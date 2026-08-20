@@ -362,6 +362,11 @@ export const workspaceVariables = sqliteTable("workspace_variables", {
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   key: text("key").notNull(),
   value: text("value").notNull(),
+  // Sensitive values are encrypted at rest (todo 167-169): when sensitive is
+  // true, `value` holds the plaintext fallback "" and `valueEncrypted` holds
+  // the AES-256-GCM enc:v1 payload. Plaintext rows (pre-encryption) are
+  // migrated transparently on next write.
+  valueEncrypted: text("value_encrypted"),
   sensitive: integer("sensitive", { mode: "boolean" }).default(false),
   hcl: integer("hcl", { mode: "boolean" }).default(false),
   category: text("category").notNull().default("terraform"), // 'terraform' or 'env'
@@ -878,6 +883,8 @@ export const variableSetVariables = sqliteTable("variable_set_variables", {
   variableSetId: text("variable_set_id").notNull().references(() => variableSets.id, { onDelete: "cascade" }),
   key: text("key").notNull(),
   value: text("value").notNull(),
+  // Sensitive-value at-rest encryption (todo 167-169, see workspace note).
+  valueEncrypted: text("value_encrypted"),
   sensitive: integer("sensitive", { mode: "boolean" }).default(false),
   hcl: integer("hcl", { mode: "boolean" }).default(false),
   category: text("category").notNull().default("terraform"),

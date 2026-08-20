@@ -385,6 +385,22 @@ if (!isPostgres) {
     }
   }
 
+  // Sensitive-variable at-rest encryption columns (todo 167-169, same guard
+  // pattern). Idempotent boot repair for both variable tables.
+  for (const tableName of ["workspace_variables", "variable_set_variables"] as const) {
+    const columns = (client.query(`PRAGMA table_info(${tableName})`).all() as ReadonlyArray<{ readonly name: string }>)
+      .map((column): string => column.name);
+    if (columns.includes("value_encrypted")) continue;
+    try {
+      client.run(`ALTER TABLE ${tableName} ADD COLUMN value_encrypted text`);
+    } catch (error: unknown) {
+      const updatedColumns = client.query(`PRAGMA table_info(${tableName})`).all() as ReadonlyArray<{ readonly name: string }>;
+      if (!updatedColumns.some((c): boolean => c.name === "value_encrypted")) {
+        throw error;
+      }
+    }
+  }
+
   // Configuration-version upload-claim lease column (todo 278, mirrors the
   // runs.scheduled_at guard above): atomically claims a pending CV before
   // accepting an archive PUT so simultaneous signed PUTs cannot race.
@@ -768,6 +784,9 @@ export function applyPgMigrations(): Promise<void> {
     // Refresh-session two-tab concurrency grace (todo 125-127, see sqlite boot path).
     await pg.unsafe("ALTER TABLE refresh_sessions ADD COLUMN IF NOT EXISTS successor_hash text");
     await pg.unsafe("ALTER TABLE refresh_sessions ADD COLUMN IF NOT EXISTS rotated_at_ms bigint");
+    // Sensitive-variable at-rest encryption (todo 167-169, see sqlite boot path).
+    await pg.unsafe("ALTER TABLE workspace_variables ADD COLUMN IF NOT EXISTS value_encrypted text");
+    await pg.unsafe("ALTER TABLE variable_set_variables ADD COLUMN IF NOT EXISTS value_encrypted text");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS configuration_versions_workspace_created_idx ON configuration_versions (workspace_id, created_at)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS workspaces_org_idx ON workspaces (org_id)");
     // Agent heartbeat sweep (recoverStaleAgentJobs) filters on lastPingAt/status

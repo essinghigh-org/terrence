@@ -7,6 +7,7 @@ import { checkOrgPermission, findAuthorizedRun, findAuthorizedWorkspace } from "
 import { scopeCoversOrg, scopeGrants } from "../lib/token-scopes";
 import { currentTokenScopes } from "../lib/request-scope";
 import { workspaceVariableResource } from "../lib/response";
+import { variableValueForWrite, variableValueForRead } from "../lib/variable-crypto";
 import { validVariableAttributes } from "../lib/validation";
 import { handleBitbucketWebhook, handleGithubWebhook, handleGitlabWebhook } from "../lib/webhooks";
 import { costEstimationEnabledForOrganization, getSettings, getSiteCapabilities } from "../lib/settings";
@@ -432,13 +433,17 @@ export const miscRoutes = new Elysia({ name: "misc" })
     }
     const categoryValue: unknown = normalizedAttributes.category;
     const descriptionValue: unknown = normalizedAttributes.description;
+    const sensitiveValue = normalizedAttributes.sensitive === true;
+    // Sensitive values are encrypted at rest (todo 167/168).
+    const stored = await variableValueForWrite(sensitiveValue, normalizedAttributes.value);
     const variable: typeof workspaceVariables.$inferInsert = {
       id: `var-${crypto.randomUUID()}`,
       workspaceId,
       key: normalizedAttributes.key as string,
-      value: normalizedAttributes.value,
+      value: stored.value,
+      valueEncrypted: stored.valueEncrypted,
       category: categoryValue === "env" ? "env" : "terraform",
-      sensitive: normalizedAttributes.sensitive === true,
+      sensitive: sensitiveValue,
       hcl: normalizedAttributes.hcl === true,
       description: typeof descriptionValue === "string" ? descriptionValue : null,
     };
@@ -465,9 +470,15 @@ export const miscRoutes = new Elysia({ name: "misc" })
     }
     let sensitive = typeof attributes.sensitive === "boolean" ? attributes.sensitive : variable.sensitive === true;
     if (variable.sensitive === true && !sensitive && attributes.value === undefined) sensitive = true;
+    // Re-encrypt when the value or sensitive flag changed; flipping sensitive
+    // on encrypts the existing plaintext (todo 169).
+    const suppliedValue = typeof attributes.value === "string" ? attributes.value : null;
+    const effectiveValue = suppliedValue ?? (sensitive ? await variableValueForRead(variable) : variable.value);
+    const stored = await variableValueForWrite(sensitive, effectiveValue);
     const updates: Partial<typeof workspaceVariables.$inferInsert> = {
       key: typeof attributes.key === "string" ? attributes.key : variable.key,
-      value: typeof attributes.value === "string" ? attributes.value : variable.value,
+      value: stored.value,
+      valueEncrypted: stored.valueEncrypted,
       category: typeof attributes.category === "string" ? attributes.category : variable.category,
       sensitive,
       hcl: typeof attributes.hcl === "boolean" ? attributes.hcl : variable.hcl === true,

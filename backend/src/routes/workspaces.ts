@@ -11,6 +11,7 @@ import {
   type WorkspaceResourcePermissions,
 } from "../lib/response";
 import { validVariableAttributes } from "../lib/validation";
+import { variableValueForWrite, variableValueForRead } from "../lib/variable-crypto";
 import { validateVersion, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, auditLog, strictAuditEnabled, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspaceData , type DeepReadonly } from "../lib/utils";
 
 import { normalizeWorkingDirectory } from "../workspace";
@@ -1202,9 +1203,11 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const sensitive = typeof attributes.sensitive === "boolean" ? attributes.sensitive : false;
     const hcl = typeof attributes.hcl === "boolean" ? attributes.hcl : false;
     const description = typeof attributes.description === "string" ? attributes.description : null;
-    await db.insert(workspaceVariables).values({ id: varId, workspaceId, key, value, category, sensitive, hcl, description });
+    // Sensitive values are encrypted at rest (todo 167/168).
+    const stored = await variableValueForWrite(sensitive, value);
+    await db.insert(workspaceVariables).values({ id: varId, workspaceId, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description });
     (set as { status: number }).status = 201;
-    return { data: workspaceVariableResource({ id: varId, workspaceId, key, value, category, sensitive, hcl, description }) };
+    return { data: workspaceVariableResource({ id: varId, workspaceId, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description }) };
   })
   .get("/api/v2/workspaces/:workspace_id/vars/:var_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";
@@ -1237,12 +1240,17 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     }
     let sensitive = typeof attrs.sensitive === "boolean" ? attrs.sensitive : (variable.sensitive ?? false);
     if ((variable.sensitive ?? false) && !sensitive && attrs.value === undefined) sensitive = true;
+    // A value supplied in this PATCH is authoritative; otherwise keep the
+    // stored value (decrypting an encrypted one). Flipping sensitive on
+    // encrypts the existing plaintext (todo 169).
+    const suppliedValue = typeof attrs.value === "string" ? attrs.value : null;
+    const effectiveValue = suppliedValue ?? (sensitive ? await variableValueForRead(variable) : variable.value);
     const key = typeof attrs.key === "string" ? attrs.key : variable.key;
-    const value = typeof attrs.value === "string" ? attrs.value : variable.value;
     const category = typeof attrs.category === "string" ? attrs.category : variable.category;
     const hcl = typeof attrs.hcl === "boolean" ? attrs.hcl : (variable.hcl ?? false);
     const description = typeof attrs.description === "string" ? attrs.description : variable.description;
-    const updated = { key, value, category, sensitive, hcl, description };
+    const stored = await variableValueForWrite(sensitive, effectiveValue);
+    const updated = { key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description };
     try {
       await db.update(workspaceVariables).set(updated).where(eq(workspaceVariables.id, varId));
     } catch (error: unknown) {

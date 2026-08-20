@@ -67,6 +67,7 @@ import { applyGateBlockReason } from "./lib/operations";
 import { isMaintenanceActive } from "./lib/maintenance";
 import { publish } from "./lib/event-bus";
 import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./lib/sandbox";
+import { decryptSecret } from "./lib/secrets";
 import { log } from "./lib/log";
 import { assertArchiveExpandedSize, assertArchiveLogicalSize, assertArchiveMemberCount } from "./lib/archive";
 import { startDurableJobWorker } from "./lib/durable-jobs";
@@ -792,22 +793,30 @@ export async function executionVariables(
 
   const effective = new Map<string, ExecutionVariable>();
 
+  // Decrypt sensitive variable values for execution (todo 167/168): rows
+  // store sensitive values encrypted at rest; runs need the plaintext.
+  // Overrides carry plaintext already (no encrypted column).
+  const decryptIfNeeded = async (variable: { readonly value: string; readonly valueEncrypted?: string | null }): Promise<string> =>
+    "valueEncrypted" in variable && variable.valueEncrypted !== null && variable.valueEncrypted !== undefined && variable.valueEncrypted !== ""
+      ? decryptSecret(variable.valueEncrypted)
+      : variable.value;
+
   // 1. Non-priority variable set variables first
   for (const variable of setVars) {
     if (!prioritySetIds.has(variable.variableSetId)) {
-      effective.set(`${variable.category}:${variable.key}`, { ...variable, hcl: false, priority: false });
+      effective.set(`${variable.category}:${variable.key}`, { ...variable, value: await decryptIfNeeded(variable), hcl: false, priority: false });
     }
   }
 
   // 2. Workspace variables override non-priority sets
   for (const variable of workspaceVars) {
-    effective.set(`${variable.category}:${variable.key}`, { ...variable, hcl: variable.hcl === true, priority: false });
+    effective.set(`${variable.category}:${variable.key}`, { ...variable, value: await decryptIfNeeded(variable), hcl: variable.hcl === true, priority: false });
   }
 
   // 3. Priority variable set variables override everything
   for (const variable of setVars) {
     if (prioritySetIds.has(variable.variableSetId)) {
-      effective.set(`${variable.category}:${variable.key}`, { ...variable, hcl: false, priority: true });
+      effective.set(`${variable.category}:${variable.key}`, { ...variable, value: await decryptIfNeeded(variable), hcl: false, priority: true });
     }
   }
 

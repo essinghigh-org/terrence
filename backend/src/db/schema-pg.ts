@@ -1564,6 +1564,8 @@ export const variableSetVariables = pgTable("variable_set_variables", {
     variableSetId: text("variable_set_id").notNull().references(() => variableSets.id, { onDelete: "cascade" }),
     key: text("key").notNull(),
     value: text("value").notNull(),
+    // Sensitive-value at-rest encryption (todo 167-169, see sqlite note).
+    valueEncrypted: text("value_encrypted"),
     sensitive: boolean("sensitive").default(false),
     hcl: boolean("hcl").default(false),
     category: text("category").notNull().default("terraform"),
@@ -1666,6 +1668,8 @@ export const workspaceVariables = pgTable("workspace_variables", {
     workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
     key: text("key").notNull(),
     value: text("value").notNull(),
+    // Sensitive-value at-rest encryption (todo 167-169, see sqlite note).
+    valueEncrypted: text("value_encrypted"),
     sensitive: boolean("sensitive").default(false),
     hcl: boolean("hcl").default(false),
     category: text("category").notNull().default("terraform"),

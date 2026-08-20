@@ -10,6 +10,7 @@ import {
   workspaces,
 } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
+import { decryptSecret, isEncryptedSecret } from "../../src/lib/secrets";
 
 // VAR-006: sensitive variable update / unset / reveal rules.
 //
@@ -95,9 +96,12 @@ describe("workspace variable sensitive rules (VAR-006)", () => {
     expect(patched.data.attributes.sensitive).toBe(true);
     expect(patched.data.attributes.value).toBeNull();
 
-    // The stored value is unchanged (still the original).
+    // The stored value is unchanged (still the original) — now encrypted.
     const stored = await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, id) });
-    expect(stored?.value).toBe("original");
+    expect(stored?.valueEncrypted).not.toBeNull();
+    expect(isEncryptedSecret(stored!.valueEncrypted!)).toBe(true);
+    expect(await decryptSecret(stored!.valueEncrypted!)).toBe("original");
+    expect(stored?.value).toBe("");
     expect(stored?.sensitive).toBe(true);
   });
 
@@ -136,25 +140,30 @@ describe("workspace variable sensitive rules (VAR-006)", () => {
     expect(patched.data.attributes.sensitive).toBe(true);
     expect(patched.data.attributes.value).toBeNull();
 
-    // The stored value did rotate.
+    // The stored value did rotate (and is encrypted at rest).
     const stored = await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, id) });
-    expect(stored?.value).toBe("second");
+    expect(stored?.valueEncrypted).not.toBeNull();
+    expect(isEncryptedSecret(stored!.valueEncrypted!)).toBe(true);
+    expect(await decryptSecret(stored!.valueEncrypted!)).toBe("second");
+    expect(stored?.value).toBe("");
     expect(stored?.sensitive).toBe(true);
   });
 
   it("excludes sensitive values from the workspace var list", async () => {
-    await request(`/api/v2/workspaces/${wsId}/vars`, "POST", {
+    const createdSecret = await request(`/api/v2/workspaces/${wsId}/vars`, "POST", {
       data: { type: "vars", attributes: { key: "listsecret", value: "hiddenval", sensitive: true } },
     });
-    await request(`/api/v2/workspaces/${wsId}/vars`, "POST", {
+    expect(createdSecret.status).toBe(201);
+    const createdPlain = await request(`/api/v2/workspaces/${wsId}/vars`, "POST", {
       data: { type: "vars", attributes: { key: "listplain", value: "plainval", sensitive: false } },
     });
+    expect(createdPlain.status).toBe(201);
     const list = await request(`/api/v2/workspaces/${wsId}/vars`);
     expect(list.status).toBe(200);
-    const body = await list.json();
-    const byKey = new Map(body.data.map((v: { attributes: { key: string } }) => [v.attributes.key, v.attributes]));
-    expect(byKey.get("listsecret").value).toBeNull();
-    expect(byKey.get("listsecret").sensitive).toBe(true);
-    expect(byKey.get("listplain").value).toBe("plainval");
+    const body = await list.json() as { data: { attributes: Record<string, unknown> }[] };
+    const byKey = new Map(body.data.map((v) => [v.attributes.key as string, v.attributes]));
+    expect(byKey.get("listsecret")?.value).toBeNull();
+    expect(byKey.get("listsecret")?.sensitive).toBe(true);
+    expect(byKey.get("listplain")?.value).toBe("plainval");
   });
 });

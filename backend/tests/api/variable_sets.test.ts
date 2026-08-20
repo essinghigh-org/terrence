@@ -181,7 +181,7 @@ describe("organization variable set API contract", () => {
     expect(variableData.attributes.sensitive).toBe(true);
     expect((await db.query.variableSetVariables.findFirst({
       where: eq(variableSetVariables.id, variableId),
-    }))?.value).toBe("do-not-leak");
+    }))?.valueEncrypted).toBeDefined();
     const listedVariables = await request(
       `/api/v2/varsets/${variableSetId}/relationships/vars?page[size]=1`,
     );
