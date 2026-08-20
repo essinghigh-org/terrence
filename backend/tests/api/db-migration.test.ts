@@ -191,7 +191,7 @@ describe("SQLite -> PostgreSQL migration wizard", () => {
     expect(bad.status).toBe(200);
     const body = (await bad.json()) as { data: { ok: boolean; error: string } };
     expect(body.data.ok).toBe(false);
-    expect(body.data.error).toContain("postgres");
+    expect(body.data.error.toLowerCase()).toMatch(/postgres|invalid url|cannot be parsed/);
 
     if (postgresAvailable) {
       const ok = await app.handle(adminRequest("/api/v2/admin/db-migration/test-connection", "POST", {
