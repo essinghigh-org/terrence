@@ -349,6 +349,26 @@ if (!isPostgres) {
   }
   client.run("CREATE INDEX IF NOT EXISTS runs_status_scheduled_idx ON runs (status, scheduled_at)");
 
+  // Configuration-version upload-claim lease column (todo 278, mirrors the
+  // runs.scheduled_at guard above): atomically claims a pending CV before
+  // accepting an archive PUT so simultaneous signed PUTs cannot race.
+  // Databases whose migration journal never applied the column are repaired
+  // at boot. Idempotent.
+  {
+    const cvColumns = (client.query("PRAGMA table_info(configuration_versions)").all() as ReadonlyArray<{ readonly name: string }>)
+      .map((column): string => column.name);
+    if (!cvColumns.includes("upload_claim_expires_at")) {
+      try {
+        client.run("ALTER TABLE configuration_versions ADD COLUMN upload_claim_expires_at integer");
+      } catch (error: unknown) {
+        const updatedColumns = client.query("PRAGMA table_info(configuration_versions)").all() as ReadonlyArray<{ readonly name: string }>;
+        if (!updatedColumns.some((column): boolean => column.name === "upload_claim_expires_at")) {
+          throw error;
+        }
+      }
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Id-format migration: re-key persisted rows that predate the current ID
   // scheme (e.g. workspaces `w-*` -> `ws-*`, users `u-*` -> `usr-*`, orgs `o-*`
@@ -705,6 +725,8 @@ export function applyPgMigrations(): Promise<void> {
     await pg.unsafe("CREATE INDEX IF NOT EXISTS runs_workspace_status_created_idx ON runs (workspace_id, status, created_at)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS runs_status_created_idx ON runs (status, created_at)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS runs_status_scheduled_idx ON runs (status, scheduled_at)");
+    // Configuration-version upload-claim lease (todo 278, see sqlite boot path).
+    await pg.unsafe("ALTER TABLE configuration_versions ADD COLUMN IF NOT EXISTS upload_claim_expires_at bigint");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS configuration_versions_workspace_created_idx ON configuration_versions (workspace_id, created_at)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS workspaces_org_idx ON workspaces (org_id)");
     // Agent heartbeat sweep (recoverStaleAgentJobs) filters on lastPingAt/status

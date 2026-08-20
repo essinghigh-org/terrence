@@ -1,10 +1,11 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { configurationVersions, runs, type users } from "../db/schema";
-import { eq, count, desc, and, inArray, notInArray } from "drizzle-orm";
+import { eq, count, desc, and, inArray, notInArray, isNull, lt, or } from "drizzle-orm";
 import { apiURL, signedApiURL, validSignedApiURL, FINAL_RUN_STATUSES, findAuthorizedWorkspace, pageRequest, pagination , type DeepReadonly } from "../lib/utils";
 import { join } from "path";
 import { mkdir, rm, writeFile } from "fs/promises";
+import { rmSync } from "node:fs";
 import { authPlugin } from "../auth";
 
 const rawStorageDir = process.env.STORAGE_DIR;
@@ -132,6 +133,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
       source,
       ingressAttributes: null,
       statusTimestamps: null,
+      uploadClaimExpiresAt: null,
       error: null,
       errorMessage: null,
       softDeletedAt: null,
@@ -167,6 +169,28 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     if (cv.status !== "pending" || cv.archivePath !== null) {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] };
     }
+    // Atomically claim the pending configuration-version BEFORE accepting the
+    // body (todo 278): two simultaneous signed PUTs must not both write the
+    // archive. The conditional UPDATE only succeeds for exactly one request;
+    // a stale claim from a crashed upload expires after 15 minutes.
+    const UPLOAD_CLAIM_TTL_MS = 15 * 60 * 1000;
+    const claimFilter = and(
+      eq(configurationVersions.id, cvId),
+      eq(configurationVersions.status, "pending"),
+      isNull(configurationVersions.archivePath),
+      or(
+        isNull(configurationVersions.uploadClaimExpiresAt),
+        lt(configurationVersions.uploadClaimExpiresAt, Date.now()),
+      ),
+    );
+    const claim = await db.update(configurationVersions)
+      .set({ uploadClaimExpiresAt: Date.now() + UPLOAD_CLAIM_TTL_MS })
+      .where(claimFilter)
+      .returning({ id: configurationVersions.id });
+    if (claim.length === 0) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "An upload for this configuration version is already in progress" }] };
+    }
     const tarName = `config-${cvId}.tar.gz`;
     const tarPath = join(CV_STORAGE_DIR, tarName);
     await mkdir(CV_STORAGE_DIR, { recursive: true });
@@ -180,22 +204,32 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
             ? new Uint8Array(await body.arrayBuffer())
             : new Uint8Array(await request.arrayBuffer());
     } catch {
+      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null }).where(eq(configurationVersions.id, cvId));
       (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: "Could not read configuration archive body" }] };
     }
     if (buffer.byteLength === 0) {
+      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null }).where(eq(configurationVersions.id, cvId));
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Configuration archive is empty" }] };
     }
     if (buffer.byteLength > 100 * 1024 * 1024) {
+      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null }).where(eq(configurationVersions.id, cvId));
       (set as { status: number }).status = 413; return { errors: [{ status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds 100 MiB maximum" }] };
     }
     await writeFile(tarPath, buffer, { mode: 0o600 });
     const uploadedAt = new Date().toISOString();
-    await db.update(configurationVersions).set({
+    const finalized = await db.update(configurationVersions).set({
       archivePath: tarPath,
       status: "uploaded",
+      uploadClaimExpiresAt: null,
       statusTimestamps: { ...(cv.statusTimestamps ?? {}), uploadedAt },
-    }).where(eq(configurationVersions.id, cvId));
+    }).where(and(eq(configurationVersions.id, cvId), eq(configurationVersions.status, "pending"), isNull(configurationVersions.archivePath))).returning({ id: configurationVersions.id });
+    if (finalized.length === 0) {
+      // Another request finalized between our claim and write; ours loses.
+      rmSync(tarPath, { force: true });
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] };
+    }
     (set as { status: number }).status = 200;
     return { data: { id: cvId, type: "configuration-versions", attributes: { status: "uploaded" } } };
   })

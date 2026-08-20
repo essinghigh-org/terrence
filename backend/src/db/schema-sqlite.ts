@@ -379,6 +379,11 @@ export const configurationVersions = sqliteTable("configuration_versions", {
   source: text("source").default("tfe-api"),
   ingressAttributes: text("ingress_attributes", { mode: "json" }).$type<{ commitSha?: string; commitUrl?: string; commitMessage?: string; branch?: string; tag?: string; pullRequestNumber?: number; senderUsername?: string; senderAvatarUrl?: string; senderProviderId?: string; cloneUrl?: string; compareUrl?: string }>(),
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<{ uploadedAt?: string; archivedAt?: string }>(),
+  // Upload-claim lease (todo 278): atomically claims a pending
+  // configuration-version before accepting an archive PUT, so two
+  // simultaneous signed PUTs cannot race. Claim expires so a crashed
+  // upload cannot wedge the version permanently.
+  uploadClaimExpiresAt: integer("upload_claim_expires_at"),
   error: text("error"),
   errorMessage: text("error_message"),
   softDeletedAt: integer("soft_deleted_at"),

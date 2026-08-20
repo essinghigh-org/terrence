@@ -283,6 +283,8 @@ export const configurationVersions = pgTable("configuration_versions", {
     source: text("source").default("tfe-api"),
     ingressAttributes: jsonb("ingress_attributes"),
     statusTimestamps: jsonb("status_timestamps"),
+    // Upload-claim lease (todo 278, see sqlite schema note).
+    uploadClaimExpiresAt: bigint("upload_claim_expires_at", { mode: "number" }),
     error: text("error"),
     errorMessage: text("error_message"),
     softDeletedAt: bigint("soft_deleted_at", { mode: "number" }),
