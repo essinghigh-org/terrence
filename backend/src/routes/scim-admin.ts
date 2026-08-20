@@ -395,6 +395,10 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     if (denied !== undefined) return denied;
     const teamId = params.external_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
+    if (team === undefined) {
+      (set as { status: number }).status = 204;
+      return;
+    }
     await db.delete(teamScimGroupMappings)
       .where(eq(teamScimGroupMappings.teamId, team.id));
     (set as { status: number }).status = 204;

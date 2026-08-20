@@ -350,15 +350,21 @@ export const operationsRoutes = new Elysia({ name: "operations" })
         return err.body;
       }
       const dedupeKey = `${runId}:${kind}`;
-      if (streamRequested && !refresh) {
-        const pendingJob = await db.query.durableJobs.findFirst({
-          where: and(eq(durableJobs.kind, "plan-explanation"), eq(durableJobs.dedupeKey, dedupeKey)),
-        });
-        if (pendingJob !== undefined && (pendingJob.status === "queued" || pendingJob.status === "running")) {
-          return sseJobProgressResponse(runId, kind, pendingJob, model, reasoningEffort, request);
+      if (streamRequested) {
+        if (!refresh) {
+          const cachedStream = await findExplanation(runId, kind);
+          if (cachedStream !== undefined && cachedStream.content !== "") {
+            return cachedSseResponse(cachedStream.content, kind, cachedStream.model, reasoningEffort, cachedStream.createdAt);
+          }
+          const pendingJob = await db.query.durableJobs.findFirst({
+            where: and(eq(durableJobs.kind, "plan-explanation"), eq(durableJobs.dedupeKey, dedupeKey)),
+          });
+          if (pendingJob !== undefined && (pendingJob.status === "queued" || pendingJob.status === "running")) {
+            return sseJobProgressResponse(runId, kind, pendingJob, model, reasoningEffort, request);
+          }
         }
+        return streamExplainResponse(resolvedSettings, source, runId, kind, model, reasoningEffort, request, refresh);
       }
-      if (streamRequested) return streamExplainResponse(resolvedSettings, source, runId, kind, model, reasoningEffort, request, refresh);
       // Background the non-streaming generation: enqueue a durable job and
       // return 202 so a tab close does not abort the LLM call. Concurrent
       // requests for the same (run, kind) dedupe to the same job.
