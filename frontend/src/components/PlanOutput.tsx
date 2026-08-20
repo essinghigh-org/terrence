@@ -775,8 +775,8 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
       onToggle={(event): void => { setExpanded(event.currentTarget.open); }}
     >
       <summary className="flex cursor-pointer list-none items-center gap-2.5 px-4 py-3 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-        <ChevronRight className="size-4 shrink-0 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
-        <span className={`inline-flex size-6 shrink-0 items-center justify-center rounded-md text-sm font-bold leading-none ${config.className} bg-muted`}>
+        <ChevronRight className="size-4 shrink-0 rotate-0 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
+        <span className={`inline-flex shrink-0 items-center justify-center text-sm font-bold leading-none ${config.className}`}>
           {"icon" in config ? (
             <config.icon className="size-3.5" aria-hidden="true" />
           ) : (
@@ -814,35 +814,7 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
               {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
             </button>
           </div>
-          {(resource.deposed !== undefined
-            || resource.previous_address !== undefined
-            || resource.change.importing !== undefined
-            || (resource.action_reason !== undefined && resource.action_reason !== "")) && (
-          <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] leading-4 text-muted-foreground/80">
-            {resource.deposed !== undefined && (
-              <span>Deposed key: <code className="font-mono">{resource.deposed}</code></span>
-            )}
-            {resource.previous_address !== undefined && (
-              <span className="flex items-center gap-1">
-                Moved from <code className="font-mono">{resource.previous_address}</code>
-                <ArrowRight className="inline size-3 text-muted-foreground/70" />
-                <code className="font-mono font-medium text-foreground/85">{resource.address}</code>
-              </span>
-            )}
-            {resource.change.importing !== undefined && (
-              <span>
-                Import ID: <code className="font-mono">
-                  {resource.change.importing.unknown === true
-                    ? "known after apply"
-                    : resource.change.importing.id ?? "unknown"}
-                </code>
-              </span>
-            )}
-            {resource.action_reason !== undefined && resource.action_reason !== "" && (
-              <span>Reason: {actionReasonLabel(resource.action_reason)}</span>
-            )}
-          </div>
-          )}
+
         </div>
       </summary>
       {expanded && <AttributeDiff change={resource.change} address={resource.address} type={resource.type} name={fallbackName} />}

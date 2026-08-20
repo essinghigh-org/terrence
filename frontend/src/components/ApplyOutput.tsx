@@ -319,8 +319,8 @@ function ApplyResourceRow({
     >
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
-          <ChevronRight className="size-4 shrink-0 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
-          <span className={`inline-flex size-6 shrink-0 items-center justify-center rounded-md text-sm font-bold leading-none ${config.className} bg-muted`}>
+          <ChevronRight className="size-4 shrink-0 rotate-0 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
+          <span className={`inline-flex shrink-0 items-center justify-center text-sm font-bold leading-none ${config.className}`}>
             {"icon" in config ? (
               <config.icon className="size-3.5" aria-hidden="true" />
             ) : (
@@ -343,18 +343,7 @@ function ApplyResourceRow({
               </button>
             </div>
 
-            <div className="mt-0.5 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
-              {resource.previous_address !== undefined && (
-                <span className="flex items-center gap-1">
-                  Moved from <code className="font-mono">{resource.previous_address}</code>
-                  <ArrowRight className="inline size-3 text-muted-foreground/70" />
-                  <code className="font-mono font-medium text-foreground/85">{resource.address}</code>
-                </span>
-              )}
-              {execution.resourceId !== undefined && (
-                <span>ID: <code className="font-mono text-foreground/85">{execution.resourceId}</code></span>
-              )}
-            </div>
+
           </div>
         </div>
 

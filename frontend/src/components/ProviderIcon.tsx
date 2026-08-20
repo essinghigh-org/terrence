@@ -118,7 +118,7 @@ export function ProviderIcon({
       loading="lazy"
       decoding="async"
       title={providerName ?? undefined}
-      className="shrink-0 rounded-[3px] bg-white p-px object-contain shadow-sm ring-1 ring-black/5"
+      className="shrink-0 object-contain"
       style={{ width: size, height: size }}
       onError={(event): void => {
         (event.currentTarget as HTMLImageElement).style.display = "none";

@@ -164,8 +164,9 @@ test("renders replacement and nested safe diffs and filters resources", async ()
   expect(view.getByText("1 replacement")).toBeTruthy();
   expect(document.body.textContent?.includes("old-super-secret")).toBe(false);
   expect(document.body.textContent?.includes("new-super-secret")).toBe(false);
-  expect(view.getByText(/deadbeef/)).toBeTruthy();
-  expect(view.getByText(/Replacement required by provider/)).toBeTruthy();
+  // secondary metadata under the address is intentionally hidden (address-only rows)
+  expect(view.queryByText(/deadbeef/)).toBeNull();
+  expect(view.queryByText(/Replacement required by provider/)).toBeNull();
 
   fireEvent.click(view.getByText("module.app.secret_resource.replaced"));
   await waitFor((): void => {
@@ -177,7 +178,6 @@ test("renders replacement and nested safe diffs and filters resources", async ()
     expect(view.getAllByText("Forces replacement").length).toBeGreaterThan(0);
     expect(view.getByText(/1 unchanged attribute hidden/)).toBeTruthy();
   });
-  expect(view.getByText(/Replacement required by provider/)).toBeTruthy();
   expect((view.container as HTMLElement).querySelector("img[alt=\"\"]")?.getAttribute("src") ?? view.container.textContent).toBeTruthy();
 
   changeInput(view.getByLabelText("Filter resources by address or type"), "aws_instance");
@@ -259,8 +259,9 @@ test("keeps moves, imports, drift, and output values visible", async () => {
   expect(view.getByText("1 move")).toBeTruthy();
   expect(view.getByText("1 drifted resource")).toBeTruthy();
   expect(view.getByText("1 action to invoke")).toBeTruthy();
-  expect(view.getByText(/aws_instance.old_name/)).toBeTruthy();
-  expect(view.getByText(/i-2/)).toBeTruthy();
+  // moved-from / import IDs are no longer rendered under the address
+  expect(view.queryByText(/aws_instance\.old_name/)).toBeNull();
+  expect(view.queryByText(/i-2/)).toBeNull();
 
   fireEvent.click(view.getByText("Actions to invoke"));
   expect(view.getByText("action.aws_lambda_invoke.deploy")).toBeTruthy();
