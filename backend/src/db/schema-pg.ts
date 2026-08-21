@@ -462,6 +462,18 @@ export const hyokCustomerKeyVersions = pgTable("hyok_customer_key_versions", {
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.hyokCustomerKeyVersions.createdAt.defaultFn!()),
 });
 
+export const identityLinks = pgTable("identity_links", {
+    id: text("id").notNull().primaryKey(),
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    externalId: text("external_id").notNull(),
+    emailAtLinkTime: text("email_at_link_time"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.identityLinks.createdAt.defaultFn!()),
+}, (table) => [
+    uniqueIndex("identity_links_provider_external_idx").on(table.provider, table.externalId),
+    index("identity_links_user_idx").on(table.userId),
+  ]);
+
 export const locks = pgTable("locks", {
     name: text("name").notNull().primaryKey(),
     owner: text("owner").notNull(),
@@ -693,6 +705,26 @@ export const organizationDataRetentionPolicies = pgTable("organization_data_rete
     deleteOlderThanNDays: bigint("delete_older_than_n_days", { mode: "number" }),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.organizationDataRetentionPolicies.createdAt.defaultFn!()),
 });
+
+export const organizationInvitations = pgTable("organization_invitations", {
+    id: text("id").notNull().primaryKey(),
+    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    emailNormalized: text("email_normalized").notNull(),
+    role: text("role").notNull().default("member"),
+    status: text("status").notNull().default("pending"),
+    tokenHash: text("token_hash").notNull().unique(),
+    tokenPrefix: text("token_prefix"),
+    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    acceptedBy: text("accepted_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.organizationInvitations.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.organizationInvitations.updatedAt.defaultFn!()),
+}, (table) => [
+    index("organization_invitations_org_idx").on(table.orgId),
+    index("organization_invitations_email_normalized_idx").on(table.emailNormalized),
+    uniqueIndex("organization_invitations_org_email_pending_idx").on(table.orgId, table.emailNormalized).where(sql`${table.status} = 'pending'`),
+  ]);
 
 export const organizationMembershipRoles = pgTable("organization_membership_roles", {
     membershipId: text("membership_id").notNull().references(() => organizationMemberships.id, { onDelete: "cascade" }),
@@ -1543,6 +1575,8 @@ export const users = pgTable("users", {
     ssoProvider: text("sso_provider"),
     ssoSubject: text("sso_subject"),
     ssoSiteAdmin: boolean("sso_site_admin").notNull().default(false),
+    deletedAt: bigint("deleted_at", { mode: "number" }),
+    deletedEmailHash: text("deleted_email_hash"),
 }, (table) => [
     uniqueIndex("users_sso_identity_idx").on(table.ssoProvider, table.ssoSubject),
   ]);

@@ -169,6 +169,13 @@
       "when": 1787331069273,
       "tag": "0023_smart_ultron",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1787339901794,
+      "tag": "0024_gorgeous_shatterstar",
+      "breakpoints": true
     }
   ]
 }

@@ -5,6 +5,7 @@ import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { db } from "../db";
 import {
+  identityLinks,
   organizationMemberships,
   organizations,
   samlSettings,
@@ -15,6 +16,7 @@ import {
 import { getSettings } from "./settings";
 import { log } from "./log";
 import { apiURL, auditLog } from "./utils";
+import { normalizeEmail as canonicalEmail, sanitizeUsername as canonicalUsername } from "./identity";
 import { isUniqueConstraintError } from "./validation";
 
 export type SsoProvider = "saml" | "oidc" | "ldap";
@@ -113,16 +115,11 @@ export async function ldapSettings(): Promise<LdapSettings> {
 
 /** A username is usable for auto-provisioned accounts when it survives sanitization. */
 export function sanitizeUsername(value: string): string | null {
-  const cleaned = value.trim().replace(/[^a-zA-Z0-9._-]/g, "");
-  if (cleaned === "" || cleaned.length > 100) return null;
-  return cleaned;
+  return canonicalUsername(value);
 }
 
 export function validEmail(value: string | null | undefined): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim().toLowerCase();
-  if (trimmed.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return null;
-  return trimmed;
+  return canonicalEmail(value);
 }
 
 /**
@@ -198,6 +195,7 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
         if (!isUniqueConstraintError(error)) throw error;
       }
     }
+    await db.insert(identityLinks).values({ id: `idlink-${crypto.randomUUID()}`, userId: byIdentity.id, provider: identity.provider, externalId: subject, emailAtLinkTime: email, createdAt: Date.now() }).onConflictDoNothing();
     const refreshed = await db.query.users.findFirst({ where: eq(users.id, byIdentity.id) });
     if (refreshed === undefined) throw new Error("SSO user is unavailable");
     return { user: refreshed, created: false };
@@ -219,6 +217,7 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
         .where(and(eq(users.id, byEmail.id), isNull(users.ssoProvider), isNull(users.ssoSubject)))
         .returning({ id: users.id });
       if (linked.length === 0) throw new SsoConflictError(identity.provider, username);
+      await db.insert(identityLinks).values({ id: `idlink-${crypto.randomUUID()}`, userId: byEmail.id, provider: identity.provider, externalId: subject, emailAtLinkTime: email, createdAt: Date.now() }).onConflictDoNothing();
       const refreshed = await db.query.users.findFirst({ where: eq(users.id, byEmail.id) });
       if (refreshed === undefined) throw new Error("SSO user is unavailable");
       return { user: refreshed, created: false };
@@ -292,6 +291,7 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
     }
     throw new Error("Failed to provision SSO user");
   }
+  await db.insert(identityLinks).values({ id: `idlink-${crypto.randomUUID()}`, userId: raced.id, provider: identity.provider, externalId: subject, emailAtLinkTime: email, createdAt: Date.now() }).onConflictDoNothing();
   if (raced.id !== userId) {
     // Another concurrent login created the identity; reuse that account.
     return { user: raced, created: false };

@@ -88,6 +88,7 @@ import { scimRoutes } from "./routes/scim";
 import { explorerRoutes } from "./routes/explorer";
 import { teamProjectRoutes } from "./routes/team-projects";
 import { organizationRoleRoutes } from "./routes/organization-roles";
+import { organizationInvitationRoutes } from "./routes/organization-invitations";
 import { samlRoutes } from "./routes/saml";
 import { oidcRoutes } from "./routes/oidc";
 import { workloadIdentityRoutes } from "./routes/workload-identity";
@@ -370,9 +371,15 @@ function serverEndpointPath(request: CustomRequest): string | undefined {
   return undefined;
 }
 
+function isInvitationPath(pathname: string): boolean {
+  return pathname.startsWith("/api/v2/organizations/") && pathname.includes("/organization-invitations")
+    || pathname.startsWith("/api/v2/organization-invitations/");
+}
+
 function sensitivePath(request: CustomRequest): string | undefined {
   const path = new URL(request.url).pathname;
   if (request.method === "PATCH" && path === "/api/v2/account/password") return path;
+  if (isInvitationPath(path)) return "/api/v2/organization-invitations/*";
   if (request.method !== "POST") return undefined;
   if (sensitivePaths.has(path)) return path;
   if (/^\/api\/v2\/notification-configurations\/[^/]+\/actions\/verify$/.test(path)) {
@@ -770,6 +777,7 @@ export const app = new Elysia()
   .use(explorerRoutes)
   .use(teamProjectRoutes)
   .use(organizationRoleRoutes)
+  .use(organizationInvitationRoutes)
   .use(samlRoutes)
   .use(oidcRoutes)
   .use(workloadIdentityRoutes)

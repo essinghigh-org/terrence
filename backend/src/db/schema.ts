@@ -157,6 +157,10 @@ export const hyokCustomerKeyVersions: typeof sqliteSchema.hyokCustomerKeyVersion
   ? sqliteSchema.hyokCustomerKeyVersions
   : (pgTables[dbNameOf(sqliteSchema.hyokCustomerKeyVersions)] as unknown as typeof sqliteSchema.hyokCustomerKeyVersions);
 
+export const identityLinks: typeof sqliteSchema.identityLinks = pgTables === null
+  ? sqliteSchema.identityLinks
+  : (pgTables[dbNameOf(sqliteSchema.identityLinks)] as unknown as typeof sqliteSchema.identityLinks);
+
 export const locks: typeof sqliteSchema.locks = pgTables === null
   ? sqliteSchema.locks
   : (pgTables[dbNameOf(sqliteSchema.locks)] as unknown as typeof sqliteSchema.locks);
@@ -236,6 +240,10 @@ export const orgTokenTTLPolicies: typeof sqliteSchema.orgTokenTTLPolicies = pgTa
 export const organizationDataRetentionPolicies: typeof sqliteSchema.organizationDataRetentionPolicies = pgTables === null
   ? sqliteSchema.organizationDataRetentionPolicies
   : (pgTables[dbNameOf(sqliteSchema.organizationDataRetentionPolicies)] as unknown as typeof sqliteSchema.organizationDataRetentionPolicies);
+
+export const organizationInvitations: typeof sqliteSchema.organizationInvitations = pgTables === null
+  ? sqliteSchema.organizationInvitations
+  : (pgTables[dbNameOf(sqliteSchema.organizationInvitations)] as unknown as typeof sqliteSchema.organizationInvitations);
 
 export const organizationMembershipRoles: typeof sqliteSchema.organizationMembershipRoles = pgTables === null
   ? sqliteSchema.organizationMembershipRoles

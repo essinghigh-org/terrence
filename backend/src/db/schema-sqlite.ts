@@ -23,6 +23,12 @@ export const users = sqliteTable("users", {
   // True when the site-admin flag was granted through the SAML site-admin
   // attribute; such grants are revoked when the attribute stops matching.
   ssoSiteAdmin: integer("sso_site_admin", { mode: "boolean" }).notNull().default(false),
+  // Soft-delete retention (todo.md #13): hard DELETE is replaced by an
+  // anonymised tombstone so audit history remains intact. deletedAt is the
+  // deletion timestamp; deletedEmailHash preserves a non-reversible handle
+  // for dedup without keeping PII.
+  deletedAt: integer("deleted_at"),
+  deletedEmailHash: text("deleted_email_hash"),
 }, (table) => [
   uniqueIndex("users_sso_identity_idx").on(table.ssoProvider, table.ssoSubject),
 ]);
@@ -156,6 +162,47 @@ export const organizationMemberships = sqliteTable("organization_memberships", {
   // admins directly; 'saml' for memberships created by the SAML group mapper.
   ssoSource: text("sso_source"),
 });
+
+// First-class invitations (todo.md #3, #4, #17): invite != user != membership.
+// An invitation is a pending intent to add an email address to an org. It
+// owns the secret (tokenHash, hashed like API tokens), expiry, and lifecycle
+// (pending/accepted/cancelled/expired) independently of any user row.
+// Accepting an invitation materializes (or reuses) a user and flips/creates
+// the corresponding organization_membership row.
+export const organizationInvitations = sqliteTable("organization_invitations", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  email: text("email").notNull(),
+  emailNormalized: text("email_normalized").notNull(),
+  role: text("role").notNull().default("member"),
+  status: text("status").notNull().default("pending"), // pending | accepted | cancelled | expired
+  tokenHash: text("token_hash").notNull().unique(),
+  tokenPrefix: text("token_prefix"),
+  expiresAt: integer("expires_at").notNull(),
+  createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+  acceptedBy: text("accepted_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  index("organization_invitations_org_idx").on(table.orgId),
+  index("organization_invitations_email_normalized_idx").on(table.emailNormalized),
+  uniqueIndex("organization_invitations_org_email_pending_idx").on(table.orgId, table.emailNormalized).where(sql`${table.status} = 'pending'`),
+]);
+
+// Deterministic identity linking (todo.md #2, #11): converges invite + SCIM
+// + OIDC + SAML logins that share the same canonical email/username to a
+// single user row, rather than relying solely on ad-hoc email matching.
+export const identityLinks = sqliteTable("identity_links", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  provider: text("provider").notNull(),
+  externalId: text("external_id").notNull(),
+  emailAtLinkTime: text("email_at_link_time"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("identity_links_provider_external_idx").on(table.provider, table.externalId),
+  index("identity_links_user_idx").on(table.userId),
+]);
 
 export const organizationRoles = sqliteTable("organization_roles", {
   id: text("id").primaryKey(),

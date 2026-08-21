@@ -1,9 +1,9 @@
 import { Elysia } from "elysia";
 import { hashAuthenticationToken } from "../lib/token-service";
 import { db } from "../db";
-import { scimGroups, scimGroupMemberships, scimTokens, scimUserIdentities, scimSettings,
+import { identityLinks, organizationInvitations, scimGroups, scimGroupMemberships, scimTokens, scimUserIdentities, scimSettings,
   users } from "../db/schema";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { isUniqueConstraintError } from "../lib/validation";
 
 type SetObj = Readonly<{ status?: number | string; headers: Record<string, string | number> }>;
@@ -216,6 +216,16 @@ export const scimRoutes = new Elysia({ name: "scim" })
           createdAt: Date.now(),
           updatedAt: Date.now(),
         });
+        await tx.insert(identityLinks).values({ id: `idlink-${crypto.randomUUID()}`, userId: linkedUserId, provider: "scim", externalId: scimIdentityId, emailAtLinkTime: email, createdAt: Date.now() }).onConflictDoNothing();
+        // Converge pending invitation for same canonical email (todo #11: merge not duplicate)
+        if (email !== null) {
+          const pending = await tx.query.organizationInvitations.findFirst({ where: and(eq(organizationInvitations.emailNormalized, email.toLowerCase()), eq(organizationInvitations.status, "pending")) });
+          if (pending !== undefined) {
+            const { organizationMemberships } = await import("../db/schema");
+            await tx.insert(organizationMemberships).values({ id: `orgmem-${crypto.randomUUID()}`, orgId: pending.orgId, userId: linkedUserId, role: pending.role, status: "active" }).onConflictDoNothing();
+            await tx.update(organizationInvitations).set({ status: "accepted", acceptedBy: linkedUserId, updatedAt: Date.now() }).where(eq(organizationInvitations.id, pending.id));
+          }
+        }
       });
     } catch (error: unknown) {
       if (!isUniqueConstraintError(error)) throw error;

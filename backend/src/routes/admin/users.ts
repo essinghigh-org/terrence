@@ -81,6 +81,7 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if ((targetUser as unknown as { deletedAt?: unknown }).deletedAt != null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: adminUserResource(targetUser) };
   })
   .patch("/api/v2/admin/users/:user_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
@@ -88,6 +89,7 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if ((targetUser as unknown as { deletedAt?: unknown }).deletedAt != null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
@@ -104,9 +106,13 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(users).where(eq(users.id, userId));
-    // Close the user's event streams; the browser session's token is dead
-    // with the user row, but the open SSE connection would otherwise linger.
+    if ((targetUser as unknown as { deletedAt?: unknown }).deletedAt != null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const { createHash } = await import("node:crypto");
+    const now = Date.now();
+    const emailHash = (targetUser as unknown as { email?: string | null }).email ? createHash("sha256").update(String((targetUser as unknown as { email?: string | null }).email).toLowerCase()).digest("hex") : null;
+    await db.update(users).set({ deletedAt: now, deletedEmailHash: emailHash, email: null, isSuspended: true } as unknown as Record<string, unknown>).where(eq(users.id, userId));
+    const { auditLog } = await import("../../lib/utils");
+    await auditLog("delete", "users", userId, user?.id ?? null, null, { username: (targetUser as unknown as { username?: string }).username });
     publish("authz.changed", { "user-id": userId });
     (set as { status: number }).status = 204;
     return {};
@@ -119,6 +125,7 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if ((target as Record<string, unknown>).isSuspended === true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is already suspended" }] }; }
     await db.update(users).set({ isSuspended: true }).where(eq(users.id, userId));
+    try { const { auditLog: al } = await import("../../lib/utils"); await al("suspend", "users", userId, user?.id ?? null, null, { username: (target as unknown as { username?: string }).username }); } catch {}
     // A suspended user must lose live event access immediately, not after
     // the SSE connection's one-hour permission-snapshot lifetime.
     publish("authz.changed", { "user-id": userId });
@@ -133,6 +140,7 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if ((target as Record<string, unknown>).isSuspended !== true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is not suspended" }] }; }
     await db.update(users).set({ isSuspended: false }).where(eq(users.id, userId));
+    try { const { auditLog: al } = await import("../../lib/utils"); await al("unsuspend", "users", userId, user?.id ?? null, null, { username: (target as unknown as { username?: string }).username }); } catch {}
     const updated = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
     return { data: adminUserResource(updated) };
