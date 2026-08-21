@@ -21,6 +21,7 @@ const PUBLIC_URL = typeof process.env.PUBLIC_URL === "string" && process.env.PUB
   ? new URL(process.env.PUBLIC_URL)
   : null;
 import { issueMfaChallenge, consumeMfaChallenge } from "../lib/mfa-challenge";
+import { withDbLock } from "../lib/db-lock";
 import { authenticateLdapWithCircuitBreaker } from "../lib/ldap";
 import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "../lib/sso";
 import { resolveClientIp } from "../lib/client-ip";
@@ -34,7 +35,11 @@ const REFRESH_COOKIE = "terrence_refresh";
 // not replay. Replay detection (family revocation) applies outside it.
 const REFRESH_GRACE_MS = 30_000;
 const THEME_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-// ponytail: one Bun process is the deployment model; use database row locks if horizontal scaling is added.
+// Cross-replica refresh rotation lock (todo 347): DB-backed mutex via
+// the locks table so that multi-replica Postgres deployments serialize
+// refresh rotation atomically. On SQLite the DB lock serializes through
+// the single writer just as correctly; the in-process queue remains as a
+// fast-path so we do not hit the DB on every serialization hop.
 let refreshRotationQueue = Promise.resolve();
 
 async function withRefreshRotationLock<T>(operation: () => Promise<T>): Promise<T> {
@@ -45,7 +50,9 @@ async function withRefreshRotationLock<T>(operation: () => Promise<T>): Promise<
   });
   await previous;
   try {
-    return await operation();
+    // Serialize across replicas through the DB lock; the outer in-process
+    // queue prevents thundering within this replica while we wait.
+    return await withDbLock("refresh-rotation", operation);
   } finally {
     release();
   }
