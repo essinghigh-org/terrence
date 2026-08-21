@@ -395,11 +395,22 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     const variables = await db.query.variableSetVariables.findMany({ where: and(eq(variableSetVariables.variableSetId, record.id), inArray(variableSetVariables.id, ids)) });
     if (variables.length !== ids.length) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const byId = new Map(variables.map((v: VarItem): [string, VarItem] => [v.id, v]));
-    const updates = (relationship.resources as ResItem[]).map((item: ResItem): { variable: VarItem; values: Record<string, unknown> } => {
+    const updates = await Promise.all((relationship.resources as ResItem[]).map(async (item: ResItem): Promise<{ variable: VarItem; values: Record<string, unknown> }> => {
       const v = byId.get(item.id);
       if (v === undefined) throw new Error("Variable not found");
-      return { variable: v, values: variableSetVariableUpdate(v, item.attributes as Parameters<typeof variableSetVariableUpdate>[1]) };
-    });
+      const base = variableSetVariableUpdate(v, item.attributes as Parameters<typeof variableSetVariableUpdate>[1]);
+      const sensitiveNow = base.sensitive === true;
+      const valueChanged = base.value !== v.value;
+      const sensitiveChanged = sensitiveNow !== (v.sensitive === true);
+      if (valueChanged || sensitiveChanged) {
+        const stored = await variableValueForWrite(sensitiveNow, base.value as string);
+        base.value = stored.value;
+        (base as Record<string, unknown>).valueEncrypted = stored.valueEncrypted;
+      } else {
+        (base as Record<string, unknown>).valueEncrypted = v.valueEncrypted;
+      }
+      return { variable: v, values: base };
+    }));
     try {
       await db.transaction(async (tx: unknown): Promise<void> => {
         const t = tx as typeof db;

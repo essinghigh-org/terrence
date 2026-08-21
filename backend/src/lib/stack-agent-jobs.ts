@@ -176,7 +176,11 @@ export async function completeStackAgentJob(
   completion: StackAgentJobCompletion,
 ): Promise<Readonly<{ job: StackAgentJob; runStatus: string; fencingToken?: number }> | undefined> {
   const outcome = await db.transaction(async (tx): Promise<Readonly<{ job: StackAgentJob; runStatus: string; fencingToken?: number }> | undefined> => {
-    if (!isStackAgentResultValid(completion.result)) throw new Error(`stack agent result exceeds ${MAX_STACK_AGENT_RESULT_BYTES} bytes or structural limits`);
+    // Terraform state can be arbitrarily large — validate the metadata envelope
+    // without the state payload so a valid apply with a large state is not
+    // rejected. State is persisted as a file artifact via saveStackState.
+    const { state: _state, json_state: _jsonState, ...metadata } = completion.result as Record<string, unknown>;
+    if (!isStackAgentResultValid(metadata)) throw new Error(`stack agent result metadata exceeds ${MAX_STACK_AGENT_RESULT_BYTES} bytes or structural limits`);
     const job = await tx.query.stackAgentJobs.findFirst({ where: and(eq(stackAgentJobs.id, jobId), eq(stackAgentJobs.agentId, agentId), eq(stackAgentJobs.status, "claimed")) });
     if (job === undefined) return undefined;
     const step = await tx.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, job.stepId), eq(stackRecords.recordType, "stack-deployment-steps")) });

@@ -8,7 +8,7 @@ import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
 
 const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 
-import { checkOrganizationPermission, checkOrgPermission, checkWorkspacePermission, pageRequest, pagination } from "../lib/utils";
+import { auditLog, checkOrganizationPermission, checkOrgPermission, checkWorkspacePermission, pageRequest, pagination } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { orgMembershipResource } from "../lib/response";
 import { cachedOrgByName } from "../lib/cached-lookups";
@@ -547,6 +547,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       await t.delete(apiTokens).where(and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, true)));
       await t.insert(apiTokens).values({ id, token: tokenHash, teamId, orgId: team.orgId, description: `Team token for ${team.name}`, scopes: null, legacy: true, createdAt: Date.now() });
     });
+    await auditLog("create", "team-authentication-token", id, user?.id ?? null, team.orgId, { teamId, legacy: true });
     (set as { status: number }).status = 201;
     return { data: { id, type: "authentication-tokens", attributes: { token: rawToken, "created-at": new Date().toISOString() } } };
   })
@@ -562,7 +563,8 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(apiTokens).where(and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, true)));
+    const deleted = await db.delete(apiTokens).where(and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, true))).returning({ id: apiTokens.id });
+    if (deleted.length > 0) await auditLog("delete", "team-authentication-token", deleted[0]!.id, user?.id ?? null, team.orgId, { teamId, legacy: true });
     (set as { status: number }).status = 204;
     return {};
   })
@@ -619,6 +621,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     }
     const tokenHash = hashAuthenticationToken(secret);
     await db.insert(apiTokens).values({ id: tokenId, token: tokenHash, orgId: team.orgId, teamId: team.id, description, createdAt: Date.now(), expiresAt, legacy: false });
+    await auditLog("create", "team-authentication-token", tokenId, user?.id ?? null, team.orgId, { teamId, description });
     (set as { status: number }).status = 201;
     return { data: { id: tokenId, type: "authentication-tokens", attributes: { token: secret, description, "created-at": new Date().toISOString(), "expired-at": expiresAt !== null ? new Date(expiresAt).toISOString() : null } } };
   })
@@ -640,7 +643,8 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     // Removing a modern token must never disturb the legacy credential.
-    await db.delete(apiTokens).where(and(eq(apiTokens.id, tokenId), eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, false)));
+    const deleted = await db.delete(apiTokens).where(and(eq(apiTokens.id, tokenId), eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, false))).returning({ id: apiTokens.id });
+    if (deleted.length > 0) await auditLog("delete", "team-authentication-token", tokenId, user?.id ?? null, team.orgId, { teamId });
     (set as { status: number }).status = 204;
     return {};
   })
