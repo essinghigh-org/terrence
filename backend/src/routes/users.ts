@@ -184,7 +184,12 @@ export const userRoutes = new Elysia({ name: "users" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be \"organization-memberships\"" }] };
     }
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const email = typeof attrs.email === "string" ? attrs.email : undefined;
+    const rawEmail = typeof attrs.email === "string" ? attrs.email.trim() : undefined;
+    if (rawEmail !== undefined && (rawEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail))) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email address" }] };
+    }
+    const email = rawEmail?.toLowerCase() ?? undefined;
     const username = typeof attrs.username === "string" ? attrs.username : undefined;
     let targetUser: Readonly<typeof users.$inferSelect> | undefined;
     if (email !== undefined) targetUser = await db.query.users.findFirst({ where: eq(users.email, email) });

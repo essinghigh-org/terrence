@@ -118,6 +118,8 @@ export function sanitizeUsername(value: string): string | null {
   return cleaned;
 }
 
+export function canonicalizeEmail(value: string): string | null { return validEmail(value); }
+
 export function validEmail(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim().toLowerCase();
