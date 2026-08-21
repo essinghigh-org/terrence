@@ -155,6 +155,8 @@ function fksByColumn(table: Table): Map<string, { targetVar: string; foreignProp
 const PARTIAL_INDEX_OVERRIDES: Readonly<Record<string, (props: Map<string, string>) => string>> = {
   projects_org_default_idx: (props): string =>
     `sql\`\${table.${props.get("is_default")}} = true\``,
+  organization_invitations_org_email_pending_idx: (props): string =>
+    `sql\`\${table.${props.get("status")}} = 'pending'\``,
 };
 
 function renderExtras(table: Table, props: Map<string, string>): string[] {

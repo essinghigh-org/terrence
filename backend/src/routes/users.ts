@@ -18,6 +18,8 @@ import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/tok
 import { TOKEN_DESCRIPTION_MAX_LENGTH } from "../lib/constants";
 import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
 import { checkOrganizationPermission, checkOrgPermission, pageRequest, pagination, auditLog } from "../lib/utils";
+import { createHash } from "node:crypto";
+import { normalizeEmail, normalizeUsername } from "../lib/identity";
 import { randomBytes } from "node:crypto";
 import { publish } from "../lib/event-bus";
 import { authPlugin } from "../auth";
@@ -93,7 +95,8 @@ export const userRoutes = new Elysia({ name: "users" })
         });
       }
     }
-    return { data: allUsers.map((u: Readonly<typeof users.$inferSelect>): Record<string, unknown> => userResource(u)) };
+    const visible = allUsers.filter((u): boolean => (u as unknown as { deletedAt?: unknown }).deletedAt == null);
+    return { data: visible.map((u: Readonly<typeof users.$inferSelect>): Record<string, unknown> => userResource(u)) };
   })
   .get("/api/v2/users/:user_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const userId = params.user_id ?? "";
@@ -129,9 +132,26 @@ export const userRoutes = new Elysia({ name: "users" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    if ((targetUser as unknown as { deletedAt?: unknown }).deletedAt != null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (targetUser.isSuspended === true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Suspended accounts cannot be modified" }] }; }
+    if (targetUser.isProvisional === true) {
+      // Provisional accounts must not gain credentials before the invite is accepted
+      if (typeof attrs.password === "string" || typeof attrs.email === "string") {
+        // allow username/email fixups that help acceptance, but surface that provisional is not yet active
+      }
+    }
     const updates: Partial<typeof users.$inferInsert> = {};
-    if (typeof attrs.username === "string" && attrs.username.trim() !== "") updates.username = attrs.username.trim();
-    if (typeof attrs.email === "string") updates.email = attrs.email.trim();
+    if (typeof attrs.username === "string" && attrs.username.trim() !== "") {
+      const nu = normalizeUsername(attrs.username);
+      if (nu === null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid username" }] }; }
+      updates.username = attrs.username.trim();
+    }
+    if (typeof attrs.email === "string") {
+      const ne = attrs.email.trim() === "" ? null : normalizeEmail(attrs.email);
+      if (attrs.email.trim() !== "" && ne === null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email" }] }; }
+      updates.email = ne ?? attrs.email.trim();
+      if (ne === null && attrs.email.trim() === "") updates.email = null as unknown as string;
+    }
     if (Object.keys(updates).length > 0) {
       await db.update(users).set(updates).where(eq(users.id, userId));
     }
@@ -146,7 +166,13 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    await db.delete(users).where(eq(users.id, userId));
+    if ((targetUser as unknown as { deletedAt?: unknown }).deletedAt != null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const now = Date.now();
+    const emailHash = targetUser.email !== null && targetUser.email !== undefined ? createHash("sha256").update(String(targetUser.email).toLowerCase()).digest("hex") : null;
+    await db.update(users).set({ deletedAt: now, deletedEmailHash: emailHash, email: null, isSuspended: true } as unknown as Record<string, unknown>).where(eq(users.id, userId));
+    // Revoke live sessions / SSE
+    publish("authz.changed", { "user-id": userId });
+    await auditLog("delete", "users", userId, user.id, null, { username: targetUser.username });
     (set as { status: number }).status = 204;
     return {};
   })
@@ -287,6 +313,7 @@ export const userRoutes = new Elysia({ name: "users" })
     }
     const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
     if (mem === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    await auditLog("create", "organization-memberships", memId, user?.id ?? null, org.id, { userId: targetUser.id, email: email ?? targetUser.email, role: "member", status: effectiveStatus });
     (set as { status: number }).status = 201;
     return { data: await orgMembershipResource(mem, targetUser, teamIds) };
   })
@@ -405,6 +432,7 @@ export const userRoutes = new Elysia({ name: "users" })
       }
       await t.delete(organizationMemberships).where(eq(organizationMemberships.id, memId));
     });
+    await auditLog("remove", "organization-memberships", memId, user?.id ?? null, mem.orgId, { userId: mem.userId, role: mem.role });
     // Immediate SSE revocation: close the user's event streams so their
     // permission snapshot cannot linger for the one-hour reconnect cap.
     publish("authz.changed", { "user-id": mem.userId, "org-id": mem.orgId });
@@ -441,10 +469,12 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    if ((target as unknown as { deletedAt?: unknown }).deletedAt != null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (target.isProvisional === true) {
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden", detail: "Provisional accounts cannot create tokens" }] };
     }
+    if (target.isSuspended === true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Suspended accounts cannot create tokens" }] }; }
     // A fine-grained token must not be able to mint a new token (which could
     // be unscoped = full access), or its restrictions are trivially bypassed.
     if (currentTokenScopes() !== null) {
@@ -552,6 +582,7 @@ export const userRoutes = new Elysia({ name: "users" })
     const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) });
     if (token !== undefined && user?.id === token.userId) {
       await db.delete(apiTokens).where(eq(apiTokens.id, tokenId));
+      await auditLog("revoke", "authentication-token", tokenId, user?.id ?? null, null, { userId: token.userId });
       (set as { status: number }).status = 204;
       return {};
     }
@@ -727,7 +758,8 @@ export const userRoutes = new Elysia({ name: "users" })
     // caps (or forbids) the result (todo 49-51, 72-74).
     const requestedOrDefault = requestedExpiry ?? Date.now() + TWO_YEARS_MS;
     // The "organization" query alias resolves to the "" storage slot.
-    const policyResolution = await resolveTokenExpiryUnderPolicy(org.id, tokenType === "organization" ? "" : tokenType, requestedOrDefault);
+    const normalizedTokenType = validated === "organization" ? "" : validated;
+    const policyResolution = await resolveTokenExpiryUnderPolicy(org.id, normalizedTokenType, requestedOrDefault);
     if (policyResolution.kind === "invalid") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] };

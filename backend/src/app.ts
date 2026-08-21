@@ -88,6 +88,7 @@ import { scimRoutes } from "./routes/scim";
 import { explorerRoutes } from "./routes/explorer";
 import { teamProjectRoutes } from "./routes/team-projects";
 import { organizationRoleRoutes } from "./routes/organization-roles";
+import { organizationInvitationRoutes } from "./routes/organization-invitations";
 import { samlRoutes } from "./routes/saml";
 import { oidcRoutes } from "./routes/oidc";
 import { workloadIdentityRoutes } from "./routes/workload-identity";
@@ -770,6 +771,7 @@ export const app = new Elysia()
   .use(explorerRoutes)
   .use(teamProjectRoutes)
   .use(organizationRoleRoutes)
+  .use(organizationInvitationRoutes)
   .use(samlRoutes)
   .use(oidcRoutes)
   .use(workloadIdentityRoutes)

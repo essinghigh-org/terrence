@@ -136,6 +136,7 @@ const isIndexBuilder = (item: unknown): item is { config: IndexConfig } =>
 // at build time so the mirror can never silently diverge.
 const PARTIAL_INDEX_WHERE: Readonly<Record<string, (table: Record<string, unknown>) => SQL>> = {
   projects_org_default_idx: (table): SQL => sql`${table["isDefault"]} = true`,
+  organization_invitations_org_email_pending_idx: (table): SQL => sql`${table["status"]} = 'pending'`,
 };
 
 function tableName(table: SqliteTable): string {

@@ -5,6 +5,7 @@ import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { db } from "../db";
 import {
+  identityLinks,
   organizationMemberships,
   organizations,
   samlSettings,
@@ -198,6 +199,8 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
         if (!isUniqueConstraintError(error)) throw error;
       }
     }
+    // Record deterministic identity link for invite/SCIM/SSO convergence (todo #2/#11)
+    try { await db.insert(identityLinks).values({ id: `idlink-${crypto.randomUUID()}`, userId: byIdentity.id, provider: identity.provider, externalId: subject, emailAtLinkTime: email, createdAt: Date.now() }).onConflictDoNothing(); } catch {}
     const refreshed = await db.query.users.findFirst({ where: eq(users.id, byIdentity.id) });
     if (refreshed === undefined) throw new Error("SSO user is unavailable");
     return { user: refreshed, created: false };
@@ -219,6 +222,7 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
         .where(and(eq(users.id, byEmail.id), isNull(users.ssoProvider), isNull(users.ssoSubject)))
         .returning({ id: users.id });
       if (linked.length === 0) throw new SsoConflictError(identity.provider, username);
+      try { await db.insert(identityLinks).values({ id: `idlink-${crypto.randomUUID()}`, userId: byEmail.id, provider: identity.provider, externalId: subject, emailAtLinkTime: email, createdAt: Date.now() }).onConflictDoNothing(); } catch {}
       const refreshed = await db.query.users.findFirst({ where: eq(users.id, byEmail.id) });
       if (refreshed === undefined) throw new Error("SSO user is unavailable");
       return { user: refreshed, created: false };
@@ -292,6 +296,7 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
     }
     throw new Error("Failed to provision SSO user");
   }
+  try { await db.insert(identityLinks).values({ id: `idlink-${crypto.randomUUID()}`, userId: raced.id, provider: identity.provider, externalId: subject, emailAtLinkTime: email, createdAt: Date.now() }).onConflictDoNothing(); } catch {}
   if (raced.id !== userId) {
     // Another concurrent login created the identity; reuse that account.
     return { user: raced, created: false };
