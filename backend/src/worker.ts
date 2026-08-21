@@ -71,6 +71,7 @@ import { decryptSecret } from "./lib/secrets";
 import { log } from "./lib/log";
 import { assertArchiveExpandedSize, assertArchiveLogicalSize, assertArchiveMemberCount } from "./lib/archive";
 import { startDurableJobWorker } from "./lib/durable-jobs";
+import { handleVcsWebhookJob } from "./lib/webhook-jobs";
 import { runModuleTestJob } from "./lib/module-test-worker";
 import { runStackConfigurationJob, runStackDeploymentJob } from "./lib/stack-worker";
 import { runPlanExplanationJob } from "./lib/plan-explainer-worker";
@@ -3267,6 +3268,7 @@ export function startWorkerQueue(): void {
     "explorer-inventory": runExplorerInventoryJob,
     "explorer-catalog": runExplorerCatalogJob,
     "plan-explanation": runPlanExplanationJob,
+    "vcs-webhook": handleVcsWebhookJob,
   });
 
   const arm = (cycle: () => Promise<void>, interval: number): void => {

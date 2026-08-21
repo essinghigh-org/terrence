@@ -128,6 +128,13 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
     metrics.terrence_database_page_count = collection.instance.database.pageCount;
     metrics.terrence_database_cache_size_bytes = collection.instance.database.cacheSizeBytes;
     metrics.terrence_database_freelist_bytes = collection.instance.database.freelistBytes;
+    // VCS webhook delivery queue (todo 192-194).
+    metrics.terrence_webhook_queue = {
+      queued: collection.instance.webhookQueue.queued,
+      processing: collection.instance.webhookQueue.processing,
+      failed: collection.instance.webhookQueue.failed,
+      oldest_pending_seconds: collection.instance.webhookQueue.oldestPendingSeconds,
+    };
   }
   if (collection.process !== null) {
     const { snapshot, history } = collection.process;
@@ -242,6 +249,17 @@ function prometheusLines(collection: MetricsCollection): string[] {
       "# TYPE terrence_database_cache_size_bytes gauge",
       "# HELP terrence_database_freelist_bytes Database freelist pages in bytes (sqlite bloat signal; null on postgres).",
       "# TYPE terrence_database_freelist_bytes gauge",
+      // VCS webhook delivery queue gauges (todo 192-194).
+      "# HELP terrence_webhook_queue_depth VCS webhook deliveries waiting or in-flight, by state.",
+      "# TYPE terrence_webhook_queue_depth gauge",
+      `terrence_webhook_queue_depth{state="queued"} ${instance.webhookQueue.queued}`,
+      `terrence_webhook_queue_depth{state="processing"} ${instance.webhookQueue.processing}`,
+      "# HELP terrence_webhook_failed_total VCS webhook deliveries dead-lettered after repeated failure.",
+      "# TYPE terrence_webhook_failed_total gauge",
+      `terrence_webhook_failed_total ${instance.webhookQueue.failed}`,
+      "# HELP terrence_webhook_oldest_pending_seconds Age of the oldest delivery not yet processed.",
+      "# TYPE terrence_webhook_oldest_pending_seconds gauge",
+      `terrence_webhook_oldest_pending_seconds ${instance.webhookQueue.oldestPendingSeconds}`,
     );
     // Backend-specific samples are omitted when the value is unavailable
     // (postgres has no sqlite page cache/freelist) rather than emitting 0.

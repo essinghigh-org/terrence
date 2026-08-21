@@ -84,6 +84,7 @@ const counters = {
 const failures = {
   auditWrites: 0,
   runLogWrites: 0,
+  webhookDeliveries: 0,
 };
 
 export type FailureKind = keyof typeof failures;

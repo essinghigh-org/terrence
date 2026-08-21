@@ -3,7 +3,7 @@ import { db } from "../db";
 import { durableJobs } from "../db/schema";
 import { log } from "./log";
 
-export type DurableJobKind = "module-test" | "stack-configuration" | "stack-deployment" | "explorer-inventory" | "explorer-catalog" | "plan-explanation";
+export type DurableJobKind = "module-test" | "stack-configuration" | "stack-deployment" | "explorer-inventory" | "explorer-catalog" | "plan-explanation" | "vcs-webhook";
 export type DurableJob = Readonly<typeof durableJobs.$inferSelect>;
 export type DurableJobContext = Readonly<{
   heartbeat: () => Promise<boolean>;
@@ -13,7 +13,8 @@ export type DurableJobHandler = (job: DurableJob, context: DurableJobContext) =>
 
 const LEASE_MS = 30_000;
 const POLL_MS = 500;
-const MAX_ATTEMPTS = 3;
+/** Attempts before a durable job dead-letters (todo 186); shared with the webhook delivery mirror. */
+export const DURABLE_MAX_ATTEMPTS = 3;
 let workerRunning = false;
 
 export async function enqueueDurableJob(
@@ -209,7 +210,7 @@ async function runJob(job: DurableJob, handler: DurableJobHandler): Promise<void
     const message = error instanceof Error ? error.message : String(error);
     const stopped = await isDurableJobStopped(job).catch((): boolean => false);
     if (!stopped) {
-      await finishDurableJob(job, job.attempts >= MAX_ATTEMPTS ? "failed" : "queued", message);
+      await finishDurableJob(job, job.attempts >= DURABLE_MAX_ATTEMPTS ? "failed" : "queued", message);
     }
     log.error("Durable job failed", { jobId: job.id, kind: job.kind, attempts: job.attempts, error: message });
   } finally {

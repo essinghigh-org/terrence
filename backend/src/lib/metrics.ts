@@ -35,6 +35,7 @@ import {
 } from "./utils";
 import type { TokenScopes } from "./token-scopes";
 import { processHistory, processSnapshot, type ProcessSnapshot, type SampleWindow } from "./process-metrics";
+import { collectWebhookQueueMetrics, type WebhookQueueMetrics } from "./webhook-jobs";
 
 export type AgentPoolMetrics = Readonly<{
   id: string;
@@ -74,6 +75,8 @@ export type MetricsCollection = Readonly<{
       cacheSizeBytes: number | null;
       freelistBytes: number | null;
     }>;
+    /** VCS webhook delivery queue state (todo 192-194). */
+    webhookQueue: WebhookQueueMetrics;
   }> | null;
   /**
    * Process-level runtime observability (rss, heap, request counters, worker
@@ -172,13 +175,14 @@ async function collectPoolMetrics(
 
 /** Instance-wide metrics (legacy tokens only). */
 export async function collectInstanceMetrics(): Promise<NonNullable<MetricsCollection["instance"]>> {
-  const [userCount, organizationCount, workspaceCount, runCount, runsByStatus, database] = await Promise.all([
+  const [userCount, organizationCount, workspaceCount, runCount, runsByStatus, database, webhookQueue] = await Promise.all([
     db.select({ value: count() }).from(users),
     db.select({ value: count() }).from(organizations),
     db.select({ value: count() }).from(workspaces),
     db.select({ value: count() }).from(runs),
     db.select({ status: runs.status, value: count() }).from(runs).groupBy(runs.status),
     Promise.resolve(databaseMetrics()),
+    collectWebhookQueueMetrics(),
   ]);
   return {
     users: userCount[0]?.value ?? 0,
@@ -193,6 +197,7 @@ export async function collectInstanceMetrics(): Promise<NonNullable<MetricsColle
       cacheSizeBytes: database.cacheSizeBytes,
       freelistBytes: database.freelistBytes,
     },
+    webhookQueue,
   };
 }
 
