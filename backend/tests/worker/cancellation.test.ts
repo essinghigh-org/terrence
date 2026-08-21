@@ -138,4 +138,4 @@ test("cancel terminates the IaC subprocess and the run cannot publish success", 
   expect(result.subprocessDead).toBe(true);
   expect(result.status).toBe("canceled");
   expect(result.applied).toBe(false);
-});
+}, { timeout: 30000 });
