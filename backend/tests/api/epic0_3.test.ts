@@ -119,7 +119,13 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
     expect(delRes.status).toBe(204);
 
     const checkUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
-    expect(checkUser).toBeUndefined();
+    // Soft-delete retains a tombstone (todo #13) so the row survives with deletedAt set.
+    expect(checkUser).toBeDefined();
+    expect((checkUser as unknown as { deletedAt?: number | null })?.deletedAt).toBeDefined();
+    expect((checkUser as unknown as { deletedAt?: number | null })?.deletedAt).not.toBeNull();
+    // Deleted users must no longer authenticate / be fetchable
+    const getAfterDelete = await app.handle(new Request(`http://localhost/api/v2/users/${userId}`, { headers: { Authorization: `Bearer ${userToken}` } }));
+    expect([401, 404].includes(getAfterDelete.status)).toBeTrue();
   });
 
   it("supports organization membership creation, listing, showing with include=user, and deletion", async () => {
