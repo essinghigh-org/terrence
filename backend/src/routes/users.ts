@@ -339,7 +339,13 @@ export const userRoutes = new Elysia({ name: "users" })
     const includeQuery = query.include;
     const includeUsers = typeof includeQuery === "string" && includeQuery.split(",").includes("user");
     const data = await Promise.all(page.map(async (m: Readonly<typeof organizationMemberships.$inferSelect>): Promise<Record<string, unknown>> => orgMembershipResource(m, userMap.get(m.userId) ?? null)));
-    const result: { data: Record<string, unknown>[]; included?: Record<string, unknown>[]; meta?: Record<string, unknown> } = { data, ...pagination(request, number, size, totalFiltered), meta: { "status-counts": statusCounts } };
+    const result: { data: Record<string, unknown>[]; included?: Record<string, unknown>[]; meta?: Record<string, unknown>; links?: Record<string, string | null> } = {
+      data,
+      ...pagination(request, number, size, totalFiltered),
+    };
+    // Preserve pagination meta alongside status-counts (object spread of `meta`
+    // would otherwise clobber one side). Merge both.
+    result.meta = { ...(result.meta ?? {}), "status-counts": statusCounts } as Record<string, unknown>;
     if (includeUsers && userList.length > 0) {
       result.included = userList.map((u: Readonly<typeof users.$inferSelect>): Record<string, unknown> => userResource(u));
     }
