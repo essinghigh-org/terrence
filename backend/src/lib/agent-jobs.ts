@@ -28,6 +28,44 @@ import {
 } from "./plan-json";
 import type { DeepReadonly } from "./utils";
 
+export const MAX_AGENT_RESULT_BYTES = 64 * 1024;
+export const MAX_AGENT_RESULT_DEPTH = 8;
+export const MAX_AGENT_RESULT_KEYS = 500;
+
+function isResultValueTooLarge(value: unknown, depth: number, keyCount: { count: number }): boolean {
+  if (depth > MAX_AGENT_RESULT_DEPTH) return true;
+  if (typeof value === "string" && value.length > 16_384) return true;
+  if (typeof value !== "object" || value === null) return false;
+  if (Array.isArray(value)) {
+    if (value.length > 1000) return true;
+    keyCount.count += value.length;
+    if (keyCount.count > MAX_AGENT_RESULT_KEYS) return true;
+    for (const item of value) if (isResultValueTooLarge(item, depth + 1, keyCount)) return true;
+    return false;
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > 200) return true;
+  keyCount.count += entries.length;
+  if (keyCount.count > MAX_AGENT_RESULT_KEYS) return true;
+  for (const [k, v] of entries) {
+    if (k.length > 1024) return true;
+    if (typeof v === "string" && v.length > 16_384) return true;
+    if (isResultValueTooLarge(v, depth + 1, keyCount)) return true;
+  }
+  return false;
+}
+
+export function isAgentResultValid(result: unknown): boolean {
+  if (typeof result !== "object" || result === null || Array.isArray(result)) return false;
+  try {
+    const serialized = JSON.stringify(result);
+    if (new TextEncoder().encode(serialized).byteLength > MAX_AGENT_RESULT_BYTES) return false;
+  } catch {
+    return false;
+  }
+  return !isResultValueTooLarge(result, 0, { count: 0 });
+}
+
 export type AgentJobCompletion = Readonly<{
   status: "completed" | "errored";
   errorMessage: string | null;
@@ -722,6 +760,7 @@ export async function completeAgentJob(
     const run = await tx.query.runs.findFirst({ where: eq(runs.id, job.runId) });
     const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
     if (run?.status !== expectedRunStatus) return undefined;
+    if (!isAgentResultValid(completion.result)) return undefined;
     if (completion.planJson !== null && (completion.status !== "completed" || job.phase !== "plan")) {
       return undefined;
     }

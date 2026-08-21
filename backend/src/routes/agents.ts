@@ -23,6 +23,8 @@ import {
   claimAgentJob,
   completeAgentJob,
   findClaimedAgentJob,
+  isAgentResultValid,
+  MAX_AGENT_RESULT_BYTES,
   type AgentJobCompletion,
   type ClaimedAgentJob,
 } from "../lib/agent-jobs";
@@ -325,6 +327,10 @@ function completionFromBody(body: unknown): AgentJobCompletion | undefined {
     } catch {
       return undefined;
     }
+  }
+  const rawResult = attrs.result;
+  if (rawResult !== undefined && rawResult !== null && typeof rawResult === "object") {
+    if (!isAgentResultValid(rawResult)) return undefined;
   }
   const result = typeof attrs.result === "object" && attrs.result !== null && !Array.isArray(attrs.result)
     ? attrs.result as Record<string, unknown>
@@ -787,6 +793,10 @@ export const agentRoutes = new Elysia({ name: "agents" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "status must be completed or errored" }] };
     }
     const rawResult = attrs.result;
+    if (rawResult !== null && typeof rawResult === "object" && !Array.isArray(rawResult) && !isAgentResultValid(rawResult)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `result exceeds ${MAX_AGENT_RESULT_BYTES} bytes or structural limits` }] };
+    }
     const result = rawResult !== null && typeof rawResult === "object" && !Array.isArray(rawResult) ? rawResult as Record<string, unknown> : {
       hasChanges: attrs["has-changes"] === true,
       deferredChanges: attrs["deferred-changes"] === true,
