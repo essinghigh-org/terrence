@@ -1,7 +1,8 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { policySets, policySetVersions, policySetWorkspaces, policySetProjects, policySetExclusions, policySetProjectExclusions, policySetTagSelectors, policySetParameters, policies, policyChecks, projects, runs, workspaces, organizations, oauthClients, oauthTokens, githubAppInstallations, type users } from "../db/schema";
-import { eq, and, inArray, asc, isNull, like } from "drizzle-orm";
+import { eq, and, inArray, asc, isNull, like, ilike } from "drizzle-orm";
+import { isPostgres } from "../db/driver";
 import { checkOrganizationPermission, checkWorkspacePermission, signedApiURL, validSignedApiURL , type DeepReadonly } from "../lib/utils";
 import { organizationName } from "../lib/response";
 import { authPlugin } from "../auth";
@@ -348,9 +349,10 @@ export const policyRoutes = new Elysia({ name: "policies" })
     if (kind === "sentinel" || kind === "opa") conditions.push(eq(policies.kind, kind));
     const searchName = paramsUrl.get("search[name]")?.trim() ?? paramsUrl.get("q")?.trim();
     if (searchName !== undefined && searchName !== "") {
-      // SQLite LIKE is ASCII case-insensitive; matches the in-memory
-      // policy-set name filter below.
-      conditions.push(like(policies.name, `%${searchName}%`));
+      // SQLite LIKE is ASCII case-insensitive; Postgres LIKE is not — use
+      // ILIKE there so the contract holds on both drivers.
+      const nameFilter = isPostgres ? ilike(policies.name, `%${searchName}%`) : like(policies.name, `%${searchName}%`);
+      conditions.push(nameFilter);
     }
     const polList = (await db.query.policies.findMany({
       where: and(...conditions),

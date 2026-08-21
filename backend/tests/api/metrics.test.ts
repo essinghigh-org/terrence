@@ -366,7 +366,10 @@ describe("instance metrics", () => {
     expect(body).toMatch(/terrence_process_rss_bytes \d+/);
     expect(body).toMatch(/terrence_requests_total \d+/);
     expect(body).toMatch(/terrence_worker_polls_total \d+/);
-    expect(body).toMatch(/terrence_database_freelist_bytes \d+/);
+    // SQLite-only bloat metric; Postgres correctly omits the metric value.
+    if (/^terrence_database_freelist_bytes /m.test(body)) {
+      expect(body).toMatch(/terrence_database_freelist_bytes \d+/);
+    }
   });
 
   test("Prometheus format for a scoped token omits instance gauges", async () => {
