@@ -9,8 +9,25 @@ on:
 permissions: read-all
 
 jobs:
-  test:
-    name: Test
+  backend-sqlite:
+    name: Backend (SQLite)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Run backend tests (SQLite)
+        run: cd backend && bun test
+
+  backend-postgres:
+    name: Backend (Postgres)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -31,14 +48,53 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: latest
-
+          bun-version: 1.3.14
       - name: Install dependencies
         run: bun install --frozen-lockfile
-
-      - name: Run backend tests
+      - name: Run backend tests (Postgres)
+        env:
+          DATABASE_URL: postgres://terrence:terrence@localhost:5432/terrence_test
         run: cd backend && bun test
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Run frontend tests
+        run: cd frontend && bun test --preload ./tests/setup.ts --parallel=8
+      - name: Frontend build
+        run: cd frontend && bun run build
+
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Lint
+        run: bun run lint
+      - name: Knip
+        run: bun run knip
