@@ -2,15 +2,28 @@ import { Elysia } from "elysia";
 import { db } from "../db";
 import { users, apiTokens, refreshSessions, organizationMemberships, organizations, samlSettings, teams, user2FA } from "../db/schema";
 import { and, count, eq, gt, inArray, isNull, ne, or } from "drizzle-orm";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { userResource } from "../lib/response";
 import { isUniqueConstraintError } from "../lib/validation";
+import { envEnabled } from "../lib/env";
 import { auditLog } from "../lib/utils";
 import { log } from "../lib/log";
 import { authPlugin } from "../auth";
 import { lockFirstUserElection } from "../db/first-user";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
+import { encryptSecret, decryptSecret, isEncryptedSecret } from "../lib/secrets";
+import { syncedTrustedClientIp } from "../lib/client-ip";
+import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
+
+// HTTPS source of truth for cookie flags (todo 134): when PUBLIC_URL is
+// configured it overrides per-request protocol/header detection.
+const PUBLIC_URL = ((): URL | null => {
+  const raw = process.env.PUBLIC_URL;
+  if (typeof raw !== "string" || raw === "") return null;
+  try { return new URL(raw); } catch { return null; }
+})();
 import { issueMfaChallenge, consumeMfaChallenge } from "../lib/mfa-challenge";
+import { withDbLock } from "../lib/db-lock";
 import { authenticateLdapWithCircuitBreaker } from "../lib/ldap";
 import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "../lib/sso";
 import { resolveClientIp } from "../lib/client-ip";
@@ -19,8 +32,16 @@ import { checkPasswordPolicy, loadPasswordPolicy } from "../lib/password-policy"
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const REFRESH_COOKIE = "terrence_refresh";
+// Two-tab concurrency grace (todo 125-127): a presented refresh token that
+// was rotated within this window is treated as a legitimate concurrent tab,
+// not replay. Replay detection (family revocation) applies outside it.
+const REFRESH_GRACE_MS = 30_000;
 const THEME_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-// ponytail: one Bun process is the deployment model; use database row locks if horizontal scaling is added.
+// Cross-replica refresh rotation lock (todo 347): DB-backed mutex via
+// the locks table so that multi-replica Postgres deployments serialize
+// refresh rotation atomically. On SQLite the DB lock serializes through
+// the single writer just as correctly; the in-process queue remains as a
+// fast-path so we do not hit the DB on every serialization hop.
 let refreshRotationQueue = Promise.resolve();
 
 async function withRefreshRotationLock<T>(operation: () => Promise<T>): Promise<T> {
@@ -31,7 +52,9 @@ async function withRefreshRotationLock<T>(operation: () => Promise<T>): Promise<
   });
   await previous;
   try {
-    return await operation();
+    // Serialize across replicas through the DB lock; the outer in-process
+    // queue prevents thundering within this replica while we wait.
+    return await withDbLock("refresh-rotation", operation);
   } finally {
     release();
   }
@@ -78,7 +101,7 @@ export function opaqueToken(prefix: string): string {
 }
 
 export function tokenHash(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
+  return hashAuthenticationToken(token);
 }
 
 function refreshCookieCandidates(request: RequestInfo | undefined): string[] {
@@ -94,8 +117,18 @@ function refreshCookieCandidates(request: RequestInfo | undefined): string[] {
 }
 
 function secureRequest(request: RequestInfo | undefined): boolean {
-  const forwarded = request?.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
-  return forwarded === "https" || (request !== undefined && new URL(request.url).protocol === "https:");
+  // X-Forwarded-Proto is only trusted when the admin opted in to trusting
+  // forwarded headers via trusted-client-ip-headers (todo 133): an untrusted
+  // client must not be able to force the Secure flag decision either way.
+  // The configured PUBLIC_URL (todo 134) is the HTTPS source of truth for
+  // deployments that terminate TLS at a proxy without header trust.
+  if (PUBLIC_URL !== null) return PUBLIC_URL.protocol === "https:";
+  const forwardedTrusted = syncedTrustedClientIp(request) !== null;
+  if (forwardedTrusted) {
+    const forwarded = request?.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+    if (forwarded !== undefined && forwarded !== "") return forwarded === "https";
+  }
+  return request !== undefined && new URL(request.url).protocol === "https:";
 }
 
 function setRefreshCookie(
@@ -353,16 +386,23 @@ function refreshUnauthorized(
   return { errors: [{ status: "401", title: "Unauthorized", detail }] };
 }
 
+async function resolveMfaSeed(mfa: Readonly<{ secret: string; secretEncrypted: string | null }>): Promise<string | null> {
+  const raw = mfa.secretEncrypted ?? (mfa.secret !== "" ? mfa.secret : null);
+  if (raw === null) return null;
+  if (!isEncryptedSecret(raw)) return raw;
+  try { return await decryptSecret(raw); } catch { return null; }
+}
+
 export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
   .post("/admin/initial-admin-user", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
     const configuredToken = process.env.IACT_TOKEN;
-    // the reference format's installer passes the token as a query parameter, so the query
-    // form stays for compatibility (kanban 5.3). Accept a header alternative
-    // so fresh deployments can keep the secret out of proxy logs, browser
-    // history, and traces entirely. Operators that never use the installer
-    // flow can disable the query form outright with IACT_QUERY_TOKEN_DISABLED.
-    const queryEnabled = process.env.IACT_QUERY_TOKEN_DISABLED !== "1" && process.env.IACT_QUERY_TOKEN_DISABLED !== "true";
+    // the reference format's installer passes the token as a query parameter.
+    // Query-token compatibility is OPT-IN (todo 142: the default is the
+    // safer header-only flow) — set IACT_QUERY_TOKEN_ENABLED=1 to restore the
+    // reference installer behavior. The header alternative keeps the secret
+    // out of proxy logs, browser history, and traces entirely.
+    const queryEnabled = envEnabled(process.env.IACT_QUERY_TOKEN_ENABLED);
     const queryToken = request === undefined || !queryEnabled ? null : new URL(request.url).searchParams.get("token");
     const headerToken = request === undefined ? null
       : request.headers.get("x-iact-token")
@@ -402,7 +442,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const organizationId = `org-${crypto.randomUUID()}`;
     const configuredOrganizationName = (process.env.ADMIN_ORGANIZATION ?? "default").trim();
     const organizationName = configuredOrganizationName === "" ? "default" : configuredOrganizationName;
-    const token = `user-${crypto.randomUUID()}`;
+    const token = generateAuthenticationToken("user");
     const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
     const createdOrganizationId = await db.transaction(async (tx: unknown): Promise<string | null> => {
       const t = tx as typeof db;
@@ -437,7 +477,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       });
       await t.insert(apiTokens).values({
         id: crypto.randomUUID(),
-        token: createHash("sha256").update(token).digest("hex"),
+        token: hashAuthenticationToken(token),
         userId,
         description: "Initial administrator token",
         createdAt: Date.now(),
@@ -590,7 +630,12 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     }
 
     const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, challenge.userId) });
-    if (mfa === undefined || mfa.enabled !== true || !verifyTotp(mfa.secret, code)) {
+    if (mfa === undefined || mfa.enabled !== true) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
+    }
+    const loginSeedPlain = await resolveMfaSeed(mfa);
+    if (loginSeedPlain === null || !verifyTotp(loginSeedPlain, code)) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
     }
@@ -626,6 +671,41 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         if (current.revokedAt !== null || current.expiresAt <= now) {
           continue;
         }
+        // Two-tab concurrency grace (todo 125-127): this request serialized
+        // behind the winning tab (in-process rotation lock) and is presenting
+        // a token the winner just rotated. Within the grace window that is
+        // the legitimate second tab, not replay: re-issue an access token
+        // against the successor session WITHOUT rotating again. Outside the
+        // window the normal reuse handling below applies.
+        if (
+          current.rotatedAt !== null
+          && current.rotatedAtMs !== null
+          && current.successorHash !== null
+          && now - current.rotatedAtMs <= REFRESH_GRACE_MS
+        ) {
+          const successor = await db.query.refreshSessions.findFirst({
+            where: eq(refreshSessions.tokenHash, current.successorHash),
+          });
+          const successorUser = successor !== undefined && successor.revokedAt === null && successor.expiresAt > now
+            ? await db.query.users.findFirst({ where: eq(users.id, successor.userId) })
+            : undefined;
+          if (successor !== undefined && successorUser !== undefined) {
+            const graceAccess = opaqueToken("user");
+            const graceAccessId = crypto.randomUUID();
+            const graceExpiresAt = now + ACCESS_TOKEN_TTL_MS;
+            await db.insert(apiTokens).values({
+              id: graceAccessId,
+              token: tokenHash(graceAccess),
+              userId: successorUser.id,
+              description: "Browser session access token",
+              expiresAt: graceExpiresAt,
+              createdAt: now,
+            });
+            // The browser already holds the successor refresh cookie from the
+            // winning response; only the access-token document is re-issued.
+            return accessTokenDocument(graceAccessId, graceAccess, successorUser, graceExpiresAt);
+          }
+        }
         // Rotated tokens are normally reuse, but the pre-2026-08-19
         // Path=/api/v2/users ghost cookie is a rotated token that shares
         // the same family as the live token the browser also sends.
@@ -657,10 +737,14 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         const accessTokenId = crypto.randomUUID();
         const refreshToken = opaqueToken("refresh");
         const accessExpiresAt = now + ACCESS_TOKEN_TTL_MS;
+        // Two-tab concurrency grace (todo 125-127): the rotation records the
+        // successor hash so an immediately-duplicated refresh presenting the
+        // same old token resolves to the successor instead of revoking the
+        // family. Only rotations within REFRESH_GRACE_MS are forgiven.
         const rotated = await db.transaction(async (tx: unknown): Promise<boolean> => {
           const t = tx as typeof db;
           const claimed = await t.update(refreshSessions)
-            .set({ rotatedAt: now })
+            .set({ rotatedAt: now, rotatedAtMs: now, successorHash: tokenHash(refreshToken) })
             .where(and(
               eq(refreshSessions.id, current.id),
               isNull(refreshSessions.rotatedAt),
@@ -691,6 +775,49 @@ export const accountRoutes = new Elysia({ name: "accounts" })
           return true;
         });
         if (!rotated) {
+          // Re-read the row: the concurrent winner may have populated
+          // successorHash/rotatedAtMs that our stale snapshot lacks.
+          const fresh = await db.query.refreshSessions.findFirst({
+            where: eq(refreshSessions.id, current.id),
+          });
+          const effective = fresh ?? current;
+          // The claim failed: the token was already rotated (two-tab race or
+          // replay) or revoked/expired. The in-process rotation lock means a
+          // concurrent same-process tab serialized behind us and re-read the
+          // row; a genuine cross-process replay arrives later than the grace
+          // window. Inside the window, treat the duplicate as the legitimate
+          // second tab: hand back the successor session's access token
+          // WITHOUT rotating again (todo 125-126). Outside the window this
+          // stays a family-revocation reuse event (todo 127).
+          if (
+            effective.rotatedAtMs !== null
+            && effective.successorHash !== null
+            && now - effective.rotatedAtMs <= REFRESH_GRACE_MS
+          ) {
+            const successor = await db.query.refreshSessions.findFirst({
+              where: eq(refreshSessions.tokenHash, effective.successorHash),
+            });
+            const successorUser = successor !== undefined && successor.revokedAt === null && successor.expiresAt > now
+              ? await db.query.users.findFirst({ where: eq(users.id, successor.userId) })
+              : undefined;
+            if (successor !== undefined && successorUser !== undefined) {
+              const graceAccess = opaqueToken("user");
+              const graceAccessId = crypto.randomUUID();
+              const graceExpiresAt = now + ACCESS_TOKEN_TTL_MS;
+              await db.insert(apiTokens).values({
+                id: graceAccessId,
+                token: tokenHash(graceAccess),
+                userId: successorUser.id,
+                description: "Browser session access token",
+                expiresAt: graceExpiresAt,
+                createdAt: now,
+              });
+              // Keep the successor's refresh cookie value as-is: the browser
+              // already holds it from the first response. Only the access
+              // token document is re-issued here.
+              return accessTokenDocument(graceAccessId, graceAccess, successorUser, graceExpiresAt);
+            }
+          }
           await revokeRefreshFamily(current.familyId, current.userId, now);
           return refreshUnauthorized(set, request, "Refresh token reuse detected");
         }
@@ -749,7 +876,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     return undefined;
   })
   .post("/api/v2/users", async ({ body, set }: ReqCtx): Promise<unknown> => {
-    if (process.env.TERRENCE_ENABLE_LOCAL_SIGNUP !== "true") {
+    if (!envEnabled(process.env.TERRENCE_ENABLE_LOCAL_SIGNUP)) {
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden", detail: "Local signup is disabled on this instance. Set TERRENCE_ENABLE_LOCAL_SIGNUP=true or use ADMIN_PASSWORD bootstrap." }] };
     }
@@ -1012,11 +1139,15 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const secret = generateTotpSecret();
     const account = user.email ?? user.username;
     const otpauth = otpauthUrl(secret, account);
-    // Store as pending (enabled=false); verify flips it on after a valid code.
-    await db.insert(user2FA).values({ userId: user.id, secret, enabled: false }).onConflictDoUpdate({
+    // Store the seed ENCRYPTED at rest (todo 110): pending (enabled=false);
+    // verify flips it on after a valid code. The plaintext column keeps "" so
+    // the NOT NULL constraint holds; readers prefer secretEncrypted.
+    const secretEncrypted = await encryptSecret(secret);
+    await db.insert(user2FA).values({ userId: user.id, secret: "", secretEncrypted, enabled: false }).onConflictDoUpdate({
       target: user2FA.userId,
-      set: { secret, enabled: false },
+      set: { secret: "", secretEncrypted, enabled: false },
     });
+    await auditLog("enroll", "mfa", user.id, user.id, null, { userId: user.id });
     return {
       data: {
         type: "mfa",
@@ -1036,11 +1167,25 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Code is required" }] };
     }
     const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
-    if (mfa === undefined || !verifyTotp(mfa.secret, code)) {
+    if (mfa === undefined) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
     }
+    const seedPlain = await resolveMfaSeed(mfa);
+    if (seedPlain === null || !verifyTotp(seedPlain, code)) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
+    }
+    // Transparent migration: a plaintext seed is re-encrypted after its first
+    // successful use (todo 111/112 — the enc:v1 prefix check prevents
+    // double-encrypting an already-encrypted value).
+    if (mfa.secretEncrypted === null && mfa.secret !== "") {
+      await db.update(user2FA)
+        .set({ secret: "", secretEncrypted: await encryptSecret(mfa.secret) })
+        .where(eq(user2FA.userId, user.id));
+    }
     await db.update(user2FA).set({ enabled: true }).where(eq(user2FA.userId, user.id));
+    await auditLog("verify", "mfa", user.id, user.id, null, { userId: user.id });
     const token = refreshCookieCandidates(request)[0];
     if (token !== undefined && token !== "") {
       await db.update(refreshSessions)
@@ -1061,14 +1206,20 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Code is required" }] };
     }
     const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
-    if (mfa === undefined || mfa.enabled !== true) {
+    if (mfa === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found", detail: "MFA is not enabled" }] };
     }
-    if (!verifyTotp(mfa.secret, code)) {
+    if (mfa.enabled !== true) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found", detail: "MFA is not enabled" }] };
+    }
+    const disableSeedPlain = await resolveMfaSeed(mfa);
+    if (disableSeedPlain === null || !verifyTotp(disableSeedPlain, code)) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
     }
     await db.delete(user2FA).where(eq(user2FA.userId, user.id));
+    await auditLog("remove", "mfa", user.id, user.id, null, { userId: user.id });
     return { data: { type: "mfa", attributes: { enabled: false } } };
   });

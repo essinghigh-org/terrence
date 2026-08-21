@@ -1,4 +1,5 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { hashAuthenticationToken } from "./token-service";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -42,7 +43,7 @@ export async function revokeRunTokens(runId: string): Promise<void> {
 }
 
 export function hashRunToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
+  return hashAuthenticationToken(token);
 }
 
 /**

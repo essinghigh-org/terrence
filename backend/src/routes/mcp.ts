@@ -1,5 +1,6 @@
 import { Elysia } from "elysia";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { hashAuthenticationToken } from "../lib/token-service";
 import { db } from "../db";
 import { apiTokens } from "../db/schema";
 import { eq } from "drizzle-orm";
@@ -14,7 +15,7 @@ import type { McpSession, McpTool } from "../lib/mcp/types";
 class McpAuthError extends Error {}
 
 function hashToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
+  return hashAuthenticationToken(token);
 }
 
 async function resolveToken(raw: string): Promise<McpSession | null> {

@@ -132,8 +132,8 @@ describe("admin system-info (kanban 12.10)", () => {
 });
 
 describe("strict audit mode (kanban 12.16)", () => {
-  it("records user token minting only when AUDIT_STRICT is enabled", async () => {
-    // Gated off: no audit row for the same operation.
+  it("always audits token creation regardless of AUDIT_STRICT (kanban 426)", async () => {
+    // Credential lifecycle is unconditional (426-429); the flag only gates verbose reads.
     const offResponse = await request(`/api/v2/users/${userId}/authentication-tokens`, "POST", userToken, {
       data: { type: "authentication-tokens", attributes: { description: "strict-off-token" } },
     });
@@ -145,9 +145,10 @@ describe("strict audit mode (kanban 12.16)", () => {
         eq(auditLogs.resourceId, ((await offResponse.json()) as { data: { id: string } }).data.id),
       ),
     });
-    expect(offRow).toBeUndefined();
+    expect(offRow).toBeDefined();
+    expect((offRow?.details as Record<string, unknown> | null)?.description).toBe("strict-off-token");
 
-    // Gated on: row appears.
+    // Still audited when the flag is on.
     const onResponse = await withStrict(async () =>
       request(`/api/v2/users/${userId}/authentication-tokens`, "POST", userToken, {
         data: { type: "authentication-tokens", attributes: { description: "strict-on-token" } },

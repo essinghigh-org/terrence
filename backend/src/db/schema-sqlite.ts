@@ -362,6 +362,11 @@ export const workspaceVariables = sqliteTable("workspace_variables", {
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   key: text("key").notNull(),
   value: text("value").notNull(),
+  // Sensitive values are encrypted at rest (todo 167-169): when sensitive is
+  // true, `value` holds the plaintext fallback "" and `valueEncrypted` holds
+  // the AES-256-GCM enc:v1 payload. Plaintext rows (pre-encryption) are
+  // migrated transparently on next write.
+  valueEncrypted: text("value_encrypted"),
   sensitive: integer("sensitive", { mode: "boolean" }).default(false),
   hcl: integer("hcl", { mode: "boolean" }).default(false),
   category: text("category").notNull().default("terraform"), // 'terraform' or 'env'
@@ -379,6 +384,11 @@ export const configurationVersions = sqliteTable("configuration_versions", {
   source: text("source").default("tfe-api"),
   ingressAttributes: text("ingress_attributes", { mode: "json" }).$type<{ commitSha?: string; commitUrl?: string; commitMessage?: string; branch?: string; tag?: string; pullRequestNumber?: number; senderUsername?: string; senderAvatarUrl?: string; senderProviderId?: string; cloneUrl?: string; compareUrl?: string }>(),
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<{ uploadedAt?: string; archivedAt?: string }>(),
+  // Upload-claim lease (todo 278): atomically claims a pending
+  // configuration-version before accepting an archive PUT, so two
+  // simultaneous signed PUTs cannot race. Claim expires so a crashed
+  // upload cannot wedge the version permanently.
+  uploadClaimExpiresAt: integer("upload_claim_expires_at"),
   error: text("error"),
   errorMessage: text("error_message"),
   softDeletedAt: integer("soft_deleted_at"),
@@ -527,6 +537,10 @@ export const apiTokens = sqliteTable("api_tokens", {
   description: text("description"),
   scopes: text("scopes"), // JSON-encoded fine-grained scope definition (null = legacy full-permission token)
   tokenType: text("token_type").notNull().default(""), // org token slot: "" | "audit-trails" | "organization"
+  // Team-token discriminator (TFE parity): the singular legacy
+  // /teams/:id/authentication-token endpoints must only see the team's single
+  // legacy credential, never the modern plural authentication-tokens set.
+  legacy: integer("legacy", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
   lastUsedAt: integer("last_used_at"),
   expiresAt: integer("expires_at"),
@@ -571,6 +585,13 @@ export const refreshSessions = sqliteTable("refresh_sessions", {
   expiresAt: integer("expires_at").notNull(),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
   mfaVerified: integer("mfa_verified", { mode: "boolean" }).notNull().default(false),
+  // Successor link (todo 126): the refresh token this row was rotated INTO.
+  // A presented token whose successor is still within the concurrency grace
+  // window is a legitimate two-tab race, not reuse — the successor is handed
+  // back instead of revoking the family. Replay outside the grace window
+  // stays a family-revocation event (todo 127).
+  successorHash: text("successor_hash"),
+  rotatedAtMs: integer("rotated_at_ms"),
 }, (table) => [
   index("refresh_sessions_family_idx").on(table.familyId),
   index("refresh_sessions_user_idx").on(table.userId),
@@ -862,6 +883,8 @@ export const variableSetVariables = sqliteTable("variable_set_variables", {
   variableSetId: text("variable_set_id").notNull().references(() => variableSets.id, { onDelete: "cascade" }),
   key: text("key").notNull(),
   value: text("value").notNull(),
+  // Sensitive-value at-rest encryption (todo 167-169, see workspace note).
+  valueEncrypted: text("value_encrypted"),
   sensitive: integer("sensitive", { mode: "boolean" }).default(false),
   hcl: integer("hcl", { mode: "boolean" }).default(false),
   category: text("category").notNull().default("terraform"),
@@ -1784,6 +1807,10 @@ export const oauthDeviceCodes = sqliteTable("oauth_device_codes", {
 export const user2FA = sqliteTable("user_2fa", {
   userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   secret: text("secret").notNull(),
+  // TOTP seeds are encrypted at rest (todo 110-112) with the AES-256-GCM
+  // secret layer ("enc:v1:..." prefix). NULL = plaintext seed written before
+  // encryption shipped; migrated transparently on first successful verify.
+  secretEncrypted: text("secret_encrypted"),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });

@@ -105,6 +105,25 @@ async function loadKdfSalt(): Promise<Buffer> {
 const SALT_READ_RETRIES = 20;
 const SALT_READ_RETRY_DELAY_MS = 25;
 
+// Key-file concurrent-read retry (todo 150): same bounded-retry contract as
+// readExistingSaltWithRetry — a concurrent creator may not have finished
+// writing when EEXIST is observed.
+const KEY_READ_RETRIES = 20;
+const KEY_READ_RETRY_DELAY_MS = 25;
+
+async function readExistingKeyWithRetry(keyPath: string): Promise<Buffer> {
+  for (let attempt = 0; attempt < KEY_READ_RETRIES; attempt += 1) {
+    if (attempt > 0) await new Promise<void>((resolveDelay): void => { setTimeout(resolveDelay, KEY_READ_RETRY_DELAY_MS); });
+    try {
+      const key = Buffer.from((await readFile(keyPath, "utf8")).trim(), "base64");
+      if (key.length === KEY_LENGTH) return key;
+    } catch (readError) {
+      if ((readError as NodeJS.ErrnoException).code !== "ENOENT") throw readError;
+    }
+  }
+  throw new Error(`Invalid encryption key in ${keyPath} (concurrent write never completed)`);
+}
+
 async function readExistingSaltWithRetry(saltPath: string): Promise<Buffer> {
   for (let attempt = 0; attempt < SALT_READ_RETRIES; attempt += 1) {
     if (attempt > 0) await new Promise<void>((resolveDelay): void => { setTimeout(resolveDelay, SALT_READ_RETRY_DELAY_MS); });
@@ -180,13 +199,20 @@ async function loadEncryptionKey(): Promise<Buffer> {
         key = generated;
       } catch (createError) {
         if ((createError as NodeJS.ErrnoException).code !== "EEXIST") throw createError;
-        // Another caller created the file concurrently; read the now-complete key.
-        key = Buffer.from((await readFile(keyPath, "utf8")).trim(), "base64");
+        // Another caller created the file concurrently. Like the KDF salt
+        // path (todo 150), the concurrent writer may not have finished
+        // writing (open "wx" → write is not atomic with creation), so retry
+        // a bounded number of times instead of treating a transient
+        // partial/empty file as the final key.
+        key = await readExistingKeyWithRetry(keyPath);
       }
     }
 
     if (key.length !== KEY_LENGTH) {
-      throw new Error(`Invalid encryption key in ${keyPath}`);
+      // A concurrent creator may have written a truncated file; retry once
+      // before failing so a transient partial write does not brick the node.
+      key = await readExistingKeyWithRetry(keyPath);
+      if (key.length !== KEY_LENGTH) throw new Error(`Invalid encryption key in ${keyPath}`);
     }
     return key;
   })().finally(() => {

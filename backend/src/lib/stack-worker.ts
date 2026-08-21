@@ -4,6 +4,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "bun";
 import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { envEnabled } from "./env";
 import { db } from "../db";
 import {
   githubAppInstallations,
@@ -69,13 +70,13 @@ function providerFamily(provider: string): "github" | "gitlab" | "ado" {
 }
 
 function checkedUrl(value: string): string {
-  const reason = validateExternalUrl(value, process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS === "true");
+  const reason = validateExternalUrl(value, envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS));
   if (reason !== null) throw new Error(`The Stack VCS URL is unsafe: ${reason}`);
   return value;
 }
 
 async function fetchArchive(url: string, headers: Readonly<Record<string, string>>): Promise<Response> {
-  const allowPrivate = process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS === "true";
+  const allowPrivate = envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS);
   let nextUrl = url;
   let requestHeaders: Readonly<Record<string, string>> = headers;
   for (let redirect = 0; redirect <= 5; redirect += 1) {
@@ -419,9 +420,9 @@ async function executeComponent(
   context: DurableJobContext,
 ): Promise<StackExecutionResult> {
   const statePath = stateFilePath(stackId, deployment);
-  if (process.env.SIMULATED_RUNS === "true" || process.env.NODE_ENV === "test") {
-    const hasChanges = operation === "plan" && process.env.SIMULATED_STACK_PLAN_CHANGES === "true";
-    const deferredChanges = operation === "plan" && process.env.SIMULATED_STACK_DEFERRED === "true";
+  if (envEnabled(process.env.SIMULATED_RUNS) || process.env.NODE_ENV === "test") {
+    const hasChanges = operation === "plan" && envEnabled(process.env.SIMULATED_STACK_PLAN_CHANGES);
+    const deferredChanges = operation === "plan" && envEnabled(process.env.SIMULATED_STACK_DEFERRED);
     if (operation === "apply") {
       if (destroy) await removeStackState(stackId, deployment, runId, fencingToken ?? undefined);
       else await saveStackState(stackId, deployment, runId, null, fencingToken ?? undefined);

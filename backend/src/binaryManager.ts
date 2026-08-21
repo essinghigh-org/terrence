@@ -1,6 +1,7 @@
 import { isAbsolute, join, relative, resolve, sep } from "path";
 import { mkdir, exists, chmod, unlink, readdir, rm, readFile, writeFile } from "fs/promises";
 import { spawn } from "bun";
+import { envEnabled } from "./lib/env";
 import { log } from "./lib/log";
 import { isVersionCacheFresh, loadVersionCacheFile, saveVersionCacheFile } from "./lib/version-cache";
 
@@ -466,7 +467,7 @@ async function calculateSha256(buffer: Readonly<ArrayBuffer>): Promise<string> {
 
 async function verifySha256(tool: "tofu" | "terraform", version: string, filename: string, buffer: Readonly<ArrayBuffer>): Promise<boolean> {
 
-  const allowBypass = process.env.ALLOW_TOOL_FALLBACK === "true" || process.env.ALLOW_UNVERIFIED_CHECKSUMS === "true";
+  const allowBypass = envEnabled(process.env.ALLOW_UNVERIFIED_CHECKSUMS);
   try {
     let checksumUrl = "";
     if (tool === "tofu") {
@@ -510,7 +511,7 @@ async function verifySha256(tool: "tofu" | "terraform", version: string, filenam
 export async function ensureBinary(toolInput?: string | null, versionInput?: string | null): Promise<{ binaryPath: string; tool: string; version: string } | null> {
   const tool = (toolInput?.toLowerCase() === "terraform" ? "terraform" : "tofu");
   let version = (versionInput !== null && versionInput !== undefined && versionInput !== "" ? versionInput : "latest");
-  const allowSystemFallback = version === "latest" || process.env.ALLOW_TOOL_FALLBACK === "true";
+  const allowSystemFallback = version === "latest" || envEnabled(process.env.ALLOW_TOOL_FALLBACK);
 
   if (!validateVersion(version)) {
     console.warn(`[terrence] Invalid version format requested: ${versionInput ?? ""}`);
@@ -694,7 +695,7 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
   }
 
   // Alternate-tool fallback ONLY if opt-in via environment flag
-  if (process.env.ALLOW_TOOL_FALLBACK === "true") {
+  if (envEnabled(process.env.ALLOW_TOOL_FALLBACK)) {
     const fallbackTool = tool === "tofu" ? "terraform" : "tofu";
     try {
       const sysAlt = spawn(["which", fallbackTool]);

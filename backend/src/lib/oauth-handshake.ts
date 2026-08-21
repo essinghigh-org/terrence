@@ -51,6 +51,18 @@ export async function takeOAuthHandshakeState<T extends OAuthHandshakePayload>(
   return row?.payload as T | undefined;
 }
 
+/** Read a handshake without consuming it. Returns undefined when unknown or expired. */
+export async function peekOAuthHandshakeState(
+  id: string,
+  now = Date.now(),
+): Promise<{ payload: OAuthHandshakePayload; expiresAt: number } | undefined> {
+  const [row] = await db.select({ payload: oauthHandshakeStates.payload, expiresAt: oauthHandshakeStates.expiresAt })
+    .from(oauthHandshakeStates)
+    .where(and(eq(oauthHandshakeStates.id, id), gt(oauthHandshakeStates.expiresAt, now)))
+    .limit(1);
+  return row === undefined ? undefined : { payload: row.payload as OAuthHandshakePayload, expiresAt: row.expiresAt };
+}
+
 /** Drop handshakes whose TTL has elapsed. Safe to call periodically. */
 export async function pruneExpiredOAuthHandshakeStates(now = Date.now()): Promise<number> {
   const deleted = await db.delete(oauthHandshakeStates)

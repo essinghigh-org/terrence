@@ -10,6 +10,8 @@ import { db } from "../db";
 import { controlPlaneNodes, workspaces } from "../db/schema";
 import { systemAuthError, systemRateLimited } from "../lib/system-api";
 import { privateHostReason } from "../lib/url-safety";
+import { probeLandlockAbi, runSandboxRequired } from "../lib/sandbox";
+import { envEnabled } from "../lib/env";
 import { readinessNodeId } from "./health";
 
 type Status = "OK" | "WARNING" | "ERROR";
@@ -78,6 +80,9 @@ const ALL_CHECKS = {
   redis: ["connection"],
   "task-worker": ["running"],
   runtime: ["version"],
+  // Security posture (todo 158/166): sandbox availability and encryption-key
+  // health WITHOUT revealing key material — status booleans only.
+  security: ["run_sandbox", "encryption_key"],
 } as const;
 const BUNDLE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SUPPORT_BUNDLE_PATH = "/api/v1/support/bundle-requests";
@@ -164,11 +169,24 @@ async function diagnosticGroups(
   if (selected.get("task-worker")?.has("running") === true) {
     checks.set("task-worker.running", Promise.resolve({
       name: "running",
-      status: process.env.TERRENCE_DISABLE_WORKER === "true" ? "WARNING" : "OK",
+      status: envEnabled(process.env.TERRENCE_DISABLE_WORKER) ? "WARNING" : "OK",
     }));
   }
   if (selected.get("runtime")?.has("version") === true) {
     checks.set("runtime.version", Promise.resolve({ name: "version", status: "OK" }));
+  }
+  if (selected.get("security")?.has("run_sandbox") === true) {
+    checks.set("security.run_sandbox", Promise.resolve({
+      name: "run_sandbox",
+      // WARNING when the sandbox is explicitly disabled or Landlock is
+      // unavailable; OK when required AND usable. Never includes key data.
+      status: runSandboxRequired() && probeLandlockAbi() >= 1 ? "OK" : "WARNING",
+    }));
+  }
+  if (selected.get("security")?.has("encryption_key") === true) {
+    checks.set("security.encryption_key", access(join(storageDirectory(), ".encryption-key"), constants.R_OK)
+      .then((): DiagnosticCheck => ({ name: "encryption_key", status: "OK" }))
+      .catch((): DiagnosticCheck => ({ name: "encryption_key", status: "WARNING" })));
   }
 
   const resolved = new Map<string, DiagnosticCheck>(

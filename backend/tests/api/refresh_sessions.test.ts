@@ -150,6 +150,23 @@ describe("browser refresh sessions", () => {
     expect(familyBeforeReuse.find((session) => session.id === firstSession?.id)?.rotatedAt).not.toBeNull();
     expect(familyBeforeReuse.find((session) => session.id !== firstSession?.id)?.revokedAt).toBeNull();
 
+    // Immediate reuse of the just-rotated token is the two-tab concurrency
+    // case: inside REFRESH_GRACE_MS the second tab gets a grace access token
+    // (200) instead of a reuse revocation. See refresh_two_tab_grace.test.ts.
+    const graceResponse = await request("/api/v2/users/refresh", undefined, {
+      Cookie: firstCookie,
+    });
+    expect(graceResponse.status).toBe(200);
+    expect((await db.query.refreshSessions.findMany({
+      where: eq(refreshSessions.familyId, firstSession?.familyId ?? ""),
+    })).every((session): boolean => session.revokedAt === null)).toBeTrue();
+
+    // Outside the grace window the same presented token is genuine reuse:
+    // family revocation + 401.
+    const presentedHash = createHash("sha256").update(rawCookieToken(firstCookie)).digest("hex");
+    await db.update(refreshSessions)
+      .set({ rotatedAtMs: Date.now() - 10 * 60 * 1000 })
+      .where(eq(refreshSessions.tokenHash, presentedHash));
     const reuseResponse = await request("/api/v2/users/refresh", undefined, {
       Cookie: firstCookie,
     });
@@ -351,17 +368,27 @@ describe("browser refresh sessions", () => {
     expect(await accountStatus(otherDocument.data.attributes.token).then((response): number => response.status)).toBe(200);
   });
 
-  test("treats concurrent use of one refresh token as family reuse", async () => {
+  test("concurrent use of one refresh token succeeds for both tabs within the grace window", async () => {
+    // Two-tab race: the second request lands inside REFRESH_GRACE_MS and is
+    // served a grace access token instead of revoking the family (todo 124).
     const loginResponse = await login(true);
     const refreshCookie = cookie(loginResponse);
     const responses = await Promise.all([
       request("/api/v2/users/refresh", undefined, { Cookie: refreshCookie }),
       request("/api/v2/users/refresh", undefined, { Cookie: refreshCookie }),
     ]);
-    expect(responses.map((response): number => response.status).sort()).toEqual([200, 401]);
-    const rotated = responses.find((response): boolean => response.status === 200);
-    if (rotated === undefined) throw new Error("Expected one successful refresh");
-    const document = await rotated.json() as { data: { attributes: { token: string } } };
-    expect(await accountStatus(document.data.attributes.token).then((result): number => result.status)).toBe(401);
+    expect(responses.map((response): number => response.status).sort()).toEqual([200, 200]);
+    for (const response of responses) {
+      const document = await response.json() as { data: { attributes: { token: string } } };
+      expect(await accountStatus(document.data.attributes.token).then((result): number => result.status)).toBe(200);
+    }
+    // The family survives the race.
+    const presentedHash = createHash("sha256").update(rawCookieToken(refreshCookie)).digest("hex");
+    const presented = await db.query.refreshSessions.findFirst({ where: eq(refreshSessions.tokenHash, presentedHash) });
+    const family = await db.query.refreshSessions.findMany({
+      where: eq(refreshSessions.familyId, presented?.familyId ?? ""),
+    });
+    expect(family.length).toBeGreaterThanOrEqual(2);
+    expect(family.every((session): boolean => session.revokedAt === null)).toBeTrue();
   });
 });

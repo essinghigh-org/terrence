@@ -1,11 +1,15 @@
 import { Elysia } from "elysia";
-import { createHash } from "node:crypto";
+import { hashAuthenticationToken } from "../lib/token-service";
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { and, asc, desc, eq, lt } from "drizzle-orm";
 import { db } from "../db";
 import { agentForwardedRequests, agentPoolTokens, agents, agentJobs, logs, organizations, runs, stackAgentJobs } from "../db/schema";
 import { authPlugin } from "../auth";
+import {
+  isAgentResultValid,
+  MAX_AGENT_RESULT_BYTES,
+} from "../lib/agent-jobs";
 import {
   appendAgentJobLog,
   authenticateAgent,
@@ -81,7 +85,7 @@ function bearerToken(authorization: string | null): string | undefined {
 
 /** Resolve the agent pool that owns an agent token (or undefined). */
 async function poolForToken(token: string): Promise<{ poolId: string; tokenId: string } | undefined> {
-  const tokenHash = createHash("sha256").update(token).digest("hex");
+  const tokenHash = hashAuthenticationToken(token);
   const row = await db.query.agentPoolTokens.findFirst({ where: eq(agentPoolTokens.token, tokenHash) });
   return row === undefined ? undefined : { poolId: row.agentPoolId, tokenId: row.id };
 }
@@ -376,6 +380,10 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
         if (statePayload === undefined || jsonState === undefined || jsonStateOutputs === undefined) {
           set.status = 422;
           return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Agent state payload must be valid JSON strings" }] };
+        }
+        if (!isAgentResultValid(result)) {
+          set.status = 422;
+          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `result exceeds ${MAX_AGENT_RESULT_BYTES} bytes or structural limits` }] };
         }
         const completion: AgentJobCompletion = {
           status: jobStatus === "finished" ? "completed" : "errored",

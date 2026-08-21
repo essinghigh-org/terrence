@@ -12,9 +12,11 @@ import {
 import { parseTokenScopes, type TokenScopes } from "../lib/token-scopes";
 import { currentTokenScopes } from "../lib/request-scope";
 import { eq, and, asc, desc, count, inArray, isNull, like, ne, or } from "drizzle-orm";
-import { createHash } from "node:crypto";
 import { userResource, orgMembershipResource, tokenResource } from "../lib/response";
 import { tokenExpiry } from "../lib/validation";
+import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
+import { TOKEN_DESCRIPTION_MAX_LENGTH } from "../lib/constants";
+import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
 import { checkOrganizationPermission, checkOrgPermission, pageRequest, pagination, auditLog, strictAuditEnabled } from "../lib/utils";
 import { publish } from "../lib/event-bus";
 import { authPlugin } from "../auth";
@@ -41,6 +43,17 @@ function organizationTokenWhere(orgId: string, tokenType: string) {
     isNull(apiTokens.teamId),
   );
 }
+
+// TFE org-token slots addressable via the singular endpoints' ?token= query
+// (todo 52/53): arbitrary query strings must not mint new token namespaces.
+// "organization" is accepted as a TFE-style alias of the "" slot.
+const ORG_TOKEN_TYPES = ["", "organization", "audit-trails"] as const;
+
+function validateOrgTokenType(value: string): (typeof ORG_TOKEN_TYPES)[number] | null {
+  return (ORG_TOKEN_TYPES as readonly string[]).includes(value) ? value as (typeof ORG_TOKEN_TYPES)[number] : null;
+}
+
+const TWO_YEARS_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 
 export const userRoutes = new Elysia({ name: "users" })
   .use(authPlugin)
@@ -342,12 +355,24 @@ export const userRoutes = new Elysia({ name: "users" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const description = typeof attributes.description === "string" ? attributes.description : "API token";
-    const expiresAt = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
-    if (description === "" || Number.isNaN(expiresAt)) {
+    const description = typeof attributes.description === "string" ? attributes.description.trim() : "API token";
+    const requestedExpiry = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
+    if (description === "" || description.length > TOKEN_DESCRIPTION_MAX_LENGTH || Number.isNaN(requestedExpiry)) {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `description is required and must be at most ${TOKEN_DESCRIPTION_MAX_LENGTH} characters` }] };
     }
+    // Organization TTL policy governs user tokens (todo 72-74): the effective
+    // expiry is capped by the policy; max-ttl-ms = 0 forbids minting.
+    const policyResolution = await resolveTokenExpiryUnderPolicy(null, "user", requestedExpiry);
+    if (policyResolution.kind === "invalid") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] };
+    }
+    if (policyResolution.kind === "forbidden") {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
+    }
+    const expiresAt = policyResolution.expiresAt;
     // Fine-grained scopes (optional): when present, the token is restricted
     // to the listed orgs/projects/workspaces/tags and permission grants.
     let scopes: TokenScopes | null = null;
@@ -359,27 +384,26 @@ export const userRoutes = new Elysia({ name: "users" })
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Invalid scopes" }] };
       }
     }
-    const rawToken = `user-${crypto.randomUUID()}`;
+    const rawToken = generateAuthenticationToken("user");
     const createdToken = {
       id: crypto.randomUUID(),
-      token: createHash("sha256").update(rawToken).digest("hex"),
+      token: hashAuthenticationToken(rawToken),
       userId,
       orgId: null,
       description,
       scopes: scopes === null ? null : JSON.stringify(scopes),
       tokenType: "",
+      legacy: false,
       createdAt: Date.now(),
       lastUsedAt: null,
       expiresAt,
       teamId: null,
     };
     await db.insert(apiTokens).values(createdToken);
-    if (strictAuditEnabled()) {
-      await auditLog("create", "authentication-token", createdToken.id, user?.id ?? null, null, {
-        description,
-        source: "user",
-      });
-    }
+    await auditLog("create", "authentication-token", createdToken.id, user?.id ?? null, null, {
+      description,
+      source: "user",
+    });
     (set as { status: number }).status = 201;
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
@@ -388,6 +412,14 @@ export const userRoutes = new Elysia({ name: "users" })
     const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) });
     if (token !== undefined && user?.id === token.userId) {
       return { data: tokenResource(token) };
+    }
+    // Team tokens: generic lookup requires manage-teams on the token's org
+    // (todo 45).
+    if (token !== undefined && token.teamId !== null) {
+      const team = await db.query.teams.findFirst({ where: eq(teams.id, token.teamId) });
+      if (team !== undefined && (await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) {
+        return { data: tokenResource(token) };
+      }
     }
     const agentToken = await db.query.agentPoolTokens.findFirst({ where: eq(agentPoolTokens.id, tokenId) });
     const pool = agentToken === undefined
@@ -424,6 +456,17 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 204;
       return {};
     }
+    // Team tokens: generic delete requires manage-teams on the token's org;
+    // the legacy credential can only be removed via the singular endpoint
+    // (todo 46).
+    if (token !== undefined && token.teamId !== null && token.legacy === false) {
+      const team = await db.query.teams.findFirst({ where: eq(teams.id, token.teamId) });
+      if (team !== undefined && (await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) {
+        await db.delete(apiTokens).where(eq(apiTokens.id, tokenId));
+        (set as { status: number }).status = 204;
+        return {};
+      }
+    }
     const agentToken = await db.query.agentPoolTokens.findFirst({ where: eq(agentPoolTokens.id, tokenId) });
     const pool = agentToken === undefined
       ? undefined
@@ -437,6 +480,7 @@ export const userRoutes = new Elysia({ name: "users" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     await db.delete(agentPoolTokens).where(eq(agentPoolTokens.id, tokenId));
+    if (agentToken !== undefined && pool !== undefined) await auditLog("delete", "agent-pool-token", tokenId, user?.id ?? null, pool.orgId, { agentPoolId: pool.id });
     (set as { status: number }).status = 204;
     return {};
   })
@@ -459,7 +503,25 @@ export const userRoutes = new Elysia({ name: "users" })
     const orgData = typeof orgRel.data === "object" && orgRel.data !== null ? (orgRel.data as Record<string, unknown>) : {};
     const description = typeof attributes.description === "string" ? attributes.description : "API token";
     const orgId = typeof orgData.id === "string" ? orgData.id : undefined;
-    const expiresAt = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
+    const requestedExpiry = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
+    if (Number.isNaN(requestedExpiry)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "expired-at must be a valid ISO-8601 timestamp" }] };
+    }
+    // Organization TTL policy governs org-scoped tokens minted here (todo
+    // 72-74); user-scoped ones have no governing org policy.
+    const policyResolution = orgId !== undefined
+      ? await resolveTokenExpiryUnderPolicy(orgId, "", requestedExpiry)
+      : { kind: "ok" as const, expiresAt: requestedExpiry };
+    if (policyResolution.kind === "invalid") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] };
+    }
+    if (policyResolution.kind === "forbidden") {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
+    }
+    const expiresAt = policyResolution.expiresAt;
     // Fine-grained scopes (optional): when present, the token is restricted
     // to the listed orgs/projects/workspaces/tags and permission grants.
     let scopes: TokenScopes | null = null;
@@ -481,15 +543,16 @@ export const userRoutes = new Elysia({ name: "users" })
         return { errors: [{ status: "403", title: "Forbidden" }] };
       }
     }
-    const rawToken = `${orgId !== undefined ? "org" : "user"}-${crypto.randomUUID()}`;
+    const rawToken = generateAuthenticationToken(orgId !== undefined ? "org" : "user");
     const createdToken = {
       id: crypto.randomUUID(),
-      token: createHash("sha256").update(rawToken).digest("hex"),
+      token: hashAuthenticationToken(rawToken),
       userId: orgId !== undefined ? null : user.id,
       orgId: orgId ?? null,
       description,
       scopes: scopes === null ? null : JSON.stringify(scopes),
       tokenType: "",
+      legacy: false,
       createdAt: Date.now(),
       lastUsedAt: null,
       expiresAt,
@@ -504,14 +567,12 @@ export const userRoutes = new Elysia({ name: "users" })
     } else {
       await db.insert(apiTokens).values(createdToken);
     }
-    if (strictAuditEnabled()) {
-      await auditLog("create", "authentication-token", createdToken.id, user.id, orgId ?? null, {
-        description,
-        scopes: createdToken.scopes,
-        ...(orgId !== undefined ? { orgId } : {}),
-        source: "user",
-      });
-    }
+    await auditLog("create", "authentication-token", createdToken.id, user.id, orgId ?? null, {
+      description,
+      scopes: createdToken.scopes,
+      ...(orgId !== undefined ? { orgId } : {}),
+      source: "user",
+    });
     (set as { status: number }).status = 201;
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
@@ -524,7 +585,13 @@ export const userRoutes = new Elysia({ name: "users" })
     }
     // the cloud platform passes ?token=audit-trails to address the audit-trails token slot
     // distinctly from the organization token (which sends no query param).
-    const tokenType = new URL(request.url).searchParams.get("token") ?? "";
+    const rawTokenType = new URL(request.url).searchParams.get("token") ?? "";
+    const validated = validateOrgTokenType(rawTokenType);
+    if (validated === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "token query parameter must be one of: (empty), organization, audit-trails" }] };
+    }
+    const tokenType = validated === "organization" ? "" : validated;
     const token = await db.query.apiTokens.findFirst({
       where: organizationTokenWhere(org.id, tokenType),
     });
@@ -541,41 +608,63 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const tokenType = new URL(request.url).searchParams.get("token") ?? "";
+    // Unknown token values must not mint arbitrary token namespaces (todo 52/53).
+    const rawTokenType = new URL(request.url).searchParams.get("token") ?? "";
+    const validated = validateOrgTokenType(rawTokenType);
+    if (validated === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "token query parameter must be one of: (empty), organization, audit-trails" }] };
+    }
+    const tokenType = validated === "organization" ? "" : validated;
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const expiresAt = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
-    if (Number.isNaN(expiresAt)) {
+    const requestedExpiry = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
+    if (Number.isNaN(requestedExpiry)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
-    const rawToken = `org-${crypto.randomUUID()}`;
+    // TFE parity: org tokens default to a two-year expiry; the org TTL policy
+    // caps (or forbids) the result (todo 49-51, 72-74).
+    const requestedOrDefault = requestedExpiry ?? Date.now() + TWO_YEARS_MS;
+    // The "organization" query alias resolves to the "" storage slot.
+    const policyResolution = await resolveTokenExpiryUnderPolicy(org.id, tokenType === "organization" ? "" : tokenType, requestedOrDefault);
+    if (policyResolution.kind === "invalid") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] };
+    }
+    if (policyResolution.kind === "forbidden") {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
+    }
+    const expiresAt = policyResolution.expiresAt;
+    const rawToken = generateAuthenticationToken("org");
     const createdToken = {
       id: crypto.randomUUID(),
-      token: createHash("sha256").update(rawToken).digest("hex"),
+      token: hashAuthenticationToken(rawToken),
       userId: null,
       orgId: org.id,
       description: null,
       scopes: null,
       tokenType,
+      legacy: false,
       createdAt: Date.now(),
       lastUsedAt: null,
       expiresAt,
       teamId: null,
     };
+    const priorOrgToken = await db.query.apiTokens.findFirst({ where: organizationTokenWhere(org.id, tokenType) });
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
       await t.delete(apiTokens).where(organizationTokenWhere(org.id, tokenType));
       await t.insert(apiTokens).values(createdToken);
     });
-    if (strictAuditEnabled()) {
-      await auditLog("create", "organization-authentication-token", createdToken.id, user?.id ?? null, org.id, {
-        orgId: org.id,
-        tokenType: tokenType === "" ? null : tokenType,
-        source: "user",
-      });
-    }
+    await auditLog(priorOrgToken === undefined ? "create" : "replace", "organization-authentication-token", createdToken.id, user?.id ?? null, org.id, {
+      orgId: org.id,
+      tokenType: tokenType === "" ? null : tokenType,
+      source: "user",
+      ...(priorOrgToken === undefined ? {} : { replacedTokenId: priorOrgToken.id }),
+    });
     (set as { status: number }).status = 201;
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
@@ -587,7 +676,9 @@ export const userRoutes = new Elysia({ name: "users" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const tokenType = new URL(request.url).searchParams.get("token") ?? "";
+    const existing = await db.query.apiTokens.findFirst({ where: organizationTokenWhere(org.id, tokenType) });
     await db.delete(apiTokens).where(organizationTokenWhere(org.id, tokenType));
+    if (existing !== undefined) await auditLog("delete", "organization-authentication-token", existing.id, user?.id ?? null, org.id, { tokenType: tokenType === "" ? null : tokenType });
     (set as { status: number }).status = 204;
     return {};
   });

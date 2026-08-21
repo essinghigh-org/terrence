@@ -1,5 +1,6 @@
 import { Elysia } from "elysia";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { envEnabled } from "../lib/env";
 import { db } from "../db";
 import { runTriggers, auditLogs, githubWebhookDeliveries, workspaces, workspaceVariables, users, organizationMemberships } from "../db/schema";
 import { eq, and, desc, inArray } from "drizzle-orm";
@@ -7,8 +8,9 @@ import { checkOrgPermission, findAuthorizedRun, findAuthorizedWorkspace } from "
 import { scopeCoversOrg, scopeGrants } from "../lib/token-scopes";
 import { currentTokenScopes } from "../lib/request-scope";
 import { workspaceVariableResource } from "../lib/response";
+import { variableValueForWrite, variableValueForRead } from "../lib/variable-crypto";
 import { validVariableAttributes } from "../lib/validation";
-import { handleBitbucketWebhook, handleGithubWebhook, handleGitlabWebhook } from "../lib/webhooks";
+import { enqueueVcsWebhookJob, vcsWebhookDeliveryId, type VcsWebhookProvider } from "../lib/webhook-jobs";
 import { costEstimationEnabledForOrganization, getSettings, getSiteCapabilities } from "../lib/settings";
 import { confirmRunForApply } from "../lib/operations";
 import {
@@ -102,18 +104,39 @@ export function costEstimateResource(
   };
 }
 
-async function processGithubDelivery(deliveryId: string | null, eventName: string, payload: Readonly<Record<string, unknown>>): Promise<void> {
-  try {
-    await handleGithubWebhook(eventName, payload);
-    if (deliveryId !== null) {
-      await db.update(githubWebhookDeliveries)
-        .set({ status: "processed", processedAt: Date.now() })
-        .where(eq(githubWebhookDeliveries.id, deliveryId));
-    }
-  } catch (error) {
-    if (deliveryId !== null) await db.delete(githubWebhookDeliveries).where(eq(githubWebhookDeliveries.id, deliveryId));
-    console.error(error);
+/**
+ * Durable enqueue path (todo 183-190): persist the delivery onto the durable
+ * job queue and only then ACK. The worker-disabled fallback (tests,
+ * benchmarks, API-only nodes) processes inline so deliveries never strand in
+ * `queued` behind a worker that will never poll.
+ */
+async function durableWebhookEnqueue(input: Readonly<{
+  provider: VcsWebhookProvider;
+  eventName: string;
+  payload: Record<string, unknown>;
+  deliveryId: string | null;
+}>): Promise<void> {
+  if (input.deliveryId !== null) {
+    await db.insert(githubWebhookDeliveries)
+      .values({ id: input.deliveryId, status: "queued", receivedAt: Date.now() })
+      .onConflictDoNothing();
   }
+  if (envEnabled(process.env.TERRENCE_DISABLE_WORKER)) {
+    const { processVcsWebhookPayload } = await import("../lib/webhook-jobs");
+    await processVcsWebhookPayload({
+      provider: input.provider,
+      eventName: input.eventName,
+      payload: input.payload,
+      deliveryId: input.deliveryId,
+    });
+    return;
+  }
+  await enqueueVcsWebhookJob({
+    provider: input.provider,
+    eventName: input.eventName,
+    payload: input.payload,
+    deliveryId: input.deliveryId,
+  });
 }
 
 function webhookPayload(body: unknown): { payload: Record<string, unknown>; rawBody: string } | undefined {
@@ -196,18 +219,6 @@ const webhookAcknowledged = {
   data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } },
 } as const;
 
-async function processProviderDelivery(
-  handler: (eventName: string, payload: Readonly<Record<string, unknown>>) => Promise<boolean>,
-  eventName: string,
-  payload: Readonly<Record<string, unknown>>,
-): Promise<void> {
-  try {
-    await handler(eventName, payload);
-  } catch (error) {
-    console.error(error);
-  }
-}
-
 export const miscRoutes = new Elysia({ name: "misc" })
   .use(authPlugin)
   // --- Webhook Receivers ---
@@ -241,10 +252,13 @@ export const miscRoutes = new Elysia({ name: "misc" })
       const deliveryId = deliveryHeader !== null && deliveryHeader !== "" ? deliveryHeader : null;
       if (deliveryId !== null) {
         const claimed = await db.insert(githubWebhookDeliveries)
-          .values({ id: deliveryId, status: "processing", receivedAt: Date.now() })
+          .values({ id: deliveryId, status: "queued", receivedAt: Date.now() })
           .onConflictDoNothing()
           .returning({ id: githubWebhookDeliveries.id });
         if (claimed.length === 0) {
+          // Redelivery of a delivery we already hold: acknowledged without
+          // reprocessing (todo 184/199). A failed delivery stays failed until
+          // the admin retry endpoint re-arms it.
           return { data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } } };
         }
       }
@@ -252,12 +266,19 @@ export const miscRoutes = new Elysia({ name: "misc" })
       if (eventName === "push" || eventName === "pull_request") {
         log.info(`Received GitHub ${eventName} event.`);
       }
-      void processGithubDelivery(deliveryId, eventName, payload);
+      // Durable path: the delivery row (or the job row itself when no header
+      // GUID was sent) IS the durable record; enqueue before ACK (todo 190).
+      await durableWebhookEnqueue({
+        provider: "github",
+        eventName,
+        payload,
+        deliveryId,
+      });
     }
 
     return { data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } } };
   })
-  .post("/api/webhooks/gitlab", ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): unknown => {
+  .post("/api/webhooks/gitlab", async ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): Promise<unknown> => {
     const secret = process.env.GITLAB_WEBHOOK_SECRET;
     if (typeof secret !== "string" || secret === "") {
       return webhookUnauthorized(set, "GitLab webhook secret is not configured");
@@ -269,10 +290,15 @@ export const miscRoutes = new Elysia({ name: "misc" })
     if (eventName === null || eventName === "") return webhookUnprocessable(set, "Missing GitLab event header");
     const parsed = webhookPayload(body);
     if (parsed === undefined) return webhookUnprocessable(set, "Invalid webhook payload");
-    void processProviderDelivery(handleGitlabWebhook, eventName, parsed.payload);
+    await durableWebhookEnqueue({
+      provider: "gitlab",
+      eventName,
+      payload: parsed.payload,
+      deliveryId: vcsWebhookDeliveryId("gitlab", eventName, parsed.payload, null),
+    });
     return webhookAcknowledged;
   })
-  .post("/api/webhooks/bitbucket", ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): unknown => {
+  .post("/api/webhooks/bitbucket", async ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): Promise<unknown> => {
     const parsed = webhookPayload(body);
     if (parsed === undefined) return webhookUnprocessable(set, "Invalid webhook payload");
     const secret = process.env.BITBUCKET_WEBHOOK_SECRET;
@@ -284,7 +310,12 @@ export const miscRoutes = new Elysia({ name: "misc" })
     if (!sameSecret(signature, expected)) return webhookUnauthorized(set, "Invalid Bitbucket webhook signature");
     const eventName = request.headers.get("x-event-key");
     if (eventName === null || eventName === "") return webhookUnprocessable(set, "Missing Bitbucket event header");
-    void processProviderDelivery(handleBitbucketWebhook, eventName, parsed.payload);
+    await durableWebhookEnqueue({
+      provider: "bitbucket",
+      eventName,
+      payload: parsed.payload,
+      deliveryId: vcsWebhookDeliveryId("bitbucket", eventName, parsed.payload, null),
+    });
     return webhookAcknowledged;
   })
   // --- External Apply Approval Webhook (kanban 21.8) ---
@@ -432,13 +463,17 @@ export const miscRoutes = new Elysia({ name: "misc" })
     }
     const categoryValue: unknown = normalizedAttributes.category;
     const descriptionValue: unknown = normalizedAttributes.description;
+    const sensitiveValue = normalizedAttributes.sensitive === true;
+    // Sensitive values are encrypted at rest (todo 167/168).
+    const stored = await variableValueForWrite(sensitiveValue, normalizedAttributes.value);
     const variable: typeof workspaceVariables.$inferInsert = {
       id: `var-${crypto.randomUUID()}`,
       workspaceId,
       key: normalizedAttributes.key as string,
-      value: normalizedAttributes.value,
+      value: stored.value,
+      valueEncrypted: stored.valueEncrypted,
       category: categoryValue === "env" ? "env" : "terraform",
-      sensitive: normalizedAttributes.sensitive === true,
+      sensitive: sensitiveValue,
       hcl: normalizedAttributes.hcl === true,
       description: typeof descriptionValue === "string" ? descriptionValue : null,
     };
@@ -465,9 +500,15 @@ export const miscRoutes = new Elysia({ name: "misc" })
     }
     let sensitive = typeof attributes.sensitive === "boolean" ? attributes.sensitive : variable.sensitive === true;
     if (variable.sensitive === true && !sensitive && attributes.value === undefined) sensitive = true;
+    // Re-encrypt when the value or sensitive flag changed; flipping sensitive
+    // on encrypts the existing plaintext (todo 169).
+    const suppliedValue = typeof attributes.value === "string" ? attributes.value : null;
+    const effectiveValue = suppliedValue ?? (sensitive ? await variableValueForRead(variable) : variable.value);
+    const stored = await variableValueForWrite(sensitive, effectiveValue);
     const updates: Partial<typeof workspaceVariables.$inferInsert> = {
       key: typeof attributes.key === "string" ? attributes.key : variable.key,
-      value: typeof attributes.value === "string" ? attributes.value : variable.value,
+      value: stored.value,
+      valueEncrypted: stored.valueEncrypted,
       category: typeof attributes.category === "string" ? attributes.category : variable.category,
       sensitive,
       hcl: typeof attributes.hcl === "boolean" ? attributes.hcl : variable.hcl === true,

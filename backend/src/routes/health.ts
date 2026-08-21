@@ -2,6 +2,7 @@ import { Elysia } from "elysia";
 import { db } from "../db";
 import { authPlugin } from "../auth";
 import { probeLandlockAbi, runSandboxRequired } from "../lib/sandbox";
+import { envEnabled } from "../lib/env";
 import { log } from "../lib/log";
 import { ssoSettingsSnapshot } from "../lib/sso";
 import { isStorageDegraded } from "../lib/storage-health";
@@ -128,6 +129,13 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
     metrics.terrence_database_page_count = collection.instance.database.pageCount;
     metrics.terrence_database_cache_size_bytes = collection.instance.database.cacheSizeBytes;
     metrics.terrence_database_freelist_bytes = collection.instance.database.freelistBytes;
+    // VCS webhook delivery queue (todo 192-194).
+    metrics.terrence_webhook_queue = {
+      queued: collection.instance.webhookQueue.queued,
+      processing: collection.instance.webhookQueue.processing,
+      failed: collection.instance.webhookQueue.failed,
+      oldest_pending_seconds: collection.instance.webhookQueue.oldestPendingSeconds,
+    };
   }
   if (collection.process !== null) {
     const { snapshot, history } = collection.process;
@@ -242,6 +250,17 @@ function prometheusLines(collection: MetricsCollection): string[] {
       "# TYPE terrence_database_cache_size_bytes gauge",
       "# HELP terrence_database_freelist_bytes Database freelist pages in bytes (sqlite bloat signal; null on postgres).",
       "# TYPE terrence_database_freelist_bytes gauge",
+      // VCS webhook delivery queue gauges (todo 192-194).
+      "# HELP terrence_webhook_queue_depth VCS webhook deliveries waiting or in-flight, by state.",
+      "# TYPE terrence_webhook_queue_depth gauge",
+      `terrence_webhook_queue_depth{state="queued"} ${instance.webhookQueue.queued}`,
+      `terrence_webhook_queue_depth{state="processing"} ${instance.webhookQueue.processing}`,
+      "# HELP terrence_webhook_failed_total VCS webhook deliveries dead-lettered after repeated failure.",
+      "# TYPE terrence_webhook_failed_total gauge",
+      `terrence_webhook_failed_total ${instance.webhookQueue.failed}`,
+      "# HELP terrence_webhook_oldest_pending_seconds Age of the oldest delivery not yet processed.",
+      "# TYPE terrence_webhook_oldest_pending_seconds gauge",
+      `terrence_webhook_oldest_pending_seconds ${instance.webhookQueue.oldestPendingSeconds}`,
     );
     // Backend-specific samples are omitted when the value is unavailable
     // (postgres has no sqlite page cache/freelist) rather than emitting 0.
@@ -408,7 +427,7 @@ async function readinessResponse(
     if (timer !== undefined) clearTimeout(timer);
   });
   const disk = isStorageDegraded() ? "ERROR" : "OK";
-  const worker = process.env.TERRENCE_DISABLE_WORKER === "true" ? "ERROR" : "OK";
+  const worker = envEnabled(process.env.TERRENCE_DISABLE_WORKER) ? "ERROR" : "OK";
   const maintenance = maintenanceSnapshot();
   const draining = maintenance.active || ["draining", "maintenance"].includes((process.env.TERRENCE_NODE_STATUS ?? "").toLowerCase());
   const status = database === "ERROR" || disk === "ERROR" ? "ERROR" : draining ? "DRAINING" : "OK";
@@ -615,7 +634,7 @@ export const healthRoutes = new Elysia({ name: "health" })
       log.error("Unable to read SSO configuration for ping", { error: error instanceof Error ? error.message : String(error) });
       const lastKnown = pingSsoLastKnown;
       return {
-        "signup-enabled": process.env.TERRENCE_ENABLE_LOCAL_SIGNUP === "true",
+        "signup-enabled": envEnabled(process.env.TERRENCE_ENABLE_LOCAL_SIGNUP),
         "local-auth-enabled": lastKnown?.localAuthEnabled ?? true,
         sso: {
           saml: lastKnown?.samlEnabled ?? false,
@@ -625,7 +644,7 @@ export const healthRoutes = new Elysia({ name: "health" })
       };
     }
     return {
-      "signup-enabled": process.env.TERRENCE_ENABLE_LOCAL_SIGNUP === "true",
+      "signup-enabled": envEnabled(process.env.TERRENCE_ENABLE_LOCAL_SIGNUP),
       "local-auth-enabled": sso.localAuthEnabled,
       sso: { saml: sso.samlEnabled, oidc: sso.oidcEnabled, ldap: sso.ldapEnabled },
     };

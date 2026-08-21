@@ -12,6 +12,7 @@ import { statfsSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import type { ParamCtx } from "./types";
+import { envEnabled } from "../../lib/env";
 import { currentSamlSettings } from "./helpers";
 export const systemRoutes = new Elysia({ name: "admin-system" })
   .use(authPlugin)
@@ -48,8 +49,8 @@ export const systemRoutes = new Elysia({ name: "admin-system" })
         storage,
         database: await databaseMetrics(),
         worker: {
-          enabled: process.env.TERRENCE_DISABLE_WORKER !== "1",
-          "drain-mode": process.env.TERRENCE_DISABLE_WORKER === "1",
+          enabled: !envEnabled(process.env.TERRENCE_DISABLE_WORKER),
+          "drain-mode": envEnabled(process.env.TERRENCE_DISABLE_WORKER),
           "poll-interval-ms": Number.isFinite(workerPoll) && workerPoll > 0 ? workerPoll : 1500,
         },
         sandbox: {
@@ -59,7 +60,7 @@ export const systemRoutes = new Elysia({ name: "admin-system" })
           reason: sandboxReason,
         },
         integrations: {
-          "signup-enabled": process.env.TERRENCE_ENABLE_LOCAL_SIGNUP === "true",
+          "signup-enabled": envEnabled(process.env.TERRENCE_ENABLE_LOCAL_SIGNUP),
           "saml-enabled": saml,
           "oidc-enabled": oidc,
           "ldap-enabled": ldap,

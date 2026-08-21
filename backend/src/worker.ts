@@ -1,3 +1,4 @@
+import { envEnabled } from "./lib/env";
 import { db } from "./db";
 import {
   runs,
@@ -67,9 +68,11 @@ import { applyGateBlockReason } from "./lib/operations";
 import { isMaintenanceActive } from "./lib/maintenance";
 import { publish } from "./lib/event-bus";
 import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./lib/sandbox";
+import { decryptSecret } from "./lib/secrets";
 import { log } from "./lib/log";
 import { assertArchiveExpandedSize, assertArchiveLogicalSize, assertArchiveMemberCount } from "./lib/archive";
 import { startDurableJobWorker } from "./lib/durable-jobs";
+import { handleVcsWebhookJob } from "./lib/webhook-jobs";
 import { runModuleTestJob } from "./lib/module-test-worker";
 import { runStackConfigurationJob, runStackDeploymentJob } from "./lib/stack-worker";
 import { runPlanExplanationJob } from "./lib/plan-explainer-worker";
@@ -131,6 +134,18 @@ if (RUN_SANDBOX_REQUIRED && runSandbox === null) {
     "Run sandbox is enabled (TERRENCE_RUN_SANDBOX=true) but Landlock is unavailable. "
     + "Runs will FAIL until Landlock is enabled on the host kernel or the sandbox is disabled. "
     + "See https://docs.kernel.org/userspace-api/landlock.html",
+  );
+}
+// Prominent warning whenever unsandboxed execution is explicitly enabled
+// (todo 89): the opt-out is insecure by definition, so it must be impossible
+// to miss in the logs.
+if (!RUN_SANDBOX_REQUIRED) {
+  log.warn(
+    "!!! RUN SANDBOX DISABLED (TERRENCE_RUN_SANDBOX=false) — IaC runs execute "
+    + "WITHOUT filesystem isolation. Provider plugins and local-exec provisioners "
+    + "run with this process's service identity and can read STORAGE_DIR, the "
+    + "database, and encryption keys. This mode is only intended for hosts whose "
+    + "kernel cannot provide Landlock (Linux >= 5.13, CONFIG_SECURITY_LANDLOCK).",
   );
 }
 
@@ -780,22 +795,30 @@ export async function executionVariables(
 
   const effective = new Map<string, ExecutionVariable>();
 
+  // Decrypt sensitive variable values for execution (todo 167/168): rows
+  // store sensitive values encrypted at rest; runs need the plaintext.
+  // Overrides carry plaintext already (no encrypted column).
+  const decryptIfNeeded = async (variable: { readonly value: string; readonly valueEncrypted?: string | null }): Promise<string> =>
+    "valueEncrypted" in variable && variable.valueEncrypted !== null && variable.valueEncrypted !== undefined && variable.valueEncrypted !== ""
+      ? decryptSecret(variable.valueEncrypted)
+      : variable.value;
+
   // 1. Non-priority variable set variables first
   for (const variable of setVars) {
     if (!prioritySetIds.has(variable.variableSetId)) {
-      effective.set(`${variable.category}:${variable.key}`, { ...variable, hcl: false, priority: false });
+      effective.set(`${variable.category}:${variable.key}`, { ...variable, value: await decryptIfNeeded(variable), hcl: false, priority: false });
     }
   }
 
   // 2. Workspace variables override non-priority sets
   for (const variable of workspaceVars) {
-    effective.set(`${variable.category}:${variable.key}`, { ...variable, hcl: variable.hcl === true, priority: false });
+    effective.set(`${variable.category}:${variable.key}`, { ...variable, value: await decryptIfNeeded(variable), hcl: variable.hcl === true, priority: false });
   }
 
   // 3. Priority variable set variables override everything
   for (const variable of setVars) {
     if (prioritySetIds.has(variable.variableSetId)) {
-      effective.set(`${variable.category}:${variable.key}`, { ...variable, hcl: false, priority: true });
+      effective.set(`${variable.category}:${variable.key}`, { ...variable, value: await decryptIfNeeded(variable), hcl: false, priority: true });
     }
   }
 
@@ -985,7 +1008,7 @@ async function executeRunTasks(
     let status = "running";
     let message: string | null = null;
     let resultUrl: string | null = null;
-    const destination = await resolveExternalUrl(task.url, process.env.TERRENCE_ALLOW_PRIVATE_URLS === "true");
+    const destination = await resolveExternalUrl(task.url, envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_URLS));
     if ("error" in destination) {
       status = "failed";
       message = destination.error;
@@ -1316,7 +1339,7 @@ async function executeRunImpl(runId: string): Promise<void> {
     const currentDirFiles = await readdir(executionDir);
     const hasTfFiles = currentDirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
 
-    const isSimulatedAllowed = process.env.SIMULATED_RUNS === "true" || Reflect.get(process.env, "NODE_ENV") === "test";
+    const isSimulatedAllowed = envEnabled(process.env.SIMULATED_RUNS) || Reflect.get(process.env, "NODE_ENV") === "test";
     if (!isSimulatedAllowed) {
       await writeLog(runId, "plan", `[terrence] Resolving binary for ${requestedTool} (version: ${requestedVersion})...`);
     }
@@ -1685,7 +1708,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
 
     const dirFiles = (await exists(executionDir)) ? await readdir(executionDir) : [];
     const hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
-    const isSimulatedAllowed = process.env.SIMULATED_RUNS === "true" || Reflect.get(process.env, "NODE_ENV") === "test";
+    const isSimulatedAllowed = envEnabled(process.env.SIMULATED_RUNS) || Reflect.get(process.env, "NODE_ENV") === "test";
     const resolved = isSimulatedAllowed ? null : await ensureBinary(requestedTool, requestedVersion);
 
     if (resolved !== null && (await exists(executionDir)) && hasTfFiles) {
@@ -1995,7 +2018,7 @@ export async function runPolicyChecks(
 
         // Use the Landlock sandbox if available for policy evaluation.
 // In simulated mode (tests) or when disabled, run unsandboxed.
-        const isSimulatedAllowed = process.env.SIMULATED_RUNS === "true";
+        const isSimulatedAllowed = envEnabled(process.env.SIMULATED_RUNS);
         const sandboxRequired = !isSimulatedAllowed && runSandboxRequired();
         if (sandboxRequired && (!RunSandbox.isUsable() || !RunSandbox.hasRunner())) {
           throw new Error("Landlock sandbox is required but unavailable for policy evaluation");
@@ -2356,7 +2379,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
       throw new Error("No successfully applied configuration is available for assessment.");
     }
 
-    const simulated = process.env.SIMULATED_RUNS === "true" || Reflect.get(process.env, "NODE_ENV") === "test";
+    const simulated = envEnabled(process.env.SIMULATED_RUNS) || Reflect.get(process.env, "NODE_ENV") === "test";
     let planJson: JsonObject;
     let providerSchema: JsonObject = {};
 
@@ -3236,7 +3259,7 @@ export function startWorkerQueue(): void {
   // Off switch for benchmarks/tests that must run in a process with no
   // background DB activity (the polling loop otherwise injects queries
   // and CPU into measurements).
-  if (process.env.TERRENCE_DISABLE_WORKER === "1") return;
+  if (envEnabled(process.env.TERRENCE_DISABLE_WORKER)) return;
   if (isWorkerLoopRunning) return;
   isWorkerLoopRunning = true;
   startDurableJobWorker({
@@ -3246,6 +3269,7 @@ export function startWorkerQueue(): void {
     "explorer-inventory": runExplorerInventoryJob,
     "explorer-catalog": runExplorerCatalogJob,
     "plan-explanation": runPlanExplanationJob,
+    "vcs-webhook": handleVcsWebhookJob,
   });
 
   const arm = (cycle: () => Promise<void>, interval: number): void => {

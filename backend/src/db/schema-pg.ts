@@ -173,6 +173,9 @@ export const apiTokens = pgTable("api_tokens", {
     description: text("description"),
     scopes: text("scopes"),
     tokenType: text("token_type").notNull().default(""),
+    // Team-token discriminator (TFE parity): singular legacy endpoints must
+    // only see the team's single legacy credential (see sqlite schema note).
+    legacy: boolean("legacy").notNull().default(false),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.apiTokens.createdAt.defaultFn!()),
     lastUsedAt: bigint("last_used_at", { mode: "number" }),
     expiresAt: bigint("expires_at", { mode: "number" }),
@@ -280,6 +283,8 @@ export const configurationVersions = pgTable("configuration_versions", {
     source: text("source").default("tfe-api"),
     ingressAttributes: jsonb("ingress_attributes"),
     statusTimestamps: jsonb("status_timestamps"),
+    // Upload-claim lease (todo 278, see sqlite schema note).
+    uploadClaimExpiresAt: bigint("upload_claim_expires_at", { mode: "number" }),
     error: text("error"),
     errorMessage: text("error_message"),
     softDeletedAt: bigint("soft_deleted_at", { mode: "number" }),
@@ -958,6 +963,9 @@ export const refreshSessions = pgTable("refresh_sessions", {
     expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.refreshSessions.createdAt.defaultFn!()),
     mfaVerified: boolean("mfa_verified").notNull().default(false),
+    // Two-tab concurrency grace (todo 125-127, see sqlite schema note).
+    successorHash: text("successor_hash"),
+    rotatedAtMs: bigint("rotated_at_ms", { mode: "number" }),
 }, (table) => [
     index("refresh_sessions_family_idx").on(table.familyId),
     index("refresh_sessions_user_idx").on(table.userId),
@@ -1520,6 +1528,8 @@ export const testVariables = pgTable("test_variables", {
 export const user2FA = pgTable("user_2fa", {
     userId: text("user_id").notNull().primaryKey().references(() => users.id, { onDelete: "cascade" }),
     secret: text("secret").notNull(),
+    // TOTP seed at-rest encryption (todo 110-112, see sqlite schema note).
+    secretEncrypted: text("secret_encrypted"),
     enabled: boolean("enabled").notNull().default(false),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.user2FA.createdAt.defaultFn!()),
 });
@@ -1554,6 +1564,8 @@ export const variableSetVariables = pgTable("variable_set_variables", {
     variableSetId: text("variable_set_id").notNull().references(() => variableSets.id, { onDelete: "cascade" }),
     key: text("key").notNull(),
     value: text("value").notNull(),
+    // Sensitive-value at-rest encryption (todo 167-169, see sqlite note).
+    valueEncrypted: text("value_encrypted"),
     sensitive: boolean("sensitive").default(false),
     hcl: boolean("hcl").default(false),
     category: text("category").notNull().default("terraform"),
@@ -1656,6 +1668,8 @@ export const workspaceVariables = pgTable("workspace_variables", {
     workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
     key: text("key").notNull(),
     value: text("value").notNull(),
+    // Sensitive-value at-rest encryption (todo 167-169, see sqlite note).
+    valueEncrypted: text("value_encrypted"),
     sensitive: boolean("sensitive").default(false),
     hcl: boolean("hcl").default(false),
     category: text("category").notNull().default("terraform"),

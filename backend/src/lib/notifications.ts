@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { and, desc, eq, inArray, lt, or } from "drizzle-orm";
+import { envEnabled } from "./env";
 import { db } from "../db";
 import {
   assessmentResults,
@@ -184,7 +185,7 @@ async function doPostNotification(
 
   let lastResponse: Response | undefined;
   let lastError = "";
-  const allowPrivate = process.env.TERRENCE_ALLOW_PRIVATE_URLS === "true";
+  const allowPrivate = envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_URLS);
   const destination = await resolveExternalUrl(configuration.url, allowPrivate);
   if ("error" in destination) {
     return { body: destination.error, code: "422", headers: {}, sentAt: new Date().toISOString(), successful: false, url: configuration.url, attempts: 0 };
@@ -563,7 +564,7 @@ export async function verifyDestinationOwnership(
     ownership_verification: true,
   };
 
-  const allowPrivate = process.env.TERRENCE_ALLOW_PRIVATE_URLS === "true";
+  const allowPrivate = envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_URLS);
   const destination = await resolveExternalUrl(configuration.url, allowPrivate);
   if ("error" in destination) {
     return { successful: false, echoed: null, bodyLacksEcho: true, headerLacksEcho: true };

@@ -9,6 +9,7 @@ import { type SQL } from 'drizzle-orm';
 import { mkdirSync, renameSync, statSync } from 'node:fs';
 import { join } from 'path';
 import * as schema from './schema';
+import { envEnabled } from '../lib/env';
 import { planJsonDirectory } from '../lib/plan-json';
 import { runLogsDirectory } from '../lib/run-logs';
 import { databaseDriver, databaseUrl, isPostgres, storageDir } from './driver';
@@ -27,10 +28,7 @@ mkdirSync(storageDir, { recursive: true });
 // alongside it to also capture the SQL text.
 let queryCount = 0;
 const queryLog: string[] = [];
-let queryLogEnabled = process.env.TERRENCE_QUERY_LOG === "1";
-const installQueryInstrumentation = (enabled: boolean): void => {
-  if (!enabled) return;
-};
+let queryLogEnabled = envEnabled(process.env.TERRENCE_QUERY_LOG);
 
 // ---------------------------------------------------------------------------
 // SQLite backend (default): bun:sqlite keeps a single stable native
@@ -49,7 +47,7 @@ if (!isPostgres) {
   // explicitly so referential integrity holds (drizzle's migrate() does not set it).
   client.run('PRAGMA foreign_keys = ON;');
 
-  if (process.env.TERRENCE_QUERY_COUNT === "1") {
+  if (envEnabled(process.env.TERRENCE_QUERY_COUNT)) {
     const originalPrepare = client.prepare.bind(client);
     // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types, @typescript-eslint/explicit-function-return-type -- mirrors bun:sqlite's generic prepare() signature that an explicit return type cannot widen.
     client.prepare = ((sqlText: string, ...params: unknown[]) => {
@@ -58,7 +56,6 @@ if (!isPostgres) {
       return originalPrepare(sqlText, ...(params as [never]));
     });
   }
-  installQueryInstrumentation(process.env.TERRENCE_QUERY_COUNT === "1");
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +74,7 @@ if (isPostgres) {
     // (e.g. "relation already exists" during idempotent DDL) is suppressed.
     onnotice: () => {},
   });
-  if (process.env.TERRENCE_QUERY_COUNT === "1") {
+  if (envEnabled(process.env.TERRENCE_QUERY_COUNT)) {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
     pgClient.unsafe = ((queryText: string, ...params: unknown[]) => {
       queryCount += 1;
@@ -85,7 +82,6 @@ if (isPostgres) {
       return originalUnsafe(queryText, ...(params as [never]));
     }) as typeof pgClient.unsafe;
   }
-  installQueryInstrumentation(true);
 }
 
 /** @public Used by the dynamically imported benchmark runner. */
@@ -219,7 +215,7 @@ if (!isPostgres) {
   // reverted it at the next restart. Only the NULL-only team_projects
   // backfill remains — it fills a missing value and never overwrites one.
   {
-    const teamProjectsColumns = (client.query("PRAGMA table_info(team_projects)").all() as ReadonlyArray<{ readonly name: string }>)
+    const teamProjectsColumns = (client.query("PRAGMA table_info(team_projects)").all() as readonly { readonly name: string }[])
       .map((column): string => column.name);
     if (teamProjectsColumns.includes("organization_id")) {
       client.run("UPDATE team_projects SET organization_id = (SELECT org_id FROM projects WHERE projects.id = team_projects.project_id) WHERE organization_id IS NULL");
@@ -305,13 +301,33 @@ if (!isPostgres) {
   // so a sparse/legacy journal that re-applies this boot path cannot duplicate it.
   client.run("CREATE INDEX IF NOT EXISTS agents_last_ping_at_status_idx ON agents (last_ping_at, status)");
 
+  // Team-token legacy discriminator (mirrors the runs.scheduled_at guard
+  // above): the singular /teams/:id/authentication-token endpoints must only
+  // see the team's single legacy credential, never the modern plural
+  // authentication-tokens set. Databases whose migration journal never
+  // applied the column are repaired at boot. Idempotent.
+  {
+    const apiTokenColumns = (client.query("PRAGMA table_info(api_tokens)").all() as readonly { readonly name: string }[])
+      .map((column): string => column.name);
+    if (!apiTokenColumns.includes("legacy")) {
+      try {
+        client.run("ALTER TABLE api_tokens ADD COLUMN legacy integer NOT NULL DEFAULT 0");
+      } catch (error: unknown) {
+        const updatedColumns = client.query("PRAGMA table_info(api_tokens)").all() as readonly { readonly name: string }[];
+        if (!updatedColumns.some((column): boolean => column.name === "legacy")) {
+          throw error;
+        }
+      }
+    }
+  }
+
   // Column convergence guard (mirrors the run_explanations guard above):
   // databases whose migration journal never applied the scheduled_at column
   // (journal timestamp islands, pre-squash journals, or restored backups)
   // are repaired at boot. Idempotent: a no-op once the column exists, so
   // fresh databases and properly journaled upgrades are unaffected.
   {
-    const runsColumns = (client.query("PRAGMA table_info(runs)").all() as ReadonlyArray<{ readonly name: string }>)
+    const runsColumns = (client.query("PRAGMA table_info(runs)").all() as readonly { readonly name: string }[])
       .map((column): string => column.name);
     if (!runsColumns.includes("scheduled_at")) {
       try {
@@ -320,7 +336,7 @@ if (!isPostgres) {
         // Another process may have added the column between the check and the
         // ALTER. Only swallow the failure when the column now exists; any
         // genuine ALTER failure must surface at boot.
-        const updatedColumns = client.query("PRAGMA table_info(runs)").all() as ReadonlyArray<{ readonly name: string }>;
+        const updatedColumns = client.query("PRAGMA table_info(runs)").all() as readonly { readonly name: string }[];
         if (!updatedColumns.some((column): boolean => column.name === "scheduled_at")) {
           throw error;
         }
@@ -328,6 +344,78 @@ if (!isPostgres) {
     }
   }
   client.run("CREATE INDEX IF NOT EXISTS runs_status_scheduled_idx ON runs (status, scheduled_at)");
+
+  // TOTP seed at-rest encryption column (todo 110-112, mirrors the
+  // api_tokens.legacy guard above). Idempotent boot repair for databases
+  // whose migration journal never applied the column.
+  {
+    const user2faColumns = (client.query("PRAGMA table_info(user_2fa)").all() as readonly { readonly name: string }[])
+      .map((column): string => column.name);
+    if (!user2faColumns.includes("secret_encrypted")) {
+      try {
+        client.run("ALTER TABLE user_2fa ADD COLUMN secret_encrypted text");
+      } catch (error: unknown) {
+        const updatedColumns = client.query("PRAGMA table_info(user_2fa)").all() as readonly { readonly name: string }[];
+        if (!updatedColumns.some((column): boolean => column.name === "secret_encrypted")) {
+          throw error;
+        }
+      }
+    }
+  }
+
+  // Refresh-session two-tab concurrency grace columns (todo 125-127, same
+  // guard pattern). Idempotent boot repair.
+  {
+    const refreshColumns = (client.query("PRAGMA table_info(refresh_sessions)").all() as readonly { readonly name: string }[])
+      .map((column): string => column.name);
+    for (const column of ["successor_hash", "rotated_at_ms"] as const) {
+      if (refreshColumns.includes(column)) continue;
+      try {
+        client.run(`ALTER TABLE refresh_sessions ADD COLUMN ${column}${column === "successor_hash" ? " text" : " integer"}`);
+      } catch (error: unknown) {
+        const updatedColumns = client.query("PRAGMA table_info(refresh_sessions)").all() as readonly { readonly name: string }[];
+        if (!updatedColumns.some((c): boolean => c.name === column)) {
+          throw error;
+        }
+      }
+    }
+  }
+
+  // Sensitive-variable at-rest encryption columns (todo 167-169, same guard
+  // pattern). Idempotent boot repair for both variable tables.
+  for (const tableName of ["workspace_variables", "variable_set_variables"] as const) {
+    const columns = (client.query(`PRAGMA table_info(${tableName})`).all() as readonly { readonly name: string }[])
+      .map((column): string => column.name);
+    if (columns.includes("value_encrypted")) continue;
+    try {
+      client.run(`ALTER TABLE ${tableName} ADD COLUMN value_encrypted text`);
+    } catch (error: unknown) {
+      const updatedColumns = client.query(`PRAGMA table_info(${tableName})`).all() as readonly { readonly name: string }[];
+      if (!updatedColumns.some((c): boolean => c.name === "value_encrypted")) {
+        throw error;
+      }
+    }
+  }
+
+  // Configuration-version upload-claim lease column (todo 278, mirrors the
+  // runs.scheduled_at guard above): atomically claims a pending CV before
+  // accepting an archive PUT so simultaneous signed PUTs cannot race.
+  // Databases whose migration journal never applied the column are repaired
+  // at boot. Idempotent.
+  {
+    const cvColumns = (client.query("PRAGMA table_info(configuration_versions)").all() as readonly { readonly name: string }[])
+      .map((column): string => column.name);
+    if (!cvColumns.includes("upload_claim_expires_at")) {
+      try {
+        client.run("ALTER TABLE configuration_versions ADD COLUMN upload_claim_expires_at integer");
+      } catch (error: unknown) {
+        const updatedColumns = client.query("PRAGMA table_info(configuration_versions)").all() as readonly { readonly name: string }[];
+        if (!updatedColumns.some((column): boolean => column.name === "upload_claim_expires_at")) {
+          throw error;
+        }
+      }
+    }
+  }
 
   // -------------------------------------------------------------------------
   // Id-format migration: re-key persisted rows that predate the current ID
@@ -342,7 +430,7 @@ if (!isPostgres) {
   // -------------------------------------------------------------------------
   {
     // Runs-keyed artifact directories, mirrored from plan-json.ts / run-logs.ts.
-    const RUN_SIDECAR_DIRS: ReadonlyArray<Readonly<{ dir: string; suffix: string }>> = [
+    const RUN_SIDECAR_DIRS: readonly Readonly<{ dir: string; suffix: string }[]> = [
       { dir: planJsonDirectory, suffix: ".json" },
       { dir: runLogsDirectory, suffix: ".json.gz" },
     ];
@@ -363,7 +451,7 @@ if (!isPostgres) {
       }
     };
 
-    const ID_FORMATS: ReadonlyArray<Readonly<{ table: string; prefix: string; fullUuidSuffix: boolean }>> = [
+    const ID_FORMATS: readonly Readonly<{ table: string; prefix: string; fullUuidSuffix: boolean }[]> = [
       { table: "organizations", prefix: "org-", fullUuidSuffix: true },
       { table: "users", prefix: "usr-", fullUuidSuffix: true },
       { table: "workspaces", prefix: "ws-", fullUuidSuffix: false },
@@ -567,7 +655,7 @@ export async function databaseMetrics(): Promise<Readonly<{
     const client = pgClient as postgres.Sql;
     const rows = await client.unsafe(
       "SELECT pg_database_size(current_database()) AS size, current_setting('block_size')::int AS \"blockSize\"",
-    ) as unknown as ReadonlyArray<{ size: number | bigint; blockSize: number }>;
+    ) as unknown as readonly { size: number | bigint; blockSize: number }[];
     const sizeBytes = Number(rows[0]?.size ?? 0);
     const pageSize = Number(rows[0]?.blockSize ?? 8192);
     // The URL may embed credentials; surface only host + database name.
@@ -685,11 +773,24 @@ export function applyPgMigrations(): Promise<void> {
     await pg.unsafe("CREATE INDEX IF NOT EXISTS runs_workspace_status_created_idx ON runs (workspace_id, status, created_at)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS runs_status_created_idx ON runs (status, created_at)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS runs_status_scheduled_idx ON runs (status, scheduled_at)");
+    // Configuration-version upload-claim lease (todo 278, see sqlite boot path).
+    await pg.unsafe("ALTER TABLE configuration_versions ADD COLUMN IF NOT EXISTS upload_claim_expires_at bigint");
+    // TOTP seed at-rest encryption (todo 110-112, see sqlite boot path).
+    await pg.unsafe("ALTER TABLE user_2fa ADD COLUMN IF NOT EXISTS secret_encrypted text");
+    // Refresh-session two-tab concurrency grace (todo 125-127, see sqlite boot path).
+    await pg.unsafe("ALTER TABLE refresh_sessions ADD COLUMN IF NOT EXISTS successor_hash text");
+    await pg.unsafe("ALTER TABLE refresh_sessions ADD COLUMN IF NOT EXISTS rotated_at_ms bigint");
+    // Sensitive-variable at-rest encryption (todo 167-169, see sqlite boot path).
+    await pg.unsafe("ALTER TABLE workspace_variables ADD COLUMN IF NOT EXISTS value_encrypted text");
+    await pg.unsafe("ALTER TABLE variable_set_variables ADD COLUMN IF NOT EXISTS value_encrypted text");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS configuration_versions_workspace_created_idx ON configuration_versions (workspace_id, created_at)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS workspaces_org_idx ON workspaces (org_id)");
     // Agent heartbeat sweep (recoverStaleAgentJobs) filters on lastPingAt/status
     // every poll; keep it off a full table scan as agent volume grows.
     await pg.unsafe("CREATE INDEX IF NOT EXISTS agents_last_ping_at_status_idx ON agents (last_ping_at, status)");
+    // Team-token legacy discriminator (see sqlite boot path): the singular
+    // legacy team-token endpoints must only see the team's legacy credential.
+    await pg.unsafe("ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS legacy boolean NOT NULL DEFAULT false");
     // OAuth handshake state (see sqlite boot path): persisted so any replica
     // can read/consume it. Idempotent so a re-applied boot path is safe.
     await pg.unsafe(`

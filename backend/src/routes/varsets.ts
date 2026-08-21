@@ -4,6 +4,7 @@ import { variableSets, variableSetWorkspaces, variableSetProjects, variableSetVa
 import { eq, and, asc, like, count, inArray } from "drizzle-orm";
 import { variableSetResource, variableSetVariableResource, variableSetVariableUpdate } from "../lib/response";
 import { validVariableSetAttributes, validVariableSetVariableAttributes, isUniqueConstraintError } from "../lib/validation";
+import { variableValueForWrite } from "../lib/variable-crypto";
 import { checkOrganizationPermission, findAuthorizedVariableSet, pageRequest, pagination, workspaceRelationshipIds, projectRelationshipIds, stackRelationshipIds, variableRelationshipResources, scopeWorkspaceIdsForOrg } from "../lib/utils";
 import { scopeCoversOrg, scopeGrants } from "../lib/token-scopes";
 import { currentTokenScopes } from "../lib/request-scope";
@@ -363,12 +364,14 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] };
     }
     const key = typeof attributes?.key === "string" ? attributes.key : "";
-    const value = typeof attributes?.value === "string" ? attributes.value : "";
+    const rawValue = typeof attributes?.value === "string" ? attributes.value : "";
     const category = typeof attributes?.category === "string" ? attributes.category : "terraform";
     const sensitive = typeof attributes?.sensitive === "boolean" ? attributes.sensitive : false;
     const hcl = typeof attributes?.hcl === "boolean" ? attributes.hcl : false;
     const description = typeof attributes?.description === "string" ? attributes.description : null;
-    const variable = { id: `var-${crypto.randomUUID()}`, variableSetId: record.id, key, value, category, sensitive, hcl, description };
+    // Sensitive values are encrypted at rest (todo 167/168).
+    const stored = await variableValueForWrite(sensitive, rawValue);
+    const variable = { id: `var-${crypto.randomUUID()}`, variableSetId: record.id, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description };
     try { await db.insert(variableSetVariables).values(variable); } catch (error: unknown) {
       if (isUniqueConstraintError(error)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this set" }] }; }
       throw error;
@@ -392,11 +395,22 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     const variables = await db.query.variableSetVariables.findMany({ where: and(eq(variableSetVariables.variableSetId, record.id), inArray(variableSetVariables.id, ids)) });
     if (variables.length !== ids.length) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const byId = new Map(variables.map((v: VarItem): [string, VarItem] => [v.id, v]));
-    const updates = (relationship.resources as ResItem[]).map((item: ResItem): { variable: VarItem; values: Record<string, unknown> } => {
+    const updates = await Promise.all((relationship.resources as ResItem[]).map(async (item: ResItem): Promise<{ variable: VarItem; values: Record<string, unknown> }> => {
       const v = byId.get(item.id);
       if (v === undefined) throw new Error("Variable not found");
-      return { variable: v, values: variableSetVariableUpdate(v, item.attributes as Parameters<typeof variableSetVariableUpdate>[1]) };
-    });
+      const base = variableSetVariableUpdate(v, item.attributes as Parameters<typeof variableSetVariableUpdate>[1]);
+      const sensitiveNow = base.sensitive === true;
+      const valueChanged = base.value !== v.value;
+      const sensitiveChanged = sensitiveNow !== (v.sensitive === true);
+      if (valueChanged || sensitiveChanged) {
+        const stored = await variableValueForWrite(sensitiveNow, base.value as string);
+        base.value = stored.value;
+        (base as Record<string, unknown>).valueEncrypted = stored.valueEncrypted;
+      } else {
+        (base as Record<string, unknown>).valueEncrypted = v.valueEncrypted;
+      }
+      return { variable: v, values: base };
+    }));
     try {
       await db.transaction(async (tx: unknown): Promise<void> => {
         const t = tx as typeof db;
@@ -445,6 +459,17 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] };
     }
     const updated = variableSetVariableUpdate(variable, attributes as Parameters<typeof variableSetVariableUpdate>[1]);
+    // Re-encrypt when the value or sensitive flag changed (todo 167-169).
+    const sensitiveNow = updated.sensitive === true;
+    const valueChanged = updated.value !== variable.value;
+    const sensitiveChanged = sensitiveNow !== (variable.sensitive === true);
+    if (valueChanged || sensitiveChanged) {
+      const stored = await variableValueForWrite(sensitiveNow, updated.value as string);
+      updated.value = stored.value;
+      updated.valueEncrypted = stored.valueEncrypted;
+    } else {
+      updated.valueEncrypted = variable.valueEncrypted;
+    }
     try { await db.update(variableSetVariables).set(updated).where(eq(variableSetVariables.id, variable.id)); } catch (error: unknown) {
       if (isUniqueConstraintError(error)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this set" }] }; }
       throw error;

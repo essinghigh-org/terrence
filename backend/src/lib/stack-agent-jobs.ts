@@ -16,6 +16,48 @@ export type StackAgentJob = DeepReadonly<typeof stackAgentJobs.$inferSelect>;
 type StackRecord = Readonly<typeof stackRecords.$inferSelect>;
 const STACK_AGENT_CLAIM_TIMEOUT_MS = 15 * 60_000;
 
+export const MAX_STACK_AGENT_RESULT_BYTES = 64 * 1024;
+export const MAX_STACK_AGENT_RESULT_DEPTH = 8;
+export const MAX_STACK_AGENT_RESULT_KEYS = 500;
+
+function isStackResultValueTooLarge(value: unknown, depth: number, keyCount: { count: number }): boolean {
+  if (depth > MAX_STACK_AGENT_RESULT_DEPTH) return true;
+  if (typeof value === "string" && value.length > 16_384) return true;
+  if (typeof value !== "object" || value === null) return false;
+  if (Array.isArray(value)) {
+    if (value.length > 1000) return true;
+    keyCount.count += value.length;
+    if (keyCount.count > MAX_STACK_AGENT_RESULT_KEYS) return true;
+    for (const item of value) if (isStackResultValueTooLarge(item, depth + 1, keyCount)) return true;
+    return false;
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > 200) return true;
+  keyCount.count += entries.length;
+  if (keyCount.count > MAX_STACK_AGENT_RESULT_KEYS) return true;
+  for (const [k, v] of entries) {
+    if (k.length > 1024) return true;
+    if (typeof v === "string" && v.length > 16_384) return true;
+    if (isStackResultValueTooLarge(v, depth + 1, keyCount)) return true;
+  }
+  return false;
+}
+
+export function isStackAgentResultValid(result: unknown): boolean {
+  if (typeof result !== "object" || result === null || Array.isArray(result)) return false;
+  try {
+    // State payloads are stored as artifacts, not in the JSONB metadata — exclude
+    // them from the size budget so large valid Terraform state does not reject
+    // the run.
+    const { state: _s, json_state: _js, ...metadata } = result as Record<string, unknown>;
+    const serialized = JSON.stringify(Object.keys(metadata).length === Object.keys(result as object).length ? result : metadata);
+    if (new TextEncoder().encode(serialized).byteLength > MAX_STACK_AGENT_RESULT_BYTES) return false;
+  } catch {
+    return false;
+  }
+  return !isStackResultValueTooLarge(result, 0, { count: 0 });
+}
+
 export type StackAgentJobCompletion = Readonly<{
   status: "completed" | "errored";
   errorMessage: string | null;
@@ -138,6 +180,11 @@ export async function completeStackAgentJob(
   completion: StackAgentJobCompletion,
 ): Promise<Readonly<{ job: StackAgentJob; runStatus: string; fencingToken?: number }> | undefined> {
   const outcome = await db.transaction(async (tx): Promise<Readonly<{ job: StackAgentJob; runStatus: string; fencingToken?: number }> | undefined> => {
+    // Terraform state can be arbitrarily large — validate the metadata envelope
+    // without the state payload so a valid apply with a large state is not
+    // rejected. State is persisted as a file artifact via saveStackState.
+    const { state: _state, json_state: _jsonState, ...metadata } = completion.result as Record<string, unknown>;
+    if (!isStackAgentResultValid(metadata)) throw new Error(`stack agent result metadata exceeds ${MAX_STACK_AGENT_RESULT_BYTES} bytes or structural limits`);
     const job = await tx.query.stackAgentJobs.findFirst({ where: and(eq(stackAgentJobs.id, jobId), eq(stackAgentJobs.agentId, agentId), eq(stackAgentJobs.status, "claimed")) });
     if (job === undefined) return undefined;
     const step = await tx.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, job.stepId), eq(stackRecords.recordType, "stack-deployment-steps")) });

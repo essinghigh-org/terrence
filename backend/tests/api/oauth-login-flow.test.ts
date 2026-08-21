@@ -4,6 +4,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { user2FA } from "../../src/db/schema";
 import { generateTotpCode } from "../../src/lib/totp";
+import { decryptSecret, isEncryptedSecret } from "../../src/lib/secrets";
 
 type CookieJar = Record<string, string>;
 
@@ -248,10 +249,13 @@ describe("terraform login.v1 OAuth flow", () => {
     const challengeToken = loginJson.data.attributes["mfa-challenge-token"];
     expect(challengeToken).toBeDefined();
 
-    // 3. Obtain the TOTP secret and generate code
+    // 3. Obtain the TOTP secret and generate code (seed is encrypted at rest;
+    // decrypt the same way the login path does).
     const mfaRow = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, userId) });
     expect(mfaRow).toBeDefined();
-    const totpCode = generateTotpCode(mfaRow!.secret);
+    const seedRaw = mfaRow!.secretEncrypted ?? mfaRow!.secret;
+    const seedPlain = isEncryptedSecret(seedRaw) ? await decryptSecret(seedRaw) : seedRaw;
+    const totpCode = generateTotpCode(seedPlain);
 
     // 4. Submit MFA challenge
     const mfaRes = await app.handle(
@@ -343,7 +347,9 @@ describe("terraform login.v1 OAuth flow", () => {
     );
     const challengeToken = ((await loginRes.json()) as { data: { attributes: { "mfa-challenge-token": string } } }).data.attributes["mfa-challenge-token"];
     const mfaRow = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, userId) });
-    const totpCode = generateTotpCode(mfaRow!.secret);
+    const seedRaw2 = mfaRow!.secretEncrypted ?? mfaRow!.secret;
+    const seedPlain2 = isEncryptedSecret(seedRaw2) ? await decryptSecret(seedRaw2) : seedRaw2;
+    const totpCode = generateTotpCode(seedPlain2);
     const mfaRes = await app.handle(
       new Request("http://localhost/api/v2/users/login/mfa", {
         method: "POST",
