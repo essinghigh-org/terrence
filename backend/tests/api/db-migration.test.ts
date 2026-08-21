@@ -178,9 +178,16 @@ describe("SQLite -> PostgreSQL migration wizard", () => {
     const response = await app.handle(adminRequest("/api/v2/admin/db-migration/status"));
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
-      data: { "source-database": { path: string; memory: boolean }; "restart-disabled": boolean };
+      data: { "source-database": { path: string; memory: boolean } | null; "restart-disabled": boolean };
     };
-    expect(body.data["source-database"].path).toContain("terrence.db");
+    // The wizard is SQLite->Postgres only; on Postgres DATABASE_URL the
+    // source is null (no sqlite file to migrate).
+    const isPg = (process.env.DATABASE_URL ?? "").startsWith("postgres");
+    if (isPg) {
+      expect(body.data["source-database"]).toBeNull();
+    } else {
+      expect((body.data["source-database"] as { path: string }).path).toContain("terrence.db");
+    }
     expect(body.data["restart-disabled"]).toBe(true);
   });
 
@@ -216,6 +223,8 @@ describe("SQLite -> PostgreSQL migration wizard", () => {
 
   test("runs the full migration, verifies, switches the backend, and writes the manifest", async (): Promise<void> => {
     if (!postgresAvailable) return;
+    // Wizard is SQLite->Postgres only; skip when already on Postgres.
+    if ((process.env.DATABASE_URL ?? "").startsWith("postgres")) return;
     const start = await app.handle(adminRequest("/api/v2/admin/db-migration/start", "POST", {
       data: { attributes: { url: targetUrl } },
     }));
@@ -297,6 +306,7 @@ describe("SQLite -> PostgreSQL migration wizard", () => {
 
   test("cannot start a second migration after switching", async (): Promise<void> => {
     if (!postgresAvailable) return;
+    if ((process.env.DATABASE_URL ?? "").startsWith("postgres")) return;
     const second = await app.handle(adminRequest("/api/v2/admin/db-migration/start", "POST", {
       data: { attributes: { url: targetUrl } },
     }));

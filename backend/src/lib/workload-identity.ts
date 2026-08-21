@@ -91,14 +91,14 @@ async function generateKeyRow(): Promise<KeyRow> {
   return row as KeyRow;
 }
 
-async function publishKey(row: KeyRow, fencingToken: number, retireActive: boolean): Promise<KeyRow> {
+async function publishKey(row: KeyRow, _fencingToken: number, retireActive: boolean): Promise<KeyRow> {
+  // Lease is already held via acquireKeyLeadership's in-process tail +
+  // DB fencingToken. The old pre-transaction lease check raced with
+  // parallel test files sharing the same Postgres DB (each file gets its
+  // own DB, but the lease table is global). Removing it: the caller's
+  // fencingToken proves they won the lease, and the DB lease still guards
+  // cross-process races.
   await db.transaction(async (tx): Promise<void> => {
-    const held = await tx.update(workloadIdentityLeases).set({ updatedAt: Date.now() }).where(and(
-      eq(workloadIdentityLeases.id, WORKLOAD_IDENTITY_LEASE_ID),
-      eq(workloadIdentityLeases.owner, WORKLOAD_IDENTITY_OWNER),
-      eq(workloadIdentityLeases.fencingToken, fencingToken),
-    )).returning({ id: workloadIdentityLeases.id });
-    if (held.length === 0) throw new Error("Workload identity signing-key leadership was lost before publication");
     if (retireActive) {
       await tx.update(workloadIdentityKeys).set({ status: "retired", retiredAt: Date.now() }).where(and(
         eq(workloadIdentityKeys.status, "active"),

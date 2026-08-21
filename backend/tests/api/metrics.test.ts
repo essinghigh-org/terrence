@@ -366,7 +366,16 @@ describe("instance metrics", () => {
     expect(body).toMatch(/terrence_process_rss_bytes \d+/);
     expect(body).toMatch(/terrence_requests_total \d+/);
     expect(body).toMatch(/terrence_worker_polls_total \d+/);
-    expect(body).toMatch(/terrence_database_freelist_bytes \d+/);
+    // SQLite-only bloat metric: health.ts only emits the value line when
+    // freelistBytes !== null (null on postgres). Require the value on
+    // sqlite and require its absence on postgres so a missing sqlite
+    // metric cannot pass silently.
+    const isPg = (process.env.DATABASE_URL ?? "").startsWith("postgres");
+    if (isPg) {
+      expect(body).not.toMatch(/^terrence_database_freelist_bytes \d+/m);
+    } else {
+      expect(body).toMatch(/terrence_database_freelist_bytes \d+/);
+    }
   });
 
   test("Prometheus format for a scoped token omits instance gauges", async () => {
