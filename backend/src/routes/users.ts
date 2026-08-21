@@ -179,6 +179,10 @@ export const userRoutes = new Elysia({ name: "users" })
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
+    if (data !== undefined && typeof data.type === "string" && data.type !== "organization-memberships") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be \"organization-memberships\"" }] };
+    }
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
     const email = typeof attrs.email === "string" ? attrs.email : undefined;
     const username = typeof attrs.username === "string" ? attrs.username : undefined;
@@ -229,20 +233,47 @@ export const userRoutes = new Elysia({ name: "users" })
         }
       }
       if (candidateIds.length > 0) {
-        const teamsInOrg = await db.query.teams.findMany({
-          where: and(inArray(teams.id, candidateIds), eq(teams.orgId, org.id)),
-          columns: { id: true },
-        });
-        const membershipBatch = teamsInOrg.map((team): typeof teamMemberships.$inferInsert => ({
-          id: `tmem-${crypto.randomUUID()}`,
-          teamId: team.id,
-          userId: targetUser.id,
-          createdAt: Date.now(),
-        }));
-        if (membershipBatch.length > 0) {
-          await db.insert(teamMemberships).values(membershipBatch).onConflictDoNothing();
+        // 19-20: reject other-org team IDs and duplicate IDs with 422
+        const uniqueIds = [...new Set(candidateIds)];
+        if (uniqueIds.length !== candidateIds.length) {
+          (set as { status: number }).status = 422;
+          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Duplicate team IDs in relationships.teams" }] };
         }
-        teamIds.push(...teamsInOrg.map((t): string => t.id));
+        // Validate each team id belongs to this org; other-org IDs are rejected (not silently dropped)
+        const allTeams = await db.query.teams.findMany({ where: inArray(teams.id, uniqueIds), columns: { id: true, orgId: true } });
+        const byIdMap = new Map(allTeams.map((tm: { id: string; orgId: string }): [string, string] => [tm.id, tm.orgId]));
+        for (const cid of uniqueIds) {
+          const owner = byIdMap.get(cid);
+          if (owner === undefined) {
+            (set as { status: number }).status = 422;
+            return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Team \"${cid}\" does not exist` }] };
+          }
+          if (owner !== org.id) {
+            (set as { status: number }).status = 422;
+            return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Team \"${cid}\" does not belong to organization \"${org.name}\"` }] };
+          }
+        }
+        // Validate relationship type = teams (item 18)
+        const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
+        const teamsRel = typeof rels.teams === "object" && rels.teams !== null ? (rels.teams as Record<string, unknown>) : {};
+        const relData = teamsRel.data;
+        if (Array.isArray(relData)) {
+          for (const entry of relData) {
+            if (entry !== null && typeof entry === "object" && typeof (entry as Record<string, unknown>).type === "string" && (entry as Record<string, unknown>).type !== "teams") {
+              (set as { status: number }).status = 422;
+              return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "relationships.teams.data[].type must be \"teams\"" }] };
+            }
+          }
+        }
+        // 21-23: for invited memberships, store pending team intent on the membership itself
+        // rather than as active team_memberships rows (those materialize on acceptance).
+        const teamsInOrg = allTeams.filter((tm): boolean => tm.orgId === org.id);
+        if (teamsInOrg.length > 0) {
+          // For now the membership is always invited (invite-only), so treat all initial team
+          // assignments as pending intent attached to the membership; they become effective on acceptance.
+          // Carry them via organizationMemberships metadata until the invitations table lands (items 161-230).
+          teamIds.push(...teamsInOrg.map((tm): string => tm.id));
+        }
       }
     }
     const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
@@ -319,7 +350,15 @@ export const userRoutes = new Elysia({ name: "users" })
     if (mem === undefined || !(await checkOrganizationPermission(mem.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, memId));
+    await db.transaction(async (tx: unknown): Promise<void> => {
+      const t = tx as typeof db;
+      // Remove effective team memberships for this org (item 26-27)
+      const orgTeamIds = (await t.query.teams.findMany({ where: eq(teams.orgId, mem.orgId), columns: { id: true } })).map((row: { id: string }): string => row.id);
+      if (orgTeamIds.length > 0) {
+        await t.delete(teamMemberships).where(and(eq(teamMemberships.userId, mem.userId), inArray(teamMemberships.teamId, orgTeamIds)));
+      }
+      await t.delete(organizationMemberships).where(eq(organizationMemberships.id, memId));
+    });
     // Immediate SSE revocation: close the user's event streams so their
     // permission snapshot cannot linger for the one-hour reconnect cap.
     publish("authz.changed", { "user-id": mem.userId, "org-id": mem.orgId });
