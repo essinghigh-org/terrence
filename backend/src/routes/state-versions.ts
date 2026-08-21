@@ -9,7 +9,6 @@ import {
   checkRunStateAccess,
   findAuthorizedWorkspace,
   findRemoteStateReadableWorkspace,
-  canConsumeRemoteState,
   pageRequest,
   pagination,
   decodeStatePayload,

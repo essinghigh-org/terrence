@@ -617,10 +617,11 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
       await checkpointWithRetries();
     });
     source = openSourceSnapshot();
+    if (source === null) throw new WizardError("Source database unavailable");
     let plans: TablePlan[] = [];
     let report = emptyReport();
     await run("schema", async (ctx): Promise<void> => {
-      const schema = inspectSourceSchema(source);
+      const schema = inspectSourceSchema(source!);
       for (const table of schema.tables) assertNoUnparsedColumns(table);
       cachedIndexes = schema.indexes;
       plans = planTables(schema);
@@ -671,6 +672,7 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
         const fkStatements = generateForeignKeySql(plan.def);
         if (fkStatements.length > 0) await target.unsafe(fkStatements.join("\n"));
       }
+      if (source === null) throw new WizardError("Source database unavailable");
       await seedMigrationJournal(source, target);
       ctx.setState({ ...ctx.state, report });
     });
@@ -690,6 +692,7 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
           if (plan === undefined) continue;
           const startedAt = Date.now();
           try {
+            if (source === null) throw new WizardError("Source database unavailable");
             await copyTable(source, target, plan.copy, {
               isCancelled: (): boolean => cancelRequested,
               onBatch: (batch): void => {
@@ -755,12 +758,14 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
       const verification: TableVerifyResult[] = [];
       const fkNames = new Map(plans.map((plan): [string, readonly string[]] => [plan.def.name, plan.fkNames]));
       for (const plan of plans) {
+        if (source === null) throw new WizardError("Source database unavailable");
         const sourceCount = Number((source.query(`SELECT COUNT(*) AS n FROM "${plan.def.name}"`).get() as { n: number }).n);
         const targetCountRow = await target.unsafe(`SELECT count(*)::bigint AS n FROM "${plan.def.name}"`);
         const targetCount = Number(targetCountRow[0]?.n ?? 0);
         let digestMatch: boolean | null = null;
         let digestSkipped: string | null = null;
         if (plan.copy.pkColumns.length > 0) {
+          if (source === null) throw new WizardError("Source database unavailable");
           const sourceDigest = digestTableSource(source, plan.copy);
           const targetDigest = await digestTableTarget(target, plan.copy);
           digestMatch = sourceDigest.digest === targetDigest.digest && sourceDigest.rows === targetDigest.rows;
@@ -779,6 +784,7 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
           digestSkipped,
         });
       }
+      if (source === null) throw new WizardError("Source database unavailable");
       const violations = await validateForeignKeys(target, plans.map((plan): CopyTable => plan.copy), fkNames);
       const journalMatch = await verifyJournal(source, target);
       report = { ...report, fkViolations: violations, journalMatch };
