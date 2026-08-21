@@ -3,7 +3,7 @@ import { db } from "../db";
 import { orgTokenTTLPolicies, type users } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { checkOrganizationPermission, notFound } from "../lib/utils";
-import { isTtlPolicyTokenType, normalizeTtlPolicyTokenType } from "../lib/token-ttl-policy";
+import { denormalizeTtlPolicyTokenType, isTtlPolicyTokenType, normalizeTtlPolicyTokenType } from "../lib/token-ttl-policy";
 import { authPlugin } from "../auth";
 import { cachedOrgByName } from "../lib/cached-lookups";
 
@@ -23,7 +23,7 @@ function ttlResource(r: TtlRow): Record<string, unknown> {
     id: r.id,
     type: "organization-token-ttl-policies",
     attributes: {
-      "token-type": r.tokenType,
+      "token-type": denormalizeTtlPolicyTokenType(r.tokenType),
       "max-ttl-ms": r.maxTtlMs,
       "created-at": new Date(r.createdAt).toISOString(),
       "updated-at": new Date(r.updatedAt).toISOString(),

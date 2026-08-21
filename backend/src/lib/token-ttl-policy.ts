@@ -32,8 +32,10 @@ export function normalizeTtlPolicyTokenType(value: string): string {
   return value;
 }
 
-/** Denormalize for GET responses if needed (not currently used — GET returns DB canonical). */
+/** Denormalize DB canonical to TFE wire format for GET/PATCH responses. */
 export function denormalizeTtlPolicyTokenType(value: string): string {
+  if (value === "") return "organization";
+  if (value === "audit-trails") return "audit_trails";
   return value;
 }
 

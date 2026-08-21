@@ -42,7 +42,8 @@ const TOKEN_TYPES: readonly { value: string; label: string }[] = [
 // value because it collides with "no selection". The UI uses "user" as the
 // option value and maps it back to "" on submit.
 function toTokenTypeSlot(optionValue: string): string {
-  return optionValue === "user" ? "" : optionValue;
+  // Send wire types; PATCH normalizes "organization" -> "" and "audit_trails" -> "audit-trails".
+  return optionValue;
 }
 
 function humanizeTokenType(tokenType: string): string {

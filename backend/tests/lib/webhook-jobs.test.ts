@@ -38,7 +38,7 @@ const gitlabPayload = {
   commits: [{ id: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", added: ["main.tf"], modified: [], removed: [] }],
 };
 
-const gitlabDedupeKey = "gitlab:durability/repo:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+const gitlabDedupeKey = "gitlab:durability/repo:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef:Push Hook";
 
 async function jobByDedupeKey(dedupeKey: string) {
   return db.query.durableJobs.findFirst({
@@ -58,9 +58,9 @@ afterAll(async (): Promise<void> => {
 
 describe("vcs webhook durability", () => {
   test("provider identity derivation", () => {
-    expect(vcsWebhookDeliveryId("github", {}, "guid-123")).toBe("guid-123");
-    expect(vcsWebhookDeliveryId("gitlab", gitlabPayload, null)).toBe(gitlabDedupeKey);
-    expect(vcsWebhookDeliveryId("bitbucket", {
+    expect(vcsWebhookDeliveryId("github", "push", {}, "guid-123")).toBe("guid-123");
+    expect(vcsWebhookDeliveryId("gitlab", "Push Hook", gitlabPayload, null)).toBe(gitlabDedupeKey);
+    expect(vcsWebhookDeliveryId("bitbucket", "repo:push", {
       repository: { full_name: "durability/repo" },
       push: {
         changes: [{
@@ -71,10 +71,10 @@ describe("vcs webhook durability", () => {
           },
         }],
       },
-    }, null)).toBe("bitbucket:durability/repo:feedfacefeedfacefeedfacefeedfacefeedface");
+    }, null)).toBe("bitbucket:durability/repo:feedfacefeedfacefeedfacefeedfacefeedface:repo:push");
     // Unparseable payloads fall back to no dedupe rather than collapsing distinct events.
-    expect(vcsWebhookDeliveryId("gitlab", {}, null)).toBeNull();
-    expect(vcsWebhookDeliveryId("bitbucket", {}, null)).toBeNull();
+    expect(vcsWebhookDeliveryId("gitlab", "Push Hook", {}, null)).toBeNull();
+    expect(vcsWebhookDeliveryId("bitbucket", "repo:push", {}, null)).toBeNull();
   });
 
   test("duplicate delivery while first copy is still processing is deduped (todo 199)", async () => {
