@@ -219,12 +219,9 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "status must be one of: active, invited" }] };
     }
-    const status = requestedStatus === "invited" ? "invited" : "active";
-    // TFE compat: invitations are always invited; callers cannot mint active directly (item 15)
-    // If the target already exists and is active, that is 409; we force invited for new invites.
-    const inviteStatus = existingMem === undefined ? "invited" : status;
+    // TFE compat: new invitations are always invited (item 15); existing membership already returned 409.
     await db.insert(organizationMemberships).values({
-      id: memId, orgId: org.id, userId: targetUser.id, role: "member", status: inviteStatus,
+      id: memId, orgId: org.id, userId: targetUser.id, role: "member", status: "invited",
     });
     const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
     const teamsRel = typeof rels.teams === "object" && rels.teams !== null ? (rels.teams as Record<string, unknown>) : {};
@@ -431,7 +428,7 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    if (target.isProvisional === true || (user as unknown as Record<string, unknown>).isProvisional === true) {
+    if (target.isProvisional === true) {
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden", detail: "Provisional accounts cannot create tokens" }] };
     }

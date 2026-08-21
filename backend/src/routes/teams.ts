@@ -229,10 +229,10 @@ export const teamRoutes = new Elysia({ name: "teams" })
     ]);
     const { number, size } = pageRequest(request);
     const callerUserId = user?.id ?? null;
-    const callerIsOwner = callerUserId !== null && (await db.query.organizationMemberships.findFirst({ where: and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.userId, callerUserId), eq(organizationMemberships.role, "owner")) })) !== undefined;
+    const callerIsOwner = callerUserId !== null && (await db.query.organizationMemberships.findFirst({ where: and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.userId, callerUserId), eq(organizationMemberships.role, "owner"), eq(organizationMemberships.status, "active")) })) !== undefined;
     const callerIsSiteAdmin = user?.isSiteAdmin === true;
     let callerTeamIds: Set<string> | null = null;
-    let callerCanSeeSecret = callerIsOwner || callerIsSiteAdmin;
+    let callerCanSeeSecret = callerIsOwner || callerIsSiteAdmin || (tokenOrgId !== null && tokenOrgId === org.id) || tokenTeamId !== null;
     if (callerUserId !== null) {
       const rows = await db.query.teamMemberships.findMany({ where: eq(teamMemberships.userId, callerUserId), columns: { teamId: true } });
       const memberTeamIds = rows.map((r: { teamId: string }): string => r.teamId);

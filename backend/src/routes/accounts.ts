@@ -583,7 +583,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       user = found;
     }
 
-    if ((user as unknown as typeof users.$inferSelect).isProvisional === true) {
+    if (user.isProvisional === true) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "This invitation has not been accepted yet" }] };
     }
