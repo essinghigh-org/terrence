@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "./db";
 import { apiTokens, user2FA, users } from "./db/schema";
 import { hashAuthenticationToken } from "./lib/token-service";
-import { putOAuthHandshakeState, takeOAuthHandshakeState } from "./lib/oauth-handshake";
+import { peekOAuthHandshakeState, putOAuthHandshakeState, takeOAuthHandshakeState } from "./lib/oauth-handshake";
 import { browserSessionDetails } from "./routes/accounts";
 
 const CLIENT_ID = "terraform-cli";
@@ -45,6 +45,10 @@ async function putPendingAuth(id: string, value: StoredPendingAuth): Promise<voi
 }
 async function takePendingAuth(id: string): Promise<StoredPendingAuth | undefined> {
   return takeOAuthHandshakeState<StoredPendingAuth>(PENDING_AUTH_PREFIX + id);
+}
+async function peekPendingAuth(id: string): Promise<StoredPendingAuth | undefined> {
+  const row = await peekOAuthHandshakeState(PENDING_AUTH_PREFIX + id);
+  return row?.payload as StoredPendingAuth | undefined;
 }
 async function putAuthCode(id: string, value: StoredAuthCode): Promise<void> {
   await putOAuthHandshakeState(AUTH_CODE_PREFIX + id, value.expiresAt, value as unknown as Record<string, unknown>);
@@ -248,8 +252,14 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       return plainError("OAuth authorization state mismatch. Please run 'terraform login' again.");
     }
 
-    const pending = await takePendingAuth(oauthState);
-    if (pending === undefined || pending.expiresAt <= Date.now()) {
+    // Peek without consuming: the unauthenticated probe (no session)
+    // should not consume the pending state needed by the subsequent
+    // authenticated request. Only consume after a session is confirmed.
+    const peekPending = await peekPendingAuth(oauthState);
+    if (peekPending === undefined || peekPending.expiresAt <= Date.now()) {
+      // Consume if present but expired, so the stale row does not linger.
+      const stale = await takePendingAuth(oauthState);
+      void stale;
       return plainError("OAuth authorization expired. Please run 'terraform login' again.");
     }
 
@@ -270,6 +280,10 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       return plainError("Multi-factor authentication required. Please run 'terraform login' again.");
     }
 
+    const pending = await takePendingAuth(oauthState);
+    if (pending === undefined) {
+      return plainError("OAuth authorization expired. Please run 'terraform login' again.");
+    }
     return await approveForUser(pending.authorization, details.user.id);
   })
   .post("/oauth/token", async ({ body, request, set }): Promise<Record<string, string>> => {
