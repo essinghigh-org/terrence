@@ -320,10 +320,12 @@ export const userRoutes = new Elysia({ name: "users" })
       };
       filteredMems = filteredMems.filter((m): boolean => matchUser(m.userId));
     }
+    const byStatus = await db.select({ status: organizationMemberships.status, total: count() }).from(organizationMemberships).where(eq(organizationMemberships.orgId, org.id)).groupBy(organizationMemberships.status);
+    const countByStatus = new Map(byStatus.map((row): [string, number] => [row.status, row.total]));
     const statusCounts = {
-      total: (await db.select({ total: count() }).from(organizationMemberships).where(eq(organizationMemberships.orgId, org.id)))[0]?.total ?? 0,
-      active: (await db.select({ total: count() }).from(organizationMemberships).where(and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.status, "active"))))[0]?.total ?? 0,
-      invited: (await db.select({ total: count() }).from(organizationMemberships).where(and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.status, "invited"))))[0]?.total ?? 0,
+      total: [...countByStatus.values()].reduce((sum, value): number => sum + value, 0),
+      active: countByStatus.get("active") ?? 0,
+      invited: countByStatus.get("invited") ?? 0,
     };
     const totalFiltered = filteredMems.length;
     const page = filteredMems.slice((number - 1) * size, number * size);
@@ -429,7 +431,7 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    if ((target as unknown as Record<string, unknown>).isProvisional === true || (user as unknown as Record<string, unknown>).isProvisional === true) {
+    if (target.isProvisional === true || (user as unknown as Record<string, unknown>).isProvisional === true) {
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden", detail: "Provisional accounts cannot create tokens" }] };
     }

@@ -235,12 +235,13 @@ export const teamRoutes = new Elysia({ name: "teams" })
     let callerCanSeeSecret = callerIsOwner || callerIsSiteAdmin;
     if (callerUserId !== null) {
       const rows = await db.query.teamMemberships.findMany({ where: eq(teamMemberships.userId, callerUserId), columns: { teamId: true } });
-      callerTeamIds = new Set(rows.map((r: { teamId: string }): string => r.teamId));
+      const memberTeamIds = rows.map((r: { teamId: string }): string => r.teamId);
+      const callerTeams = memberTeamIds.length === 0
+        ? []
+        : await db.query.teams.findMany({ where: and(eq(teams.orgId, org.id), inArray(teams.id, memberTeamIds)), columns: { id: true, organizationAccess: true } });
+      callerTeamIds = new Set(callerTeams.map((tm): string => tm.id));
       if (!callerCanSeeSecret) {
-        for (const tid of callerTeamIds) {
-          const tm = await db.query.teams.findFirst({ where: eq(teams.id, tid), columns: { organizationAccess: true } });
-          if ((tm?.organizationAccess as Record<string, unknown> | undefined)?.["access-secret-teams"] === true) { callerCanSeeSecret = true; break; }
-        }
+        callerCanSeeSecret = callerTeams.some((tm): boolean => (tm.organizationAccess as Record<string, unknown> | undefined)?.["access-secret-teams"] === true);
       }
     }
     const visibleTeamWhere = callerCanSeeSecret
