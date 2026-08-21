@@ -468,7 +468,7 @@ export function OrganizationSettings(): React.JSX.Element {
     const userId = addMemberTeam[teamId];
     if (userId === undefined || userId === "") return;
     try {
-      await fetchApi(`/teams/${encodeURIComponent(teamId)}/relationships/members`, {
+      await fetchApi(`/teams/${encodeURIComponent(teamId)}/relationships/users`, {
         method: "POST",
         body: JSON.stringify({ data: [{ id: userId, type: "users" }] }),
       });
@@ -497,7 +497,7 @@ export function OrganizationSettings(): React.JSX.Element {
 
   const removeTeamMember = async (teamId: string, member: { id: string; username: string }): Promise<void> => {
     try {
-      await fetchApi(`/teams/${encodeURIComponent(teamId)}/relationships/members`, {
+      await fetchApi(`/teams/${encodeURIComponent(teamId)}/relationships/users`, {
         method: "DELETE",
         body: JSON.stringify({ data: [{ id: member.id, type: "users" }] }),
       });

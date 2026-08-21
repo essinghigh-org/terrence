@@ -193,6 +193,10 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     }
     try {
       const id = crypto.randomUUID();
+      if ((user as unknown as Record<string, unknown>).isProvisional === true) {
+        (set as { status: number }).status = 403;
+        return { errors: [{ status: "403", title: "Forbidden", detail: "Provisional accounts cannot create organizations" }] };
+      }
       const saml = await db.query.samlSettings.findFirst({ where: eq(samlSettings.id, "saml") });
       const org = {
         id,

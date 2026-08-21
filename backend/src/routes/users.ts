@@ -17,7 +17,8 @@ import { tokenExpiry } from "../lib/validation";
 import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
 import { TOKEN_DESCRIPTION_MAX_LENGTH } from "../lib/constants";
 import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
-import { checkOrganizationPermission, checkOrgPermission, pageRequest, pagination, auditLog, strictAuditEnabled } from "../lib/utils";
+import { checkOrganizationPermission, checkOrgPermission, pageRequest, pagination, auditLog } from "../lib/utils";
+import { randomBytes } from "node:crypto";
 import { publish } from "../lib/event-bus";
 import { authPlugin } from "../auth";
 import { cachedOrgByName } from "../lib/cached-lookups";
@@ -178,8 +179,17 @@ export const userRoutes = new Elysia({ name: "users" })
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
+    if (data !== undefined && typeof data.type === "string" && data.type !== "organization-memberships") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be \"organization-memberships\"" }] };
+    }
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const email = typeof attrs.email === "string" ? attrs.email : undefined;
+    const rawEmail = typeof attrs.email === "string" ? attrs.email.trim() : undefined;
+    if (rawEmail !== undefined && (rawEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail))) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email address" }] };
+    }
+    const email = rawEmail?.toLowerCase() ?? undefined;
     const username = typeof attrs.username === "string" ? attrs.username : undefined;
     let targetUser: Readonly<typeof users.$inferSelect> | undefined;
     if (email !== undefined) targetUser = await db.query.users.findFirst({ where: eq(users.email, email) });
@@ -188,7 +198,7 @@ export const userRoutes = new Elysia({ name: "users" })
       const uid = `usr-${crypto.randomUUID()}`;
       const emailPrefix = email.split("@")[0] ?? "user";
       const uname = `${emailPrefix}_${crypto.randomUUID().substring(0, 4)}`;
-      await db.insert(users).values({ id: uid, username: uname, email, passwordHash: "invited" });
+      await db.insert(users).values({ id: uid, username: uname, email, passwordHash: `$disabled$${randomBytes(32).toString("base64url")}`, isProvisional: true });
       targetUser = await db.query.users.findFirst({ where: eq(users.id, uid) });
     }
     if (targetUser === undefined) {
@@ -203,27 +213,63 @@ export const userRoutes = new Elysia({ name: "users" })
       return { errors: [{ status: "409", title: "Conflict", detail: "User is already a member of this organization" }] };
     }
     const memId = `orgmem-${crypto.randomUUID()}`;
-    const status = typeof attrs.status === "string" ? attrs.status : "active";
-    await db.insert(organizationMemberships).values({
-      id: memId, orgId: org.id, userId: targetUser.id, role: "member", status,
-    });
+    const allowedStatuses = new Set(["active", "invited"]);
+    const rawRequestedStatus = typeof attrs.status === "string" ? attrs.status : undefined;
+    if (rawRequestedStatus !== undefined && !allowedStatuses.has(rawRequestedStatus)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "status must be one of: active, invited" }] };
+    }
+    // TFE compat: inviting an existing user defaults to active; inviting a not-yet-existing
+    // email provisions a user + invited membership. Callers may still request "invited" explicitly.
+    const isNewProvisional = targetUser.isProvisional === true && targetUser.email !== null && targetUser.email.toLowerCase() === email;
+    // Only force invited for auto-provisioned provisional users; otherwise honor requested/default active.
+    // Pre-validate relationships.teams before inserting the membership so a 422
+    // does not leave an orphan organizationMembership row behind.
     const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
     const teamsRel = typeof rels.teams === "object" && rels.teams !== null ? (rels.teams as Record<string, unknown>) : {};
     const teamRelData = teamsRel.data;
-    const teamIds: string[] = [];
+    const candidateIds: string[] = [];
+    let validatedTeams: { id: string; orgId: string }[] | null = null;
     if (Array.isArray(teamRelData)) {
-      const candidateIds: string[] = [];
       for (const t of teamRelData) {
+        if (t !== null && typeof t === "object" && typeof (t as Record<string, unknown>).type === "string" && (t as Record<string, unknown>).type !== "teams") {
+          (set as { status: number }).status = 422;
+          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "relationships.teams.data[].type must be \"teams\"" }] };
+        }
         if (t !== null && typeof t === "object" && typeof (t as Record<string, unknown>).id === "string") {
           candidateIds.push((t as Record<string, unknown>).id as string);
         }
       }
       if (candidateIds.length > 0) {
-        const teamsInOrg = await db.query.teams.findMany({
-          where: and(inArray(teams.id, candidateIds), eq(teams.orgId, org.id)),
-          columns: { id: true },
-        });
-        const membershipBatch = teamsInOrg.map((team): typeof teamMemberships.$inferInsert => ({
+        const uniqueIds = [...new Set(candidateIds)];
+        if (uniqueIds.length !== candidateIds.length) {
+          (set as { status: number }).status = 422;
+          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Duplicate team IDs in relationships.teams" }] };
+        }
+        const allTeams = await db.query.teams.findMany({ where: inArray(teams.id, uniqueIds), columns: { id: true, orgId: true } });
+        const byIdMap = new Map(allTeams.map((tm: { id: string; orgId: string }): [string, string] => [tm.id, tm.orgId]));
+        for (const cid of uniqueIds) {
+          const owner = byIdMap.get(cid);
+          if (owner === undefined) {
+            (set as { status: number }).status = 422;
+            return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Team \"${cid}\" does not exist` }] };
+          }
+          if (owner !== org.id) {
+            (set as { status: number }).status = 422;
+            return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Team \"${cid}\" does not belong to organization \"${org.name}\"` }] };
+          }
+        }
+        validatedTeams = allTeams;
+      }
+    }
+    const effectiveStatus = isNewProvisional ? "invited" : (rawRequestedStatus ?? "active");
+    await db.insert(organizationMemberships).values({
+      id: memId, orgId: org.id, userId: targetUser.id, role: "member", status: effectiveStatus,
+    });
+    const teamIds: string[] = [];
+    if (validatedTeams !== null && validatedTeams.length > 0) {
+      if (effectiveStatus === "active") {
+        const membershipBatch = validatedTeams.map((team): typeof teamMemberships.$inferInsert => ({
           id: `tmem-${crypto.randomUUID()}`,
           teamId: team.id,
           userId: targetUser.id,
@@ -232,7 +278,11 @@ export const userRoutes = new Elysia({ name: "users" })
         if (membershipBatch.length > 0) {
           await db.insert(teamMemberships).values(membershipBatch).onConflictDoNothing();
         }
-        teamIds.push(...teamsInOrg.map((t): string => t.id));
+        teamIds.push(...validatedTeams.map((tm): string => tm.id));
+      } else {
+        // Invited: carry as pending intent on the response; real
+        // team_memberships rows materialize on invitation acceptance.
+        teamIds.push(...validatedTeams.map((tm): string => tm.id));
       }
     }
     const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
@@ -246,19 +296,56 @@ export const userRoutes = new Elysia({ name: "users" })
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId ?? null, "members:read"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    const url = new URL(request.url);
+    const q = (query.q ?? url.searchParams.get("q") ?? "").trim().toLowerCase();
+    const filterStatus = (query["filter[status]"] ?? url.searchParams.get("filter[status]") ?? "").trim();
+    const filterEmail = (query["filter[email]"] ?? url.searchParams.get("filter[email]") ?? "").trim().toLowerCase();
+    if (filterStatus !== "" && !["active", "invited"].includes(filterStatus)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "filter[status] must be active or invited" }] };
+    }
     const { number, size } = pageRequest(request);
-    const [mems, countRows] = await Promise.all([
-      db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.orgId, org.id), orderBy: [asc(organizationMemberships.id)], limit: size, offset: (number - 1) * size }),
-      db.select({ total: count() }).from(organizationMemberships).where(eq(organizationMemberships.orgId, org.id)),
-    ]);
-    const userIds = mems.map((m: Readonly<{ readonly userId: string }>): string => m.userId);
+    // Apply filters. q and filter[email] both match user username/email; they compose with AND.
+    let filteredMems: Readonly<typeof organizationMemberships.$inferSelect>[] = await db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.orgId, org.id), orderBy: [asc(organizationMemberships.id)] });
+    if (filterStatus !== "") filteredMems = filteredMems.filter((m): boolean => m.status === filterStatus);
+    if (filterEmail !== "" || q !== "") {
+      const memUserIds = [...new Set(filteredMems.map((m): string => m.userId))];
+      const memUsers = memUserIds.length > 0 ? await db.query.users.findMany({ where: inArray(users.id, memUserIds) }) : [];
+      const memUserMap = new Map(memUsers.map((u): [string, typeof u] => [u.id, u]));
+      const emailNeedles = filterEmail !== "" ? filterEmail.split(",").map((s): string => s.trim().toLowerCase()).filter(Boolean) : [];
+      const matchUser = (uid: string): boolean => {
+        const u = memUserMap.get(uid);
+        if (u === undefined) return false;
+        const hay = `${u.username} ${u.email ?? ""}`.toLowerCase();
+        const emailHay = (u.email ?? "").toLowerCase();
+        if (q !== "" && !hay.includes(q)) return false;
+        if (emailNeedles.length > 0 && !emailNeedles.some((needle): boolean => emailHay === needle || emailHay.includes(needle))) return false;
+        return true;
+      };
+      filteredMems = filteredMems.filter((m): boolean => matchUser(m.userId));
+    }
+    const byStatus = await db.select({ status: organizationMemberships.status, total: count() }).from(organizationMemberships).where(eq(organizationMemberships.orgId, org.id)).groupBy(organizationMemberships.status);
+    const countByStatus = new Map(byStatus.map((row): [string, number] => [row.status, row.total]));
+    const statusCounts = {
+      total: [...countByStatus.values()].reduce((sum, value): number => sum + value, 0),
+      active: countByStatus.get("active") ?? 0,
+      invited: countByStatus.get("invited") ?? 0,
+    };
+    const totalFiltered = filteredMems.length;
+    const page = filteredMems.slice((number - 1) * size, number * size);
+    const userIds = page.map((m: Readonly<{ readonly userId: string }>): string => m.userId);
     const userList = userIds.length > 0 ? await db.query.users.findMany({ where: inArray(users.id, userIds) }) : [];
     const userMap = new Map(userList.map((u: Readonly<typeof users.$inferSelect>): [string, typeof u] => [u.id, u]));
     const includeQuery = query.include;
     const includeUsers = typeof includeQuery === "string" && includeQuery.split(",").includes("user");
-    const data = await Promise.all(mems.map(async (m: Readonly<typeof organizationMemberships.$inferSelect>): Promise<Record<string, unknown>> => orgMembershipResource(m, userMap.get(m.userId) ?? null)));
-    const totalCount = countRows[0]?.total ?? 0;
-    const result: { data: Record<string, unknown>[]; included?: Record<string, unknown>[] } = { data, ...pagination(request, number, size, totalCount) };
+    const data = await Promise.all(page.map(async (m: Readonly<typeof organizationMemberships.$inferSelect>): Promise<Record<string, unknown>> => orgMembershipResource(m, userMap.get(m.userId) ?? null)));
+    const result: { data: Record<string, unknown>[]; included?: Record<string, unknown>[]; meta?: Record<string, unknown>; links?: Record<string, string | null> } = {
+      data,
+      ...pagination(request, number, size, totalFiltered),
+    };
+    // Preserve pagination meta alongside status-counts (object spread of `meta`
+    // would otherwise clobber one side). Merge both.
+    result.meta = { ...(result.meta ?? {}), "status-counts": statusCounts } as Record<string, unknown>;
     if (includeUsers && userList.length > 0) {
       result.included = userList.map((u: Readonly<typeof users.$inferSelect>): Record<string, unknown> => userResource(u));
     }
@@ -309,7 +396,15 @@ export const userRoutes = new Elysia({ name: "users" })
     if (mem === undefined || !(await checkOrganizationPermission(mem.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, memId));
+    await db.transaction(async (tx: unknown): Promise<void> => {
+      const t = tx as typeof db;
+      // Remove effective team memberships for this org (item 26-27)
+      const orgTeamIds = (await t.query.teams.findMany({ where: eq(teams.orgId, mem.orgId), columns: { id: true } })).map((row: { id: string }): string => row.id);
+      if (orgTeamIds.length > 0) {
+        await t.delete(teamMemberships).where(and(eq(teamMemberships.userId, mem.userId), inArray(teamMemberships.teamId, orgTeamIds)));
+      }
+      await t.delete(organizationMemberships).where(eq(organizationMemberships.id, memId));
+    });
     // Immediate SSE revocation: close the user's event streams so their
     // permission snapshot cannot linger for the one-hour reconnect cap.
     publish("authz.changed", { "user-id": mem.userId, "org-id": mem.orgId });
@@ -345,6 +440,10 @@ export const userRoutes = new Elysia({ name: "users" })
     if (target === undefined || user?.id !== userId) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (target.isProvisional === true) {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: "Provisional accounts cannot create tokens" }] };
     }
     // A fine-grained token must not be able to mint a new token (which could
     // be unscoped = full access), or its restrictions are trivially bypassed.

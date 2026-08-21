@@ -10,6 +10,7 @@ export const users = sqliteTable("users", {
   isSiteAdmin: integer("is_site_admin", { mode: "boolean" }).default(false),
   isSiteAuditor: integer("is_site_auditor", { mode: "boolean" }).default(false),
   isSuspended: integer("is_suspended", { mode: "boolean" }).default(false),
+  isProvisional: integer("is_provisional", { mode: "boolean" }).notNull().default(false),
   mustChangePassword: integer("must_change_password", { mode: "boolean" }).notNull().default(false),
   theme: text("theme").notNull().default("original-light"),
   // External identity for SAML / OIDC / LDAP provisioned accounts.

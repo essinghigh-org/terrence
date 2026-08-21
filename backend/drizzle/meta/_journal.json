@@ -183,6 +183,13 @@
       "when": 1787172076336,
       "tag": "0025_powerful_warpath",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1787327989961,
+      "tag": "0026_neat_kylun",
+      "breakpoints": true
     }
   ]
 }
