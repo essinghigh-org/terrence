@@ -3,7 +3,7 @@ import { db } from "../db";
 import { orgTokenTTLPolicies, type users } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { checkOrganizationPermission, notFound } from "../lib/utils";
-import { isTtlPolicyTokenType } from "../lib/token-ttl-policy";
+import { isTtlPolicyTokenType, normalizeTtlPolicyTokenType } from "../lib/token-ttl-policy";
 import { authPlugin } from "../auth";
 import { cachedOrgByName } from "../lib/cached-lookups";
 
@@ -67,7 +67,8 @@ export const tokenTtlRoutes = new Elysia({ name: "token-ttl" })
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "each token-ttl-policies entry must be an object" }] };
       }
       const o = item as Record<string, unknown>;
-      const tokenType = typeof o["token-type"] === "string" ? o["token-type"].trim() : "";
+      const rawTokenType = typeof o["token-type"] === "string" ? o["token-type"].trim() : "";
+      const tokenType = normalizeTtlPolicyTokenType(rawTokenType);
       const maxTtlMs = o["max-ttl-ms"];
       // The empty string is the org-token slot (see schema.ts apiTokens.tokenType).
       // Only an *absent or non-string* token-type is malformed here. Token

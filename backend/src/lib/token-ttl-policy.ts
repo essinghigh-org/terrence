@@ -18,11 +18,23 @@ import { eq } from "drizzle-orm";
 
 /** Token types a policy can govern. Mirrors apiTokens.tokenType semantics:
  * "" is the organization-token slot. Whitelisted at the policy API (todo 76). */
-export const TTL_POLICY_TOKEN_TYPES = ["", "user", "team", "team-legacy", "audit-trails"] as const;
+export const TTL_POLICY_TOKEN_TYPES = ["", "organization", "user", "team", "team-legacy", "audit-trails", "audit_trails"] as const;
 export type TtlPolicyTokenType = (typeof TTL_POLICY_TOKEN_TYPES)[number];
 
 export function isTtlPolicyTokenType(value: string): value is TtlPolicyTokenType {
   return (TTL_POLICY_TOKEN_TYPES as readonly string[]).includes(value);
+}
+
+/** Normalize TFE wire token-types to our DB canonical ("" = org slot, "audit-trails" = audit). */
+export function normalizeTtlPolicyTokenType(value: string): string {
+  if (value === "organization") return "";
+  if (value === "audit_trails") return "audit-trails";
+  return value;
+}
+
+/** Denormalize for GET responses if needed (not currently used — GET returns DB canonical). */
+export function denormalizeTtlPolicyTokenType(value: string): string {
+  return value;
 }
 
 export type TtlPolicyResolution =
