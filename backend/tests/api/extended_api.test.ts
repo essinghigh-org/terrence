@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll, afterAll } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { organizations, users, apiTokens, workspaces, workspaceVariables, stateVersions, configurationVersions, runs, logs, workspaceTags, organizationMemberships } from "../../src/db/schema";
+import { users } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 import { executeRun } from "../../src/worker";
 import { rm } from "fs/promises";

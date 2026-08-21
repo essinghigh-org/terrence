@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
@@ -50,11 +50,11 @@ describe("Organization rename & downstream links (ORG-012)", () => {
     // Two workspaces: one plain, one with VCS.
     await db.insert(workspaces).values({
       id: `ws-plain-${suffix}`, orgId, name: "plain-ws",
-      defaultExecutionMode: "remote", isDefaultProject: false,
+      executionMode: "remote",
     });
     await db.insert(workspaces).values({
       id: `ws-vcs-${suffix}`, orgId, name: "vcs-ws",
-      defaultExecutionMode: "remote", isDefaultProject: false,
+      executionMode: "remote",
       vcsRepo: { identifier: "hashicorp/terraform", githubAppInstallationId: ghInstallationId },
     });
   });

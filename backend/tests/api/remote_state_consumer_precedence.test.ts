@@ -72,7 +72,7 @@ describe("remote-state consumer precedence (STATE-005)", () => {
       { id: crossOrgConsumer, name: `${crossOrgConsumer}`, orgId: otherOrgId, projectId: null },
     ]);
     await db.insert(runs).values([
-      { id: runInConsumer, workspaceId: explicitConsumer, orgId, status: "planned", isDestroy: false, createdAt: Date.now() },
+      { id: runInConsumer, workspaceId: explicitConsumer, status: "planned", isDestroy: false, createdAt: Date.now() },
     ]);
     consumerRunToken = await mintRunToken(runInConsumer, explicitConsumer, orgId);
     await db.insert(remoteStateConsumers).values([
@@ -156,7 +156,7 @@ describe("remote-state consumer precedence (STATE-005)", () => {
   test("a run without a consumer grant cannot read another workspace's state (404)", async () => {
     const runNoGrant = `run-nogrant-${suffix}`;
     await db.insert(runs).values([
-      { id: runNoGrant, workspaceId: unrelatedConsumer, orgId, status: "planned", isDestroy: false, createdAt: Date.now() },
+      { id: runNoGrant, workspaceId: unrelatedConsumer, status: "planned", isDestroy: false, createdAt: Date.now() },
     ]);
     noGrantRunToken = await mintRunToken(runNoGrant, unrelatedConsumer, orgId);
     try {
@@ -177,7 +177,7 @@ describe("remote-state consumer precedence (STATE-005)", () => {
   test("a run without a consumer grant cannot read another workspace's state outputs (404)", async () => {
     const runNoGrant = `run-nogrant-out-${suffix}`;
     await db.insert(runs).values([
-      { id: runNoGrant, workspaceId: unrelatedConsumer, orgId, status: "planned", isDestroy: false, createdAt: Date.now() },
+      { id: runNoGrant, workspaceId: unrelatedConsumer, status: "planned", isDestroy: false, createdAt: Date.now() },
     ]);
     const noGrantOutToken = await mintRunToken(runNoGrant, unrelatedConsumer, orgId);
     try {

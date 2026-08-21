@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -51,7 +51,7 @@ describe("Notification configuration delivery-responses (NOT-011)", () => {
       id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active",
     });
     await db.insert(apiTokens).values({ id: `tok-${suffix}`, token, userId });
-    await db.insert(workspaces).values({ id: workspaceId, orgId, name: "notif-ws", defaultExecutionMode: "remote" });
+    await db.insert(workspaces).values({ id: workspaceId, orgId, name: "notif-ws", executionMode: "remote" });
     await db.insert(runs).values({ id: runId, workspaceId, status: "applied", createdAt: Date.now() });
   });
 

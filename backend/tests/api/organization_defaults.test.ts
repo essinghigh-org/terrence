@@ -18,11 +18,6 @@ describe("Organization create/update defaults (ORG-010)", () => {
   const token = `token-${suffix}`;
   const user = `owner-${suffix}`;
 
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/vnd.api+json",
-  };
-
   const request = (path: string, method = "GET", body?: unknown) =>
     app.handle(new Request(`http://terrence.test${path}`, {
       method,

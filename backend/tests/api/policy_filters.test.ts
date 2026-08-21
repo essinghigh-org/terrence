@@ -4,7 +4,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
   apiTokens, organizationMemberships, organizations, policies,
-  policySets, users, workspaces,
+  policySets, users,
 } from "../../src/db/schema";
 
 /**

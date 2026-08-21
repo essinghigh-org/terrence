@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { users, apiTokens } from "../../src/db/schema";
+import { apiTokens } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 import { createHash, randomBytes } from "node:crypto";
 import { hashAuthenticationToken, opaqueToken } from "../../src/lib/token-service";

@@ -44,20 +44,11 @@ async function runCancellationScript(script: string, env: Record<string, string>
   }
 }
 
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-test("cancel terminates the IaC subprocess and the run cannot publish success", { timeout: 30000 }, async () => {
+test("cancel terminates the IaC subprocess and the run cannot publish success", async () => {
   const result = await runCancellationScript(`
     const { chmod, mkdir, writeFile, rm, exists, readFile } = await import("fs/promises");
     const { join } = await import("path");
-    const pidAlive = (p) => { try { process.kill(p, 0); return true; } catch { return false; } };
+    const _pidAlive = (p) => { try { process.kill(p, 0); return true; } catch { return false; } };
     const { db } = await import("./src/db/index.ts");
     const { eq } = await import("drizzle-orm");
     const { organizations, projects, workspaces, configurationVersions, runs } = await import("./src/db/schema.ts");
