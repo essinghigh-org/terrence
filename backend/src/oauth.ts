@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "./db";
 import { apiTokens, user2FA, users } from "./db/schema";
 import { hashAuthenticationToken } from "./lib/token-service";
+import { putOAuthHandshakeState, takeOAuthHandshakeState } from "./lib/oauth-handshake";
 import { browserSessionDetails } from "./routes/accounts";
 
 const CLIENT_ID = "terraform-cli";
@@ -19,23 +20,40 @@ type AuthorizationRequest = {
   state: string;
 };
 
-/**
- * In-memory stores. SINGLE-INSTANCE DEPLOYMENT CONSTRAINT: authorization codes
- * and pending authorization requests are held in-memory with a short TTL.
- * Multi-instance deployments require sticky routing (session affinity) or a
- * shared persistence store so the authorization, complete, and token requests
- * reach the same node instance.
- */
-const authorizationCodes = new Map<string, {
+// Terraform CLI OAuth state is persisted in the oauth_handshake_states table
+// (todo 338-342): pending authorizations and one-time authorization codes are
+// stored durably so any replica can serve any step of the handshake. IDs are
+// namespaced so the single table serves all three handshake kinds (VCS,
+// pending-auth, auth-code). Atomic consume (DELETE ... RETURNING WHERE
+// expiresAt > now) gives single-use semantics and eliminates sticky routing.
+const PENDING_AUTH_PREFIX = "tf-pending:";
+const AUTH_CODE_PREFIX = "tf-code:";
+
+type StoredAuthCode = {
   codeChallenge: string;
   expiresAt: number;
   redirectUri: string;
   userId: string;
-}>();
-const pendingAuthorizations = new Map<string, {
+};
+type StoredPendingAuth = {
   authorization: AuthorizationRequest;
   expiresAt: number;
-}>();
+};
+
+async function putPendingAuth(id: string, value: StoredPendingAuth): Promise<void> {
+  await putOAuthHandshakeState(PENDING_AUTH_PREFIX + id, value.expiresAt, value as unknown as Record<string, unknown>);
+}
+async function takePendingAuth(id: string): Promise<StoredPendingAuth | undefined> {
+  return takeOAuthHandshakeState<StoredPendingAuth>(PENDING_AUTH_PREFIX + id);
+}
+async function putAuthCode(id: string, value: StoredAuthCode): Promise<void> {
+  await putOAuthHandshakeState(AUTH_CODE_PREFIX + id, value.expiresAt, value as unknown as Record<string, unknown>);
+}
+async function takeAuthCode(id: string): Promise<StoredAuthCode | undefined> {
+  return takeOAuthHandshakeState<StoredAuthCode>(AUTH_CODE_PREFIX + id);
+}
+// Lightweight prune of expired heap entries is now handled by the periodic GC
+// on the table; approveForUser still no-ops quickly without a DB round-trip.
 
 function field(input: unknown, name: string): string {
   const value = (input as Record<string, unknown> | null)?.[name] as string | undefined;
@@ -126,22 +144,15 @@ function readOauthStateCookie(request: RequestInfo | undefined): string | undefi
 
 /**
  * Issue a PKCE authorization code for `userId` and redirect Terraform's local
- * callback. Reaps expired entries from both in-memory stores.
+ * callback.
  */
-function approveForUser(
+async function approveForUser(
   authorization: Readonly<AuthorizationRequest>,
   userId: string,
-): Response {
+): Promise<Response> {
   const now = Date.now();
-  for (const [code, entry] of authorizationCodes) {
-    if (entry.expiresAt <= now) authorizationCodes.delete(code);
-  }
-  for (const [id, entry] of pendingAuthorizations) {
-    if (entry.expiresAt <= now) pendingAuthorizations.delete(id);
-  }
-
   const code = crypto.randomUUID();
-  authorizationCodes.set(code, {
+  await putAuthCode(code, {
     codeChallenge: authorization.codeChallenge,
     expiresAt: now + CODE_TTL_MS,
     redirectUri: authorization.redirectUri,
@@ -191,7 +202,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       });
       const mfaEnforced = mfa?.enabled === true;
       if (!mfaEnforced || details.session.mfaVerified) {
-        return approveForUser(authorization, details.user.id);
+        return await approveForUser(authorization, details.user.id);
       }
     }
 
@@ -199,12 +210,8 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     // request under an opaque state id (set as an HttpOnly cookie so the SPA
     // cannot tamper with it) and redirect to /login with that id in the URL
     // so the SPA knows to complete the OAuth handshake after login.
-    const now = Date.now();
-    for (const [id, entry] of pendingAuthorizations) {
-      if (entry.expiresAt <= now) pendingAuthorizations.delete(id);
-    }
     const stateId = crypto.randomUUID();
-    pendingAuthorizations.set(stateId, { authorization, expiresAt: now + CODE_TTL_MS });
+    await putPendingAuth(stateId, { authorization, expiresAt: Date.now() + CODE_TTL_MS });
 
     // Secure flag under HTTPS (todo 135): the state cookie is a bearer
     // capability for the OAuth handshake and must not cross plaintext HTTP.
@@ -230,9 +237,8 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       return plainError("OAuth authorization state mismatch. Please run 'terraform login' again.");
     }
 
-    const pending = pendingAuthorizations.get(oauthState);
+    const pending = await takePendingAuth(oauthState);
     if (pending === undefined || pending.expiresAt <= Date.now()) {
-      pendingAuthorizations.delete(oauthState);
       return plainError("OAuth authorization expired. Please run 'terraform login' again.");
     }
 
@@ -253,8 +259,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       return plainError("Multi-factor authentication required. Please run 'terraform login' again.");
     }
 
-    pendingAuthorizations.delete(oauthState);
-    return approveForUser(pending.authorization, details.user.id);
+    return await approveForUser(pending.authorization, details.user.id);
   })
   .post("/oauth/token", async ({ body, request, set }): Promise<Record<string, string>> => {
     if (
@@ -265,9 +270,8 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     }
 
     const code = field(body, "code");
-    const entry = authorizationCodes.get(code);
+    const entry = await takeAuthCode(code);
     if (entry === undefined) return oauthError(set, "invalid_grant");
-    authorizationCodes.delete(code);
 
     const verifier = field(body, "code_verifier");
     if (
