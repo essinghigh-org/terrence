@@ -59,11 +59,21 @@ export const authPlugin = new Elysia({ name: "auth" })
   }> => {
     rateLimitPrincipals.delete(request);
     const authHeader = request.headers.get("authorization");
-    if (typeof authHeader !== "string" || !authHeader.startsWith("Bearer ")) {
+    // Scheme is case-insensitive per RFC 7235 (todo 176); the credential that
+    // follows is not.
+    const bearerMatch = typeof authHeader === "string" && /^bearer\s+/i.test(authHeader);
+    if (!bearerMatch) {
       return { user: null, token: null, orgId: null, teamId: null, tokenError: null , run: null };
     }
 
-    const tokenString = authHeader.substring(7);
+    const tokenString = authHeader.substring(authHeader.indexOf(" ") + 1).trim();
+    // Cheap rejection BEFORE any DB lookup (todo 175): a bearer token longer
+    // than any legitimate credential format is garbage — hashing + querying
+    // it only serves a denial-of-wallet on the database. 512 chars covers
+    // every minted format (prefix + 43 base64url chars) with headroom.
+    if (tokenString.length === 0 || tokenString.length > 512) {
+      return { user: null, token: null, orgId: null, teamId: null, tokenError: "invalid", run: null };
+    }
     const tokenHash = hashToken(tokenString);
 
     // Lookup by hash. The user row is JOINed in so the common user-token path
