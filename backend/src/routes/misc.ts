@@ -1,5 +1,6 @@
 import { Elysia } from "elysia";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { envEnabled } from "../lib/env";
 import { db } from "../db";
 import { runTriggers, auditLogs, githubWebhookDeliveries, workspaces, workspaceVariables, users, organizationMemberships } from "../db/schema";
 import { eq, and, desc, inArray } from "drizzle-orm";
@@ -120,7 +121,7 @@ async function durableWebhookEnqueue(input: Readonly<{
       .values({ id: input.deliveryId, status: "queued", receivedAt: Date.now() })
       .onConflictDoNothing();
   }
-  if (process.env.TERRENCE_DISABLE_WORKER === "1") {
+  if (envEnabled(process.env.TERRENCE_DISABLE_WORKER)) {
     const { processVcsWebhookPayload } = await import("../lib/webhook-jobs");
     await processVcsWebhookPayload({
       provider: input.provider,

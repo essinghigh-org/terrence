@@ -9,6 +9,7 @@ import { type SQL } from 'drizzle-orm';
 import { mkdirSync, renameSync, statSync } from 'node:fs';
 import { join } from 'path';
 import * as schema from './schema';
+import { envEnabled } from '../lib/env';
 import { planJsonDirectory } from '../lib/plan-json';
 import { runLogsDirectory } from '../lib/run-logs';
 import { databaseDriver, databaseUrl, isPostgres, storageDir } from './driver';
@@ -27,7 +28,7 @@ mkdirSync(storageDir, { recursive: true });
 // alongside it to also capture the SQL text.
 let queryCount = 0;
 const queryLog: string[] = [];
-let queryLogEnabled = process.env.TERRENCE_QUERY_LOG === "1";
+let queryLogEnabled = envEnabled(process.env.TERRENCE_QUERY_LOG);
 
 // ---------------------------------------------------------------------------
 // SQLite backend (default): bun:sqlite keeps a single stable native
@@ -46,7 +47,7 @@ if (!isPostgres) {
   // explicitly so referential integrity holds (drizzle's migrate() does not set it).
   client.run('PRAGMA foreign_keys = ON;');
 
-  if (process.env.TERRENCE_QUERY_COUNT === "1") {
+  if (envEnabled(process.env.TERRENCE_QUERY_COUNT)) {
     const originalPrepare = client.prepare.bind(client);
     // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types, @typescript-eslint/explicit-function-return-type -- mirrors bun:sqlite's generic prepare() signature that an explicit return type cannot widen.
     client.prepare = ((sqlText: string, ...params: unknown[]) => {
@@ -73,7 +74,7 @@ if (isPostgres) {
     // (e.g. "relation already exists" during idempotent DDL) is suppressed.
     onnotice: () => {},
   });
-  if (process.env.TERRENCE_QUERY_COUNT === "1") {
+  if (envEnabled(process.env.TERRENCE_QUERY_COUNT)) {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
     pgClient.unsafe = ((queryText: string, ...params: unknown[]) => {
       queryCount += 1;

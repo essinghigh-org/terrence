@@ -2,6 +2,7 @@ import { Elysia } from "elysia";
 import { db } from "../db";
 import { authPlugin } from "../auth";
 import { probeLandlockAbi, runSandboxRequired } from "../lib/sandbox";
+import { envEnabled } from "../lib/env";
 import { log } from "../lib/log";
 import { ssoSettingsSnapshot } from "../lib/sso";
 import { isStorageDegraded } from "../lib/storage-health";
@@ -426,7 +427,7 @@ async function readinessResponse(
     if (timer !== undefined) clearTimeout(timer);
   });
   const disk = isStorageDegraded() ? "ERROR" : "OK";
-  const worker = process.env.TERRENCE_DISABLE_WORKER === "true" ? "ERROR" : "OK";
+  const worker = envEnabled(process.env.TERRENCE_DISABLE_WORKER) ? "ERROR" : "OK";
   const maintenance = maintenanceSnapshot();
   const draining = maintenance.active || ["draining", "maintenance"].includes((process.env.TERRENCE_NODE_STATUS ?? "").toLowerCase());
   const status = database === "ERROR" || disk === "ERROR" ? "ERROR" : draining ? "DRAINING" : "OK";
@@ -633,7 +634,7 @@ export const healthRoutes = new Elysia({ name: "health" })
       log.error("Unable to read SSO configuration for ping", { error: error instanceof Error ? error.message : String(error) });
       const lastKnown = pingSsoLastKnown;
       return {
-        "signup-enabled": process.env.TERRENCE_ENABLE_LOCAL_SIGNUP === "true",
+        "signup-enabled": envEnabled(process.env.TERRENCE_ENABLE_LOCAL_SIGNUP),
         "local-auth-enabled": lastKnown?.localAuthEnabled ?? true,
         sso: {
           saml: lastKnown?.samlEnabled ?? false,
@@ -643,7 +644,7 @@ export const healthRoutes = new Elysia({ name: "health" })
       };
     }
     return {
-      "signup-enabled": process.env.TERRENCE_ENABLE_LOCAL_SIGNUP === "true",
+      "signup-enabled": envEnabled(process.env.TERRENCE_ENABLE_LOCAL_SIGNUP),
       "local-auth-enabled": sso.localAuthEnabled,
       sso: { saml: sso.samlEnabled, oidc: sso.oidcEnabled, ldap: sso.ldapEnabled },
     };

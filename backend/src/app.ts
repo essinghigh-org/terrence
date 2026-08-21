@@ -3,6 +3,7 @@ import { staticPlugin } from "@elysiajs/static";
 import { rateLimit, type Context as RateLimitContext } from "elysia-rate-limit";
 import { join } from "path";
 import { readFileSync } from "node:fs";
+import { envEnabled } from "./lib/env";
 import { authPlugin, authenticatedRateLimitKey } from "./auth";
 import { syncedTrustedClientIp } from "./lib/client-ip";
 import { oauthPlugin } from "./oauth";
@@ -813,7 +814,7 @@ setTimeout((): void => {
   // disable both (TERRENCE_DISABLE_WORKER=1 keeps the process timer-free),
   // production runs both. The ring buffer is what turns the /metrics rss
   // growth figure into a leak trend instead of a steady-state snapshot.
-  if (process.env.TERRENCE_DISABLE_WORKER !== "1") {
+  if (!envEnabled(process.env.TERRENCE_DISABLE_WORKER)) {
     import("./lib/process-metrics").then(({ startProcessSampler }: { startProcessSampler: (intervalMs?: number, ringMax?: number) => void }): void => {
       startProcessSampler();
     }).catch((error: unknown): void => {

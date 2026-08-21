@@ -11,6 +11,7 @@ import { controlPlaneNodes, workspaces } from "../db/schema";
 import { systemAuthError, systemRateLimited } from "../lib/system-api";
 import { privateHostReason } from "../lib/url-safety";
 import { probeLandlockAbi, runSandboxRequired } from "../lib/sandbox";
+import { envEnabled } from "../lib/env";
 import { readinessNodeId } from "./health";
 
 type Status = "OK" | "WARNING" | "ERROR";
@@ -168,7 +169,7 @@ async function diagnosticGroups(
   if (selected.get("task-worker")?.has("running") === true) {
     checks.set("task-worker.running", Promise.resolve({
       name: "running",
-      status: process.env.TERRENCE_DISABLE_WORKER === "true" ? "WARNING" : "OK",
+      status: envEnabled(process.env.TERRENCE_DISABLE_WORKER) ? "WARNING" : "OK",
     }));
   }
   if (selected.get("runtime")?.has("version") === true) {

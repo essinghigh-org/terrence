@@ -1,3 +1,4 @@
+import { envEnabled } from "./lib/env";
 import { db } from "./db";
 import {
   runs,
@@ -1007,7 +1008,7 @@ async function executeRunTasks(
     let status = "running";
     let message: string | null = null;
     let resultUrl: string | null = null;
-    const destination = await resolveExternalUrl(task.url, process.env.TERRENCE_ALLOW_PRIVATE_URLS === "true");
+    const destination = await resolveExternalUrl(task.url, envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_URLS));
     if ("error" in destination) {
       status = "failed";
       message = destination.error;
@@ -1338,7 +1339,7 @@ async function executeRunImpl(runId: string): Promise<void> {
     const currentDirFiles = await readdir(executionDir);
     const hasTfFiles = currentDirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
 
-    const isSimulatedAllowed = process.env.SIMULATED_RUNS === "true" || Reflect.get(process.env, "NODE_ENV") === "test";
+    const isSimulatedAllowed = envEnabled(process.env.SIMULATED_RUNS) || Reflect.get(process.env, "NODE_ENV") === "test";
     if (!isSimulatedAllowed) {
       await writeLog(runId, "plan", `[terrence] Resolving binary for ${requestedTool} (version: ${requestedVersion})...`);
     }
@@ -1707,7 +1708,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
 
     const dirFiles = (await exists(executionDir)) ? await readdir(executionDir) : [];
     const hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
-    const isSimulatedAllowed = process.env.SIMULATED_RUNS === "true" || Reflect.get(process.env, "NODE_ENV") === "test";
+    const isSimulatedAllowed = envEnabled(process.env.SIMULATED_RUNS) || Reflect.get(process.env, "NODE_ENV") === "test";
     const resolved = isSimulatedAllowed ? null : await ensureBinary(requestedTool, requestedVersion);
 
     if (resolved !== null && (await exists(executionDir)) && hasTfFiles) {
@@ -2017,7 +2018,7 @@ export async function runPolicyChecks(
 
         // Use the Landlock sandbox if available for policy evaluation.
 // In simulated mode (tests) or when disabled, run unsandboxed.
-        const isSimulatedAllowed = process.env.SIMULATED_RUNS === "true";
+        const isSimulatedAllowed = envEnabled(process.env.SIMULATED_RUNS);
         const sandboxRequired = !isSimulatedAllowed && runSandboxRequired();
         if (sandboxRequired && (!RunSandbox.isUsable() || !RunSandbox.hasRunner())) {
           throw new Error("Landlock sandbox is required but unavailable for policy evaluation");
@@ -2378,7 +2379,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
       throw new Error("No successfully applied configuration is available for assessment.");
     }
 
-    const simulated = process.env.SIMULATED_RUNS === "true" || Reflect.get(process.env, "NODE_ENV") === "test";
+    const simulated = envEnabled(process.env.SIMULATED_RUNS) || Reflect.get(process.env, "NODE_ENV") === "test";
     let planJson: JsonObject;
     let providerSchema: JsonObject = {};
 
@@ -3258,7 +3259,7 @@ export function startWorkerQueue(): void {
   // Off switch for benchmarks/tests that must run in a process with no
   // background DB activity (the polling loop otherwise injects queries
   // and CPU into measurements).
-  if (process.env.TERRENCE_DISABLE_WORKER === "1") return;
+  if (envEnabled(process.env.TERRENCE_DISABLE_WORKER)) return;
   if (isWorkerLoopRunning) return;
   isWorkerLoopRunning = true;
   startDurableJobWorker({

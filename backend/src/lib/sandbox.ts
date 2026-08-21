@@ -2,6 +2,7 @@ import { isAbsolute, join, dirname, resolve } from "path";
 import { mkdir, rm } from "fs/promises";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "os";
+import { envEnabled } from "./env";
 import type { Subprocess } from "bun";
 
 /**
@@ -288,7 +289,7 @@ let cachedResolvDir: string | null | undefined;
  * only the paths variable.
  */
 function extraRwArgs(): string[] {
-  if (process.env.TERRENCE_SANDBOX_EXTRA_RW_ALLOWED !== "true") return [];
+  if (!envEnabled(process.env.TERRENCE_SANDBOX_EXTRA_RW_ALLOWED)) return [];
   const raw = process.env.TERRENCE_SANDBOX_EXTRA_RW_PATHS;
   if (raw === undefined || raw === "") return [];
   return raw.split(":").filter((p): boolean => p !== "").map((p): string => `--rw=${p}`);

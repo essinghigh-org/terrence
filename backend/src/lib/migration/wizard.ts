@@ -20,6 +20,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import { count, eq, inArray } from "drizzle-orm";
+import { envEnabled } from "../env";
 import { db } from "../../db";
 import { checkpointWal } from "../../db";
 import { agentJobs, assessmentResults, runs } from "../../db/schema";
@@ -187,7 +188,7 @@ function drainTimeoutMs(): number {
 }
 
 export function restartDisabled(): boolean {
-  return process.env.TERRENCE_DISABLE_RESTART === "1";
+  return envEnabled(process.env.TERRENCE_DISABLE_RESTART);
 }
 
 export function environmentDatabaseUrlWarning(): string | null {
@@ -872,7 +873,7 @@ async function checkpointWithRetries(): Promise<void> {
 }
 
 async function waitForDrain(ctx: JobContext): Promise<void> {
-  if (process.env.MIGRATION_SKIP_DRAIN === "true") {
+  if (envEnabled(process.env.MIGRATION_SKIP_DRAIN)) {
     ctx.setState({
       ...ctx.state,
       steps: ctx.state.steps.map((step): WizardStep =>

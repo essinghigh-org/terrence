@@ -5,6 +5,7 @@ import { and, count, eq, gt, inArray, isNull, ne, or } from "drizzle-orm";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { userResource } from "../lib/response";
 import { isUniqueConstraintError } from "../lib/validation";
+import { envEnabled } from "../lib/env";
 import { auditLog } from "../lib/utils";
 import { log } from "../lib/log";
 import { authPlugin } from "../auth";
@@ -385,7 +386,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     // safer header-only flow) — set IACT_QUERY_TOKEN_ENABLED=1 to restore the
     // reference installer behavior. The header alternative keeps the secret
     // out of proxy logs, browser history, and traces entirely.
-    const queryEnabled = process.env.IACT_QUERY_TOKEN_ENABLED === "1" || process.env.IACT_QUERY_TOKEN_ENABLED === "true";
+    const queryEnabled = envEnabled(process.env.IACT_QUERY_TOKEN_ENABLED);
     const queryToken = request === undefined || !queryEnabled ? null : new URL(request.url).searchParams.get("token");
     const headerToken = request === undefined ? null
       : request.headers.get("x-iact-token")
@@ -858,7 +859,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     return undefined;
   })
   .post("/api/v2/users", async ({ body, set }: ReqCtx): Promise<unknown> => {
-    if (process.env.TERRENCE_ENABLE_LOCAL_SIGNUP !== "true") {
+    if (!envEnabled(process.env.TERRENCE_ENABLE_LOCAL_SIGNUP)) {
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden", detail: "Local signup is disabled on this instance. Set TERRENCE_ENABLE_LOCAL_SIGNUP=true or use ADMIN_PASSWORD bootstrap." }] };
     }
