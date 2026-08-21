@@ -216,15 +216,15 @@ export const scimRoutes = new Elysia({ name: "scim" })
           createdAt: Date.now(),
           updatedAt: Date.now(),
         });
-        try { await tx.insert(identityLinks).values({ id: `idlink-${crypto.randomUUID()}`, userId: linkedUserId, provider: "scim", externalId: String(payload.userName ?? userName), emailAtLinkTime: email, createdAt: Date.now() }).onConflictDoNothing(); } catch {}
+        await tx.insert(identityLinks).values({ id: `idlink-${crypto.randomUUID()}`, userId: linkedUserId, provider: "scim", externalId: scimIdentityId, emailAtLinkTime: email, createdAt: Date.now() }).onConflictDoNothing();
         // Converge pending invitation for same canonical email (todo #11: merge not duplicate)
         if (email !== null) {
-          try {
-            const pending = await tx.query.organizationInvitations.findFirst({ where: and(eq(organizationInvitations.emailNormalized, email.toLowerCase()), eq(organizationInvitations.status, "pending")) });
-            if (pending !== undefined) {
-              await tx.update(organizationInvitations).set({ status: "accepted", acceptedBy: linkedUserId, updatedAt: Date.now() }).where(eq(organizationInvitations.id, pending.id));
-            }
-          } catch {}
+          const pending = await tx.query.organizationInvitations.findFirst({ where: and(eq(organizationInvitations.emailNormalized, email.toLowerCase()), eq(organizationInvitations.status, "pending")) });
+          if (pending !== undefined) {
+            const { organizationMemberships } = await import("../db/schema");
+            await tx.insert(organizationMemberships).values({ id: `orgmem-${crypto.randomUUID()}`, orgId: pending.orgId, userId: linkedUserId, role: pending.role, status: "active" }).onConflictDoNothing();
+            await tx.update(organizationInvitations).set({ status: "accepted", acceptedBy: linkedUserId, updatedAt: Date.now() }).where(eq(organizationInvitations.id, pending.id));
+          }
         }
       });
     } catch (error: unknown) {

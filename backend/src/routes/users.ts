@@ -144,7 +144,7 @@ export const userRoutes = new Elysia({ name: "users" })
     if (typeof attrs.username === "string" && attrs.username.trim() !== "") {
       const nu = normalizeUsername(attrs.username);
       if (nu === null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid username" }] }; }
-      updates.username = attrs.username.trim();
+      updates.username = nu;
     }
     if (typeof attrs.email === "string") {
       const ne = attrs.email.trim() === "" ? null : normalizeEmail(attrs.email);

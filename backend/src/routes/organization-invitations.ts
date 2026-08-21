@@ -99,7 +99,7 @@ export const organizationInvitationRoutes = new Elysia({ name: "organization-inv
     if (rawToken.trim() === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invitation token is required" }] }; }
     if (user === null || user === undefined) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
     const tokenHash = hashAuthenticationToken(rawToken);
-    const invite = await db.query.organizationInvitations.findFirst({ where: eq(organizationInvitations.tokenHash, tokenHash) });
+    let invite = await db.query.organizationInvitations.findFirst({ where: eq(organizationInvitations.tokenHash, tokenHash) });
     if (invite === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found", detail: "Invitation not found" }] }; }
     if (invite.status !== "pending") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Invitation is ${invite.status}` }] }; }
     if (invite.expiresAt < Date.now()) {
@@ -116,13 +116,16 @@ export const organizationInvitationRoutes = new Elysia({ name: "organization-inv
     }
     const existing = await db.query.organizationMemberships.findFirst({ where: and(eq(organizationMemberships.orgId, invite.orgId), eq(organizationMemberships.userId, user.id)) });
     if (existing !== undefined) {
-      await db.update(organizationInvitations).set({ status: "accepted", acceptedBy: user.id, updatedAt: Date.now() }).where(eq(organizationInvitations.id, invite.id));
-      (set as { status: number }).status = 200; return { data: invitationResource({ ...invite, status: "accepted", acceptedBy: user.id }) };
+      const claimed = await db.update(organizationInvitations).set({ status: "accepted", acceptedBy: user.id, updatedAt: Date.now() }).where(and(eq(organizationInvitations.id, invite.id), eq(organizationInvitations.status, "pending"))).returning();
+      if (claimed.length === 0) invite = (await db.query.organizationInvitations.findFirst({ where: eq(organizationInvitations.id, invite.id) })) ?? invite;
+      else invite = { ...invite, status: "accepted" as const, acceptedBy: user.id };
+      (set as { status: number }).status = 200; return { data: invitationResource({ ...invite, status: "accepted", acceptedBy: user.id } as typeof invite) };
     }
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
+      const claim = await t.update(organizationInvitations).set({ status: "accepted", acceptedBy: user.id, updatedAt: Date.now() }).where(and(eq(organizationInvitations.id, invite.id), eq(organizationInvitations.status, "pending"))).returning();
+      if (claim.length === 0) throw new Error("invitation no longer pending");
       await t.insert(organizationMemberships).values({ id: `orgmem-${crypto.randomUUID()}`, orgId: invite.orgId, userId: user.id, role: invite.role, status: "active" }).onConflictDoNothing();
-      await t.update(organizationInvitations).set({ status: "accepted", acceptedBy: user.id, updatedAt: Date.now() }).where(eq(organizationInvitations.id, invite.id));
       // Clear provisional if this invite resolves it
       if ((user as unknown as Record<string,unknown>).isProvisional === true) {
         await t.update(users).set({ isProvisional: false }).where(eq(users.id, user.id));

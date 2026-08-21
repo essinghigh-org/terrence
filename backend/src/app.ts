@@ -371,9 +371,15 @@ function serverEndpointPath(request: CustomRequest): string | undefined {
   return undefined;
 }
 
+function isInvitationPath(pathname: string): boolean {
+  return pathname.startsWith("/api/v2/organizations/") && pathname.includes("/organization-invitations")
+    || pathname.startsWith("/api/v2/organization-invitations/");
+}
+
 function sensitivePath(request: CustomRequest): string | undefined {
   const path = new URL(request.url).pathname;
   if (request.method === "PATCH" && path === "/api/v2/account/password") return path;
+  if (isInvitationPath(path)) return "/api/v2/organization-invitations/*";
   if (request.method !== "POST") return undefined;
   if (sensitivePaths.has(path)) return path;
   if (/^\/api\/v2\/notification-configurations\/[^/]+\/actions\/verify$/.test(path)) {

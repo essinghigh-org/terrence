@@ -186,7 +186,7 @@ export const authPlugin = new Elysia({ name: "auth" })
       // The joined lookup already resolves the user for hashed tokens. Only
       // tokens found via the plaintext legacy fallback re-query (rare).
       const resolvedUser = user ?? await db.query.users.findFirst({ where: eq(users.id, token.userId) });
-      if ((resolvedUser as unknown as { deletedAt?: unknown })?.deletedAt != null) {
+      if ((resolvedUser as unknown as { deletedAt: number | null | undefined })?.deletedAt != null) {
         return { user: null, token: null, orgId: null, teamId: null, tokenError: "invalid" , run: null };
       }
       if (resolvedUser?.isSuspended === true) {
