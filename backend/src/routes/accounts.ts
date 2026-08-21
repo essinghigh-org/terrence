@@ -1130,6 +1130,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       target: user2FA.userId,
       set: { secret: "", secretEncrypted, enabled: false },
     });
+    await auditLog("enroll", "mfa", user.id, user.id, null, { userId: user.id });
     return {
       data: {
         type: "mfa",
@@ -1170,6 +1171,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         .where(eq(user2FA.userId, user.id));
     }
     await db.update(user2FA).set({ enabled: true }).where(eq(user2FA.userId, user.id));
+    await auditLog("verify", "mfa", user.id, user.id, null, { userId: user.id });
     const token = refreshCookieCandidates(request)[0];
     if (token !== undefined && token !== "") {
       await db.update(refreshSessions)
@@ -1209,5 +1211,6 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
     }
     await db.delete(user2FA).where(eq(user2FA.userId, user.id));
+    await auditLog("remove", "mfa", user.id, user.id, null, { userId: user.id });
     return { data: { type: "mfa", attributes: { enabled: false } } };
   });

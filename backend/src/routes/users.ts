@@ -400,12 +400,10 @@ export const userRoutes = new Elysia({ name: "users" })
       teamId: null,
     };
     await db.insert(apiTokens).values(createdToken);
-    if (strictAuditEnabled()) {
-      await auditLog("create", "authentication-token", createdToken.id, user?.id ?? null, null, {
-        description,
-        source: "user",
-      });
-    }
+    await auditLog("create", "authentication-token", createdToken.id, user?.id ?? null, null, {
+      description,
+      source: "user",
+    });
     (set as { status: number }).status = 201;
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
@@ -482,6 +480,7 @@ export const userRoutes = new Elysia({ name: "users" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     await db.delete(agentPoolTokens).where(eq(agentPoolTokens.id, tokenId));
+    if (agentToken !== undefined && pool !== undefined) await auditLog("delete", "agent-pool-token", tokenId, user?.id ?? null, pool.orgId, { agentPoolId: pool.id });
     (set as { status: number }).status = 204;
     return {};
   })
@@ -568,14 +567,12 @@ export const userRoutes = new Elysia({ name: "users" })
     } else {
       await db.insert(apiTokens).values(createdToken);
     }
-    if (strictAuditEnabled()) {
-      await auditLog("create", "authentication-token", createdToken.id, user.id, orgId ?? null, {
-        description,
-        scopes: createdToken.scopes,
-        ...(orgId !== undefined ? { orgId } : {}),
-        source: "user",
-      });
-    }
+    await auditLog("create", "authentication-token", createdToken.id, user.id, orgId ?? null, {
+      description,
+      scopes: createdToken.scopes,
+      ...(orgId !== undefined ? { orgId } : {}),
+      source: "user",
+    });
     (set as { status: number }).status = 201;
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
@@ -652,18 +649,18 @@ export const userRoutes = new Elysia({ name: "users" })
       expiresAt,
       teamId: null,
     };
+    const _priorOrgToken = await db.query.apiTokens.findFirst({ where: organizationTokenWhere(org.id, tokenType) });
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
       await t.delete(apiTokens).where(organizationTokenWhere(org.id, tokenType));
       await t.insert(apiTokens).values(createdToken);
     });
-    if (strictAuditEnabled()) {
-      await auditLog("create", "organization-authentication-token", createdToken.id, user?.id ?? null, org.id, {
-        orgId: org.id,
-        tokenType: tokenType === "" ? null : tokenType,
-        source: "user",
-      });
-    }
+    await auditLog(_priorOrgToken === undefined ? "create" : "replace", "organization-authentication-token", createdToken.id, user?.id ?? null, org.id, {
+      orgId: org.id,
+      tokenType: tokenType === "" ? null : tokenType,
+      source: "user",
+      ...(_priorOrgToken === undefined ? {} : { replacedTokenId: _priorOrgToken.id }),
+    });
     (set as { status: number }).status = 201;
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
@@ -675,7 +672,9 @@ export const userRoutes = new Elysia({ name: "users" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const tokenType = new URL(request.url).searchParams.get("token") ?? "";
+    const existing = await db.query.apiTokens.findFirst({ where: organizationTokenWhere(org.id, tokenType) });
     await db.delete(apiTokens).where(organizationTokenWhere(org.id, tokenType));
+    if (existing !== undefined) await auditLog("delete", "organization-authentication-token", existing.id, user?.id ?? null, org.id, { tokenType: tokenType === "" ? null : tokenType });
     (set as { status: number }).status = 204;
     return {};
   });
