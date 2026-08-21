@@ -1,6 +1,6 @@
 {
-  "id": "0023_add_refresh_grace_columns",
-  "prevId": "6166196c-60a8-43da-bdca-9b05a26d471e",
+  "id": "1344c8bd-8fcd-40f3-bfb5-c04e71f499ee",
+  "prevId": "36c00409-44c8-4e5f-95e3-c957ea9ee73c",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1200,6 +1200,13 @@
           "notNull": true,
           "default": "''"
         },
+        "legacy": {
+          "name": "legacy",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "bigint",
@@ -2081,6 +2088,12 @@
         "status_timestamps": {
           "name": "status_timestamps",
           "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "upload_claim_expires_at": {
+          "name": "upload_claim_expires_at",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": false
         },
@@ -7513,6 +7526,18 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "successor_hash": {
+          "name": "successor_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rotated_at_ms": {
+          "name": "rotated_at_ms",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -11992,6 +12017,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "secret_encrypted": {
+          "name": "secret_encrypted",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "enabled": {
           "name": "enabled",
           "type": "boolean",
@@ -12075,6 +12106,13 @@
           "type": "boolean",
           "primaryKey": false,
           "notNull": false,
+          "default": false
+        },
+        "is_provisional": {
+          "name": "is_provisional",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
           "default": false
         },
         "must_change_password": {
@@ -12263,6 +12301,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "value_encrypted": {
+          "name": "value_encrypted",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "sensitive": {
           "name": "sensitive",
@@ -13079,6 +13123,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "value_encrypted": {
+          "name": "value_encrypted",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "sensitive": {
           "name": "sensitive",
