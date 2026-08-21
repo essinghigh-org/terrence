@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { db } from "../db";
 import { users, apiTokens, refreshSessions, organizationMemberships, organizations, samlSettings, teams, user2FA } from "../db/schema";
 import { and, count, eq, gt, inArray, isNull, ne, or } from "drizzle-orm";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { userResource } from "../lib/response";
 import { isUniqueConstraintError } from "../lib/validation";
 import { auditLog } from "../lib/utils";
@@ -91,7 +91,7 @@ export function opaqueToken(prefix: string): string {
 }
 
 export function tokenHash(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
+  return hashAuthenticationToken(token);
 }
 
 function refreshCookieCandidates(request: RequestInfo | undefined): string[] {

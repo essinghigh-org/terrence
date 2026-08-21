@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { db } from "./db";
 import { apiTokens, runTokens, users, teams, systemApiTokens } from "./db/schema";
 import { eq } from "drizzle-orm";
-import { createHash } from "node:crypto";
+import { hashAuthenticationToken } from "./lib/token-service";
 import { setRequestSiteAdmin } from "./lib/request-scope";
 
 type AuthToken = {
@@ -24,7 +24,7 @@ export type SystemAuthToken = Readonly<{
 }>;
 
 function hashToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
+  return hashAuthenticationToken(token);
 }
 
 type HeaderGetter = { readonly get: (name: string) => string | null };

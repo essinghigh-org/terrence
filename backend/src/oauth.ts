@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { eq } from "drizzle-orm";
 import { db } from "./db";
 import { apiTokens, user2FA, users } from "./db/schema";
-import { createHash } from "node:crypto";
+import { hashAuthenticationToken } from "./lib/token-service";
 import { browserSessionDetails } from "./routes/accounts";
 
 const CLIENT_ID = "terraform-cli";
@@ -292,7 +292,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       const defaultTtl = 30 * 24 * 60 * 60 * 1000;
       await db.insert(apiTokens).values({
         id: crypto.randomUUID(),
-        token: createHash("sha256").update(accessToken).digest("hex"),
+        token: hashAuthenticationToken(accessToken),
         userId: user.id,
         description: "Terraform CLI login",
         createdAt: Date.now(),
@@ -301,7 +301,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     } else {
       await db.insert(apiTokens).values({
         id: crypto.randomUUID(),
-        token: createHash("sha256").update(accessToken).digest("hex"),
+        token: hashAuthenticationToken(accessToken),
         userId: user.id,
         description: "Terraform CLI login",
         createdAt: Date.now(),

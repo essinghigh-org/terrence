@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { hashAuthenticationToken } from "../lib/token-service";
 import { Elysia } from "elysia";
 import { and, asc, count, eq, inArray } from "drizzle-orm";
 import { authPlugin } from "../auth";
@@ -260,7 +260,7 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     const rawToken = `scim-${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
     const token = {
       id: `at-${crypto.randomUUID()}`,
-      tokenHash: createHash("sha256").update(rawToken).digest("hex"),
+      tokenHash: hashAuthenticationToken(rawToken),
       description: typeof description === "string" ? description : null,
       createdAt: now,
       expiresAt,

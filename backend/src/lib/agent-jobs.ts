@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { hashAuthenticationToken } from "./token-service";
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
@@ -423,7 +423,7 @@ export async function authenticateAgent(
   if (authorization?.startsWith("Bearer agent-") !== true) return undefined;
   const agent = await db.query.agents.findFirst({ where: eq(agents.id, agentId) });
   if (agent === undefined) return undefined;
-  const tokenHash = createHash("sha256").update(authorization.slice(7)).digest("hex");
+  const tokenHash = hashAuthenticationToken(authorization.slice(7));
   const token = await db.query.agentPoolTokens.findFirst({
     where: and(
       eq(agentPoolTokens.agentPoolId, agent.agentPoolId),

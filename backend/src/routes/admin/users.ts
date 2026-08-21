@@ -7,7 +7,7 @@ import { eq, and, or, count, like } from "drizzle-orm";
 import { pageRequest, pagination } from "../../lib/utils";
 import { isUniqueConstraintError } from "../../lib/validation";
 import { checkPasswordPolicy, loadPasswordPolicy } from "../../lib/password-policy";
-import { createHash } from "node:crypto";
+import { hashAuthenticationToken } from "../../lib/token-service";
 import type { ParamCtx } from "./types";
 import { type UserItem, adminUserResource } from "./helpers";
 import { publish } from "../../lib/event-bus";
@@ -213,7 +213,7 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     const rawToken = `imp-${crypto.randomUUID()}-${crypto.randomUUID()}`;
     await db.insert(apiTokens).values({
       id: `impersonation-${crypto.randomUUID()}`,
-      token: createHash("sha256").update(rawToken).digest("hex"),
+      token: hashAuthenticationToken(rawToken),
       userId: target.id,
       description: `Impersonation by ${user.username}`,
       expiresAt: Date.now() + 15 * 60 * 1000,

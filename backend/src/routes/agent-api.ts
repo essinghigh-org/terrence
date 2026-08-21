@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import { createHash } from "node:crypto";
+import { hashAuthenticationToken } from "../lib/token-service";
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { and, asc, desc, eq, lt } from "drizzle-orm";
@@ -81,7 +81,7 @@ function bearerToken(authorization: string | null): string | undefined {
 
 /** Resolve the agent pool that owns an agent token (or undefined). */
 async function poolForToken(token: string): Promise<{ poolId: string; tokenId: string } | undefined> {
-  const tokenHash = createHash("sha256").update(token).digest("hex");
+  const tokenHash = hashAuthenticationToken(token);
   const row = await db.query.agentPoolTokens.findFirst({ where: eq(agentPoolTokens.token, tokenHash) });
   return row === undefined ? undefined : { poolId: row.agentPoolId, tokenId: row.id };
 }

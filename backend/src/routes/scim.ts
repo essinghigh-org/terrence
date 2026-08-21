@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import { createHash } from "node:crypto";
+import { hashAuthenticationToken } from "../lib/token-service";
 import { db } from "../db";
 import { scimGroups, scimGroupMemberships, scimTokens, scimUserIdentities, scimSettings,
   users } from "../db/schema";
@@ -20,7 +20,7 @@ async function validateScimToken(request: { headers: { get(name: string): string
   const auth = request.headers.get("authorization");
   if (!auth?.startsWith("Bearer ")) { (set as { status: number }).status = 401; return false; }
   const rawToken = auth.slice(7);
-  const hash = createHash("sha256").update(rawToken).digest("hex");
+  const hash = hashAuthenticationToken(rawToken);
   const now = Date.now();
   const token = await db.query.scimTokens.findFirst({ where: eq(scimTokens.tokenHash, hash) });
   if (!token || token.expiresAt < now) { (set as { status: number }).status = 401; return false; }

@@ -28,9 +28,6 @@ mkdirSync(storageDir, { recursive: true });
 let queryCount = 0;
 const queryLog: string[] = [];
 let queryLogEnabled = process.env.TERRENCE_QUERY_LOG === "1";
-const installQueryInstrumentation = (enabled: boolean): void => {
-  if (!enabled) return;
-};
 
 // ---------------------------------------------------------------------------
 // SQLite backend (default): bun:sqlite keeps a single stable native
@@ -58,7 +55,6 @@ if (!isPostgres) {
       return originalPrepare(sqlText, ...(params as [never]));
     });
   }
-  installQueryInstrumentation(process.env.TERRENCE_QUERY_COUNT === "1");
 }
 
 // ---------------------------------------------------------------------------
@@ -85,7 +81,6 @@ if (isPostgres) {
       return originalUnsafe(queryText, ...(params as [never]));
     }) as typeof pgClient.unsafe;
   }
-  installQueryInstrumentation(true);
 }
 
 /** @public Used by the dynamically imported benchmark runner. */
