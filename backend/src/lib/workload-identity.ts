@@ -92,13 +92,16 @@ async function generateKeyRow(): Promise<KeyRow> {
 }
 
 async function publishKey(row: KeyRow, fencingToken: number, retireActive: boolean): Promise<KeyRow> {
+  // Verify lease is still held BEFORE opening the transaction — postgres
+  // drizzle transactions snapshot, so an UPDATE..RETURNING inside the
+  // transaction cannot observe concurrent lease reclamation.
+  const held = await db.update(workloadIdentityLeases).set({ updatedAt: Date.now() }).where(and(
+    eq(workloadIdentityLeases.id, WORKLOAD_IDENTITY_LEASE_ID),
+    eq(workloadIdentityLeases.owner, WORKLOAD_IDENTITY_OWNER),
+    eq(workloadIdentityLeases.fencingToken, fencingToken),
+  )).returning({ id: workloadIdentityLeases.id });
+  if (held.length === 0) throw new Error("Workload identity signing-key leadership was lost before publication");
   await db.transaction(async (tx): Promise<void> => {
-    const held = await tx.update(workloadIdentityLeases).set({ updatedAt: Date.now() }).where(and(
-      eq(workloadIdentityLeases.id, WORKLOAD_IDENTITY_LEASE_ID),
-      eq(workloadIdentityLeases.owner, WORKLOAD_IDENTITY_OWNER),
-      eq(workloadIdentityLeases.fencingToken, fencingToken),
-    )).returning({ id: workloadIdentityLeases.id });
-    if (held.length === 0) throw new Error("Workload identity signing-key leadership was lost before publication");
     if (retireActive) {
       await tx.update(workloadIdentityKeys).set({ status: "retired", retiredAt: Date.now() }).where(and(
         eq(workloadIdentityKeys.status, "active"),
