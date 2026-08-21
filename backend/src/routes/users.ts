@@ -17,7 +17,8 @@ import { tokenExpiry } from "../lib/validation";
 import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
 import { TOKEN_DESCRIPTION_MAX_LENGTH } from "../lib/constants";
 import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
-import { checkOrganizationPermission, checkOrgPermission, pageRequest, pagination, auditLog, strictAuditEnabled } from "../lib/utils";
+import { checkOrganizationPermission, checkOrgPermission, pageRequest, pagination, auditLog } from "../lib/utils";
+import { randomBytes } from "node:crypto";
 import { publish } from "../lib/event-bus";
 import { authPlugin } from "../auth";
 import { cachedOrgByName } from "../lib/cached-lookups";
@@ -188,7 +189,7 @@ export const userRoutes = new Elysia({ name: "users" })
       const uid = `usr-${crypto.randomUUID()}`;
       const emailPrefix = email.split("@")[0] ?? "user";
       const uname = `${emailPrefix}_${crypto.randomUUID().substring(0, 4)}`;
-      await db.insert(users).values({ id: uid, username: uname, email, passwordHash: "invited" });
+      await db.insert(users).values({ id: uid, username: uname, email, passwordHash: `$disabled$${randomBytes(32).toString("base64url")}`, isProvisional: true });
       targetUser = await db.query.users.findFirst({ where: eq(users.id, uid) });
     }
     if (targetUser === undefined) {
@@ -203,9 +204,18 @@ export const userRoutes = new Elysia({ name: "users" })
       return { errors: [{ status: "409", title: "Conflict", detail: "User is already a member of this organization" }] };
     }
     const memId = `orgmem-${crypto.randomUUID()}`;
-    const status = typeof attrs.status === "string" ? attrs.status : "active";
+    const allowedStatuses = new Set(["active", "invited"]);
+    const requestedStatus = typeof attrs.status === "string" ? attrs.status : "invited";
+    if (!allowedStatuses.has(requestedStatus)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "status must be one of: active, invited" }] };
+    }
+    const status = requestedStatus === "invited" ? "invited" : "active";
+    // TFE compat: invitations are always invited; callers cannot mint active directly (item 15)
+    // If the target already exists and is active, that is 409; we force invited for new invites.
+    const inviteStatus = existingMem === undefined ? "invited" : status;
     await db.insert(organizationMemberships).values({
-      id: memId, orgId: org.id, userId: targetUser.id, role: "member", status,
+      id: memId, orgId: org.id, userId: targetUser.id, role: "member", status: inviteStatus,
     });
     const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
     const teamsRel = typeof rels.teams === "object" && rels.teams !== null ? (rels.teams as Record<string, unknown>) : {};
@@ -345,6 +355,10 @@ export const userRoutes = new Elysia({ name: "users" })
     if (target === undefined || user?.id !== userId) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if ((target as unknown as Record<string, unknown>).isProvisional === true || (user as unknown as Record<string, unknown>).isProvisional === true) {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: "Provisional accounts cannot create tokens" }] };
     }
     // A fine-grained token must not be able to mint a new token (which could
     // be unscoped = full access), or its restrictions are trivially bypassed.

@@ -228,9 +228,29 @@ export const teamRoutes = new Elysia({ name: "teams" })
       checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"),
     ]);
     const { number, size } = pageRequest(request);
+    const callerUserId = user?.id ?? null;
+    const callerIsOwner = callerUserId !== null && (await db.query.organizationMemberships.findFirst({ where: and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.userId, callerUserId), eq(organizationMemberships.role, "owner")) })) !== undefined;
+    const callerIsSiteAdmin = user?.isSiteAdmin === true;
+    let callerTeamIds: Set<string> | null = null;
+    let callerCanSeeSecret = callerIsOwner || callerIsSiteAdmin;
+    if (callerUserId !== null) {
+      const rows = await db.query.teamMemberships.findMany({ where: eq(teamMemberships.userId, callerUserId), columns: { teamId: true } });
+      callerTeamIds = new Set(rows.map((r: { teamId: string }): string => r.teamId));
+      if (!callerCanSeeSecret) {
+        for (const tid of callerTeamIds) {
+          const tm = await db.query.teams.findFirst({ where: eq(teams.id, tid), columns: { organizationAccess: true } });
+          if ((tm?.organizationAccess as Record<string, unknown> | undefined)?.["access-secret-teams"] === true) { callerCanSeeSecret = true; break; }
+        }
+      }
+    }
+    const visibleTeamWhere = callerCanSeeSecret
+      ? eq(teams.orgId, org.id)
+      : callerTeamIds !== null && callerTeamIds.size > 0
+        ? and(eq(teams.orgId, org.id), or(eq(teams.visibility, "organization"), inArray(teams.id, [...callerTeamIds])))!
+        : and(eq(teams.orgId, org.id), eq(teams.visibility, "organization"))!;
     const [teamList, countRows] = await Promise.all([
-      db.query.teams.findMany({ where: eq(teams.orgId, org.id), orderBy: [asc(teams.id)], limit: size, offset: (number - 1) * size }),
-      db.select({ total: count() }).from(teams).where(eq(teams.orgId, org.id)),
+      db.query.teams.findMany({ where: visibleTeamWhere, orderBy: [asc(teams.id)], limit: size, offset: (number - 1) * size }),
+      db.select({ total: count() }).from(teams).where(visibleTeamWhere),
     ]);
     const teamIds = teamList.map((t: TeamItem): string => t.id);
     const scimEnabled = (await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") }))?.enabled === true;

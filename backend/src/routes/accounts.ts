@@ -583,6 +583,10 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       user = found;
     }
 
+    if ((user as unknown as Record<string, unknown>).isProvisional === true) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "This invitation has not been accepted yet" }] };
+    }
     // If MFA is enabled for this account, issue a short-lived challenge token
     // instead of an access token. The client completes login via
     // POST /users/login/mfa with a valid TOTP code.
