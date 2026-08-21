@@ -292,19 +292,48 @@ export const userRoutes = new Elysia({ name: "users" })
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId ?? null, "members:read"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    const url = new URL(request.url);
+    const q = (query.q ?? url.searchParams.get("q") ?? "").trim().toLowerCase();
+    const filterStatus = (query["filter[status]"] ?? url.searchParams.get("filter[status]") ?? "").trim();
+    const filterEmail = (query["filter[email]"] ?? url.searchParams.get("filter[email]") ?? "").trim().toLowerCase();
+    if (filterStatus !== "" && !["active", "invited"].includes(filterStatus)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "filter[status] must be active or invited" }] };
+    }
     const { number, size } = pageRequest(request);
-    const [mems, countRows] = await Promise.all([
-      db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.orgId, org.id), orderBy: [asc(organizationMemberships.id)], limit: size, offset: (number - 1) * size }),
-      db.select({ total: count() }).from(organizationMemberships).where(eq(organizationMemberships.orgId, org.id)),
-    ]);
-    const userIds = mems.map((m: Readonly<{ readonly userId: string }>): string => m.userId);
+    // Apply filters. q and filter[email] both match user username/email; they compose with AND.
+    let filteredMems: Readonly<typeof organizationMemberships.$inferSelect>[] = await db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.orgId, org.id), orderBy: [asc(organizationMemberships.id)] });
+    if (filterStatus !== "") filteredMems = filteredMems.filter((m): boolean => m.status === filterStatus);
+    if (filterEmail !== "" || q !== "") {
+      const memUserIds = [...new Set(filteredMems.map((m): string => m.userId))];
+      const memUsers = memUserIds.length > 0 ? await db.query.users.findMany({ where: inArray(users.id, memUserIds) }) : [];
+      const memUserMap = new Map(memUsers.map((u): [string, typeof u] => [u.id, u]));
+      const emailNeedles = filterEmail !== "" ? filterEmail.split(",").map((s): string => s.trim().toLowerCase()).filter(Boolean) : [];
+      const matchUser = (uid: string): boolean => {
+        const u = memUserMap.get(uid);
+        if (u === undefined) return false;
+        const hay = `${u.username} ${u.email ?? ""}`.toLowerCase();
+        const emailHay = (u.email ?? "").toLowerCase();
+        if (q !== "" && !hay.includes(q)) return false;
+        if (emailNeedles.length > 0 && !emailNeedles.some((needle): boolean => emailHay === needle || emailHay.includes(needle))) return false;
+        return true;
+      };
+      filteredMems = filteredMems.filter((m): boolean => matchUser(m.userId));
+    }
+    const statusCounts = {
+      total: (await db.select({ total: count() }).from(organizationMemberships).where(eq(organizationMemberships.orgId, org.id)))[0]?.total ?? 0,
+      active: (await db.select({ total: count() }).from(organizationMemberships).where(and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.status, "active"))))[0]?.total ?? 0,
+      invited: (await db.select({ total: count() }).from(organizationMemberships).where(and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.status, "invited"))))[0]?.total ?? 0,
+    };
+    const totalFiltered = filteredMems.length;
+    const page = filteredMems.slice((number - 1) * size, number * size);
+    const userIds = page.map((m: Readonly<{ readonly userId: string }>): string => m.userId);
     const userList = userIds.length > 0 ? await db.query.users.findMany({ where: inArray(users.id, userIds) }) : [];
     const userMap = new Map(userList.map((u: Readonly<typeof users.$inferSelect>): [string, typeof u] => [u.id, u]));
     const includeQuery = query.include;
     const includeUsers = typeof includeQuery === "string" && includeQuery.split(",").includes("user");
-    const data = await Promise.all(mems.map(async (m: Readonly<typeof organizationMemberships.$inferSelect>): Promise<Record<string, unknown>> => orgMembershipResource(m, userMap.get(m.userId) ?? null)));
-    const totalCount = countRows[0]?.total ?? 0;
-    const result: { data: Record<string, unknown>[]; included?: Record<string, unknown>[] } = { data, ...pagination(request, number, size, totalCount) };
+    const data = await Promise.all(page.map(async (m: Readonly<typeof organizationMemberships.$inferSelect>): Promise<Record<string, unknown>> => orgMembershipResource(m, userMap.get(m.userId) ?? null)));
+    const result: { data: Record<string, unknown>[]; included?: Record<string, unknown>[]; meta?: Record<string, unknown> } = { data, ...pagination(request, number, size, totalFiltered), meta: { "status-counts": statusCounts } };
     if (includeUsers && userList.length > 0) {
       result.included = userList.map((u: Readonly<typeof users.$inferSelect>): Record<string, unknown> => userResource(u));
     }
