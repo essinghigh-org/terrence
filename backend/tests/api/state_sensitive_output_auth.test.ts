@@ -71,7 +71,7 @@ describe("sensitive state output authorization (STATE-003)", () => {
     userToken = `out-user-token-${suffix}`;
     otherUserToken = `out-other-token-${suffix}`;
     await db.insert(workspaces).values({ id: wsId, name: `out-ws-${suffix}`, orgId });
-    await db.insert(runs).values({ id: runId, workspaceId: wsId, orgId, status: "planned", isDestroy: false, createdAt: Date.now() });
+    await db.insert(runs).values({ id: runId, workspaceId: wsId, status: "planned", isDestroy: false, createdAt: Date.now() });
 
     const svRes = await request(
       `/api/v2/workspaces/${wsId}/state-versions`,

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import { and, eq, inArray, like } from "drizzle-orm";
+import { eq, like } from "drizzle-orm";
 import { db } from "../../src/db";
 import {
   organizations,

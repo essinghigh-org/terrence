@@ -41,7 +41,7 @@ describe("landlock run sandbox", () => {
       const [exitCode, stdout, stderr] = await Promise.all([
         proc.exited,
         new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
+        new Response(proc.stderr!).text(), // stderr unused elsewhere
       ]);
       expect(exitCode).toBe(0);
       expect(stdout).toContain("OpenTofu");
@@ -79,7 +79,7 @@ describe("landlock run sandbox", () => {
         { mode: 0o755 },
       );
       const proc = sandbox.spawn(["/bin/sh", probeScript], { cwd: workDir, env: {} });
-      const [exitCode, stdout, stderr] = await Promise.all([
+      const [exitCode, stdout] = await Promise.all([
         proc.exited,
         new Response(proc.stdout).text(),
         new Response(proc.stderr).text(),

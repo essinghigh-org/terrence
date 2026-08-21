@@ -151,6 +151,20 @@ function systemRuleArgs(): string[] {
   ].filter(existsSync).map((path): string => `--rx=${path}`);
 }
 
+/** Minimal /dev allow-list (todo 10). The previous --rw-files=/dev granted
+ *  read/write beneath the entire /dev tree. Prefer explicitly required
+ *  devices so a compromised provisioner cannot reach /dev/shm, device nodes,
+ *  or container sockets. /dev/shm is intentionally NOT allow-listed. */
+function devRuleArgs(): string[] {
+  const required = ["/dev/null", "/dev/zero", "/dev/urandom", "/dev/full", "/dev/tty"] as const;
+  const args: string[] = [];
+  for (const p of required) {
+    if (!existsSync(p)) continue;
+    args.push(`--rw-files=${p}`);
+  }
+  return args;
+}
+
 /**
  * Landlock run sandbox. Instance methods mirror the chroot-era API so the
  * worker's call sites stay stable.
@@ -239,7 +253,7 @@ export class RunSandbox {
         `--rx=${binaryDir}`,
         ...systemRuleArgs(),
         "--ro=/etc",
-        `--rw-files=/dev`,
+        ...devRuleArgs(),
         ...(resolvDir !== null ? [`--ro=${resolvDir}`] : []),
         ...extraRwArgs(),
         `--cwd=${opts.cwd}`,
@@ -264,15 +278,29 @@ export class RunSandbox {
 
   /** Resolve the run workdir containing a cwd (execution dir). */
   private workDirForRunCwd(cwd: string): string {
-    // The run workdir is the tmpdir/terrence/runs/<runId> ancestor of cwd.
-    const runsBase = join(tmpdir(), "terrence", "runs");
-    if (cwd.startsWith(runsBase + "/")) {
-      const rest = cwd.slice(runsBase.length + 1);
-      const runId = rest.split("/")[0] ?? "";
-      return join(runsBase, runId);
+    // Canonicalize before trusting ancestry (todo 11): string-prefix checks
+    // are symlink/traversal-sensitive. Resolve/realpath and prove containment.
+    const runsBase = resolve(join(tmpdir(), "terrence", "runs"));
+    let resolvedCwd: string;
+    try {
+      resolvedCwd = resolve(cwd);
+      // Best-effort realpath to collapse symlinks when the path exists.
+      try { resolvedCwd = realpathSync(resolvedCwd); } catch { /* use resolved */ }
+    } catch {
+      return cwd;
     }
-    // Fallback: use the cwd itself (e.g. assessment dirs under tmpdir).
-    return cwd;
+    let resolvedBase = runsBase;
+    try { resolvedBase = realpathSync(runsBase); } catch { /* use resolved */ }
+    const prefix = resolvedBase.endsWith("/") ? resolvedBase : resolvedBase + "/";
+    if (resolvedCwd === resolvedBase || resolvedCwd.startsWith(prefix)) {
+      const rest = resolvedCwd === resolvedBase ? "" : resolvedCwd.slice(prefix.length);
+      const runId = rest.split("/")[0] ?? "";
+      if (runId !== "" && !runId.includes("/") && !runId.includes("\\")) {
+        return join(resolvedBase, runId);
+      }
+    }
+    // Fallback: use the canonicalized cwd itself (e.g. assessment dirs).
+    return resolvedCwd;
   }
 }
 
@@ -292,7 +320,15 @@ function extraRwArgs(): string[] {
   if (!envEnabled(process.env.TERRENCE_SANDBOX_EXTRA_RW_ALLOWED)) return [];
   const raw = process.env.TERRENCE_SANDBOX_EXTRA_RW_PATHS;
   if (raw === undefined || raw === "") return [];
-  return raw.split(":").filter((p): boolean => p !== "").map((p): string => `--rw=${p}`);
+  const out: string[] = [];
+  for (const p of raw.split(":")) {
+    if (p === "") continue;
+    if (!isAbsolute(p)) continue;
+    let canon = resolve(p);
+    try { canon = realpathSync(canon); } catch { /* use resolved */ }
+    out.push(`--rw=${canon}`);
+  }
+  return out;
 }
 
 /** Directory holding the real resolv.conf (follows systemd-resolved symlinks). */

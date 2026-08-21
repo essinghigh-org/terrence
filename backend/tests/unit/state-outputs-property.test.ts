@@ -38,7 +38,7 @@ describe("stateOutputResources (STATE-001/002)", () => {
     const a = stateOutputResources(stateRow("sv-abc123", payload));
     const b = stateOutputResources(stateRow("sv-abc123", payload));
     expect(a).toEqual(b);
-    expect(a[0].id).toBe(expectedId("sv-abc123", "my_output"));
+    expect(a[0]!.id).toBe(expectedId("sv-abc123", "my_output"));
   });
 
   test("IDs are unique per output name within a state version", () => {
@@ -59,9 +59,9 @@ describe("stateOutputResources (STATE-001/002)", () => {
     const payload = parsePayload({ shared: { value: "x" } });
     const one = stateOutputResources(stateRow("sv-one", payload));
     const two = stateOutputResources(stateRow("sv-two", payload));
-    expect(one[0].id).not.toBe(two[0].id);
-    expect(one[0].id).toBe(expectedId("sv-one", "shared"));
-    expect(two[0].id).toBe(expectedId("sv-two", "shared"));
+    expect(one[0]!.id).not.toBe(two[0]!.id);
+    expect(one[0]!.id).toBe(expectedId("sv-one", "shared"));
+    expect(two[0]!.id).toBe(expectedId("sv-two", "shared"));
   });
 
   test("each resource carries type, self link, and attributes shape go-tfe expects", () => {
@@ -75,19 +75,19 @@ describe("stateOutputResources (STATE-001/002)", () => {
     );
 
     for (const [name, r] of Object.entries(byName)) {
-      expect(r.id).toBe(expectedId("sv-x", name));
-      expect(r.type).toBe("state-version-outputs");
+      expect((r as Record<string, string>).id!).toBe(expectedId("sv-x", name));
+      expect((r as Record<string, unknown>).type).toBe("state-version-outputs");
       const links = (r.links ?? {}) as Record<string, unknown>;
-      expect(links.self).toBe(`/api/v2/state-version-outputs/${r.id}`);
+      expect(links.self).toBe(`/api/v2/state-version-outputs/${(r as Record<string,string>).id}`);
       const attr = (r.attributes ?? {}) as Record<string, unknown>;
       expect(Object.keys(attr).sort()).toEqual(
         ["detailed-type", "name", "sensitive", "type", "value"].sort(),
       );
     }
-    expect(byName.plain.attributes.sensitive).toBe(false);
-    expect(byName.flagged.attributes.sensitive).toBe(true);
-    expect(byName.flagged.attributes.type).toBe("string");
-    expect(byName.flagged.attributes["detailed-type"]).toBe("string");
+    expect((byName.plain!.attributes as Record<string, unknown>).sensitive).toBe(false);
+    expect((byName.flagged!.attributes as Record<string, unknown>).sensitive).toBe(true);
+    expect((byName.flagged!.attributes as Record<string, unknown>).type).toBe("string");
+    expect((byName.flagged!.attributes as Record<string, unknown>)["detailed-type"]).toBe("string");
   });
 
   test("empty / malformed state payloads yield no output resources", () => {

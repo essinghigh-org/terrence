@@ -55,8 +55,8 @@ describe("run-scoped token scope/lifetime/revocation (RUN-022)", () => {
       { id: wsB, name: `rtok-b-${suffix}`, orgId },
     ]);
     await db.insert(runs).values([
-      { id: runA, workspaceId: wsA, orgId, status: "planned", isDestroy: false, createdAt: Date.now() },
-      { id: runB, workspaceId: wsB, orgId, status: "planned", isDestroy: false, createdAt: Date.now() },
+      { id: runA, workspaceId: wsA, status: "planned", isDestroy: false, createdAt: Date.now() },
+      { id: runB, workspaceId: wsB, status: "planned", isDestroy: false, createdAt: Date.now() },
     ]);
     const post = await app.handle(new Request(`http://terrence.test/api/v2/workspaces/${wsA}/state-versions`, {
       method: "POST",

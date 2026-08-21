@@ -56,7 +56,7 @@ describe("automatic workspace destruction scheduler", () => {
     const workspaceId = await createWorkspace({
       autoDestroyAt: new Date(NOW - 1_000).toISOString(),
     });
-    const created = await enqueueWithMaintenanceWait(NOW);
+    void (await enqueueWithMaintenanceWait(NOW));
     const ourRun = await db.query.runs.findFirst({ where: eq(runs.workspaceId, workspaceId) });
     expect(ourRun).toBeDefined();
     expect(ourRun).toMatchObject({
@@ -84,7 +84,7 @@ describe("automatic workspace destruction scheduler", () => {
       statePayload: "{}",
       createdAt: NOW - (3 * 3_600_000),
     });
-    const first = await enqueueWithMaintenanceWait(NOW);
+    void (await enqueueWithMaintenanceWait(NOW));
     const ourRun = await db.query.runs.findFirst({ where: eq(runs.workspaceId, workspaceId) });
     expect(ourRun).toBeDefined();
     expect((await db.query.workspaces.findFirst({

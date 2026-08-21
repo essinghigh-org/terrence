@@ -140,11 +140,17 @@ describe("getModelCatalog / listCatalogProviders / getCatalogProviderModels", ()
   it("treats a cache past the TTL as stale (falls through to fetch)", async () => {
     const providers = parseModelCatalog(SAMPLE);
     _resetModelCatalogCache({ fetchedAt: Date.now() - MODEL_CATALOG_TTL_MS - 1, providers });
-    // With a stale in-memory cache and no on-disk cache, the lib tries the
-    // network; in the test env fetch fails fast (no network) and we degrade
-    // to the stale in-memory copy rather than throwing.
-    const catalog = await getModelCatalog(Date.now());
-    expect(catalog.providers.length).toBeGreaterThan(0);
-    _resetModelCatalogCache();
+    const origFetch = globalThis.fetch;
+    // Avoid the 30 s network timeout in CI — fail fast and exercise the
+    // stale-fallback path without hitting the network.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (globalThis as any).fetch = () => Promise.reject(new Error("offline"));
+    try {
+      const catalog = await getModelCatalog(Date.now());
+      expect(catalog.providers.length).toBeGreaterThan(0);
+    } finally {
+      globalThis.fetch = origFetch;
+      _resetModelCatalogCache();
+    }
   });
 });

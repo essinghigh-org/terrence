@@ -430,7 +430,7 @@ if (!isPostgres) {
   // -------------------------------------------------------------------------
   {
     // Runs-keyed artifact directories, mirrored from plan-json.ts / run-logs.ts.
-    const RUN_SIDECAR_DIRS: readonly Readonly<{ dir: string; suffix: string }[]> = [
+    const RUN_SIDECAR_DIRS: Readonly<{ dir: string; suffix: string }[]> = [
       { dir: planJsonDirectory, suffix: ".json" },
       { dir: runLogsDirectory, suffix: ".json.gz" },
     ];
@@ -451,7 +451,7 @@ if (!isPostgres) {
       }
     };
 
-    const ID_FORMATS: readonly Readonly<{ table: string; prefix: string; fullUuidSuffix: boolean }[]> = [
+    const ID_FORMATS: Readonly<{ table: string; prefix: string; fullUuidSuffix: boolean }[]> = [
       { table: "organizations", prefix: "org-", fullUuidSuffix: true },
       { table: "users", prefix: "usr-", fullUuidSuffix: true },
       { table: "workspaces", prefix: "ws-", fullUuidSuffix: false },
