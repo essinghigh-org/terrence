@@ -215,10 +215,21 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
 
     // Secure flag under HTTPS (todo 135): the state cookie is a bearer
     // capability for the OAuth handshake and must not cross plaintext HTTP.
-    const forwardedProto = request?.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
-    const secure = forwardedProto === "https"
-      || (request !== undefined && new URL(request.url).protocol === "https:")
-      || process.env.PUBLIC_URL?.startsWith("https://") === true;
+    // Share the HTTPS policy with accounts.ts / oidc.ts: PUBLIC_URL is
+    // authoritative when configured; forwarded headers only matter behind a
+    // trusted proxy; otherwise the request's own protocol is used.
+    const secure = await (async (): Promise<boolean> => {
+      const publicUrl = process.env["PUBLIC_URL"];
+      if (typeof publicUrl === "string" && publicUrl !== "") {
+        try { const proto = new URL(publicUrl).protocol; if (proto === "https:") return true; if (proto !== "") return false; } catch {}
+      }
+      const { syncedTrustedClientIp } = await import("./lib/client-ip");
+      if (syncedTrustedClientIp(request) !== null) {
+        const forwarded = request?.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+        if (forwarded !== undefined && forwarded !== "") return forwarded === "https";
+      }
+      return request !== undefined && new URL(request.url).protocol === "https:";
+    })();
     const cookie = `${OAUTH_STATE_COOKIE}=${stateId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(CODE_TTL_MS / 1000)}${secure ? "; Secure" : ""}`;
     const location = `/login?oauth_state=${encodeURIComponent(stateId)}`;
     return new Response(null, {

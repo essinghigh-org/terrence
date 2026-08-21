@@ -366,7 +366,6 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       });
       if (job !== undefined) {
         const errorMessage = typeof jobPayload.error === "string" ? jobPayload.error : null;
-        let _agentResultTooLarge = false;
         const result: Record<string, unknown> = {};
         if (jobData !== null) {
           for (const key of ["has_changes", "generated_configuration", "resource_additions",

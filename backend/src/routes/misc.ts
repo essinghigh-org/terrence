@@ -294,7 +294,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
       provider: "gitlab",
       eventName,
       payload: parsed.payload,
-      deliveryId: vcsWebhookDeliveryId("gitlab", parsed.payload, null),
+      deliveryId: vcsWebhookDeliveryId("gitlab", eventName, parsed.payload, null),
     });
     return webhookAcknowledged;
   })
@@ -314,7 +314,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
       provider: "bitbucket",
       eventName,
       payload: parsed.payload,
-      deliveryId: vcsWebhookDeliveryId("bitbucket", parsed.payload, null),
+      deliveryId: vcsWebhookDeliveryId("bitbucket", eventName, parsed.payload, null),
     });
     return webhookAcknowledged;
   })

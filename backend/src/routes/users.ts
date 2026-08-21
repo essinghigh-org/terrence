@@ -585,11 +585,13 @@ export const userRoutes = new Elysia({ name: "users" })
     }
     // the cloud platform passes ?token=audit-trails to address the audit-trails token slot
     // distinctly from the organization token (which sends no query param).
-    const tokenType = validateOrgTokenType(new URL(request.url).searchParams.get("token") ?? "");
-    if (tokenType === null) {
+    const rawTokenType = new URL(request.url).searchParams.get("token") ?? "";
+    const validated = validateOrgTokenType(rawTokenType);
+    if (validated === null) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "token query parameter must be one of: (empty), organization, audit-trails" }] };
     }
+    const tokenType = validated === "organization" ? "" : validated;
     const token = await db.query.apiTokens.findFirst({
       where: organizationTokenWhere(org.id, tokenType),
     });
@@ -607,11 +609,13 @@ export const userRoutes = new Elysia({ name: "users" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     // Unknown token values must not mint arbitrary token namespaces (todo 52/53).
-    const tokenType = validateOrgTokenType(new URL(request.url).searchParams.get("token") ?? "");
-    if (tokenType === null) {
+    const rawTokenType = new URL(request.url).searchParams.get("token") ?? "";
+    const validated = validateOrgTokenType(rawTokenType);
+    if (validated === null) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "token query parameter must be one of: (empty), organization, audit-trails" }] };
     }
+    const tokenType = validated === "organization" ? "" : validated;
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
@@ -649,17 +653,17 @@ export const userRoutes = new Elysia({ name: "users" })
       expiresAt,
       teamId: null,
     };
-    const _priorOrgToken = await db.query.apiTokens.findFirst({ where: organizationTokenWhere(org.id, tokenType) });
+    const priorOrgToken = await db.query.apiTokens.findFirst({ where: organizationTokenWhere(org.id, tokenType) });
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
       await t.delete(apiTokens).where(organizationTokenWhere(org.id, tokenType));
       await t.insert(apiTokens).values(createdToken);
     });
-    await auditLog(_priorOrgToken === undefined ? "create" : "replace", "organization-authentication-token", createdToken.id, user?.id ?? null, org.id, {
+    await auditLog(priorOrgToken === undefined ? "create" : "replace", "organization-authentication-token", createdToken.id, user?.id ?? null, org.id, {
       orgId: org.id,
       tokenType: tokenType === "" ? null : tokenType,
       source: "user",
-      ...(_priorOrgToken === undefined ? {} : { replacedTokenId: _priorOrgToken.id }),
+      ...(priorOrgToken === undefined ? {} : { replacedTokenId: priorOrgToken.id }),
     });
     (set as { status: number }).status = 201;
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };

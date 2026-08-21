@@ -17,9 +17,11 @@ import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/tok
 
 // HTTPS source of truth for cookie flags (todo 134): when PUBLIC_URL is
 // configured it overrides per-request protocol/header detection.
-const PUBLIC_URL = typeof process.env.PUBLIC_URL === "string" && process.env.PUBLIC_URL !== ""
-  ? new URL(process.env.PUBLIC_URL)
-  : null;
+const PUBLIC_URL = ((): URL | null => {
+  const raw = process.env.PUBLIC_URL;
+  if (typeof raw !== "string" || raw === "") return null;
+  try { return new URL(raw); } catch { return null; }
+})();
 import { issueMfaChallenge, consumeMfaChallenge } from "../lib/mfa-challenge";
 import { withDbLock } from "../lib/db-lock";
 import { authenticateLdapWithCircuitBreaker } from "../lib/ldap";
@@ -124,7 +126,7 @@ function secureRequest(request: RequestInfo | undefined): boolean {
   const forwardedTrusted = syncedTrustedClientIp(request) !== null;
   if (forwardedTrusted) {
     const forwarded = request?.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
-    return forwarded === "https";
+    if (forwarded !== undefined && forwarded !== "") return forwarded === "https";
   }
   return request !== undefined && new URL(request.url).protocol === "https:";
 }
@@ -384,6 +386,13 @@ function refreshUnauthorized(
   return { errors: [{ status: "401", title: "Unauthorized", detail }] };
 }
 
+async function resolveMfaSeed(mfa: Readonly<{ secret: string; secretEncrypted: string | null }>): Promise<string | null> {
+  const raw = mfa.secretEncrypted ?? (mfa.secret !== "" ? mfa.secret : null);
+  if (raw === null) return null;
+  if (!isEncryptedSecret(raw)) return raw;
+  try { return await decryptSecret(raw); } catch { return null; }
+}
+
 export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
   .post("/admin/initial-admin-user", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
@@ -625,12 +634,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
     }
-    const loginSeed = mfa.secretEncrypted ?? (mfa.secret !== "" ? mfa.secret : null);
-    const loginSeedPlain = loginSeed === null
-      ? null
-      : isEncryptedSecret(loginSeed)
-        ? await decryptSecret(loginSeed)
-        : loginSeed;
+    const loginSeedPlain = await resolveMfaSeed(mfa);
     if (loginSeedPlain === null || !verifyTotp(loginSeedPlain, code)) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
@@ -771,6 +775,12 @@ export const accountRoutes = new Elysia({ name: "accounts" })
           return true;
         });
         if (!rotated) {
+          // Re-read the row: the concurrent winner may have populated
+          // successorHash/rotatedAtMs that our stale snapshot lacks.
+          const fresh = await db.query.refreshSessions.findFirst({
+            where: eq(refreshSessions.id, current.id),
+          });
+          const effective = fresh ?? current;
           // The claim failed: the token was already rotated (two-tab race or
           // replay) or revoked/expired. The in-process rotation lock means a
           // concurrent same-process tab serialized behind us and re-read the
@@ -780,12 +790,12 @@ export const accountRoutes = new Elysia({ name: "accounts" })
           // WITHOUT rotating again (todo 125-126). Outside the window this
           // stays a family-revocation reuse event (todo 127).
           if (
-            current.rotatedAtMs !== null
-            && current.successorHash !== null
-            && now - current.rotatedAtMs <= REFRESH_GRACE_MS
+            effective.rotatedAtMs !== null
+            && effective.successorHash !== null
+            && now - effective.rotatedAtMs <= REFRESH_GRACE_MS
           ) {
             const successor = await db.query.refreshSessions.findFirst({
-              where: eq(refreshSessions.tokenHash, current.successorHash),
+              where: eq(refreshSessions.tokenHash, effective.successorHash),
             });
             const successorUser = successor !== undefined && successor.revokedAt === null && successor.expiresAt > now
               ? await db.query.users.findFirst({ where: eq(users.id, successor.userId) })
@@ -1161,10 +1171,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
     }
-    // Resolve the seed: prefer the encrypted column; fall back to the legacy
-    // plaintext column for rows written before encryption shipped (todo 111).
-    const seed = mfa.secretEncrypted ?? (mfa.secret !== "" ? mfa.secret : null);
-    const seedPlain = seed === null ? null : isEncryptedSecret(seed) ? await decryptSecret(seed) : seed;
+    const seedPlain = await resolveMfaSeed(mfa);
     if (seedPlain === null || !verifyTotp(seedPlain, code)) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
@@ -1207,12 +1214,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found", detail: "MFA is not enabled" }] };
     }
-    const disableSeed = mfa.secretEncrypted ?? (mfa.secret !== "" ? mfa.secret : null);
-    const disableSeedPlain = disableSeed === null
-      ? null
-      : isEncryptedSecret(disableSeed)
-        ? await decryptSecret(disableSeed)
-        : disableSeed;
+    const disableSeedPlain = await resolveMfaSeed(mfa);
     if (disableSeedPlain === null || !verifyTotp(disableSeedPlain, code)) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };

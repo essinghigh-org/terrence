@@ -564,7 +564,8 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const deleted = await db.delete(apiTokens).where(and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, true))).returning({ id: apiTokens.id });
-    if (deleted.length > 0) await auditLog("delete", "team-authentication-token", deleted[0]!.id, user?.id ?? null, team.orgId, { teamId, legacy: true });
+    const deletedId = deleted[0]?.id;
+    if (deletedId !== undefined) await auditLog("delete", "team-authentication-token", deletedId, user?.id ?? null, team.orgId, { teamId, legacy: true });
     (set as { status: number }).status = 204;
     return {};
   })

@@ -209,7 +209,10 @@ async function loadEncryptionKey(): Promise<Buffer> {
     }
 
     if (key.length !== KEY_LENGTH) {
-      throw new Error(`Invalid encryption key in ${keyPath}`);
+      // A concurrent creator may have written a truncated file; retry once
+      // before failing so a transient partial write does not brick the node.
+      key = await readExistingKeyWithRetry(keyPath);
+      if (key.length !== KEY_LENGTH) throw new Error(`Invalid encryption key in ${keyPath}`);
     }
     return key;
   })().finally(() => {

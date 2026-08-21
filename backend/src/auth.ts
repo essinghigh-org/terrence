@@ -61,12 +61,12 @@ export const authPlugin = new Elysia({ name: "auth" })
     const authHeader = request.headers.get("authorization");
     // Scheme is case-insensitive per RFC 7235 (todo 176); the credential that
     // follows is not.
-    const bearerMatch = typeof authHeader === "string" && /^bearer\s+/i.test(authHeader);
-    if (!bearerMatch) {
+    const bearerMatch = typeof authHeader === "string" ? authHeader.match(/^bearer\s+/i) : null;
+    if (bearerMatch === null) {
       return { user: null, token: null, orgId: null, teamId: null, tokenError: null , run: null };
     }
 
-    const tokenString = authHeader.substring(authHeader.indexOf(" ") + 1).trim();
+    const tokenString = (authHeader as string).slice(bearerMatch[0].length).trim();
     // Cheap rejection BEFORE any DB lookup (todo 175): a bearer token longer
     // than any legitimate credential format is garbage — hashing + querying
     // it only serves a denial-of-wallet on the database. 512 chars covers

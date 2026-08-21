@@ -467,7 +467,7 @@ async function calculateSha256(buffer: Readonly<ArrayBuffer>): Promise<string> {
 
 async function verifySha256(tool: "tofu" | "terraform", version: string, filename: string, buffer: Readonly<ArrayBuffer>): Promise<boolean> {
 
-  const allowBypass = envEnabled(process.env.ALLOW_TOOL_FALLBACK) || envEnabled(process.env.ALLOW_UNVERIFIED_CHECKSUMS);
+  const allowBypass = envEnabled(process.env.ALLOW_UNVERIFIED_CHECKSUMS);
   try {
     let checksumUrl = "";
     if (tool === "tofu") {

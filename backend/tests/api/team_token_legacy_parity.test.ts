@@ -87,6 +87,7 @@ describe("team token legacy/plural separation (TFE parity)", () => {
   });
 
   afterAll(async () => {
+    await db.delete(apiTokens).where(inArray(apiTokens.userId, [ownerAId, ownerBId, ownerCId]));
     await db.delete(apiTokens).where(eq(apiTokens.orgId, orgId));
     await db.delete(teams).where(eq(teams.id, teamId));
     await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId));

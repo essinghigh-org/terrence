@@ -1244,12 +1244,13 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     // stored value (decrypting an encrypted one). Flipping sensitive on
     // encrypts the existing plaintext (todo 169).
     const suppliedValue = typeof attrs.value === "string" ? attrs.value : null;
+    const unchangedSensitive = suppliedValue === null && sensitive && variable.sensitive === true && variable.valueEncrypted !== null;
     const effectiveValue = suppliedValue ?? (sensitive ? await variableValueForRead(variable) : variable.value);
     const key = typeof attrs.key === "string" ? attrs.key : variable.key;
     const category = typeof attrs.category === "string" ? attrs.category : variable.category;
     const hcl = typeof attrs.hcl === "boolean" ? attrs.hcl : (variable.hcl ?? false);
     const description = typeof attrs.description === "string" ? attrs.description : variable.description;
-    const stored = await variableValueForWrite(sensitive, effectiveValue);
+    const stored = unchangedSensitive ? { value: variable.value, valueEncrypted: variable.valueEncrypted } : await variableValueForWrite(sensitive, effectiveValue);
     const updated = { key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description };
     try {
       await db.update(workspaceVariables).set(updated).where(eq(workspaceVariables.id, varId));

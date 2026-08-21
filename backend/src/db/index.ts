@@ -215,7 +215,7 @@ if (!isPostgres) {
   // reverted it at the next restart. Only the NULL-only team_projects
   // backfill remains — it fills a missing value and never overwrites one.
   {
-    const teamProjectsColumns = (client.query("PRAGMA table_info(team_projects)").all() as ReadonlyArray<{ readonly name: string }>)
+    const teamProjectsColumns = (client.query("PRAGMA table_info(team_projects)").all() as readonly { readonly name: string }[])
       .map((column): string => column.name);
     if (teamProjectsColumns.includes("organization_id")) {
       client.run("UPDATE team_projects SET organization_id = (SELECT org_id FROM projects WHERE projects.id = team_projects.project_id) WHERE organization_id IS NULL");
@@ -307,13 +307,13 @@ if (!isPostgres) {
   // authentication-tokens set. Databases whose migration journal never
   // applied the column are repaired at boot. Idempotent.
   {
-    const apiTokenColumns = (client.query("PRAGMA table_info(api_tokens)").all() as ReadonlyArray<{ readonly name: string }>)
+    const apiTokenColumns = (client.query("PRAGMA table_info(api_tokens)").all() as readonly { readonly name: string }[])
       .map((column): string => column.name);
     if (!apiTokenColumns.includes("legacy")) {
       try {
         client.run("ALTER TABLE api_tokens ADD COLUMN legacy integer NOT NULL DEFAULT 0");
       } catch (error: unknown) {
-        const updatedColumns = client.query("PRAGMA table_info(api_tokens)").all() as ReadonlyArray<{ readonly name: string }>;
+        const updatedColumns = client.query("PRAGMA table_info(api_tokens)").all() as readonly { readonly name: string }[];
         if (!updatedColumns.some((column): boolean => column.name === "legacy")) {
           throw error;
         }
@@ -327,7 +327,7 @@ if (!isPostgres) {
   // are repaired at boot. Idempotent: a no-op once the column exists, so
   // fresh databases and properly journaled upgrades are unaffected.
   {
-    const runsColumns = (client.query("PRAGMA table_info(runs)").all() as ReadonlyArray<{ readonly name: string }>)
+    const runsColumns = (client.query("PRAGMA table_info(runs)").all() as readonly { readonly name: string }[])
       .map((column): string => column.name);
     if (!runsColumns.includes("scheduled_at")) {
       try {
@@ -336,7 +336,7 @@ if (!isPostgres) {
         // Another process may have added the column between the check and the
         // ALTER. Only swallow the failure when the column now exists; any
         // genuine ALTER failure must surface at boot.
-        const updatedColumns = client.query("PRAGMA table_info(runs)").all() as ReadonlyArray<{ readonly name: string }>;
+        const updatedColumns = client.query("PRAGMA table_info(runs)").all() as readonly { readonly name: string }[];
         if (!updatedColumns.some((column): boolean => column.name === "scheduled_at")) {
           throw error;
         }
@@ -349,13 +349,13 @@ if (!isPostgres) {
   // api_tokens.legacy guard above). Idempotent boot repair for databases
   // whose migration journal never applied the column.
   {
-    const user2faColumns = (client.query("PRAGMA table_info(user_2fa)").all() as ReadonlyArray<{ readonly name: string }>)
+    const user2faColumns = (client.query("PRAGMA table_info(user_2fa)").all() as readonly { readonly name: string }[])
       .map((column): string => column.name);
     if (!user2faColumns.includes("secret_encrypted")) {
       try {
         client.run("ALTER TABLE user_2fa ADD COLUMN secret_encrypted text");
       } catch (error: unknown) {
-        const updatedColumns = client.query("PRAGMA table_info(user_2fa)").all() as ReadonlyArray<{ readonly name: string }>;
+        const updatedColumns = client.query("PRAGMA table_info(user_2fa)").all() as readonly { readonly name: string }[];
         if (!updatedColumns.some((column): boolean => column.name === "secret_encrypted")) {
           throw error;
         }
@@ -366,14 +366,14 @@ if (!isPostgres) {
   // Refresh-session two-tab concurrency grace columns (todo 125-127, same
   // guard pattern). Idempotent boot repair.
   {
-    const refreshColumns = (client.query("PRAGMA table_info(refresh_sessions)").all() as ReadonlyArray<{ readonly name: string }>)
+    const refreshColumns = (client.query("PRAGMA table_info(refresh_sessions)").all() as readonly { readonly name: string }[])
       .map((column): string => column.name);
     for (const column of ["successor_hash", "rotated_at_ms"] as const) {
       if (refreshColumns.includes(column)) continue;
       try {
         client.run(`ALTER TABLE refresh_sessions ADD COLUMN ${column}${column === "successor_hash" ? " text" : " integer"}`);
       } catch (error: unknown) {
-        const updatedColumns = client.query("PRAGMA table_info(refresh_sessions)").all() as ReadonlyArray<{ readonly name: string }>;
+        const updatedColumns = client.query("PRAGMA table_info(refresh_sessions)").all() as readonly { readonly name: string }[];
         if (!updatedColumns.some((c): boolean => c.name === column)) {
           throw error;
         }
@@ -384,13 +384,13 @@ if (!isPostgres) {
   // Sensitive-variable at-rest encryption columns (todo 167-169, same guard
   // pattern). Idempotent boot repair for both variable tables.
   for (const tableName of ["workspace_variables", "variable_set_variables"] as const) {
-    const columns = (client.query(`PRAGMA table_info(${tableName})`).all() as ReadonlyArray<{ readonly name: string }>)
+    const columns = (client.query(`PRAGMA table_info(${tableName})`).all() as readonly { readonly name: string }[])
       .map((column): string => column.name);
     if (columns.includes("value_encrypted")) continue;
     try {
       client.run(`ALTER TABLE ${tableName} ADD COLUMN value_encrypted text`);
     } catch (error: unknown) {
-      const updatedColumns = client.query(`PRAGMA table_info(${tableName})`).all() as ReadonlyArray<{ readonly name: string }>;
+      const updatedColumns = client.query(`PRAGMA table_info(${tableName})`).all() as readonly { readonly name: string }[];
       if (!updatedColumns.some((c): boolean => c.name === "value_encrypted")) {
         throw error;
       }
@@ -403,13 +403,13 @@ if (!isPostgres) {
   // Databases whose migration journal never applied the column are repaired
   // at boot. Idempotent.
   {
-    const cvColumns = (client.query("PRAGMA table_info(configuration_versions)").all() as ReadonlyArray<{ readonly name: string }>)
+    const cvColumns = (client.query("PRAGMA table_info(configuration_versions)").all() as readonly { readonly name: string }[])
       .map((column): string => column.name);
     if (!cvColumns.includes("upload_claim_expires_at")) {
       try {
         client.run("ALTER TABLE configuration_versions ADD COLUMN upload_claim_expires_at integer");
       } catch (error: unknown) {
-        const updatedColumns = client.query("PRAGMA table_info(configuration_versions)").all() as ReadonlyArray<{ readonly name: string }>;
+        const updatedColumns = client.query("PRAGMA table_info(configuration_versions)").all() as readonly { readonly name: string }[];
         if (!updatedColumns.some((column): boolean => column.name === "upload_claim_expires_at")) {
           throw error;
         }
@@ -430,7 +430,7 @@ if (!isPostgres) {
   // -------------------------------------------------------------------------
   {
     // Runs-keyed artifact directories, mirrored from plan-json.ts / run-logs.ts.
-    const RUN_SIDECAR_DIRS: ReadonlyArray<Readonly<{ dir: string; suffix: string }>> = [
+    const RUN_SIDECAR_DIRS: readonly Readonly<{ dir: string; suffix: string }[]> = [
       { dir: planJsonDirectory, suffix: ".json" },
       { dir: runLogsDirectory, suffix: ".json.gz" },
     ];
@@ -451,7 +451,7 @@ if (!isPostgres) {
       }
     };
 
-    const ID_FORMATS: ReadonlyArray<Readonly<{ table: string; prefix: string; fullUuidSuffix: boolean }>> = [
+    const ID_FORMATS: readonly Readonly<{ table: string; prefix: string; fullUuidSuffix: boolean }[]> = [
       { table: "organizations", prefix: "org-", fullUuidSuffix: true },
       { table: "users", prefix: "usr-", fullUuidSuffix: true },
       { table: "workspaces", prefix: "ws-", fullUuidSuffix: false },
@@ -655,7 +655,7 @@ export async function databaseMetrics(): Promise<Readonly<{
     const client = pgClient as postgres.Sql;
     const rows = await client.unsafe(
       "SELECT pg_database_size(current_database()) AS size, current_setting('block_size')::int AS \"blockSize\"",
-    ) as unknown as ReadonlyArray<{ size: number | bigint; blockSize: number }>;
+    ) as unknown as readonly { size: number | bigint; blockSize: number }[];
     const sizeBytes = Number(rows[0]?.size ?? 0);
     const pageSize = Number(rows[0]?.blockSize ?? 8192);
     // The URL may embed credentials; surface only host + database name.

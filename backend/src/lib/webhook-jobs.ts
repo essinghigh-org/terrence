@@ -36,7 +36,7 @@ export type VcsWebhookJobPayload = Readonly<{
   deliveryId: string | null;
 }>;
 
-function stableEventIdentity(provider: VcsWebhookProvider, payload: Readonly<Record<string, unknown>>): string | null {
+function stableEventIdentity(provider: VcsWebhookProvider, eventName: string, payload: Readonly<Record<string, unknown>>): string | null {
   // Light extraction mirroring the provider parsers: repo + commit identity is
   // enough to collapse a redelivered copy of the SAME push without storing the
   // whole body twice. Unparseable shapes fall back to no dedupe (process it).
@@ -51,7 +51,7 @@ function stableEventIdentity(provider: VcsWebhookProvider, payload: Readonly<Rec
         ? payload.after
         : undefined;
     return typeof repo === "string" && repo !== "" && typeof sha === "string" && sha !== ""
-      ? `gitlab:${repo}:${sha}`
+      ? `gitlab:${repo}:${sha}:${eventName}`
       : null;
   }
   const repo = typeof payload.repository === "object" && payload.repository !== null && !Array.isArray(payload.repository)
@@ -72,7 +72,7 @@ function stableEventIdentity(provider: VcsWebhookProvider, payload: Readonly<Rec
       ? (target as Record<string, unknown>).hash
       : undefined;
     return typeof repo === "string" && repo !== "" && typeof sha === "string" && sha !== ""
-      ? `bitbucket:${repo}:${sha}`
+      ? `bitbucket:${repo}:${sha}:${eventName}`
       : null;
   }
   return null;
@@ -85,11 +85,12 @@ function stableEventIdentity(provider: VcsWebhookProvider, payload: Readonly<Rec
  */
 export function vcsWebhookDeliveryId(
   provider: VcsWebhookProvider,
+  eventName: string,
   payload: Readonly<Record<string, unknown>>,
   headerDeliveryId: string | null,
 ): string | null {
   if (provider === "github") return headerDeliveryId;
-  return stableEventIdentity(provider, payload);
+  return stableEventIdentity(provider, eventName, payload);
 }
 
 /** Enqueue one delivery onto the durable queue; resolves after the DB insert. */
