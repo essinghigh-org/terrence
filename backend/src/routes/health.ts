@@ -290,7 +290,7 @@ function prometheusLines(collection: MetricsCollection): string[] {
       );
       const fps = (instance.database as unknown as { slowFingerprints?: Readonly<Record<string, number>> }).slowFingerprints ?? {};
       const fpLines = Object.entries(fps).slice(0, 10).map(([fp, count]): string =>
-        `terrence_database_slow_fingerprint_total{fingerprint="${fp.replaceAll('"', '\\"')}"} ${count}`,
+        `terrence_database_slow_fingerprint_total{fingerprint="${prometheusLabel(fp)}"} ${count}`,
       );
       if (fpLines.length > 0) {
         lines.push(

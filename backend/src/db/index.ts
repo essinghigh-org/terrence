@@ -104,21 +104,39 @@ if (isPostgres) {
     pgClient.unsafe = ((queryText: string, ...params: unknown[]) => {
       const start = poolQueryStart();
       const queryTextCopy = queryText;
+      const pending = originalUnsafe(queryText, ...(params as [never])) as unknown as {
+        then: (onFulfilled: (v: unknown) => unknown, onRejected: (e: unknown) => unknown) => unknown;
+      } & Record<string, unknown>;
       const finish = (): void => {
         const durationMs = poolQueryEnd(start);
         recordSlowQuery(queryTextCopy, durationMs);
       };
-      const result = originalUnsafe(queryText, ...(params as [never]));
-      // postgres.js returns a Promise for every query; attach completion hooks
-      // without altering the result shape.
-      if (result !== null && typeof result === 'object' && 'then' in (result as unknown as Record<string, unknown>)) {
-        return (result as unknown as Promise<unknown>).then(
-          (value: unknown) => { finish(); return value; },
-          (err: unknown) => { finish(); throw err; },
-        ) as typeof result;
+      // Preserve the PendingQuery shape (postgres.js returns a thenable with
+      // extra methods like .values()/.execute() that drizzle relies on).
+      // Decorate .then rather than replacing the object with a plain Promise.
+      if (pending !== null && typeof pending === 'object' && typeof pending.then === 'function') {
+        const originalThen = pending.then.bind(pending);
+        (pending as unknown as { then: unknown }).then = (
+          onFulfilled: (v: unknown) => unknown,
+          onRejected?: (e: unknown) => unknown,
+        ): unknown => originalThen(
+          (value: unknown) => { finish(); return onFulfilled(value); },
+          (err: unknown) => { finish(); if (onRejected !== undefined) return onRejected(err); throw err; },
+        );
+        // For lazy queries that never call .then (e.g. fire-and-forget), also
+        // finish on next tick if not already settled — bounded to one call.
+        let settled = false;
+        const onceFinish = (): void => { if (!settled) { settled = true; finish(); } };
+        // Wrap .catch as well if present
+        const origCatch = (pending as unknown as { catch?: (fn: (e: unknown) => unknown) => unknown }).catch;
+        if (typeof origCatch === 'function') {
+          (pending as unknown as { catch: unknown }).catch = (fn: (e: unknown) => unknown): unknown =>
+            origCatch.call(pending, (err: unknown) => { onceFinish(); return fn(err); });
+        }
+        return pending as unknown as ReturnType<typeof originalUnsafe>;
       }
       finish();
-      return result;
+      return pending as unknown as ReturnType<typeof originalUnsafe>;
     }) as typeof pgClient.unsafe;
   }
   if (envEnabled(process.env.TERRENCE_QUERY_COUNT)) {
