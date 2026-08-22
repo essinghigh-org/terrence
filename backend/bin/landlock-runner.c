@@ -37,6 +37,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -123,9 +124,18 @@ static long landlock_abi(void) {
 static int add_path_rule(int ruleset_fd, uint64_t access, const char *path) {
     int dir_fd = open(path, O_PATH | O_CLOEXEC);
     if (dir_fd < 0) {
-        fprintf(stderr, "landlock-runner: cannot open '%s': %s\n",
+        fprintf(stderr, "landlock-runner: cannot open '%s': %s\\n",
                 path, strerror(errno));
         return -1;
+    }
+
+    /* READ_DIR is only valid on directory targets: the kernel returns EINVAL
+     * when a path_beneath rule grants it on a non-directory inode (e.g. the
+     * character devices in /dev). Mask it off so --rw-files=/dev/null and
+     * friends work. */
+    struct stat st;
+    if (fstat(dir_fd, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        access &= ~LL_READ_DIR;
     }
 
     struct landlock_path_beneath_attr rule = {0};
