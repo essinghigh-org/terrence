@@ -82,7 +82,7 @@ Migration point (316): consider PostgreSQL when busy/lock events climb, WAL chec
 
 ## Post-copy verification (317-322)
 
-One-click migration (317) runs a post-copy checksum: row counts (318), aggregate hashes (319), FK verification (320), artifact references (321), and encrypted-blob decryptability (322).
+One-click migration (317) runs a post-copy checksum: row counts (318), aggregate hashes (319), FK verification (320), artifact references (321), and encrypted-blob decryptability (322). The checks fail closed if any aggregate or FK diverges.
 
 ## Performance
 
