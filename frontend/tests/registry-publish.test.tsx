@@ -71,7 +71,7 @@ async function selectRepository(view: ReturnType<typeof render>): Promise<void> 
   fireEvent.focus(repository);
   fireEvent.keyDown(repository, { key: "ArrowDown" });
   const option = await view.findByRole("option", { name: /acme\/terraform-network/ });
-  fireEvent.click(option);
+  fireEvent.mouseDown(option);
   await waitFor((): void => {
     expect((repository as HTMLInputElement).value).toBe("acme/terraform-network");
   });
