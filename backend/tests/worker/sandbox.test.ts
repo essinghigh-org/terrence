@@ -293,6 +293,7 @@ describe("landlock run sandbox", () => {
 
   it("denies access to /sys where filesystem restrictions apply", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    if (!existsSync("/sys/kernel/hostname")) { console.warn("Skipping: /sys/kernel/hostname missing on this host"); return; }
     const sandbox = new RunSandbox();
     const workDir = await mkdtemp(join(tmpdir(), "terrence-sb-"));
     await mkdir(join(workDir, "tmp"), { recursive: true });
@@ -302,7 +303,7 @@ describe("landlock run sandbox", () => {
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
-      expect(["SYS_READABLE", "SYS_DENIED"]).toContain(stdout.trim());
+      expect(stdout.trim()).toBe("SYS_DENIED");
     } finally {
       await rm(workDir, { recursive: true, force: true });
     }
