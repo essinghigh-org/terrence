@@ -71,6 +71,8 @@ import { probeLandlockAbi, RunSandbox, removeSandboxWorkDir, runNetDenyEnabled, 
 import { attachToRunCgroup, createRunCgroup, destroyRunCgroup, killRunCgroup } from "./lib/run-cgroup";
 import { decryptSecret } from "./lib/secrets";
 import { log } from "./lib/log";
+export type { ExecutionPhase } from "./worker/phases";
+export { executorBackendFromEnv, type ExecutorBackend, EXECUTOR_BACKENDS } from "./worker/executor-policy";
 import { assertArchiveExpandedSize, assertArchiveLogicalSize, assertArchiveMemberCount } from "./lib/archive";
 import { startDurableJobWorker } from "./lib/durable-jobs";
 import { handleVcsWebhookJob } from "./lib/webhook-jobs";
