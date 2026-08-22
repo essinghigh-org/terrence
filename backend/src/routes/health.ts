@@ -458,9 +458,23 @@ async function readinessResponse(
   });
   const disk = isStorageDegraded() ? "ERROR" : "OK";
   const worker = envEnabled(process.env.TERRENCE_DISABLE_WORKER) ? "ERROR" : "OK";
+  // Todo 64: fail readiness when operator policy demands a newer Landlock ABI than the host provides.
+  const sandboxMinAbi = (() => {
+    const raw = process.env.TERRENCE_SANDBOX_MIN_ABI;
+    if (raw === undefined || raw.trim() === "") return null;
+    const n = Number.parseInt(raw.trim(), 10);
+    return Number.isSafeInteger(n) && n >= 1 ? n : null;
+  })();
+  const sandboxAbiStatus: "OK" | "ERROR" =
+    sandboxMinAbi !== null && probeLandlockAbi() < sandboxMinAbi ? "ERROR" : "OK";
   const maintenance = maintenanceSnapshot();
   const draining = maintenance.active || ["draining", "maintenance"].includes((process.env.TERRENCE_NODE_STATUS ?? "").toLowerCase());
-  const status = database === "ERROR" || disk === "ERROR" ? "ERROR" : draining ? "DRAINING" : "OK";
+  const status =
+    database === "ERROR" || disk === "ERROR" || sandboxAbiStatus === "ERROR"
+      ? "ERROR"
+      : draining
+        ? "DRAINING"
+        : "OK";
   if (status !== "OK") (set as { status: number }).status = 503;
 
   const result: ReadinessResult = {
@@ -473,6 +487,7 @@ async function readinessResponse(
       { check: "disk", status: disk },
       { check: "redis", status: "OK" },
       { check: "task-worker", status: worker },
+      { check: "run-sandbox", status: sandboxAbiStatus },
       { check: "vault", status: "OK" },
     ],
   };
@@ -695,6 +710,7 @@ export const healthRoutes = new Elysia({ name: "health" })
         available: boolean;
         abi: number;
         reason: string | null;
+        extraRwAllowed: boolean;
         docs: string;
       };
     };
@@ -707,6 +723,7 @@ export const healthRoutes = new Elysia({ name: "health" })
         ? "landlock-runner missing or Landlock not enabled in the kernel"
         : "Landlock is not available on this kernel (needs Linux >= 5.13 with CONFIG_SECURITY_LANDLOCK)";
     }
+    const extraRwAllowed = envEnabled(process.env.TERRENCE_SANDBOX_EXTRA_RW_ALLOWED);
     return {
       data: {
         "run-sandbox": {
@@ -714,6 +731,7 @@ export const healthRoutes = new Elysia({ name: "health" })
           available: abi >= 1,
           abi,
           reason,
+          extraRwAllowed,
           docs: "https://docs.kernel.org/userspace-api/landlock.html",
         },
       },

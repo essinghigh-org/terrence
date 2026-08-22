@@ -69,4 +69,5 @@ export type SecuritySummary = Readonly<{
   sandboxEnabled: boolean;
   sandboxAvailable: boolean;
   sandboxReason: string | null;
+  sandboxExtraRwAllowed: boolean;
 }>;

@@ -147,6 +147,11 @@ export function SecurityOverview(props: Readonly<{
                     {securitySummary.sandboxReason !== null && (
                       <p className="text-xs text-muted-foreground">{securitySummary.sandboxReason}</p>
                     )}
+                    {securitySummary.sandboxExtraRwAllowed && (
+                      <div className="rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-sm text-warning">
+                        Warning: extra sandbox read-write paths are enabled (TERRENCE_SANDBOX_EXTRA_RW_ALLOWED). The sandbox allow-list is widened beyond the default.
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
                 <Card>
