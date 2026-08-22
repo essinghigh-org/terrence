@@ -81,6 +81,17 @@ import { purgeExpiredForwardedRequests } from "./lib/agent-forwarding";
 import { runExplorerCatalogJob, runExplorerInventoryJob, scheduleExplorerInventory } from "./lib/explorer-inventory";
 import { revokeWorkloadIdentityTokens, workspaceIdentityEnvironment } from "./lib/workload-identity";
 import { costEstimationEnabledForOrganization, getSettings } from "./lib/settings";
+import "./lib/run-claim";
+import "./lib/configuration-materialization";
+import "./lib/terraform-init";
+import "./lib/plan-phase";
+import "./lib/policy-phase";
+import "./lib/cost-phase";
+import "./lib/run-task-phase";
+import "./lib/apply-phase";
+import "./lib/state-persistence";
+import "./lib/run-finalization";
+import "./lib/run-cleanup";
 
 type NoCodeUpgradeTarget = Readonly<{
   noCodeModuleId: string;

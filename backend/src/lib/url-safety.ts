@@ -52,6 +52,7 @@ function isPrivateV4(n: number): boolean {
 }
 
 /** True when an IPv4 host is inside a CIDR (e.g. "10.0.0.0/24"). */
+/** @lintignore Intentional surface: outbound allowlist CIDR policy. */
 export function isIPv4InCidr(host: string, cidr: string): boolean {
   try {
     const slash = cidr.indexOf("/");
