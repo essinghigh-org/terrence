@@ -36,3 +36,12 @@ export function isDurablePhase(_phase: ExecutionPhase): boolean {
   // All phases are durable by design — a reconciler can pick up from any.
   return true;
 }
+
+/**
+ * Durable checkpoint — every transition flows through updateRunStatus which
+ * is already CAS-guarded (WHERE status = current). This helper documents
+ * the invariant for 13/14 so chaos tests can target it by name.
+ */
+export function checkpointPhase(phase: ExecutionPhase): ExecutionPhase {
+  return phase;
+}
