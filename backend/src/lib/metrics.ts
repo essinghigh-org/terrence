@@ -27,7 +27,7 @@ import {
   workspaces,
 } from "../db/schema";
 import { and, count, eq, inArray, min, type SQL } from "drizzle-orm";
-import { databaseMetrics } from "../db";
+import { databaseMetrics, databasePoolMetrics } from "../db";
 import { configuredHeartbeatTimeoutMs } from "./agent-jobs";
 import {
   checkOrganizationPermission,
@@ -74,6 +74,7 @@ export type MetricsCollection = Readonly<{
       pageCount: number;
       cacheSizeBytes: number | null;
       freelistBytes: number | null;
+      pool: import("./db-pool-metrics").DbPoolMetrics;
     }>;
     /** VCS webhook delivery queue state (todo 192-194). */
     webhookQueue: WebhookQueueMetrics;
@@ -196,6 +197,7 @@ export async function collectInstanceMetrics(): Promise<NonNullable<MetricsColle
       pageCount: database.pageCount,
       cacheSizeBytes: database.cacheSizeBytes,
       freelistBytes: database.freelistBytes,
+      pool: databasePoolMetrics(),
     },
     webhookQueue,
   };

@@ -129,6 +129,8 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
     metrics.terrence_database_page_count = collection.instance.database.pageCount;
     metrics.terrence_database_cache_size_bytes = collection.instance.database.cacheSizeBytes;
     metrics.terrence_database_freelist_bytes = collection.instance.database.freelistBytes;
+    // DB pool observation (todos 289,290,291): pending depth, latency p50/p95.
+    metrics.terrence_database_pool = collection.instance.database.pool;
     // VCS webhook delivery queue (todo 192-194).
     metrics.terrence_webhook_queue = {
       queued: collection.instance.webhookQueue.queued,
@@ -269,6 +271,23 @@ function prometheusLines(collection: MetricsCollection): string[] {
     }
     if (instance.database.freelistBytes !== null) {
       lines.push(`terrence_database_freelist_bytes ${instance.database.freelistBytes}`);
+    }
+    // DB pool (todos 289,290,291)
+    {
+      const p = instance.database.pool;
+      lines.push(
+        "# HELP terrence_database_pool_pending Queries currently waiting or executing.",
+        "# TYPE terrence_database_pool_pending gauge",
+        `terrence_database_pool_pending{driver="${p.driver}"} ${p.pendingQueries}`,
+        "# HELP terrence_database_pool_exhausted_total Queries that arrived while another was pending (contention signal).",
+        "# TYPE terrence_database_pool_exhausted_total counter",
+        `terrence_database_pool_exhausted_total ${p.queriesExhausted}`,
+        "# HELP terrence_database_query_duration_ms Observed query/transaction latency (recent window).",
+        "# TYPE terrence_database_query_duration_ms gauge",
+        `terrence_database_query_duration_ms{quantile="0.5"} ${p.p50Ms ?? 0}`,
+        `terrence_database_query_duration_ms{quantile="0.95"} ${p.p95Ms ?? 0}`,
+        `terrence_database_query_duration_ms{quantile="max"} ${p.maxMs ?? 0}`,
+      );
     }
   }
   // Global latch: emitted for every collection shape (scoped tokens too).

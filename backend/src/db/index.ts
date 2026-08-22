@@ -13,6 +13,7 @@ import { envEnabled } from '../lib/env';
 import { planJsonDirectory } from '../lib/plan-json';
 import { runLogsDirectory } from '../lib/run-logs';
 import { databaseUrl, isPostgres, storageDir } from './driver';
+import { poolMetrics, poolQueryEnd, poolQueryStart, poolTransactionEnd, poolTransactionStart } from '../lib/db-pool-metrics';
 
 // Deliberately synchronous: a top-level await here made this module a TLA
 // module, and Bun's worker threads can resolve importers while the TLA is
@@ -94,6 +95,27 @@ if (isPostgres) {
     // (e.g. "relation already exists" during idempotent DDL) is suppressed.
     onnotice: () => {},
   });
+  // Always-on lightweight pool observation (todos 289,290,291): pending + latency
+  // samples are recorded for /metrics; zero branching in the hot path beyond
+  // the counter bump. Wraps `unsafe` which is the underlying query path for
+  // both drizzle and raw SQL on postgres.
+  {
+    const originalUnsafe = pgClient.unsafe.bind(pgClient);
+    pgClient.unsafe = ((queryText: string, ...params: unknown[]) => {
+      const start = poolQueryStart();
+      const result = originalUnsafe(queryText, ...(params as [never]));
+      // postgres.js returns a Promise for every query; attach completion hooks
+      // without altering the result shape.
+      if (result !== null && typeof result === 'object' && 'then' in (result as unknown as Record<string, unknown>)) {
+        return (result as unknown as Promise<unknown>).then(
+          (value: unknown) => { poolQueryEnd(start); return value; },
+          (err: unknown) => { poolQueryEnd(start); throw err; },
+        ) as typeof result;
+      }
+      poolQueryEnd(start);
+      return result;
+    }) as typeof pgClient.unsafe;
+  }
   if (envEnabled(process.env.TERRENCE_QUERY_COUNT)) {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
     pgClient.unsafe = ((queryText: string, ...params: unknown[]) => {
@@ -752,6 +774,16 @@ export function rawQueryAll<T>(fragment: SQL): Promise<T[]> | T[] {
 // databaseDriver itself is not re-exported: nothing consumes it outside
 // src/db/driver.ts (knip-verified).
 export { isPostgres };
+
+export function databasePoolMetrics(): ReturnType<typeof poolMetrics> {
+  const max = isPostgres ? 10 : 1;
+  const driver = isPostgres ? 'postgres' as const : 'sqlite' as const;
+  return poolMetrics(driver, max);
+}
+
+// Wrappers for transaction latency (todo 291): callers in db-layer wrap
+// transaction bodies with these helpers so wall time is captured.
+export { poolTransactionStart, poolTransactionEnd };
 
 /**
  * Apply the PostgreSQL schema migrations (drizzle/pg). The sqlite migrator
