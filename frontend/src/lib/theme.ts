@@ -89,14 +89,14 @@ export const THEMES: readonly ThemeDefinition[] = [
     codeBackground: "220 7% 13%", codeForeground: "220 20% 92%",
   }),
   createTheme("catppuccin-latte", "Catppuccin Latte", "light", {
-    background: "220 23% 95%", foreground: "234 16% 35%", card: "220 22% 98%", primary: "220 91% 45%", primaryForeground: "220 23% 95%",
+    background: "220 23% 95%", foreground: "234 16% 35%", card: "220 22% 98%", primary: "220 91% 38%", primaryForeground: "220 23% 95%",
     secondary: "220 22% 91%", secondaryForeground: "234 16% 35%", muted: "220 22% 91%", mutedForeground: "233 13% 53%",
     accent: "221 100% 94%", accentForeground: "220 91% 44%", destructive: "347 87% 44%", destructiveForeground: "220 23% 95%",
     border: "220 17% 84%", input: "233 13% 65%", success: "109 58% 40%", warning: "22 99% 52%",
     codeBackground: "234 16% 20%", codeForeground: "220 23% 95%",
   }),
   createTheme("tokyo-day", "Tokyo Day", "light", {
-    background: "220 13% 94%", foreground: "229 25% 28%", card: "0 0% 100%", primary: "211 80% 45%", primaryForeground: "0 0% 100%",
+    background: "220 13% 94%", foreground: "229 25% 28%", card: "0 0% 100%", primary: "211 80% 40%", primaryForeground: "0 0% 100%",
     secondary: "220 17% 88%", secondaryForeground: "229 25% 28%", muted: "220 14% 91%", mutedForeground: "229 20% 45%",
     accent: "211 80% 93%", accentForeground: "211 80% 42%", destructive: "349 90% 57%", destructiveForeground: "0 0% 100%",
     border: "222 12% 84%", input: "222 15% 62%", success: "100 45% 42%", warning: "35 80% 48%",
@@ -110,14 +110,14 @@ export const THEMES: readonly ThemeDefinition[] = [
     codeBackground: "220 16% 22%", codeForeground: "218 27% 94%",
   }),
   createTheme("rose-pine-dawn", "Rosé Pine Dawn", "light", {
-    background: "35 45% 95%", foreground: "248 19% 40%", card: "35 67% 98%", primary: "267 22% 45%", primaryForeground: "35 45% 95%",
+    background: "35 45% 95%", foreground: "248 19% 40%", card: "35 67% 98%", primary: "267 22% 40%", primaryForeground: "35 45% 95%",
     secondary: "35 36% 90%", secondaryForeground: "248 19% 40%", muted: "35 36% 90%", mutedForeground: "249 12% 52%",
     accent: "4 53% 67%", accentForeground: "248 19% 30%", destructive: "343 36% 55%", destructiveForeground: "35 67% 98%",
     border: "30 18% 86%", input: "249 12% 55%", success: "197 53% 34%", warning: "35 77% 50%",
     codeBackground: "248 19% 25%", codeForeground: "35 45% 95%",
   }),
   createTheme("solarized-light", "Solarized Light", "light", {
-    background: "44 80% 94%", foreground: "194 14% 45%", card: "45 43% 89%", primary: "205 69% 40%", primaryForeground: "44 80% 97%",
+    background: "44 80% 94%", foreground: "194 14% 45%", card: "45 43% 89%", primary: "205 69% 35%", primaryForeground: "44 80% 97%",
     secondary: "45 43% 89%", secondaryForeground: "192 81% 14%", muted: "45 43% 89%", mutedForeground: "194 14% 56%",
     accent: "45 100% 35%", accentForeground: "44 80% 97%", destructive: "1 71% 52%", destructiveForeground: "44 80% 97%",
     border: "44 37% 80%", input: "194 14% 45%", success: "68 100% 30%", warning: "18 80% 44%",
@@ -131,7 +131,7 @@ export const THEMES: readonly ThemeDefinition[] = [
     codeBackground: "222 30% 7%", codeForeground: "210 20% 92%",
   }),
   createTheme("catppuccin-mocha", "Catppuccin Mocha", "dark", {
-    background: "240 21% 15%", foreground: "227 68% 88%", card: "240 21% 18%", popover: "240 21% 23%", primary: "217 92% 76%", primaryForeground: "240 21% 15%",
+    background: "240 21% 15%", foreground: "227 68% 88%", card: "240 21% 18%", popover: "240 21% 23%", primary: "217 92% 82%", primaryForeground: "240 21% 15%",
     secondary: "240 21% 23%", secondaryForeground: "227 68% 88%", muted: "240 21% 23%", mutedForeground: "231 15% 56%",
     accent: "189 71% 73%", accentForeground: "240 21% 15%", destructive: "343 81% 75%", destructiveForeground: "240 21% 15%",
     border: "240 21% 28%", input: "231 15% 56%", success: "115 54% 76%", warning: "41 86% 83%",
@@ -173,7 +173,7 @@ export const THEMES: readonly ThemeDefinition[] = [
     codeBackground: "0 0% 10%", codeForeground: "43 59% 81%",
   }),
   createTheme("solarized-dark", "Solarized Dark", "dark", {
-    background: "192 100% 11%", foreground: "194 14% 56%", card: "192 81% 14%", popover: "192 81% 18%", primary: "205 69% 49%", primaryForeground: "192 100% 11%",
+    background: "192 100% 11%", foreground: "194 14% 56%", card: "192 81% 14%", popover: "192 81% 18%", primary: "205 69% 58%", primaryForeground: "192 100% 11%",
     secondary: "192 81% 18%", secondaryForeground: "44 80% 94%", muted: "192 81% 14%", mutedForeground: "194 14% 64%",
     accent: "45 100% 35%", accentForeground: "44 80% 94%", destructive: "1 71% 52%", destructiveForeground: "44 80% 94%",
     border: "194 14% 35%", input: "194 14% 45%", success: "68 100% 30%", warning: "18 80% 44%",
