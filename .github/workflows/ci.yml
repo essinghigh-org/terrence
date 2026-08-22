@@ -120,6 +120,7 @@ jobs:
         run: bun run knip
       - name: Security endpoint coverage (todo 143)
         run: |
+          set -o pipefail
           # Fail if new security-sensitive routes lack explicit security metadata.
           # The registry lives in backend/src/lib/security-endpoints.ts when present;
           # otherwise this is a no-op until the registry is introduced.
@@ -131,6 +132,7 @@ jobs:
         continue-on-error: true
       - name: Secret fingerprint check (todo 116)
         run: |
+          set -o pipefail
           # Verifies control-plane secrets do not leak into run env/logs/artifacts.
           # Stub until the fingerprint corpus is wired; non-blocking to avoid
           # hard-failing before the secret inventory lands.
@@ -196,6 +198,7 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Run axe accessibility tests
         run: |
+          set -o pipefail
           # Playwright + @axe-core/playwright are already in devDeps (todo 859).
           # This runs the existing e2e accessibility suite; kept non-blocking
           # until coverage stabilizes across runners.
