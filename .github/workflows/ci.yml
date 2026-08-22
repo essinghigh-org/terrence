@@ -118,3 +118,95 @@ jobs:
         continue-on-error: true
       - name: Knip
         run: bun run knip
+      - name: Security endpoint coverage (todo 143)
+        run: |
+          set -o pipefail
+          # Fail if new security-sensitive routes lack explicit security metadata.
+          # The registry lives in backend/src/lib/security-endpoints.ts when present;
+          # otherwise this is a no-op until the registry is introduced.
+          if [ -f backend/src/lib/security-endpoints.ts ]; then
+            bun run --cwd backend scripts/check-security-endpoints.ts 2>&1 | tail -n 30
+          else
+            echo "security-endpoints registry not yet present; skipping (todo 143 stub)"
+          fi
+        continue-on-error: true
+      - name: Secret fingerprint check (todo 116)
+        run: |
+          set -o pipefail
+          # Verifies control-plane secrets do not leak into run env/logs/artifacts.
+          # Stub until the fingerprint corpus is wired; non-blocking to avoid
+          # hard-failing before the secret inventory lands.
+          echo "secret fingerprint check stub (todo 116) — wire fingerprint corpus in follow-up"
+        continue-on-error: true
+
+  # Lightweight supply-chain / artifact verification (todos 828, 889, 800).
+  # These are non-blocking so they can surface regressions without hard-failing
+  # the entire pipeline while the budgets/provenance settle.
+  build-verification:
+    name: Build verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Frontend build (reproducible)
+        run: cd frontend && bun run build
+      - name: Docker build check (todo 828)
+        run: |
+          docker build -f Dockerfile --target builder -t terrence:ci-builder . > /tmp/docker-build.log 2>&1 || (cat /tmp/docker-build.log; exit 1)
+          echo "Docker builder stage OK"
+        continue-on-error: true
+      - name: Bundle size budget (todo 800)
+        run: |
+          node -e '
+            const fs=require("fs"), path=require("path");
+            const dist="frontend/dist";
+            if(!fs.existsSync(dist)){console.log("no dist, skipping budget");process.exit(0)}
+            const files=(function walk(d){return fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(d,e.name)):[path.join(d,e.name)])})(dist);
+            const total=files.reduce((s,f)=>s+fs.statSync(f).size,0);
+            const budget=6*1024*1024; // 6 MiB initial budget for frontend/dist
+            console.log(`bundle total ${(total/1024/1024).toFixed(2)} MiB (budget ${(budget/1024/1024).toFixed(2)} MiB)`);
+            if(total>budget){console.error(`bundle exceeds budget by ${((total-budget)/1024).toFixed(0)} KiB`);process.exit(1)}
+          '
+        continue-on-error: true
+      - name: Reproducible lockfile check (todo 889)
+        run: |
+          bun install --frozen-lockfile
+          if ! git diff --quiet -- bun.lock; then echo "::warning::bun.lock drifted after install"; git diff -- bun.lock | head -n 50; fi
+        continue-on-error: true
+
+  accessibility:
+    name: Accessibility (axe)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Run axe accessibility tests
+        run: |
+          set -o pipefail
+          # Playwright + @axe-core/playwright are already in devDeps (todo 859).
+          # E2e specs need a live instance (127.0.0.1:3001 + TERRENCE_E2E_ADMIN_TOKEN)
+          # which CI does not provision. This step proves the axe + playwright
+          # toolchain installs intact without needing the live server or token.
+          npx --yes playwright install --with-deps chromium 2>&1 | tail -n 5
+          # --list only, via Node's loader so `bun:test` unit files are never
+          # resolved (bunx would route them through Bun's `bun:` ESM loader and
+          # produce `Only URLs with a scheme in: file, data, and node` errors).
+          npx playwright test --list 2>&1 | head -n 20
+          echo "axe toolchain OK (full e2e run requires TERRENCE_E2E_ADMIN_TOKEN + live instance)"
+        continue-on-error: true
