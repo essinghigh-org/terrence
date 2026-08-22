@@ -517,8 +517,11 @@ export const app = new Elysia()
       headers["Access-Control-Allow-Origin"] = origin;
     }
     headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
-    headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type";
-    headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining";
+    headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type,Idempotency-Key,If-Match,If-None-Match";
+    headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining,X-Request-Id";
+    // Correlation IDs (455): accept client-supplied or generate; log and expose for tracing/bundles.
+    const correlationId = request.headers.get("x-request-id") ?? request.headers.get("x-correlation-id") ?? crypto.randomUUID();
+    headers["X-Request-Id"] = correlationId;
   })
   .onAfterHandle(({ request, response, set }: AfterHandleContext): void => {
     const meta = requestMeta.get(request as unknown as Request);
