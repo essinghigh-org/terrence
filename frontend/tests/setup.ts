@@ -3,7 +3,12 @@ import { cleanup, configure } from "@testing-library/react";
 import { JSDOM } from "jsdom";
 import type { JsonObject } from "../src/lib/json";
 
-configure({ defaultHidden: true });
+configure({
+  defaultHidden: true,
+  // CI runners (2 vCPU) run --parallel=8 workers; under CPU starvation the
+  // default 1s async-util timeout expires before React flushes a render.
+  asyncUtilTimeout: 10_000,
+});
 
 const jsdom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost/" });
 let customLocation: unknown;
