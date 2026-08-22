@@ -346,6 +346,14 @@ function extraRwArgs(): string[] {
     try { canon = realpathSync(canon); } catch { /* use resolved */ }
     out.push(`--rw=${canon}`);
   }
+  if (out.length > 0) {
+    // Todo 67: observable record so operators (and the UI banner from 66)
+    // can correlate which widened paths are actually in effect.
+    try {
+      const { log } = require("./log") as { log: { warn: (msg: string, data?: unknown) => void } };
+      log.warn("sandbox extra RW paths active", { paths: out.map((a) => a.slice("--rw=".length)) });
+    } catch { /* logging is best-effort during early boot */ }
+  }
   return out;
 }
 
