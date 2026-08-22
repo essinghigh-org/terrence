@@ -157,7 +157,7 @@ static int probe(void) {
 static void usage(void) {
     fprintf(stderr,
         "usage: landlock-runner --probe\n"
-        "   or: landlock-runner (--rwx=PATH | --rw=PATH | --rw-files=PATH | --rx=PATH | --ro=PATH)* [--cwd=DIR] -- CMD [ARGS...]\n");
+        "   or: landlock-runner (--rwx=PATH | --rw=PATH | --rw-files=PATH | --rx=PATH | --ro=PATH)* [--deny-net] [--cwd=DIR] -- CMD [ARGS...]\n");
 }
 
 int main(int argc, char **argv) {
@@ -176,6 +176,7 @@ int main(int argc, char **argv) {
     }
 
     const char *cwd = NULL;
+    int deny_net = 0;
 
     /* First pass: collect rules (no restrictions applied yet). */
     struct { const char *path; uint64_t access; } rules[64];
@@ -191,6 +192,10 @@ int main(int argc, char **argv) {
             saw_dashdash = 1;
             cmd_start = i + 1;
             break;
+        }
+        if (strcmp(arg, "--deny-net") == 0) {
+            deny_net = 1;
+            continue;
         }
         if (strncmp(arg, "--cwd=", 6) == 0) {
             cwd = arg + 6;
@@ -236,12 +241,22 @@ int main(int argc, char **argv) {
         return 2;
     }
 
+    if (deny_net && abi < 4) {
+        fprintf(stderr, "landlock-runner: --deny-net requires Landlock ABI >= 4 (got %ld)\n", abi);
+        return 2;
+    }
     struct ll_ruleset_attr rs_attr = {0};
     rs_attr.handled_access_fs = handled_access(abi);
+    if (deny_net && abi >= 4) {
+        rs_attr.handled_access_net = (1ULL << 0) | (1ULL << 1); /* BIND_TCP | CONNECT_TCP */
+    }
     if (abi >= 6) {
         rs_attr.scoped = LL_SCOPE_ABSTRACT_UNIX_SOCKET | LL_SCOPE_SIGNAL;
     }
-    size_t rs_attr_size = abi >= 6 ? sizeof(rs_attr) : sizeof(rs_attr.handled_access_fs);
+    size_t rs_attr_size;
+    if (abi >= 6) rs_attr_size = sizeof(rs_attr);
+    else if (abi >= 4) rs_attr_size = sizeof(rs_attr.handled_access_fs) + sizeof(rs_attr.handled_access_net);
+    else rs_attr_size = sizeof(rs_attr.handled_access_fs);
     int ruleset_fd = (int) syscall(__NR_landlock_create_ruleset, &rs_attr,
                                    rs_attr_size, 0);
     if (ruleset_fd < 0) {
