@@ -45,6 +45,22 @@ export function syncedTrustedClientIp(request: unknown): string | null {
   return trustedHeaderValue(request);
 }
 
+/**
+ * Whether the current request was served over HTTPS.
+ * Respects X-Forwarded-Proto when the admin has configured trusted proxy headers,
+ * otherwise checks the URL scheme directly. Trusting the forwarded header only
+ * when the proxy is configured prevents an off-proxy client from spoofing HTTPS.
+ */
+export function requestIsHttps(request: Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }>): boolean {
+  try {
+    if (new URL(request.url).protocol === "https:") return true;
+  } catch { /* fall through to header check */ }
+  // Only trust X-Forwarded-Proto when a trusted header list is configured (proxy in front).
+  if (cachedTrustedHeaders.length === 0) return false;
+  const forwarded = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+  return forwarded === "https";
+}
+
 function headerValue(request: unknown, name: string): string | null {
   const value = (request as { headers?: { get?: (k: string) => string | null } } | null)?.headers?.get?.(name);
   if (value === undefined || value === null || value === "") return null;
