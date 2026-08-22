@@ -21,6 +21,7 @@ export type RateLimitClass =
   | "scim-settings"
   | "scim-mapping"
   | "workspace-run-history"
+  | "metrics"
   | "none";
 
 export type BodyLimitClass = "api" | "upload";
@@ -172,6 +173,19 @@ export const ENDPOINT_POLICIES: readonly EndpointPolicy[] = [
       if (m !== "POST" && m !== "PATCH" && m !== "DELETE") return undefined;
       const path = pathnameOf(request);
       return /^\/api\/v2\/admin\/teams\/[^/]+\/scim-group-mapping$/.test(path) ? path : undefined;
+    },
+  },
+  {
+    id: "metrics",
+    description: "Metrics endpoint (service-token / scoped-token auth).",
+    rateLimit: "metrics",
+    bodyLimit: "api",
+    auth: "authenticated",
+    audit: "none",
+    secretResponse: true,
+    match: (request): string | undefined => {
+      const p = pathnameOf(request);
+      return p === "/metrics" || p.startsWith("/metrics?") ? "/metrics" : undefined;
     },
   },
   {

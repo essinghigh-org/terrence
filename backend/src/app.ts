@@ -483,6 +483,18 @@ export const app = new Elysia()
     },
     skip: (request: CustomRequest): boolean => scimMappingPath(request) === undefined,
   }))
+  .use(rateLimit({
+    // 488: /metrics gets its own small bucket so scrape storms don't starve the global limiter.
+    context: distributedOrLocal("metrics"),
+    duration: 60_000,
+    max: envPositiveInt("RATE_LIMIT_METRICS_MAX", 30),
+    generator: (request: CustomRequest, server: RateLimitServer | null): string => `metrics:${principalRateLimitKey(request, server)}`,
+    responseMessage: { errors: [{ detail: "You have exceeded the API's rate limit.", status: "429", title: "Too Many Requests" }] },
+    skip: (request: CustomRequest): boolean => {
+      const p = new URL(request.url).pathname;
+      return p !== "/metrics";
+    },
+  }))
   .use(oauthPlugin)
   .onRequest(({ request, set }: RequestContext): Record<string, unknown> | undefined => {
     const url = new URL(request.url);

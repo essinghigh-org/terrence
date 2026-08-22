@@ -37,7 +37,7 @@ describe("endpoint-policy (465-469)", () => {
   it("every registry entry has audit/rate", () => {
     for (const e of ENDPOINT_POLICIES) {
       expect(["admin","auth","none"]).toContain(e.audit);
-      expect(["global","none","sensitive","sso-get","scim-settings","scim-mapping","workspace-run-history"]).toContain(e.rateLimit);
+      expect(["global","none","sensitive","sso-get","scim-settings","scim-mapping","workspace-run-history","metrics"]).toContain(e.rateLimit);
     }
   });
 
