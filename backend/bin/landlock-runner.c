@@ -121,7 +121,7 @@ static long landlock_abi(void) {
                    LANDLOCK_CREATE_RULESET_VERSION);
 }
 
-static int add_path_rule(int ruleset_fd, uint64_t access, const char *path) {
+static int add_path_rule(int ruleset_fd, long abi, uint64_t access, const char *path) {
     int dir_fd = open(path, O_PATH | O_CLOEXEC);
     if (dir_fd < 0) {
         fprintf(stderr, "landlock-runner: cannot open '%s': %s\\n",
@@ -129,13 +129,20 @@ static int add_path_rule(int ruleset_fd, uint64_t access, const char *path) {
         return -1;
     }
 
-    /* READ_DIR is only valid on directory targets: the kernel returns EINVAL
-     * when a path_beneath rule grants it on a non-directory inode (e.g. the
-     * character devices in /dev). Mask it off so --rw-files=/dev/null and
-     * friends work. */
     struct stat st;
     if (fstat(dir_fd, &st) != 0 || !S_ISDIR(st.st_mode)) {
-        access &= ~LL_READ_DIR;
+        /* Non-directory target (regular file, chardev like /dev/null):
+         * the kernel rejects directory-scoped rights here with EINVAL.
+         * Intersect with exactly the rights valid on a file target. */
+        access &= abi_mask(LL_EXECUTE | LL_WRITE_FILE | LL_READ_FILE
+                           | ((abi >= 3) ? LL_TRUNCATE : 0)
+                           | ((abi >= 5) ? LL_IOCTL_DEV : 0),
+                           abi);
+        if (access == 0) {
+            /* Nothing grantable on this target; skip rather than fail. */
+            close(dir_fd);
+            return 0;
+        }
     }
 
     struct landlock_path_beneath_attr rule = {0};
@@ -276,7 +283,7 @@ int main(int argc, char **argv) {
     }
 
     for (int r = 0; r < n_rules; r++) {
-        if (add_path_rule(ruleset_fd, abi_mask(rules[r].access, abi), rules[r].path) != 0) {
+        if (add_path_rule(ruleset_fd, abi, abi_mask(rules[r].access, abi), rules[r].path) != 0) {
             close(ruleset_fd);
             return 2;
         }
