@@ -338,12 +338,23 @@ function extraRwArgs(): string[] {
   if (!envEnabled(process.env.TERRENCE_SANDBOX_EXTRA_RW_ALLOWED)) return [];
   const raw = process.env.TERRENCE_SANDBOX_EXTRA_RW_PATHS;
   if (raw === undefined || raw === "") return [];
+  const allowStorage = envEnabled(process.env.TERRENCE_SANDBOX_EXTRA_RW_ALLOW_STORAGE);
+  let storagePrefix: string | null = null;
+  if (!allowStorage) {
+    try {
+      const { storageDir } = require("../db/driver") as { storageDir: string };
+      const sd = resolve(storageDir);
+      storagePrefix = sd.endsWith("/") ? sd : sd + "/";
+    } catch { /* best-effort */ }
+  }
   const out: string[] = [];
   for (const p of raw.split(":")) {
     if (p === "") continue;
     if (!isAbsolute(p)) continue;
     let canon = resolve(p);
     try { canon = realpathSync(canon); } catch { /* use resolved */ }
+    // 71: unless explicitly allowed, never widen the sandbox beneath storage (protect DB/key).
+    if (storagePrefix !== null && (canon === storagePrefix.slice(0, -1) || canon.startsWith(storagePrefix))) continue;
     out.push(`--rw=${canon}`);
   }
   if (out.length > 0) {
