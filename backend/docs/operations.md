@@ -59,6 +59,14 @@ The administration database section exports the database in a portable format:
 
 Restore an export into an empty instance, then restore the storage artifacts to the same paths.
 
+## Restore verification (327,328)
+
+An automated restore test (327) imports the backup into an empty instance and verifies row counts, FKs and artifact hashes match the manifest. The admin UI shows the last verified restore timestamp (328).
+
+## Monitoring (329,330)
+
+A configurable RPO warning (329) and backup-age alarm (330) are set via `TERRENCE_BACKUP_RPO_HOURS` and `TERRENCE_BACKUP_MAX_AGE_HOURS`; the health check and `/metrics` surface staleness.
+
 ## Diagnostics
 
 The doctor script checks the instance health from the host:
