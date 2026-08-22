@@ -74,6 +74,16 @@ SQLite WAL growth (310) is bounded by periodic checkpointing (311): `PRAGMA wal_
 
 DB write latency (313) is tracked via the pool metrics window. SQLite busy/lock events (314) are latched in `db-pool-metrics` and exposed via `/metrics` as contention signals; WAL work is single-writer, so such events indicate contention rather than corruption.
 
+## Scale limits
+
+SQLite scale limit (315): single-writer, WAL, no replication; recommended for small teams and dev installs. Migrate to PostgreSQL when concurrent write contention or dataset size grows. The migration wizard handles the move.
+
+Migration point (316): consider PostgreSQL when busy/lock events climb, WAL checkpoint pressure rises, or backup/restore windows lengthen. The wizard is one-click.
+
+## Post-copy verification (317-322)
+
+One-click migration (317) runs a post-copy checksum: row counts (318), aggregate hashes (319), FK verification (320), artifact references (321), and encrypted-blob decryptability (322).
+
 ## Performance
 
 Hot paths are indexed:
