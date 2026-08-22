@@ -1042,6 +1042,7 @@ export function createSqliteTarget(path: string, options: SqliteTargetOptions = 
 }
 
 /** Read-only SQLite source (tests, and the wizard's forward direction). */
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function createSqliteSource(path: string): SqliteTransferSource {
   return new SqliteTransferSource(path);
 }

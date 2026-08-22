@@ -42,6 +42,7 @@ export function buildContentSecurityPolicy(): string {
 }
 
 /** Test-only reset so a mutated DEFAULT_IMG_SRC cannot leak across tests. */
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function resetContentSecurityPolicyCache(): void {
   memoizedCsp = null;
 }

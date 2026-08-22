@@ -33,6 +33,7 @@ export async function refreshTrustedClientIpHeaders(): Promise<void> {
 }
 
 /** Synchronous read of the configured header list (for the rate-limit path). */
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function trustedClientIpHeaders(): readonly string[] {
   return cachedTrustedHeaders;
 }

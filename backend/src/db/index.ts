@@ -12,7 +12,7 @@ import * as schema from './schema';
 import { envEnabled } from '../lib/env';
 import { planJsonDirectory } from '../lib/plan-json';
 import { runLogsDirectory } from '../lib/run-logs';
-import { databaseDriver, databaseUrl, isPostgres, storageDir } from './driver';
+import { databaseUrl, isPostgres, storageDir } from './driver';
 
 // Deliberately synchronous: a top-level await here made this module a TLA
 // module, and Bun's worker threads can resolve importers while the TLA is
@@ -106,6 +106,7 @@ export function getQueryLog(): readonly string[] {
  * leak into a later breakdown. Zero cost while disabled: the hot path only
  * reads a boolean.
  */
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function setQueryLogging(enabled: boolean): void {
   queryLogEnabled = enabled;
   if (!enabled) queryLog.length = 0;
@@ -726,9 +727,11 @@ export function rawQueryAll<T>(fragment: SQL): Promise<T[]> | T[] {
   return db.all<T>(fragment);
 }
 
-// Re-export the active driver so consumers can branch on backend behavior
-// (e.g. raw-SQL dialect shims) with a single import.
-export { databaseDriver, isPostgres };
+// Re-export the active-driver flag so consumers can branch on backend
+// behavior (e.g. raw-SQL dialect shims) with a single import.
+// databaseDriver itself is not re-exported: nothing consumes it outside
+// src/db/driver.ts (knip-verified).
+export { isPostgres };
 
 /**
  * Apply the PostgreSQL schema migrations (drizzle/pg). The sqlite migrator

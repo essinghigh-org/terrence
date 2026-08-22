@@ -326,4 +326,5 @@ export function explainError(status: number, title: string, detail: string): Rea
   return { status, body: { errors: [{ status: String(status), title, detail }] } };
 }
 
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export { log };

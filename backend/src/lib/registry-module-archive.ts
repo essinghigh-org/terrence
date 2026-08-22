@@ -157,6 +157,7 @@ export async function ingestModuleArchive<T>(
   }
 }
 
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export const moduleArchiveLimits = {
   compressedBytes: MAX_MODULE_ARCHIVE_BYTES,
   expandedBytes: MAX_EXPANDED_ARCHIVE_BYTES,

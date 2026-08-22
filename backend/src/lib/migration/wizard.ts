@@ -168,6 +168,7 @@ const ACTIVE_RUN_STATUSES = new Set([
   "applying",
 ]);
 
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function storageDirectory(): string {
   return storageDir;
 }
@@ -995,6 +996,7 @@ function writeMigrationManifest(state: WizardState, verification: readonly Table
 }
 
 /** Abort a running or stalled migration; maintenance turns off immediately. */
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function abortMigration(): WizardState {
   const state = loadWizardState();
   if (state === null) throw new WizardError("No migration is in progress.");

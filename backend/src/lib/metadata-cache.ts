@@ -48,6 +48,7 @@ export function invalidateOrganizationName(orgId: string): void {
 }
 
 /** Test hook: clears the whole cache. */
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function clearMetadataCache(): void {
   store.clear();
 }

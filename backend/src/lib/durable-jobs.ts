@@ -146,6 +146,7 @@ export async function heartbeatDurableJob(job: DurableJob, now = Date.now()): Pr
   return updated.length === 1;
 }
 
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export async function isDurableJobCanceled(job: DurableJob): Promise<boolean> {
   const row = await db.query.durableJobs.findFirst({ where: eq(durableJobs.id, job.id) });
   return row?.status === "canceled";

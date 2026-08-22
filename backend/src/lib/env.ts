@@ -15,6 +15,7 @@ export function envEnabled(value: string | undefined): boolean {
   return value === "1" || value === "true";
 }
 
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function envFlag(name: string): boolean {
   return envEnabled(process.env[name]);
 }

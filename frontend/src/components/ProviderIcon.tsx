@@ -128,6 +128,7 @@ export function ProviderIcon({
 }
 
 // Test helper
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function clearProviderIconCacheForTests(): void {
   iconCache.clear();
   pending.clear();

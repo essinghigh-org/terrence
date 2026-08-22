@@ -44,6 +44,7 @@ let saltWasRecreatedOnLoad = false;
  * (startup/bootstrapping) can detect a lost or non-persistent STORAGE_DIR and
  * warn or abort. Only exported for startup diagnostics.
  */
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function didRecreateKdfSalt(): boolean {
   return saltWasRecreatedOnLoad;
 }
