@@ -133,10 +133,13 @@ static int add_path_rule(int ruleset_fd, long abi, uint64_t access, const char *
     if (fstat(dir_fd, &st) != 0 || !S_ISDIR(st.st_mode)) {
         /* Non-directory target (regular file, chardev like /dev/null):
          * the kernel rejects directory-scoped rights here with EINVAL.
-         * Intersect with exactly the rights valid on a file target. */
+         * Intersect with exactly the rights valid on a file target.
+         * RESOLVE_UNIX (ABI >= 9) is file-compatible: it gates pathname
+         * UNIX socket resolution, so keep it for socket files. */
         access &= abi_mask(LL_EXECUTE | LL_WRITE_FILE | LL_READ_FILE
                            | ((abi >= 3) ? LL_TRUNCATE : 0)
-                           | ((abi >= 5) ? LL_IOCTL_DEV : 0),
+                           | ((abi >= 5) ? LL_IOCTL_DEV : 0)
+                           | ((abi >= 9) ? LL_RESOLVE_UNIX : 0),
                            abi);
         if (access == 0) {
             /* Nothing grantable on this target; skip rather than fail. */
