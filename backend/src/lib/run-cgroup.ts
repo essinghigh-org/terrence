@@ -157,17 +157,17 @@ export function killRunCgroup(runId: string, env: NodeJS.ProcessEnv = process.en
     return false;
   }
   if (procs === "") return false;
-  // Fallback SIGKILL first: on a real kernel cgroup.kill does the same thing
-  // atomically; on a fake/test root (no kernel behind the files) the write to
-  // cgroup.kill would silently do nothing while pids listed in procs keep
-  // running. Signaling the listed pids directly is correct in both cases.
-  const killed = fallbackKillAll(path);
+  // cgroup.kill is the primary path: atomic kernel-side termination with no
+  // PID-reuse risk. Fallback SIGKILL only when cgroup.kill is unavailable
+  // (pre-5.14 kernels) so we never kill a recycled PID when the kernel op
+  // succeeds.
   try {
     writeFileSync(join(path, "cgroup.kill"), "1");
+    return true;
   } catch {
-    /* older kernels lack cgroup.kill — fallback above already covered us */
+    /* older kernels lack cgroup.kill — fall back to per-PID SIGKILL */
   }
-  return killed;
+  return fallbackKillAll(path);
 }
 
 function fallbackKillAll(path: string): boolean {

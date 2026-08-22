@@ -72,6 +72,11 @@ const REDACTED_RESPONSE_HEADERS = new Set([
   "x-powered-by",
   "forwarded",
   "via",
+  "traceparent",
+  "tracestate",
+  "x-request-id",
+  "x-forwarded-for",
+  "x-real-ip",
 ]);
 
 function responseHeaders(headers: Readonly<Headers>): Record<string, string[]> {

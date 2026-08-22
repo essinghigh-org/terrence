@@ -32,7 +32,7 @@ jobs:
             echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
             echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           else
-            pkg_version=$(node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")
+            pkg_version=$(node -p "String(require('./package.json').version ?? '0.0.0')" 2>/dev/null || echo "0.0.0")
             echo "version=${pkg_version}" >> "$GITHUB_OUTPUT"
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi

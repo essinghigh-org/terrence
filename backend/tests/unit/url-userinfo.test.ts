@@ -18,8 +18,10 @@ describe("URL userinfo rejection (kanban 18)", () => {
   });
 
   it("still accepts plain https URLs with @ elsewhere in the query", async (): Promise<void> => {
-    // The @ sits in the query string, not the authority component.
-    const result = await resolveExternalUrl("https://example.com/hook?email=a@b.example");
+    // The @ sits in the query string, not the authority component — inject a
+    // stub resolver so this test never touches the network/DNS.
+    const stub: (host: string) => Promise<readonly string[]> = async () => ["93.184.216.34"];
+    const result = await resolveExternalUrl("https://example.com/hook?email=a@b.example", false, stub);
     expect("target" in result).toBeTrue();
   });
 
