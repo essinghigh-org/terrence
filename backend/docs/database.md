@@ -68,7 +68,11 @@ Scheduled `ANALYZE` (308) runs via the database's own autovacuum/autovacuum-anal
 
 ## WAL
 
-SQLite WAL growth (310) is bounded by periodic checkpointing (see below); pathological WAL size is surfaced via database metrics and the storage health check. WAL work is single-writer, so busy events indicate contention rather than corruption.
+SQLite WAL growth (310) is bounded by periodic checkpointing (311): `PRAGMA wal_checkpoint(TRUNCATE)` runs at GC intervals. Pathological WAL size (312) is surfaced via database metrics and the storage health check with a configurable threshold.
+
+## Observability
+
+DB write latency (313) is tracked via the pool metrics window. SQLite busy/lock events (314) are latched in `db-pool-metrics` and exposed via `/metrics` as contention signals; WAL work is single-writer, so such events indicate contention rather than corruption.
 
 ## Performance
 
