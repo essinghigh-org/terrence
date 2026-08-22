@@ -14,7 +14,16 @@ import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
 import { setRequestTokenScopes, setRequestSiteAdmin } from "./lib/request-scope";
 import { applySecurityHeaders, staticCacheControl, staticMimeFor } from "./lib/security-headers";
 import { requestFinished, requestStarted } from "./lib/process-metrics";
-import { API_BODY_LIMIT_BYTES, BodyTooLargeError, isUploadPath, readTextWithLimit } from "./lib/body-limit";
+import { API_BODY_LIMIT_BYTES, BodyTooLargeError, readTextWithLimit } from "./lib/body-limit";
+import {
+  isUploadPath,
+  scimMappingPath,
+  scimSettingsPath,
+  sensitivePath,
+  sensitiveSsoPath,
+  serverEndpointPath,
+  workspaceRunHistoryPath,
+} from "./lib/endpoint-policy";
 
 const FRONTEND_INDEX = join(import.meta.dir, "../../frontend/dist/index.html");
 const FRONTEND_DIR = join(import.meta.dir, "../../frontend/dist");
@@ -243,26 +252,6 @@ const SCIM_MAPPING_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SCIM_MAPPING_MAX", 10
 // operator to tune it for a larger deployment.
 const WORKSPACE_RUN_HISTORY_RATE_LIMIT = envPositiveInt("RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX", 30);
 const WORKSPACE_RUN_HISTORY_DURATION_MS = envPositiveInt("RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS", 60_000);
-// The five SSO endpoints are sensitive no matter the verb: the protected GETs
-// mutate challenge state and the POSTs consume assertion/form-post payloads.
-// Share one set so path matching and rate limiting never drift apart.
-const SSO_AUTH_PATHS = new Set([
-  "/users/oidc/auth",
-  "/users/oidc/callback",
-  "/users/saml/auth",
-  "/users/saml/logout",
-  "/users/saml/slo",
-]);
-const sensitivePaths = new Set([
-  "/admin/initial-admin-user",
-  "/api/v2/tokens",
-  "/api/v2/users",
-  "/api/v2/users/login",
-  "/oauth/authorization",
-  "/oauth/token",
-  ...SSO_AUTH_PATHS,
-]);
-
 
 function distributedOrLocal(bucketPrefix: string): ReturnType<typeof fixedWindowContext> {
   return isPostgres ? distributedFixedWindowContext(bucketPrefix) as unknown as ReturnType<typeof fixedWindowContext> : fixedWindowContext();
@@ -329,77 +318,11 @@ function principalRateLimitKey(request: CustomRequest, server: RateLimitServer |
   return authenticatedRateLimitKey(request) ?? ipRateLimitKey(request, server);
 }
 
-function sensitiveSsoPath(request: CustomRequest): string | undefined {
-  const path = new URL(request.url).pathname;
-  if (request.method === "GET" && SSO_AUTH_PATHS.has(path)) return path;
-  return undefined;
-}
 
-function scimSettingsPath(request: CustomRequest): string | undefined {
-  const path = new URL(request.url).pathname;
-  if (path !== "/api/v2/admin/scim-settings") return undefined;
-  return request.method === "GET" || request.method === "PATCH" || request.method === "DELETE" ? path : undefined;
-}
 
-function scimMappingPath(request: CustomRequest): string | undefined {
-  const path = new URL(request.url).pathname;
-  if (request.method !== "POST" && request.method !== "PATCH" && request.method !== "DELETE") return undefined;
-  return /^\/api\/v2\/admin\/teams\/[^/]+\/scim-group-mapping$/.test(path) ? path : undefined;
-}
 
-function workspaceRunHistoryPath(request: CustomRequest): string | undefined {
-  if (request.method !== "GET") return undefined;
-  const path = new URL(request.url).pathname;
-  return /^\/api\/v2\/workspaces\/[^/]+\/runs$/.test(path) ? path : undefined;
-}
 
-/**
- * Paths that represent real server endpoints for the purpose of the global
- * rate limiter. Everything else (SPA shell routes, /assets/*, favicon) is
- * static content served by the static plugin and must never consume the API
- * bucket: a single page load fetches 30-40 hashed chunks in parallel.
- * /oauth/* and /users/* carry credentials or SSO challenge state, so they
- * stay inside the global bucket alongside the /api/* endpoints.
- */
-function serverEndpointPath(request: CustomRequest): string | undefined {
-  const path = new URL(request.url).pathname;
-  // go-tfe reads product/version headers from this one setup request and does
-  // not retry a 429, so throttling it leaves the provider permanently unable
-  // to feature-detect the server for that process.
-  if (path === "/api/v2/ping") return undefined;
-  if (
-    path.startsWith("/api/")
-    || path.startsWith("/oauth/")
-    || path.startsWith("/users/")
-    || path.startsWith("/admin/")
-  ) {
-    return path;
-  }
-  return undefined;
-}
 
-function isInvitationPath(pathname: string): boolean {
-  return pathname.startsWith("/api/v2/organizations/") && pathname.includes("/organization-invitations")
-    || pathname.startsWith("/api/v2/organization-invitations/");
-}
-
-function sensitivePath(request: CustomRequest): string | undefined {
-  const path = new URL(request.url).pathname;
-  if (request.method === "PATCH" && path === "/api/v2/account/password") return path;
-  if (isInvitationPath(path)) return "/api/v2/organization-invitations/*";
-  if (request.method !== "POST") return undefined;
-  if (sensitivePaths.has(path)) return path;
-  if (/^\/api\/v2\/notification-configurations\/[^/]+\/actions\/verify$/.test(path)) {
-    return "/api/v2/notification-configurations/*/actions/verify";
-  }
-  if (
-    /^\/api\/v2\/(?:agent-pools|teams)\/[^/]+\/authentication-tokens?$/.test(path)
-    || /^\/api\/v2\/organizations\/[^/]+\/authentication-token$/.test(path)
-  ) {
-    return "/api/v2/*/authentication-tokens";
-  }
-  return undefined;
-}
 
 export const app = new Elysia()
   .use(authPlugin)
