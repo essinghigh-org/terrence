@@ -242,11 +242,9 @@ export function serverEndpointPath(request: Readonly<{ method: string; url: stri
 }
 
 /** Whether the request targets an archive upload (keeps the 100 MiB body limit). */
-export function isUploadPath(pathname: string): boolean {
-  return pathname.endsWith("/upload") || pathname.endsWith("/json-upload");
-}
-
 /** Resolve the rate-limit class for a request (first matching registry entry wins, else global/none). */
+/** @public Intentional surface: registry consumer for future enforcement layer. */
+/** @lintignore Intentional surface: registry enforcement layer will consume this. */
 export function rateLimitClassFor(request: Readonly<{ method: string; url: string }>): RateLimitClass {
   for (const entry of ENDPOINT_POLICIES) {
     if (entry.match(request) !== undefined) return entry.rateLimit;

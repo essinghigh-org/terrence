@@ -14,7 +14,7 @@ import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
 import { setRequestTokenScopes, setRequestSiteAdmin } from "./lib/request-scope";
 import { applySecurityHeaders, staticCacheControl, staticMimeFor } from "./lib/security-headers";
 import { requestFinished, requestStarted } from "./lib/process-metrics";
-import { API_BODY_LIMIT_BYTES, BodyTooLargeError, readTextWithLimit } from "./lib/body-limit";
+import { API_BODY_LIMIT_BYTES, BodyTooLargeError, isUploadPath, readTextWithLimit } from "./lib/body-limit";
 import {
   scimMappingPath,
   scimSettingsPath,
@@ -22,7 +22,6 @@ import {
   sensitiveSsoPath,
   serverEndpointPath,
   workspaceRunHistoryPath,
-  isUploadPath,
 } from "./lib/endpoint-policy";
 
 const FRONTEND_INDEX = join(import.meta.dir, "../../frontend/dist/index.html");
