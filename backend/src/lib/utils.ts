@@ -1262,10 +1262,29 @@ export function validSignedApiURL(request: RequestWithUrl, path: string, method 
 // Private/loopback/link-local/CGNAT/cloud-metadata range checks live in
 // lib/url-safety.ts (privateHostReason); validateExternalUrl delegates there.
 
+
+/** Outbound allowlist: when TERRENCE_OUTBOUND_ALLOW_HOSTS/CIDRS restrict egress, check them. */
+function isOutboundAllowed(hostname: string, _href: string): boolean {
+  const allowHosts = (process.env.TERRENCE_OUTBOUND_ALLOW_HOSTS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (allowHosts.length > 0 && allowHosts.some((h) => hostname.toLowerCase() === h || hostname.toLowerCase().endsWith(`.${h}`))) return true;
+  // CIDR allowlist (parsed via isPrivate-style check but inverted: if host is IPv4 within CIDR, allow)
+  const allowCidrs = (process.env.TERRENCE_OUTBOUND_ALLOW_CIDRS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (allowCidrs.length > 0) {
+    try {
+      const { isIPv4InCidr } = require("./url-safety") as { isIPv4InCidr?: (host: string, cidr: string) => boolean };
+      if (typeof isIPv4InCidr === "function" && allowCidrs.some((cidr) => isIPv4InCidr(hostname, cidr))) return true;
+    } catch { /* best-effort */ }
+  }
+  return false;
+}
+
 export function validateExternalUrl(url: string, allowPrivate = false): string | null {
   try {
     const parsed = new URL(url);
     if (!["http:", "https:"].includes(parsed.protocol)) return "Only http and https URLs are allowed";
+    // 41-44: outbound allowlist/CIDR/DNS — when TERRENCE_OUTBOUND_ALLOW_HOSTS or CIDRS gate private access,
+    // private-host denial is scoped to that policy; otherwise the global allowPrivate flag applies.
+    if (!allowPrivate && isOutboundAllowed(parsed.hostname, parsed.href)) return null;
     if (!allowPrivate) {
       const reason = privateHostReason(parsed.hostname);
       if (reason !== null) return reason;

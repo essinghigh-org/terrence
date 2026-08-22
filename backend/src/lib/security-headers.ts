@@ -18,10 +18,14 @@ const DEFAULT_IMG_SRC = ["'self'", "data:"];
 let memoizedCsp: string | null = null;
 
 /** Build the CSP (memoized; the policy is static per process). */
-export function buildContentSecurityPolicy(): string {
-  if (memoizedCsp !== null) return memoizedCsp;
+export function buildContentSecurityPolicy(options?: Readonly<{ strict?: boolean }>): string {
+  const strict = options?.strict ?? process.env.TERRENCE_CSP_STRICT === "1";
+  if (memoizedCsp !== null && !strict) return memoizedCsp;
   const imgSrc = DEFAULT_IMG_SRC.join(" ");
-  memoizedCsp = [
+  const styleSrc = strict
+    ? "style-src 'self'"
+    : "style-src 'self' 'unsafe-inline'";
+  const policy = [
     "default-src 'self'",
     "base-uri 'none'",
     "object-src 'none'",
@@ -33,12 +37,10 @@ export function buildContentSecurityPolicy(): string {
     "media-src 'self'",
     "font-src 'self'",
     "script-src 'self'",
-    // See notes: theme colors go through the CSSOM (not blocked), but React
-    // style props like DependencyGraph's borderLeftColor are also CSSOM writes;
-    // keeping unsafe-inline here without touching script-src is intentional.
-    "style-src 'self' 'unsafe-inline'",
+    styleSrc,
   ].join("; ");
-  return memoizedCsp;
+  if (!strict) memoizedCsp = policy;
+  return policy;
 }
 
 /** Test-only reset so a mutated DEFAULT_IMG_SRC cannot leak across tests. */
