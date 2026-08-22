@@ -20,13 +20,11 @@ type Route = Readonly<{ method: string; path: string }>;
 const routes = (app as unknown as { routes: Route[] }).routes;
 
 function tagForPath(path: string): string[] {
-  // Derive a tag from the first two path segments so the generated spec groups
-  // sensibly (organizations, workspaces, runs, …). Frontend catch-alls get no tag.
   if (path.startsWith("/api/v2/")) {
     const seg = path.slice("/api/v2/".length).split("/")[0] ?? "misc";
     return [seg];
   }
-  if (path.startsWith("/api/v1/") || path.startsWith("/api/v1/")) return ["system"];
+  if (path.startsWith("/api/v1/")) return ["system"];
   if (path.startsWith("/api/")) return ["api"];
   if (path === "/openapi.json") return [];
   return [];
@@ -36,6 +34,19 @@ function tagForPath(path: string): string[] {
 // incrementally; today every operation gets a generic JSON:API response stub
 // so the contract is still machine-readable and testable against registration.
 const paths: Record<string, Record<string, unknown>> = {};
+const usedOperationIds = new Set<string>();
+
+function uniqueOperationId(base: string): string {
+  if (!usedOperationIds.has(base)) {
+    usedOperationIds.add(base);
+    return base;
+  }
+  let suffix = 2;
+  while (usedOperationIds.has(`${base}-${String(suffix)}`)) suffix += 1;
+  const id = `${base}-${String(suffix)}`;
+  usedOperationIds.add(id);
+  return id;
+}
 
 for (const route of routes) {
   const { method, path } = route;
@@ -51,14 +62,20 @@ for (const route of routes) {
   ) {
     continue;
   }
-  // Elysia may register HEAD/OPTIONS automatically; keep only the declared verbs.
+  // Keep only the verbs that are actually declared; drop auto-registered ones.
   const m = method.toLowerCase();
-  if (!["get", "post", "put", "patch", "delete", "options", "head"].includes(m)) continue;
+  if (!["get", "post", "put", "patch", "delete"].includes(m)) continue;
   // Skip internal plugin routes (openapi's own /openapi/json if present).
   if (path.startsWith("/openapi")) continue;
 
-  const openApiPath = path;
-  const operationId = `${m}${openApiPath.replaceAll(/[^a-zA-Z0-9]+/g, "-").replaceAll(/^-|-$/g, "")}` || `${m}-root`;
+  // Convert Elysia :param syntax to OAS {param} and declare path parameters.
+  const paramNames: string[] = [];
+  const openApiPath = path.replaceAll(/:([A-Za-z0-9_]+)/g, (_m: string, name: string): string => {
+    paramNames.push(name);
+    return `{${name}}`;
+  });
+  const slug = openApiPath.replaceAll(/[^a-zA-Z0-9]+/g, "-").replaceAll(/^-|-$/g, "");
+  const operationId = uniqueOperationId(slug === "" ? `${m}-root` : `${m}-${slug}`);
   const tags = tagForPath(openApiPath);
 
   paths[openApiPath] ??= {};
@@ -68,6 +85,16 @@ for (const route of routes) {
   paths[openApiPath]![m] = {
     operationId,
     ...(tags.length > 0 ? { tags } : {}),
+    ...(paramNames.length > 0
+      ? {
+          parameters: paramNames.map((name) => ({
+            name,
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          })),
+        }
+      : {}),
     summary: `${m.toUpperCase()} ${openApiPath}`,
     responses: {
       "200": {

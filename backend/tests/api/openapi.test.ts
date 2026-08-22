@@ -22,37 +22,63 @@ describe("openapi contract", () => {
     expect(typeof paths).toBe("object");
   });
 
-  it("covers every registered API route", async () => {
-    const { app: liveApp } = await import("../../src/app");
+  it("covers every registered route", () => {
     type Route = Readonly<{ method: string; path: string }>;
-    const routes = (liveApp as unknown as { routes: Route[] }).routes;
-    const apiRoutes = routes.filter(
-      (r) =>
-        r.path.startsWith("/api/") ||
-        r.path.startsWith("/oauth/") ||
-        r.path.startsWith("/admin/"),
-    );
+    const routes = (app as unknown as { routes: Route[] }).routes;
+    const apiRoutes = routes.filter((r): boolean => {
+      if (
+        r.path === "/" ||
+        r.path === "/login" ||
+        r.path === "/register" ||
+        r.path === "/app" ||
+        r.path === "/app/*" ||
+        r.path === "*" ||
+        r.path === "/*" ||
+        r.path === "/404.html" ||
+        r.path === "/index.html" ||
+        r.path === "" ||
+        r.path === "/openapi.json" ||
+        r.path.startsWith("/openapi")
+      ) {
+        return false;
+      }
+      const m = r.method.toLowerCase();
+      if (!["get", "post", "put", "patch", "delete"].includes(m)) return false;
+      return true;
+    });
+    const toOasPath = (p: string): string => p.replaceAll(/:([A-Za-z0-9_]+)/g, "{$1}");
     const missing: string[] = [];
     for (const route of apiRoutes) {
       const m = route.method.toLowerCase();
-      if (!["get", "post", "put", "patch", "delete"].includes(m)) continue;
-      const pathEntry = paths[route.path];
+      const oasPath = toOasPath(route.path);
+      const pathEntry = paths[oasPath];
       if (pathEntry === undefined || pathEntry[m] === undefined) {
-        missing.push(`${route.method} ${route.path}`);
+        missing.push(`${route.method} ${route.path} -> ${oasPath}`);
       }
     }
     expect(missing).toEqual([]);
   });
 
-  it("matches the checked-in artifact", () => {
+  it("matches the checked-in artifact exactly", () => {
     const artifact = JSON.parse(readFileSync(join(import.meta.dir, "../../openapi.json"), "utf8")) as Record<string, unknown>;
-    expect(spec.openapi).toBe(artifact.openapi);
-    expect(Object.keys(paths).length).toBe(Object.keys(artifact.paths as object).length);
+    expect(spec).toEqual(artifact);
   });
 
   it("has no frontend catch-alls in the contract", () => {
     expect(paths["/*"]).toBeUndefined();
     expect(paths["*"]).toBeUndefined();
     expect(paths["/"]).toBeUndefined();
+  });
+
+  it("uses OAS templated paths and declares path parameters", () => {
+    for (const [path, methods] of Object.entries(paths)) {
+      expect(path.includes(":")).toBe(false);
+      for (const op of Object.values(methods)) {
+        const params = (op as { parameters?: { in: string }[] }).parameters;
+        if (path.includes("{")) {
+          expect(params?.some((p) => p.in === "path")).toBe(true);
+        }
+      }
+    }
   });
 });
