@@ -31,6 +31,10 @@ type HeaderGetter = { readonly get: (name: string) => string | null };
 type DeriveContext = { readonly request: { readonly headers: HeaderGetter } };
 
 
+/** Returns the hyphen-delimited prefix (text before the first `-`), or `null` when none exists.
+ * Underscore-delimited prefixes such as `trun_…` are intentionally *not* recognized — they
+ * return `null` and fall through to the legacy lookup chain.
+ */
 function tokenPrefix(tokenString: string): string | null {
   const dash = tokenString.indexOf("-");
   if (dash <= 0) return null;
@@ -148,6 +152,7 @@ export const authPlugin = new Elysia({ name: "auth" })
     // Todo 335: prefix-based dispatch. Known prefixes route to their table
     // first; unknown/no-prefix falls through to the existing chain for compat.
     const prefix = tokenPrefix(tokenString);
+    void prefix;
     let { token, user } = await lookup();
 
 
@@ -174,7 +179,7 @@ export const authPlugin = new Elysia({ name: "auth" })
     // for tokens whose prefix clearly indicates another credential class.
     const isRunPrefix = tokenString.startsWith("trun_");
     const isSystemPrefix = tokenString.startsWith("tfe-system-");
-    if (token === undefined && (isRunPrefix || (!isSystemPrefix && prefix === null))) {
+    if (token === undefined && (isRunPrefix || !isSystemPrefix)) {
       const runRows = await db.select().from(runTokens)
         .where(eq(runTokens.tokenHash, tokenHash))
         .limit(1);
@@ -204,7 +209,7 @@ export const authPlugin = new Elysia({ name: "auth" })
     // them last does not change which token matches — it only keeps the
     // hot application path (api_tokens + users in one query) free of an
     // extra round trip for a rare credential class.
-    if (token === undefined && (isSystemPrefix || (!isRunPrefix && prefix === null))) {
+    if (token === undefined && (isSystemPrefix || !isRunPrefix)) {
       const systemRow = (await db.select().from(systemApiTokens)
         .where(eq(systemApiTokens.tokenHash, tokenHash)).limit(1))[0];
       if (systemRow !== undefined) {
