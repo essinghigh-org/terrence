@@ -241,7 +241,8 @@ export function serverEndpointPath(request: Readonly<{ method: string; url: stri
   return undefined;
 }
 
-/** Whether the request targets an archive upload (keeps the 100 MiB body limit). */
+/** Whether the request targets an archive upload (keeps the 100 MiB body limit). */export { isUploadPath } from "./body-limit";
+
 /** Resolve the rate-limit class for a request (first matching registry entry wins, else global/none). */
 /** @public Intentional surface: registry consumer for future enforcement layer. */
 /** @lintignore Intentional surface: registry enforcement layer will consume this. */
