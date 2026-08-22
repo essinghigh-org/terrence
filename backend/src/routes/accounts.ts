@@ -989,6 +989,20 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     });
     return { data: browserSessionResources(sessions, token?.id ?? null) };
   })
+  .delete("/api/v2/account/sessions", async ({ user, token, set }: AuthReqCtx): Promise<unknown> => {
+    if (user === null || user === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    await db.update(refreshSessions)
+      .set({ revokedAt: Date.now() })
+      .where(and(eq(refreshSessions.userId, user.id), isNull(refreshSessions.revokedAt)));
+    if (token !== null && token !== undefined) {
+      await db.delete(apiTokens).where(and(eq(apiTokens.userId, user.id), ne(apiTokens.id, token.id)));
+    }
+    (set as { status: number }).status = 204;
+    return undefined;
+  })
   .delete("/api/v2/account/sessions/:family_id", async ({ params, request, user, token, set }: AuthReqCtx): Promise<unknown> => {
     const familyId = params?.family_id ?? "";
     if (user === null || user === undefined || familyId === "") {
