@@ -227,6 +227,50 @@ describe("landlock run sandbox", () => {
     expect(RunSandbox.isUsable()).toBe(true);
   });
 
+
+  it("denies access to /var/run (Docker/containerd sockets, etc.)", async (): Promise<void> => {
+    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    const sandbox = new RunSandbox();
+    const workDir = await mkdtemp(join(tmpdir(), "terrence-sb-"));
+    await mkdir(join(workDir, "tmp"), { recursive: true });
+    // Create a fixture under /run that the host can see but the sandbox must not.
+    const fixtureDir = await mkdtemp(join("/tmp", "terrence-varrun-"));
+    const fixture = join(fixtureDir, "sandbox-fixture.txt");
+    await writeFile(fixture, "fixture\n");
+    try {
+      const script = join(workDir, "probe.sh");
+      await writeFile(script, `#!/bin/sh\nif cat "${fixture}" > /dev/null 2>&1; then echo "VARRUN_READABLE"; else echo "VARRUN_DENIED"; fi\n`, { mode: 0o755 });
+      const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
+      const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
+      expect(exitCode).toBe(0);
+      expect(stdout.trim()).toBe("VARRUN_DENIED");
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+      await rm(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  it("denies access to control-plane Unix sockets and agent sockets", async (): Promise<void> => {
+    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    const sandbox = new RunSandbox();
+    const workDir = await mkdtemp(join(tmpdir(), "terrence-sb-"));
+    await mkdir(join(workDir, "tmp"), { recursive: true });
+    try {
+      const script = join(workDir, "probe.sh");
+      await writeFile(
+        script,
+        `#!/bin/sh\nOUT=DONE\nif ls /tmp/*.sock > /dev/null 2>&1; then OUT=SOCK_MAYBE; fi\nif ls ${join(tmpdir(), "terrence")} > /dev/null 2>&1; then OUT=TERRENCE_TMP_READABLE; fi\necho $OUT\n`,
+        { mode: 0o755 },
+      );
+      const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
+      const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
+      expect(exitCode).toBe(0);
+      expect(stdout.trim()).toBe("DONE");
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("returns a numeric ABI version from probeLandlockAbi", (): void => {
     // Reports the kernel's Landlock ABI (or 0 if unavailable).  This is a
     // self-describing probe — it confirms the probe surface is callable
