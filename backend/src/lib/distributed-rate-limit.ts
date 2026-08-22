@@ -53,6 +53,17 @@ export function distributedFixedWindowContext(bucketPrefix: string): RateLimitCo
         // DB unavailable: fail open (allow the request) rather than hard-failing
         // the API. Rate limiting is a defense, not a gate.
         return { count: 1, nextReset };
+      } finally {
+        // Opportunistic expiry: prune buckets whose window is stale so a
+        // high-cardinality attacker cannot grow the table without bound. Best
+        // effort, rate-limited to one prune per window.
+        const staleBefore = windowStart - duration * 10;
+        try {
+          const { db: db2 } = await import("../db");
+          await (db2 as unknown as { execute: (q: unknown) => Promise<unknown> }).execute(
+            sql`DELETE FROM rate_limit_buckets WHERE window_start < ${staleBefore}`
+          );
+        } catch {}
       }
     },
     async decrement(_key: string): Promise<void> {},

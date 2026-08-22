@@ -525,10 +525,9 @@ export const app = new Elysia()
     },
     skip: (request: CustomRequest): boolean => scimSettingsPath(request) === undefined,
   }))
-  // Both SCIM limiters use the process-local fixedWindowContext store, so they
-  // enforce per-instance bounds: single-node deployments get the documented
-  // limits, multi-replica deployments should account for the worker count
-  // (each replica carries its own window).
+  // SCIM limiters are distributed on Postgres (shared bucket table) so all
+  // replicas share the same window; on SQLite they remain process-local (single
+  // instance, no cross-replica drift).
   .use(rateLimit({
     context: distributedOrLocal("scim-mapping"),
     duration: 60_000,

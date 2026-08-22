@@ -57,12 +57,21 @@ export function rememberRateLimitPrincipal(request: object, token: Readonly<Auth
 
 /** Count API tokens still stored as plaintext (pre-hash migration). Used by admin diagnostics (todo 332). */
 export async function countLegacyPlaintextTokens(): Promise<number> {
-  const rows = await db.select({ token: apiTokens.token }).from(apiTokens);
+  // Hashed tokens are exactly 64 hex chars (SHA-256 hex); anything else is legacy plaintext.
+  // Paginated scan keeps memory bounded even on a large token table; GLOB/~ dialect split
+  // would require backend branching, so a single portable path is kept.
   let count = 0;
-  for (const row of rows) {
-    const v = row.token;
-    // Hashed tokens are exactly 64 hex chars (SHA-256 hex); anything else is legacy plaintext.
-    if (v.length !== 64 || !/^[0-9a-f]{64}$/i.test(v)) count += 1;
+  let offset = 0;
+  const pageSize = 500;
+  while (true) {
+    const page = await db.select({ token: apiTokens.token }).from(apiTokens).limit(pageSize).offset(offset);
+    if (page.length === 0) break;
+    for (const row of page) {
+      const v = row.token;
+      if (v.length !== 64 || !/^[0-9a-f]{64}$/i.test(v)) count += 1;
+    }
+    if (page.length < pageSize) break;
+    offset += pageSize;
   }
   return count;
 }
@@ -71,18 +80,25 @@ export async function countLegacyPlaintextTokens(): Promise<number> {
 /** Bulk-migrate any remaining plaintext api_tokens to SHA-256 hashes (todo 333).
  * Idempotent: already-hashed rows are skipped. Returns the number migrated. */
 export async function migrateLegacyPlaintextTokens(): Promise<number> {
-  const rows = await db.select({ id: apiTokens.id, token: apiTokens.token }).from(apiTokens);
   let migrated = 0;
-  for (const row of rows) {
-    const v = row.token;
-    if (v.length === 64 && /^[0-9a-f]{64}$/i.test(v)) continue;
-    const hashed = hashAuthenticationToken(v);
-    // Guard against accidental double-hash if two migrators race on the same row.
-    const current = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, row.id) });
-    if (current === undefined) continue;
-    if (current.token.length === 64 && /^[0-9a-f]{64}$/i.test(current.token)) continue;
-    await db.update(apiTokens).set({ token: hashed }).where(eq(apiTokens.id, row.id));
-    migrated += 1;
+  let offset = 0;
+  const pageSize = 200;
+  while (true) {
+    const page = await db.select({ id: apiTokens.id, token: apiTokens.token }).from(apiTokens).limit(pageSize).offset(offset);
+    if (page.length === 0) break;
+    for (const row of page) {
+      const v = row.token;
+      if (v.length === 64 && /^[0-9a-f]{64}$/i.test(v)) continue;
+      const hashed = hashAuthenticationToken(v);
+      // Guard against accidental double-hash if two migrators race on the same row.
+      const current = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, row.id) });
+      if (current === undefined) continue;
+      if (current.token.length === 64 && /^[0-9a-f]{64}$/i.test(current.token)) continue;
+      await db.update(apiTokens).set({ token: hashed }).where(eq(apiTokens.id, row.id));
+      migrated += 1;
+    }
+    if (page.length < pageSize) break;
+    offset += pageSize;
   }
   return migrated;
 }
