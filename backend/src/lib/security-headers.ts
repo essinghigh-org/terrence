@@ -53,6 +53,8 @@ export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   // Clickjacking: CSP frame-ancestors is the modern control; keep the legacy
   // X-Frame-Options for older browsers that ignore frame-ancestors.
   "X-Frame-Options": "DENY",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Resource-Policy": "same-origin",
   // Authenticated app: don't want search engines referencing it.
   "X-Robots-Tag": "noindex, nofollow, noarchive",
   // Browser capabilities Terrence does not use (clipboard deliberately left
