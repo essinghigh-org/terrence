@@ -773,7 +773,7 @@ async function streamLog(
 }
 
 function buildSanitizedEnv(
-  workspaceVars: readonly { readonly key: string; readonly value: string; readonly category: string }[],
+  workspaceVars: readonly { readonly key: string; readonly value: string; readonly category: string; readonly sensitive?: boolean }[],
   extraEnv?: Readonly<Record<string, string>>,
 ): Record<string, string> {
   const allowedKeys = ["PATH", "HOME", "TMPDIR", "USER", "LANG", "LC_ALL", "SHELL"];
@@ -792,6 +792,8 @@ function buildSanitizedEnv(
     }
     if (v.category === "env") {
       env[v.key] = v.value;
+    } else if (v.category === "terraform" && v.sensitive === true) {
+      env[`TF_VAR_${v.key}`] = v.value;
     }
   }
 
@@ -810,13 +812,14 @@ type ExecutionVariable = {
   category: string;
   hcl: boolean;
   priority: boolean;
+  sensitive: boolean;
 };
 
 export async function executionVariables(
   workspaceId: string,
   orgId: string,
   projectId: string | null,
-  workspaceVariableOverrides?: readonly Readonly<Pick<ExecutionVariable, "key" | "value" | "category" | "hcl">>[],
+  workspaceVariableOverrides?: readonly Readonly<Pick<ExecutionVariable, "key" | "value" | "category" | "hcl" | "sensitive">>[],
 ): Promise<ExecutionVariable[]> {
   const [workspaceVars, workspaceLinks, projectLinks, orgVariableSets] = await Promise.all([
     workspaceVariableOverrides === undefined
@@ -861,19 +864,19 @@ export async function executionVariables(
   // 1. Non-priority variable set variables first
   for (const variable of setVars) {
     if (!prioritySetIds.has(variable.variableSetId)) {
-      effective.set(`${variable.category}:${variable.key}`, { ...variable, value: await decryptIfNeeded(variable), hcl: false, priority: false });
+      effective.set(`${variable.category}:${variable.key}`, { ...variable, value: await decryptIfNeeded(variable), hcl: false, priority: false, sensitive: variable.sensitive === true });
     }
   }
 
   // 2. Workspace variables override non-priority sets
   for (const variable of workspaceVars) {
-    effective.set(`${variable.category}:${variable.key}`, { ...variable, value: await decryptIfNeeded(variable), hcl: variable.hcl === true, priority: false });
+    effective.set(`${variable.category}:${variable.key}`, { ...variable, value: await decryptIfNeeded(variable), hcl: variable.hcl === true, priority: false, sensitive: variable.sensitive === true });
   }
 
   // 3. Priority variable set variables override everything
   for (const variable of setVars) {
     if (prioritySetIds.has(variable.variableSetId)) {
-      effective.set(`${variable.category}:${variable.key}`, { ...variable, value: await decryptIfNeeded(variable), hcl: false, priority: true });
+      effective.set(`${variable.category}:${variable.key}`, { ...variable, value: await decryptIfNeeded(variable), hcl: false, priority: true, sensitive: variable.sensitive === true });
     }
   }
 
@@ -1391,11 +1394,12 @@ async function executeRunImpl(runId: string): Promise<void> {
     const upgradeTarget = noCodeUpgradeTarget(configuration?.source ?? null);
     const proposedWorkspaceVariables = upgradeTarget === undefined
       ? undefined
-      : ((run.variables ?? []) as readonly NoCodeUpgradeRunVariable[]).map((variable): Readonly<Pick<ExecutionVariable, "key" | "value" | "category" | "hcl">> => ({
+      : ((run.variables ?? []) as readonly NoCodeUpgradeRunVariable[]).map((variable): Readonly<Pick<ExecutionVariable, "key" | "value" | "category" | "hcl" | "sensitive">> => ({
           key: variable.key,
           value: variable.value,
           category: variable.category === "env" ? "env" : "terraform",
           hcl: variable.hcl === true,
+          sensitive: false,
         }));
     const vars = await executionVariables(
       workspace.id,
@@ -1477,6 +1481,7 @@ async function executeRunImpl(runId: string): Promise<void> {
       }
       for (const variable of vars) {
         if (variable.category === "terraform" && variable.priority) {
+          if (variable.sensitive) continue;
           planArgs.push(`-var=${variable.key}=${variable.hcl ? variable.value : JSON.stringify(variable.value)}`);
         }
       }
