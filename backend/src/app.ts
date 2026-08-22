@@ -5,6 +5,8 @@ import { join } from "path";
 import { readFileSync } from "node:fs";
 import { envEnabled } from "./lib/env";
 import { authPlugin, authenticatedRateLimitKey } from "./auth";
+import { distributedFixedWindowContext } from "./lib/distributed-rate-limit";
+import { isPostgres } from "./db/driver";
 import { syncedTrustedClientIp } from "./lib/client-ip";
 import { oauthPlugin } from "./oauth";
 import { log } from "./lib/log";
@@ -261,6 +263,11 @@ const sensitivePaths = new Set([
   ...SSO_AUTH_PATHS,
 ]);
 
+
+function distributedOrLocal(bucketPrefix: string): ReturnType<typeof fixedWindowContext> {
+  return isPostgres ? distributedFixedWindowContext(bucketPrefix) as unknown as ReturnType<typeof fixedWindowContext> : fixedWindowContext();
+}
+
 function fixedWindowContext(): RateLimitContext {
   const counts = new Map<string, number>();
   let duration = SENSITIVE_RATE_DURATION_MS;
@@ -455,7 +462,7 @@ export const app = new Elysia()
     skip: (request: CustomRequest): boolean => serverEndpointPath(request) === undefined,
   }))
   .use(rateLimit({
-    context: fixedWindowContext(),
+    context: distributedOrLocal("workspace-run-history"),
     duration: WORKSPACE_RUN_HISTORY_DURATION_MS,
     max: WORKSPACE_RUN_HISTORY_RATE_LIMIT,
     generator: (request: CustomRequest, server: RateLimitServer | null): string => {
@@ -471,7 +478,7 @@ export const app = new Elysia()
     skip: (request: CustomRequest): boolean => workspaceRunHistoryPath(request) === undefined,
   }))
   .use(rateLimit({
-    context: fixedWindowContext(),
+    context: distributedOrLocal("sensitive"),
     duration: SENSITIVE_RATE_DURATION_MS,
     max: SENSITIVE_RATE_LIMIT,
     generator: (request: CustomRequest, server: RateLimitServer | null): string => {
@@ -487,7 +494,7 @@ export const app = new Elysia()
     skip: (request: CustomRequest): boolean => sensitivePath(request) === undefined,
   }))
   .use(rateLimit({
-    context: fixedWindowContext(),
+    context: distributedOrLocal("sso-get"),
     duration: SENSITIVE_RATE_DURATION_MS,
     max: SSO_GET_RATE_LIMIT,
     generator: (request: CustomRequest, server: RateLimitServer | null): string => {
@@ -503,7 +510,7 @@ export const app = new Elysia()
     skip: (request: CustomRequest): boolean => sensitiveSsoPath(request) === undefined,
   }))
   .use(rateLimit({
-    context: fixedWindowContext(),
+    context: distributedOrLocal("scim-settings"),
     duration: 1_000,
     max: SCIM_SETTINGS_RATE_LIMIT,
     generator: (request: CustomRequest, server: RateLimitServer | null): string => {
@@ -523,7 +530,7 @@ export const app = new Elysia()
   // limits, multi-replica deployments should account for the worker count
   // (each replica carries its own window).
   .use(rateLimit({
-    context: fixedWindowContext(),
+    context: distributedOrLocal("scim-mapping"),
     duration: 60_000,
     max: SCIM_MAPPING_RATE_LIMIT,
     generator: (request: CustomRequest, server: RateLimitServer | null): string => {

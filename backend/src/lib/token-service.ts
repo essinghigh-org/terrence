@@ -44,6 +44,7 @@ export function opaqueToken(prefix: string): string {
 /** @public Intentional surface: benchmark/test hook or cross-module API. */
 export const TOKEN_FORMAT_VERSION = 1 as const;
 
+/** @lintignore Intentional surface: operator tooling (todo 6/66), consumed out-of-tree. */
 export function tokenFingerprint(token: string): string {
   return hashAuthenticationToken(token).slice(-6);
 }
