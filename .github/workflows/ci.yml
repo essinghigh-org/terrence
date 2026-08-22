@@ -208,4 +208,3 @@ jobs:
           # vite preview serves the built dist without an API; the static spec
           # only hits unauthenticated routes and is the real gate.
           npx playwright test -c playwright-static.config.ts 2>&1 | tail -n 80
-        continue-on-error: true
