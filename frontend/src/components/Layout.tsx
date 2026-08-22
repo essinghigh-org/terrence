@@ -561,7 +561,14 @@ export function Layout({
     }
 
     if (inAccountSettings) {
-      const links = mustChangePassword === false ? [
+      const links = mustChangePassword === true ? [
+        {
+          active: true,
+          icon: Lock,
+          label: "Password",
+          to: "/app/account#password",
+        },
+      ] as const : [
         {
           active: location.hash === "" || location.hash === "#profile",
           icon: UserRound,
@@ -591,13 +598,6 @@ export function Layout({
           icon: KeyRound,
           label: "API tokens",
           to: "/app/account#api-tokens",
-        },
-      ] as const : [
-        {
-          active: true,
-          icon: Lock,
-          label: "Password",
-          to: "/app/account#password",
         },
       ] as const;
 
