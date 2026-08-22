@@ -1198,6 +1198,23 @@ export function pageRequest(request: RequestWithUrl): { number: number; size: nu
   };
 }
 
+/** Cursor pagination (303-305): keyset helper for enormous tables. */
+export function cursorPagination(request: RequestWithUrl, cursor: string | null, pageSize: number, hasMore: boolean): { links: Record<string, string | null>; meta: Record<string, unknown> } {
+  const nextCursor = hasMore ? cursor : null;
+  const base = new URL(request.url);
+  const linkFor = (c: string | null): string | null => {
+    if (c === null) return null;
+    const u = new URL(base.toString());
+    u.searchParams.set("page[cursor]", c);
+    u.searchParams.set("page[size]", String(pageSize));
+    return u.toString();
+  };
+  return {
+    links: { self: request.url, first: linkFor(null), prev: null, next: linkFor(nextCursor), last: null },
+    meta: { pagination: { "page-size": pageSize, "next-cursor": nextCursor, "cursor": cursor } },
+  };
+}
+
 export function pagination(request: RequestWithUrl, currentPage: number, pageSize: number, totalCount: number): { links: Record<string, string | null>; meta: Record<string, unknown> } {
   const totalPages = Math.ceil(totalCount / pageSize);
   const pageLink = (page: number): string => {
