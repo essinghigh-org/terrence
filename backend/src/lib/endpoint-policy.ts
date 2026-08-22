@@ -31,10 +31,13 @@ export type EndpointPolicy = Readonly<{
   id: string;
   /** Human-readable description for docs / audit. */
   description: string;
-  /** Match predicate — replaces the scattered path Sets/regexes in app.ts. */
-  match: (request: Readonly<{ method: string; url: string }>) => boolean;
-  /** Canonical label returned by the classifier (what rate-limit keys group on). */
-  label: string;
+  /**
+   * Match predicate. Returns the canonical rate-limit label when the request
+   * matches this policy, or undefined otherwise. Returning the label directly
+   * lets classifiers derive from the registry instead of re-encoding the same
+   * Set/regex in two places (which would drift).
+   */
+  match: (request: Readonly<{ method: string; url: string }>) => string | undefined;
   rateLimit: RateLimitClass;
   bodyLimit: BodyLimitClass;
   auth: AuthClass;
@@ -77,7 +80,14 @@ function pathnameOf(request: Readonly<{ url: string }>): string {
   try {
     return new URL(request.url).pathname;
   } catch {
-    return request.url;
+    // Relative or malformed URL (e.g. "/api/v2/users/login?next=/x"): keep
+    // only the path segment so Set/regex classifiers don't fail open on a
+    // query string or fragment.
+    const raw = request.url;
+    const end = Math.min(
+      ...[raw.indexOf("?"), raw.indexOf("#")].filter((index): boolean => index >= 0).concat([raw.length]),
+    );
+    return raw.slice(0, end);
   }
 }
 
@@ -98,131 +108,118 @@ export const ENDPOINT_POLICIES: readonly EndpointPolicy[] = [
   {
     id: "sensitive",
     description: "Credential-bearing or secret-issuing endpoints (login, token issuance, invitation).",
-    label: "sensitive",
     rateLimit: "sensitive",
     bodyLimit: "api",
     auth: "public",
     audit: "auth",
     secretResponse: true,
-    match: (request): boolean => {
+    match: (request): string | undefined => {
       const path = pathnameOf(request);
-      if (request.method === "PATCH" && path === "/api/v2/account/password") return true;
-      if (isInvitationPath(path)) return true;
-      if (request.method !== "POST") return false;
-      if (SENSITIVE_SET.has(path)) return true;
-      if (/^\/api\/v2\/notification-configurations\/[^/]+\/actions\/verify$/.test(path)) return true;
+      if (request.method === "PATCH" && path === "/api/v2/account/password") return path;
+      if (isInvitationPath(path)) return "/api/v2/organization-invitations/*";
+      if (request.method !== "POST") return undefined;
+      if (SENSITIVE_SET.has(path)) return path;
+      if (/^\/api\/v2\/notification-configurations\/[^/]+\/actions\/verify$/.test(path)) {
+        return "/api/v2/notification-configurations/*/actions/verify";
+      }
       if (
         /^\/api\/v2\/(?:agent-pools|teams)\/[^/]+\/authentication-tokens?$/.test(path) ||
         /^\/api\/v2\/organizations\/[^/]+\/authentication-token$/.test(path)
       ) {
-        return true;
+        return "/api/v2/*/authentication-tokens";
       }
-      return false;
+      return undefined;
     },
   },
   {
     id: "sso-get",
     description: "SSO challenge GETs that mutate server state and need a separate bucket.",
-    label: "sso-get",
     rateLimit: "sso-get",
     bodyLimit: "api",
     auth: "public",
     audit: "auth",
     secretResponse: false,
-    match: (request): boolean => request.method === "GET" && SSO_AUTH_SET.has(pathnameOf(request)),
+    match: (request): string | undefined => {
+      const path = pathnameOf(request);
+      return request.method === "GET" && SSO_AUTH_SET.has(path) ? path : undefined;
+    },
   },
   {
     id: "scim-settings",
     description: "SCIM admin settings endpoint.",
-    label: "scim-settings",
     rateLimit: "scim-settings",
     bodyLimit: "api",
     auth: "admin",
     audit: "admin",
     secretResponse: false,
-    match: (request): boolean => {
+    match: (request): string | undefined => {
       const path = pathnameOf(request);
-      if (path !== "/api/v2/admin/scim-settings") return false;
-      return request.method === "GET" || request.method === "PATCH" || request.method === "DELETE";
+      if (path !== "/api/v2/admin/scim-settings") return undefined;
+      const m = request.method;
+      return m === "GET" || m === "PATCH" || m === "DELETE" ? path : undefined;
     },
   },
   {
     id: "scim-mapping",
     description: "SCIM group mapping mutations.",
-    label: "scim-mapping",
     rateLimit: "scim-mapping",
     bodyLimit: "api",
     auth: "admin",
     audit: "admin",
     secretResponse: false,
-    match: (request): boolean => {
-      if (request.method !== "POST" && request.method !== "PATCH" && request.method !== "DELETE") return false;
-      return /^\/api\/v2\/admin\/teams\/[^/]+\/scim-group-mapping$/.test(pathnameOf(request));
+    match: (request): string | undefined => {
+      const m = request.method;
+      if (m !== "POST" && m !== "PATCH" && m !== "DELETE") return undefined;
+      const path = pathnameOf(request);
+      return /^\/api\/v2\/admin\/teams\/[^/]+\/scim-group-mapping$/.test(path) ? path : undefined;
     },
   },
   {
     id: "workspace-run-history",
     description: "Workspace run listing (separate bucket per TFE reference).",
-    label: "workspace-run-history",
     rateLimit: "workspace-run-history",
     bodyLimit: "api",
     auth: "authenticated",
     audit: "none",
     secretResponse: false,
-    match: (request): boolean =>
-      request.method === "GET" && /^\/api\/v2\/workspaces\/[^/]+\/runs$/.test(pathnameOf(request)),
+    match: (request): string | undefined =>
+      request.method === "GET" && /^\/api\/v2\/workspaces\/[^/]+\/runs$/.test(pathnameOf(request))
+        ? "/api/v2/workspaces/*/runs"
+        : undefined,
   },
 ] as const;
 
 // ---------------------------------------------------------------------------
-// Derived classifiers — thin wrappers so app.ts calls a single import.
+// Derived classifiers — delegate to the registry so the two can never drift.
 // ---------------------------------------------------------------------------
+
+function labelFor(
+  id: EndpointPolicy["id"],
+  request: Readonly<{ method: string; url: string }>,
+): string | undefined {
+  const entry = ENDPOINT_POLICIES.find((candidate): boolean => candidate.id === id);
+  return entry?.match(request);
+}
 
 /** Canonical label for the sensitive bucket, or undefined when not sensitive. */
 export function sensitivePath(request: Readonly<{ method: string; url: string }>): string | undefined {
-  const path = pathnameOf(request);
-  // Preserve the exact label shapes the previous implementation returned so
-  // rate-limit keys stay stable across the refactor.
-  if (request.method === "PATCH" && path === "/api/v2/account/password") return path;
-  if (isInvitationPath(path)) return "/api/v2/organization-invitations/*";
-  if (request.method !== "POST") return undefined;
-  if (SENSITIVE_SET.has(path)) return path;
-  if (/^\/api\/v2\/notification-configurations\/[^/]+\/actions\/verify$/.test(path)) {
-    return "/api/v2/notification-configurations/*/actions/verify";
-  }
-  if (
-    /^\/api\/v2\/(?:agent-pools|teams)\/[^/]+\/authentication-tokens?$/.test(path) ||
-    /^\/api\/v2\/organizations\/[^/]+\/authentication-token$/.test(path)
-  ) {
-    return "/api/v2/*/authentication-tokens";
-  }
-  return undefined;
+  return labelFor("sensitive", request);
 }
 
 export function sensitiveSsoPath(request: Readonly<{ method: string; url: string }>): string | undefined {
-  const path = pathnameOf(request);
-  if (request.method === "GET" && SSO_AUTH_SET.has(path)) return path;
-  return undefined;
+  return labelFor("sso-get", request);
 }
 
 export function scimSettingsPath(request: Readonly<{ method: string; url: string }>): string | undefined {
-  const path = pathnameOf(request);
-  if (path !== "/api/v2/admin/scim-settings") return undefined;
-  const m = request.method;
-  return m === "GET" || m === "PATCH" || m === "DELETE" ? path : undefined;
+  return labelFor("scim-settings", request);
 }
 
 export function scimMappingPath(request: Readonly<{ method: string; url: string }>): string | undefined {
-  const m = request.method;
-  if (m !== "POST" && m !== "PATCH" && m !== "DELETE") return undefined;
-  const path = pathnameOf(request);
-  return /^\/api\/v2\/admin\/teams\/[^/]+\/scim-group-mapping$/.test(path) ? path : undefined;
+  return labelFor("scim-mapping", request);
 }
 
 export function workspaceRunHistoryPath(request: Readonly<{ method: string; url: string }>): string | undefined {
-  if (request.method !== "GET") return undefined;
-  const path = pathnameOf(request);
-  return /^\/api\/v2\/workspaces\/[^/]+\/runs$/.test(path) ? path : undefined;
+  return labelFor("workspace-run-history", request);
 }
 
 /**
@@ -252,7 +249,7 @@ export function isUploadPath(pathname: string): boolean {
 /** Resolve the rate-limit class for a request (first matching registry entry wins, else global/none). */
 export function rateLimitClassFor(request: Readonly<{ method: string; url: string }>): RateLimitClass {
   for (const entry of ENDPOINT_POLICIES) {
-    if (entry.match(request)) return entry.rateLimit;
+    if (entry.match(request) !== undefined) return entry.rateLimit;
   }
   return serverEndpointPath(request) !== undefined ? "global" : "none";
 }
