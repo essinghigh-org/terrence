@@ -87,6 +87,24 @@ export function applySecurityHeaders(target: Record<string, string | number>): v
   }
 }
 
+/** HSTS value when Terrence knows it is being served over HTTPS (includeSubDomains, 1 year). */
+export const HSTS_VALUE = "max-age=31536000; includeSubDomains";
+
+/** Whether a response should carry HSTS. Caller passes the request so we can check the scheme / X-Forwarded-Proto. */
+export function shouldSendHsts(request: Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }>): boolean {
+  // Import lazily to avoid circular deps at module load.
+  try {
+    const { requestIsHttps } = require("./client-ip") as { requestIsHttps: (r: unknown) => boolean };
+    return requestIsHttps(request as unknown as never);
+  } catch {
+    try {
+      return new URL(request.url).protocol === "https:";
+    } catch {
+      return false;
+    }
+  }
+}
+
 // Static assets served by the Elysia static plugin arrive without a
 // Content-Type; with X-Content-Type-Options: nosniff (and module-script MIME
 // rules) that breaks stylesheets and JS modules. Assign explicit MIME types.

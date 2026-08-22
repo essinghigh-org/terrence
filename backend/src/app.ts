@@ -12,7 +12,7 @@ import { oauthPlugin } from "./oauth";
 import { log } from "./lib/log";
 import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
 import { setRequestTokenScopes, setRequestSiteAdmin } from "./lib/request-scope";
-import { applySecurityHeaders, staticCacheControl, staticMimeFor } from "./lib/security-headers";
+import { applySecurityHeaders, HSTS_VALUE, shouldSendHsts, staticCacheControl, staticMimeFor } from "./lib/security-headers";
 import openapiJson from "../openapi.json" with { type: "json" };
 import { requestFinished, requestStarted } from "./lib/process-metrics";
 import { API_BODY_LIMIT_BYTES, BodyTooLargeError, readTextWithLimit } from "./lib/body-limit";
@@ -545,6 +545,13 @@ export const app = new Elysia()
     // permissions) + static caching. Applies to every response, so static
     // assets and SPA HTML get the same treatment as API responses.
     applySecurityHeaders(headers);
+    // HSTS (137): only when Terrence knows it is behind HTTPS, so plain HTTP
+    // dev/test deployments are not forced into HTTPS by a cached header.
+    try {
+      if (shouldSendHsts(request as unknown as { url: string; headers: { get: (name: string) => string | null } })) {
+        if (headers["Strict-Transport-Security"] === undefined) headers["Strict-Transport-Security"] = HSTS_VALUE;
+      }
+    } catch { /* HSTS is best-effort */ }
     if (headers["Content-Type"] === undefined) {
       const mime = staticMimeFor(pathname);
       if (mime !== undefined) headers["Content-Type"] = mime;
