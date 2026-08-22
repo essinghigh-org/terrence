@@ -476,6 +476,15 @@ async function readinessResponse(
       { check: "vault", status: "OK" },
     ],
   };
+  // Todo 271: include the bundled DB schema target alongside the
+  // database liveness check so /api/v1/readiness and /readyz agree.
+  // This is the packaged target; the applied state lives in the DB's
+  // `__drizzle_migrations` history (see databaseSchemaVersion()).
+  try {
+    const { databaseSchemaVersion } = await import("../db");
+    const schemaVersion = databaseSchemaVersion();
+    if (schemaVersion !== null) result.checks.push({ check: "database-schema", status: schemaVersion });
+  } catch { /* journal missing on fresh boot is not readiness failure */ }
   // Only the heartbeat path persists the node row. Every readiness probe
   // responding on load-balancer or orchestrator intervals would otherwise
   // write the row on each request for zero freshness gain (the heartbeat
@@ -759,7 +768,11 @@ export const healthRoutes = new Elysia({ name: "health" })
         (set as { status: number }).status = 503;
         return "not ready: storage degraded";
       }
-      return "ready";
+      // Todo 271: surface the applied DB schema version so operators can
+      // verify rollout completeness (e.g. mixed-version fleet check).
+      const { databaseSchemaVersion } = await import("../db");
+      const schemaVersion = databaseSchemaVersion();
+      return schemaVersion !== null ? `ready (schema ${schemaVersion})` : "ready";
     } catch {
       (set as { status: number }).status = 503;
       return "not ready";

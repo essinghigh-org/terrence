@@ -30,6 +30,17 @@ function hashToken(token: string): string {
 type HeaderGetter = { readonly get: (name: string) => string | null };
 type DeriveContext = { readonly request: { readonly headers: HeaderGetter } };
 
+
+/** Returns the hyphen-delimited prefix (text before the first `-`), or `null` when none exists.
+ * Underscore-delimited prefixes such as `trun_…` are intentionally *not* recognized — they
+ * return `null` and fall through to the legacy lookup chain.
+ */
+function tokenPrefix(tokenString: string): string | null {
+  const dash = tokenString.indexOf("-");
+  if (dash <= 0) return null;
+  return tokenString.slice(0, dash);
+}
+
 const rateLimitPrincipals = new WeakMap<object, string>();
 
 export function authenticatedRateLimitKey(request: object): string | undefined {
@@ -45,6 +56,55 @@ export function rememberRateLimitPrincipal(request: object, token: Readonly<Auth
         ? `organization:${token.orgId}`
         : undefined;
   if (principal !== undefined) rateLimitPrincipals.set(request, principal);
+}
+
+
+/** Count API tokens still stored as plaintext (pre-hash migration). Used by admin diagnostics (todo 332). */
+export async function countLegacyPlaintextTokens(): Promise<number> {
+  // Hashed tokens are exactly 64 hex chars (SHA-256 hex); anything else is legacy plaintext.
+  // Paginated scan keeps memory bounded even on a large token table; GLOB/~ dialect split
+  // would require backend branching, so a single portable path is kept.
+  let count = 0;
+  let offset = 0;
+  const pageSize = 500;
+  for (;;) {
+    const page = await db.select({ token: apiTokens.token }).from(apiTokens).orderBy(apiTokens.id).limit(pageSize).offset(offset);
+    if (page.length === 0) break;
+    for (const row of page) {
+      const v = row.token;
+      if (v.length !== 64 || !/^[0-9a-f]{64}$/i.test(v)) count += 1;
+    }
+    if (page.length < pageSize) break;
+    offset += pageSize;
+  }
+  return count;
+}
+
+
+/** Bulk-migrate any remaining plaintext api_tokens to SHA-256 hashes (todo 333).
+ * Idempotent: already-hashed rows are skipped. Returns the number migrated. */
+export async function migrateLegacyPlaintextTokens(): Promise<number> {
+  let migrated = 0;
+  let offset = 0;
+  const pageSize = 200;
+  for (;;) {
+    const page = await db.select({ id: apiTokens.id, token: apiTokens.token }).from(apiTokens).orderBy(apiTokens.id).limit(pageSize).offset(offset);
+    if (page.length === 0) break;
+    for (const row of page) {
+      const v = row.token;
+      if (v.length === 64 && /^[0-9a-f]{64}$/i.test(v)) continue;
+      const hashed = hashAuthenticationToken(v);
+      // Guard against accidental double-hash if two migrators race on the same row.
+      const current = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, row.id) });
+      if (current === undefined) continue;
+      if (current.token.length === 64 && /^[0-9a-f]{64}$/i.test(current.token)) continue;
+      await db.update(apiTokens).set({ token: hashed }).where(eq(apiTokens.id, row.id));
+      migrated += 1;
+    }
+    if (page.length < pageSize) break;
+    offset += pageSize;
+  }
+  return migrated;
 }
 
 export const authPlugin = new Elysia({ name: "auth" })
@@ -89,11 +149,18 @@ export const authPlugin = new Elysia({ name: "auth" })
       const row = rows[0];
       return { token: row?.token, user: row?.user ?? null };
     };
+    // Todo 335: prefix-based dispatch. Known prefixes route to their table
+    // first; unknown/no-prefix falls through to the existing chain for compat.
+    const prefix = tokenPrefix(tokenString);
+    void prefix;
     let { token, user } = await lookup();
 
 
-    // Legacy fallback: re-hash plaintext token on successful use
-    if (token === undefined) {
+    // Legacy fallback: re-hash plaintext token on successful use (todo 331).
+    // Gated behind TERRENCE_ALLOW_LEGACY_TOKENS (default 1 for compat). Set to
+    // "0" once the legacy counter reads zero to fully remove the plaintext path.
+    const allowLegacyTokens = process.env.TERRENCE_ALLOW_LEGACY_TOKENS !== "0";
+    if (allowLegacyTokens && token === undefined) {
       const legacyToken = await db.query.apiTokens.findFirst({
         where: eq(apiTokens.token, tokenString),
       });
@@ -108,7 +175,11 @@ export const authPlugin = new Elysia({ name: "auth" })
 
     // Run tokens: ephemeral worker credentials (the reference format run-token model). They do
     // not map to a user/team/org token row; the run row carries the scope.
-    if (token === undefined) {
+    // Todo 335: prefix dispatch - run tokens are `trun_`, so skip this lookup
+    // for tokens whose prefix clearly indicates another credential class.
+    const isRunPrefix = tokenString.startsWith("trun_");
+    const isSystemPrefix = tokenString.startsWith("tfe-system-");
+    if (token === undefined && (isRunPrefix || !isSystemPrefix)) {
       const runRows = await db.select().from(runTokens)
         .where(eq(runTokens.tokenHash, tokenHash))
         .limit(1);
@@ -138,7 +209,7 @@ export const authPlugin = new Elysia({ name: "auth" })
     // them last does not change which token matches — it only keeps the
     // hot application path (api_tokens + users in one query) free of an
     // extra round trip for a rare credential class.
-    if (token === undefined) {
+    if (token === undefined && (isSystemPrefix || !isRunPrefix)) {
       const systemRow = (await db.select().from(systemApiTokens)
         .where(eq(systemApiTokens.tokenHash, tokenHash)).limit(1))[0];
       if (systemRow !== undefined) {

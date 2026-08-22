@@ -6,7 +6,8 @@ import { migrate as sqliteMigrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { drizzle as pgDrizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { type SQL } from 'drizzle-orm';
-import { mkdirSync, renameSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { join } from 'path';
 import * as schema from './schema';
 import { envEnabled } from '../lib/env';
@@ -351,6 +352,7 @@ if (!isPostgres) {
     )
   `);
   client.run("CREATE INDEX IF NOT EXISTS locks_expires_idx ON locks (expires_at)");
+
 
   // Hot-path query indexes (benchmarked: queue scan 200x, workspace run
   // lists 36x, calendar range 17x faster with these). Existing databases
@@ -802,6 +804,27 @@ export function databasePoolMetrics(): ReturnType<typeof poolMetrics> {
   const max = isPostgres ? 10 : 1;
   const driver = isPostgres ? 'postgres' as const : 'sqlite' as const;
   return poolMetrics(driver, max);
+}
+
+let cachedSchemaVersion: string | null | undefined;
+/** Drizzle journal tag of the last migration bundled with this build (e.g. "0028_melodic_micromax").
+ * This is the packaged *target* schema, not the DB-applied state — during a
+ * rolling deploy the new image may report the new tag before the database has
+ * been migrated. Callers that need the applied state should read the
+ * `__drizzle_migrations` history table in the connected database.
+ * Memoized: the journal is a build artifact that never changes at runtime.
+ */
+export function databaseSchemaVersion(): string | null {
+  if (cachedSchemaVersion !== undefined) return cachedSchemaVersion;
+  try {
+    const journalPath = isPostgres
+      ? fileURLToPath(new URL("../../drizzle/pg/meta/_journal.json", import.meta.url))
+      : fileURLToPath(new URL("../../drizzle/meta/_journal.json", import.meta.url));
+    const raw = readFileSync(journalPath, "utf8");
+    const tag = (JSON.parse(raw) as { entries?: { tag?: string }[] }).entries?.slice(-1)[0]?.tag;
+    cachedSchemaVersion = typeof tag === "string" && tag !== "" ? tag : null;
+    return cachedSchemaVersion;
+  } catch { cachedSchemaVersion = null; return null; }
 }
 
 // Wrappers for transaction latency (todo 291): callers in db-layer wrap

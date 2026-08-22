@@ -333,6 +333,10 @@ export const queryRuns: typeof sqliteSchema.queryRuns = pgTables === null
   ? sqliteSchema.queryRuns
   : (pgTables[dbNameOf(sqliteSchema.queryRuns)] as unknown as typeof sqliteSchema.queryRuns);
 
+export const rateLimitBuckets: typeof sqliteSchema.rateLimitBuckets = pgTables === null
+  ? sqliteSchema.rateLimitBuckets
+  : (pgTables[dbNameOf(sqliteSchema.rateLimitBuckets)] as unknown as typeof sqliteSchema.rateLimitBuckets);
+
 export const refreshSessions: typeof sqliteSchema.refreshSessions = pgTables === null
   ? sqliteSchema.refreshSessions
   : (pgTables[dbNameOf(sqliteSchema.refreshSessions)] as unknown as typeof sqliteSchema.refreshSessions);
