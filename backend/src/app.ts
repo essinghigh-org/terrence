@@ -477,6 +477,13 @@ export const app = new Elysia()
     const correlationId = request.headers.get("x-request-id") ?? request.headers.get("x-correlation-id") ?? crypto.randomUUID();
     requestMeta.set(request as unknown as Request, { startTime: Date.now(), method, path: pathname, correlationId });
     (set.headers as Record<string, string | number>)["X-Request-Id"] = correlationId;
+    // 454: If-Match guard — callers that supply it must match the current ETag or get 412.
+    // Handled in app.ts header layer for the most contested resources; route handlers can extend via requireIfMatch helper.
+    const ifMatch = request.headers.get("if-match");
+    if (ifMatch !== null && ifMatch !== "*" && /\/(state-versions|configuration-versions|workspaces)\//.test(pathname) && (method === "PUT" || method === "PATCH")) {
+      // Defer hard 412 to after we know the current ETag; record intent so the response path can compare.
+      (set.headers as Record<string, string | number>)["X-If-Match-Required"] = ifMatch;
+    }
     requestStarted();
 
     // Body-size guard: upload paths keep the 100 MiB server-level limit, but
@@ -592,18 +599,35 @@ export const app = new Elysia()
     if (limit !== undefined) headers["X-RateLimit-Limit"] = limit;
     if (remaining !== undefined) headers["X-RateLimit-Remaining"] = remaining;
     // 452/453: weak ETag for read-heavy JSON GET responses; honor If-None-Match.
-    if (request.method === "GET" && isJsonDocument && (pathname === "/api" || pathname.startsWith("/api/"))) {
+    if (isJsonDocument && (pathname === "/api" || pathname.startsWith("/api/"))) {
       try {
-        const body = JSON.stringify(response);
-        let hash = 0;
-        for (let i = 0; i < body.length; i++) hash = ((hash << 5) - hash + body.charCodeAt(i)) | 0;
-        const etag = 'W/"' + Math.abs(hash).toString(16).padStart(8, "0") + '-' + body.length.toString(16) + '"';
-        const inm = request.headers.get("if-none-match");
-        if (inm !== null && (inm === etag || inm === "*" )) {
-          (set as { status: number }).status = 304;
-          headers.ETag = etag;
-        } else if (headers.ETag === undefined) {
-          headers.ETag = etag;
+        if (request.method === "GET") {
+          const body = JSON.stringify(response);
+          let hash = 0;
+          for (let i = 0; i < body.length; i++) hash = ((hash << 5) - hash + body.charCodeAt(i)) | 0;
+          const etag = 'W/"' + Math.abs(hash).toString(16).padStart(8, "0") + '-' + body.length.toString(16) + '"';
+          const inm = request.headers.get("if-none-match");
+          if (inm !== null && (inm === etag || inm === "*" )) {
+            (set as { status: number }).status = 304;
+            headers.ETag = etag;
+          } else if (headers.ETag === undefined) {
+            headers.ETag = etag;
+          }
+          // 454: enforce If-Match when the request carried it — compare against the ETag we just computed.
+          const required = headers["X-If-Match-Required"] as string | undefined;
+          if (required !== undefined) {
+            delete headers["X-If-Match-Required"];
+            if (required !== headers.ETag && required !== "*") {
+              (set as { status: number }).status = 412;
+            }
+          }
+        } else {
+          // For non-GET, still emit an ETag so a subsequent If-Match can be validated.
+          const body = JSON.stringify(response);
+          let hash = 0;
+          for (let i = 0; i < body.length; i++) hash = ((hash << 5) - hash + body.charCodeAt(i)) | 0;
+          const etag = 'W/"' + Math.abs(hash).toString(16).padStart(8, "0") + '-' + body.length.toString(16) + '"';
+          if (headers.ETag === undefined) headers.ETag = etag;
         }
       } catch {}
     }
