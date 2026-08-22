@@ -82,7 +82,7 @@ function createTheme(
 
 export const THEMES: readonly ThemeDefinition[] = [
   createTheme("original-light", "Original", "light", {
-    background: "0 0% 100%", foreground: "220 7% 13%", primary: "217 100% 53%", primaryForeground: "0 0% 100%",
+    background: "0 0% 100%", foreground: "220 7% 13%", primary: "217 91% 48%", primaryForeground: "0 0% 100%",
     secondary: "220 10% 95%", secondaryForeground: "220 7% 13%", muted: "220 9% 96%", mutedForeground: "220 7% 40%",
     accent: "216 100% 96%", accentForeground: "217 100% 42%", destructive: "358 78% 51%", destructiveForeground: "0 0% 100%",
     border: "225 8% 88%", input: "223 8% 68%", success: "142 60% 38%", warning: "38 92% 50%",
