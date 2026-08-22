@@ -60,7 +60,19 @@ The doctor script checks SQLite integrity with the built-in integrity check. See
 
 ## GC and retention
 
-The garbage collector prunes soft-deleted runs and expired data according to the retention policy. `GC_GRACE_PERIOD_DAYS` controls the grace period for deleted runs.
+The garbage collector prunes soft-deleted runs and expired data according to the retention policy. `GC_GRACE_PERIOD_DAYS` controls the grace period for deleted runs. Archival (306) is covered by data-retention policies; very large run/audit/log tables (307) are not partitioned today — partitioning is future work.
+
+## Maintenance
+
+Scheduled `ANALYZE` (308) runs via the database's own autovacuum/autovacuum-analyze; no in-app periodic `ANALYZE` is scheduled. `VACUUM` (309) is operator-managed: `VACUUM` on PostgreSQL and SQLite `VACUUM` are not run automatically and are documented as out-of-band maintenance.
+
+## WAL
+
+SQLite WAL growth (310) is bounded by periodic checkpointing (311): `PRAGMA wal_checkpoint(TRUNCATE)` runs at GC intervals. Pathological WAL size (312) is surfaced via database metrics and the storage health check with a configurable threshold.
+
+## Observability
+
+DB write latency (313) is tracked via the pool metrics window. SQLite busy/lock events (314) are latched in `db-pool-metrics` and exposed via `/metrics` as contention signals; WAL work is single-writer, so such events indicate contention rather than corruption.
 
 ## Performance
 
