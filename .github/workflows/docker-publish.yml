@@ -2,8 +2,8 @@ name: Publish Docker Image
 
 on:
   push:
-    branches:
-      - master
+    tags:
+      - "v*.*.*"
   workflow_dispatch:
 
 permissions: read-all
@@ -19,28 +19,29 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Determine if publish is needed
-        id: check
-        env:
-          COMMIT_MSG: ${{ toJSON(github.event.head_commit.message) }}
+      - name: Determine version from tag
+        id: version
         run: |
-          # workflow_dispatch has no head_commit — always publish
-          # push events: only publish if commit starts with "release:"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          elif echo "$COMMIT_MSG" | grep -q '"release:'; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
+          # Tag pushes (v1.2.3) carry the version directly; workflow_dispatch
+          # reuses package.json as fallback so manual publishes still version
+          # correctly without requiring a tag.
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           else
-            echo "publish=false" >> "$GITHUB_OUTPUT"
+            pkg_version=$(node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")
+            echo "version=${pkg_version}" >> "$GITHUB_OUTPUT"
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
+          echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
-        if: steps.check.outputs.publish == 'true'
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log in to GitHub Container Registry
-        if: steps.check.outputs.publish == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -49,21 +50,23 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        if: steps.check.outputs.publish == 'true'
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=${{ steps.version.outputs.tag }}
             type=sha,format=short
 
       - name: Build and push Docker image
-        if: steps.check.outputs.publish == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ./Dockerfile
           push: true
+          build-args: |
+            BUILD_VERSION=${{ steps.version.outputs.version }}
+            BUILD_SHA=${{ steps.version.outputs.sha_short }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

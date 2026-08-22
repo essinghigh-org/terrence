@@ -97,7 +97,7 @@ A disk-full condition:
 
 - The container image is built from pinned base images.
 - Terraform, OpenTofu, and Infracost binaries are checksum-verified.
-- The release workflow runs only on `release:` commits.
+- Releases are published from Git tags (`v*.*.*`). The image bakes immutable `BUILD_VERSION`/`BUILD_SHA` from the tag and commit.
 
 ## Event stream revocation
 
