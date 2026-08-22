@@ -63,8 +63,8 @@ export async function countLegacyPlaintextTokens(): Promise<number> {
   let count = 0;
   let offset = 0;
   const pageSize = 500;
-  while (true) {
-    const page = await db.select({ token: apiTokens.token }).from(apiTokens).limit(pageSize).offset(offset);
+  for (;;) {
+    const page = await db.select({ token: apiTokens.token }).from(apiTokens).orderBy(apiTokens.id).limit(pageSize).offset(offset);
     if (page.length === 0) break;
     for (const row of page) {
       const v = row.token;
@@ -83,8 +83,8 @@ export async function migrateLegacyPlaintextTokens(): Promise<number> {
   let migrated = 0;
   let offset = 0;
   const pageSize = 200;
-  while (true) {
-    const page = await db.select({ id: apiTokens.id, token: apiTokens.token }).from(apiTokens).limit(pageSize).offset(offset);
+  for (;;) {
+    const page = await db.select({ id: apiTokens.id, token: apiTokens.token }).from(apiTokens).orderBy(apiTokens.id).limit(pageSize).offset(offset);
     if (page.length === 0) break;
     for (const row of page) {
       const v = row.token;

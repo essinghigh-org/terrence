@@ -17,6 +17,7 @@ import { isPostgres } from "../db/driver";
  */
 export function distributedFixedWindowContext(bucketPrefix: string): RateLimitContext {
   let duration = 60_000;
+  let lastPrunedWindowStart: number | null = null;
 
   return {
     init(options): void {
@@ -54,16 +55,18 @@ export function distributedFixedWindowContext(bucketPrefix: string): RateLimitCo
         // the API. Rate limiting is a defense, not a gate.
         return { count: 1, nextReset };
       } finally {
-        // Opportunistic expiry: prune buckets whose window is stale so a
-        // high-cardinality attacker cannot grow the table without bound. Best
-        // effort, rate-limited to one prune per window.
-        const staleBefore = windowStart - duration * 10;
-        try {
-          const { db: db2 } = await import("../db");
-          await (db2 as unknown as { execute: (q: unknown) => Promise<unknown> }).execute(
-            sql`DELETE FROM rate_limit_buckets WHERE window_start < ${staleBefore}`
-          );
-        } catch {}
+        // Opportunistic expiry, rate-limited to one prune per window per
+        // bucketPrefix so every limited request does not pay for a table scan.
+        if (lastPrunedWindowStart !== windowStart) {
+          lastPrunedWindowStart = windowStart;
+          const staleBefore = windowStart - duration * 10;
+          try {
+            const { db: db2 } = await import("../db");
+            await (db2 as unknown as { execute: (q: unknown) => Promise<unknown> }).execute(
+              sql`DELETE FROM rate_limit_buckets WHERE window_start < ${staleBefore}`
+            );
+          } catch {}
+        }
       }
     },
     async decrement(_key: string): Promise<void> {},

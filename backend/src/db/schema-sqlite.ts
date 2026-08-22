@@ -1036,6 +1036,15 @@ export const locks = sqliteTable("locks", {
   index("locks_expires_idx").on(table.expiresAt),
 ]);
 
+export const rateLimitBuckets = sqliteTable("rate_limit_buckets", {
+  bucket: text("bucket").primaryKey(),
+  windowStart: integer("window_start").notNull(),
+  count: integer("count").notNull().default(1),
+}, (table) => [
+  index("rate_limit_buckets_window_idx").on(table.windowStart),
+]);
+
+
 export const policySets = sqliteTable("policy_sets", {
   id: text("id").primaryKey(),
   orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),

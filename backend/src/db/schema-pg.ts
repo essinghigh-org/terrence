@@ -991,6 +991,14 @@ export const queryRuns = pgTable("query_runs", {
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.queryRuns.createdAt.defaultFn!()),
 });
 
+export const rateLimitBuckets = pgTable("rate_limit_buckets", {
+    bucket: text("bucket").notNull().primaryKey(),
+    windowStart: bigint("window_start", { mode: "number" }).notNull(),
+    count: bigint("count", { mode: "number" }).notNull().default(1),
+}, (table) => [
+    index("rate_limit_buckets_window_idx").on(table.windowStart),
+  ]);
+
 export const refreshSessions = pgTable("refresh_sessions", {
     id: text("id").notNull().primaryKey(),
     familyId: text("family_id").notNull(),

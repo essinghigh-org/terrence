@@ -476,8 +476,10 @@ async function readinessResponse(
       { check: "vault", status: "OK" },
     ],
   };
-  // Todo 271: include the applied DB schema version alongside the
+  // Todo 271: include the bundled DB schema target alongside the
   // database liveness check so /api/v1/readiness and /readyz agree.
+  // This is the packaged target; the applied state lives in the DB's
+  // `__drizzle_migrations` history (see databaseSchemaVersion()).
   try {
     const { databaseSchemaVersion } = await import("../db");
     const schemaVersion = databaseSchemaVersion();

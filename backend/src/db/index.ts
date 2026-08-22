@@ -351,18 +351,7 @@ if (!isPostgres) {
     )
   `);
   client.run("CREATE INDEX IF NOT EXISTS locks_expires_idx ON locks (expires_at)");
-  // Distributed rate-limit buckets (todo 20): shared fixed-window counters for
-  // HA Postgres. Created idempotently like `locks`; SQLite also gets the
-  // table (cheap, unused) so the distributed context never hits a missing-table
-  // error on single-instance installs.
-  client.run(`
-    CREATE TABLE IF NOT EXISTS rate_limit_buckets (
-      bucket TEXT PRIMARY KEY NOT NULL,
-      window_start INTEGER NOT NULL,
-      count INTEGER NOT NULL DEFAULT 1
-    )
-  `);
-  client.run("CREATE INDEX IF NOT EXISTS rate_limit_buckets_window_idx ON rate_limit_buckets (window_start)");
+
 
   // Hot-path query indexes (benchmarked: queue scan 200x, workspace run
   // lists 36x, calendar range 17x faster with these). Existing databases
@@ -816,7 +805,12 @@ export function databasePoolMetrics(): ReturnType<typeof poolMetrics> {
   return poolMetrics(driver, max);
 }
 
-/** Drizzle journal tag of the last applied migration (e.g. "0028_melodic_micromax"). */
+/** Drizzle journal tag of the last migration bundled with this build (e.g. "0028_melodic_micromax").
+ * This is the packaged *target* schema, not the DB-applied state — during a
+ * rolling deploy the new image may report the new tag before the database has
+ * been migrated. Callers that need the applied state should read the
+ * `__drizzle_migrations` history table in the connected database.
+ */
 export function databaseSchemaVersion(): string | null {
   try {
     const journalPath = isPostgres
@@ -846,16 +840,6 @@ export function applyPgMigrations(): Promise<void> {
     const instance = pgDb;
     if (instance === null) throw new Error("postgres backend not initialized");
     const pg = pgClient as postgres.Sql;
-    // Distributed rate-limit buckets (todo 20): shared fixed-window counters for HA Postgres.
-    await pg.unsafe(`
-      CREATE TABLE IF NOT EXISTS rate_limit_buckets (
-        bucket TEXT PRIMARY KEY,
-        window_start BIGINT NOT NULL,
-        count INTEGER NOT NULL DEFAULT 1
-      )
-    `);
-    await pg.unsafe(`CREATE INDEX IF NOT EXISTS rate_limit_buckets_window_idx ON rate_limit_buckets (window_start)`);
-
     const durableJobsTable = await pg.unsafe<{ exists: boolean }[]>("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'durable_jobs') AS exists");
     if (durableJobsTable[0]?.exists === true) {
       await pg.unsafe(`
