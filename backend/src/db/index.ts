@@ -64,12 +64,32 @@ if (!isPostgres) {
 // the test harness (tests/setup.ts) — never here, because the migrator is
 // async and this module must stay synchronous for bun's worker threads.
 // ---------------------------------------------------------------------------
+function parseTimeoutMs(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw.trim());
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  // Clamp to 24h so a typo (e.g. seconds vs ms) cannot disable the guard.
+  return Math.min(Math.round(n), 86_400_000);
+}
+
 let pgClient: postgres.Sql | null = null;
 if (isPostgres) {
+  const statementTimeoutMs = parseTimeoutMs(process.env.TERRENCE_DB_STATEMENT_TIMEOUT_MS, 30_000);
+  const lockTimeoutMs = parseTimeoutMs(process.env.TERRENCE_DB_LOCK_TIMEOUT_MS, 10_000);
+  const idleInTxTimeoutMs = parseTimeoutMs(process.env.TERRENCE_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS, 60_000);
   pgClient = postgres(databaseUrl, {
     max: 10,
     idle_timeout: 20,
     connect_timeout: 10,
+    // Fail-safe: a stuck query / contended lock / idle transaction is killed
+    // server-side instead of holding a pool connection forever (todos 287/288).
+    // Postgres.js forwards `connection` keys as startup GUC params, so every
+    // pooled connection inherits these defaults without a SET per query.
+    connection: {
+      statement_timeout: statementTimeoutMs,
+      lock_timeout: lockTimeoutMs,
+      idle_in_transaction_session_timeout: idleInTxTimeoutMs,
+    },
     // The app surfaces database errors itself; postgres.js NOTICE noise
     // (e.g. "relation already exists" during idempotent DDL) is suppressed.
     onnotice: () => {},
