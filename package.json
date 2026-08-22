@@ -1,8 +1,22 @@
 {
   "name": "terrence",
   "version": "1.0.0",
+  "devDependencies": {
+    "eslint": "^10.7.0",
+    "knip": "^6.29.0",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.65.0"
+  },
+  "description": "Self-hosted platform for OpenTofu and Terraform remote workflows",
   "license": "MIT",
-  "description": "Self-hosted platform for OpenTofu and Terraform remote workflows", 
+  "overrides": {
+    "brace-expansion": "5.0.9",
+    "esbuild": "0.28.1",
+    "fast-uri": "3.1.5",
+    "hono": "4.12.34",
+    "js-yaml": "4.3.1",
+    "nanoid": "3.3.17"
+  },
   "scripts": {
     "dev:backend": "cd backend && bun run --watch index.ts",
     "dev:frontend": "cd frontend && bun run dev",
@@ -21,19 +35,5 @@
   "workspaces": [
     "backend",
     "frontend"
-  ],
-  "overrides": {
-    "brace-expansion": "5.0.9",
-    "esbuild": "0.28.1",
-    "fast-uri": "3.1.5",
-    "hono": "4.12.34",
-    "js-yaml": "4.3.1",
-    "nanoid": "3.3.17"
-  },
-  "devDependencies": {
-    "eslint": "^10.7.0",
-    "knip": "^6.29.0",
-    "typescript": "~6.0.2",
-    "typescript-eslint": "^8.65.0"
-  }
+  ]
 }

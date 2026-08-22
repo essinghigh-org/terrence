@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@elysiajs/static": "^1.4.10",
+    "@sinclair/typebox": "^0.34.52",
     "@xmldom/xmldom": "^0.9.10",
     "drizzle-orm": "^0.45.2",
     "elysia": "^1.4.29",

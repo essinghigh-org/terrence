@@ -13,6 +13,7 @@ import { log } from "./lib/log";
 import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
 import { setRequestTokenScopes, setRequestSiteAdmin } from "./lib/request-scope";
 import { applySecurityHeaders, staticCacheControl, staticMimeFor } from "./lib/security-headers";
+import openapiJson from "../openapi.json" with { type: "json" };
 import { requestFinished, requestStarted } from "./lib/process-metrics";
 import { API_BODY_LIMIT_BYTES, BodyTooLargeError, readTextWithLimit } from "./lib/body-limit";
 import {
@@ -326,6 +327,7 @@ function principalRateLimitKey(request: CustomRequest, server: RateLimitServer |
 
 export const app = new Elysia()
   .use(authPlugin)
+  .get("/openapi.json", (): unknown => openapiJson)
   .get("/api/v2/available-versions", async ({ query, set }: Readonly<{ query: Readonly<Record<string, string>>; set: SetObject }>): Promise<unknown> => {
     const tool = query.tool === "terraform" ? "terraform" : "tofu";
     try {
