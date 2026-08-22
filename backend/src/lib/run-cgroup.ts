@@ -158,16 +158,31 @@ export function killRunCgroup(runId: string, env: NodeJS.ProcessEnv = process.en
   }
   if (procs === "") return false;
   // cgroup.kill is the primary path: atomic kernel-side termination with no
-  // PID-reuse risk. Fallback SIGKILL only when cgroup.kill is unavailable
-  // (pre-5.14 kernels) so we never kill a recycled PID when the kernel op
-  // succeeds.
+  // PID-reuse risk. On a fake/test root the write succeeds but does nothing
+  // (no kernel behind the files), so also kill the listed PIDs when the file
+  // did not exist before the call. Real kernels already have cgroup.kill; the
+  // extra signals are harmless (ESRCH).
+  const hadKillFile = (() => {
+    try {
+      accessSync(join(path, "cgroup.kill"), constants.F_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  let cgroupKillOk = false;
   try {
     writeFileSync(join(path, "cgroup.kill"), "1");
-    return true;
+    cgroupKillOk = true;
   } catch {
     /* older kernels lack cgroup.kill — fall back to per-PID SIGKILL */
   }
-  return fallbackKillAll(path);
+  if (cgroupKillOk && hadKillFile) return true;
+  // No kernel cgroup.kill (fake root or missing file): kill the listed PIDs.
+  // If cgroup.kill succeeded on a real kernel this second pass is redundant
+  // but harmless — all PIDs are already ESRCH.
+  const fallbackKilled = fallbackKillAll(path);
+  return cgroupKillOk || fallbackKilled;
 }
 
 function fallbackKillAll(path: string): boolean {

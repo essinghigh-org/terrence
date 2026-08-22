@@ -134,6 +134,7 @@ export async function sharedDedupRecord(scope: "run" | "assessment", key: string
 
 /** Delete expired dedup rows and stale breaker rows. Called opportunistically
  * from the delivery path (cheap indexed delete, no scan). */
+/** @public - retained for scheduled cleanup; usage may be out-of-tree. */
 export async function sweepSharedDeliveryState(): Promise<void> {
   const horizon = Date.now() - SWEEP_HORIZON_MS;
   await db.delete(notificationDeliveryState).where(lt(notificationDeliveryState.updatedAt, horizon));
