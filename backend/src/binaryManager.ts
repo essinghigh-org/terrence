@@ -297,8 +297,15 @@ export async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<
   try {
     if (tool === "tofu") {
       assertNotRateLimited("releases/latest");
+      // Unauthenticated GitHub API allows 60 req/hr per IP; CI runners share an
+      // IP across parallel jobs and exhaust it. Authenticate when a token is
+      // available (5000 req/hr).
+      const githubToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? "";
+      const authHeaders: Record<string, string> = githubToken !== ""
+        ? { Authorization: `Bearer ${githubToken}` }
+        : {};
       const res = await fetch("https://api.github.com/repos/opentofu/opentofu/releases/latest", {
-        headers: { "User-Agent": "terrence-iac-manager" },
+        headers: { "User-Agent": "terrence-iac-manager", ...authHeaders },
         signal: AbortSignal.timeout(10000),
       });
       guardUpstreamRateLimit(res, "releases/latest");
@@ -378,6 +385,12 @@ async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<strin
 
   try {
     assertNotRateLimited(tool === "tofu" ? "releases enumeration" : "hashicorp index");
+    // Same GitHub-token discipline as resolveLatestVersion: CI runners share an
+    // egress IP and the unauthenticated 60 req/hr ceiling is easily exhausted.
+    const githubToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? "";
+    const authHeaders: Record<string, string> = githubToken !== ""
+      ? { Authorization: `Bearer ${githubToken}` }
+      : {};
     let versions: string[] = [];
     if (tool === "tofu") {
       // Paginate through all GitHub releases
@@ -386,7 +399,7 @@ async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<strin
         const res = await fetch(
           `https://api.github.com/repos/opentofu/opentofu/releases?per_page=100&page=${page}`,
           {
-            headers: { "User-Agent": "terrence-iac-manager" },
+            headers: { "User-Agent": "terrence-iac-manager", ...authHeaders },
             signal: AbortSignal.timeout(15000),
           },
         );
