@@ -32,5 +32,8 @@
         "bench/**/*.ts"
       ]
     }
-  }
+  },
+  "ignoreBinaries": [
+    "playwright-static.config.ts"
+  ]
 }

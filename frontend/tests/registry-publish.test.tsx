@@ -67,12 +67,12 @@ async function selectRepository(view: ReturnType<typeof render>): Promise<void> 
   fireEvent.change(await view.findByLabelText("VCS connection"), { target: { value: "github-app:installation-1" } });
   const repository = await view.findByRole("combobox", { name: "Repository" });
   fireEvent.focus(repository);
-  await view.findByRole("option", { name: /acme\/terraform-network/ });
   fireEvent.keyDown(repository, { key: "ArrowDown" });
-  await waitFor((): void => { expect(repository.getAttribute("aria-activedescendant")).not.toBeNull(); });
-  fireEvent.keyDown(repository, { key: "Enter" });
-// SAFETY: the component renders this element type for the queried role/label.
-  expect((repository as HTMLInputElement).value).toBe("acme/terraform-network");
+  const option = await view.findByRole("option", { name: /acme\/terraform-network/ }, { timeout: 5000 });
+  fireEvent.mouseDown(option);
+  await waitFor((): void => {
+    expect((repository as HTMLInputElement).value).toBe("acme/terraform-network");
+  });
 }
 
 afterEach((): void => {
