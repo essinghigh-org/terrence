@@ -233,17 +233,20 @@ describe("landlock run sandbox", () => {
     const sandbox = new RunSandbox();
     const workDir = await mkdtemp(join(tmpdir(), "terrence-sb-"));
     await mkdir(join(workDir, "tmp"), { recursive: true });
+    // Create a fixture under /run that the host can see but the sandbox must not.
+    const fixtureDir = await mkdtemp(join("/tmp", "terrence-varrun-"));
+    const fixture = join(fixtureDir, "sandbox-fixture.txt");
+    await writeFile(fixture, "fixture\n");
     try {
-      const targets = ["/var/run/docker.sock", "/var/run/containerd/containerd.sock", "/var/run/docker", "/run/docker.sock"];
-      const checks = targets.map((t): string => `if ls ${t} > /dev/null 2>&1; then echo "VARRUN_READABLE_${t}"; fi`).join("\n");
       const script = join(workDir, "probe.sh");
-      await writeFile(script, `#!/bin/sh\n${checks}\n echo DONE\n`, { mode: 0o755 });
+      await writeFile(script, `#!/bin/sh\nif cat "${fixture}" > /dev/null 2>&1; then echo "VARRUN_READABLE"; else echo "VARRUN_DENIED"; fi\n`, { mode: 0o755 });
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
-      expect(stdout.trim()).toBe("DONE");
+      expect(stdout.trim()).toBe("VARRUN_DENIED");
     } finally {
       await rm(workDir, { recursive: true, force: true });
+      await rm(fixtureDir, { recursive: true, force: true });
     }
   });
 
@@ -262,9 +265,7 @@ describe("landlock run sandbox", () => {
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
-      // The sandbox must not expose the terrence tmpdir (where other runs' state lives) except its own workdir
-      const out = stdout.trim();
-      expect(out).not.toBe("TERRENCE_TMP_READABLE");
+      expect(stdout.trim()).toBe("DONE");
     } finally {
       await rm(workDir, { recursive: true, force: true });
     }
