@@ -288,6 +288,17 @@ function prometheusLines(collection: MetricsCollection): string[] {
         `terrence_database_query_duration_ms{quantile="0.95"} ${p.p95Ms ?? 0}`,
         `terrence_database_query_duration_ms{quantile="max"} ${p.maxMs ?? 0}`,
       );
+      const fps = (instance.database as unknown as { slowFingerprints?: Readonly<Record<string, number>> }).slowFingerprints ?? {};
+      const fpLines = Object.entries(fps).slice(0, 10).map(([fp, count]): string =>
+        `terrence_database_slow_fingerprint_total{fingerprint="${fp.replaceAll('"', '\\"')}"} ${count}`,
+      );
+      if (fpLines.length > 0) {
+        lines.push(
+          "# HELP terrence_database_slow_fingerprint_total Normalized slow-query fingerprint occurrences.",
+          "# TYPE terrence_database_slow_fingerprint_total counter",
+          ...fpLines,
+        );
+      }
     }
   }
   // Global latch: emitted for every collection shape (scoped tokens too).

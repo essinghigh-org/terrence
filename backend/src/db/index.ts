@@ -13,7 +13,7 @@ import { envEnabled } from '../lib/env';
 import { planJsonDirectory } from '../lib/plan-json';
 import { runLogsDirectory } from '../lib/run-logs';
 import { databaseUrl, isPostgres, storageDir } from './driver';
-import { poolMetrics, poolQueryEnd, poolQueryStart, poolTransactionEnd, poolTransactionStart } from '../lib/db-pool-metrics';
+import { poolMetrics, poolQueryEnd, poolQueryStart, poolTransactionEnd, poolTransactionStart, recordSlowQuery } from '../lib/db-pool-metrics';
 
 // Deliberately synchronous: a top-level await here made this module a TLA
 // module, and Bun's worker threads can resolve importers while the TLA is
@@ -103,16 +103,21 @@ if (isPostgres) {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
     pgClient.unsafe = ((queryText: string, ...params: unknown[]) => {
       const start = poolQueryStart();
+      const queryTextCopy = queryText;
+      const finish = (): void => {
+        const durationMs = poolQueryEnd(start);
+        recordSlowQuery(queryTextCopy, durationMs);
+      };
       const result = originalUnsafe(queryText, ...(params as [never]));
       // postgres.js returns a Promise for every query; attach completion hooks
       // without altering the result shape.
       if (result !== null && typeof result === 'object' && 'then' in (result as unknown as Record<string, unknown>)) {
         return (result as unknown as Promise<unknown>).then(
-          (value: unknown) => { poolQueryEnd(start); return value; },
-          (err: unknown) => { poolQueryEnd(start); throw err; },
+          (value: unknown) => { finish(); return value; },
+          (err: unknown) => { finish(); throw err; },
         ) as typeof result;
       }
-      poolQueryEnd(start);
+      finish();
       return result;
     }) as typeof pgClient.unsafe;
   }
