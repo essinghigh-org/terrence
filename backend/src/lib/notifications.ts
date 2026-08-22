@@ -19,6 +19,7 @@ import {
 } from "../db/schema";
 import type { DeepReadonly } from "./utils";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./url-safety";
+import { _resetSharedDeliveryState as resetSharedStateImpl, sharedBreakerRecordFailure, sharedBreakerRecordSuccess, sharedDedupRecord, sharedDedupSuppressed } from "./notification-state";
 import { getSettings } from "./settings";
 import { sendEmail } from "./smtp";
 
@@ -93,6 +94,10 @@ export function _redactedHeaderNamesForTests(): ReadonlySet<string> {
   return REDACTED_RESPONSE_HEADERS;
 }
 
+async function resetSharedDeliveryState(): Promise<void> {
+  await resetSharedStateImpl();
+}
+
 // ---------------------------------------------------------------------------
 // Per-destination circuit breaker (kanban 7.8).
 //
@@ -122,10 +127,20 @@ function recordBreakerFailure(configurationId: string): void {
   const failures = (current?.failures ?? 0) + 1;
   const openedAfterSample = failures >= BREAKER_FAILURE_LIMIT ? Date.now() : current?.openedAfterSample ?? null;
   breakers.set(configurationId, { failures, openedAfterSample });
+  // Mirror into the shared store (kanban 15): other replicas must see the
+  // breaker trip without waiting for their own three failures. Fire-and-
+  // forget: the local map already bounds this replica; shared convergence is
+  // eventual and failures here only delay it.
+  void sharedBreakerRecordFailure(configurationId).catch((): void => {
+    /* shared state is best-effort; local breaker still protects this replica */
+  });
 }
 
 function recordBreakerSuccess(configurationId: string): void {
   breakers.delete(configurationId);
+  void sharedBreakerRecordSuccess(configurationId).catch((): void => {
+    /* best-effort, same as failure mirroring */
+  });
 }
 
 function breakerRefusesDelivery(configurationId: string): boolean {
@@ -158,6 +173,12 @@ export function _dedup(reset?: boolean): void {
   if (reset === true) emittedKeys.clear();
 }
 
+/** Only exported for tests: clear the replica-shared delivery state so a
+ * test's breaker/dedup sequence starts from a clean slate. */
+export function _resetSharedDeliveryState(): Promise<void> {
+  return resetSharedDeliveryState();
+}
+
 function dedupSuppressed(scope: "run" | "assessment", key: string): boolean {
   const now = Date.now();
   const fullKey = `${scope}:${key}`;
@@ -165,18 +186,43 @@ function dedupSuppressed(scope: "run" | "assessment", key: string): boolean {
   if (prior !== undefined && now - prior < DEDUP_WINDOW_MS) {
     return true;
   }
+  // Not suppressed locally — the async wrapper (deliveryDeduplicated) consults
+  // the shared store (kanban 16) so another replica's emission inside the
+  // window suppresses this one too. The local map stays as the no-I/O fast
+  // path.
+  return false;
+}
+
+/** Record that a logical notification was emitted for a (scope, key). */
+function dedupRecord(scope: "run" | "assessment", key: string): void {
+  const now = Date.now();
+  emittedKeys.set(`${scope}:${key}`, now);
   // Opportunistically prune stale entries so the map never grows unbounded.
   if (emittedKeys.size > 1_000) {
     for (const [mapKey, ts] of emittedKeys) {
       if (now - ts >= DEDUP_WINDOW_MS) emittedKeys.delete(mapKey);
     }
   }
-  return false;
 }
 
-/** Record that a logical notification was emitted for a (scope, key). */
-function dedupRecord(scope: "run" | "assessment", key: string): void {
-  emittedKeys.set(`${scope}:${key}`, Date.now());
+/** Async dedup gate: local TTL map first (no I/O), then the shared store. */
+export async function deliveryDeduplicated(scope: "run" | "assessment", key: string): Promise<boolean> {
+  if (dedupSuppressed(scope, key)) return true;
+  try {
+    return await sharedDedupSuppressed(scope, key);
+  } catch {
+    // Shared state unavailable (DB hiccup): fail OPEN so notifications are
+    // at-least-once rather than silently lost. Dedup is an optimization.
+    return false;
+  }
+}
+
+/** Record a logical emission in both the local TTL map and the shared store. */
+export function deliveryDedupRecord(scope: "run" | "assessment", key: string): void {
+  dedupRecord(scope, key);
+  void sharedDedupRecord(scope, key).catch((): void => {
+    /* best-effort: worst case a duplicate notification on failover */
+  });
 }
 
 export function postNotification(
@@ -684,7 +730,7 @@ export async function deliverRunNotifications(
   const runStatus = statusOverride ?? run.status;
 
   const dedupKey = `${run.id}:${trigger}:${runStatus}`;
-  if (dedupSuppressed("run", dedupKey)) {
+  if (await deliveryDeduplicated("run", dedupKey)) {
     return [];
   }
   // Only record the logical emission when there is at least one matching
@@ -692,6 +738,7 @@ export async function deliverRunNotifications(
   // or breaker-closed run does not consume the dedup window.
   if (matching.length > 0) {
     dedupRecord("run", dedupKey);
+    deliveryDedupRecord("run", dedupKey);
   }
 
   return Promise.all(matching.map(async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>
@@ -753,7 +800,7 @@ export async function deliverAssessmentNotifications(
   const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, result.workspaceId) });
   if (workspace === undefined) return [];
 
-  if (dedupSuppressed("assessment", `${assessmentResultId}:${trigger}`)) {
+  if (await deliveryDeduplicated("assessment", `${assessmentResultId}:${trigger}`)) {
     return [];
   }
 
@@ -787,6 +834,7 @@ export async function deliverAssessmentNotifications(
 
   if (matching.length > 0) {
     dedupRecord("assessment", `${assessmentResultId}:${trigger}`);
+    deliveryDedupRecord("assessment", `${assessmentResultId}:${trigger}`);
   }
 
   return Promise.all(matching.map(async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>

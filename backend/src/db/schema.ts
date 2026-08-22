@@ -205,6 +205,10 @@ export const notificationConfigurations: typeof sqliteSchema.notificationConfigu
   ? sqliteSchema.notificationConfigurations
   : (pgTables[dbNameOf(sqliteSchema.notificationConfigurations)] as unknown as typeof sqliteSchema.notificationConfigurations);
 
+export const notificationDeliveryState: typeof sqliteSchema.notificationDeliveryState = pgTables === null
+  ? sqliteSchema.notificationDeliveryState
+  : (pgTables[dbNameOf(sqliteSchema.notificationDeliveryState)] as unknown as typeof sqliteSchema.notificationDeliveryState);
+
 export const notificationWorkspaceCounters: typeof sqliteSchema.notificationWorkspaceCounters = pgTables === null
   ? sqliteSchema.notificationWorkspaceCounters
   : (pgTables[dbNameOf(sqliteSchema.notificationWorkspaceCounters)] as unknown as typeof sqliteSchema.notificationWorkspaceCounters);

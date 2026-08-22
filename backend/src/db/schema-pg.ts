@@ -621,6 +621,18 @@ export const notificationConfigurations = pgTable("notification_configurations",
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.notificationConfigurations.createdAt.defaultFn!()),
 });
 
+export const notificationDeliveryState = pgTable("notification_delivery_state", {
+    id: text("id").notNull().primaryKey(),
+    kind: text("kind").notNull(),
+    stateKey: text("state_key").notNull(),
+    value: bigint("value", { mode: "number" }).notNull().default(0),
+    windowStart: bigint("window_start", { mode: "number" }),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.notificationDeliveryState.updatedAt.defaultFn!()),
+}, (table) => [
+    uniqueIndex("notification_delivery_state_kind_key_idx").on(table.kind, table.stateKey),
+    index("notification_delivery_state_updated_idx").on(table.updatedAt),
+  ]);
+
 export const notificationWorkspaceCounters = pgTable("notification_workspace_counters", {
     workspaceId: text("workspace_id").notNull().primaryKey().references(() => workspaces.id, { onDelete: "cascade" }),
     configurationCount: bigint("configuration_count", { mode: "number" }).notNull().default(0),
