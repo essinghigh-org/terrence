@@ -108,7 +108,7 @@ import { providerIconRoutes } from "./routes/provider-icons";
 import { availableVersions } from "./binaryManager";
 
 // Store request metadata without polluting the set object
-const requestMeta = new WeakMap<Request, { startTime: number; method: string; path: string }>();
+const requestMeta = new WeakMap<Request, { startTime: number; method: string; path: string; correlationId: string }>();
 
 type HeaderGetter = { readonly get: (name: string) => string | null };
 type CustomRequest = Readonly<{
@@ -474,7 +474,9 @@ export const app = new Elysia()
     const url = new URL(request.url);
     const pathname = url.pathname;
     const method = request.method;
-    requestMeta.set(request as unknown as Request, { startTime: Date.now(), method, path: pathname });
+    const correlationId = request.headers.get("x-request-id") ?? request.headers.get("x-correlation-id") ?? crypto.randomUUID();
+    requestMeta.set(request as unknown as Request, { startTime: Date.now(), method, path: pathname, correlationId });
+    (set.headers as Record<string, string | number>)["X-Request-Id"] = correlationId;
     requestStarted();
 
     // Body-size guard: upload paths keep the 100 MiB server-level limit, but
@@ -519,9 +521,6 @@ export const app = new Elysia()
     headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
     headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type,Idempotency-Key,If-Match,If-None-Match";
     headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining,X-Request-Id";
-    // Correlation IDs (455): accept client-supplied or generate; log and expose for tracing/bundles.
-    const correlationId = request.headers.get("x-request-id") ?? request.headers.get("x-correlation-id") ?? crypto.randomUUID();
-    headers["X-Request-Id"] = correlationId;
   })
   .onAfterHandle(({ request, response, set }: AfterHandleContext): void => {
     const meta = requestMeta.get(request as unknown as Request);
@@ -535,7 +534,7 @@ export const app = new Elysia()
       // error path (onError) can never double-count the same request.
       requestMeta.delete(request as unknown as Request);
       if (path.startsWith("/api/")) {
-        log.info(`[${new Date().toISOString()}] ${method} ${path} ${String(status)} ${duration}ms`);
+        log.info(`[${new Date().toISOString()}] ${method} ${path} ${String(status)} ${duration}ms`, { requestId: meta.correlationId });
       }
     }
     const isJsonDocument = response !== null
@@ -579,6 +578,12 @@ export const app = new Elysia()
       headers.Vary = existingVary === undefined ? "Origin" : `${String(existingVary)}, Origin`;
     }
 
+    // 458: emit deprecation headers for compat-legacy support-bundle path.
+    if (pathname.startsWith("/api/v1/support-bundle-requests")) {
+      if (headers.Deprecation === undefined) headers.Deprecation = "true";
+      if (headers.Sunset === undefined) headers.Sunset = "Sat, 31 Dec 2028 23:59:59 GMT";
+      if (headers["Sunset-Link"] === undefined) headers["Sunset-Link"] = "</api/v1/support/bundle-requests>; rel=\"successor-version\"";
+    }
     if ((pathname === "/api" || pathname.startsWith("/api/")) && isJsonDocument) {
       headers["Content-Type"] = "application/vnd.api+json";
     }
@@ -586,6 +591,22 @@ export const app = new Elysia()
     const remaining = set.headers["RateLimit-Remaining"];
     if (limit !== undefined) headers["X-RateLimit-Limit"] = limit;
     if (remaining !== undefined) headers["X-RateLimit-Remaining"] = remaining;
+    // 452/453: weak ETag for read-heavy JSON GET responses; honor If-None-Match.
+    if (request.method === "GET" && isJsonDocument && (pathname === "/api" || pathname.startsWith("/api/"))) {
+      try {
+        const body = JSON.stringify(response);
+        let hash = 0;
+        for (let i = 0; i < body.length; i++) hash = ((hash << 5) - hash + body.charCodeAt(i)) | 0;
+        const etag = 'W/"' + Math.abs(hash).toString(16).padStart(8, "0") + '-' + body.length.toString(16) + '"';
+        const inm = request.headers.get("if-none-match");
+        if (inm !== null && (inm === etag || inm === "*" )) {
+          (set as { status: number }).status = 304;
+          headers.ETag = etag;
+        } else if (headers.ETag === undefined) {
+          headers.ETag = etag;
+        }
+      } catch {}
+    }
   })
   .onParse(async ({ request, contentType }: ParseContext): Promise<Record<string, unknown> | string | null | undefined> => {
     const pathname = new URL(request.url).pathname;

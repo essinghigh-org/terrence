@@ -461,6 +461,8 @@ async function generateSupportBundle(record: BundleRecord, authorization: string
       createUsageBundle(),
     ]);
     const entries: Record<string, string> = {};
+    // 457: stamp request/correlation identity into the bundle for trace continuity.
+    entries["_request-correlation.json"] = JSON.stringify({ bundleId: record.id, createdAt: record.createdAt, generatedAt: new Date().toISOString() }, null, 2) + "\n";
     for (const diagnostic of diagnostics) {
       const prefix = `${record.id}/${diagnostic.node}`;
       entries[`${prefix}/diagnostics.json`] = `${JSON.stringify([diagnosticResource(diagnostic)], null, 2)}\n`;
