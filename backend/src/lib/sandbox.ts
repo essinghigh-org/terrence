@@ -130,7 +130,10 @@ export function resetLandlockAbiCache(): void {
  */
 function netRuleArgs(): string[] {
   if (!runNetDenyEnabled()) return [];
-  if (probeLandlockAbi() < 4) return [];
+  const abi = probeLandlockAbi();
+  if (abi < 4) {
+    throw new Error(`Run network isolation requires Landlock ABI >= 4. Host ABI is ${abi}. Upgrade the kernel or set TERRENCE_RUN_NET_POLICY=allow.`);
+  }
   return ["--deny-net"];
 }
 
