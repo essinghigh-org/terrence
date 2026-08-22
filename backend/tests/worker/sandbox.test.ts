@@ -326,6 +326,74 @@ describe("landlock run sandbox", () => {
     }
   });
 
+
+  it("denies creating Unix domain sockets outside the workdir", async (): Promise<void> => {
+    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    const sandbox = new RunSandbox();
+    const workDir = await mkdtemp(join(tmpdir(), "terrence-sb-"));
+    await mkdir(join(workDir, "tmp"), { recursive: true });
+    try {
+      const script = join(workDir, "probe.sh");
+      await writeFile(
+        script,
+        `#!/bin/sh\npython3 -c "
+import socket, os
+# Try to create a socket outside workdir (should be denied)
+try:
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.bind('/tmp/sandbox-socket-test.sock')
+    print('SOCKET_CREATED_OUTSIDE')
+    s.close()
+    os.unlink('/tmp/sandbox-socket-test.sock')
+except PermissionError:
+    print('SOCKET_DENIED')
+except OSError as e:
+    print(f'SOCKET_DENIED_{e.errno}')
+" 2>&1\n`,
+        { mode: 0o755 },
+      );
+      const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
+      const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("SOCKET_DENIED");
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+      try { await rm("/tmp/sandbox-socket-test.sock", { force: true }); } catch {}
+    }
+  });
+
+  it("denies abstract Unix domain sockets (ABI-dependent, documents behavior)", async (): Promise<void> => {
+    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    const sandbox = new RunSandbox();
+    const workDir = await mkdtemp(join(tmpdir(), "terrence-sb-"));
+    await mkdir(join(workDir, "tmp"), { recursive: true });
+    try {
+      const script = join(workDir, "probe.sh");
+      await writeFile(
+        script,
+        `#!/bin/sh\npython3 -c "
+import socket
+try:
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    # Abstract sockets use null byte prefix, not filesystem path
+    s.bind('\0terrence-abstract-test')
+    print('ABSTRACT_SOCKET_CREATED')
+    s.close()
+except Exception as e:
+    print(f'ABSTRACT_DENIED_{type(e).__name__}')
+" 2>&1\n`,
+        { mode: 0o755 },
+      );
+      const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
+      const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
+      expect(exitCode).toBe(0);
+      const out = stdout.trim();
+      expect(out.startsWith("ABSTRACT_")).toBe(true);
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("returns a numeric ABI version from probeLandlockAbi", (): void => {
     // Reports the kernel's Landlock ABI (or 0 if unavailable).  This is a
     // self-describing probe — it confirms the probe surface is callable
