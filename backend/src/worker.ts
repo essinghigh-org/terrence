@@ -1408,7 +1408,15 @@ async function executeRunImpl(runId: string): Promise<void> {
       proposedWorkspaceVariables,
     );
 
-    const envVars = { ...buildSanitizedEnv(vars), ...(await runTerraformEnv(run.id, workspace, "plan", vars)) };
+    const extraTfVars: Record<string, string> = {};
+    if (upgradeTarget === undefined) {
+      for (const variable of run.variables ?? []) {
+        if (typeof (variable as unknown as { sensitive?: unknown }).sensitive === "boolean" && (variable as unknown as { sensitive: boolean }).sensitive) {
+          extraTfVars[`TF_VAR_${variable.key}`] = variable.value;
+        }
+      }
+    }
+    const envVars = { ...buildSanitizedEnv(vars), ...extraTfVars, ...(await runTerraformEnv(run.id, workspace, "plan", vars)) };
     if (run.debuggingMode) envVars.TF_LOG = "TRACE";
     const tfVarsLines = vars
       .filter((variable: { readonly category: string }): boolean => variable.category === "terraform")
@@ -1477,7 +1485,10 @@ async function executeRunImpl(runId: string): Promise<void> {
       for (const replacement of run.replaceAddrs ?? []) planArgs.push(`-replace=${replacement}`);
       if (tfVarsLines.length > 0) planArgs.push("-var-file=terrence.workspace.tfvars");
       if (upgradeTarget === undefined) {
-        for (const variable of run.variables ?? []) planArgs.push(`-var=${variable.key}=${variable.value}`);
+        for (const variable of run.variables ?? []) {
+          if (typeof (variable as unknown as { sensitive?: unknown }).sensitive === "boolean" && (variable as unknown as { sensitive: boolean }).sensitive) continue;
+          planArgs.push(`-var=${variable.key}=${variable.value}`);
+        }
       }
       for (const variable of vars) {
         if (variable.category === "terraform" && variable.priority) {
