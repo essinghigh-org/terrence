@@ -51,6 +51,23 @@ function isPrivateV4(n: number): boolean {
   return false;
 }
 
+/** True when an IPv4 host is inside a CIDR (e.g. "10.0.0.0/24"). */
+export function isIPv4InCidr(host: string, cidr: string): boolean {
+  try {
+    const slash = cidr.indexOf("/");
+    if (slash === -1) return host === cidr;
+    const base = cidr.slice(0, slash);
+    const bits = parseInt(cidr.slice(slash + 1), 10);
+    if (!Number.isFinite(bits) || bits < 0 || bits > 32) return false;
+    const baseParts = base.split(".");
+    const hostParts = host.split(".");
+    if (baseParts.length !== 4 || hostParts.length !== 4) return false;
+    const toNum = (p: string[]): number => p.reduce((a, v) => (a << 8) | parseInt(v, 10), 0) >>> 0;
+    const mask = bits === 0 ? 0 : (~0 >>> (32 - bits)) << (32 - bits) >>> 0;
+    return (toNum(hostParts) & mask) === (toNum(baseParts) & mask);
+  } catch { return false; }
+}
+
 function isPrivateV6(host: string): boolean {
   const lower = host.toLowerCase();
   // Normalize into the full 8-hextet sequence so embedded-IPv4 detection
