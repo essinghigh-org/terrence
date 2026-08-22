@@ -1255,6 +1255,27 @@ async function executeRunImpl(runId: string): Promise<void> {
     where: eq(organizations.id, workspace.orgId),
   });
 
+  // Re-check executor policy at plan/apply entry (36-39): handles
+  // admin enabling requireHardIsolation between claim and execution.
+  if (workspace.executionMode !== "agent") {
+    const pForExec = workspace.projectId
+      ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId as string) }).catch((): undefined => undefined)
+      : undefined;
+    const policyError = executorPolicyAllowsLocal(
+      workspace as unknown as { trustedExecution?: boolean | null },
+      pForExec !== undefined ? { allowedExecutionModes: (pForExec as unknown as { allowedExecutionModes?: string | null } | undefined)?.allowedExecutionModes ?? null } : null,
+      org !== undefined ? { requireHardIsolation: (org as unknown as { requireHardIsolation?: boolean | null } | undefined)?.requireHardIsolation ?? null } : null,
+    );
+    if (policyError !== null) {
+      await db.update(runs).set({ status: "errored", statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() } }).where(eq(runs.id, runId));
+      await writeLog(runId, "plan", `[terrence ERROR] ${policyError}`);
+      publish("run.status", { "run-id": runId, "workspace-id": workspace.id, "org-id": workspace.orgId, status: "errored", at: new Date().toISOString() });
+      queueRunNotification(runId, "run:errored", "errored");
+      void reportRunVcsStatus(runId, "errored");
+      return;
+    }
+  }
+
   const workDir = runWorkDir(runId);
   let keepPlan = false;
 
@@ -2870,7 +2891,10 @@ export async function pollWorkerQueue(): Promise<string[]> {
         }
         const o = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
         if (o !== undefined) orgForPolicy = { requireHardIsolation: (o as unknown as { requireHardIsolation?: boolean | null }).requireHardIsolation ?? null };
-      } catch { /* policy lookup is best-effort; fall through to allow */ }
+      } catch (error: unknown) {
+        log.error("executor policy lookup failed, deferring run", { runId: run.id, error: String(error) });
+        continue;
+      }
       const policyError = executorPolicyAllowsLocal(
         workspace as unknown as { trustedExecution?: boolean | null },
         projectForPolicy,
@@ -2885,6 +2909,13 @@ export async function pollWorkerQueue(): Promise<string[]> {
           await writeLog(run.id, "plan", `[terrence ERROR] ${policyError}`);
           queueRunNotification(run.id, "run:errored", "errored");
           void reportRunVcsStatus(run.id, "errored");
+          publish("run.status", {
+            "run-id": run.id,
+            "workspace-id": workspace.id,
+            "org-id": workspace.orgId,
+            status: "errored",
+            at: new Date().toISOString(),
+          });
         }
         continue;
       }

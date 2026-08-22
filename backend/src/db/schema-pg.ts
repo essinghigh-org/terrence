@@ -959,6 +959,7 @@ export const projects = pgTable("projects", {
     settingOverwrites: jsonb("setting_overwrites"),
     defaultAgentPoolId: text("default_agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
     isDefault: boolean("is_default").notNull().default(false),
+    allowedExecutionModes: text("allowed_execution_modes"),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.projects.createdAt.defaultFn!()),
 }, (table) => [
     uniqueIndex("projects_org_name_idx").on(table.orgId, table.name),

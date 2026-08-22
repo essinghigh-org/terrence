@@ -274,6 +274,8 @@ export const projects = sqliteTable("projects", {
   settingOverwrites: text("setting_overwrites", { mode: "json" }).$type<Record<string, boolean>>(),
   defaultAgentPoolId: text("default_agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
   isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
+  // Executor policy (37): allowed execution modes for workspaces in this project.
+  allowedExecutionModes: text("allowed_execution_modes"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   uniqueIndex("projects_org_name_idx").on(table.orgId, table.name),

@@ -465,20 +465,30 @@ if (!isPostgres) {
     }
   }
 
-  // Executor policy columns (36/37/38): additive, defaults preserve existing behavior.
-  for (const [tableName, column, ddl] of [
-    ["workspaces", "trusted_execution", "ALTER TABLE workspaces ADD COLUMN trusted_execution integer NOT NULL DEFAULT 1"],
-    ["projects", "allowed_execution_modes", "ALTER TABLE projects ADD COLUMN allowed_execution_modes text"],
-    ["organizations", "require_hard_isolation", "ALTER TABLE organizations ADD COLUMN require_hard_isolation integer NOT NULL DEFAULT 0"],
-  ] as const) {
-    const cols = (client.query(`PRAGMA table_info(${tableName})`).all() as readonly { readonly name: string }[])
-      .map((c): string => c.name);
-    if (cols.includes(column)) continue;
-    try {
-      client.run(ddl);
-    } catch (error: unknown) {
-      const updated = client.query(`PRAGMA table_info(${tableName})`).all() as readonly { readonly name: string }[];
-      if (!updated.some((c): boolean => c.name === column)) throw error;
+  // Executor policy columns (36/37/38): cache PRAGMA per table so adding columns to the same table stays O(1).
+  {
+    const tableCols = new Map<string, Set<string>>();
+    const colsFor = (t: string): Set<string> => {
+      let s = tableCols.get(t);
+      if (s !== undefined) return s;
+      s = new Set((client.query(`PRAGMA table_info(${t})`).all() as readonly { readonly name: string }[]).map((c): string => c.name));
+      tableCols.set(t, s);
+      return s;
+    };
+    for (const [tableName, column, ddl] of [
+      ["workspaces", "trusted_execution", "ALTER TABLE workspaces ADD COLUMN trusted_execution integer NOT NULL DEFAULT 1"],
+      ["projects", "allowed_execution_modes", "ALTER TABLE projects ADD COLUMN allowed_execution_modes text"],
+      ["organizations", "require_hard_isolation", "ALTER TABLE organizations ADD COLUMN require_hard_isolation integer NOT NULL DEFAULT 0"],
+    ] as const) {
+      if (colsFor(tableName).has(column)) continue;
+      try {
+        client.run(ddl);
+        colsFor(tableName).add(column);
+      } catch (error: unknown) {
+        const updated = new Set((client.query(`PRAGMA table_info(${tableName})`).all() as readonly { readonly name: string }[]).map((c): string => c.name));
+        tableCols.set(tableName, updated);
+        if (!updated.has(column)) throw error;
+      }
     }
   }
 
