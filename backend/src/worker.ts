@@ -183,7 +183,7 @@ export function executorPolicyAllowsLocal(
   // Per-project: if allowedExecutionModes is set, local "remote" must be listed.
   if (project?.allowedExecutionModes !== null && project?.allowedExecutionModes !== undefined) {
     const allowed = project.allowedExecutionModes.split(",").map((s) => s.trim()).filter(Boolean);
-    if (allowed.length > 0 && !allowed.includes("remote") && !allowed.includes("local")) {
+    if (!allowed.includes("remote") && !allowed.includes("local")) {
       return `Project restricts execution to [${allowed.join(", ")}]; local execution is not allowed.`;
     }
   }
@@ -1773,6 +1773,28 @@ async function executeApplyImpl(runId: string): Promise<void> {
     where: eq(organizations.id, workspace.orgId),
   });
 
+  // Re-check executor policy at apply entry too (admin may have tightened policy between plan and apply).
+  if (workspace.executionMode !== "agent") {
+    const pForApply = workspace.projectId
+      ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId as string) }).catch((): undefined => undefined)
+      : undefined;
+    const policyErr = executorPolicyAllowsLocal(
+      workspace as unknown as { trustedExecution?: boolean | null },
+      pForApply !== undefined ? { allowedExecutionModes: (pForApply as unknown as { allowedExecutionModes?: string | null } | undefined)?.allowedExecutionModes ?? null } : null,
+      org !== undefined ? { requireHardIsolation: (org as unknown as { requireHardIsolation?: boolean | null } | undefined)?.requireHardIsolation ?? null } : null,
+    );
+    if (policyErr !== null) {
+      if (run.status !== "canceled" && run.status !== "force_canceled") {
+        await updateRunStatus(runId, "errored");
+        await writeLog(runId, "apply", `[terrence ERROR] ${policyErr}`);
+        publish("run.status", { "run-id": runId, "workspace-id": workspace.id, "org-id": workspace.orgId, status: "errored", at: new Date().toISOString() });
+        queueRunNotification(runId, "run:errored", "errored");
+        void reportRunVcsStatus(runId, "errored");
+      }
+      return;
+    }
+  }
+
   if (!["confirmed", "apply_queued", "applying"].includes(run.status)) await updateRunStatus(runId, "confirmed");
   await updateRunStatus(runId, "apply_queued");
   await updateRunStatus(runId, "applying");
@@ -2904,7 +2926,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
         const blocked = await db.update(runs).set({
           status: "errored",
           statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
-        }).where(claimWhere).returning({ id: runs.id });
+        }).where(and(claimWhere, eq(runs.status, "pending"))).returning({ id: runs.id });
         if (blocked.length > 0) {
           await writeLog(run.id, "plan", `[terrence ERROR] ${policyError}`);
           queueRunNotification(run.id, "run:errored", "errored");
