@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import { authPlugin } from "../../auth";
+import { authPlugin, countLegacyPlaintextTokens } from "../../auth";
 import { db } from "../../db";
 import { databaseMetrics } from "../../db";
 import { agents } from "../../db/schema";
@@ -70,6 +70,7 @@ export const systemRoutes = new Elysia({ name: "admin-system" })
           total: agentRows.reduce((sum: number, row: { status: string; n: number }): number => sum + row.n, 0),
           "by-status": Object.fromEntries(agentRows.map((row: { status: string; n: number }): [string, number] => [row.status, row.n])),
         },
+        "legacy-plaintext-tokens": await countLegacyPlaintextTokens().catch((): number => -1),
       },
     };
   });

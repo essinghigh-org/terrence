@@ -47,6 +47,19 @@ export function rememberRateLimitPrincipal(request: object, token: Readonly<Auth
   if (principal !== undefined) rateLimitPrincipals.set(request, principal);
 }
 
+
+/** Count API tokens still stored as plaintext (pre-hash migration). Used by admin diagnostics (todo 332). */
+export async function countLegacyPlaintextTokens(): Promise<number> {
+  const rows = await db.select({ token: apiTokens.token }).from(apiTokens);
+  let count = 0;
+  for (const row of rows) {
+    const v = row.token;
+    // Hashed tokens are exactly 64 hex chars (SHA-256 hex); anything else is legacy plaintext.
+    if (v.length !== 64 || !/^[0-9a-f]{64}$/i.test(v)) count += 1;
+  }
+  return count;
+}
+
 export const authPlugin = new Elysia({ name: "auth" })
   .derive({ as: "global" }, async ({ request }: DeriveContext): Promise<{
     user: typeof users.$inferSelect | null;
@@ -92,8 +105,11 @@ export const authPlugin = new Elysia({ name: "auth" })
     let { token, user } = await lookup();
 
 
-    // Legacy fallback: re-hash plaintext token on successful use
-    if (token === undefined) {
+    // Legacy fallback: re-hash plaintext token on successful use (todo 331).
+    // Gated behind TERRENCE_ALLOW_LEGACY_TOKENS (default 1 for compat). Set to
+    // "0" once the legacy counter reads zero to fully remove the plaintext path.
+    const allowLegacyTokens = process.env.TERRENCE_ALLOW_LEGACY_TOKENS !== "0";
+    if (allowLegacyTokens && token === undefined) {
       const legacyToken = await db.query.apiTokens.findFirst({
         where: eq(apiTokens.token, tokenString),
       });
