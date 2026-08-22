@@ -51,6 +51,7 @@ export function syncedTrustedClientIp(request: unknown): string | null {
  * otherwise checks the URL scheme directly. Trusting the forwarded header only
  * when the proxy is configured prevents an off-proxy client from spoofing HTTPS.
  */
+/** @public Intentional surface: used by security-headers HSTS check. */
 export function requestIsHttps(request: Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }>): boolean {
   try {
     if (new URL(request.url).protocol === "https:") return true;
