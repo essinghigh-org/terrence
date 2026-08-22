@@ -38,6 +38,7 @@ export async function variableValueForRead(row: {
  * True when a row still stores its sensitive value in the legacy plaintext
  * column (needs migration on next write).
  */
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function sensitiveValueNeedsMigration(row: {
   readonly value: string;
   readonly valueEncrypted?: string | null;

@@ -42,6 +42,8 @@ export const RUN_NOTIFICATION_TRIGGERS = [
   "run:errored",
   "run:confirmed",
 ] as const;
+// Re-exported for API consumers via route schemas; knip cannot see that use.
+/** @public */
 export type RunNotificationTrigger = (typeof RUN_NOTIFICATION_TRIGGERS)[number];
 
 export const ASSESSMENT_NOTIFICATION_TRIGGERS = [
@@ -49,6 +51,8 @@ export const ASSESSMENT_NOTIFICATION_TRIGGERS = [
   "assessment:check_failure",
   "assessment:failed",
 ] as const;
+// Re-exported for API consumers via route schemas; knip cannot see that use.
+/** @public */
 export type AssessmentNotificationTrigger = (typeof ASSESSMENT_NOTIFICATION_TRIGGERS)[number];
 
 export const CHANGE_REQUEST_NOTIFICATION_TRIGGERS = [
@@ -58,6 +62,8 @@ export const CHANGE_REQUEST_NOTIFICATION_TRIGGERS = [
   "change_request:canceled",
   "team:change_request",
 ] as const;
+// Re-exported for API consumers via route schemas; knip cannot see that use.
+/** @public */
 export type ChangeRequestNotificationTrigger = (typeof CHANGE_REQUEST_NOTIFICATION_TRIGGERS)[number];
 
 export const NOTIFICATION_TRIGGERS = [
@@ -70,6 +76,7 @@ export function isExecutionMode(value: unknown): value is ExecutionMode {
   return typeof value === "string" && (EXECUTION_MODES as readonly string[]).includes(value);
 }
 
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function isProviderMode(value: unknown): value is ProviderMode {
   return typeof value === "string" && (PROVIDER_MODES as readonly string[]).includes(value);
 }

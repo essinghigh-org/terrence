@@ -21,6 +21,7 @@ export function generateAuthenticationToken(prefix: string): string {
  * Generate a short/ephemeral credential (refresh, MFA recovery, OAuth codes,
  * run tokens). Same entropy, distinct prefix convention at the call site.
  */
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function generateEphemeralToken(prefix: string): string {
   return opaqueToken(prefix);
 }
@@ -40,6 +41,7 @@ export function opaqueToken(prefix: string): string {
  * identify which credential is installed somewhere without storing/revealing
  * the secret. Last 6 characters of the SHA-256 digest.
  */
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function tokenFingerprint(token: string): string {
   return hashAuthenticationToken(token).slice(-6);
 }

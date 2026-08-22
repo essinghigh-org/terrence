@@ -157,4 +157,5 @@ export const dbMigrationRoutes = new Elysia({ name: "admin-db-migration" })
   });
 
 // Re-exported for tests that want to assert URL masking.
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export { maskPostgresUrl };

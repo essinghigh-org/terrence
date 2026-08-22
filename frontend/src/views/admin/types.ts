@@ -12,11 +12,13 @@ export type AdminSection =
   | "audit"
   | "auth";
 
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export const attrString = (attrs: JsonObject, key: string, fallback: string): string => {
   const value = attrs[key];
   return isString(value) ? value : fallback;
 };
 
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export const attrBoolean = (attrs: JsonObject, key: string, fallback: boolean): boolean => {
   const value = attrs[key];
   return isBoolean(value) ? value : fallback;

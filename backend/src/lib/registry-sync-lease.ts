@@ -116,6 +116,7 @@ export class RegistrySyncLease {
 }
 
 /** Drop expired leases (periodic sweep). Returns the number reaped. */
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export async function reapExpiredRegistrySyncLeases(now = Date.now()): Promise<number> {
   const deleted = await db.delete(registrySyncLeases)
     .where(lt(registrySyncLeases.expiresAt, now))

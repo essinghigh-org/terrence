@@ -2,6 +2,9 @@ import { ApiError, prepareAuthToken } from "./api";
 import { isRecord } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
 
+// Wire-format shape of the SSE run-status event; knip cannot see the
+// type-only documentation use.
+/** @public */
 export type RunStatusEvent = Readonly<{
   "run-id": string;
   "workspace-id": string;

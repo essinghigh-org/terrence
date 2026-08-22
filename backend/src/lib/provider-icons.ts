@@ -158,12 +158,15 @@ export async function batchResolveProviderIconUrls(providerNames: readonly strin
 }
 
 // Test-only helpers
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function clearProviderIconCache(): void {
   cache.clear();
   inflightByKey.clear();
   registryInFlight = 0;
   registryQueue.length = 0;
 }
+
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function primeProviderIconCache(key: string, url: string | null): void {
   setCache(key.toLowerCase(), url, CACHE_TTL_MS);
 }

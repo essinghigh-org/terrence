@@ -72,6 +72,7 @@ export async function pruneExpiredOAuthHandshakeStates(now = Date.now()): Promis
 }
 
 /** Advisory count of live handshakes (diagnostics only). */
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export async function countOAuthHandshakeStates(now = Date.now()): Promise<number> {
   const rows = await db.select({ count: sql<number>`count(*)` })
     .from(oauthHandshakeStates)

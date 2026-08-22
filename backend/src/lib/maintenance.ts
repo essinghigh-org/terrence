@@ -101,6 +101,7 @@ export function exitMaintenance(): MaintenanceState {
 }
 
 /** Test helper: drop the in-memory cache (tests use a fresh STORAGE_DIR). */
+/** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function resetMaintenanceCacheForTests(): void {
   cached = undefined;
 }

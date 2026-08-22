@@ -1104,8 +1104,23 @@ describe("tfe provider e2e", () => {
       }
     }
     const { ensureBinary } = await import("../../src/binaryManager");
-    const terraform = await ensureBinary("terraform");
-    const tofu = await ensureBinary("tofu");
+    // Upstream registry lookups are occasionally transient (CI runners share
+    // egress); retry each download before giving the whole file up.
+    const ensureWithRetry = async (tool: "terraform" | "tofu"): Promise<{ binaryPath: string } | null> => {
+      let last: { binaryPath: string } | null = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) await sleep(5_000 * attempt);
+        try {
+          last = await ensureBinary(tool);
+        } catch {
+          last = null;
+        }
+        if (last !== null) return last;
+      }
+      return null;
+    };
+    const terraform = await ensureWithRetry("terraform");
+    const tofu = await ensureWithRetry("tofu");
     if (terraform === null || tofu === null) throw new Error("could not obtain terraform and tofu binaries (network required)");
     terraformBin = terraform.binaryPath;
     tofuBin = tofu.binaryPath;
