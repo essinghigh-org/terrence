@@ -19,18 +19,7 @@
         "tests/**/*.ts",
         "drizzle.config.pg.ts",
         "src/db/pg-schema.ts",
-        "src/lib/module-test-supervisor.ts",
-        "src/lib/run-claim.ts",
-        "src/lib/configuration-materialization.ts",
-        "src/lib/terraform-init.ts",
-        "src/lib/plan-phase.ts",
-        "src/lib/policy-phase.ts",
-        "src/lib/cost-phase.ts",
-        "src/lib/run-task-phase.ts",
-        "src/lib/apply-phase.ts",
-        "src/lib/state-persistence.ts",
-        "src/lib/run-finalization.ts",
-        "src/lib/run-cleanup.ts"
+        "src/lib/module-test-supervisor.ts"
       ]
     },
     "frontend": {
