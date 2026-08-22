@@ -172,6 +172,26 @@ function assertRunSandboxAvailable(): void {
   }
 }
 
+/** Executor policy check (36-39): returns an error message when local execution is forbidden. */
+export function executorPolicyAllowsLocal(
+  workspace: Readonly<{ trustedExecution?: boolean | null; executionMode?: string | null }>,
+  project: Readonly<{ allowedExecutionModes?: string | null }> | null,
+  organization: Readonly<{ requireHardIsolation?: boolean | null }> | null,
+): string | null {
+  // Per-workspace: untrusted workspaces must not run locally.
+  if (workspace.trustedExecution === false) return "Workspace is marked untrusted: local execution is refused. Use an isolated executor (agent/container).";
+  // Per-project: if allowedExecutionModes is set, local "remote" must be listed.
+  if (project?.allowedExecutionModes !== null && project?.allowedExecutionModes !== undefined) {
+    const allowed = project.allowedExecutionModes.split(",").map((s) => s.trim()).filter(Boolean);
+    if (allowed.length > 0 && !allowed.includes("remote") && !allowed.includes("local")) {
+      return `Project restricts execution to [${allowed.join(", ")}]; local execution is not allowed.`;
+    }
+  }
+  // Per-organization: require hard isolation means no local Landlock.
+  if (organization?.requireHardIsolation === true) return "Organization requires hard isolation: local execution is disabled.";
+  return null;
+}
+
 /** Resolve the run workdir (tmpdir-based; the sandbox allow-lists it per run). */
 function runWorkDir(runId: string): string {
   return runSandbox !== null ? runSandbox.workDirFor(runId) : join(tmpdir(), "terrence", "runs", runId);
@@ -2836,6 +2856,38 @@ export async function pollWorkerQueue(): Promise<string[]> {
         void reportRunVcsStatus(run.id, "plan_queued");
       }
       continue;
+    }
+
+    // Executor policy (36-39): refuse local Landlock for untrusted workspaces
+    // or when project/org requires hard isolation.
+    {
+      let projectForPolicy: { allowedExecutionModes?: string | null } | null = null;
+      let orgForPolicy: { requireHardIsolation?: boolean | null } | null = null;
+      try {
+        if (workspace.projectId !== null && workspace.projectId !== undefined) {
+          const p = await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId as string) });
+          if (p !== undefined) projectForPolicy = { allowedExecutionModes: (p as unknown as { allowedExecutionModes?: string | null }).allowedExecutionModes ?? null };
+        }
+        const o = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
+        if (o !== undefined) orgForPolicy = { requireHardIsolation: (o as unknown as { requireHardIsolation?: boolean | null }).requireHardIsolation ?? null };
+      } catch { /* policy lookup is best-effort; fall through to allow */ }
+      const policyError = executorPolicyAllowsLocal(
+        workspace as unknown as { trustedExecution?: boolean | null },
+        projectForPolicy,
+        orgForPolicy,
+      );
+      if (policyError !== null) {
+        const blocked = await db.update(runs).set({
+          status: "errored",
+          statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+        }).where(claimWhere).returning({ id: runs.id });
+        if (blocked.length > 0) {
+          await writeLog(run.id, "plan", `[terrence ERROR] ${policyError}`);
+          queueRunNotification(run.id, "run:errored", "errored");
+          void reportRunVcsStatus(run.id, "errored");
+        }
+        continue;
+      }
     }
 
     // Claim local and remote runs atomically by moving them into the first execution stage.

@@ -61,6 +61,8 @@ export const organizations = sqliteTable("organizations", {
   aggregatedCommitStatusEnabled: integer("aggregated_commit_status_enabled", { mode: "boolean" }).notNull().default(true),
   sendPassingStatusesForUntriggeredSpeculativePlans: integer("send_passing_statuses", { mode: "boolean" }).notNull().default(false),
   moduleTestTokenTtl: integer("module_test_token_ttl").notNull().default(600),
+  // Isolation policy (38): when true, workspaces in this org must not use local execution.
+  requireHardIsolation: integer("require_hard_isolation", { mode: "boolean" }).notNull().default(false),
 });
 
 export const samlSettings = sqliteTable("saml_settings", {
@@ -331,6 +333,10 @@ export const workspaces = sqliteTable("workspaces", {
   settingOverwrites: text("setting_overwrites", { mode: "json" }).$type<Record<string, boolean>>(),
   locked: integer("locked", { mode: "boolean" }).default(false),
   lockedReason: text("locked_reason"),
+  // Executor policy (36/37/39): per-workspace isolation level. When
+  // `trustedExecution` is false, local Landlock execution is refused and the
+  // run must be dispatched to an isolated executor (agent/container/k8s).
+  trustedExecution: integer("trusted_execution", { mode: "boolean" }).notNull().default(true),
   // Ownership metadata (kanban 16.12): operational attribution beyond RBAC.
   // ownedByType is "team" | "user" | "service" | null; ownedById references
   // the team or user row when applicable. This is informational, not

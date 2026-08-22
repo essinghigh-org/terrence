@@ -793,6 +793,7 @@ export const organizations = pgTable("organizations", {
     aggregatedCommitStatusEnabled: boolean("aggregated_commit_status_enabled").notNull().default(true),
     sendPassingStatusesForUntriggeredSpeculativePlans: boolean("send_passing_statuses").notNull().default(false),
     moduleTestTokenTtl: bigint("module_test_token_ttl", { mode: "number" }).notNull().default(600),
+    requireHardIsolation: boolean("require_hard_isolation").notNull().default(false),
 });
 
 export const planExports = pgTable("plan_exports", {
@@ -1757,6 +1758,7 @@ export const workspaces = pgTable("workspaces", {
     settingOverwrites: jsonb("setting_overwrites"),
     locked: boolean("locked").default(false),
     lockedReason: text("locked_reason"),
+    trustedExecution: boolean("trusted_execution").notNull().default(true),
     ownedByType: text("owned_by_type"),
     ownedById: text("owned_by_id"),
     contactEmail: text("contact_email"),
