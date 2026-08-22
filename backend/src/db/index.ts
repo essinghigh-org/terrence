@@ -804,6 +804,18 @@ export function databasePoolMetrics(): ReturnType<typeof poolMetrics> {
   return poolMetrics(driver, max);
 }
 
+/** Drizzle journal tag of the last applied migration (e.g. "0028_melodic_micromax"). */
+export function databaseSchemaVersion(): string | null {
+  try {
+    const journalPath = isPostgres
+      ? new URL("../../drizzle/pg/meta/_journal.json", import.meta.url).pathname
+      : new URL("../../drizzle/meta/_journal.json", import.meta.url).pathname;
+    const raw = require("node:fs").readFileSync(journalPath, "utf8");
+    const tag = (JSON.parse(raw) as { entries?: { tag?: string }[] }).entries?.slice(-1)[0]?.tag;
+    return typeof tag === "string" && tag !== "" ? tag : null;
+  } catch { return null; }
+}
+
 // Wrappers for transaction latency (todo 291): callers in db-layer wrap
 // transaction bodies with these helpers so wall time is captured.
 // poolTransaction helpers are available from lib/db-pool-metrics directly when needed
