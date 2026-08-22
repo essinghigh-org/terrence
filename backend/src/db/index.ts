@@ -13,7 +13,7 @@ import { envEnabled } from '../lib/env';
 import { planJsonDirectory } from '../lib/plan-json';
 import { runLogsDirectory } from '../lib/run-logs';
 import { databaseUrl, isPostgres, storageDir } from './driver';
-import { poolMetrics, poolQueryEnd, poolQueryStart, poolTransactionEnd, poolTransactionStart, recordSlowQuery } from '../lib/db-pool-metrics';
+import { poolMetrics, poolQueryEnd, poolQueryStart, recordSlowQuery } from '../lib/db-pool-metrics';
 
 // Deliberately synchronous: a top-level await here made this module a TLA
 // module, and Bun's worker threads can resolve importers while the TLA is
@@ -806,7 +806,7 @@ export function databasePoolMetrics(): ReturnType<typeof poolMetrics> {
 
 // Wrappers for transaction latency (todo 291): callers in db-layer wrap
 // transaction bodies with these helpers so wall time is captured.
-export { poolTransactionStart, poolTransactionEnd };
+// poolTransaction helpers are available from lib/db-pool-metrics directly when needed
 
 /**
  * Apply the PostgreSQL schema migrations (drizzle/pg). The sqlite migrator
