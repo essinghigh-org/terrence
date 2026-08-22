@@ -118,7 +118,7 @@ export const THEMES: readonly ThemeDefinition[] = [
   }),
   createTheme("solarized-light", "Solarized Light", "light", {
     background: "44 80% 94%", foreground: "194 14% 45%", card: "45 43% 89%", primary: "205 69% 35%", primaryForeground: "44 80% 97%",
-    secondary: "45 43% 89%", secondaryForeground: "192 81% 14%", muted: "45 43% 89%", mutedForeground: "194 14% 30%",
+    secondary: "45 43% 89%", secondaryForeground: "192 81% 14%", muted: "45 43% 89%", mutedForeground: "194 14% 24%",
     accent: "45 100% 35%", accentForeground: "44 80% 97%", destructive: "1 71% 52%", destructiveForeground: "44 80% 97%",
     border: "44 37% 80%", input: "194 14% 45%", success: "68 100% 30%", warning: "18 80% 44%",
     codeBackground: "192 81% 14%", codeForeground: "44 80% 94%",
@@ -174,7 +174,7 @@ export const THEMES: readonly ThemeDefinition[] = [
   }),
   createTheme("solarized-dark", "Solarized Dark", "dark", {
     background: "192 100% 11%", foreground: "194 14% 56%", card: "192 81% 14%", popover: "192 81% 18%", primary: "205 69% 58%", primaryForeground: "192 100% 11%",
-    secondary: "192 81% 18%", secondaryForeground: "44 80% 94%", muted: "192 81% 14%", mutedForeground: "194 14% 72%",
+    secondary: "192 81% 18%", secondaryForeground: "44 80% 94%", muted: "192 81% 14%", mutedForeground: "194 14% 80%",
     accent: "45 100% 35%", accentForeground: "44 80% 94%", destructive: "1 71% 52%", destructiveForeground: "44 80% 94%",
     border: "194 14% 35%", input: "194 14% 45%", success: "68 100% 30%", warning: "18 80% 44%",
     codeBackground: "192 100% 8%", codeForeground: "44 80% 94%",
