@@ -30,6 +30,13 @@ function hashToken(token: string): string {
 type HeaderGetter = { readonly get: (name: string) => string | null };
 type DeriveContext = { readonly request: { readonly headers: HeaderGetter } };
 
+
+function tokenPrefix(tokenString: string): string | null {
+  const dash = tokenString.indexOf("-");
+  if (dash <= 0) return null;
+  return tokenString.slice(0, dash);
+}
+
 const rateLimitPrincipals = new WeakMap<object, string>();
 
 export function authenticatedRateLimitKey(request: object): string | undefined {
@@ -122,6 +129,9 @@ export const authPlugin = new Elysia({ name: "auth" })
       const row = rows[0];
       return { token: row?.token, user: row?.user ?? null };
     };
+    // Todo 335: prefix-based dispatch. Known prefixes route to their table
+    // first; unknown/no-prefix falls through to the existing chain for compat.
+    const prefix = tokenPrefix(tokenString);
     let { token, user } = await lookup();
 
 
@@ -144,7 +154,11 @@ export const authPlugin = new Elysia({ name: "auth" })
 
     // Run tokens: ephemeral worker credentials (the reference format run-token model). They do
     // not map to a user/team/org token row; the run row carries the scope.
-    if (token === undefined) {
+    // Todo 335: prefix dispatch - run tokens are `trun_`, so skip this lookup
+    // for tokens whose prefix clearly indicates another credential class.
+    const isRunPrefix = tokenString.startsWith("trun_");
+    const isSystemPrefix = tokenString.startsWith("tfe-system-");
+    if (token === undefined && (isRunPrefix || (!isSystemPrefix && prefix === null))) {
       const runRows = await db.select().from(runTokens)
         .where(eq(runTokens.tokenHash, tokenHash))
         .limit(1);
@@ -174,7 +188,7 @@ export const authPlugin = new Elysia({ name: "auth" })
     // them last does not change which token matches — it only keeps the
     // hot application path (api_tokens + users in one query) free of an
     // extra round trip for a rare credential class.
-    if (token === undefined) {
+    if (token === undefined && (isSystemPrefix || (!isRunPrefix && prefix === null))) {
       const systemRow = (await db.select().from(systemApiTokens)
         .where(eq(systemApiTokens.tokenHash, tokenHash)).limit(1))[0];
       if (systemRow !== undefined) {
