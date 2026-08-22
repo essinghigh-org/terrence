@@ -68,6 +68,7 @@ import { applyGateBlockReason } from "./lib/operations";
 import { isMaintenanceActive } from "./lib/maintenance";
 import { publish } from "./lib/event-bus";
 import { probeLandlockAbi, RunSandbox, removeSandboxWorkDir, runNetDenyEnabled, runSandboxRequired } from "./lib/sandbox";
+import { attachToRunCgroup, createRunCgroup, destroyRunCgroup, killRunCgroup } from "./lib/run-cgroup";
 import { decryptSecret } from "./lib/secrets";
 import { log } from "./lib/log";
 import { assertArchiveExpandedSize, assertArchiveLogicalSize, assertArchiveMemberCount } from "./lib/archive";
@@ -188,6 +189,15 @@ type TrackedRunProcess = Readonly<{
   stderr?: Readonly<ReadableStream<Uint8Array>>;
 }>;
 const activeRunProcesses = new Map<string, Set<TrackedRunProcess>>();
+/** Per-run cgroup paths (kanban 8/9). Empty when cgroups are unavailable. */
+const activeRunCgroups = new Map<string, string>();
+
+/** Create the run's cgroup (limits applied) when the host allows it. */
+export function prepareRunCgroup(runId: string): string | null {
+  const path = createRunCgroup(runId);
+  if (path !== null) activeRunCgroups.set(runId, path);
+  return path;
+}
 
 function trackRunProcess(runId: string, process: unknown): TrackedRunProcess {
   const child = process as TrackedRunProcess & { pid?: number | null };
@@ -204,6 +214,7 @@ function trackRunProcess(runId: string, process: unknown): TrackedRunProcess {
     stdout: child.stdout,
     stderr: child.stderr,
   } as TrackedRunProcess;
+  if (tracked.pid !== null) attachToRunCgroup(tracked.pid, activeRunCgroups.get(runId) ?? null);
   const processes = activeRunProcesses.get(runId) ?? new Set<TrackedRunProcess>();
   processes.add(tracked);
   activeRunProcesses.set(runId, processes);
@@ -245,6 +256,15 @@ function terminateProcessGroup(pid: number | null, signal: "SIGINT" | "SIGKILL")
 /** Stop the actual Terraform process before a canceled run can report success. */
 export function cancelRunExecution(runId: string, force = false): void {
   const signal = force ? "SIGKILL" : "SIGINT";
+  // Cgroup cancellation (todo 9) first when the run has a group: cgroup.kill
+  // is atomic kernel-side and reaches daemonized/double-forked descendants
+  // that escape process-group termination. Process-group signals still fire
+  // as the primary path; the cgroup kill is the backstop, and only escalates
+  // immediately on force.
+  const groupPath = activeRunCgroups.get(runId);
+  if (force && groupPath !== undefined) {
+    killRunCgroup(runId);
+  }
   for (const child of activeRunProcesses.get(runId) ?? []) {
     const pgid = child.pid;
     // Kill the whole process group, not just the tracked leader. IaC runs spawn
@@ -263,9 +283,18 @@ export function cancelRunExecution(runId: string, force = false): void {
       // terminates those orphans.
       setTimeout((): void => {
         terminateProcessGroup(pgid, "SIGKILL");
+        // Cgroup backstop: after grace, hard-kill any straggler the group
+        // signals missed (daemonizers, setpgid escapes).
+        if (activeRunCgroups.get(runId) !== undefined) killRunCgroup(runId);
       }, 5_000);
     }
   }
+}
+
+/** Tear down a finished run's cgroup. Call from run finalization/cleanup. */
+export function cleanupRunCgroup(runId: string): void {
+  if (!activeRunCgroups.delete(runId)) return;
+  destroyRunCgroup(runId);
 }
 
 async function runWasCanceled(runId: string): Promise<boolean> {
@@ -1178,7 +1207,13 @@ async function waitForVcsConfigurationDownload(
 
 /** Tracked wrapper: shutdown drain waits for in-flight run executions. */
 export function executeRun(runId: string): Promise<void> {
-  return trackLocalExecution(executeRunImpl(runId));
+  prepareRunCgroup(runId);
+  return trackLocalExecution(
+    executeRunImpl(runId).finally((): void => {
+      // Cgroup teardown retries are cheap: rmdir only succeeds on empty groups.
+      cleanupRunCgroup(runId);
+    }),
+  );
 }
 
 async function executeRunImpl(runId: string): Promise<void> {

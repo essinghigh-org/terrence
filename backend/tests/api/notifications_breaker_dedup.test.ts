@@ -10,7 +10,7 @@ import {
   users,
   workspaces,
 } from "../../src/db/schema";
-import { _breakerState, _dedup, deliverRunNotifications } from "../../src/lib/notifications";
+import { _breakerState, _dedup, _resetSharedDeliveryState, deliverRunNotifications } from "../../src/lib/notifications";
 
 describe("Notification circuit breaker & dedup (kanban 7.8 / 7.9)", () => {
   const suffix = crypto.randomUUID();
@@ -32,7 +32,9 @@ describe("Notification circuit breaker & dedup (kanban 7.8 / 7.9)", () => {
     ]);
     await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: authToken, userId }]);
     await db.insert(workspaces).values([{ id: workspaceId, name: `ws-${suffix}`, orgId }]);
-    _dedup(true); // reset dedup state before the suite
+    _dedup(true);
+        await _resetSharedDeliveryState(); // reset dedup state before the suite
+    await _resetSharedDeliveryState();
   });
 
   afterAll(async () => {
@@ -42,6 +44,7 @@ describe("Notification circuit breaker & dedup (kanban 7.8 / 7.9)", () => {
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.delete(users).where(eq(users.username, userId));
     _dedup(true);
+        await _resetSharedDeliveryState();
   });
 
   it("7.8 tripped circuit breaker skips delivery to a dead destination", async () => {
@@ -80,6 +83,7 @@ describe("Notification circuit breaker & dedup (kanban 7.8 / 7.9)", () => {
       // makes BREAKER_FAILURE_LIMIT internal HTTP attempts, all failing).
       for (let i = 0; i < 3; i += 1) {
         _dedup(true);
+        await _resetSharedDeliveryState();
         const delivery = await deliverRunNotifications(deadRunId, "run:errored");
         expect(delivery).toHaveLength(1);
         expect(delivery[0]?.successful).toBeFalse();
@@ -91,6 +95,7 @@ describe("Notification circuit breaker & dedup (kanban 7.8 / 7.9)", () => {
 
       // Fourth delivery: the breaker is open, so NO HTTP call happens.
       _dedup(true);
+        await _resetSharedDeliveryState();
       const tripped = await deliverRunNotifications(deadRunId, "run:errored");
       expect(tripped).toHaveLength(1);
       expect(tripped[0]?.successful).toBeFalse();
@@ -137,9 +142,11 @@ describe("Notification circuit breaker & dedup (kanban 7.8 / 7.9)", () => {
 
       // Two failed deliveries accumulate failures.
       _dedup(true);
+        await _resetSharedDeliveryState();
       await deliverRunNotifications(flakyRunId, "run:errored");
       expect(_breakerState(configId).failures).toBe(1);
       _dedup(true);
+        await _resetSharedDeliveryState();
       await deliverRunNotifications(flakyRunId, "run:errored", "canceled");
       expect(_breakerState(configId).failures).toBe(2);
       expect(_breakerState(configId).open).toBeFalse();
@@ -147,6 +154,7 @@ describe("Notification circuit breaker & dedup (kanban 7.8 / 7.9)", () => {
       // The destination recovers: one successful delivery resets to zero and
       // the breaker never opens.
       _dedup(true);
+        await _resetSharedDeliveryState();
       const recovered = await deliverRunNotifications(flakyRunId, "run:errored", "errored");
       expect(recovered[0]?.successful).toBeTrue();
       const state = _breakerState(configId);
@@ -191,6 +199,7 @@ describe("Notification circuit breaker & dedup (kanban 7.8 / 7.9)", () => {
       });
 
       _dedup(true);
+        await _resetSharedDeliveryState();
       // Same (run, trigger, status) twice in a row → deduped on second call.
       const first = await deliverRunNotifications(runId, "run:errored");
       const second = await deliverRunNotifications(runId, "run:errored");

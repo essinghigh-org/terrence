@@ -60,12 +60,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
 FROM cgr.dev/chainguard/wolfi-base@sha256:30f03343947c7ae3581fda727a6e2aa7b8ce7009b7bfc2ab8d5c9483ace5812f
 # Pin the full -rN revision so apk exact-matches; bump together with bun bumps.
 ARG BUN_VERSION=1.3.14-r3
+ARG BUILD_VERSION=0.0.0
+ARG BUILD_SHA=unknown
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000 \
     STORAGE_DIR=/app/backend/storage \
     INFRACOST_ENABLED=false \
-    INFRACOST_VERSION=0.10.45
+    INFRACOST_VERSION=0.10.45 \
+    BUILD_VERSION=${BUILD_VERSION} \
+    BUILD_SHA=${BUILD_SHA}
 
 # wolfi-base ships busybox (tar/cp/which), glibc, apk and ca-certificates-bundle.
 # Add the external tools the worker shells out to at runtime. Bun comes from apk

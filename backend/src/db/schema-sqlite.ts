@@ -405,6 +405,31 @@ export const notificationWorkspaceCounters = sqliteTable("notification_workspace
   updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
 });
 
+/**
+ * Replica-shared notification delivery control state (kanban 15/16).
+ *
+ * kind="breaker": circuit breaker for one notification configuration.
+ *   stateKey = configuration id, value = consecutive failure count,
+ *   windowStart = when the breaker opened (null while closed).
+ * kind="dedup": logical-notification emission marker.
+ *   stateKey = "<scope>:<runId|assessmentId>:<trigger>:<status>",
+ *   value = 0, windowStart = last emission time.
+ *
+ * All timestamps are worker-supplied epoch ms so SQLite and Postgres behave
+ * identically. Rows are pruned on read when expired and swept periodically.
+ */
+export const notificationDeliveryState = sqliteTable("notification_delivery_state", {
+  id: text("id").primaryKey(),
+  kind: text("kind").notNull(),
+  stateKey: text("state_key").notNull(),
+  value: integer("value").notNull().default(0),
+  windowStart: integer("window_start"),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("notification_delivery_state_kind_key_idx").on(table.kind, table.stateKey),
+  index("notification_delivery_state_updated_idx").on(table.updatedAt),
+]);
+
 export const workspaceVariables = sqliteTable("workspace_variables", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
