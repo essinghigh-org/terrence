@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
+// Never mutate DATABASE_URL in a test — it corrupts the Postgres connection for later suites.
 const SENSITIVE_KEYS = [
-  "DATABASE_URL",
   "TERRENCE_SESSION_SECRET",
   "TERRENCE_ENCRYPTION_KEY",
   "TERRENCE_GITHUB_APP_PRIVATE_KEY",
@@ -10,6 +10,8 @@ const SENSITIVE_KEYS = [
   "TERRENCE_OAUTH_CLIENT_SECRET",
   "TERRENCE_AGENT_TOKEN",
 ] as const;
+
+const DATABASE_URL_MARKER = "secret-marker-DATABASE_URL";
 
 describe("run env isolation — secrets never leak into Terraform", () => {
   function assertNoSensitive(env: Readonly<Record<string, string>>): void {
@@ -51,6 +53,8 @@ describe("run env isolation — secrets never leak into Terraform", () => {
           expect(stdout).not.toContain(k);
           expect(stdout).not.toContain(`secret-marker-${k}`);
         }
+        expect(stdout).not.toContain("DATABASE_URL");
+        expect(stdout).not.toContain(DATABASE_URL_MARKER);
       } finally {
         await rm(workDir, { recursive: true, force: true });
       }
