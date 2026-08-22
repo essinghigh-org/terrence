@@ -54,12 +54,43 @@ export type NotificationDelivery = Readonly<{
   attempts: number;
 }>;
 
+/** Header names whose values must never be persisted with notification
+ * delivery attempts (kanban 17). Response headers can carry upstream
+ * credentials (Set-Cookie sessions, Authorization echoes, proxy auth),
+ * internal topology (Server, X-Powered-By), and tracing ids that leak
+ * infrastructure detail. Matching is lowercase. */
+const REDACTED_RESPONSE_HEADERS = new Set([
+  "set-cookie",
+  "authorization",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "www-authenticate",
+  "cookie",
+  "x-api-key",
+  "server",
+  "x-powered-by",
+  "forwarded",
+  "via",
+]);
+
 function responseHeaders(headers: Readonly<Headers>): Record<string, string[]> {
   const result: Record<string, string[]> = {};
   headers.forEach((value, key): void => {
-    result[key.toLowerCase()] = [value];
+    const lower = key.toLowerCase();
+    if (REDACTED_RESPONSE_HEADERS.has(lower)) {
+      // Record the header's presence without its value: operators can still
+      // see the endpoint set a cookie/auth challenge, but never its contents.
+      result[lower] = ["[redacted]"];
+      return;
+    }
+    result[lower] = [value];
   });
   return result;
+}
+
+/** Test seam for the redaction decision table. */
+export function _redactedHeaderNamesForTests(): ReadonlySet<string> {
+  return REDACTED_RESPONSE_HEADERS;
 }
 
 // ---------------------------------------------------------------------------

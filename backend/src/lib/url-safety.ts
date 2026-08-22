@@ -224,6 +224,13 @@ export async function resolveExternalUrl(
     return { error: "Invalid URL" };
   }
   if (!["http:", "https:"].includes(parsed.protocol)) return { error: "Only http and https URLs are allowed" };
+  // Reject userinfo credentials (kanban 18): configured integration secrets
+  // belong in structured secret fields, not embedded in URLs where they land
+  // in logs, audit records, and error messages. `user@host` without a
+  // password is rejected too — it is ambiguous and never intentional.
+  if (parsed.username !== "" || parsed.password !== "") {
+    return { error: "URLs with embedded credentials (user:password@host) are not allowed" };
+  }
   const literalReason = privateHostReason(parsed.hostname);
   if (!allowPrivate && literalReason !== null) return { error: literalReason };
 
@@ -271,7 +278,9 @@ export async function fetchResolvedExternalUrl(target: ResolvedExternalUrl, init
       method: init.method,
       headers: Object.fromEntries(headers),
       servername: secure && isIP(hostname) === 0 ? hostname : undefined,
-      auth: url.username === "" ? undefined : `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`,
+      // Defense-in-depth with the resolveExternalUrl userinfo rejection:
+      // credentials must arrive as explicit headers, not URL components.
+      auth: undefined,
       signal: AbortSignal.timeout(init.timeoutMs),
     // Node stream callbacks expose mutable transport objects by design.
     // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
