@@ -527,7 +527,7 @@ export const app = new Elysia()
     }
     headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
     headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type,Idempotency-Key,If-Match,If-None-Match";
-    headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining,X-Request-Id";
+    headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,Retry-After,X-Request-Id";
   })
   .onAfterHandle(({ request, response, set }: AfterHandleContext): void => {
     const meta = requestMeta.get(request as unknown as Request);
@@ -598,6 +598,22 @@ export const app = new Elysia()
     const remaining = set.headers["RateLimit-Remaining"];
     if (limit !== undefined) headers["X-RateLimit-Limit"] = limit;
     if (remaining !== undefined) headers["X-RateLimit-Remaining"] = remaining;
+    // 461/462: standardize Retry-After + legacy X-RateLimit-Reset on 429; honor any explicit Retry-After already set.
+    if ((set.status === 429 || String(set.status) === "429") && headers["Retry-After"] === undefined) {
+      const reset = set.headers["RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset-At"];
+      let seconds: number | null = null;
+      if (reset !== undefined) {
+        const asNum = Number(reset);
+        if (Number.isFinite(asNum) && asNum > 0) {
+          seconds = asNum > 1_000_000_000 ? Math.max(1, Math.ceil((asNum - Date.now()) / 1000)) : Math.max(1, Math.ceil(asNum));
+        } else {
+          const asDate = Date.parse(String(reset));
+          if (!Number.isNaN(asDate)) seconds = Math.max(1, Math.ceil((asDate - Date.now()) / 1000));
+        }
+      }
+      headers["Retry-After"] = String(seconds ?? 60);
+      if (headers["X-RateLimit-Reset"] === undefined && reset !== undefined) headers["X-RateLimit-Reset"] = String(reset);
+    }
     // 452/453: weak ETag for read-heavy JSON GET responses; honor If-None-Match.
     if (isJsonDocument && (pathname === "/api" || pathname.startsWith("/api/"))) {
       try {

@@ -651,6 +651,25 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
 
 export const healthRoutes = new Elysia({ name: "health" })
   .use(authPlugin)
+  // 459/460: programmatic capabilities + version-negotiation endpoint (TFE parity, also satisfies 463 docs premise).
+  .get("/api/v2/capabilities", ({ set }: MetricsCtx): Record<string, unknown> => {
+    const h = set.headers as Record<string, string | number>;
+    h["TFP-API-Version"] = TFP_API_VERSION;
+    h["TFE-Version"] = COMPATIBILITY_VERSION;
+    h["X-TFE-Version"] = COMPATIBILITY_VERSION;
+    return {
+      data: {
+        type: "capabilities",
+        attributes: {
+          "tfe-version": COMPATIBILITY_VERSION,
+          "tfp-api-version": TFP_API_VERSION,
+          "minimum-client-version": null as string | null,
+          "maximum-client-version": null as string | null,
+        },
+        meta: { version: appVersion(), build: process.env.BUILD_SHA ?? "unknown" },
+      },
+    };
+  })
   .get("/.well-known/terraform.json", (): Record<string, unknown> => ({
     "login.v1": {
       client: "terraform-cli",
