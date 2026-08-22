@@ -186,15 +186,14 @@ describe("landlock run sandbox", () => {
     await mkdir(join(workDir, "tmp"), { recursive: true });
     try {
       const script = join(workDir, "probe.sh");
-      // Use a timeout /dev/tcp probe through the shell
-      await writeFile(script, `#!/bin/sh\nif command -v nc > /dev/null 2>&1; then nc -w 2 127.0.0.1 3000 < /dev/null > /dev/null 2>&1 && echo "NET_REACHABLE" || echo "NET_DENIED"; else echo "NET_UNCHECKED_NC_MISSING"; fi\n`, { mode: 0o755 });
+      const denyNet = process.env.TERRENCE_RUN_NET_POLICY === "deny";
+      await writeFile(script, `#!/bin/sh\npython3 -c "import socket; s=socket.socket(); s.settimeout(1); rc=s.connect_ex(('127.0.0.1', 9)); print('NET_DENIED' if rc==13 else ('NET_REACHABLE' if rc==111 else f'NET_RC_{rc}'))"\n`, { mode: 0o755 });
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
       const result = stdout.trim();
-      // Landlock doesn't restrict network access, so this may be reachable.
-      // We accept either result but at least we exercise the path.
-      expect(["NET_DENIED", "NET_UNCHECKED_NC_MISSING"]).toContain(result);
+      if (denyNet) expect(result).toBe("NET_DENIED");
+      else expect(["NET_REACHABLE", "NET_DENIED", "NET_RC_101", "NET_RC_110", "NET_RC_115"]).toContain(result);
     } finally {
       await rm(testBase, { recursive: true, force: true });
     }

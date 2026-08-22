@@ -35,6 +35,14 @@ const SANDBOX_DISABLED = ["false", "0", "none", "no", "off"].includes(
   (process.env.TERRENCE_RUN_SANDBOX ?? "true").toLowerCase(),
 );
 
+export function runNetPolicy(): "allow" | "deny" {
+  const raw = (process.env.TERRENCE_RUN_NET_POLICY ?? "allow").toLowerCase().trim();
+  return raw === "deny" ? "deny" : "allow";
+}
+export function runNetDenyEnabled(): boolean {
+  return runNetPolicy() === "deny";
+}
+
 /**
  * Whether the run sandbox is required on this deployment. Single source of
  * truth shared by worker.ts (fail-closed guard) and health.ts (meta endpoint).
@@ -120,6 +128,12 @@ export function resetLandlockAbiCache(): void {
  * masks both the ruleset attr and every rule by probed ABI; this pure
  * function pins that truth table in unit tests without a kernel farm.
  */
+function netRuleArgs(): string[] {
+  if (!runNetDenyEnabled()) return [];
+  if (probeLandlockAbi() < 4) return [];
+  return ["--deny-net"];
+}
+
 export function landlockAccessFlagsForAbi(abi: number): {
   refer: boolean;
   truncate: boolean;
@@ -254,6 +268,7 @@ export class RunSandbox {
         ...systemRuleArgs(),
         "--ro=/etc",
         ...devRuleArgs(),
+        ...netRuleArgs(),
         ...(resolvDir !== null ? [`--ro=${resolvDir}`] : []),
         ...extraRwArgs(),
         `--cwd=${opts.cwd}`,

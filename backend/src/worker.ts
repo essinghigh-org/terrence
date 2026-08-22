@@ -67,7 +67,7 @@ import { mintRunToken, revokeRunTokens, writeRunCliConfig } from "./lib/run-toke
 import { applyGateBlockReason } from "./lib/operations";
 import { isMaintenanceActive } from "./lib/maintenance";
 import { publish } from "./lib/event-bus";
-import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./lib/sandbox";
+import { probeLandlockAbi, RunSandbox, removeSandboxWorkDir, runNetDenyEnabled, runSandboxRequired } from "./lib/sandbox";
 import { decryptSecret } from "./lib/secrets";
 import { log } from "./lib/log";
 import { assertArchiveExpandedSize, assertArchiveLogicalSize, assertArchiveMemberCount } from "./lib/archive";
@@ -156,6 +156,12 @@ if (!RUN_SANDBOX_REQUIRED) {
  */
 function assertRunSandboxAvailable(): void {
   if (!RUN_SANDBOX_REQUIRED) return;
+  if (runNetDenyEnabled() && probeLandlockAbi() < 4) {
+    throw new Error(
+      "Run network isolation requires Landlock ABI >= 4 (TERRENCE_RUN_NET_POLICY=deny). "
+        + `Host ABI is ${probeLandlockAbi()}. Upgrade the kernel or set TERRENCE_RUN_NET_POLICY=allow.`,
+    );
+  }
   if (runSandbox === null) {
     throw new Error(
       "Run sandbox unavailable: Landlock is not enabled on this host kernel. "
