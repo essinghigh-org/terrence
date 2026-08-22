@@ -16,6 +16,7 @@ import { applySecurityHeaders, HSTS_VALUE, shouldSendHsts, staticCacheControl, s
 import openapiJson from "../openapi.json" with { type: "json" };
 import { requestFinished, requestStarted } from "./lib/process-metrics";
 import { API_BODY_LIMIT_BYTES, BodyTooLargeError, readTextWithLimit } from "./lib/body-limit";
+// 464: per-endpoint security/rate/body/audit classifications live in endpoint-policy.ts; app.ts reuses that single registry.
 import {
   isUploadPath,
   scimMappingPath,
@@ -251,6 +252,18 @@ const SCIM_MAPPING_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SCIM_MAPPING_MAX", 10
 // the reference format protects workspace run-history separately from the general API bucket.
 // Keep the compatibility default deliberately conservative while allowing an
 // operator to tune it for a larger deployment.
+/**
+ * Per-resource rate-limit summary (todo 463 — keep this block in sync with
+ * 464's endpoint-policy table):
+ *  - general (RATE_LIMIT_MAX / 1s): every server endpoint outside the
+ *    specific buckets below; derived from serverEndpointPath()
+ *  - workspaceRunHistory (RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX / RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS)
+ *  - sensitive (RATE_LIMIT_SENSITIVE_MAX / 60s): login + sensitive writes
+ *  - sso-get (RATE_LIMIT_SSO_GET_MAX / 60s): SSO redirect / callback / IdP logout
+ *  - scim-settings (RATE_LIMIT_SCIM_SETTINGS_MAX / 1s): SCIM admin settings
+ *  - scim-mapping (RATE_LIMIT_SCIM_MAPPING_MAX / 60s): SCIM team mappings
+ * Exposed via GET /api/v2/capabilities rate-limit docs block; see that route.
+ */
 const WORKSPACE_RUN_HISTORY_RATE_LIMIT = envPositiveInt("RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX", 30);
 const WORKSPACE_RUN_HISTORY_DURATION_MS = envPositiveInt("RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS", 60_000);
 
