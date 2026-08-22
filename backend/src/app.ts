@@ -107,6 +107,7 @@ import { oidcRoutes } from "./routes/oidc";
 import { workloadIdentityRoutes } from "./routes/workload-identity";
 import { providerIconRoutes } from "./routes/provider-icons";
 import { actionsRoutes } from "./routes/actions";
+import { registryComponentsRoutes } from "./routes/registry-components";
 import { availableVersions } from "./binaryManager";
 
 // Store request metadata without polluting the set object
@@ -812,7 +813,8 @@ export const app = new Elysia()
   .use(providerIconRoutes)
   .use(policyEvaluationRoutes)
   .use(docsRoutes)
-  .use(actionsRoutes);
+  .use(actionsRoutes)
+  .use(registryComponentsRoutes);
 
 // The System API has its own listener in production. The same routes remain
 // mounted on the application listener as a compatibility extension.
