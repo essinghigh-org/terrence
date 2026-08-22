@@ -1,0 +1,1 @@
+ALTER TABLE `projects` ADD `allowed_execution_modes` text;

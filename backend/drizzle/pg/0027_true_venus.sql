@@ -1,0 +1,2 @@
+ALTER TABLE "organizations" ADD COLUMN "require_hard_isolation" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "workspaces" ADD COLUMN "trusted_execution" boolean DEFAULT true NOT NULL;

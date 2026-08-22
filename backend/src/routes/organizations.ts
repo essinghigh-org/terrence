@@ -224,6 +224,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
         aggregatedCommitStatusEnabled: true,
         sendPassingStatusesForUntriggeredSpeculativePlans: false,
         moduleTestTokenTtl: moduleTestTokenTtlBounds.default,
+        requireHardIsolation: false,
       };
       await db.transaction(async (tx: unknown): Promise<void> => {
         const t = tx as typeof db;
