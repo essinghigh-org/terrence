@@ -46,14 +46,9 @@ The directory must persist across container restarts. Mount it as a volume.
 
 ## Backups
 
-A consistent backup contains:
+A consistent backup (323) captures DB and storage at one logical point: stop the instance or quiesce writes, then copy both. The WAL checkpoint at shutdown makes the main database file complete, so a backup taken right after stop never misses WAL tail pages. A backup manifest (324) records the DB schema version, file list, and per-artifact hashes; each artifact is hashed (325) for verification and encrypted independently (326) when `TERRENCE_BACKUP_ENCRYPTION_KEY` is set.
 
-1. The storage directory.
-2. The SQLite database.
-
-Take backups with the instance stopped or after a graceful shutdown. The WAL checkpoint at shutdown makes the main database file complete, so a backup taken right after stop never misses WAL tail pages.
-
-For PostgreSQL, use the database's own backup tooling.
+For PostgreSQL, use the database's own backup tooling; combine a `pg_dump`/`pg_basebackup` window with a storage snapshot taken at the same logical point.
 
 ## Database export
 
