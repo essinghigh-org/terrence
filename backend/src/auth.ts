@@ -60,6 +60,26 @@ export async function countLegacyPlaintextTokens(): Promise<number> {
   return count;
 }
 
+
+/** Bulk-migrate any remaining plaintext api_tokens to SHA-256 hashes (todo 333).
+ * Idempotent: already-hashed rows are skipped. Returns the number migrated. */
+export async function migrateLegacyPlaintextTokens(): Promise<number> {
+  const rows = await db.select({ id: apiTokens.id, token: apiTokens.token }).from(apiTokens);
+  let migrated = 0;
+  for (const row of rows) {
+    const v = row.token;
+    if (v.length === 64 && /^[0-9a-f]{64}$/i.test(v)) continue;
+    const hashed = hashAuthenticationToken(v);
+    // Guard against accidental double-hash if two migrators race on the same row.
+    const current = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, row.id) });
+    if (current === undefined) continue;
+    if (current.token.length === 64 && /^[0-9a-f]{64}$/i.test(current.token)) continue;
+    await db.update(apiTokens).set({ token: hashed }).where(eq(apiTokens.id, row.id));
+    migrated += 1;
+  }
+  return migrated;
+}
+
 export const authPlugin = new Elysia({ name: "auth" })
   .derive({ as: "global" }, async ({ request }: DeriveContext): Promise<{
     user: typeof users.$inferSelect | null;
