@@ -13,6 +13,7 @@ import { envEnabled } from '../lib/env';
 import { planJsonDirectory } from '../lib/plan-json';
 import { runLogsDirectory } from '../lib/run-logs';
 import { databaseUrl, isPostgres, storageDir } from './driver';
+import { poolMetrics, poolQueryEnd, poolQueryStart, recordSlowQuery } from '../lib/db-pool-metrics';
 
 // Deliberately synchronous: a top-level await here made this module a TLA
 // module, and Bun's worker threads can resolve importers while the TLA is
@@ -64,16 +65,80 @@ if (!isPostgres) {
 // the test harness (tests/setup.ts) — never here, because the migrator is
 // async and this module must stay synchronous for bun's worker threads.
 // ---------------------------------------------------------------------------
+function parseTimeoutMs(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw.trim());
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  // Clamp to 24h so a typo (e.g. seconds vs ms) cannot disable the guard.
+  return Math.min(Math.round(n), 86_400_000);
+}
+
 let pgClient: postgres.Sql | null = null;
 if (isPostgres) {
+  const statementTimeoutMs = parseTimeoutMs(process.env.TERRENCE_DB_STATEMENT_TIMEOUT_MS, 30_000);
+  const lockTimeoutMs = parseTimeoutMs(process.env.TERRENCE_DB_LOCK_TIMEOUT_MS, 10_000);
+  const idleInTxTimeoutMs = parseTimeoutMs(process.env.TERRENCE_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS, 60_000);
   pgClient = postgres(databaseUrl, {
     max: 10,
     idle_timeout: 20,
     connect_timeout: 10,
+    // Fail-safe: a stuck query / contended lock / idle transaction is killed
+    // server-side instead of holding a pool connection forever (todos 287/288).
+    // Postgres.js forwards `connection` keys as startup GUC params, so every
+    // pooled connection inherits these defaults without a SET per query.
+    connection: {
+      statement_timeout: statementTimeoutMs,
+      lock_timeout: lockTimeoutMs,
+      idle_in_transaction_session_timeout: idleInTxTimeoutMs,
+    },
     // The app surfaces database errors itself; postgres.js NOTICE noise
     // (e.g. "relation already exists" during idempotent DDL) is suppressed.
     onnotice: () => {},
   });
+  // Always-on lightweight pool observation (todos 289,290,291): pending + latency
+  // samples are recorded for /metrics; zero branching in the hot path beyond
+  // the counter bump. Wraps `unsafe` which is the underlying query path for
+  // both drizzle and raw SQL on postgres.
+  {
+    const originalUnsafe = pgClient.unsafe.bind(pgClient);
+    pgClient.unsafe = ((queryText: string, ...params: unknown[]) => {
+      const start = poolQueryStart();
+      const queryTextCopy = queryText;
+      const pending = originalUnsafe(queryText, ...(params as [never])) as unknown as {
+        then: (onFulfilled: (v: unknown) => unknown, onRejected: (e: unknown) => unknown) => unknown;
+      } & Record<string, unknown>;
+      const finish = (): void => {
+        const durationMs = poolQueryEnd(start);
+        recordSlowQuery(queryTextCopy, durationMs);
+      };
+      // Preserve the PendingQuery shape (postgres.js returns a thenable with
+      // extra methods like .values()/.execute() that drizzle relies on).
+      // Decorate .then rather than replacing the object with a plain Promise.
+      if (pending !== null && typeof pending === 'object' && typeof pending.then === 'function') {
+        const originalThen = pending.then.bind(pending);
+        (pending as unknown as { then: unknown }).then = (
+          onFulfilled: (v: unknown) => unknown,
+          onRejected?: (e: unknown) => unknown,
+        ): unknown => originalThen(
+          (value: unknown) => { finish(); return onFulfilled(value); },
+          (err: unknown) => { finish(); if (onRejected !== undefined) return onRejected(err); throw err; },
+        );
+        // For lazy queries that never call .then (e.g. fire-and-forget), also
+        // finish on next tick if not already settled — bounded to one call.
+        let settled = false;
+        const onceFinish = (): void => { if (!settled) { settled = true; finish(); } };
+        // Wrap .catch as well if present
+        const origCatch = (pending as unknown as { catch?: (fn: (e: unknown) => unknown) => unknown }).catch;
+        if (typeof origCatch === 'function') {
+          (pending as unknown as { catch: unknown }).catch = (fn: (e: unknown) => unknown): unknown =>
+            origCatch.call(pending, (err: unknown) => { onceFinish(); return fn(err); });
+        }
+        return pending as unknown as ReturnType<typeof originalUnsafe>;
+      }
+      finish();
+      return pending as unknown as ReturnType<typeof originalUnsafe>;
+    }) as typeof pgClient.unsafe;
+  }
   if (envEnabled(process.env.TERRENCE_QUERY_COUNT)) {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
     pgClient.unsafe = ((queryText: string, ...params: unknown[]) => {
@@ -732,6 +797,16 @@ export function rawQueryAll<T>(fragment: SQL): Promise<T[]> | T[] {
 // databaseDriver itself is not re-exported: nothing consumes it outside
 // src/db/driver.ts (knip-verified).
 export { isPostgres };
+
+export function databasePoolMetrics(): ReturnType<typeof poolMetrics> {
+  const max = isPostgres ? 10 : 1;
+  const driver = isPostgres ? 'postgres' as const : 'sqlite' as const;
+  return poolMetrics(driver, max);
+}
+
+// Wrappers for transaction latency (todo 291): callers in db-layer wrap
+// transaction bodies with these helpers so wall time is captured.
+// poolTransaction helpers are available from lib/db-pool-metrics directly when needed
 
 /**
  * Apply the PostgreSQL schema migrations (drizzle/pg). The sqlite migrator
