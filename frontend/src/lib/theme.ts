@@ -90,7 +90,7 @@ export const THEMES: readonly ThemeDefinition[] = [
   }),
   createTheme("catppuccin-latte", "Catppuccin Latte", "light", {
     background: "220 23% 95%", foreground: "234 16% 35%", card: "220 22% 98%", primary: "220 91% 38%", primaryForeground: "220 23% 95%",
-    secondary: "220 22% 91%", secondaryForeground: "234 16% 35%", muted: "220 22% 91%", mutedForeground: "233 13% 53%",
+    secondary: "220 22% 91%", secondaryForeground: "234 16% 35%", muted: "220 22% 91%", mutedForeground: "233 13% 43%",
     accent: "221 100% 94%", accentForeground: "220 91% 44%", destructive: "347 87% 44%", destructiveForeground: "220 23% 95%",
     border: "220 17% 84%", input: "233 13% 65%", success: "109 58% 40%", warning: "22 99% 52%",
     codeBackground: "234 16% 20%", codeForeground: "220 23% 95%",
@@ -111,14 +111,14 @@ export const THEMES: readonly ThemeDefinition[] = [
   }),
   createTheme("rose-pine-dawn", "Rosé Pine Dawn", "light", {
     background: "35 45% 95%", foreground: "248 19% 40%", card: "35 67% 98%", primary: "267 22% 40%", primaryForeground: "35 45% 95%",
-    secondary: "35 36% 90%", secondaryForeground: "248 19% 40%", muted: "35 36% 90%", mutedForeground: "249 12% 52%",
+    secondary: "35 36% 90%", secondaryForeground: "248 19% 40%", muted: "35 36% 90%", mutedForeground: "249 12% 42%",
     accent: "4 53% 67%", accentForeground: "248 19% 30%", destructive: "343 36% 55%", destructiveForeground: "35 67% 98%",
     border: "30 18% 86%", input: "249 12% 55%", success: "197 53% 34%", warning: "35 77% 50%",
     codeBackground: "248 19% 25%", codeForeground: "35 45% 95%",
   }),
   createTheme("solarized-light", "Solarized Light", "light", {
     background: "44 80% 94%", foreground: "194 14% 45%", card: "45 43% 89%", primary: "205 69% 35%", primaryForeground: "44 80% 97%",
-    secondary: "45 43% 89%", secondaryForeground: "192 81% 14%", muted: "45 43% 89%", mutedForeground: "194 14% 56%",
+    secondary: "45 43% 89%", secondaryForeground: "192 81% 14%", muted: "45 43% 89%", mutedForeground: "194 14% 46%",
     accent: "45 100% 35%", accentForeground: "44 80% 97%", destructive: "1 71% 52%", destructiveForeground: "44 80% 97%",
     border: "44 37% 80%", input: "194 14% 45%", success: "68 100% 30%", warning: "18 80% 44%",
     codeBackground: "192 81% 14%", codeForeground: "44 80% 94%",
