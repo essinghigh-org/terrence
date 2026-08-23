@@ -1154,6 +1154,14 @@ export function applyPgMigrations(): Promise<void> {
     // Reconcile a sparse journal before migrating (2026-08-23 prod incident,
     // sqlite parity): stamp journal rows for migrations whose objects already
     // exist outside the journal, so the migrator never replays them.
+    // Fresh databases have no journal yet — mirror the migrator's own
+    // bootstrap DDL (schema + table) so the reads below always succeed.
+    await pg.unsafe('CREATE SCHEMA IF NOT EXISTS "drizzle"');
+    await pg.unsafe(`CREATE TABLE IF NOT EXISTS "drizzle"."__drizzle_migrations" (
+      id SERIAL PRIMARY KEY,
+      hash text NOT NULL,
+      created_at bigint
+    )`);
     const stampedPg = await reconcileSparseMigrationJournal({
       bundledFolder: join(import.meta.dir, "../../drizzle/pg"),
       appliedRows: async () =>
