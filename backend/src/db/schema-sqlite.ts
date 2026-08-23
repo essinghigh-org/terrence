@@ -724,6 +724,40 @@ export const variableSetWorkspaces = sqliteTable("variable_set_workspaces", {
   uniqueIndex("variable_set_workspaces_idx").on(table.variableSetId, table.workspaceId),
 ]);
 
+export const actions = sqliteTable("actions", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  actionType: text("action_type").notNull().default("custom"), // custom, terraform, stack-lifecycle
+  status: text("status").notNull().default("active"), // active, disabled, deprecated
+  configuration: text("configuration", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("actions_org_name_idx").on(table.orgId, table.name),
+]);
+
+export const actionInvocations = sqliteTable("action_invocations", {
+  id: text("id").primaryKey(),
+  actionId: text("action_id").notNull().references(() => actions.id, { onDelete: "cascade" }),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
+  stackId: text("stack_id").references(() => stacks.id, { onDelete: "set null" }),
+  deploymentId: text("deployment_id"),
+  status: text("status").notNull().default("pending"), // pending, running, completed, failed, canceled
+  output: text("output", { mode: "json" }).$type<Record<string, unknown>>(),
+  errorMessage: text("error_message"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+  completedAt: integer("completed_at"),
+}, (table) => [
+  index("action_invocations_org_idx").on(table.orgId),
+  index("action_invocations_run_idx").on(table.runId),
+  index("action_invocations_stack_idx").on(table.stackId),
+  index("action_invocations_action_idx").on(table.actionId),
+]);
+
 export const stacks = sqliteTable("stacks", {
   id: text("id").primaryKey(),
   orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
