@@ -3,6 +3,7 @@ import { drizzle as sqliteDrizzle, SQLiteBunTransaction, type BunSQLiteDatabase 
 import type { SQLiteBunSession } from 'drizzle-orm/bun-sqlite';
 import type { SQLiteSession, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { migrate as sqliteMigrate } from 'drizzle-orm/bun-sqlite/migrator';
+import { readBundledMigrationJournal, reconcileSparseMigrationJournal, sparseJournalReconcilePlan } from './reconcile';
 import { SQL as BunSQL } from 'bun';
 import { drizzle as pgDrizzle } from 'drizzle-orm/bun-sql';
 import { type SQL } from 'drizzle-orm';
@@ -320,6 +321,50 @@ if (!isPostgres) {
   // databases migrate cleanly. It is reset before any real query runs.
   client.run("PRAGMA legacy_alter_table = ON;");
   try {
+    // Reconcile a sparse journal before migrating (2026-08-23 prod incident):
+    // the journal stopped advancing while idempotent boot DDL kept creating
+    // schema objects outside it, so drizzle's timestamp replay re-applies
+    // newer migrations over existing objects and aborts the whole batch on
+    // the first collision. Plan the reconciliation BEFORE sqliteMigrate and
+    // run it OUTSIDE its transaction: skip statements whose object already
+    // exists, execute the rest (statement-level repair for partially present
+    // migrations), then stamp each reconciled row so drizzle never replays it.
+    const drizzleFolder = join(import.meta.dir, "../../drizzle");
+    // Drizzle's migrator creates the journal table on demand; a fresh database
+    // has none yet. Mirror its exact DDL so the reads below always succeed.
+    client.run(`CREATE TABLE IF NOT EXISTS "__drizzle_migrations" (
+      id SERIAL PRIMARY KEY,
+      hash text NOT NULL,
+      created_at numeric
+    )`);
+    const journalRows = client.query("SELECT hash, created_at FROM __drizzle_migrations").all() as readonly { hash: string; created_at: number }[];
+    const tableNames = client.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as readonly { name: string }[];
+    const indexNames = client.query("SELECT name FROM sqlite_master WHERE type = 'index'").all() as readonly { name: string }[];
+    const columnPairs: Array<{ table: string; column: string }> = [];
+    for (const { name } of tableNames) {
+      for (const column of client.query(`PRAGMA table_info("${name}")`).all() as readonly { name: string }[]) {
+        columnPairs.push({ table: name, column: column.name });
+      }
+    }
+    const plan = sparseJournalReconcilePlan(drizzleFolder, readBundledMigrationJournal(drizzleFolder), {
+      appliedRows: journalRows.map(({ hash, created_at }) => ({ hash, createdAt: created_at })),
+      tables: new Set(tableNames.map(({ name }) => name)),
+      indexes: new Set(indexNames.map(({ name }) => name)),
+      columns: new Set(columnPairs.map(({ table, column }) => `${table}.${column}`)),
+    });
+    let executedStatements = 0;
+    for (const entry of plan) {
+      for (const statement of entry.statements) {
+        if (!statement.skip) {
+          client.run(statement.sql);
+          executedStatements += 1;
+        }
+      }
+      client.run('INSERT INTO "__drizzle_migrations" ("hash", "created_at") VALUES(?, ?)', [entry.hash, entry.when]);
+    }
+    if (plan.length > 0) {
+      console.warn(`[terrence] sparse migration journal reconciled: repaired ${plan.length} migration(s), executed ${executedStatements} statement(s)`);
+    }
     sqliteMigrate(db, { migrationsFolder: join(import.meta.dir, '../../drizzle') });
   } finally {
     client.run("PRAGMA legacy_alter_table = OFF;");
@@ -1106,6 +1151,37 @@ export function applyPgMigrations(): Promise<void> {
       `);
     }
     const { migrate } = await import("drizzle-orm/bun-sql/migrator");
+    // Reconcile a sparse journal before migrating (2026-08-23 prod incident,
+    // sqlite parity): stamp journal rows for migrations whose objects already
+    // exist outside the journal, so the migrator never replays them.
+    const stampedPg = await reconcileSparseMigrationJournal({
+      bundledFolder: join(import.meta.dir, "../../drizzle/pg"),
+      appliedRows: async () =>
+        (await pg.unsafe<{ hash: string; created_at: string | number }[]>("SELECT hash, created_at FROM drizzle.__drizzle_migrations")).map(
+          ({ hash, created_at }) => ({ hash, createdAt: Number(created_at) }),
+        ),
+      existingTables: async () =>
+        (await pg.unsafe<{ table_name: string }[]>("SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()")).map(
+          ({ table_name }) => table_name,
+        ),
+      existingIndexes: async () =>
+        (await pg.unsafe<{ indexname: string }[]>("SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()")).map(
+          ({ indexname }) => indexname,
+        ),
+      existingColumns: async () =>
+        (
+          await pg.unsafe<{ table_name: string; column_name: string }[]>(
+            "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = current_schema()",
+          )
+        ).map(({ table_name, column_name }) => ({ table: table_name, column: column_name })),
+      runStatement: async (sql) => {
+        await pg.unsafe(sql);
+      },
+      markApplied: async (hash, createdAt) => {
+        await pg.unsafe('INSERT INTO "drizzle"."__drizzle_migrations" ("hash", "created_at") VALUES($1, $2)', [hash, createdAt]);
+      },
+    });
+    if (stampedPg > 0) console.warn(`[terrence] sparse migration journal reconciled (pg): reconciled ${stampedPg} migration(s) outside the migrator`);
     await migrate(instance, { migrationsFolder: join(import.meta.dir, "../../drizzle/pg") });
     await pg.unsafe("UPDATE organizations SET default_iac_binary = 'terraform' WHERE default_iac_binary = 'tofu'");
     await pg.unsafe("UPDATE policy_sets SET overridable = false WHERE overridable = true");
