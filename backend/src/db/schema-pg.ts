@@ -1021,6 +1021,23 @@ export const refreshSessions = pgTable("refresh_sessions", {
     index("refresh_sessions_user_idx").on(table.userId),
   ]);
 
+export const registryComponents = pgTable("registry_components", {
+    id: text("id").notNull().primaryKey(),
+    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    namespace: text("namespace").notNull().default("hashicorp"),
+    description: text("description"),
+    source: text("source").notNull().default("registry"),
+    sourceIdentifier: text("source_identifier").notNull(),
+    version: text("version").notNull().default("0.1.0"),
+    status: text("status").notNull().default("pending"),
+    publishedAt: bigint("published_at", { mode: "number" }),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.registryComponents.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" }).$defaultFn(() => sqliteSchema.registryComponents.updatedAt.defaultFn!()),
+}, (table) => [
+    uniqueIndex("registry_components_org_ns_name_idx").on(table.orgId, table.namespace, table.name),
+  ]);
+
 export const registryGpgKeys = pgTable("registry_gpg_keys", {
     id: text("id").notNull().primaryKey(),
     orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),

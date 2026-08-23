@@ -341,6 +341,10 @@ export const refreshSessions: typeof sqliteSchema.refreshSessions = pgTables ===
   ? sqliteSchema.refreshSessions
   : (pgTables[dbNameOf(sqliteSchema.refreshSessions)] as unknown as typeof sqliteSchema.refreshSessions);
 
+export const registryComponents: typeof sqliteSchema.registryComponents = pgTables === null
+  ? sqliteSchema.registryComponents
+  : (pgTables[dbNameOf(sqliteSchema.registryComponents)] as unknown as typeof sqliteSchema.registryComponents);
+
 export const registryGpgKeys: typeof sqliteSchema.registryGpgKeys = pgTables === null
   ? sqliteSchema.registryGpgKeys
   : (pgTables[dbNameOf(sqliteSchema.registryGpgKeys)] as unknown as typeof sqliteSchema.registryGpgKeys);

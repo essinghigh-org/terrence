@@ -1226,7 +1226,24 @@ export const noCodeWorkspaceConfigurations = sqliteTable("no_code_workspace_conf
   index("no_code_workspace_configurations_module_idx").on(table.noCodeModuleId),
 ]);
 
-export const registryProviders = sqliteTable("registry_providers", {
+export const registryComponents = sqliteTable("registry_components", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  namespace: text("namespace").notNull().default("hashicorp"),
+  description: text("description"),
+  source: text("source").notNull().default("registry"),
+  sourceIdentifier: text("source_identifier").notNull(),
+  version: text("version").notNull().default("0.1.0"),
+  status: text("status").notNull().default("pending"), // pending, available, errored, deprecated, deleted
+  publishedAt: integer("published_at"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("registry_components_org_ns_name_idx").on(table.orgId, table.namespace, table.name),
+]);
+
+export const registryProviders = sqliteTable("registry_providers" , {
   id: text("id").primaryKey(),
   orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   namespace: text("namespace").notNull(),
