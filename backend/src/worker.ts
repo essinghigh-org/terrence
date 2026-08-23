@@ -937,8 +937,13 @@ export async function executionVariables(
   ]);
   const workspaceSetIds = new Set(workspaceLinks.map((link): string => link.variableSetId));
   const projectSetIds = new Set(projectLinks.map((link): string => link.variableSetId));
+  const ownedProjectSetIds = new Set(
+    orgVariableSets
+      .filter((set): boolean => projectId !== null && set.parentProjectId === projectId)
+      .map((set): string => set.id),
+  );
   const activeSets = orgVariableSets
-    .filter((vs: { readonly global: boolean | null; readonly id: string }): boolean => vs.global === true || attached.has(vs.id))
+    .filter((vs: { readonly global: boolean | null; readonly id: string }): boolean => vs.global === true || attached.has(vs.id) || ownedProjectSetIds.has(vs.id))
     .sort((left, right): number => {
       const rank = (set: { readonly id: string; readonly priority: boolean | null }): number =>
         (set.priority === true ? 10 : 0) + (workspaceSetIds.has(set.id) ? 2 : projectSetIds.has(set.id) ? 1 : 0);
