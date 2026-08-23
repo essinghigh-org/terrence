@@ -209,11 +209,12 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     }
     try {
       await assertArchiveExpandedSize(tarPath);
-    } catch {
+    } catch (error: unknown) {
       await rm(tarPath, { force: true });
       await db.update(configurationVersions).set({ uploadClaimExpiresAt: null }).where(eq(configurationVersions.id, cvId));
+      const expanded = error instanceof Error && /expands beyond|contents exceed/i.test(error.message);
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration archive is not a valid gzip tar archive" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: expanded ? "Configuration archive expands beyond the permitted size" : "Configuration archive is not a valid gzip tar archive" }] };
     }
     const uploadedAt = new Date().toISOString();
     const finalized = await db.update(configurationVersions).set({

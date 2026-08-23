@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { db } from "../db";
 import { stateOutputIndex, stateVersions, workspaces, runs, organizationMemberships, teams, type users } from "../db/schema";
 import { eq, and, desc, count, inArray } from "drizzle-orm";
@@ -64,10 +64,16 @@ async function requestBodyText(
   await mkdir(uploadDir, { recursive: true });
   try {
     await persistUploadBody(body, request, path, MAX_IMPORTED_STATE_BYTES);
+    // The upload is already bounded on disk; JSON parsing needs the complete
+    // document, so this single read cannot exceed MAX_IMPORTED_STATE_BYTES.
     return await readFile(path, "utf8");
   } finally {
     await rm(path, { force: true });
   }
+}
+
+function recoveryStatePath(runId: string): string {
+  return join(storageDir, "recovery", runId, "terraform.tfstate");
 }
 
 export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
@@ -241,7 +247,9 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         status: "finalized",
         createdAt: Date.now(),
       });
-      await insertStateOutputIndex(tx, id, workspaceId, source.jsonState, source.statePayload);
+      await insertStateOutputIndex(tx, id, workspaceId,
+        source.jsonState === null ? null : decodeStatePayload(source.jsonState),
+        source.statePayload === null ? null : decodeStatePayload(source.statePayload));
     }));
     scheduleExplorerInventory(workspaceId);
     const created = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, id) });
@@ -416,7 +424,8 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State content must be valid JSON" }] };
     }
     await db.update(stateVersions).set({ statePayload: await encryptStatePayload(rawState), status: "finalized" }).where(eq(stateVersions.id, stateVersionId));
-    await insertStateOutputIndex(db, stateVersionId, sv.workspaceId, sv.jsonState, rawState);
+    await insertStateOutputIndex(db, stateVersionId, sv.workspaceId,
+      sv.jsonState === null ? null : decodeStatePayload(sv.jsonState), rawState);
     scheduleExplorerInventory(sv.workspaceId);
     (set as { status: number }).status = 200;
     return {};
@@ -438,7 +447,8 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }] };
     }
     await db.update(stateVersions).set({ jsonState: await encryptStatePayload(jsonState) }).where(eq(stateVersions.id, stateVersionId));
-    if (sv.status === "finalized") await insertStateOutputIndex(db, stateVersionId, sv.workspaceId, jsonState, sv.statePayload);
+    if (sv.status === "finalized") await insertStateOutputIndex(db, stateVersionId, sv.workspaceId,
+      jsonState, sv.statePayload === null ? null : decodeStatePayload(sv.statePayload));
     scheduleExplorerInventory(sv.workspaceId);
     (set as { status: number }).status = 200;
     return {};
@@ -457,7 +467,8 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state outputs must be valid JSON" }] };
     }
     await db.update(stateVersions).set({ jsonStateOutputs: await encryptStatePayload(jsonStateOutputs) }).where(eq(stateVersions.id, stateVersionId));
-    if (sv.status === "finalized") await insertStateOutputIndex(db, stateVersionId, sv.workspaceId, jsonStateOutputs, sv.statePayload);
+    if (sv.status === "finalized") await insertStateOutputIndex(db, stateVersionId, sv.workspaceId,
+      jsonStateOutputs, sv.statePayload === null ? null : decodeStatePayload(sv.statePayload));
     scheduleExplorerInventory(sv.workspaceId);
     (set as { status: number }).status = 200;
     return {};
@@ -496,7 +507,9 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         status: "finalized",
         createdAt: Date.now(),
       });
-      await insertStateOutputIndex(tx, newId, sv.workspaceId, sv.jsonState, sv.statePayload);
+      await insertStateOutputIndex(tx, newId, sv.workspaceId,
+        sv.jsonState === null ? null : decodeStatePayload(sv.jsonState),
+        sv.statePayload === null ? null : decodeStatePayload(sv.statePayload));
     }));
     scheduleExplorerInventory(sv.workspaceId);
     const newSv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, newId) });
@@ -575,6 +588,100 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         jsonStateOutputs: null,
       }, request),
     };
+  })
+  .get("/api/v2/runs/:run_id/recovery-state", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const runId = params.run_id ?? "";
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+    const workspace = run === undefined ? undefined : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "admin");
+    if (run === undefined || workspace === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    try {
+      const payload = decodeStatePayload(await readFile(recoveryStatePath(runId), "utf8"));
+      if (parseTerraformStatePayload(payload) === null) throw new Error("invalid recovery state");
+      (set.headers as Record<string, string>)["Content-Type"] = "application/json";
+      return new Response(payload);
+    } catch {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+  })
+  .post("/api/v2/runs/:run_id/actions/recover-state", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+    const runId = params.run_id ?? "";
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+    const workspace = run === undefined ? undefined : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "state-write");
+    if (run === undefined || workspace === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (orgId !== null && orgId !== undefined) {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden" }] };
+    }
+    if (!ownsWorkspaceLock(workspace, lockPrincipal(user?.id, orgId, teamId))) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before recovering state" }] };
+    }
+    let rawState: string;
+    let parsed: ReturnType<typeof parseTerraformStatePayload>;
+    try {
+      rawState = decodeStatePayload(await readFile(recoveryStatePath(runId), "utf8"));
+      parsed = parseTerraformStatePayload(rawState);
+    } catch {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (parsed === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Recovered state is not a valid Terraform/OpenTofu state file" }] };
+    }
+    const latest = await db.query.stateVersions.findFirst({
+      where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized")),
+      orderBy: [desc(stateVersions.serial)],
+      columns: { serial: true, statePayload: true },
+    });
+    if (latest?.statePayload !== null && latest?.statePayload !== undefined) {
+      const previous = parseTerraformStatePayload(decodeStatePayload(latest.statePayload));
+      if (previous?.lineage !== undefined && parsed.lineage !== previous.lineage) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Recovered state lineage does not match the workspace history" }] };
+      }
+    }
+    const stateVersionId = await withStateSerialRetry(() => db.transaction(async (tx: unknown): Promise<string> => {
+      const t = tx as typeof db;
+      const current = await t.query.stateVersions.findFirst({
+        where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized")),
+        orderBy: [desc(stateVersions.serial)],
+      });
+      const id = crypto.randomUUID();
+      await t.insert(stateVersions).values({
+        id,
+        workspaceId: workspace.id,
+        serial: (current?.serial ?? 0) + 1,
+        runId,
+        statePayload: await encryptStatePayload(rawState),
+        jsonState: await encryptStatePayload(rawState),
+        jsonStateOutputs: await encryptStatePayload(parsed.outputs === undefined ? null : JSON.stringify(parsed.outputs)),
+        status: "finalized",
+        terraformVersion: typeof parsed.terraform_version === "string" ? parsed.terraform_version : null,
+        intermediate: false,
+        createdAt: Date.now(),
+      });
+      await insertStateOutputIndex(t, id, workspace.id, rawState, rawState);
+      return id;
+    }));
+    const recoveryDir = join(storageDir, "recovery", runId);
+    await writeFile(join(recoveryDir, ".recovered"), new Date().toISOString(), { mode: 0o600 }).catch(() => {});
+    await rm(recoveryDir, { recursive: true, force: true });
+    const stateVersion = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
+    if (stateVersion === undefined) {
+      (set as { status: number }).status = 500;
+      return { errors: [{ status: "500", title: "Internal Server Error" }] };
+    }
+    scheduleExplorerInventory(workspace.id);
+    (set as { status: number }).status = 201;
+    return { data: stateVersionResource(stateVersion, request) };
   })
   .post("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, body, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";

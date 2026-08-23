@@ -48,7 +48,7 @@ import { isStorageDegraded, isDiskFullError, markStorageDegraded } from "./lib/s
 import { workspaceExecutionDirectory } from "./workspace";
 import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
 import { canTransitionRunStatus, isTerminalRunStatus } from "./lib/run-status";
-import { FINAL_RUN_STATUSES, signedApiURL, decodeStatePayload } from "./lib/utils";
+import { FINAL_RUN_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, signedApiURL, decodeStatePayload } from "./lib/utils";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./lib/url-safety";
 import {
   emptyCostEstimate,
@@ -1364,7 +1364,10 @@ export function executeRun(runId: string): Promise<void> {
               statusTimestamps: { ...(current?.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
             }).where(and(
               eq(runs.id, runId),
-              notInArray(runs.status, ["canceled", "force_canceled", "applied", "errored", "discarded"]),
+              notInArray(runs.status, [
+                "canceled", "force_canceled", "applied", "errored", "discarded",
+                "planned", "planned_and_saved", "planned_and_finished", "policy_soft_failed",
+              ]),
             ));
           } catch (statusError: unknown) {
             log.error("Failed to fence a run after an execution error", { runId, error: statusError });
@@ -3126,11 +3129,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
     const blockerStatuses = run.planOnly || run.savePlan
       ? []
       : [
-          "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
-          "queuing", "plan_queued", "planning", "planned", "cost_estimating",
-          "cost_estimated", "policy_checking", "policy_override", "policy_checked",
-          "post_plan_running", "post_plan_completed", "policy_soft_failed",
-          "confirmed", "apply_queued", "applying",
+          ...WORKSPACE_BLOCKING_RUN_STATUSES,
         ];
 
     const claimWhere = and(
@@ -3641,7 +3640,7 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
   const parsedRetention = rawRetention === undefined || rawRetention === "" ? 7 * 24 * 60 * 60 * 1000 : Number(rawRetention);
   const retentionMs = Number.isSafeInteger(parsedRetention) && parsedRetention >= 0 ? parsedRetention : 7 * 24 * 60 * 60 * 1000;
   const cutoff = Date.now() - retentionMs;
-  const pruneRoot = async (root: string): Promise<void> => {
+  const pruneRoot = async (root: string, requireRecoveredMarker = false): Promise<void> => {
     const entries = await readdir(root, { withFileTypes: true, encoding: "utf8" }).catch(() => null);
     if (entries === null) return;
     await Promise.all(entries
@@ -3649,6 +3648,7 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
       .map(async (entry): Promise<void> => {
         const path = join(root, entry.name);
         try {
+          if (requireRecoveredMarker && !(await exists(join(path, ".recovered")))) return;
           if ((await stat(path)).mtimeMs < cutoff) await rm(path, { recursive: true, force: true });
         } catch {
           // Best effort: a concurrent reconciliation or cleanup may own it.
@@ -3673,7 +3673,7 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
         }
       }));
   };
-  await Promise.all([pruneRoot(join(storageDir, "recovery")), pruneSavedPlans()]);
+  await Promise.all([pruneRoot(join(storageDir, "recovery"), true), pruneSavedPlans()]);
 }
 
 export async function reconcileInterruptedLocalRuns(): Promise<{

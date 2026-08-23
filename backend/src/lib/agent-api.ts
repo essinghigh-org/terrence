@@ -29,7 +29,7 @@ export function agentFilesystemPath(runId: string): string {
 /** Public base URL for the job's absolute artifact URLs (caddy reverse proxy aware). */
 export function agentApiBaseUrl(request: { readonly headers: { readonly get: (name: string) => string | null } }): string {
   const configured = process.env.PUBLIC_URL?.trim();
-  if (configured !== undefined) {
+  if (configured) {
     let parsed: URL;
     try {
       parsed = new URL(configured);

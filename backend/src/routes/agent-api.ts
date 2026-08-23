@@ -764,7 +764,8 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
     const path = agentFilesystemPath(details.job.runId);
     try {
       await mkdir(dirname(path), { recursive: true });
-      await persistUploadBody(ctx.body, ctx.request, path, MAX_AGENT_FILESYSTEM_BYTES);
+      const size = await persistUploadBody(ctx.body, ctx.request, path, MAX_AGENT_FILESYSTEM_BYTES);
+      if (size === 0) throw new Error("empty");
     } catch (error: unknown) {
       await rm(path, { force: true });
       const tooLarge = error instanceof Error && error.message === "too-large";

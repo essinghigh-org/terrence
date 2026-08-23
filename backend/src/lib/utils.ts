@@ -1281,6 +1281,12 @@ export function apiURL(request: RequestWithUrl, path: string): string {
   return new URL(path, PUBLIC_URL ?? request.url).toString();
 }
 
+/**
+ * Signed URLs must use the same key on every replica. Configure
+ * SIGNED_URL_SECRET consistently across a multi-replica deployment, or mount
+ * a shared STORAGE_DIR so the generated fallback file is shared. A single
+ * replica may continue using the local fallback.
+ */
 function loadSignedUrlSecret(): string {
   const storage = process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage");
   const path = join(storage, ".signed-url-secret");
@@ -1520,6 +1526,13 @@ export const CAPACITY_RUNNING_STATUSES = [
   "planning", "cost_estimating", "cost_estimated", "policy_checking",
   "policy_override", "policy_checked", "post_plan_running", "post_plan_completed",
   "applying",
+];
+export const WORKSPACE_BLOCKING_RUN_STATUSES = [
+  "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
+  "queuing", "plan_queued", "planning", "planned", "cost_estimating",
+  "cost_estimated", "policy_checking", "policy_override", "policy_checked",
+  "post_plan_running", "post_plan_completed", "policy_soft_failed",
+  "confirmed", "apply_queued", "applying",
 ];
 const DISCARDABLE_RUN_STATUSES = [
   "planned",

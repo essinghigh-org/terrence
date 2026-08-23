@@ -33,11 +33,11 @@ if (systemIsRemote && (systemTlsCertPath === undefined || systemTlsKeyPath === u
 }
 const systemTls = systemTlsCertPath !== undefined && systemTlsKeyPath !== undefined
   ? {
-      cert: await Bun.file(systemTlsCertPath).arrayBuffer(),
-      key: await Bun.file(systemTlsKeyPath).arrayBuffer(),
+      cert: Bun.file(systemTlsCertPath),
+      key: Bun.file(systemTlsKeyPath),
     }
   : undefined;
-if (systemTls !== undefined && (systemTls.cert.byteLength === 0 || systemTls.key.byteLength === 0)) {
+if (systemTls !== undefined && (systemTls.cert.size === 0 || systemTls.key.size === 0)) {
   throw new Error("SYSTEM_API_TLS_CERT and SYSTEM_API_TLS_KEY must point to non-empty files.");
 }
 

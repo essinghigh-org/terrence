@@ -8,7 +8,7 @@ export async function persistUploadBody(body: unknown, request: Request, path: s
       ? new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
       : typeof body === "string"
         ? new TextEncoder().encode(body)
-        : body !== null && typeof body === "object" && !(body instanceof Blob)
+        : body !== null && typeof body === "object" && (Array.isArray(body) || Object.getPrototypeOf(body) === Object.prototype)
           ? new TextEncoder().encode(JSON.stringify(body))
           : null;
   if (direct !== null) {
@@ -18,7 +18,7 @@ export async function persistUploadBody(body: unknown, request: Request, path: s
   }
   const stream = body instanceof Blob ? body.stream() : request.body;
   const reader = stream?.getReader();
-  if (reader === undefined) return 0;
+  if (reader === undefined) throw new Error("empty");
   const file = await open(path, "w", 0o600);
   let total = 0;
   try {

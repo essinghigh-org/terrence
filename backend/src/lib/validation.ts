@@ -6,8 +6,8 @@ function stateStorageDir(): string {
 }
 
 /** Encrypt state fields at rest while keeping the API/parser representation plain. */
-export async function encryptStatePayload(payload: string | null): Promise<string | null> {
-  return payload === null ? null : encryptSecret(payload);
+export function encryptStatePayload(payload: string | null): Promise<string | null> {
+  return payload === null ? Promise.resolve(null) : encryptSecret(payload);
 }
 
 function decryptStatePayload(payload: string): string {
