@@ -260,6 +260,9 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     await writeFile(join(vcsDir, "my-repo-abc123", "main.tf"), 'output "x" { value = "1" }');
     const archiveProc = Bun.spawnSync(["tar", "-czf", join(cvDir, "config-cv1.tar.gz"), "-C", vcsDir, "."]);
     if (archiveProc.exitCode !== 0) throw new Error("tar failed");
+    await db.update(configurationVersions)
+      .set({ archivePath: join(cvDir, "config-cv1.tar.gz") })
+      .where(eq(configurationVersions.id, "cv1"));
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/configuration-version\`, {
       headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id },
     }));

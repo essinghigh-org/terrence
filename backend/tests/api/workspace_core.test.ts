@@ -182,7 +182,7 @@ test("workspace core routes persist settings and execute from the configured sub
         id: runId,
         workspaceId,
         configurationVersionId: configurationId,
-        status: "planning",
+        status: "pending",
         createdAt: Date.now(),
       });
       await executeRun(runId);

@@ -20,6 +20,8 @@ describe("Terraform/OpenTofu state import", () => {
   beforeAll(async () => {
     await persistSeed(seed);
     await db.insert(workspaces).values({ id: workspaceId, name: "state-import", orgId: seed.orgId });
+    const lock = await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, { method: "POST", headers });
+    expect(lock.status).toBe(200);
   });
 
   afterAll(async () => {
@@ -31,7 +33,7 @@ describe("Terraform/OpenTofu state import", () => {
   it("accepts a structurally valid partial state and preserves it", async () => {
     const state = JSON.stringify({
       version: 4,
-      serial: 17,
+      serial: 1,
       lineage: "migration-lineage",
       resources: [{
         mode: "managed",

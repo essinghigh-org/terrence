@@ -5,6 +5,7 @@ import {
   users, workspaces, configurationVersions, apiTokens, organizations, organizationMemberships,
 } from "../../src/db/schema";
 import { createHash } from "node:crypto";
+import { validTarGzip } from "./test-archives";
 
 describe("Security Regression — Configuration Version Upload Authorization", () => {
   let adminToken: string;
@@ -67,7 +68,7 @@ describe("Security Regression — Configuration Version Upload Authorization", (
       new Request(`http://localhost/api/v2/configuration-versions/${cvId}/upload`, {
         method: "PUT",
         headers: { Authorization: `Bearer ${readOnlyToken}` },
-        body: Buffer.from("test"),
+        body: validTarGzip("security-regression"),
       }),
     );
     expect(res.status).toBe(404);
@@ -78,7 +79,7 @@ describe("Security Regression — Configuration Version Upload Authorization", (
       new Request(`http://localhost/api/v2/configuration-versions/${cvId}/upload`, {
         method: "PUT",
         headers: { Authorization: `Bearer ${adminToken}` },
-        body: Buffer.from("test"),
+        body: validTarGzip("security-regression"),
       }),
     );
     expect(res.status).toBe(200);

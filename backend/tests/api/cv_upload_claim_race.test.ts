@@ -10,6 +10,7 @@ import {
   users,
   workspaces,
 } from "../../src/db/schema";
+import { validTarGzip } from "./test-archives";
 
 // Configuration-version upload claim race (todo 278): two simultaneous signed
 // PUTs against the same pending configuration-version must not both write the
@@ -68,8 +69,7 @@ describe("configuration-version upload claim race", () => {
     await db.delete(users).where(eq(users.username, userId));
   });
 
-  const tarball = (tag: string): ArrayBuffer =>
-    new TextEncoder().encode(`fake-tar-gz-payload-${tag}-${"x".repeat(256)}`).buffer as ArrayBuffer;
+  const tarball = (tag: string): Uint8Array<ArrayBuffer> => validTarGzip(`fake-tar-gz-payload-${tag}-${"x".repeat(256)}`);
 
   it("only one of two simultaneous uploads wins; the loser gets 409", async () => {
     const [a, b] = await Promise.all([

@@ -44,13 +44,6 @@ export function trustedClientIpHeaders(): readonly string[] {
   return cachedTrustedHeaders;
 }
 
-/** Synchronously resolve a request's IP from the configured trusted headers
- * (empty when no header matches the configured priority list). */
-export function syncedTrustedClientIp(request: unknown): string | null {
-  if (cachedTrustedHeaders.length === 0) return null;
-  return trustedHeaderValue(request);
-}
-
 /** Read a forwarded client address only when the actual socket peer is trusted. */
 export function trustedClientIpForPeer(request: unknown, peer: string | null): string | null {
   return trustedProxy(peer) ? trustedHeaderValue(request) : null;

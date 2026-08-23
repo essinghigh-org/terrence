@@ -25,6 +25,9 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Run backend tests (SQLite)
         env:
+          # Fixtures insert legacy plaintext tokens; the migration-only
+          # compatibility path is explicitly enabled for the test process.
+          TERRENCE_ALLOW_LEGACY_TOKENS: "1"
           # Raises the tofu release-lookup ceiling from 60/hr (per shared
           # runner IP) to 5000/hr when both matrix jobs run e2e downloads.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -60,6 +63,9 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Run backend tests (Postgres)
         env:
+          # Fixtures insert legacy plaintext tokens; the migration-only
+          # compatibility path is explicitly enabled for the test process.
+          TERRENCE_ALLOW_LEGACY_TOKENS: "1"
           DATABASE_URL: postgres://terrence:terrence@localhost:5432/terrence_test
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: cd backend && bun test

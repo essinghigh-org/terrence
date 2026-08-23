@@ -5,7 +5,7 @@ import {
   scryptSync,
 } from "node:crypto";
 import { mkdir, open, readFile } from "node:fs/promises";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { log } from "./log";
 
@@ -335,51 +335,6 @@ export function decryptSecretSync(value: string, storageDir: string): string {
       }
     }
     throw error;
-  }
-}
-
-/** Synchronous envelope writer for database payloads that are persisted by
- * already-synchronous transaction code (notably Terraform state). */
-export function encryptSecretSync(value: string, storageDir: string): string {
-  if (isEncryptedSecret(value)) return value;
-  ensureEncryptionMaterialSync(storageDir);
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", loadEncryptionKeySync(storageDir), iv);
-  const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
-  return [
-    ENCRYPTED_PREFIX,
-    iv.toString("base64"),
-    cipher.getAuthTag().toString("base64"),
-    ciphertext.toString("base64"),
-  ].join(":");
-}
-
-/** Create first-use key material for the synchronous writer without weakening
- * decryptSecretSync's fail-closed behavior for missing boot credentials. */
-function ensureEncryptionMaterialSync(storageDir: string): void {
-  const resolvedDir = resolve(storageDir);
-  mkdirSync(resolvedDir, { recursive: true });
-  const password = process.env.ENCRYPTION_PASSWORD;
-  const path = join(resolvedDir, password !== undefined && password !== "" ? SALT_FILE_NAME : KEY_FILE_NAME);
-  try {
-    const existing = Buffer.from(readFileSync(path, "utf8").trim(), "base64");
-    const minimum = password !== undefined && password !== "" ? SALT_LENGTH : KEY_LENGTH;
-    if (existing.length >= minimum) return;
-    throw new Error(`Invalid encryption material in ${path}`);
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      if (error instanceof Error && error.message.startsWith("Invalid encryption material")) throw error;
-      throw error;
-    }
-    const bytes = randomBytes(password !== undefined && password !== "" ? SALT_LENGTH : KEY_LENGTH);
-    try {
-      writeFileSync(path, bytes.toString("base64"), { mode: 0o600, flag: "wx" });
-    } catch (createError: unknown) {
-      if ((createError as NodeJS.ErrnoException).code !== "EEXIST") throw createError;
-      const existing = Buffer.from(readFileSync(path, "utf8").trim(), "base64");
-      const minimum = password !== undefined && password !== "" ? SALT_LENGTH : KEY_LENGTH;
-      if (existing.length < minimum) throw new Error(`Invalid encryption material in ${path}`);
-    }
   }
 }
 

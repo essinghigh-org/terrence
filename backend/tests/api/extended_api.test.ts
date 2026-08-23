@@ -6,6 +6,8 @@ import { eq } from "drizzle-orm";
 import { executeRun } from "../../src/worker";
 import { rm } from "fs/promises";
 import { join } from "path";
+import { createHash } from "node:crypto";
+import { validTarGzip } from "./test-archives";
 
 describe("the reference format API v2 - Extended APIs", () => {
   let userToken: string;
@@ -193,7 +195,7 @@ describe("the reference format API v2 - Extended APIs", () => {
       new Request(`http://localhost/api/v2/configuration-versions/${cvId}/upload`, {
         method: "PUT",
         headers: { "Authorization": `Bearer ${userToken}` },
-        body: new Uint8Array([0x1f, 0x8b, 0x08])
+        body: validTarGzip("extended")
       })
     );
     expect(uploadRes.status).toBe(200);
@@ -273,6 +275,12 @@ describe("the reference format API v2 - Extended APIs", () => {
   });
 
   it("should list state versions and download state JSON payload", async () => {
+    const lock = await app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${userToken}` },
+    }));
+    expect(lock.status).toBe(200);
+    const rawState = JSON.stringify({ version: 4, serial: 1, resources: [] });
     const createState = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
         method: "POST",
@@ -281,7 +289,7 @@ describe("the reference format API v2 - Extended APIs", () => {
           "Authorization": `Bearer ${userToken}`
         },
         body: JSON.stringify({
-          data: { attributes: { serial: 1, state: JSON.stringify({ resources: [] }) } }
+          data: { type: "state-versions", attributes: { serial: 1, state: rawState, md5: createHash("md5").update(rawState).digest("base64") } }
         })
       })
     );

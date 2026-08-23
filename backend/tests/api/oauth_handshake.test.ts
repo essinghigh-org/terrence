@@ -81,6 +81,7 @@ describe("VCS OAuth handshakes", () => {
   const providerRequests: { path: string; authorization: string | null; body: string }[] = [];
   let provider: ReturnType<typeof Bun.serve>;
   let clientId = "";
+  const previousPrivateVcsUrls = process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS;
 
   const request = (
     path: string,
@@ -95,6 +96,9 @@ describe("VCS OAuth handshakes", () => {
     }));
 
   beforeAll(async () => {
+    // The provider is an in-process loopback server; keep the production SSRF
+    // guard enabled everywhere else while explicitly allowing this fixture.
+    process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS = "1";
     provider = Bun.serve({
       port: 0,
       fetch: async (request: Request): Promise<Response> => {
@@ -210,6 +214,8 @@ describe("VCS OAuth handshakes", () => {
 
   afterAll(async () => {
     await provider.stop(true);
+    if (previousPrivateVcsUrls === undefined) delete process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS;
+    else process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS = previousPrivateVcsUrls;
     await db.delete(oauthClients).where(eq(oauthClients.orgId, orgId));
     await db.delete(apiTokens).where(eq(apiTokens.userId, userId));
     await db.delete(apiTokens).where(eq(apiTokens.userId, otherUserId));

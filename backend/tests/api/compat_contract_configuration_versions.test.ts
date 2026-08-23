@@ -14,6 +14,7 @@ import {
   request,
   seedOrg,
 } from "./compat_contract_helpers";
+import { validTarGzip } from "./test-archives";
 
 describe("remote-workflow configuration versions contract", () => {
   const seed = seedOrg("cv");
@@ -73,7 +74,7 @@ describe("remote-workflow configuration versions contract", () => {
     const upload = await request(refreshedUploadUrl, {
       method: "PUT",
       headers: { Authorization: `Bearer ${seed.token}`, "Content-Type": "application/octet-stream" },
-      body: new Uint8Array([0x1f, 0x8b, 0x08]),
+      body: validTarGzip("compat-cv"),
     });
     expect(upload.status).toBe(200);
 
@@ -90,7 +91,7 @@ describe("remote-workflow configuration versions contract", () => {
   it("downloads the uploaded configuration", async () => {
     const response = await request(`/api/v2/configuration-versions/${cvId}/download`, { headers });
     expect(response.status).toBe(200);
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([0x1f, 0x8b, 0x08]));
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(validTarGzip("compat-cv"));
   });
 
   it("lists configuration versions with pagination metadata", async () => {

@@ -15,6 +15,7 @@ import {
   users,
   workspaces,
 } from "../../src/db/schema";
+import { validTarGzip } from "./test-archives";
 
 describe("Terraform cloud protocol contract", () => {
   const suffix = crypto.randomUUID();
@@ -133,7 +134,7 @@ describe("Terraform cloud protocol contract", () => {
     const uploadResponse = await request(uploadUrl, {
       method: "PUT",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream" },
-      body: new Uint8Array([0x1f, 0x8b, 0x08]),
+      body: validTarGzip("cloud-contract"),
     });
     expect(uploadResponse.status).toBe(200);
     const downloadResponse = await request(
@@ -142,7 +143,7 @@ describe("Terraform cloud protocol contract", () => {
     );
     expect(downloadResponse.status).toBe(200);
     expect(new Uint8Array(await downloadResponse.arrayBuffer())).toEqual(
-      new Uint8Array([0x1f, 0x8b, 0x08]),
+      validTarGzip("cloud-contract"),
     );
 
     const configurationListResponse = await request(
@@ -238,6 +239,11 @@ describe("Terraform cloud protocol contract", () => {
   });
 
   it("supports state version creation, current version retrieval, and state download", async () => {
+    const lockResponse = await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, {
+      method: "POST",
+      headers: authHeaders,
+    });
+    expect(lockResponse.status).toBe(200);
     const state = { version: 4, serial: 1, lineage: suffix, resources: [] };
     const metadataOnlyStateResponse = await request(
       `/api/v2/workspaces/${workspaceId}/state-versions`,
@@ -416,13 +422,16 @@ describe("Terraform cloud protocol contract", () => {
       ["cancel", "canceled"],
       ["force-cancel", "force_canceled"],
     ]) {
-      await db.update(runs).set({ status: "planned" }).where(eq(runs.id, runId));
+      await db.update(runs).set({
+        status: action === "cancel" ? "planning" : action === "force-cancel" ? "applying" : "planned",
+        ...(action === "force-cancel" ? { statusTimestamps: { "cancel-requested-at": new Date().toISOString() } } : {}),
+      }).where(eq(runs.id, runId));
       const actionResponse = await request(
         `/api/v2/runs/${runId}/actions/${action}`,
         { method: "POST", headers: authHeaders },
       );
-      expect(actionResponse.status).toBe(200);
-      expect((await actionResponse.json()).data.attributes.status).toBe(status);
+      expect(actionResponse.status).toBe(202);
+      expect((await db.query.runs.findFirst({ where: eq(runs.id, runId) }))?.status).toBe(status);
     }
   });
 

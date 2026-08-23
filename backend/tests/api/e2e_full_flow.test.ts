@@ -3,6 +3,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { runs, stateVersions } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
+import { validTarGzip } from "./test-archives";
 
 describe("Comprehensive Terrence End-to-End System Flow Test", () => {
   // Cleanup only rows created by this suite's fixture suffix
@@ -224,7 +225,7 @@ describe("Comprehensive Terrence End-to-End System Flow Test", () => {
           ...authHeaders,
           "Content-Type": "application/octet-stream",
         },
-        body: new Uint8Array([0x1f, 0x8b, 0x08]),
+        body: validTarGzip("e2e"),
       })
     );
     if (uploadRes.status !== 200) {

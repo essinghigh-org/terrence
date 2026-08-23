@@ -51,6 +51,11 @@ describe("State Version Outputs & Temporal Upload API", () => {
   });
 
   test("POST /workspaces/:id/state-versions returns temporal upload URLs when state omitted", async () => {
+    const lock = await app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    }));
+    expect(lock.status).toBe(200);
     const res = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
         method: "POST",
