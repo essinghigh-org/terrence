@@ -222,13 +222,13 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     // Share the HTTPS policy with accounts.ts / oidc.ts: PUBLIC_URL is
     // authoritative when configured; otherwise the request's own protocol is
     // used. A request object alone cannot authenticate a forwarded scheme.
-    const secure = await (async (): Promise<boolean> => {
-      const publicUrl = process.env["PUBLIC_URL"];
+      const secure = ((): boolean => {
+        const publicUrl = process.env.PUBLIC_URL;
       if (typeof publicUrl === "string" && publicUrl !== "") {
         try { const proto = new URL(publicUrl).protocol; if (proto === "https:") return true; if (proto !== "") return false; } catch {}
       }
       return request !== undefined && new URL(request.url).protocol === "https:";
-    })();
+      })();
     const cookie = `${OAUTH_STATE_COOKIE}=${stateId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(CODE_TTL_MS / 1000)}${secure ? "; Secure" : ""}`;
     const location = `/login?oauth_state=${encodeURIComponent(stateId)}`;
     return new Response(null, {

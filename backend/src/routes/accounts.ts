@@ -724,7 +724,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         }
         // This is a live candidate — record its family so earlier rotated
         // ghosts from the same family can be forgiven (already skipped).
-        if (liveFamilyId === null) liveFamilyId = current.familyId;
+        liveFamilyId ??= current.familyId;
         const user = await db.query.users.findFirst({ where: eq(users.id, current.userId) });
         if (user === undefined) {
           await revokeRefreshFamily(current.familyId, current.userId, now);

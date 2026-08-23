@@ -800,9 +800,7 @@ export async function completeAgentJob(
     // Modern agent protocol uploads the plan JSON separately (PUT to the job's
     // plan-json URL) before completing; fall back to the stored artifact so
     // resource counts are still derived from the real plan.
-    const effectivePlanJson = completion.planJson !== null
-      ? completion.planJson
-      : await readPlanJsonArtifact(run.id);
+    const effectivePlanJson = completion.planJson ?? await readPlanJsonArtifact(run.id);
     const structuredPlanCounts = job.phase === "plan" && effectivePlanJson !== undefined
       ? planJsonResourceCounts(effectivePlanJson)
       : undefined;
