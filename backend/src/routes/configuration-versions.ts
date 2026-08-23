@@ -7,6 +7,7 @@ import { join } from "path";
 import { mkdir, rm, writeFile } from "fs/promises";
 import { rmSync } from "node:fs";
 import { authPlugin } from "../auth";
+import { assertArchiveExpandedSize } from "../lib/archive";
 
 const rawStorageDir = process.env.STORAGE_DIR;
 const storageDir = typeof rawStorageDir === "string" && rawStorageDir !== "" ? rawStorageDir : join(import.meta.dir, "../storage");
@@ -101,6 +102,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     const workspaceId = params.workspace_id ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "plan");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot create configuration versions" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
@@ -217,6 +219,16 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
       (set as { status: number }).status = 413; return { errors: [{ status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds 100 MiB maximum" }] };
     }
     await writeFile(tarPath, buffer, { mode: 0o600 });
+    try {
+      await assertArchiveExpandedSize(tarPath);
+      const listing = Bun.spawn(["tar", "-tzf", tarPath], { stdout: "pipe", stderr: "pipe" });
+      if (await listing.exited !== 0) throw new Error("invalid tar archive");
+    } catch {
+      rmSync(tarPath, { force: true });
+      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null }).where(eq(configurationVersions.id, cvId));
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration archive is not a valid gzip tar archive" }] };
+    }
     const uploadedAt = new Date().toISOString();
     const finalized = await db.update(configurationVersions).set({
       archivePath: tarPath,
@@ -247,12 +259,13 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
         columns: { id: true },
       });
       if (activeRun !== undefined) return undefined;
+      const archivePath = current.archivePath;
       const rows = await tx.update(configurationVersions).set({
         status: "archived",
         archivePath: null,
         statusTimestamps: { ...(current.statusTimestamps ?? {}), archivedAt: new Date().toISOString() },
-      }).where(and(eq(configurationVersions.id, current.id), eq(configurationVersions.status, "uploaded"))).returning({ id: configurationVersions.id, archivePath: configurationVersions.archivePath });
-      return rows[0];
+      }).where(and(eq(configurationVersions.id, current.id), eq(configurationVersions.status, "uploaded"))).returning({ id: configurationVersions.id });
+      return rows[0] === undefined ? undefined : { ...rows[0], archivePath };
     });
     if (archived === undefined) {
       (set as { status: number }).status = 409;

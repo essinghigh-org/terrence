@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, notInArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db";
 import { agentPools, runs, runComments } from "../../db/schema";
 import type { users } from "../../db/schema";
@@ -245,7 +245,19 @@ export const runTools: readonly McpTool[] = [
       if (!(await checkWorkspacePermission(authorized.workspace, session.userId ?? undefined, session.orgId, session.teamId, "cancel"))) {
         return toolError("Not authorized to cancel this run");
       }
-      const updated = await db.update(runs).set({ status: "canceled" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
+      const updated = await db.update(runs).set({
+        status: "canceled",
+        statusTimestamps: { ...(authorized.run.statusTimestamps ?? {}), "cancel-requested-at": new Date().toISOString() },
+      }).where(and(
+        eq(runs.id, runId),
+        eq(runs.status, authorized.run.status),
+        inArray(runs.status, [
+          "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
+          "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated",
+          "policy_checking", "policy_override", "policy_checked", "post_plan_running",
+          "post_plan_completed", "confirmed", "apply_queued", "applying",
+        ]),
+      )).returning();
       if (updated.length === 0) return toolBadRequest("Run is not cancelable");
       const { cancelRunExecution } = await import("../../worker");
       cancelRunExecution(runId);

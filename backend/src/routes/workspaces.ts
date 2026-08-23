@@ -12,7 +12,7 @@ import {
 } from "../lib/response";
 import { validVariableAttributes } from "../lib/validation";
 import { variableValueForWrite, variableValueForRead } from "../lib/variable-crypto";
-import { validateVersion, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, auditLog, strictAuditEnabled, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspaceData , type DeepReadonly } from "../lib/utils";
+import { validateVersion, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, auditLog, strictAuditEnabled, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspaceData, lockPrincipal, ownsWorkspaceLock, ifMatchSatisfied, type DeepReadonly } from "../lib/utils";
 
 import { normalizeWorkingDirectory } from "../workspace";
 import { authPlugin } from "../auth";
@@ -1003,12 +1003,19 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       },
     };
   })
-  .patch("/api/v2/workspaces/:workspace_id", async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .patch("/api/v2/workspaces/:workspace_id", async ({ params, body, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const org = await cachedOrgById(ws.orgId);
+    const currentResource = await workspaceResource(
+      ws,
+      org?.defaultIacBinary,
+      await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+      { orgName: org?.name ?? null },
+    );
+    if (!ifMatchSatisfied(request, { data: currentResource })) { (set as { status: number }).status = 412; return { errors: [{ status: "412", title: "Precondition Failed" }] }; }
     return updateWorkspaceResponse(
       ws,
       org?.defaultIacBinary,
@@ -1316,12 +1323,19 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockReason.error }] };
     }
 
-    await db.update(workspaces).set({ locked: true, lockedReason: lockReason.reason }).where(eq(workspaces.id, workspaceId));
+    const principal = lockPrincipal(user?.id, principalOrgId, teamId);
+    const locked = await db.update(workspaces).set({
+      locked: true,
+      lockedReason: lockReason.reason,
+      lockOwnerType: principal.type,
+      lockOwnerId: principal.id,
+    }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, false))).returning({ id: workspaces.id });
+    if (locked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is already locked" }] }; }
     await auditLog("lock", "workspaces", workspaceId, user?.id ?? null, ws.orgId, teamId !== null && teamId !== undefined ? { teamId } : undefined);
     const org = await cachedOrgById(ws.orgId);
     return {
       data: await workspaceResource(
-        { ...ws, locked: true, lockedReason: lockReason.reason },
+        { ...ws, locked: true, lockedReason: lockReason.reason, lockOwnerType: principal.type, lockOwnerId: principal.id },
         org?.defaultIacBinary,
         await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
         { orgName: org?.name ?? null },
@@ -1335,12 +1349,14 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "lock"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     if (ws.locked !== true) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is not locked" }] }; }
+    if (!ownsWorkspaceLock(ws, lockPrincipal(user?.id, principalOrgId, teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Only the lock owner can unlock this workspace" }] }; }
     await promoteIntermediateStateVersion(workspaceId);
-    await db.update(workspaces).set({ locked: false, lockedReason: null }).where(eq(workspaces.id, workspaceId));
+    const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true), eq(workspaces.lockOwnerType, lockPrincipal(user?.id, principalOrgId, teamId).type), eq(workspaces.lockOwnerId, lockPrincipal(user?.id, principalOrgId, teamId).id))).returning({ id: workspaces.id });
+    if (unlocked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock changed while unlocking" }] }; }
     const org = await cachedOrgById(ws.orgId);
     return {
       data: await workspaceResource(
-        { ...ws, locked: false, lockedReason: null },
+        { ...ws, locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null },
         org?.defaultIacBinary,
         await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
         { orgName: org?.name ?? null },
@@ -1352,11 +1368,11 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null, "admin");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await promoteIntermediateStateVersion(workspaceId);
-    await db.update(workspaces).set({ locked: false, lockedReason: null }).where(eq(workspaces.id, workspaceId));
+    await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true)));
     const org = await cachedOrgById(ws.orgId);
     return {
       data: await workspaceResource(
-        { ...ws, locked: false, lockedReason: null },
+        { ...ws, locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null },
         org?.defaultIacBinary,
         await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
         { orgName: org?.name ?? null },

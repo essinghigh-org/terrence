@@ -140,6 +140,8 @@ export const authPlugin = new Elysia({ name: "auth" })
     // costs ONE query instead of two (api_tokens + users). Portable across
     // backends: .get() is sqlite-only, so use limit(1) + await (drizzle query
     // builders are thenable on both dialects).
+    const isRunPrefix = tokenString.startsWith("trun_");
+    const isSystemPrefix = tokenString.startsWith("tfe-system-");
     const lookup = async (): Promise<{ token: AuthToken | undefined; user: (typeof users.$inferSelect) | null }> => {
       const rows = await db.select({ token: apiTokens, user: users })
         .from(apiTokens)
@@ -152,14 +154,18 @@ export const authPlugin = new Elysia({ name: "auth" })
     // Todo 335: prefix-based dispatch. Known prefixes route to their table
     // first; unknown/no-prefix falls through to the existing chain for compat.
     const prefix = tokenPrefix(tokenString);
-    void prefix;
-    let { token, user } = await lookup();
+    // Run/system prefixes have dedicated tables. All other credentials still
+    // get one indexed hash lookup: this keeps migrated legacy rows usable
+    // after their first request without reopening the plaintext fallback.
+    const dedicatedPrefix = prefix !== null && ["scim", "saml", "oidc"].includes(prefix);
+    const skipApiLookup = isRunPrefix || isSystemPrefix || dedicatedPrefix;
+    let { token, user } = skipApiLookup ? { token: undefined, user: null } : await lookup();
 
 
     // Legacy fallback: re-hash plaintext token on successful use (todo 331).
-    // Gated behind TERRENCE_ALLOW_LEGACY_TOKENS (default 1 for compat). Set to
-    // "0" once the legacy counter reads zero to fully remove the plaintext path.
-    const allowLegacyTokens = process.env.TERRENCE_ALLOW_LEGACY_TOKENS !== "0";
+    // Legacy plaintext rows are an explicit migration escape hatch, never the
+    // default authentication path.
+    const allowLegacyTokens = process.env.TERRENCE_ALLOW_LEGACY_TOKENS === "1";
     if (allowLegacyTokens && token === undefined) {
       const legacyToken = await db.query.apiTokens.findFirst({
         where: eq(apiTokens.token, tokenString),
@@ -177,8 +183,6 @@ export const authPlugin = new Elysia({ name: "auth" })
     // not map to a user/team/org token row; the run row carries the scope.
     // Todo 335: prefix dispatch - run tokens are `trun_`, so skip this lookup
     // for tokens whose prefix clearly indicates another credential class.
-    const isRunPrefix = tokenString.startsWith("trun_");
-    const isSystemPrefix = tokenString.startsWith("tfe-system-");
     if (token === undefined && (isRunPrefix || !isSystemPrefix)) {
       const runRows = await db.select().from(runTokens)
         .where(eq(runTokens.tokenHash, tokenHash))

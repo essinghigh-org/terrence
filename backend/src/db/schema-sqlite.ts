@@ -335,6 +335,8 @@ export const workspaces = sqliteTable("workspaces", {
   settingOverwrites: text("setting_overwrites", { mode: "json" }).$type<Record<string, boolean>>(),
   locked: integer("locked", { mode: "boolean" }).default(false),
   lockedReason: text("locked_reason"),
+  lockOwnerType: text("lock_owner_type"),
+  lockOwnerId: text("lock_owner_id"),
   // Executor policy (36/37/39): per-workspace isolation level. When
   // `trustedExecution` is false, local Landlock execution is refused and the
   // run must be dispatched to an isolated executor (agent/container/k8s).

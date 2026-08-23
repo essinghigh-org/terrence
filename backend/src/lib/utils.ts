@@ -9,7 +9,7 @@ import {
   organizationMembershipRoles, organizationRoles,
 } from "../db/schema";
 import { and, desc, eq, exists, gte, inArray, isNull, like, lt, notInArray, or, sql } from "drizzle-orm";
-import { timingSafeEqual, createHmac } from "node:crypto";
+import { timingSafeEqual, createHash, createHmac } from "node:crypto";
 import { access, rm } from "node:fs/promises";
 import { recordFailure } from "./process-metrics";
 import { log } from "./log";
@@ -534,6 +534,35 @@ export type WorkspacePermission =
   | "state-outputs"
   | "state-read"
   | "state-write";
+
+export type LockPrincipal = Readonly<{ type: string; id: string }>;
+
+export function lockPrincipal(userId: string | null | undefined, orgId: string | null | undefined, teamId: string | null | undefined): LockPrincipal {
+  if (teamId !== null && teamId !== undefined && teamId !== "") return { type: "team", id: teamId };
+  if (userId !== null && userId !== undefined && userId !== "") return { type: "user", id: userId };
+  if (orgId !== null && orgId !== undefined && orgId !== "") return { type: "organization", id: orgId };
+  return { type: "service", id: "system" };
+}
+
+export function ownsWorkspaceLock(
+  workspace: Readonly<{ locked?: boolean | null; lockOwnerType?: string | null; lockOwnerId?: string | null }>,
+  principal: LockPrincipal,
+): boolean {
+  return workspace.locked === true
+    && workspace.lockOwnerType === principal.type
+    && workspace.lockOwnerId === principal.id;
+}
+
+export function strongDocumentEtag(document: unknown): string {
+  return `"${createHash("sha256").update(JSON.stringify(document)).digest("hex")}"`;
+}
+
+export function ifMatchSatisfied(request: Readonly<{ headers: Readonly<{ get(name: string): string | null }> }>, document: unknown): boolean {
+  const ifMatch = request.headers.get("if-match");
+  if (ifMatch === null || ifMatch.trim() === "*") return true;
+  const expected = strongDocumentEtag(document);
+  return ifMatch.split(",").map((tag): string => tag.trim()).some((tag): boolean => tag === expected);
+}
 
 function teamWorkspaceAllows(
   accessLevel: string,

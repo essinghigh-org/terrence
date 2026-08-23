@@ -27,6 +27,7 @@ import {
   type PlanJson,
 } from "./plan-json";
 import type { DeepReadonly } from "./utils";
+import { insertStateVersionWithSerialRetry } from "./state-serial";
 
 export const MAX_AGENT_RESULT_BYTES = 64 * 1024;
 export const MAX_AGENT_RESULT_DEPTH = 8;
@@ -747,6 +748,7 @@ export async function completeAgentJob(
   jobId: string,
   completion: AgentJobCompletion,
 ): Promise<Readonly<{ job: AgentJob; runStatus: string }> | undefined> {
+  let completedState: { workspaceId: string; statePayload: string; jsonState: string | null; jsonStateOutputs: string | null; runId: string } | undefined;
   const outcome = await db.transaction(async (transaction): Promise<Readonly<{ job: AgentJob; runStatus: string }> | undefined> => {
     const tx = transaction as unknown as typeof db;
     const job = await tx.query.agentJobs.findFirst({
@@ -817,10 +819,10 @@ export async function completeAgentJob(
         ? "errored"
         : policyOutcome.softFailed
           ? "policy_soft_failed"
-          : run.planOnly
-            ? "planned_and_finished"
-            : run.savePlan
+          : run.savePlan
               ? "planned_and_saved"
+              : run.planOnly
+                ? "planned_and_finished"
               : run.autoApply || run.allowEmptyApply
                 ? "apply_queued"
                 : "planned";
@@ -875,26 +877,30 @@ export async function completeAgentJob(
     }
 
     if (completion.status === "completed" && job.phase === "apply" && completion.statePayload !== null) {
-      const latestState = await tx.query.stateVersions.findFirst({
-        where: eq(stateVersions.workspaceId, run.workspaceId),
-        orderBy: [desc(stateVersions.serial)],
-      });
-      await tx.insert(stateVersions).values({
-        id: crypto.randomUUID(),
+      completedState = {
         workspaceId: run.workspaceId,
-        serial: (latestState?.serial ?? 0) + 1,
         statePayload: completion.statePayload,
         jsonState: completion.jsonState ?? completion.statePayload,
         jsonStateOutputs: completion.jsonStateOutputs,
         runId: run.id,
-        status: "finalized",
-        createdAt: now,
-      });
+      };
     }
 
     await tx.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agentId));
     return { job: updatedJob, runStatus };
   });
+  if (completedState !== undefined && outcome !== undefined) {
+    await insertStateVersionWithSerialRetry({
+      id: crypto.randomUUID(),
+      workspaceId: completedState.workspaceId,
+      statePayload: completedState.statePayload,
+      jsonState: completedState.jsonState,
+      jsonStateOutputs: completedState.jsonStateOutputs,
+      runId: completedState.runId,
+      status: "finalized",
+      createdAt: Date.now(),
+    });
+  }
   if (outcome !== undefined) notifyRunStatus(outcome.job.runId, outcome.runStatus);
   return outcome;
 }

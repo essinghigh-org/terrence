@@ -13,10 +13,12 @@
 // after any admin settings write, so the sync rate-limit path can read it
 // without an async DB query per request.
 import { getSettings } from "./settings";
+import { isIPv4InCidr } from "./url-safety";
 
 type PeelServer = Readonly<{ readonly requestIP?: (request: unknown) => Readonly<{ readonly address?: string }> | null }> | null;
 
 let cachedTrustedHeaders: string[] = [];
+let cachedTrustedProxyCidrs: string[] = [];
 /** Re-read the trusted-header list from settings (startup + admin writes). */
 export async function refreshTrustedClientIpHeaders(): Promise<void> {
   try {
@@ -27,6 +29,10 @@ export async function refreshTrustedClientIpHeaders(): Promise<void> {
     } else {
       cachedTrustedHeaders = [];
     }
+    const configuredCidrs = next["trusted-client-ip-cidrs"];
+    cachedTrustedProxyCidrs = Array.isArray(configuredCidrs)
+      ? configuredCidrs.filter((cidr): cidr is string => typeof cidr === "string" && cidr.trim() !== "")
+      : (process.env.TERRENCE_TRUSTED_PROXY_CIDRS ?? "").split(",").map((cidr): string => cidr.trim()).filter(Boolean);
   } catch {
     cachedTrustedHeaders = [];
   }
@@ -57,7 +63,7 @@ export function requestIsHttps(request: Readonly<{ url: string; headers: Readonl
     if (new URL(request.url).protocol === "https:") return true;
   } catch { /* fall through to header check */ }
   // Only trust X-Forwarded-Proto when a trusted header list is configured (proxy in front).
-  if (cachedTrustedHeaders.length === 0) return false;
+  if (cachedTrustedHeaders.length === 0 || cachedTrustedProxyCidrs.length === 0) return false;
   const forwarded = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
   return forwarded === "https";
 }
@@ -76,6 +82,11 @@ function trustedHeaderValue(request: unknown): string | null {
     if (value !== null) return value;
   }
   return null;
+}
+
+function trustedProxy(peer: string | null): boolean {
+  if (peer === null || cachedTrustedProxyCidrs.length === 0) return false;
+  return cachedTrustedProxyCidrs.some((cidr): boolean => isIPv4InCidr(peer, cidr));
 }
 
 function peerAddress(request: unknown, server: unknown): string | null {
@@ -100,7 +111,7 @@ function peerAddress(request: unknown, server: unknown): string | null {
 export async function resolveClientIp(request: unknown, server: unknown): Promise<string | null> {
   const peer = peerAddress(request, server);
   if (peer !== null) {
-    if (cachedTrustedHeaders.length > 0) {
+    if (cachedTrustedHeaders.length > 0 && trustedProxy(peer)) {
       const trusted = trustedHeaderValue(request);
       if (trusted !== null) return trusted;
     }

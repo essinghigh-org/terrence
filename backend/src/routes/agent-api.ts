@@ -678,6 +678,12 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       set.status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    const configuration = details.configuration;
+    if (configuration === null || configuration === undefined || configuration.status !== "uploaded" || configuration.archivePath === null || !(await Bun.file(configuration.archivePath).exists())) {
+      await rm(join(storageRoot(), "agent-cv", `${cvId}.tar.gz`), { force: true });
+      set.status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     try {
       const data = await readFile(await flattenedConfigurationArchive(cvId));
       set.headers = { "content-type": "application/gzip", "content-length": String(data.byteLength) };

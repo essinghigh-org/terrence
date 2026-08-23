@@ -1810,6 +1810,8 @@ export const workspaces = pgTable("workspaces", {
     settingOverwrites: jsonb("setting_overwrites"),
     locked: boolean("locked").default(false),
     lockedReason: text("locked_reason"),
+    lockOwnerType: text("lock_owner_type"),
+    lockOwnerId: text("lock_owner_id"),
     trustedExecution: boolean("trusted_execution").notNull().default(true),
     ownedByType: text("owned_by_type"),
     ownedById: text("owned_by_id"),

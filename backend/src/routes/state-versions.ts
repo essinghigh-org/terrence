@@ -1,4 +1,5 @@
 import { Elysia } from "elysia";
+import { createHash } from "node:crypto";
 import { db } from "../db";
 import { stateVersions, workspaces, runs, organizationMemberships, teams, type users } from "../db/schema";
 import { eq, and, desc, count, inArray } from "drizzle-orm";
@@ -16,6 +17,8 @@ import {
   validSignedApiURL,
   auditLog,
   workspaceIdsForPermission,
+  lockPrincipal,
+  ownsWorkspaceLock,
 } from "../lib/utils";
 import { isUniqueConstraintError } from "../lib/validation";
 import { authPlugin } from "../auth";
@@ -201,7 +204,8 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const workspaceId = params.workspace_id ?? "";
     const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-write");
     if (workspace === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (workspace.locked !== true) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked before rollback" }] }; }
+    if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot roll back state" }] }; }
+    if (!ownsWorkspaceLock(workspace, lockPrincipal(user?.id, orgId, teamId))) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before rollback" }] }; }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
     const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
     const relationships = data.relationships !== null && typeof data.relationships === "object" ? data.relationships as Record<string, unknown> : {};
@@ -440,6 +444,8 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-write"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot roll back state" }] }; }
+    if (!ownsWorkspaceLock(ws, lockPrincipal(user?.id, orgId, teamId))) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before rollback" }] }; }
     if (sv.statePayload === null || sv.status !== "finalized") {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State version cannot be rolled back" }] };
     }
@@ -551,6 +557,12 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
+    if (data?.type !== undefined && data.type !== "state-versions") {
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be state-versions" }] };
+    }
+    if (orgId !== null && orgId !== undefined) {
+      (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot create state versions" }] };
+    }
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
     const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
     const runRel = typeof rels.run === "object" && rels.run !== null ? (rels.run as Record<string, unknown>) : {};
@@ -569,6 +581,15 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (serial === undefined) {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "param is missing or the value is empty: serial" }] };
     }
+    if (runId !== null) {
+      const relatedRun = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { workspaceId: true } });
+      if (relatedRun?.workspaceId !== workspaceId) {
+        (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "run must belong to this workspace" }] };
+      }
+    }
+    if (run === null && (!ownsWorkspaceLock(ws, lockPrincipal(user?.id, orgId, teamId)))) {
+      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before writing state" }] };
+    }
     // No locked-workspace rejection here: the reference format allows state uploads on locked
     // workspaces. The CLI holds the workspace lock for the whole
     // import/apply operation and uploads the state while still locked;
@@ -578,8 +599,31 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (intermediate && ws.locked !== true) {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Intermediate state requires a locked workspace" }] };
     }
+    const parsedTerraformState = statePayload === null ? null : parseTerraformStatePayload(statePayload);
     if (statePayload !== null && parseStatePayload(statePayload) === null) {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State content must be valid JSON" }] };
+    }
+    if (parsedTerraformState !== null && parsedTerraformState.serial !== serial) {
+      (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial does not match the Terraform state payload" }] };
+    }
+    if (statePayload !== null && typeof attributes.md5 === "string") {
+      const expected = createHash("md5").update(statePayload).digest("base64");
+      if (attributes.md5 !== expected && attributes.md5 !== createHash("md5").update(statePayload).digest("hex")) {
+        (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "md5 does not match the state payload" }] };
+      }
+    }
+    const latestState = await db.query.stateVersions.findFirst({
+      where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
+      orderBy: [desc(stateVersions.serial)],
+    });
+    if (latestState !== undefined && runId === null && serial <= latestState.serial) {
+      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] };
+    }
+    if (parsedTerraformState !== null && latestState?.statePayload !== null && latestState?.statePayload !== undefined) {
+      const previous = parseTerraformStatePayload(latestState.statePayload);
+      if (previous?.lineage !== undefined && parsedTerraformState.lineage !== previous.lineage) {
+        (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State lineage does not match the workspace history" }] };
+      }
     }
     if (jsonState !== null && parseStatePayload(jsonState) === null) {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }] };
@@ -609,9 +653,10 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
       : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-write");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (ws.locked === true) {
+    if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot upload state" }] }; }
+    if (run === null && !ownsWorkspaceLock(ws, lockPrincipal(user?.id, orgId, teamId))) {
       (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is locked" }] };
+      return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before writing state" }] };
     }
     const contentLength = Number(request.headers.get("content-length"));
     if (Number.isFinite(contentLength) && contentLength > MAX_IMPORTED_STATE_BYTES) {
@@ -627,6 +672,27 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (parsed === null) {
       (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: "Uploaded file is not a valid Terraform/OpenTofu state file" }] };
+    }
+    const latestImportedState = await db.query.stateVersions.findFirst({
+      where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
+      orderBy: [desc(stateVersions.serial)],
+      columns: { serial: true, statePayload: true },
+    });
+    if (parsed.serial !== (latestImportedState?.serial ?? 0) + 1) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial must be the next workspace state serial" }] };
+    }
+    if (latestImportedState?.statePayload !== null && latestImportedState?.statePayload !== undefined) {
+      const previous = parseTerraformStatePayload(latestImportedState.statePayload);
+      if (previous?.lineage !== undefined && parsed.lineage !== previous.lineage) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "State lineage does not match the workspace history" }] };
+      }
+    }
+    const contentMd5 = request.headers.get("content-md5");
+    if (contentMd5 !== null && contentMd5 !== createHash("md5").update(rawState).digest("base64")) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Content-MD5 does not match the state payload" }] };
     }
 
     const stateVersionId = await withStateSerialRetry(() => db.transaction(async (tx: unknown): Promise<string> => {
