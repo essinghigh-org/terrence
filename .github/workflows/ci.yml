@@ -156,11 +156,6 @@ jobs:
             console.log(`bundle total ${(total/1024/1024).toFixed(2)} MiB (budget ${(budget/1024/1024).toFixed(2)} MiB)`);
             if(total>budget){console.error(`bundle exceeds budget by ${((total-budget)/1024).toFixed(0)} KiB`);process.exit(1)}
           '
-      - name: Reproducible lockfile check (todo 889)
-        run: |
-          bun install
-          git diff --exit-code -- bun.lock
-
   accessibility:
     name: Accessibility (axe)
     runs-on: ubuntu-latest

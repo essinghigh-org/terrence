@@ -33,6 +33,8 @@ import {
   type AgentJobDetails,
 } from "../lib/agent-api";
 import { revokeRunTokens } from "../lib/run-token";
+import { persistUploadBody } from "../lib/upload-body";
+import { log } from "../lib/log";
 
 const MAX_AGENT_BODY_BYTES = 16 * 1024 * 1024;
 // The public listener's native request cap is 100 MiB. Keep the endpoint's
@@ -58,8 +60,9 @@ async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
       completedAt: null,
       errorMessage: null,
     }).where(and(eq(agentJobs.id, job.id), eq(agentJobs.status, "claimed")));
-    const timestamps: Record<string, string> = run.statusTimestamps !== null && typeof run.statusTimestamps === "object"
-      ? { ...(run.statusTimestamps as Record<string, string>), [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() }
+    const current = await t.query.runs.findFirst({ where: eq(runs.id, run.id), columns: { statusTimestamps: true } });
+    const timestamps: Record<string, string> = current?.statusTimestamps !== null && typeof current?.statusTimestamps === "object"
+      ? { ...(current.statusTimestamps as Record<string, string>), [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() }
       : { [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() };
     await t.update(runs).set({ status: queuedStatus, statusTimestamps: timestamps }).where(and(eq(runs.id, run.id), eq(runs.status, job.phase === "plan" ? "planning" : "applying")));
   });
@@ -300,6 +303,10 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
     }
     const name = typeof body.name === "string" && body.name !== "" ? body.name : "agent";
     const arch = typeof body.arch === "string" ? body.arch : null;
+    if (arch !== null && !new Set(["amd64", "arm64", "386", "arm"]).has(arch)) {
+      set.status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "arch must be amd64, arm64, 386, or arm" }] };
+    }
     const version = ctx.request.headers.get("tfc-agent-version");
     const accept = typeof body.accept === "string" && body.accept !== "" ? body.accept : DEFAULT_AGENT_ACCEPT;
     if (accept !== "none" && (!/^[a-z_]+(?:,[a-z_]+)*$/.test(accept) || accept.split(",").some((value): boolean => !AGENT_WORKLOAD_TYPES.includes(value)))) {
@@ -651,7 +658,16 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       const payload = await buildAgentJobPayload(details, baseUrl, runToken, terraformInfo, {}, environment);
       return payload;
     } catch (error: unknown) {
-      await releaseAgentClaim(claimed).catch(() => undefined);
+      try {
+        await releaseAgentClaim(claimed);
+      } catch (releaseError: unknown) {
+        log.error("Failed to release an agent claim after payload construction failed", {
+          jobId: claimed.job.id,
+          runId: claimed.run.id,
+          error: releaseError,
+        });
+      }
+      log.error("Failed to construct an agent job payload", { jobId: claimed.job.id, runId: claimed.run.id, error });
       set.status = 503;
       return { errors: [{ status: "503", title: "Service Unavailable", detail: error instanceof Error ? error.message : "Unable to construct agent job" }] };
     }
@@ -706,7 +722,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const configuration = details.configuration;
-    if (configuration === null || configuration === undefined || configuration.status !== "uploaded" || configuration.archivePath === null || !(await Bun.file(configuration.archivePath).exists())) {
+    if (configuration === null || configuration.id !== cvId || configuration.status !== "uploaded" || configuration.archivePath === null || !(await Bun.file(configuration.archivePath).exists())) {
       await rm(join(storageRoot(), "agent-cv", `${cvId}.tar.gz`), { force: true });
       set.status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -745,14 +761,16 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const buffer = await rawBody(ctx);
-    if (buffer.byteLength > MAX_AGENT_FILESYSTEM_BYTES) {
-      set.status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
-    }
     const path = agentFilesystemPath(details.job.runId);
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, buffer, { mode: 0o600 });
+    try {
+      await mkdir(dirname(path), { recursive: true });
+      await persistUploadBody(ctx.body, ctx.request, path, MAX_AGENT_FILESYSTEM_BYTES);
+    } catch (error: unknown) {
+      await rm(path, { force: true });
+      const tooLarge = error instanceof Error && error.message === "too-large";
+      set.status = tooLarge ? 422 : 400;
+      return { errors: [{ status: String(set.status), title: tooLarge ? "Unprocessable Entity" : "Bad Request" }] };
+    }
     return {};
   })
 

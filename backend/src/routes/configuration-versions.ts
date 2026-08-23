@@ -5,7 +5,6 @@ import { eq, count, desc, and, inArray, notInArray, isNull, lt, or } from "drizz
 import { apiURL, signedApiURL, validSignedApiURL, FINAL_RUN_STATUSES, findAuthorizedWorkspace, pageRequest, pagination , type DeepReadonly } from "../lib/utils";
 import { join } from "path";
 import { mkdir, rm } from "fs/promises";
-import { rmSync } from "node:fs";
 import { authPlugin } from "../auth";
 import { assertArchiveExpandedSize } from "../lib/archive";
 import { persistUploadBody } from "../lib/upload-body";
@@ -201,7 +200,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
       const size = await persistUploadBody(body, request, tarPath, 100 * 1024 * 1024);
       if (size === 0) throw new Error("empty");
     } catch (error: unknown) {
-      rmSync(tarPath, { force: true });
+      await rm(tarPath, { force: true });
       await db.update(configurationVersions).set({ uploadClaimExpiresAt: null }).where(eq(configurationVersions.id, cvId));
       const tooLarge = (error instanceof Error && error.message === "too-large")
         || Number(request.headers.get("content-length")) > 100 * 1024 * 1024;
@@ -210,10 +209,8 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     }
     try {
       await assertArchiveExpandedSize(tarPath);
-      const listing = Bun.spawn(["tar", "-tzf", tarPath], { stdout: "ignore", stderr: "ignore" });
-      if (await listing.exited !== 0) throw new Error("invalid tar archive");
     } catch {
-      rmSync(tarPath, { force: true });
+      await rm(tarPath, { force: true });
       await db.update(configurationVersions).set({ uploadClaimExpiresAt: null }).where(eq(configurationVersions.id, cvId));
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration archive is not a valid gzip tar archive" }] };
@@ -227,7 +224,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     }).where(and(eq(configurationVersions.id, cvId), eq(configurationVersions.status, "pending"), isNull(configurationVersions.archivePath))).returning({ id: configurationVersions.id });
     if (finalized.length === 0) {
       // Another request finalized between our claim and write; ours loses.
-      rmSync(tarPath, { force: true });
+      await rm(tarPath, { force: true });
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] };
     }

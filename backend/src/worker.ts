@@ -2019,7 +2019,10 @@ async function executeApplyImpl(runId: string): Promise<void> {
       scheduledBlockReasons.set(key, "workspace-locked");
       await writeLog(runId, "apply", "[terrence] Apply deferred because the workspace is locked.");
     }
-    await db.update(runs).set({ status: "confirmed" }).where(and(
+    await db.update(runs).set({
+      status: "confirmed",
+      scheduledAt: run.scheduledAt ?? Date.now() + 1000,
+    }).where(and(
       eq(runs.id, runId),
       inArray(runs.status, ["confirmed", "apply_queued"]),
     ));
@@ -3652,10 +3655,25 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
         }
       }));
   };
-  await Promise.all([
-    pruneRoot(join(storageDir, "recovery")),
-    pruneRoot(join(storageDir, "saved-plans")),
-  ]);
+  const pruneSavedPlans = async (): Promise<void> => {
+    const root = join(storageDir, "saved-plans");
+    const entries = await readdir(root, { withFileTypes: true, encoding: "utf8" }).catch(() => null);
+    if (entries === null) return;
+    await Promise.all(entries
+      .filter((entry): boolean => entry.isDirectory())
+      .map(async (entry): Promise<void> => {
+        const path = join(root, entry.name);
+        try {
+          if ((await stat(path)).mtimeMs >= cutoff) return;
+          const run = await db.query.runs.findFirst({ where: eq(runs.id, entry.name), columns: { status: true } });
+          if (run !== undefined && !FINAL_RUN_STATUSES.includes(run.status)) return;
+          await rm(path, { recursive: true, force: true });
+        } catch {
+          // Best effort: a concurrent reconciliation or cleanup may own it.
+        }
+      }));
+  };
+  await Promise.all([pruneRoot(join(storageDir, "recovery")), pruneSavedPlans()]);
 }
 
 export async function reconcileInterruptedLocalRuns(): Promise<{

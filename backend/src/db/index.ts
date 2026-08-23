@@ -233,17 +233,17 @@ if (!isPostgres) {
       sess.schema as never,
     );
     const behavior = config?.behavior !== undefined ? ` ${config.behavior.toUpperCase()}` : '';
-    const transactionStart = poolTransactionStart();
     client.run(`BEGIN${behavior}`);
+    const transactionStart = poolTransactionStart();
     try {
       const result = await fn(tx);
       client.run('COMMIT');
-      poolTransactionEnd(transactionStart);
       return result;
     } catch (err) {
       client.run('ROLLBACK');
-      poolTransactionEnd(transactionStart);
       throw err;
+    } finally {
+      poolTransactionEnd(transactionStart);
     }
   };
 

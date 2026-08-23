@@ -605,7 +605,12 @@ export const runRoutes = new Elysia({ name: "runs" })
       (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: "page[cursor] is invalid" }] };
     }
-    if (orgWorkspaces.length === 0) { return { data: [], ...pagination(request, number, size, 0) }; }
+    if (orgWorkspaces.length === 0) {
+      return {
+        data: [],
+        ...(cursorMode ? cursorPagination(request, null, size, false) : pagination(request, number, size, 0)),
+      };
+    }
     const baseQueueWhere = and(
       inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)),
       inArray(runs.status, [...CAPACITY_PENDING_STATUSES, ...CAPACITY_RUNNING_STATUSES]),

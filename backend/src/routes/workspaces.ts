@@ -1345,9 +1345,9 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "lock"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     if (ws.locked !== true) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is not locked" }] }; }
     if (!ownsWorkspaceLock(ws, lockPrincipal(user?.id, principalOrgId, teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Only the lock owner can unlock this workspace" }] }; }
-    await promoteIntermediateStateVersion(workspaceId);
     const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true), eq(workspaces.lockOwnerType, lockPrincipal(user?.id, principalOrgId, teamId).type), eq(workspaces.lockOwnerId, lockPrincipal(user?.id, principalOrgId, teamId).id))).returning({ id: workspaces.id });
     if (unlocked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock changed while unlocking" }] }; }
+    await promoteIntermediateStateVersion(workspaceId);
     const org = await cachedOrgById(ws.orgId);
     return {
       data: await workspaceResource(

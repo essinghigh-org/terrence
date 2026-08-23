@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-/* eslint-disable @typescript-eslint/naming-convention, @typescript-eslint/prefer-readonly-parameter-types, @typescript-eslint/explicit-function-return-type, @typescript-eslint/restrict-template-expressions, @typescript-eslint/no-unnecessary-condition, @typescript-eslint/no-floating-promises -- provider schema JSON and CLI process APIs use external shapes. */
+/* eslint-disable @typescript-eslint/naming-convention, @typescript-eslint/prefer-readonly-parameter-types, @typescript-eslint/explicit-function-return-type, @typescript-eslint/restrict-template-expressions, @typescript-eslint/no-unnecessary-condition -- provider schema JSON and CLI process APIs use external shapes. */
 /**
  * Regenerate the provider-surface catalog from the latest hashicorp/tfe release.
  *
@@ -184,4 +184,7 @@ async function main(): Promise<void> {
   if (removedDataSources.length > 0) console.log(`Removed data sources: ${removedDataSources.join(", ")}`);
 }
 
-main();
+main().catch((error: unknown): void => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});

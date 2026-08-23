@@ -1298,15 +1298,24 @@ function loadSignedUrlSecret(): string {
     return generated;
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      const existing = readFileSync(path, "utf8").trim();
-      if (existing.length >= 32) return existing;
+      try {
+        const existing = readFileSync(path, "utf8").trim();
+        if (existing.length >= 32) return existing;
+      } catch {
+        // Another process may have created the file but not made it readable yet.
+      }
       throw new Error(`Signed-URL secret at ${path} is present but unusable; replace the file before starting Terrence.`);
     }
     throw error;
   }
 }
 
-const SIGNED_URL_SECRET = process.env.SIGNED_URL_SECRET ?? loadSignedUrlSecret();
+const configuredSignedUrlSecret = process.env.SIGNED_URL_SECRET?.trim();
+const SIGNED_URL_SECRET = configuredSignedUrlSecret === undefined || configuredSignedUrlSecret === ""
+  ? loadSignedUrlSecret()
+  : configuredSignedUrlSecret.length >= 32
+    ? configuredSignedUrlSecret
+    : (() => { throw new Error("SIGNED_URL_SECRET must be at least 32 characters"); })();
 
 export function signedApiURL(request: RequestWithUrl, path: string, method = "GET", ttlSeconds?: number): string {
   const configuredTtl = ttlSeconds ?? Number(process.env.SIGNED_URL_TTL_SECONDS ?? 300);

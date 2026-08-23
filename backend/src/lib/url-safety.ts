@@ -69,15 +69,27 @@ export function isIPv4InCidr(host: string, cidr: string): boolean {
   } catch { return false; }
 }
 
+type OutboundAllowlist = Readonly<{ hosts: readonly string[]; cidrs: readonly string[] }>;
+
+function readOutboundAllowlist(): OutboundAllowlist {
+  return {
+    hosts: (process.env.TERRENCE_OUTBOUND_ALLOW_HOSTS ?? "")
+      .split(",").map((value): string => value.trim().toLowerCase().replace(/\.$/, "")).filter(Boolean),
+    // CIDR entries are deliberately IPv4-only; IPv6 private destinations fail closed.
+    cidrs: (process.env.TERRENCE_OUTBOUND_ALLOW_CIDRS ?? "")
+      .split(",").map((value): string => value.trim()).filter(Boolean),
+  };
+}
+
+function allowlistAllows(hostname: string, addresses: readonly string[], allowlist: OutboundAllowlist): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  if (allowlist.hosts.some((allowed): boolean => host === allowed || host.endsWith(`.${allowed}`))) return true;
+  return allowlist.cidrs.some((cidr): boolean => [hostname, ...addresses].some((address): boolean => isIPv4InCidr(address, cidr)));
+}
+
 /** Private destinations explicitly allowed by the operator's egress policy. */
 export function outboundAllowlistAllows(hostname: string, addresses: readonly string[] = []): boolean {
-  const host = hostname.toLowerCase().replace(/\.$/, "");
-  const allowHosts = (process.env.TERRENCE_OUTBOUND_ALLOW_HOSTS ?? "")
-    .split(",").map((value): string => value.trim().toLowerCase().replace(/\.$/, "")).filter(Boolean);
-  if (allowHosts.some((allowed): boolean => host === allowed || host.endsWith(`.${allowed}`))) return true;
-  const allowCidrs = (process.env.TERRENCE_OUTBOUND_ALLOW_CIDRS ?? "")
-    .split(",").map((value): string => value.trim()).filter(Boolean);
-  return allowCidrs.some((cidr): boolean => [hostname, ...addresses].some((address): boolean => isIPv4InCidr(address, cidr)));
+  return allowlistAllows(hostname, addresses, readOutboundAllowlist());
 }
 
 function isPrivateV6(host: string): boolean {
@@ -189,15 +201,7 @@ async function resolveWithTimeout(hostname: string, resolve: HostResolver): Prom
 function resolvedAddressesError(ips: readonly string[], allowPrivate: boolean): string | null {
   if (ips.length === 0 || ips.some((ip): boolean => isIP(ip) === 0)) return "URL could not be resolved safely";
   if (allowPrivate) return null;
-  for (const ip of ips) {
-    if (ip.includes(":")) {
-      if (isPrivateV6(ip)) return PRIVATE_MSG;
-      continue;
-    }
-    const n = v4ToNumber(ip.split("."));
-    if (n !== null && isPrivateV4(n)) return PRIVATE_MSG;
-  }
-  return null;
+  return ips.some(privateAddress) ? PRIVATE_MSG : null;
 }
 
 function privateAddress(ip: string): boolean {
@@ -268,6 +272,7 @@ export async function resolveExternalUrl(
   }
   const literalReason = privateHostReason(parsed.hostname);
   if (!allowPrivate && literalReason !== null) return { error: literalReason };
+  const allowlist = readOutboundAllowlist();
 
   const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
   let addresses: readonly string[];
@@ -279,11 +284,11 @@ export async function resolveExternalUrl(
   const addressError = resolvedAddressesError(addresses, true);
   if (addressError !== null) return { error: addressError };
   if (!allowPrivate && addresses.some((candidate): boolean =>
-    privateAddress(candidate) && !outboundAllowlistAllows(hostname, [candidate]))) {
+    privateAddress(candidate) && !allowlistAllows(hostname, [candidate], allowlist))) {
     return { error: PRIVATE_MSG };
   }
   const permitted = addresses.filter((candidate): boolean =>
-    allowPrivate || !privateAddress(candidate) || outboundAllowlistAllows(hostname, [candidate]));
+    allowPrivate || !privateAddress(candidate) || allowlistAllows(hostname, [candidate], allowlist));
   const address = permitted[0];
   if (address === undefined) return { error: "URL could not be resolved safely" };
   return { target: { address, url: parsed.toString() } };

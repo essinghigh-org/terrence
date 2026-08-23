@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { db } from "../db";
 import { stateOutputIndex } from "../db/schema";
 import { parseStatePayload } from "./validation";
 
@@ -29,10 +30,5 @@ export async function insertStateOutputIndex(
 ): Promise<void> {
   const rows = stateOutputIndexRows(stateVersionId, workspaceId, jsonState, statePayload);
   if (rows.length === 0) return;
-  const insert = (tx as {
-    insert: (table: typeof stateOutputIndex) => {
-      values: (rows: readonly (typeof stateOutputIndex.$inferInsert)[]) => PromiseLike<unknown>;
-    };
-  }).insert;
-  await insert.call(tx, stateOutputIndex).values(rows);
+  await (tx as typeof db).insert(stateOutputIndex).values(rows);
 }

@@ -29,7 +29,18 @@ export function agentFilesystemPath(runId: string): string {
 /** Public base URL for the job's absolute artifact URLs (caddy reverse proxy aware). */
 export function agentApiBaseUrl(request: { readonly headers: { readonly get: (name: string) => string | null } }): string {
   const configured = process.env.PUBLIC_URL?.trim();
-  if (configured !== undefined && URL.canParse(configured)) return new URL(configured).origin;
+  if (configured !== undefined) {
+    let parsed: URL;
+    try {
+      parsed = new URL(configured);
+    } catch {
+      throw new Error("PUBLIC_URL must be a valid http(s) URL");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("PUBLIC_URL must use http or https");
+    }
+    return parsed.origin;
+  }
   // Forwarded headers are attacker-controlled unless the socket peer is
   // authenticated by the trusted-proxy layer. Prefer the direct Host header;
   // deployments behind a proxy should set PUBLIC_URL for stable artifact URLs.
