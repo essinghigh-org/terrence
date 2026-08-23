@@ -171,3 +171,10 @@ jobs:
         run: cd frontend && bun run build
       - name: Run browser E2E, accessibility & visual regression suite (Bun.WebView)
         run: cd frontend && bun run test:browser
+      - name: Upload visual regression diffs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-visual-diffs
+          path: frontend/tests/browser/baselines/__diffs__
+          if-no-files-found: ignore
