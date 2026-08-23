@@ -477,6 +477,10 @@ export const stacks: typeof sqliteSchema.stacks = pgTables === null
   ? sqliteSchema.stacks
   : (pgTables[dbNameOf(sqliteSchema.stacks)] as unknown as typeof sqliteSchema.stacks);
 
+export const stateOutputIndex: typeof sqliteSchema.stateOutputIndex = pgTables === null
+  ? sqliteSchema.stateOutputIndex
+  : (pgTables[dbNameOf(sqliteSchema.stateOutputIndex)] as unknown as typeof sqliteSchema.stateOutputIndex);
+
 export const stateVersions: typeof sqliteSchema.stateVersions = pgTables === null
   ? sqliteSchema.stateVersions
   : (pgTables[dbNameOf(sqliteSchema.stateVersions)] as unknown as typeof sqliteSchema.stateVersions);

@@ -10,7 +10,7 @@ import {
   tagBindingResource,
   type WorkspaceResourcePermissions,
 } from "../lib/response";
-import { validVariableAttributes } from "../lib/validation";
+import { decodeStatePayload, validVariableAttributes } from "../lib/validation";
 import { variableValueForWrite, variableValueForRead } from "../lib/variable-crypto";
 import { validateVersion, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, parseStatePayload, auditLog, strictAuditEnabled, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspaceData, lockPrincipal, ownsWorkspaceLock, ifMatchSatisfied, type DeepReadonly } from "../lib/utils";
 
@@ -878,7 +878,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       if (jsonStateSource !== null) {
         try {
           const parsed: unknown = typeof jsonStateSource === "string"
-            ? JSON.parse(jsonStateSource) as unknown
+            ? JSON.parse(decodeStatePayload(jsonStateSource)) as unknown
             : jsonStateSource;
           const rawResources = parsed !== null && typeof parsed === "object"
             ? (parsed as Record<string, unknown>).resources

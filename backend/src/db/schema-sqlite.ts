@@ -699,6 +699,17 @@ export const stateVersions = sqliteTable("state_versions", {
   uniqueIndex("state_versions_ws_serial_idx").on(table.workspaceId, table.serial),
 ]);
 
+export const stateOutputIndex = sqliteTable("state_output_index", {
+  outputId: text("output_id").primaryKey(),
+  stateVersionId: text("state_version_id").notNull().references(() => stateVersions.id, { onDelete: "cascade" }),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  index("state_output_index_workspace_idx").on(table.workspaceId),
+  index("state_output_index_state_idx").on(table.stateVersionId),
+]);
+
 export const workspaceTags = sqliteTable("workspace_tags", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),

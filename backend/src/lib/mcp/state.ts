@@ -2,6 +2,7 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "../../db";
 import { assessmentResults, stateVersions } from "../../db/schema";
 import { findAuthorizedWorkspace } from "../utils";
+import { decodeStatePayload } from "../validation";
 import { toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
 
 /**
@@ -38,7 +39,7 @@ export const stateTools: readonly McpTool[] = [
       };
       if (sv.jsonState !== null) {
         try {
-          const parsed = JSON.parse(sv.jsonState) as Record<string, unknown>;
+          const parsed = JSON.parse(decodeStatePayload(sv.jsonState)) as Record<string, unknown>;
           result.resources = parsed.resources ?? [];
           result.outputs = parsed.outputs ?? {};
         } catch {
@@ -47,7 +48,7 @@ export const stateTools: readonly McpTool[] = [
       }
       if (sv.jsonStateOutputs !== null) {
         try {
-          result.outputs = JSON.parse(sv.jsonStateOutputs);
+          result.outputs = JSON.parse(decodeStatePayload(sv.jsonStateOutputs));
         } catch {
           // not parseable
         }

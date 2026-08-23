@@ -15,6 +15,7 @@ import {
 } from "../db/schema";
 import { enqueueDurableJob, type DurableJobContext } from "./durable-jobs";
 import { log } from "./log";
+import { decodeStatePayload } from "./validation";
 
 export type ExplorerCatalogItem = Readonly<{ name: string; source: string; version: string }>;
 type Job = Readonly<typeof durableJobs.$inferSelect>;
@@ -32,7 +33,7 @@ function stateItems(jsonState: string | null): Readonly<{ resources: number; pro
   const modules = new Map<string, ExplorerCatalogItem>();
   let resources = 0;
   try {
-    const parsed = jsonState === null ? undefined : JSON.parse(jsonState) as Record<string, unknown>;
+    const parsed = jsonState === null ? undefined : JSON.parse(decodeStatePayload(jsonState)) as Record<string, unknown>;
     const rawResources = parsed?.resources;
     if (!Array.isArray(rawResources)) return { resources, providers: [], modules: [], providerItems: [], moduleItems: [] };
     for (const raw of rawResources) {

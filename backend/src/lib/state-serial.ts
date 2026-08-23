@@ -2,6 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db";
 import { stateVersions } from "../db/schema";
 import { isUniqueConstraintError } from "./validation";
+import { insertStateOutputIndex } from "./state-output-index";
 
 type StateInsert = Omit<typeof stateVersions.$inferInsert, "serial">;
 
@@ -18,6 +19,7 @@ export async function insertStateVersionWithSerialRetry(values: StateInsert): Pr
         });
         const serial = (latest?.serial ?? 0) + 1;
         await tx.insert(stateVersions).values({ ...values, serial });
+        await insertStateOutputIndex(tx, values.id, values.workspaceId, values.jsonState ?? null, values.statePayload ?? null);
         return serial;
       });
     } catch (error: unknown) {

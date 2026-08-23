@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
-import { eq, and, desc, asc, count, inArray, ne, notInArray, isNull } from "drizzle-orm";
+import { eq, and, desc, asc, count, inArray, ne, isNull } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource } from "../lib/response";
 import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
@@ -1019,7 +1019,8 @@ export const runRoutes = new Elysia({ name: "runs" })
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
     queueRunNotification(runId, "run:errored", "discarded");
-    return { data: { id: runId, type: "runs", attributes: { status: "discarded" } } };
+    (set as { status: number }).status = 202;
+    return new Response(null, { status: 202 });
   })
   .post("/api/v2/runs/:run_id/actions/cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
@@ -1051,7 +1052,8 @@ export const runRoutes = new Elysia({ name: "runs" })
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
     queueRunNotification(runId, "run:errored", "canceled");
-    return { data: { id: runId, type: "runs", attributes: { status: "canceled" } } };
+    (set as { status: number }).status = 202;
+    return new Response(null, { status: 202 });
   })
   .post("/api/v2/runs/:run_id/actions/force-cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
@@ -1059,11 +1061,14 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const cancelRequestedAt = authorized.run.statusTimestamps?.["cancel-requested-at"];
-    if (authorized.run.status !== "applying" && cancelRequestedAt === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Cancel the run before force-canceling it" }] }; }
+    if (cancelRequestedAt === undefined || !["pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed", "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated", "policy_checking", "policy_override", "policy_checked", "post_plan_running", "post_plan_completed", "confirmed", "apply_queued", "applying", "canceled"].includes(authorized.run.status)) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Cancel the run before force-canceling it" }] };
+    }
     const updated = await db.update(runs).set({ status: "force_canceled" }).where(and(
       eq(runs.id, runId),
       eq(runs.status, authorized.run.status),
-      notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]),
+      inArray(runs.status, ["pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed", "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated", "policy_checking", "policy_override", "policy_checked", "post_plan_running", "post_plan_completed", "confirmed", "apply_queued", "applying", "canceled"]),
     )).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-cancelable" }] }; }
     const { cancelRunExecution } = await import("../worker");
@@ -1076,7 +1081,8 @@ export const runRoutes = new Elysia({ name: "runs" })
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
     queueRunNotification(runId, "run:errored", "force_canceled");
-    return { data: { id: runId, type: "runs", attributes: { status: "force_canceled" } } };
+    (set as { status: number }).status = 202;
+    return new Response(null, { status: 202 });
   })
   .post("/api/v2/runs/:run_id/actions/override-policy", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
@@ -1102,19 +1108,17 @@ export const runRoutes = new Elysia({ name: "runs" })
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    if (authorized.run.status !== "canceled" && authorized.run.status !== "pending") { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be pending or canceled to force-execute" }] }; }
-    if (authorized.run.status === "pending") {
-      const blocker = await db.query.runs.findFirst({
-        where: and(eq(runs.workspaceId, authorized.workspace.id), inArray(runs.status, ["fetching", "planning", "applying", "plan_queued", "apply_queued"]), ne(runs.id, runId)),
-        orderBy: [asc(runs.createdAt), asc(runs.id)],
-      });
-      if (blocker !== undefined) {
-        await db.update(runs).set({ status: "force_canceled" }).where(and(eq(runs.id, blocker.id), ne(runs.status, "applied")));
-        const { cancelRunExecution } = await import("../worker");
-        cancelRunExecution(blocker.id, true);
-        await cancelAgentJobsForRun(blocker.id);
-      }
-    }
+    if (authorized.run.status !== "pending") { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be pending to force-execute" }] }; }
+    const blocker = await db.query.runs.findFirst({
+      where: and(eq(runs.workspaceId, authorized.workspace.id), inArray(runs.status, ["fetching", "planning", "applying", "plan_queued", "apply_queued"]), ne(runs.id, runId)),
+      orderBy: [asc(runs.createdAt), asc(runs.id)],
+    });
+    if (blocker === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "No blocking run is available to force-execute" }] }; }
+    const blockerCanceled = await db.update(runs).set({ status: "force_canceled" }).where(and(eq(runs.id, blocker.id), inArray(runs.status, ["fetching", "planning", "applying", "plan_queued", "apply_queued"]))).returning({ id: runs.id });
+    if (blockerCanceled.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "The blocking run changed before it could be stopped" }] }; }
+    const { cancelRunExecution } = await import("../worker");
+    cancelRunExecution(blocker.id, true);
+    await cancelAgentJobsForRun(blocker.id);
     const updated = await db.update(runs).set({ status: "pending" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status))).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-executable" }] }; }
     await auditLog("force-execute", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
@@ -1124,7 +1128,8 @@ export const runRoutes = new Elysia({ name: "runs" })
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
     queueRunNotification(runId, "run:needs_attention", "pending");
-    return { data: { id: runId, type: "runs", attributes: { status: "pending" } } };
+    (set as { status: number }).status = 202;
+    return new Response(null, { status: 202 });
   })
   .post("/api/v2/runs/:run_id/actions/queue", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";

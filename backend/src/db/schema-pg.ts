@@ -1506,6 +1506,17 @@ export const stacks = pgTable("stacks", {
     updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.stacks.updatedAt.defaultFn!()),
 });
 
+export const stateOutputIndex = pgTable("state_output_index", {
+    outputId: text("output_id").notNull().primaryKey(),
+    stateVersionId: text("state_version_id").notNull().references(() => stateVersions.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.stateOutputIndex.createdAt.defaultFn!()),
+}, (table) => [
+    index("state_output_index_workspace_idx").on(table.workspaceId),
+    index("state_output_index_state_idx").on(table.stateVersionId),
+  ]);
+
 export const stateVersions = pgTable("state_versions", {
     id: text("id").notNull().primaryKey(),
     workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),

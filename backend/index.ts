@@ -15,6 +15,25 @@ const systemPort = rawSystemPort !== undefined && rawSystemPort !== "" ? Number(
 if (!Number.isInteger(systemPort) || systemPort < 1 || systemPort > 65535) {
   throw new Error(`Invalid SYSTEM_API_PORT configuration: "${String(rawSystemPort)}". SYSTEM_API_PORT must be a valid integer between 1 and 65535.`);
 }
+const systemHost = process.env.SYSTEM_API_HOST ?? "127.0.0.1";
+const systemTlsCertPath = process.env.SYSTEM_API_TLS_CERT;
+const systemTlsKeyPath = process.env.SYSTEM_API_TLS_KEY;
+const systemIsRemote = !["127.0.0.1", "::1", "localhost"].includes(systemHost);
+if ((systemTlsCertPath === undefined) !== (systemTlsKeyPath === undefined)) {
+  throw new Error("SYSTEM_API_TLS_CERT and SYSTEM_API_TLS_KEY must be configured together.");
+}
+if (systemIsRemote && (systemTlsCertPath === undefined || systemTlsKeyPath === undefined)) {
+  throw new Error("SYSTEM_API_HOST is remote; configure SYSTEM_API_TLS_CERT and SYSTEM_API_TLS_KEY before exposing the System API.");
+}
+const systemTls = systemTlsCertPath !== undefined && systemTlsKeyPath !== undefined
+  ? {
+      cert: await Bun.file(systemTlsCertPath).arrayBuffer(),
+      key: await Bun.file(systemTlsKeyPath).arrayBuffer(),
+    }
+  : undefined;
+if (systemTls !== undefined && (systemTls.cert.byteLength === 0 || systemTls.key.byteLength === 0)) {
+  throw new Error("SYSTEM_API_TLS_CERT and SYSTEM_API_TLS_KEY must point to non-empty files.");
+}
 
 // The background worker queue is started by src/app.ts (deferred out of
 // module evaluation so the TLA module graph fully resolves first). Do NOT
@@ -61,16 +80,17 @@ systemApiApp.listen({
   // support-bundle downloads). Bind it to loopback by default so it is not
   // reachable from other hosts on the same network; override with
   // SYSTEM_API_HOST when a remote agent pool needs to call it directly.
-  hostname: process.env.SYSTEM_API_HOST ?? "127.0.0.1",
+  hostname: systemHost,
   port: systemPort,
   maxRequestBodySize: 100 * 1024 * 1024,
+  ...(systemTls === undefined ? {} : { tls: systemTls }),
 });
 
 console.log(
   `🦊 Backend is running at ${String(app.server?.hostname)}:${String(app.server?.port)}`
 );
 console.log(
-  `[terrence] System API is running at ${String(systemApiApp.server?.hostname)}:${String(systemApiApp.server?.port)} (host ${String(process.env.SYSTEM_API_HOST ?? "127.0.0.1")})`
+  `[terrence] System API is running at ${String(systemApiApp.server?.hostname)}:${String(systemApiApp.server?.port)}${systemTls === undefined ? " (HTTP loopback)" : " (TLS)"}`
 );
 
 if (isPostgres) {
