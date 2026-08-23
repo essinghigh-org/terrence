@@ -40,7 +40,7 @@ import { spawn } from "bun";
 import { createHash, createHmac } from "node:crypto";
 import { join } from "path";
 import { tmpdir } from "os";
-import { copyFile, mkdir, mkdtemp, rm, writeFile, readFile, exists, readdir, rename } from "fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, writeFile, readFile, exists, readdir, rename, stat } from "fs/promises";
 import { ensureBinary } from "./binaryManager";
 import { resolveInfracostBinary } from "./lib/infracost-bin";
 import { recordFailure, workerPollerFinished, workerPollFinished, workerPollStarted } from "./lib/process-metrics";
@@ -3601,10 +3601,33 @@ async function captureInterruptedApplyState(runId: string): Promise<boolean> {
   for await (const candidate of new Bun.Glob("**/terraform.tfstate").scan({ cwd: root, onlyFiles: true })) {
     const source = typeof candidate === "string" && candidate.startsWith("/") ? candidate : join(root, String(candidate));
     await mkdir(recoveryDir, { recursive: true, mode: 0o700 });
-    await copyFile(source, join(recoveryDir, "terraform.tfstate"));
+    const payload = await readFile(source, "utf8");
+    const encrypted = await encryptStatePayload(payload);
+    if (encrypted === null) return false;
+    await writeFile(join(recoveryDir, "terraform.tfstate"), encrypted, { mode: 0o600 });
     return true;
   }
   return false;
+}
+
+async function pruneInterruptedApplyRecovery(): Promise<void> {
+  const rawRetention = process.env.TERRENCE_RECOVERY_RETENTION_MS;
+  const parsedRetention = rawRetention === undefined || rawRetention === "" ? 7 * 24 * 60 * 60 * 1000 : Number(rawRetention);
+  const retentionMs = Number.isSafeInteger(parsedRetention) && parsedRetention >= 0 ? parsedRetention : 7 * 24 * 60 * 60 * 1000;
+  const root = join(storageDir, "recovery");
+  const entries = await readdir(root, { withFileTypes: true, encoding: "utf8" }).catch(() => null);
+  if (entries === null) return;
+  const cutoff = Date.now() - retentionMs;
+  await Promise.all(entries
+    .filter((entry): boolean => entry.isDirectory())
+    .map(async (entry): Promise<void> => {
+      const path = join(root, entry.name);
+      try {
+        if ((await stat(path)).mtimeMs < cutoff) await rm(path, { recursive: true, force: true });
+      } catch {
+        // Best effort: a concurrent reconciliation or cleanup may own it.
+      }
+    }));
 }
 
 export async function reconcileInterruptedLocalRuns(): Promise<{
@@ -3612,6 +3635,7 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
   errored: number;
   assessmentsErrored: number;
 }> {
+  await pruneInterruptedApplyRecovery();
   const pendingAt = new Date().toISOString();
   const candidates = await db.query.runs.findMany({
     where: or(
