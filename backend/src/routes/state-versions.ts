@@ -230,9 +230,9 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         id,
         workspaceId,
         serial: (latest?.serial ?? 0) + 1,
-        statePayload: source.statePayload === null ? null : encryptStatePayload(decodeStatePayload(source.statePayload)),
-        jsonState: source.jsonState === null ? null : encryptStatePayload(decodeStatePayload(source.jsonState)),
-        jsonStateOutputs: source.jsonStateOutputs === null ? null : encryptStatePayload(decodeStatePayload(source.jsonStateOutputs)),
+        statePayload: source.statePayload === null ? null : await encryptStatePayload(decodeStatePayload(source.statePayload)),
+        jsonState: source.jsonState === null ? null : await encryptStatePayload(decodeStatePayload(source.jsonState)),
+        jsonStateOutputs: source.jsonStateOutputs === null ? null : await encryptStatePayload(decodeStatePayload(source.jsonStateOutputs)),
         vcsCommitSha: source.vcsCommitSha,
         vcsCommitUrl: source.vcsCommitUrl,
         runId: null,
@@ -415,7 +415,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (rawState === "" || parseStatePayload(rawState) === null) {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State content must be valid JSON" }] };
     }
-    await db.update(stateVersions).set({ statePayload: encryptStatePayload(rawState), status: "finalized" }).where(eq(stateVersions.id, stateVersionId));
+    await db.update(stateVersions).set({ statePayload: await encryptStatePayload(rawState), status: "finalized" }).where(eq(stateVersions.id, stateVersionId));
     await insertStateOutputIndex(db, stateVersionId, sv.workspaceId, sv.jsonState, rawState);
     scheduleExplorerInventory(sv.workspaceId);
     (set as { status: number }).status = 200;
@@ -437,7 +437,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (jsonState === "" || parseStatePayload(jsonState) === null) {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }] };
     }
-    await db.update(stateVersions).set({ jsonState: encryptStatePayload(jsonState) }).where(eq(stateVersions.id, stateVersionId));
+    await db.update(stateVersions).set({ jsonState: await encryptStatePayload(jsonState) }).where(eq(stateVersions.id, stateVersionId));
     if (sv.status === "finalized") await insertStateOutputIndex(db, stateVersionId, sv.workspaceId, jsonState, sv.statePayload);
     scheduleExplorerInventory(sv.workspaceId);
     (set as { status: number }).status = 200;
@@ -456,7 +456,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (jsonStateOutputs === "" || parseStatePayload(jsonStateOutputs) === null) {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state outputs must be valid JSON" }] };
     }
-    await db.update(stateVersions).set({ jsonStateOutputs: encryptStatePayload(jsonStateOutputs) }).where(eq(stateVersions.id, stateVersionId));
+    await db.update(stateVersions).set({ jsonStateOutputs: await encryptStatePayload(jsonStateOutputs) }).where(eq(stateVersions.id, stateVersionId));
     if (sv.status === "finalized") await insertStateOutputIndex(db, stateVersionId, sv.workspaceId, jsonStateOutputs, sv.statePayload);
     scheduleExplorerInventory(sv.workspaceId);
     (set as { status: number }).status = 200;
@@ -486,9 +486,9 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         workspaceId: sv.workspaceId,
         serial: (latest?.serial ?? 0) + 1,
         runId: null,
-        statePayload: sv.statePayload === null ? null : encryptStatePayload(decodeStatePayload(sv.statePayload)),
-        jsonState: sv.jsonState === null ? null : encryptStatePayload(decodeStatePayload(sv.jsonState)),
-        jsonStateOutputs: sv.jsonStateOutputs === null ? null : encryptStatePayload(decodeStatePayload(sv.jsonStateOutputs)),
+        statePayload: sv.statePayload === null ? null : await encryptStatePayload(decodeStatePayload(sv.statePayload)),
+        jsonState: sv.jsonState === null ? null : await encryptStatePayload(decodeStatePayload(sv.jsonState)),
+        jsonStateOutputs: sv.jsonStateOutputs === null ? null : await encryptStatePayload(decodeStatePayload(sv.jsonStateOutputs)),
         vcsCommitSha: sv.vcsCommitSha,
         vcsCommitUrl: sv.vcsCommitUrl,
         terraformVersion: sv.terraformVersion,
@@ -664,9 +664,9 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       workspaceId,
       serial,
       runId,
-      statePayload: encryptStatePayload(statePayload),
-      jsonState: encryptStatePayload(jsonState ?? statePayload),
-      jsonStateOutputs: encryptStatePayload(jsonStateOutputs),
+      statePayload: await encryptStatePayload(statePayload),
+      jsonState: await encryptStatePayload(jsonState ?? statePayload),
+      jsonStateOutputs: await encryptStatePayload(jsonStateOutputs),
       intermediate,
       status: statePayload === null ? "pending" : "finalized",
       createdAt: Date.now(),
@@ -737,9 +737,9 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         id,
         workspaceId,
         serial: (latest?.serial ?? 0) + 1,
-        statePayload: encryptStatePayload(rawState),
-        jsonState: encryptStatePayload(rawState),
-        jsonStateOutputs: encryptStatePayload(parsed.outputs === undefined ? null : JSON.stringify(parsed.outputs)),
+        statePayload: await encryptStatePayload(rawState),
+        jsonState: await encryptStatePayload(rawState),
+        jsonStateOutputs: await encryptStatePayload(parsed.outputs === undefined ? null : JSON.stringify(parsed.outputs)),
         status: "finalized",
         terraformVersion: typeof parsed.terraform_version === "string" ? parsed.terraform_version : null,
         intermediate: false,

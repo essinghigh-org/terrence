@@ -2112,9 +2112,9 @@ async function executeApplyImpl(runId: string): Promise<void> {
         const nextSerial = await insertStateVersionWithSerialRetry({
           id: crypto.randomUUID(),
           workspaceId: workspace.id,
-          statePayload: encryptStatePayload(statePayload),
-          jsonState: encryptStatePayload(jsonState),
-          jsonStateOutputs: encryptStatePayload(jsonStateOutputs),
+          statePayload: await encryptStatePayload(statePayload),
+          jsonState: await encryptStatePayload(jsonState),
+          jsonStateOutputs: await encryptStatePayload(jsonStateOutputs),
           runId,
           status: "finalized",
           createdAt: Date.now(),

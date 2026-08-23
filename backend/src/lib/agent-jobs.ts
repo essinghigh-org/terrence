@@ -27,7 +27,7 @@ import {
   type PlanJson,
 } from "./plan-json";
 import type { DeepReadonly } from "./utils";
-import { insertStateVersionWithSerialRetry } from "./state-serial";
+import { insertStateVersionWithSerialTx } from "./state-serial";
 import { encryptStatePayload } from "./validation";
 
 export const MAX_AGENT_RESULT_BYTES = 64 * 1024;
@@ -777,7 +777,6 @@ export async function completeAgentJob(
   jobId: string,
   completion: AgentJobCompletion,
 ): Promise<Readonly<{ job: AgentJob; runStatus: string }> | undefined> {
-  let completedState: { workspaceId: string; statePayload: string; jsonState: string | null; jsonStateOutputs: string | null; runId: string } | undefined;
   const outcome = await db.transaction(async (transaction): Promise<Readonly<{ job: AgentJob; runStatus: string }> | undefined> => {
     const tx = transaction as unknown as typeof db;
     const job = await tx.query.agentJobs.findFirst({
@@ -894,6 +893,22 @@ export async function completeAgentJob(
     )).returning({ id: runs.id });
     if (updatedRuns.length === 0) throw new Error("Run changed while its agent job was completing");
 
+    // Apply completion and the resulting state version commit together. A
+    // successful provider apply must never be acknowledged while its state
+    // insert is still a separate, failure-prone operation.
+    if (completion.status === "completed" && job.phase === "apply" && completion.statePayload !== null) {
+      await insertStateVersionWithSerialTx(tx, {
+        id: crypto.randomUUID(),
+        workspaceId: run.workspaceId,
+        statePayload: await encryptStatePayload(completion.statePayload),
+        jsonState: await encryptStatePayload(completion.jsonState ?? completion.statePayload),
+        jsonStateOutputs: await encryptStatePayload(completion.jsonStateOutputs),
+        runId: run.id,
+        status: "finalized",
+        createdAt: now,
+      });
+    }
+
     if (job.phase === "apply") {
       await tx.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
         eq(workspaces.id, run.workspaceId),
@@ -914,31 +929,9 @@ export async function completeAgentJob(
       });
     }
 
-    if (completion.status === "completed" && job.phase === "apply" && completion.statePayload !== null) {
-      completedState = {
-        workspaceId: run.workspaceId,
-        statePayload: completion.statePayload,
-        jsonState: completion.jsonState ?? completion.statePayload,
-        jsonStateOutputs: completion.jsonStateOutputs,
-        runId: run.id,
-      };
-    }
-
     await tx.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agentId));
     return { job: updatedJob, runStatus };
   });
-  if (completedState !== undefined && outcome !== undefined) {
-    await insertStateVersionWithSerialRetry({
-      id: crypto.randomUUID(),
-      workspaceId: completedState.workspaceId,
-      statePayload: encryptStatePayload(completedState.statePayload),
-      jsonState: encryptStatePayload(completedState.jsonState),
-      jsonStateOutputs: encryptStatePayload(completedState.jsonStateOutputs),
-      runId: completedState.runId,
-      status: "finalized",
-      createdAt: Date.now(),
-    });
-  }
   if (outcome !== undefined) notifyRunStatus(outcome.job.runId, outcome.runStatus);
   return outcome;
 }

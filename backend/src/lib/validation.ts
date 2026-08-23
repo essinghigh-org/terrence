@@ -1,4 +1,4 @@
-import { decryptSecretSync, encryptSecretSync } from "./secrets";
+import { decryptSecretSync, encryptSecret } from "./secrets";
 import { join } from "node:path";
 
 function stateStorageDir(): string {
@@ -6,8 +6,8 @@ function stateStorageDir(): string {
 }
 
 /** Encrypt state fields at rest while keeping the API/parser representation plain. */
-export function encryptStatePayload(payload: string | null): string | null {
-  return payload === null ? null : encryptSecretSync(payload, stateStorageDir());
+export async function encryptStatePayload(payload: string | null): Promise<string | null> {
+  return payload === null ? null : encryptSecret(payload);
 }
 
 function decryptStatePayload(payload: string): string {

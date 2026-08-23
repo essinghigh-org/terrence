@@ -55,6 +55,7 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       workspaces,
     } = await import("./src/db/schema.ts");
     const { pollWorkerQueue } = await import("./src/worker.ts");
+    const { decodeStatePayload } = await import("./src/lib/validation.ts");
 
     const poolToken = "agent-primary-token";
     const otherPoolToken = "agent-other-token";
@@ -427,7 +428,9 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       finalRunPlanImports: finalRun?.planResourceImports,
       finalRunApplyImports: finalRun?.applyResourceImports,
       finalStateSerial: finalState?.serial,
-      finalStatePayload: finalState?.statePayload,
+      finalStatePayload: finalState?.statePayload === null || finalState?.statePayload === undefined
+        ? finalState?.statePayload
+        : decodeStatePayload(finalState.statePayload),
       finalLogs: finalLogs.map(log => [log.phase, log.outputText]),
       finalAgentStatuses: finalAgents.map(agent => [agent.id, agent.status]),
       runRelationshipAgent: runResource.relationships.agent.data.id,
