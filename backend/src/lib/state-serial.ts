@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db } from "../db";
 import { stateVersions } from "../db/schema";
 import { isUniqueConstraintError } from "./validation";
@@ -13,7 +13,7 @@ export async function insertStateVersionWithSerialTx(
 ): Promise<number> {
   const tx = transaction as typeof db;
   const latest = await tx.query.stateVersions.findFirst({
-    where: and(eq(stateVersions.workspaceId, values.workspaceId), eq(stateVersions.status, "finalized")),
+    where: eq(stateVersions.workspaceId, values.workspaceId),
     orderBy: [desc(stateVersions.serial)],
     columns: { serial: true },
   });

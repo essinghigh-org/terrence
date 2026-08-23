@@ -30,6 +30,8 @@ import {
   assessmentCheckResults,
   agentJobs,
   agentPools,
+  agentPoolAllowedProjects,
+  agentPoolAllowedWorkspaces,
   adminGeneralSettings,
   projects,
 } from "./db/schema";
@@ -3066,6 +3068,29 @@ export async function pollWorkerQueue(): Promise<string[]> {
         })).map((ws): [string, typeof workspaces.$inferSelect] => [ws.id, ws]),
       );
 
+  // Resolve queue eligibility inputs once per page instead of querying the
+  // same pool, project, organization, and scope rows for every candidate.
+  const agentPoolIds = [...new Set([...workspacesById.values()]
+    .filter((workspace): boolean => workspace.executionMode === "agent" && workspace.agentPoolId !== null)
+    .map((workspace): string | null => workspace.agentPoolId)
+    .filter((id): id is string => id !== null))];
+  const projectIds = [...new Set([...workspacesById.values()]
+    .map((workspace): string | null => workspace.projectId)
+    .filter((id): id is string => id !== null))];
+  const organizationIds = [...new Set([...workspacesById.values()].map((workspace): string => workspace.orgId))];
+  const [poolRows, projectRows, organizationRows, allowedWorkspaceRows, allowedProjectRows] = await Promise.all([
+    agentPoolIds.length === 0 ? Promise.resolve([]) : db.query.agentPools.findMany({ where: inArray(agentPools.id, agentPoolIds) }),
+    projectIds.length === 0 ? Promise.resolve([]) : db.query.projects.findMany({ where: inArray(projects.id, projectIds) }),
+    organizationIds.length === 0 ? Promise.resolve([]) : db.query.organizations.findMany({ where: inArray(organizations.id, organizationIds) }),
+    agentPoolIds.length === 0 ? Promise.resolve([]) : db.query.agentPoolAllowedWorkspaces.findMany({ where: inArray(agentPoolAllowedWorkspaces.agentPoolId, agentPoolIds) }),
+    agentPoolIds.length === 0 ? Promise.resolve([]) : db.query.agentPoolAllowedProjects.findMany({ where: inArray(agentPoolAllowedProjects.agentPoolId, agentPoolIds) }),
+  ]);
+  const poolsById = new Map(poolRows.map((pool): [string, typeof agentPools.$inferSelect] => [pool.id, pool]));
+  const projectsById = new Map(projectRows.map((project): [string, typeof projects.$inferSelect] => [project.id, project]));
+  const organizationsById = new Map(organizationRows.map((organization): [string, typeof organizations.$inferSelect] => [organization.id, organization]));
+  const allowedWorkspaceKeys = new Set(allowedWorkspaceRows.map((row): string => `${row.agentPoolId}:${row.workspaceId}`));
+  const allowedProjectKeys = new Set(allowedProjectRows.map((row): string => `${row.agentPoolId}:${row.projectId}`));
+
   for (const run of pendingRuns) {
     if (claimedRunIds.length === MAX_CLAIMS) break;
     if (claimedWorkspaceIds.has(run.workspaceId)) continue;
@@ -3105,14 +3130,12 @@ export async function pollWorkerQueue(): Promise<string[]> {
       );
 
     if (workspace.executionMode === "agent") {
-      const pool = workspace.agentPoolId === null
-        ? undefined
-        : await db.query.agentPools.findFirst({
-            where: eq(agentPools.id, workspace.agentPoolId),
-          });
+      const pool = workspace.agentPoolId === null ? undefined : poolsById.get(workspace.agentPoolId);
       if (
         pool?.orgId !== workspace.orgId
-        || !(await agentPoolAllowsWorkspace(pool, workspace.id, workspace.projectId))
+        || (pool.organizationScoped === false
+          && !allowedWorkspaceKeys.has(`${pool.id}:${workspace.id}`)
+          && (workspace.projectId === null || !allowedProjectKeys.has(`${pool.id}:${workspace.projectId}`)))
       ) {
         const unreachable = await db.update(runs).set({
           status: "unreachable",
@@ -3181,11 +3204,11 @@ export async function pollWorkerQueue(): Promise<string[]> {
       let orgForPolicy: { requireHardIsolation?: boolean | null } | null = null;
       try {
         if (workspace.projectId !== null && workspace.projectId !== undefined) {
-          const p = await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId as string) });
-          if (p !== undefined) projectForPolicy = { allowedExecutionModes: (p as unknown as { allowedExecutionModes?: string | null }).allowedExecutionModes ?? null };
+          const p = projectsById.get(workspace.projectId);
+          if (p !== undefined) projectForPolicy = { allowedExecutionModes: p.allowedExecutionModes ?? null };
         }
-        const o = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
-        if (o !== undefined) orgForPolicy = { requireHardIsolation: (o as unknown as { requireHardIsolation?: boolean | null }).requireHardIsolation ?? null };
+        const o = organizationsById.get(workspace.orgId);
+        if (o !== undefined) orgForPolicy = { requireHardIsolation: o.requireHardIsolation ?? null };
       } catch (error: unknown) {
         log.error("executor policy lookup failed, deferring run", { runId: run.id, error: String(error) });
         continue;

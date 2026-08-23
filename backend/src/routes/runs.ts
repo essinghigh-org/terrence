@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
-import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or } from "drizzle-orm";
+import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource } from "../lib/response";
-import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
+import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, cursorPagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, readRunLogs } from "../lib/run-logs";
 import { deletePlanJsonArtifact, readPlanJsonArtifact, readPlanJsonSideArtifact, sanitizePlanJson } from "../lib/plan-json";
@@ -531,6 +531,23 @@ function lockedWorkspaceDetail(reason: string | null | undefined): string {
     : "Workspace is locked";
 }
 
+type RunCursor = Readonly<{ createdAt: number; id: string }>;
+
+function decodeRunCursor(value: string): RunCursor | null {
+  try {
+    const decoded = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<string, unknown>;
+    return typeof decoded.createdAt === "number" && Number.isSafeInteger(decoded.createdAt) && typeof decoded.id === "string" && decoded.id !== ""
+      ? { createdAt: decoded.createdAt, id: decoded.id }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function encodeRunCursor(run: Readonly<{ createdAt: number; id: string }>): string {
+  return Buffer.from(JSON.stringify({ createdAt: run.createdAt, id: run.id })).toString("base64url");
+}
+
 export const runRoutes = new Elysia({ name: "runs" })
   .use(authPlugin)
   .get("/api/v2/workspaces/:workspace_id/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -581,24 +598,40 @@ export const runRoutes = new Elysia({ name: "runs" })
       workspaceIdsForPermission(organization.id, user?.id, orgId ?? null, teamId ?? null, "apply"),
     ]);
     const { number, size } = pageRequest(request);
+    const rawCursor = new URL(request.url).searchParams.get("page[cursor]");
+    const cursorMode = rawCursor !== null;
+    const cursor = rawCursor === null ? null : decodeRunCursor(rawCursor);
+    if (cursorMode && cursor === null) {
+      (set as { status: number }).status = 400;
+      return { errors: [{ status: "400", title: "Bad Request", detail: "page[cursor] is invalid" }] };
+    }
     if (orgWorkspaces.length === 0) { return { data: [], ...pagination(request, number, size, 0) }; }
-    const queueWhere = and(
+    const baseQueueWhere = and(
       inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)),
       inArray(runs.status, [...CAPACITY_PENDING_STATUSES, ...CAPACITY_RUNNING_STATUSES]),
     );
-    const [queue, countRows, runningRows] = await Promise.all([
+    const queueWhere = and(
+      baseQueueWhere,
+      cursor === null ? undefined : or(
+        gt(runs.createdAt, cursor.createdAt),
+        and(eq(runs.createdAt, cursor.createdAt), gt(runs.id, cursor.id)),
+      ),
+    );
+    const [queueWithCursor, countRows, runningRows] = await Promise.all([
       db.query.runs.findMany({
         where: queueWhere,
         orderBy: [asc(runs.createdAt), asc(runs.id)],
-        limit: size,
-        offset: (number - 1) * size,
+        limit: cursorMode ? size + 1 : size,
+        offset: cursorMode ? undefined : (number - 1) * size,
       }),
-      db.select({ total: count() }).from(runs).where(queueWhere),
+      cursorMode ? Promise.resolve([{ total: 0 }]) : db.select({ total: count() }).from(runs).where(baseQueueWhere),
       db.select({ total: count() }).from(runs).where(and(
-        queueWhere,
+        baseQueueWhere,
         inArray(runs.status, [...CAPACITY_RUNNING_STATUSES]),
       )),
     ]);
+    const hasMore = cursorMode && queueWithCursor.length > size;
+    const queue = hasMore ? queueWithCursor.slice(0, size) : queueWithCursor;
     const first = queue[0];
     let pendingBefore = 0;
     if (first !== undefined) {
@@ -623,7 +656,11 @@ export const runRoutes = new Elysia({ name: "runs" })
       return { ...resource, attributes: { ...attrs, "position-in-queue": isPending ? position : 0 } };
     });
     const included = await includedUsersForRuns(queue);
-    return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, countRows[0]?.total ?? 0) };
+    const last = queue.at(-1);
+    const pageMeta = cursorMode
+      ? cursorPagination(request, hasMore && last !== undefined ? encodeRunCursor(last) : null, size, hasMore)
+      : pagination(request, number, size, countRows[0]?.total ?? 0);
+    return { data, ...(included.length > 0 ? { included } : {}), ...pageMeta };
   })
   .get("/api/v2/organizations/:org_name/capacity", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";

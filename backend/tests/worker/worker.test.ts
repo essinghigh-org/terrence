@@ -66,6 +66,7 @@ test("plans uploaded cloud configuration against the latest local state and reco
     } = await import("./src/db/schema.ts");
     const { executeRun } = await import("./src/worker.ts");
     const { readPlanJsonArtifact } = await import("./src/lib/plan-json.ts");
+    const { decodeStatePayload } = await import("./src/lib/validation.ts");
 
     const testDir = process.env.TEST_DIR;
     const recordDir = join(testDir, "record");
@@ -279,7 +280,7 @@ test("plans uploaded cloud configuration against the latest local state and reco
       },
       persistedPlanJson,
       stateSerials: recordedStates.map(state => state.serial),
-      appliedState: JSON.parse(recordedStates.at(-1)?.statePayload ?? "null"),
+      appliedState: JSON.parse(decodeStatePayload(recordedStates.at(-1)?.statePayload ?? "null")),
     }));
   `, { NODE_ENV: "production", SIMULATED_RUNS: "false" });
 
@@ -475,6 +476,7 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
     "plan-queued-at",
     "planning-at",
     "planned-at",
+    "input-state-serial",
     "cost-estimating-at",
     "cost-estimated-at",
     "policy-checking-at",
