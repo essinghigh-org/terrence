@@ -1590,14 +1590,16 @@ export async function safeDeleteWorkspace(workspaceId: string): Promise<boolean>
     const latest = relevantStates[0];
     if (latest !== undefined && typeof latest.statePayload === "string" && latest.statePayload !== "") {
       try {
-        const parsed = JSON.parse(decodeStatePayload(latest.statePayload)) as Record<string, unknown>;
+        const decoded = decodeStatePayload(latest.statePayload);
+        const parsed = JSON.parse(decoded) as Record<string, unknown>;
         // Check if state contains any resources
         const resources = parsed.resources;
         if (resources !== undefined && Array.isArray(resources) && resources.length > 0) {
           return false; // Has managed resources
         }
       } catch {
-        // If we can't parse, err on the side of allowing deletion
+        // Fail-closed on corrupt state or decryption failures: refuse deletion when state cannot be verified
+        return false;
       }
     }
   }

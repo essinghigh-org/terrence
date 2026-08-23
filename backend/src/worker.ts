@@ -2185,11 +2185,17 @@ async function executeApplyImpl(runId: string): Promise<void> {
           await saveStateAfterApply();
         } catch (saveError: unknown) {
           await writeLog(runId, "apply", `[terrence] Could not record partial state after failed apply: ${saveError instanceof Error ? saveError.message : String(saveError)}`);
+          await captureInterruptedApplyState(runId).catch(() => false);
         }
         throw new Error(`${resolved.tool} apply failed with exit code ${applyExit}`);
       }
 
-      await saveStateAfterApply();
+      try {
+        await saveStateAfterApply();
+      } catch (saveError: unknown) {
+        await captureInterruptedApplyState(runId).catch(() => false);
+        throw saveError;
+      }
 
     } else if (isSimulatedAllowed) {
       await writeLog(runId, "apply", `[terrence] Execution engine: Simulated apply completed successfully.`);
