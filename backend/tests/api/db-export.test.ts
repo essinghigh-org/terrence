@@ -89,7 +89,11 @@ beforeAll(async (): Promise<void> => {
   try {
     // Fresh PostgreSQL source database with the real migration set applied.
     const { SQL } = await import("bun");
-    sourceDbName = `terrence_export_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const rawId = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+    sourceDbName = `terrence_export_${rawId}`;
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(sourceDbName)) {
+      throw new Error(`Invalid database identifier: ${sourceDbName}`);
+    }
     const admin = new SQL(PG_ADMIN_URL);
     try {
       await admin.unsafe(`CREATE DATABASE "${sourceDbName}"`);
@@ -181,7 +185,7 @@ beforeAll(async (): Promise<void> => {
         createdAt: Date.now(),
       });
     } finally {
-      await client.end();
+      await client.close();
     }
     postgresAvailable = true;
   } catch (error: unknown) {
@@ -198,7 +202,7 @@ afterAll(async (): Promise<void> => {
     const { SQL } = await import("bun");
     const cleanup = new SQL(PG_ADMIN_URL);
     try {
-      await cleanup.unsafe(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${sourceDbName}' AND pid <> pg_backend_pid()`);
+      await cleanup`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${sourceDbName} AND pid <> pg_backend_pid()`;
       await cleanup.unsafe(`DROP DATABASE IF EXISTS "${sourceDbName}"`);
     } catch {
       // Best-effort cleanup.

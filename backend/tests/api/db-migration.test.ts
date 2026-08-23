@@ -127,7 +127,11 @@ beforeAll(async (): Promise<void> => {
     // Fresh PostgreSQL target database (mirrors the per-file setup pattern).
     const { randomUUID } = await import("node:crypto");
     const { SQL } = await import("bun");
-    targetDbName = `terrence_migrate_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const rawId = randomUUID().replace(/-/g, "").slice(0, 12);
+    targetDbName = `terrence_migrate_${rawId}`;
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(targetDbName)) {
+      throw new Error(`Invalid database identifier: ${targetDbName}`);
+    }
     const admin = new SQL(PG_ADMIN_URL);
     try {
       await admin.unsafe(`CREATE DATABASE "${targetDbName}"`);
@@ -158,7 +162,7 @@ afterAll(async (): Promise<void> => {
     const { SQL } = await import("bun");
     const cleanup = new SQL(PG_ADMIN_URL);
     try {
-      await cleanup.unsafe(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${targetDbName}' AND pid <> pg_backend_pid()`);
+      await cleanup`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${targetDbName} AND pid <> pg_backend_pid()`;
       await cleanup.unsafe(`DROP DATABASE IF EXISTS "${targetDbName}"`);
     } catch {
       // Best-effort cleanup.

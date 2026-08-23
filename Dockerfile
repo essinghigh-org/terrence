@@ -35,6 +35,7 @@ FROM oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f
 WORKDIR /app
 
 # Copy dependency manifests first for optimal Docker layer caching
+COPY bunfig.toml ./
 COPY bun.lock ./
 COPY package.json ./
 COPY backend/package.json ./backend/
@@ -99,6 +100,7 @@ RUN apk add --no-cache \
 
 # Workspace root + backend ONLY (no frontend -> no esbuild/vite/rolldown dev
 # tooling). Mirrors the previous runtime COPY set exactly.
+COPY bunfig.toml ./
 COPY bun.lock ./
 COPY package.json ./
 COPY backend/package.json ./backend/

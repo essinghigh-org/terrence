@@ -1,14 +1,12 @@
-import { describe, expect, test, beforeAll, afterAll, beforeEach } from "bun:test";
+import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { resolve } from "node:path";
 import { createBrowser, type BrowserPage } from "./helpers/browser";
 import { startTestServer, type TestServer } from "./helpers/server";
-import { injectAuth } from "./helpers/auth";
+import { authInitStorage } from "./helpers/auth";
 import { compareScreenshots } from "./helpers/image-diff";
 
 let server: TestServer;
 let page: BrowserPage;
-
-const ADMIN_TOKEN = process.env.TERRENCE_E2E_ADMIN_TOKEN;
 
 const PAGES: readonly { name: string; path: string }[] = [
   { name: "admin-security", path: "/app/admin" },
@@ -21,7 +19,7 @@ const PAGES: readonly { name: string; path: string }[] = [
 describe("visual regression tests", () => {
   beforeAll(async (): Promise<void> => {
     server = await startTestServer();
-    page = await createBrowser();
+    page = await createBrowser({ width: 1280, height: 807 });
   });
 
   afterAll(async (): Promise<void> => {
@@ -29,51 +27,67 @@ describe("visual regression tests", () => {
     await server?.close();
   });
 
-  beforeEach(async (): Promise<void> => {
-    if (!ADMIN_TOKEN) return;
-    await page.goto(`${server.baseUrl}/login`, { waitUntil: "domcontentloaded" });
-    await injectAuth(page, ADMIN_TOKEN);
-  });
-
   for (const { name, path } of PAGES) {
     test(`snapshot ${name}`, async (): Promise<void> => {
-      if (!ADMIN_TOKEN) {
-        console.warn(`Skipping visual regression snapshot for ${name}: TERRENCE_E2E_ADMIN_TOKEN not set`);
-        return;
-      }
-
-      await page.goto(`${server.baseUrl}${path}`, { waitUntil: "networkidle", timeout: 20000 });
+      await page.goto(`${server.baseUrl}${path}`, {
+        initStorage: authInitStorage(),
+        waitUntil: "networkidle",
+        timeout: 20000,
+      });
+      await page.waitForAppReady();
       expect(new URL(page.url).pathname).toBe(path);
 
-      // Let client-side rendering and data fetches settle
-      await page.waitForTimeout(2500);
-
-      // Mask relative timestamps
+      // Mask dynamic relative timestamps
       await page.evaluate(`
         (() => {
+          window.__terrence_masked_ts = [];
           const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
           let node;
-          const regex = /^(ago|\\d+[sSmMhHdD])\\s+(ago|from now)$/;
-          const toHide = [];
           while ((node = walker.nextNode())) {
-            if (regex.test(node.textContent ? node.textContent.trim() : "")) {
-              if (node.parentElement) toHide.push(node.parentElement);
+            const txt = (node.textContent || "").trim();
+            if (txt.includes("ago") || txt.includes("from now") || txt.includes("seconds") || txt.includes("minutes")) {
+              if (node.parentElement) {
+                window.__terrence_masked_ts.push({
+                  el: node.parentElement,
+                  prev: node.parentElement.style.visibility
+                });
+                node.parentElement.style.visibility = "hidden";
+              }
             }
           }
-          toHide.forEach((el) => {
-            el.style.visibility = "hidden";
-          });
         })()
       `);
 
-      const screenshotBuffer = await page.screenshot();
+      let screenshotBuffer: Buffer;
+      try {
+        screenshotBuffer = await page.screenshot();
+      } finally {
+        await page.evaluate(`
+          (() => {
+            if (window.__terrence_masked_ts) {
+              window.__terrence_masked_ts.forEach(({ el, prev }) => {
+                el.style.visibility = prev;
+              });
+              delete window.__terrence_masked_ts;
+            }
+          })()
+        `).catch(() => {});
+      }
+
       const baselinePath = resolve(import.meta.dir, `./baselines/${name}-linux.png`);
 
       const diffResult = await compareScreenshots(page, screenshotBuffer, baselinePath, {
         maxDiffPercentage: 0.1,
+        snapshotName: name,
       });
 
-      expect(diffResult.match).toBe(true, `Visual regression detected for ${name}: ${diffResult.diffPercentage.toFixed(2)}% pixel mismatch (${diffResult.diffPixels}/${diffResult.totalPixels} pixels)`);
-    });
+      if (!diffResult.match) {
+        throw new Error(
+          `Visual regression detected for ${name}: ${diffResult.diffPercentage.toFixed(2)}% pixel mismatch (${diffResult.diffPixels}/${diffResult.totalPixels} pixels)`
+        );
+      }
+
+      expect(diffResult.match).toBe(true);
+    }, 25000);
   }
 });

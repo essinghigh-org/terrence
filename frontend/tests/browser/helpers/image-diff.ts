@@ -1,19 +1,22 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { BrowserPage } from "./browser";
 
 export type ImageDiffOptions = {
   maxDiffPercentage?: number;
   colorThreshold?: number;
   updateSnapshots?: boolean;
-}
+  diffDir?: string;
+  snapshotName?: string;
+};
 
 export type ImageDiffResult = {
   match: boolean;
   diffPixels: number;
   totalPixels: number;
   diffPercentage: number;
-}
+  diffImageBuffer?: Buffer;
+};
 
 export async function compareScreenshots(
   page: BrowserPage,
@@ -57,7 +60,13 @@ export async function compareScreenshots(
   const actualB64 = actualBuffer.toString("base64");
   const baselineB64 = baselineBuffer.toString("base64");
 
-  const diffResult = await page.evaluate<ImageDiffResult>(`
+  const diffResult = await page.evaluate<{
+    match: boolean;
+    diffPixels: number;
+    totalPixels: number;
+    diffPercentage: number;
+    diffB64?: string;
+  }>(`
     (async () => {
       const loadImg = (b64) => new Promise((resolve, reject) => {
         const img = new Image();
@@ -95,6 +104,7 @@ export async function compareScreenshots(
       ctx.drawImage(baselineImg, 0, 0);
       const baselineData = ctx.getImageData(0, 0, width, height).data;
 
+      const diffImgData = ctx.createImageData(width, height);
       let diffPixels = 0;
       const threshold = ${JSON.stringify(colorThreshold)};
 
@@ -106,8 +116,22 @@ export async function compareScreenshots(
 
         if (dr > threshold || dg > threshold || db > threshold || da > threshold) {
           diffPixels++;
+          // Highlight in magenta/red
+          diffImgData.data[i] = 255;
+          diffImgData.data[i + 1] = 0;
+          diffImgData.data[i + 2] = 128;
+          diffImgData.data[i + 3] = 255;
+        } else {
+          // Semi-transparent baseline background
+          diffImgData.data[i] = baselineData[i];
+          diffImgData.data[i + 1] = baselineData[i + 1];
+          diffImgData.data[i + 2] = baselineData[i + 2];
+          diffImgData.data[i + 3] = Math.round(baselineData[i + 3] * 0.3);
         }
       }
+
+      ctx.putImageData(diffImgData, 0, 0);
+      const diffB64 = canvas.toDataURL("image/png").replace("data:image/png;base64,", "");
 
       const diffPercentage = (diffPixels / totalPixels) * 100;
       const match = diffPercentage <= ${JSON.stringify(maxDiffPercentage)};
@@ -117,9 +141,34 @@ export async function compareScreenshots(
         diffPixels,
         totalPixels,
         diffPercentage,
+        diffB64,
       };
     })()
   `);
 
-  return diffResult;
+  let diffImageBuffer: Buffer | undefined;
+  if (diffResult.diffB64) {
+    diffImageBuffer = Buffer.from(diffResult.diffB64, "base64");
+  }
+
+  // Save diff artifacts if mismatch occurred
+  if (!diffResult.match) {
+    const diffDir = options.diffDir ?? join(dirname(baselinePath), "__diffs__");
+    const name = options.snapshotName ?? "diff";
+    try {
+      mkdirSync(diffDir, { recursive: true });
+      writeFileSync(join(diffDir, `${name}-actual.png`), actualBuffer);
+      if (diffImageBuffer) {
+        writeFileSync(join(diffDir, `${name}-diff.png`), diffImageBuffer);
+      }
+    } catch {}
+  }
+
+  return {
+    match: diffResult.match,
+    diffPixels: diffResult.diffPixels,
+    totalPixels: diffResult.totalPixels,
+    diffPercentage: diffResult.diffPercentage,
+    ...(diffImageBuffer !== undefined ? { diffImageBuffer } : {}),
+  };
 }

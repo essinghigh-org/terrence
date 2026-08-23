@@ -3,7 +3,6 @@ import html from "../index.html";
 const port = Number(process.env.PORT ?? 5173);
 const backendUrl = process.env.BACKEND_URL ?? "http://127.0.0.1:3000";
 
-// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
 async function proxyToBackend(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const target = new URL(url.pathname + url.search, backendUrl);

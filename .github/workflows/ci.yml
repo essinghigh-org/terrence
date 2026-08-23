@@ -91,7 +91,7 @@ jobs:
       - name: Run frontend tests
         env:
           NO_COLOR: "1"
-        run: cd frontend && bun test tests/*.test.tsx tests/*.test.ts --timeout 15000 --preload ./tests/setup.ts --parallel=8
+        run: cd frontend && bun test --parallel=4
       - name: Frontend build
         run: cd frontend && bun run build
 
@@ -145,15 +145,16 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Frontend build (reproducible)
         run: cd frontend && bun run build
-      - name: Docker build check (todo 828)
+      - name: Docker full build and runtime smoke check (todo 828)
         run: |
-          docker build -f Dockerfile --target builder -t terrence:ci-builder . > /tmp/docker-build.log 2>&1 || (cat /tmp/docker-build.log; exit 1)
-          echo "Docker builder stage OK"
+          docker build -f Dockerfile -t terrence:ci . > /tmp/docker-build.log 2>&1 || (cat /tmp/docker-build.log; exit 1)
+          docker run --rm terrence:ci bun --version
+          echo "Docker image build and runtime smoke check OK"
       - name: Bundle size budget (todo 800)
         run: bun run check:bundle-size
 
-  accessibility:
-    name: Accessibility (axe)
+  browser-tests:
+    name: Browser & E2E Tests (Bun.WebView)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -168,5 +169,5 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Build static frontend
         run: cd frontend && bun run build
-      - name: Run axe on static preview (Bun.WebView)
-        run: cd frontend && xvfb-run --auto-servernum bun test tests/browser/accessibility-static.test.ts
+      - name: Run browser E2E, accessibility & visual regression suite (Bun.WebView)
+        run: cd frontend && xvfb-run --auto-servernum bun test tests/browser/

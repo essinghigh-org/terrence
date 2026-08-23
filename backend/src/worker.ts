@@ -2024,12 +2024,13 @@ async function executeApplyImpl(runId: string): Promise<void> {
   if (cgroupCreatedHere) {
     prepareRunCgroup(runId);
   }
-  const run = await db.query.runs.findFirst({
-    where: eq(runs.id, runId),
-  });
+  try {
+    const run = await db.query.runs.findFirst({
+      where: eq(runs.id, runId),
+    });
 
-  if (run === undefined) return;
-  if (run.status === "canceled" || run.status === "force_canceled") return;
+    if (run === undefined) return;
+    if (run.status === "canceled" || run.status === "force_canceled") return;
 
   const workspace = await db.query.workspaces.findFirst({
     where: eq(workspaces.id, run.workspaceId),
@@ -2282,17 +2283,19 @@ async function executeApplyImpl(runId: string): Promise<void> {
       } catch {}
     }
   }
-  } finally {
-    if (workspaceRunLock) {
-      workspaceRunLock = false;
-      await releaseRunWorkspaceLock(workspace.id, runId).catch((error: unknown): void => {
-        log.error("Failed to release run workspace lock", { runId, workspaceId: workspace.id, error });
-      });
-    }
-    if (cgroupCreatedHere) {
-      cleanupRunCgroup(runId);
-    }
+} finally {
+  if (workspaceRunLock) {
+    workspaceRunLock = false;
+    await releaseRunWorkspaceLock(workspace.id, runId).catch((error: unknown): void => {
+      log.error("Failed to release run workspace lock", { runId, workspaceId: workspace.id, error });
+    });
   }
+}
+} finally {
+  if (cgroupCreatedHere) {
+    cleanupRunCgroup(runId);
+  }
+}
 }
 
 /**

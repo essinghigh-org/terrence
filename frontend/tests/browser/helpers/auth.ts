@@ -6,6 +6,13 @@ export function getAdminToken(): string {
   return process.env.TERRENCE_E2E_ADMIN_TOKEN ?? DEFAULT_MOCK_TOKEN;
 }
 
+export function authInitStorage(token: string = getAdminToken()): Record<string, string> {
+  return {
+    tfe_token: token,
+    tfe_refreshable_session: "true",
+  };
+}
+
 export async function injectAuth(page: BrowserPage, token: string = getAdminToken()): Promise<void> {
   await page.evaluate(`
     (() => {

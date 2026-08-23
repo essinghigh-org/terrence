@@ -87,7 +87,11 @@ const testDbUrl = process.env.DATABASE_URL ?? "";
 if (testDbUrl.startsWith("postgres")) {
   const { randomUUID } = await import("node:crypto");
   const { SQL } = await import("bun");
-  const dbName = `terrence_test_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  const rawId = randomUUID().replace(/-/g, "").slice(0, 12);
+  const dbName = `terrence_test_${rawId}`;
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(dbName)) {
+    throw new Error(`Invalid database identifier: ${dbName}`);
+  }
   const admin = new SQL(testDbUrl);
   try {
     await admin.unsafe(`CREATE DATABASE "${dbName}"`);
@@ -106,7 +110,7 @@ if (testDbUrl.startsWith("postgres")) {
     } catch {}
     const cleanup = new SQL(testDbUrl);
     try {
-      await cleanup.unsafe(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${dbName}' AND pid <> pg_backend_pid()`);
+      await cleanup`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${dbName} AND pid <> pg_backend_pid()`;
       await cleanup.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`);
     } catch {
       // Best-effort cleanup: a failed drop must never mask test results.

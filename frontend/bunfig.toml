@@ -1,5 +1,6 @@
 [test]
 preload = ["./tests/setup.ts"]
+pathIgnorePatterns = ["tests/browser/**"]
 
 [serve.static]
 plugins = ["bun-plugin-tailwind"]

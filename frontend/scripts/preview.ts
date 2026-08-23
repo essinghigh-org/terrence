@@ -40,10 +40,14 @@ if (!existsSync(indexHtmlPath)) {
 const server = Bun.serve({
   port,
   hostname,
-  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   fetch(req: Request): Response {
     const url = new URL(req.url);
-    const pathname = decodeURIComponent(url.pathname);
+    let pathname: string;
+    try {
+      pathname = decodeURIComponent(url.pathname);
+    } catch {
+      return new Response("Bad Request", { status: 400 });
+    }
 
     // Normalize path to prevent directory traversal
     const normalizedPath = normalize(pathname).replace(/^(\.\.[\/\\])+/, "");
@@ -60,9 +64,13 @@ const server = Bun.serve({
         if (stat.isFile()) {
           const file = Bun.file(requestedPath);
           const headers = new Headers();
-          // Add caching headers for hashed assets
-          if (pathname.startsWith("/chunk-") || pathname.includes("-")) {
+          // Precise cache-matching: content-hashed build artifacts get 1-year immutable caching;
+          // stable public assets get shorter caching with revalidation.
+          const isContentHashed = /^\/(?:chunk-[a-z0-9]+|[a-zA-Z0-9_-]+-[a-z0-9]{8,16})\.(?:js|css|svg|png|jpg|jpeg|webp|ico|webmanifest|woff2)$/i.test(pathname);
+          if (isContentHashed) {
             headers.set("cache-control", "public, max-age=31536000, immutable");
+          } else {
+            headers.set("cache-control", "public, max-age=3600, must-revalidate");
           }
           return new Response(file, { headers });
         }
@@ -70,7 +78,10 @@ const server = Bun.serve({
           const nestedIndex = join(requestedPath, "index.html");
           if (existsSync(nestedIndex)) {
             return new Response(Bun.file(nestedIndex), {
-              headers: { "content-type": "text/html; charset=utf-8" },
+              headers: {
+                "content-type": "text/html; charset=utf-8",
+                "cache-control": "no-cache, no-store, must-revalidate",
+              },
             });
           }
         }
@@ -86,7 +97,10 @@ const server = Bun.serve({
 
     // SPA fallback: return index.html for navigation routes
     return new Response(Bun.file(indexHtmlPath), {
-      headers: { "content-type": "text/html; charset=utf-8" },
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-cache, no-store, must-revalidate",
+      },
     });
   },
 });

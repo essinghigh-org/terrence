@@ -16,6 +16,7 @@ const result = await Bun.build({
   entrypoints: [join(frontendDir, "index.html")],
   outdir: outDir,
   target: "browser",
+  publicPath: "/",
   minify: !isDev,
   splitting: true,
   plugins: [tailwind],
