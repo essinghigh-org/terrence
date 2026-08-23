@@ -177,14 +177,14 @@ describe("instance metrics", () => {
       tokenHash: `metrics-refresh-hash-${suffix}`,
       userId,
       accessTokenId: sessionTokenId,
-      expiresAt: Date.now() + 60_000,
+      expiresAt: Date.now() + 60 * 60_000,
       createdAt: Date.now(),
     });
     await db.insert(systemApiTokens).values({
       id: monitoringTokenId,
       tokenHash: hashSystemApiToken(monitoringToken),
       description: "instance metrics test token",
-      expiresAt: Date.now() + 60_000,
+      expiresAt: Date.now() + 60 * 60_000,
     });
   });
 

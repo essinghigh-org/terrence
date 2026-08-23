@@ -807,7 +807,7 @@ export const healthRoutes = new Elysia({ name: "health" })
     const headers = set.headers as Record<string, string | number>;
     headers["Content-Type"] = "text/plain; version=0.0.4; charset=utf-8";
     return `${prometheusLines(collection).join("\n")}\n`;
-  }, { isAuth: true })
+  }, { systemAuth: true })
   .get("/readyz", async ({ set }: SetCtx): Promise<string> => {
     try {
       await db.query.users.findFirst();

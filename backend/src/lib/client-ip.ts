@@ -30,11 +30,15 @@ export async function refreshTrustedClientIpHeaders(): Promise<void> {
       cachedTrustedHeaders = [];
     }
     const configuredCidrs = next["trusted-client-ip-cidrs"];
-    cachedTrustedProxyCidrs = Array.isArray(configuredCidrs)
+    const settingsCidrs = Array.isArray(configuredCidrs)
       ? configuredCidrs.filter((cidr): cidr is string => typeof cidr === "string" && cidr.trim() !== "")
+      : [];
+    cachedTrustedProxyCidrs = settingsCidrs.length > 0
+      ? settingsCidrs
       : (process.env.TERRENCE_TRUSTED_PROXY_CIDRS ?? "").split(",").map((cidr): string => cidr.trim()).filter(Boolean);
   } catch {
     cachedTrustedHeaders = [];
+    cachedTrustedProxyCidrs = [];
   }
 }
 
@@ -98,13 +102,18 @@ function peerAddress(request: unknown, server: unknown): string | null {
   }
 }
 
+export function trustedForwardedProtocol(request: unknown, server: unknown): string | null {
+  const peer = peerAddress(request, server);
+  if (!trustedProxy(peer)) return null;
+  return headerValue(request, "x-forwarded-proto")?.toLowerCase() ?? null;
+}
+
 /**
  * Resolve the client IP for a request.
  * - When trusted headers are configured: return the first configured header's
  *   value, falling back to the peer address.
- * - Otherwise the peer (socket) address is authoritative. The app.handle()
- *   test-only path (no peer) falls back to X-Forwarded-For / X-Real-IP so a
- *   simulated client address can be supplied in tests.
+ * - Otherwise the peer (socket) address is authoritative. When it is
+ *   unavailable, no forwarded address is trusted.
  */
 export async function resolveClientIp(request: unknown, server: unknown): Promise<string | null> {
   const peer = peerAddress(request, server);
@@ -115,12 +124,5 @@ export async function resolveClientIp(request: unknown, server: unknown): Promis
     }
     return peer;
   }
-  if (server !== null) return null;
-  if (cachedTrustedHeaders.length > 0) {
-    const trusted = trustedHeaderValue(request);
-    if (trusted !== null) return trusted;
-  }
-  const forwarded = headerValue(request, "x-forwarded-for");
-  if (forwarded !== null) return forwarded;
-  return headerValue(request, "x-real-ip");
+  return null;
 }

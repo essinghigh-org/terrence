@@ -200,7 +200,7 @@ if (pgDb !== null) {
     } finally {
       poolTransactionEnd(start);
     }
-  }) as never;
+  });
 }
 export const db = (isPostgres ? pgDb : sqliteDb) as unknown as AppDb;
 

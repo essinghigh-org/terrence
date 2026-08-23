@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { randomUUID } from "node:crypto";
 import { hashAuthenticationToken } from "../lib/token-service";
 import { db } from "../db";
-import { apiTokens } from "../db/schema";
+import { apiTokens, teams } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { parseTokenScopes, scopeGrants, type TokenScopes, type WorkspacePermissionGrant } from "../lib/token-scopes";
 import { setRequestTokenScopes } from "../lib/request-scope";
@@ -23,25 +23,16 @@ async function resolveToken(raw: string): Promise<McpSession | null> {
   const tok = await db.query.apiTokens.findFirst({
     where: eq(apiTokens.token, tokenHash),
   });
-  if (tok === undefined) {
-    const legacy = await db.query.apiTokens.findFirst({
-      where: eq(apiTokens.token, raw),
-    });
-    if (legacy === undefined) return null;
-    if (legacy.expiresAt !== null && legacy.expiresAt < Date.now()) return null;
-    return {
-      userId: legacy.userId,
-      orgId: legacy.orgId,
-      teamId: null,
-      tokenId: legacy.id,
-      scopes: safeParseScopes(legacy.scopes),
-    };
-  }
+  if (tok === undefined) return null;
   if (tok.expiresAt !== null && tok.expiresAt < Date.now()) return null;
+  const team = tok.teamId === null
+    ? undefined
+    : await db.query.teams.findFirst({ where: eq(teams.id, tok.teamId), columns: { id: true, orgId: true } });
+  if (tok.teamId !== null && team === undefined) return null;
   return {
     userId: tok.userId,
-    orgId: tok.orgId,
-    teamId: null,
+    orgId: tok.orgId ?? team?.orgId ?? null,
+    teamId: team?.id ?? null,
     tokenId: tok.id,
     scopes: safeParseScopes(tok.scopes),
   };

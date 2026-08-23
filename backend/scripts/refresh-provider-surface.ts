@@ -137,6 +137,15 @@ function mergeStatuses(existing: SurfaceEntry[], schemas: Record<string, unknown
   }));
 }
 
+function schemaHashesMatch(surface: Surface, resources: Record<string, unknown>, dataSources: Record<string, unknown>): boolean {
+  const matches = (entry: SurfaceEntry, schemas: Record<string, unknown>): boolean =>
+    Object.prototype.hasOwnProperty.call(schemas, entry.name) && schemaHash(schemas[entry.name]) === entry.schema_hash;
+  if (surface.resources.length !== Object.keys(resources).length) return false;
+  if (surface.data_sources.length !== Object.keys(dataSources).length) return false;
+  return surface.resources.every((entry): boolean => matches(entry, resources))
+    && surface.data_sources.every((entry): boolean => matches(entry, dataSources));
+}
+
 function commentFor(version: string): string {
   return `Authoritative hashicorp/tfe v${version} provider surface, generated from \`terraform providers schema -json\` by backend/scripts/refresh-provider-surface.ts. Each entry includes a SHA-256 schema_hash over its full resource/data-source schema. Status values: covered (exercised by provider_e2e E2E), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).`;
 }
@@ -145,13 +154,19 @@ async function main(): Promise<void> {
   const existing = loadSurface(SURFACE_SRC);
   const current = catalogVersion(existing);
   const target = await resolveTargetVersion(current);
-  const hasSchemaHashes = [...existing.resources, ...existing.data_sources].every((entry): boolean => typeof entry.schema_hash === "string" && entry.schema_hash.length === 64);
+  const hasSchemaHashes = [...existing.resources, ...existing.data_sources].every((entry): boolean =>
+    typeof entry.schema_hash === "string" && /^[0-9a-f]{64}$/i.test(entry.schema_hash),
+  );
+  let generated: { resources: Record<string, unknown>; dataSources: Record<string, unknown> } | undefined;
   if (target === current && hasSchemaHashes && process.env.TERRENCE_PROVIDER_SURFACE_FORCE !== "1") {
-    console.log(`Provider surface already current (v${target}).`);
-    process.exit(0);
+    generated = generateSchema(target);
+    if (schemaHashesMatch(existing, generated.resources, generated.dataSources)) {
+      console.log(`Provider surface already current (v${target}).`);
+      process.exit(0);
+    }
   }
 
-  const { resources, dataSources } = generateSchema(target);
+  const { resources, dataSources } = generated ?? generateSchema(target);
   const mergedResources = mergeStatuses(existing.resources, resources);
   const mergedDataSources = mergeStatuses(existing.data_sources, dataSources);
   const next: Surface = {

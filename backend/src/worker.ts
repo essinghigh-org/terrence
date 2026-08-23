@@ -35,12 +35,12 @@ import {
   adminGeneralSettings,
   projects,
 } from "./db/schema";
-import { eq, desc, asc, and, gt, inArray, notInArray, or, sql, isNotNull } from "drizzle-orm";
+import { eq, desc, asc, and, gt, inArray, notInArray, or, sql, isNotNull, isNull } from "drizzle-orm";
 import { spawn } from "bun";
 import { createHash, createHmac } from "node:crypto";
 import { join } from "path";
 import { tmpdir } from "os";
-import { copyFile, mkdir, mkdtemp, rm, writeFile, readFile, exists, readdir, rename, stat } from "fs/promises";
+import { mkdir, mkdtemp, rm, writeFile, readFile, exists, readdir, rename, stat } from "fs/promises";
 import { ensureBinary } from "./binaryManager";
 import { resolveInfracostBinary } from "./lib/infracost-bin";
 import { recordFailure, workerPollerFinished, workerPollFinished, workerPollStarted } from "./lib/process-metrics";
@@ -71,7 +71,7 @@ import { isMaintenanceActive } from "./lib/maintenance";
 import { publish } from "./lib/event-bus";
 import { probeLandlockAbi, RunSandbox, removeSandboxWorkDir, runNetDenyEnabled, runSandboxRequired } from "./lib/sandbox";
 import { attachToRunCgroup, createRunCgroup, destroyRunCgroup, killRunCgroup } from "./lib/run-cgroup";
-import { decryptSecret } from "./lib/secrets";
+import { decryptSecret, encryptSecret, isEncryptedSecret } from "./lib/secrets";
 import { encryptStatePayload } from "./lib/validation";
 import { log } from "./lib/log";
 export type { ExecutionPhase } from "./worker/phases";
@@ -239,16 +239,18 @@ async function persistSavedPlan(
   const directory = savedPlanDirectory(runId);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const temporaryPlan = join(directory, `.tfplan-${crypto.randomUUID()}`);
-  if (await exists(source)) await copyFile(source, temporaryPlan);
-  else if (simulated) await writeFile(temporaryPlan, "terrence-simulated-plan\n", { mode: 0o600 });
-  else throw new Error("Terraform did not produce a saved plan file.");
-  const bytes = await readFile(temporaryPlan);
+  const bytes = await (await exists(source)
+    ? readFile(source)
+    : simulated
+      ? Promise.resolve(Buffer.from("terrence-simulated-plan\n"))
+      : Promise.reject(new Error("Terraform did not produce a saved plan file.")));
   const metadata: SavedPlanMetadata = {
     sha256: createHash("sha256").update(bytes).digest("hex"),
     stateId: state.id,
     stateSerial: state.serial,
     configurationVersionId,
   };
+  await writeFile(temporaryPlan, await encryptSecret(bytes.toString("base64")), { mode: 0o600 });
   await rename(temporaryPlan, savedPlanFile(runId));
   const temporaryMetadata = join(directory, `.metadata-${crypto.randomUUID()}`);
   await writeFile(temporaryMetadata, JSON.stringify(metadata), { mode: 0o600 });
@@ -276,11 +278,15 @@ async function readSavedPlanMetadata(runId: string): Promise<SavedPlanMetadata |
 async function restoreSavedPlan(runId: string, executionDir: string): Promise<SavedPlanMetadata | undefined> {
   const metadata = await readSavedPlanMetadata(runId);
   if (metadata === undefined || !(await exists(savedPlanFile(runId)))) return undefined;
-  const bytes = await readFile(savedPlanFile(runId));
+  const stored = await readFile(savedPlanFile(runId));
+  const storedText = stored.toString("utf8");
+  const bytes = isEncryptedSecret(storedText)
+    ? Buffer.from(await decryptSecret(storedText), "base64")
+    : stored;
   const checksum = createHash("sha256").update(bytes).digest("hex");
   if (checksum !== metadata.sha256) throw new Error("Saved plan integrity check failed.");
   await mkdir(executionDir, { recursive: true, mode: 0o700 });
-  await copyFile(savedPlanFile(runId), join(executionDir, "tfplan"));
+  await writeFile(join(executionDir, "tfplan"), bytes, { mode: 0o600 });
   return metadata;
 }
 
@@ -1829,12 +1835,17 @@ async function executeRunImpl(runId: string): Promise<void> {
       }
     }
   } catch (error: unknown) {
-    if (await runWasCanceled(runId)) return;
     const errMsg = error instanceof Error ? error.message : String(error);
     log.error(`Run ${runId} planning failed`, { error: errMsg });
     await writeLog(runId, "plan", `[terrence ERROR] ${errMsg}`);
-    await updateRunStatus(runId, "errored");
-    await cleanupSavedPlan(runId);
+    try {
+      if (!isTerminalRunStatus(run.status)) await updateRunStatus(runId, "errored");
+    } catch (statusError: unknown) {
+      log.error(`Failed to mark run ${runId} errored after planning failure`, { error: statusError });
+    } finally {
+      await cleanupSavedPlan(runId);
+    }
+    throw error;
   } finally {
     if (!keepPlan) {
       try {
@@ -1954,7 +1965,7 @@ async function acquireRunWorkspaceLock(workspaceId: string, runId: string): Prom
     lockedReason: `Run ${runId} is applying`,
     lockOwnerType: "run",
     lockOwnerId: runId,
-  }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, false))).returning({ id: workspaces.id });
+  }).where(and(eq(workspaces.id, workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
   return locked.length > 0;
 }
 
@@ -2027,7 +2038,8 @@ async function executeApplyImpl(runId: string): Promise<void> {
       scheduledAt: run.scheduledAt ?? Date.now() + 1000,
     }).where(and(
       eq(runs.id, runId),
-      inArray(runs.status, ["confirmed", "apply_queued"]),
+      eq(runs.status, run.status),
+      notInArray(runs.status, FINAL_RUN_STATUSES),
     ));
     return;
   }
@@ -2049,7 +2061,10 @@ async function executeApplyImpl(runId: string): Promise<void> {
 
     const savedPlanRequired = run.savePlan === true;
     const savedPlan = savedPlanRequired ? await restoreSavedPlan(runId, executionDir) : undefined;
-    if (savedPlanRequired && savedPlan !== undefined) {
+    if (savedPlanRequired) {
+      if (savedPlan === undefined) {
+        throw new Error("Saved plan metadata or file is missing; the plan cannot be verified before apply.");
+      }
       if (savedPlan.configurationVersionId !== run.configurationVersionId) {
         throw new Error("Saved plan configuration version no longer matches the run.");
       }
@@ -3630,6 +3645,7 @@ async function captureInterruptedApplyState(runId: string): Promise<boolean> {
     const encrypted = await encryptStatePayload(payload);
     if (encrypted === null) return false;
     await writeFile(join(recoveryDir, "terraform.tfstate"), encrypted, { mode: 0o600 });
+    await writeFile(join(recoveryDir, ".recovered"), new Date().toISOString(), { mode: 0o600 });
     return true;
   }
   return false;

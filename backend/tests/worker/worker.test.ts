@@ -196,6 +196,7 @@ test("plans uploaded cloud configuration against the latest local state and reco
       { id: "attached-only", variableSetId: "attached-set", key: "attached_only", value: "attached" },
       { id: "project-only", variableSetId: "project-set", key: "project_only", value: "project" },
       { id: "priority-only", variableSetId: "priority-set", key: "priority_only", value: "set-priority" },
+      { id: "priority-hcl", variableSetId: "priority-set", key: "priority_hcl", value: "{ enabled = true }", hcl: true },
     ]);
     await db.insert(configurationVersions).values({
       id: "configuration",
@@ -299,6 +300,7 @@ test("plans uploaded cloud configuration against the latest local state and reco
   expect(result.planArgs).toContain('-var=plain="run"');
   expect(result.planArgs).toContain('-var=priority_only="run-priority"');
   expect(result.planArgs).toContain('-var=priority_only="set-priority"');
+  expect(result.planArgs).toContain("-var=priority_hcl={ enabled = true }");
   expect(result.planArgs.indexOf('-var=priority_only="run-priority"')).toBeLessThan(
     result.planArgs.indexOf('-var=priority_only="set-priority"'),
   );
@@ -308,6 +310,7 @@ test("plans uploaded cloud configuration against the latest local state and reco
   expect(result.tfvars).toContain('attached_only = "attached"');
   expect(result.tfvars).toContain('project_only = "project"');
   expect(result.tfvars).toContain('priority_only = "set-priority"');
+  expect(result.tfvars).toContain("priority_hcl = { enabled = true }");
   expect(result.tfvars).toContain("settings = { enabled = true }");
   expect(result.uploadedTfvars).toBe('plain = "archive"');
   expect(result.providerToken).toBe("from-set");
@@ -780,8 +783,17 @@ test("rejects configuration archives containing traversal paths or links", async
       },
     ]);
 
-    await executeRun("traversal-run");
-    await executeRun("link-run");
+    const expectArchiveExtractionError = async (runId) => {
+      try {
+        await executeRun(runId);
+      } catch (error) {
+        if (error instanceof Error && error.message === "Configuration archive extraction failed or contained invalid path components.") return;
+        throw error;
+      }
+      throw new Error("Expected archive extraction to fail for " + runId);
+    };
+    await expectArchiveExtractionError("traversal-run");
+    await expectArchiveExtractionError("link-run");
     const statuses = Object.fromEntries((await db.query.runs.findMany()).map(run => [run.id, run.status]));
     const errors = Object.fromEntries((await db.query.logs.findMany())
       .filter(log => log.outputText.includes("Configuration archive extraction failed"))

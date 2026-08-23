@@ -255,8 +255,9 @@ export const runTools: readonly McpTool[] = [
         ]),
       )).returning();
       if (updated.length === 0) return toolBadRequest("Run is not cancelable");
-      const { cancelRunExecution } = await import("../../worker");
+      const { cancelRunExecution, cleanupSavedPlan } = await import("../../worker");
       cancelRunExecution(runId);
+      await cleanupSavedPlan(runId);
       await cancelAgentJobsForRun(runId);
       await auditLog("cancel", "runs", runId, session.userId ?? null, authorized.workspace.orgId, {
         workspaceId: authorized.workspace.id,

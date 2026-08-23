@@ -6,8 +6,8 @@ function stateStorageDir(): string {
 }
 
 /** Encrypt state fields at rest while keeping the API/parser representation plain. */
-export function encryptStatePayload(payload: string | null): Promise<string | null> {
-  return payload === null ? Promise.resolve(null) : encryptSecret(payload);
+export async function encryptStatePayload(payload: string | null): Promise<string | null> {
+  return payload === null ? null : encryptSecret(payload);
 }
 
 function decryptStatePayload(payload: string): string {
@@ -81,8 +81,9 @@ export function tokenExpiry(value: unknown): number | null {
 
 export function decodeStatePayload(state: unknown): string {
   if (typeof state !== "string") return JSON.stringify(state);
-  const plaintext = decryptStatePayload(state);
+  let plaintext = state;
   try {
+    plaintext = decryptStatePayload(state);
     JSON.parse(plaintext);
     return plaintext;
   } catch {

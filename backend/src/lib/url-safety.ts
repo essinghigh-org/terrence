@@ -270,11 +270,11 @@ export async function resolveExternalUrl(
   if (parsed.username !== "" || parsed.password !== "") {
     return { error: "URLs with embedded credentials (user:password@host) are not allowed" };
   }
-  const literalReason = privateHostReason(parsed.hostname);
-  if (!allowPrivate && literalReason !== null) return { error: literalReason };
   const allowlist = readOutboundAllowlist();
 
   const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
+  const literalReason = privateHostReason(parsed.hostname);
+  if (!allowPrivate && literalReason !== null && !allowlistAllows(hostname, [hostname], allowlist)) return { error: literalReason };
   let addresses: readonly string[];
   try {
     addresses = isIP(hostname) === 0 ? await resolveWithTimeout(hostname, resolve) : [hostname];

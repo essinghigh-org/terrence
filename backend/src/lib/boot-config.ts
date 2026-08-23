@@ -29,7 +29,7 @@
 // exclusive.
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { decryptSecretSync, encryptSecret, isEncryptedSecret } from "./secrets";
+import { ENCRYPTED_PREFIX, decryptSecretSync, encryptSecret, isEncryptedSecret } from "./secrets";
 
 export type DatabaseDriver = "sqlite" | "postgres";
 
@@ -206,7 +206,7 @@ export function resolveStorageSecret(storageDir: string, name: string): string {
   if (blob === "") {
     throw new BootConfigError(`Storage secret "${name}" at ${path} is empty`);
   }
-  if (blob.startsWith("enc:v1:") && !isEncryptedSecret(blob)) {
+  if (blob.startsWith(`${ENCRYPTED_PREFIX}:`) && !isEncryptedSecret(blob)) {
     throw new BootConfigError(`Cannot decrypt storage secret "${name}" at ${path}: invalid encrypted secret`);
   }
   try {

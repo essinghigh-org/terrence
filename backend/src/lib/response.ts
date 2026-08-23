@@ -841,7 +841,7 @@ export function stateOutputResources(state: StateParam): Record<string, unknown>
   if (outputs === null || outputs === undefined || typeof outputs !== "object" || Array.isArray(outputs)) return [];
 
   return Object.entries(outputs).map(([name, raw]: readonly [string, unknown]): Record<string, unknown> => {
-    const id = `wsout-${createHash("sha256").update(`${state.id}\0${name}`).digest("hex").slice(0, 16)}`;
+    const id = `wsout-${createHash("sha256").update(`${state.id}\0${name}`).digest("hex")}`;
     const output = raw !== null && raw !== undefined && typeof raw === "object" && !Array.isArray(raw)
       ? (raw as Record<string, unknown>)
       : { value: raw };

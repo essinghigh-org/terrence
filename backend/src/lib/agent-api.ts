@@ -41,12 +41,14 @@ export function agentApiBaseUrl(request: { readonly headers: { readonly get: (na
     }
     return parsed.origin;
   }
-  // Forwarded headers are attacker-controlled unless the socket peer is
-  // authenticated by the trusted-proxy layer. Prefer the direct Host header;
-  // deployments behind a proxy should set PUBLIC_URL for stable artifact URLs.
-  const proto = "https";
-  const host = request.headers.get("host") ?? "localhost";
-  return `${proto}://${host}`;
+  // A Host header is attacker-controlled. Only use a loopback host for local
+  // development/test; deployed instances must configure their public origin.
+  if (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test") {
+    const host = request.headers.get("host") ?? "localhost";
+    if (/^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/.test(host)) return `http://${host}`;
+    return "http://localhost";
+  }
+  throw new Error("PUBLIC_URL must be configured for agent artifact URLs");
 }
 
 // --- Terraform release info (upstream URL + sha256, cached) -----------------

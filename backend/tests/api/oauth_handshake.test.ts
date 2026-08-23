@@ -81,24 +81,35 @@ describe("VCS OAuth handshakes", () => {
   const providerRequests: { path: string; authorization: string | null; body: string }[] = [];
   let provider: ReturnType<typeof Bun.serve>;
   let clientId = "";
-  const previousPrivateVcsUrls = process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS;
+  let privateVcsUrlLock: Promise<void> = Promise.resolve();
+  const withPrivateVcsUrls = async <T>(operation: () => Promise<T>): Promise<T> => {
+    let release!: () => void;
+    const waiting = privateVcsUrlLock;
+    privateVcsUrlLock = new Promise<void>((resolve): void => { release = resolve; });
+    await waiting;
+    const previous = process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS;
+    process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS = "1";
+    try {
+      return await operation();
+    } finally {
+      if (previous === undefined) delete process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS;
+      else process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS = previous;
+      release();
+    }
+  };
 
   const request = (
     path: string,
     auth: string | null = apiToken,
     accept?: string,
-  ): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
+  ): Promise<Response> => withPrivateVcsUrls(() => app.handle(new Request(`http://terrence.test${path}`, {
       headers: {
         ...(auth === null ? {} : { Authorization: `Bearer ${auth}` }),
         ...(accept === undefined ? {} : { Accept: accept }),
       },
-    }));
+    })));
 
   beforeAll(async () => {
-    // The provider is an in-process loopback server; keep the production SSRF
-    // guard enabled everywhere else while explicitly allowing this fixture.
-    process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS = "1";
     provider = Bun.serve({
       port: 0,
       fetch: async (request: Request): Promise<Response> => {
@@ -176,7 +187,7 @@ describe("VCS OAuth handshakes", () => {
     ]);
 
     const providerBase = `http://${provider.hostname}:${provider.port}`;
-    const createResponse = await app.handle(new Request(
+    const createResponse = await withPrivateVcsUrls(() => app.handle(new Request(
       `http://terrence.test/api/v2/organizations/${orgName}/oauth-clients`,
       {
         method: "POST",
@@ -201,7 +212,7 @@ describe("VCS OAuth handshakes", () => {
           },
         }),
       },
-    ));
+    )));
     expect(createResponse.status).toBe(201);
     const created = await createResponse.json();
     clientId = created.data.id;
@@ -214,8 +225,6 @@ describe("VCS OAuth handshakes", () => {
 
   afterAll(async () => {
     await provider.stop(true);
-    if (previousPrivateVcsUrls === undefined) delete process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS;
-    else process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS = previousPrivateVcsUrls;
     await db.delete(oauthClients).where(eq(oauthClients.orgId, orgId));
     await db.delete(apiTokens).where(eq(apiTokens.userId, userId));
     await db.delete(apiTokens).where(eq(apiTokens.userId, otherUserId));

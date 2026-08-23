@@ -431,7 +431,13 @@ describe("Terraform cloud protocol contract", () => {
         { method: "POST", headers: authHeaders },
       );
       expect(actionResponse.status).toBe(202);
-      expect((await db.query.runs.findFirst({ where: eq(runs.id, runId) }))?.status).toBe(status);
+      let observed: string | undefined;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        observed = (await db.query.runs.findFirst({ where: eq(runs.id, runId) }))?.status;
+        if (observed === status) break;
+        await Bun.sleep(5);
+      }
+      expect(observed).toBe(status);
     }
   });
 

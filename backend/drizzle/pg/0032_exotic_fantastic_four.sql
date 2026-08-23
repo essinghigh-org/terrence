@@ -1,0 +1,1 @@
+ALTER TABLE "agent_jobs" ADD COLUMN "requeue_attempts" bigint DEFAULT 0 NOT NULL;

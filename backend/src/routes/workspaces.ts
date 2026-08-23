@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db, rawQueryAll } from "../db";
 import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, runs, configurationVersions, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, variableSets, variableSetWorkspaces, type users } from "../db/schema";
-import { eq, and, asc, desc, count, inArray, isNull, like, notInArray, sql } from "drizzle-orm";
+import { eq, and, asc, desc, count, inArray, isNull, like, notInArray, or, sql } from "drizzle-orm";
 import {
   workspaceResource,
   workspaceOutputResources,
@@ -1004,13 +1004,16 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const org = await cachedOrgById(ws.orgId);
-    const currentResource = await workspaceResource(
-      ws,
-      org?.defaultIacBinary,
-      await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
-      { orgName: org?.name ?? null },
-    );
-    if (!ifMatchSatisfied(request, { data: currentResource })) { (set as { status: number }).status = 412; return { errors: [{ status: "412", title: "Precondition Failed" }] }; }
+    const ifMatch = request.headers.get("if-match");
+    if (ifMatch !== null && ifMatch.trim() !== "*") {
+      const currentResource = await workspaceResource(
+        ws,
+        org?.defaultIacBinary,
+        await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+        { orgName: org?.name ?? null },
+      );
+      if (!ifMatchSatisfied(request, { data: currentResource })) { (set as { status: number }).status = 412; return { errors: [{ status: "412", title: "Precondition Failed" }] }; }
+    }
     return updateWorkspaceResponse(
       ws,
       org?.defaultIacBinary,
@@ -1324,7 +1327,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       lockedReason: lockReason.reason,
       lockOwnerType: principal.type,
       lockOwnerId: principal.id,
-    }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, false))).returning({ id: workspaces.id });
+    }).where(and(eq(workspaces.id, workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
     if (locked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is already locked" }] }; }
     await auditLog("lock", "workspaces", workspaceId, user?.id ?? null, ws.orgId, teamId !== null && teamId !== undefined ? { teamId } : undefined);
     const org = await cachedOrgById(ws.orgId);

@@ -82,10 +82,11 @@ describe("team token workspace authorization", () => {
   };
 
   const waitForWorkspaceUnlock = async (): Promise<void> => {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
+    for (let attempt = 0; attempt < 500; attempt += 1) {
       if ((await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId), columns: { locked: true } }))?.locked !== true) return;
       await Bun.sleep(10);
     }
+    throw new Error("Workspace remained locked after waiting for worker completion");
   };
 
   const responseData = async <T>(response: Readonly<Response>): Promise<T> => {

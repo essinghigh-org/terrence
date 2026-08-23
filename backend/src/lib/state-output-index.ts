@@ -9,13 +9,13 @@ export function stateOutputIndexRows(
   jsonState: string | null,
   statePayload: string | null,
 ): (typeof stateOutputIndex.$inferInsert)[] {
-  const parsed = parseStatePayload(jsonState ?? statePayload);
+  const parsed = parseStatePayload(statePayload ?? jsonState);
   const isBareOutputs = parsed !== null
     && !["version", "terraform_version", "serial", "lineage", "resources", "check_results", "outputs"].some((key): boolean => key in parsed);
   const outputs = parsed?.outputs ?? (statePayload === null && isBareOutputs ? parsed : undefined);
   if (outputs === null || outputs === undefined || typeof outputs !== "object" || Array.isArray(outputs)) return [];
   return Object.keys(outputs).map((name): typeof stateOutputIndex.$inferInsert => ({
-    outputId: `wsout-${createHash("sha256").update(`${stateVersionId}\0${name}`).digest("hex").slice(0, 16)}`,
+    outputId: `wsout-${createHash("sha256").update(`${stateVersionId}\0${name}`).digest("hex")}`,
     stateVersionId,
     workspaceId,
     name,
@@ -32,5 +32,5 @@ export async function insertStateOutputIndex(
 ): Promise<void> {
   const rows = stateOutputIndexRows(stateVersionId, workspaceId, jsonState, statePayload);
   if (rows.length === 0) return;
-  await (tx as typeof db).insert(stateOutputIndex).values(rows);
+  await (tx as typeof db).insert(stateOutputIndex).values(rows).onConflictDoNothing();
 }

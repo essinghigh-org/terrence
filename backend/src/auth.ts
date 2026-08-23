@@ -274,8 +274,19 @@ export const authPlugin = new Elysia({ name: "auth" })
   .macro({
     isAuth(value: boolean): Record<string, unknown> {
       return {
-        beforeHandle({ user: _, token, systemToken, set }: { readonly user?: unknown; readonly token?: unknown; readonly systemToken?: unknown; readonly set: Readonly<{ status: number }> }): Record<string, unknown> | undefined {
+        beforeHandle({ user: _, token, set }: { readonly user?: unknown; readonly token?: unknown; readonly set: Readonly<{ status: number }> }): Record<string, unknown> | undefined {
 
+          if (!value) return;
+          if (token === null || token === undefined) {
+            (set as { status: number }).status = 401;
+            return { errors: [{ status: "401", title: "Unauthorized" }] };
+          }
+        },
+      };
+    },
+    systemAuth(value: boolean): Record<string, unknown> {
+      return {
+        beforeHandle({ token, systemToken, set }: { readonly token?: unknown; readonly systemToken?: unknown; readonly set: Readonly<{ status: number }> }): Record<string, unknown> | undefined {
           if (!value) return;
           if ((token === null || token === undefined) && (systemToken === null || systemToken === undefined)) {
             (set as { status: number }).status = 401;

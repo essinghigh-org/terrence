@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "../../db";
 import {
   projects,
@@ -15,6 +15,7 @@ import {
   workspaceIdsForPermission,
   lockPrincipal,
   ownsWorkspaceLock,
+  promoteIntermediateStateVersion,
 } from "../utils";
 import { validateVersion } from "../utils";
 import { isExecutionMode } from "../constants";
@@ -326,7 +327,7 @@ export const workspaceTools: readonly McpTool[] = [
         lockedReason: reason === "" ? null : reason,
         lockOwnerType: principal.type,
         lockOwnerId: principal.id,
-      }).where(and(eq(workspaces.id, wsId), eq(workspaces.locked, false))).returning({ id: workspaces.id });
+      }).where(and(eq(workspaces.id, wsId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
       if (locked.length === 0) return toolBadRequest("Workspace is already locked");
       return { id: wsId, locked: true, lockedReason: reason === "" ? null : reason };
     },
@@ -357,6 +358,7 @@ export const workspaceTools: readonly McpTool[] = [
         eq(workspaces.lockOwnerId, principal.id),
       )).returning({ id: workspaces.id });
       if (unlocked.length === 0) return toolError("Workspace lock changed while unlocking");
+      await promoteIntermediateStateVersion(wsId);
       return { id: wsId, locked: false };
     },
   },

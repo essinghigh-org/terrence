@@ -4,7 +4,7 @@ import { configurationVersions, runs, type users } from "../db/schema";
 import { eq, count, desc, and, inArray, notInArray, isNull, lt, or } from "drizzle-orm";
 import { apiURL, signedApiURL, validSignedApiURL, FINAL_RUN_STATUSES, findAuthorizedWorkspace, pageRequest, pagination , type DeepReadonly } from "../lib/utils";
 import { join } from "path";
-import { mkdir, rm } from "fs/promises";
+import { mkdir, rm, rename } from "fs/promises";
 import { authPlugin } from "../auth";
 import { assertArchiveExpandedSize } from "../lib/archive";
 import { persistUploadBody } from "../lib/upload-body";
@@ -136,6 +136,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
       ingressAttributes: null,
       statusTimestamps: null,
       uploadClaimExpiresAt: null,
+      uploadClaimToken: null,
       error: null,
       errorMessage: null,
       softDeletedAt: null,
@@ -185,44 +186,66 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
         lt(configurationVersions.uploadClaimExpiresAt, Date.now()),
       ),
     );
+    const claimToken = crypto.randomUUID();
+    const tarPath = join(CV_STORAGE_DIR, `config-${cvId}-${claimToken}.tar.gz`);
+    const temporaryPath = `${tarPath}.tmp`;
     const claim = await db.update(configurationVersions)
-      .set({ uploadClaimExpiresAt: Date.now() + UPLOAD_CLAIM_TTL_MS })
+      .set({ uploadClaimExpiresAt: Date.now() + UPLOAD_CLAIM_TTL_MS, uploadClaimToken: claimToken })
       .where(claimFilter)
       .returning({ id: configurationVersions.id });
     if (claim.length === 0) {
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "An upload for this configuration version is already in progress" }] };
     }
-    const tarName = `config-${cvId}.tar.gz`;
-    const tarPath = join(CV_STORAGE_DIR, tarName);
-    await mkdir(CV_STORAGE_DIR, { recursive: true });
     try {
-      const size = await persistUploadBody(body, request, tarPath, 100 * 1024 * 1024);
+      await mkdir(CV_STORAGE_DIR, { recursive: true });
+      const size = await persistUploadBody(body, request, temporaryPath, 100 * 1024 * 1024);
       if (size === 0) throw new Error("empty");
     } catch (error: unknown) {
-      await rm(tarPath, { force: true });
-      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null }).where(eq(configurationVersions.id, cvId));
+      await rm(temporaryPath, { force: true });
+      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null, uploadClaimToken: null }).where(and(eq(configurationVersions.id, cvId), eq(configurationVersions.uploadClaimToken, claimToken)));
       const tooLarge = (error instanceof Error && error.message === "too-large")
         || Number(request.headers.get("content-length")) > 100 * 1024 * 1024;
       (set as { status: number }).status = tooLarge ? 413 : 400;
       return { errors: [{ status: String(tooLarge ? 413 : 400), title: tooLarge ? "Payload Too Large" : "Bad Request", detail: tooLarge ? "Configuration archive exceeds 100 MiB maximum" : "Could not read configuration archive body" }] };
     }
     try {
-      await assertArchiveExpandedSize(tarPath);
+      await assertArchiveExpandedSize(temporaryPath);
     } catch (error: unknown) {
-      await rm(tarPath, { force: true });
-      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null }).where(eq(configurationVersions.id, cvId));
+      await rm(temporaryPath, { force: true });
+      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null, uploadClaimToken: null }).where(and(eq(configurationVersions.id, cvId), eq(configurationVersions.uploadClaimToken, claimToken)));
       const expanded = error instanceof Error && /expands beyond|contents exceed/i.test(error.message);
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: expanded ? "Configuration archive expands beyond the permitted size" : "Configuration archive is not a valid gzip tar archive" }] };
     }
+    const claimStillActive = await db.query.configurationVersions.findFirst({
+      where: and(
+        eq(configurationVersions.id, cvId),
+        eq(configurationVersions.status, "pending"),
+        isNull(configurationVersions.archivePath),
+        eq(configurationVersions.uploadClaimToken, claimToken),
+      ),
+      columns: { id: true },
+    });
+    if (claimStillActive === undefined) {
+      await rm(temporaryPath, { force: true });
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] };
+    }
+    await rename(temporaryPath, tarPath);
     const uploadedAt = new Date().toISOString();
     const finalized = await db.update(configurationVersions).set({
       archivePath: tarPath,
       status: "uploaded",
       uploadClaimExpiresAt: null,
+      uploadClaimToken: null,
       statusTimestamps: { ...(cv.statusTimestamps ?? {}), uploadedAt },
-    }).where(and(eq(configurationVersions.id, cvId), eq(configurationVersions.status, "pending"), isNull(configurationVersions.archivePath))).returning({ id: configurationVersions.id });
+    }).where(and(
+      eq(configurationVersions.id, cvId),
+      eq(configurationVersions.status, "pending"),
+      isNull(configurationVersions.archivePath),
+      eq(configurationVersions.uploadClaimToken, claimToken),
+    )).returning({ id: configurationVersions.id });
     if (finalized.length === 0) {
       // Another request finalized between our claim and write; ours loses.
       await rm(tarPath, { force: true });

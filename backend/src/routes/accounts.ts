@@ -85,6 +85,7 @@ type AuthReqCtx = Readonly<{
   tokenError?: string | null;
   params?: Readonly<Record<string, string | undefined>>;
   request?: RequestInfo;
+  server?: unknown;
   body?: unknown;
   set: SetObj;
 }>;
@@ -114,9 +115,10 @@ function setRefreshCookie(
   request: RequestInfo | undefined,
   token: string,
   expiresAt: number,
+  server?: unknown,
 ): void {
   const maxAge = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
-  const secure = secureRequest(request) ? "; Secure" : "";
+  const secure = secureRequest(request, server) ? "; Secure" : "";
   const value = `${REFRESH_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${String(maxAge)}${secure}`;
   // Elysia (via Bun) joins array Set-Cookie values with ", " into a single
   // header. That is invalid for Set-Cookie when any value contains a comma
@@ -128,8 +130,8 @@ function setRefreshCookie(
   (set.headers as Record<string, string | number>)["Set-Cookie"] = value;
 }
 
-function clearRefreshCookie(set: SetObj, request: RequestInfo | undefined): void {
-  const secure = secureRequest(request) ? "; Secure" : "";
+function clearRefreshCookie(set: SetObj, request: RequestInfo | undefined, server?: unknown): void {
+  const secure = secureRequest(request, server) ? "; Secure" : "";
   // Same Bun/Elysia issue as setRefreshCookie: array Set-Cookie with Expires
   // (which contains a comma) is joined into one header and Firefox rejects
   // it. Only Max-Age=0 is needed; omit Expires and only clear Path=/.
@@ -147,6 +149,7 @@ function clearRefreshCookie(set: SetObj, request: RequestInfo | undefined): void
 export async function revokeBrowserSession(
   set: SetObj,
   request: RequestInfo | undefined,
+  server?: unknown,
 ): Promise<boolean> {
   const candidates = refreshCookieCandidates(request);
   if (candidates.length === 0) return false;
@@ -159,7 +162,7 @@ export async function revokeBrowserSession(
       if (current === undefined) continue;
       if (await revokeRefreshFamily(current.familyId, current.userId)) revoked = true;
     }
-    if (revoked) clearRefreshCookie(set, request);
+    if (revoked) clearRefreshCookie(set, request, server);
     return revoked;
   });
 }
@@ -300,7 +303,7 @@ export async function issueLoginSession(
       mfaVerified,
     });
   });
-  setRefreshCookie(set, request, refreshToken, refreshExpiresAt);
+  setRefreshCookie(set, request, refreshToken, refreshExpiresAt, server);
   return accessTokenDocument(tokenId, tokenStr, user, accessExpiresAt);
 }
 
@@ -358,9 +361,10 @@ function refreshUnauthorized(
   set: SetObj,
   request: RequestInfo | undefined,
   detail: string,
+  server?: unknown,
 ): Record<string, unknown> {
   (set as { status: number }).status = 401;
-  clearRefreshCookie(set, request);
+  clearRefreshCookie(set, request, server);
   return { errors: [{ status: "401", title: "Unauthorized", detail }] };
 }
 
@@ -630,10 +634,10 @@ export const accountRoutes = new Elysia({ name: "accounts" })
 
     return issueLoginSession(user, browserSession, set, request, server, true);
   })
-  .post("/api/v2/users/refresh", async ({ request, set }: ReqCtx): Promise<unknown> => {
+  .post("/api/v2/users/refresh", async ({ request, server, set }: ReqCtx): Promise<unknown> => {
     const candidates = refreshCookieCandidates(request);
     if (candidates.length === 0) {
-      return refreshUnauthorized(set, request, "Refresh session is missing");
+      return refreshUnauthorized(set, request, "Refresh session is missing", server);
     }
     return withRefreshRotationLock(async (): Promise<unknown> => {
       const seen = new Map<string, typeof refreshSessions.$inferSelect>();
@@ -702,7 +706,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
           }
           if (current.familyId !== liveFamilyId) {
             await revokeRefreshFamily(current.familyId, current.userId, now);
-            return refreshUnauthorized(set, request, "Refresh token reuse detected");
+            return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
           }
           continue;
         }
@@ -712,7 +716,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         const user = await db.query.users.findFirst({ where: eq(users.id, current.userId) });
         if (user === undefined) {
           await revokeRefreshFamily(current.familyId, current.userId, now);
-          return refreshUnauthorized(set, request, "Refresh session is invalid");
+          return refreshUnauthorized(set, request, "Refresh session is invalid", server);
         }
 
         const accessToken = opaqueToken("user");
@@ -801,10 +805,10 @@ export const accountRoutes = new Elysia({ name: "accounts" })
             }
           }
           await revokeRefreshFamily(current.familyId, current.userId, now);
-          return refreshUnauthorized(set, request, "Refresh token reuse detected");
+          return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
         }
 
-        setRefreshCookie(set, request, refreshToken, current.expiresAt);
+        setRefreshCookie(set, request, refreshToken, current.expiresAt, server);
         return accessTokenDocument(accessTokenId, accessToken, user, accessExpiresAt);
       }
 
@@ -814,10 +818,10 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       const reuse = [...seen.values()].find((row): boolean => row.rotatedAt !== null) ?? null;
       if (reuse !== null) {
         await revokeRefreshFamily(reuse.familyId, reuse.userId, now);
-        return refreshUnauthorized(set, request, "Refresh token reuse detected");
+        return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
       }
       if ([...seen.values()].some((row): boolean => row.revokedAt !== null || row.expiresAt <= now)) {
-        return refreshUnauthorized(set, request, "Refresh session expired");
+        return refreshUnauthorized(set, request, "Refresh session expired", server);
       }
       // Tokens not found in DB (seen miss) — fill the map for them too
       // so the error classification above could consider them; otherwise
@@ -832,16 +836,16 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         seen.set(key, row);
         if (row.rotatedAt !== null) {
           await revokeRefreshFamily(row.familyId, row.userId, now);
-          return refreshUnauthorized(set, request, "Refresh token reuse detected");
+          return refreshUnauthorized(set, request, "Refresh token reuse detected", server);
         }
         if (row.revokedAt !== null || row.expiresAt <= now) {
-          return refreshUnauthorized(set, request, "Refresh session expired");
+          return refreshUnauthorized(set, request, "Refresh session expired", server);
         }
       }
-      return refreshUnauthorized(set, request, "Refresh session is invalid");
+      return refreshUnauthorized(set, request, "Refresh session is invalid", server);
     });
   })
-  .post("/api/v2/users/logout", async ({ request, set }: ReqCtx): Promise<unknown> => {
+  .post("/api/v2/users/logout", async ({ request, server, set }: ReqCtx): Promise<unknown> => {
     const candidates = refreshCookieCandidates(request);
     if (candidates.length > 0) {
       await withRefreshRotationLock(async (): Promise<void> => {
@@ -853,7 +857,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         }
       });
     }
-    clearRefreshCookie(set, request);
+    clearRefreshCookie(set, request, server);
     (set as { status: number }).status = 204;
     return undefined;
   })
@@ -981,7 +985,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     (set as { status: number }).status = 204;
     return undefined;
   })
-  .delete("/api/v2/account/sessions/:family_id", async ({ params, request, user, token, set }: AuthReqCtx): Promise<unknown> => {
+  .delete("/api/v2/account/sessions/:family_id", async ({ params, request, server, user, token, set }: AuthReqCtx): Promise<unknown> => {
     const familyId = params?.family_id ?? "";
     if (user === null || user === undefined || familyId === "") {
       (set as { status: number }).status = 404;
@@ -1007,7 +1011,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    if (current) clearRefreshCookie(set, request);
+    if (current) clearRefreshCookie(set, request, server);
     (set as { status: number }).status = 204;
     return undefined;
   })

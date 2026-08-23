@@ -117,7 +117,7 @@ async function seedOrgFixtures(s: ScopedSeed, opts: { tags?: boolean; includeUse
   if (opts.includeUsers === true) {
     await db.insert(organizationMemberships).values({ id: `fg-rate-mem-${s.suffix}`, userId: `fg-rate-${s.suffix}`, orgId: s.orgId, role: "owner" });
   }
-  await db.insert(apiTokens).values({ id: s.adminTokenId, token: s.adminToken, userId: s.userId });
+  await db.insert(apiTokens).values({ id: s.adminTokenId, token: createHash("sha256").update(s.adminToken).digest("hex"), userId: s.userId });
   await db.insert(projects).values([
     { id: s.projectA, orgId: s.orgId, name: "proj-a" },
     { id: s.projectB, orgId: s.orgId, name: "proj-b" },

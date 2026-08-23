@@ -221,8 +221,7 @@ function secureOidcEndpoint(value: string, issuer?: string): boolean {
     if (url.username !== "" || url.password !== "") return false;
     if (issuer === undefined) {
       const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-      const loopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-      return url.protocol === "https:" || (url.protocol === "http:" && loopback);
+      return url.protocol === "https:" || (url.protocol === "http:" && loopbackHost(hostname));
     }
     const issuerUrl = new URL(issuer);
     const issuerHost = issuerUrl.hostname.replace(/^\[|\]$/g, "").toLowerCase();
@@ -233,8 +232,7 @@ function secureOidcEndpoint(value: string, issuer?: string): boolean {
     if (url.protocol === "https:") return true;
     if (url.protocol !== "http:") return false;
     // Plain HTTP is only acceptable for loopback issuers (local testing).
-    const loopback = (host: string): boolean => host === "localhost" || host === "127.0.0.1" || host === "::1";
-    return issuerUrl.protocol === "http:" && loopback(issuerHost) && loopback(hostname);
+    return issuerUrl.protocol === "http:" && loopbackHost(issuerHost) && loopbackHost(hostname);
   } catch {
     return false;
   }

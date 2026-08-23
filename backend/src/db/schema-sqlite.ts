@@ -472,6 +472,7 @@ export const configurationVersions = sqliteTable("configuration_versions", {
   // simultaneous signed PUTs cannot race. Claim expires so a crashed
   // upload cannot wedge the version permanently.
   uploadClaimExpiresAt: integer("upload_claim_expires_at"),
+  uploadClaimToken: text("upload_claim_token"),
   error: text("error"),
   errorMessage: text("error_message"),
   softDeletedAt: integer("soft_deleted_at"),
@@ -1577,6 +1578,7 @@ export const agentJobs = sqliteTable("agent_jobs", {
   status: text("status").notNull().default("queued"), // 'queued', 'claimed', 'completed', 'errored'
   result: text("result", { mode: "json" }).$type<Record<string, unknown>>(),
   errorMessage: text("error_message"),
+  requeueAttempts: integer("requeue_attempts").notNull().default(0),
   claimedAt: integer("claimed_at"),
   completedAt: integer("completed_at"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),

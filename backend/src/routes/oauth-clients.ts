@@ -42,13 +42,17 @@ async function oauthFetch(oc: OcItem, url: string, init?: RequestInit): Promise<
   const destination = await resolveExternalUrl(url, envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS));
   if ("error" in destination) return new Response(destination.error, { status: 422 });
   const headers = Object.fromEntries(new Headers(init?.headers).entries());
-  const body = init?.body === undefined
+  const rawBody = init?.body;
+  if (rawBody !== undefined && rawBody !== null
+    && typeof rawBody !== "string"
+    && !(rawBody instanceof URLSearchParams)) {
+    return new Response("Unsupported request body", { status: 422 });
+  }
+  const body = rawBody === undefined || rawBody === null
     ? undefined
-    : typeof init.body === "string"
-      ? init.body
-      : init.body instanceof URLSearchParams
-        ? init.body.toString()
-        : String(init.body);
+    : typeof rawBody === "string"
+      ? rawBody
+      : rawBody.toString();
   const requestInit: { method: string; headers: Record<string, string>; timeoutMs: number; maxResponseBytes: number; body?: string } = {
     method: init?.method ?? "GET",
     headers,

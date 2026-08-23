@@ -44,6 +44,7 @@ const MAX_AGENT_FILESYSTEM_BYTES = 100 * 1024 * 1024;
 const MAX_FORWARDED_RESPONSE_BASE64_BYTES = Math.ceil(10 * 1024 * 1024 * 4 / 3) + 8;
 const DEFAULT_AGENT_ACCEPT = "plan,apply,policy,assessment,stack_prepare,stack_plan,stack_apply,source_bundle,stack_aggregate_outputs,test";
 const AGENT_WORKLOAD_TYPES = `${DEFAULT_AGENT_ACCEPT},ingress`.split(",");
+const AGENT_ARCHITECTURES = new Set(["amd64", "aarch64", "arm64", "386", "arm"]);
 
 async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
   const { job, run } = claimed;
@@ -65,14 +66,14 @@ async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
       ? { ...(current.statusTimestamps as Record<string, string>), [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() }
       : { [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() };
     await t.update(runs).set({ status: queuedStatus, statusTimestamps: timestamps }).where(and(eq(runs.id, run.id), eq(runs.status, job.phase === "plan" ? "planning" : "applying")));
+    if (job.phase === "apply") {
+      await t.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
+        eq(workspaces.locked, true),
+        eq(workspaces.lockOwnerType, "agent-run"),
+        eq(workspaces.lockOwnerId, run.id),
+      ));
+    }
   });
-  if (job.phase === "apply") {
-    await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
-      eq(workspaces.locked, true),
-      eq(workspaces.lockOwnerType, "agent-run"),
-      eq(workspaces.lockOwnerId, run.id),
-    ));
-  }
 }
 
 type AgentCtx = Readonly<{
@@ -224,7 +225,7 @@ async function configurationArchivePath(cvId: string): Promise<string> {
  * archives carry a top-level repo directory (git archive layout), so flatten
  * the archive once and cache it under storage/agent-cv/<cvId>.tar.gz.
  */
-async function flattenedConfigurationArchive(cvId: string): Promise<string> {
+async function flattenedConfigurationArchive(cvId: string, sourcePath?: string): Promise<string> {
   const cacheDir = join(storageRoot(), "agent-cv");
   const cached = join(cacheDir, `${cvId}.tar.gz`);
   try {
@@ -233,7 +234,7 @@ async function flattenedConfigurationArchive(cvId: string): Promise<string> {
   } catch {
     // not cached yet
   }
-  const source = await configurationArchivePath(cvId);
+    const source = sourcePath ?? await configurationArchivePath(cvId);
   const tmp = await mkdtemp(join(storageRoot(), ".agent-cv-"));
   try {
     const extract = Bun.spawnSync(["tar", "-xzf", source, "-C", tmp]);
@@ -303,9 +304,9 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
     }
     const name = typeof body.name === "string" && body.name !== "" ? body.name : "agent";
     const arch = typeof body.arch === "string" ? body.arch : null;
-    if (arch !== null && !new Set(["amd64", "arm64", "386", "arm"]).has(arch)) {
+    if (arch !== null && !AGENT_ARCHITECTURES.has(arch)) {
       set.status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "arch must be amd64, arm64, 386, or arm" }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "arch must be amd64, aarch64, arm64, 386, or arm" }] };
     }
     const version = ctx.request.headers.get("tfc-agent-version");
     const accept = typeof body.accept === "string" && body.accept !== "" ? body.accept : DEFAULT_AGENT_ACCEPT;
@@ -728,7 +729,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     try {
-      const data = await readFile(await flattenedConfigurationArchive(cvId));
+      const data = await readFile(await flattenedConfigurationArchive(cvId, configuration.archivePath));
       set.headers = { "content-type": "application/gzip", "content-length": String(data.byteLength) };
       return new Response(data);
     } catch {

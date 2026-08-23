@@ -1,5 +1,5 @@
 import { hashAuthenticationToken } from "./token-service";
-import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   agentJobs,
@@ -96,6 +96,7 @@ const AGENT_PING_WRITE_INTERVAL_MS = 15_000;
 // Lower bound so an operator-shrunk timeout cannot drive the write
 // interval to something pathological (sub-second DB writes).
 const MIN_PING_WRITE_INTERVAL_MS = 3_000;
+const MAX_INVALID_COMPLETION_REQUEUES = 3;
 
 export function configuredHeartbeatTimeoutMs(): number {
   const configured = Number(
@@ -554,6 +555,7 @@ export async function claimAgentJob(
   const agentBinaries = agent.iacBinaries !== null && agent.iacBinaries.length > 0
     ? agent.iacBinaries
     : ["terraform"];
+  const skippedApplyJobIds = new Set<string>();
 
   for (let attempts = 0; attempts < 10; attempts += 1) {
     const candidate = await db.query.agentJobs.findFirst({
@@ -562,6 +564,7 @@ export async function claimAgentJob(
         eq(agentJobs.status, "queued"),
         inArray(agentJobs.phase, [...acceptedPhases]),
         inArray(agentJobs.iacBinary, agentBinaries),
+        ...(skippedApplyJobIds.size > 0 ? [notInArray(agentJobs.id, [...skippedApplyJobIds])] : []),
       ),
       orderBy: [asc(agentJobs.createdAt)],
     });
@@ -601,8 +604,9 @@ export async function claimAgentJob(
         lockedReason: `Run ${candidate.runId} is applying`,
         lockOwnerType: "agent-run",
         lockOwnerId: candidate.runId,
-      }).where(and(eq(workspaces.id, run.workspaceId), eq(workspaces.locked, false))).returning({ id: workspaces.id });
+      }).where(and(eq(workspaces.id, run.workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
       if (locked.length === 0) {
+        skippedApplyJobIds.add(candidate.id);
         await db.update(agentJobs).set({ agentId: null, status: "queued", claimedAt: null }).where(and(
           eq(agentJobs.id, candidate.id),
           eq(agentJobs.status, "claimed"),
@@ -747,6 +751,7 @@ export async function insertAgentApplyJobTx(
     claimedAt: null,
     completedAt: null,
     createdAt: Date.now(),
+    requeueAttempts: 0,
   };
   await database.insert(agentJobs).values(job);
   const updated = await database.update(runs).set({
@@ -788,13 +793,27 @@ export async function completeAgentJob(
     });
     if (job === undefined) return undefined;
     const run = await tx.query.runs.findFirst({ where: eq(runs.id, job.runId) });
+    const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
     const requeueInvalidCompletion = async (reason: string): Promise<void> => {
-      await tx.update(agentJobs).set({
-        status: "queued",
+      const requeueAttempts = job.requeueAttempts + 1;
+      const terminal = requeueAttempts >= MAX_INVALID_COMPLETION_REQUEUES;
+      const updatedJobs = await tx.update(agentJobs).set({
+        status: terminal ? "canceled" : "queued",
         agentId: null,
         claimedAt: null,
+        completedAt: terminal ? Date.now() : null,
         errorMessage: reason,
-      }).where(and(eq(agentJobs.id, job.id), eq(agentJobs.agentId, agentId), eq(agentJobs.status, "claimed")));
+        requeueAttempts,
+      }).where(and(eq(agentJobs.id, job.id), eq(agentJobs.agentId, agentId), eq(agentJobs.status, "claimed"))).returning({ id: agentJobs.id });
+      if (updatedJobs.length === 0) return;
+      const nextRunStatus = terminal ? "errored" : job.phase === "plan" ? "plan_queued" : "apply_queued";
+      if (run !== undefined) {
+        await tx.update(runs).set({
+          agentId: null,
+          status: nextRunStatus,
+          statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus),
+        }).where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus)));
+      }
       if (job.phase === "apply" && run !== undefined) {
         await tx.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
           eq(workspaces.id, run.workspaceId),
@@ -805,7 +824,6 @@ export async function completeAgentJob(
       }
       await tx.update(agents).set({ status: "idle", lastPingAt: Date.now() }).where(eq(agents.id, agentId));
     };
-    const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
     if (run?.status !== expectedRunStatus) {
       await requeueInvalidCompletion("Run changed before agent completion");
       return undefined;

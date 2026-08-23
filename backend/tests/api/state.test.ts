@@ -108,12 +108,13 @@ describe("the reference format API v2 - State Versions & Locking", () => {
   });
 
   it("should create a state version", async () => {
-    await app.handle(
+    const lockResponse = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
         method: "POST",
         headers: { "Authorization": `Bearer ${userToken}` },
       }),
     );
+    expect(lockResponse.status).toBe(200);
     const rawState = JSON.stringify({ version: 4, serial: 1, terraform_version: "1.5.0", resources: [] });
     const response = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {

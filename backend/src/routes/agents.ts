@@ -13,7 +13,7 @@ import {
   type users,
 } from "../db/schema";
 import { and, eq, inArray } from "drizzle-orm";
-import { checkOrganizationPermission, decodeStatePayload, type DeepReadonly, auditLog, strictAuditEnabled } from "../lib/utils";
+import { checkOrganizationPermission, type DeepReadonly, auditLog, strictAuditEnabled } from "../lib/utils";
 import { organizationName } from "../lib/response";
 import { hashAuthenticationToken } from "../lib/token-service";
 import { authPlugin } from "../auth";
@@ -33,6 +33,7 @@ import { isStackStoragePath } from "../lib/stack-worker";
 import { refetchConfigurationVersion } from "../lib/webhooks";
 import type { PlanJson } from "../lib/plan-json";
 import { cachedOrgByName } from "../lib/cached-lookups";
+import { decodeStatePayload } from "../lib/validation";
 
 const MAX_AGENT_PLAN_JSON_BYTES = 16 * 1024 * 1024;
 

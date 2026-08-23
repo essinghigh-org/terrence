@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { db } from "../db";
 import { stateOutputIndex, stateVersions, workspaces, runs, organizationMemberships, teams, type users } from "../db/schema";
 import { eq, and, desc, count, inArray } from "drizzle-orm";
@@ -55,18 +55,26 @@ async function withStateSerialRetry<T>(operation: () => Promise<T>): Promise<T> 
   throw new Error("State serial allocation failed");
 }
 
+type BodyTextResult = Readonly<{ ok: true; text: string } | { ok: false; reason: "too-large" | "empty" }>;
+
 async function requestBodyText(
   body: unknown,
   request: Request,
-): Promise<string> {
+): Promise<BodyTextResult> {
   const uploadDir = join(storageDir, "state-uploads");
   const path = join(uploadDir, `state-${crypto.randomUUID()}.json`);
   await mkdir(uploadDir, { recursive: true });
   try {
-    await persistUploadBody(body, request, path, MAX_IMPORTED_STATE_BYTES);
+    try {
+      await persistUploadBody(body, request, path, MAX_IMPORTED_STATE_BYTES);
+    } catch (error: unknown) {
+      if (error instanceof Error && error.message === "too-large") return { ok: false, reason: "too-large" };
+      if (error instanceof Error && error.message === "empty") return { ok: false, reason: "empty" };
+      throw error;
+    }
     // The upload is already bounded on disk; JSON parsing needs the complete
     // document, so this single read cannot exceed MAX_IMPORTED_STATE_BYTES.
-    return await readFile(path, "utf8");
+    return { ok: true, text: await readFile(path, "utf8") };
   } finally {
     await rm(path, { force: true });
   }
@@ -308,7 +316,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const stateVersionOutputId = params.state_version_output_id ?? "";
-    if (!/^wsout-[a-f0-9]{16}$/.test(stateVersionOutputId)) {
+    if (!/^wsout-[a-f0-9]{64}$/.test(stateVersionOutputId)) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const indexed = await db.query.stateOutputIndex.findFirst({ where: eq(stateOutputIndex.outputId, stateVersionOutputId) });
@@ -419,7 +427,12 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (sv.status !== "pending" || (typeof sv.statePayload === "string" && sv.statePayload !== "")) {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State content was already uploaded" }] };
     }
-    const rawState = await requestBodyText(body, request);
+    const rawStateResult = await requestBodyText(body, request);
+    if (!rawStateResult.ok) {
+      (set as { status: number }).status = rawStateResult.reason === "too-large" ? 413 : 400;
+      return { errors: [{ status: String(rawStateResult.reason === "too-large" ? 413 : 400), title: rawStateResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] };
+    }
+    const rawState = rawStateResult.text;
     if (rawState === "" || parseStatePayload(rawState) === null) {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State content must be valid JSON" }] };
     }
@@ -442,7 +455,12 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (typeof sv.jsonState === "string" && sv.jsonState !== "") {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "JSON state content was already uploaded" }] };
     }
-    const jsonState = await requestBodyText(body, request);
+    const jsonStateResult = await requestBodyText(body, request);
+    if (!jsonStateResult.ok) {
+      (set as { status: number }).status = jsonStateResult.reason === "too-large" ? 413 : 400;
+      return { errors: [{ status: String(jsonStateResult.reason === "too-large" ? 413 : 400), title: jsonStateResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] };
+    }
+    const jsonState = jsonStateResult.text;
     if (jsonState === "" || parseStatePayload(jsonState) === null) {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }] };
     }
@@ -462,7 +480,12 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (ws === undefined || (!validSignedApiURL(request, path, "PUT") && !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-write")))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const jsonStateOutputs = await requestBodyText(body, request);
+    const jsonStateOutputsResult = await requestBodyText(body, request);
+    if (!jsonStateOutputsResult.ok) {
+      (set as { status: number }).status = jsonStateOutputsResult.reason === "too-large" ? 413 : 400;
+      return { errors: [{ status: String(jsonStateOutputsResult.reason === "too-large" ? 413 : 400), title: jsonStateOutputsResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] };
+    }
+    const jsonStateOutputs = jsonStateOutputsResult.text;
     if (jsonStateOutputs === "" || parseStatePayload(jsonStateOutputs) === null) {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state outputs must be valid JSON" }] };
     }
@@ -597,15 +620,19 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    let payload: string;
     try {
-      const payload = decodeStatePayload(await readFile(recoveryStatePath(runId), "utf8"));
+      payload = decodeStatePayload(await readFile(recoveryStatePath(runId), "utf8"));
       if (parseTerraformStatePayload(payload) === null) throw new Error("invalid recovery state");
-      (set.headers as Record<string, string>)["Content-Type"] = "application/json";
-      return new Response(payload);
     } catch {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    await auditLog("read", "state-version", runId, user?.id ?? null, workspace.orgId, {
+      workspaceId: workspace.id,
+      endpoint: "recovery-state",
+    });
+    return new Response(payload, { headers: { "Content-Type": "application/json" } });
   })
   .post("/api/v2/runs/:run_id/actions/recover-state", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
@@ -671,9 +698,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       await insertStateOutputIndex(t, id, workspace.id, rawState, rawState);
       return id;
     }));
-    const recoveryDir = join(storageDir, "recovery", runId);
-    await writeFile(join(recoveryDir, ".recovered"), new Date().toISOString(), { mode: 0o600 }).catch(() => {});
-    await rm(recoveryDir, { recursive: true, force: true });
+    await rm(join(storageDir, "recovery", runId), { recursive: true, force: true });
     const stateVersion = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (stateVersion === undefined) {
       (set as { status: number }).status = 500;
@@ -801,7 +826,12 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 413;
       return { errors: [{ status: "413", title: "Payload Too Large", detail: "Terraform state exceeds the 100 MiB maximum" }] };
     }
-    const rawState = await requestBodyText(body, request);
+    const rawStateResult = await requestBodyText(body, request);
+    if (!rawStateResult.ok) {
+      (set as { status: number }).status = rawStateResult.reason === "too-large" ? 413 : 400;
+      return { errors: [{ status: String(rawStateResult.reason === "too-large" ? 413 : 400), title: rawStateResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] };
+    }
+    const rawState = rawStateResult.text;
     if (Buffer.byteLength(rawState, "utf8") > MAX_IMPORTED_STATE_BYTES) {
       (set as { status: number }).status = 413;
       return { errors: [{ status: "413", title: "Payload Too Large", detail: "Terraform state exceeds the 100 MiB maximum" }] };
@@ -836,7 +866,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const stateVersionId = await withStateSerialRetry(() => db.transaction(async (tx: unknown): Promise<string> => {
       const t = tx as typeof db;
       const latest = await t.query.stateVersions.findFirst({
-        where: eq(stateVersions.workspaceId, workspaceId),
+        where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
         orderBy: [desc(stateVersions.serial)],
       });
       const id = crypto.randomUUID();

@@ -4,7 +4,7 @@ import { db } from "../db";
 import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource } from "../lib/response";
-import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, cursorPagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
+import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, cursorPagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, readRunLogs } from "../lib/run-logs";
 import { deletePlanJsonArtifact, readPlanJsonArtifact, readPlanJsonSideArtifact, sanitizePlanJson } from "../lib/plan-json";
@@ -1097,9 +1097,14 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "cancel"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    const canceledAt = new Date().toISOString();
     const updated = await db.update(runs).set({
       status: "canceled",
-      statusTimestamps: { ...(authorized.run.statusTimestamps ?? {}), "cancel-requested-at": new Date().toISOString() },
+      statusTimestamps: {
+        ...(authorized.run.statusTimestamps ?? {}),
+        "cancel-requested-at": canceledAt,
+        "canceled-at": canceledAt,
+      },
     }).where(and(
       eq(runs.id, runId),
       eq(runs.status, authorized.run.status),
@@ -1162,9 +1167,9 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "policy-override"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const run = authorized.run;
     if (run.status !== "policy_soft_failed") { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be policy_soft_failed to override" }] }; }
-    await db.update(policyChecks).set({ status: "overridden" }).where(and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])));
     const updated = await db.update(runs).set({ status: "planned" }).where(and(eq(runs.id, runId), eq(runs.status, "policy_soft_failed"))).returning({ id: runs.id });
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is no longer awaiting policy override" }] }; }
+    await db.update(policyChecks).set({ status: "overridden" }).where(and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])));
     await auditLog("override-policy", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
       workspaceId: authorized.workspace.id,
       fromStatus: "policy_soft_failed",
@@ -1180,15 +1185,16 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     if (authorized.run.status !== "pending") { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be pending to force-execute" }] }; }
+    const activeBlockingStatuses = ["plan_queued", "planning", "apply_queued", "applying"] as const;
     const blockers = await db.query.runs.findMany({
-      where: and(eq(runs.workspaceId, authorized.workspace.id), inArray(runs.status, WORKSPACE_BLOCKING_RUN_STATUSES), ne(runs.id, runId)),
+      where: and(eq(runs.workspaceId, authorized.workspace.id), inArray(runs.status, [...activeBlockingStatuses]), ne(runs.id, runId)),
       orderBy: [asc(runs.createdAt), asc(runs.id)],
     });
     const blockingRuns = blockers.filter((run): boolean => run.planOnly !== true && run.savePlan !== true);
     if (blockingRuns.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "No blocking run is available to force-execute" }] }; }
     const blockerCanceled = await db.update(runs).set({ status: "force_canceled" }).where(and(
       inArray(runs.id, blockingRuns.map((run): string => run.id)),
-      inArray(runs.status, WORKSPACE_BLOCKING_RUN_STATUSES),
+      inArray(runs.status, [...activeBlockingStatuses]),
     )).returning({ id: runs.id });
     if (blockerCanceled.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "The blocking run changed before it could be stopped" }] }; }
     const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");

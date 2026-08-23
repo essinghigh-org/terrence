@@ -21,17 +21,34 @@ export async function persistUploadBody(body: unknown, request: Request, path: s
   if (reader === undefined) throw new Error("empty");
   const file = await open(path, "w", 0o600);
   let total = 0;
+  let failure: unknown;
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      total += value.byteLength;
-      if (total > limit) throw new Error("too-large");
-      await file.write(value);
+      if (value.byteLength > limit - total) throw new Error("too-large");
+      let offset = 0;
+      while (offset < value.byteLength) {
+        const { bytesWritten } = await file.write(value.subarray(offset));
+        if (bytesWritten <= 0) throw new Error("upload write made no progress");
+        offset += bytesWritten;
+        total += bytesWritten;
+      }
     }
+  } catch (error: unknown) {
+    failure = error;
   } finally {
-    await file.close();
-    await reader.cancel().catch(() => undefined);
+    try {
+      await file.close();
+    } catch (error: unknown) {
+      failure ??= error;
+    }
+    try {
+      await reader.cancel();
+    } catch (error: unknown) {
+      failure ??= error;
+    }
   }
+  if (failure !== undefined) throw failure;
   return total;
 }

@@ -23,7 +23,7 @@ describe("remote-workflow state versions contract", () => {
   let stateVersionId = "";
   const stateJson = (serial: number) =>
     JSON.stringify({ version: 4, serial, lineage: "test-lineage", outputs: {} });
-  const stateMd5 = (serial: number) => createHash("md5").update(stateJson(serial)).digest("hex");
+  const stateMd5 = (serial: number) => createHash("md5").update(stateJson(serial)).digest("base64");
 
   const statePayload = {
     data: {

@@ -12,13 +12,24 @@ export default tseslint.config(
       '**/.git/**',
       'frontend/tools/oxlint/**',
       'eslint.config.mjs',
-      'scripts/*.mjs',
     ],
   },
 
   // ── Strictest TS configs (includes recommended + strict + stylistic) ──
   ...tseslint.configs.strictTypeChecked,
   ...tseslint.configs.stylisticTypeChecked,
+
+  // Keep the baseline guard itself linted without opting it into the
+  // repository's TypeScript project service.
+  {
+    files: ['scripts/lint-budget.mjs'],
+    ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      ...tseslint.configs.disableTypeChecked.languageOptions,
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+    },
+  },
 
   // ── TypeScript-aware parser (monorepo project service) ─────────────────
   {
