@@ -12,6 +12,7 @@ export default tseslint.config(
       '**/.git/**',
       'frontend/tools/oxlint/**',
       'eslint.config.mjs',
+      'scripts/*.mjs',
     ],
   },
 

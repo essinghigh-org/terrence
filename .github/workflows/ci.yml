@@ -111,6 +111,8 @@ jobs:
         run: bun run typecheck
       - name: Lint
         run: bun run lint
+      - name: Lint debt budget
+        run: bun run lint:budget
       - name: Knip
         run: bun run knip
       - name: Security endpoint coverage (todo 143)
