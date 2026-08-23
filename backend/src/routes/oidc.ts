@@ -18,6 +18,7 @@ import {
 } from "../lib/sso";
 import { clearSsoChallenges, consumeSsoChallenge, storeSsoChallenge } from "../lib/sso-challenges";
 import { issueSsoLogin } from "../lib/sso-login";
+import { fetchResolvedExternalUrl, resolveExternalUrl, type ResolvedExternalUrl } from "../lib/url-safety";
 
 type HeaderValue = string | number | readonly string[];
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, HeaderValue>> }>;
@@ -66,6 +67,28 @@ const jwksRefreshes = new Map<string, number>();
 const OIDC_STATE_COOKIE = "terrence_oidc_state";
 const JWKS_REFRESH_MIN_INTERVAL_MS = 30 * 1000;
 const OIDC_CHALLENGE_KIND = "oidc-login";
+
+function loopbackHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+/** Resolve OIDC network targets once so DNS rebinding cannot change the peer. */
+async function resolveOidcEndpoint(value: string): Promise<ResolvedExternalUrl> {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("OIDC endpoint is invalid");
+  }
+  // Local HTTP IdPs are supported for development and the loopback test
+  // provider. Public/private HTTPS endpoints still require the normal
+  // outbound allowlist when their resolved address is private.
+  const allowPrivate = parsed.protocol === "http:" && loopbackHost(parsed.hostname);
+  const resolved = await resolveExternalUrl(value, allowPrivate);
+  if ("error" in resolved) throw new Error(resolved.error);
+  return resolved.target;
+}
 
 /** Test hook: clear the discovery/JWKS caches between scenarios. */
 export async function resetOidcCaches(): Promise<void> {
@@ -139,9 +162,10 @@ async function discovery(providerIssuer: string): Promise<OidcDiscovery> {
   if (pending !== undefined) return pending;
   const request = (async (): Promise<OidcDiscovery> => {
     const endpoint = `${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`;
-    const response = await fetch(endpoint, {
-      redirect: "error",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    const response = await fetchResolvedExternalUrl(await resolveOidcEndpoint(endpoint), {
+      method: "GET",
+      timeoutMs: FETCH_TIMEOUT_MS,
+      maxResponseBytes: 1024 * 1024,
     });
     if (!response.ok) throw new Error(`OIDC discovery failed: ${response.status}`);
     const config = await response.json() as Partial<Record<string, unknown>>;
@@ -311,9 +335,10 @@ async function fetchJwks(jwksUri: string, forceRefresh = false): Promise<Record<
   if (pending !== undefined) return pending;
   if (forceRefresh) jwksRefreshes.set(jwksUri, now);
   const request = (async (): Promise<Record<string, unknown>[]> => {
-    const response = await fetch(jwksUri, {
-      redirect: "error",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    const response = await fetchResolvedExternalUrl(await resolveOidcEndpoint(jwksUri), {
+      method: "GET",
+      timeoutMs: FETCH_TIMEOUT_MS,
+      maxResponseBytes: 1024 * 1024,
     });
     if (!response.ok) throw new Error("Failed to fetch the OIDC provider JWKS");
     const jwks = await response.json() as { keys?: unknown };
@@ -528,12 +553,12 @@ async function handleCallback(
   }
   let tokenResponse: Response;
   try {
-    tokenResponse = await fetch(config.tokenEndpoint, {
+    tokenResponse = await fetchResolvedExternalUrl(await resolveOidcEndpoint(config.tokenEndpoint), {
       method: "POST",
       headers: tokenHeaders,
       body: tokenBody.toString(),
-      redirect: "error",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      timeoutMs: FETCH_TIMEOUT_MS,
+      maxResponseBytes: 1024 * 1024,
     });
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : "network error";
