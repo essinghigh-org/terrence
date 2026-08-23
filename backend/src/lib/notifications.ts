@@ -19,6 +19,7 @@ import {
 } from "../db/schema";
 import type { DeepReadonly } from "./utils";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./url-safety";
+import { decryptSecret } from "./secrets";
 import { _resetSharedDeliveryState as resetSharedStateImpl, sharedBreakerRecordFailure, sharedBreakerRecordSuccess, sharedDedupRecord, sharedDedupSuppressed } from "./notification-state";
 import { getSettings } from "./settings";
 import { sendEmail } from "./smtp";
@@ -260,7 +261,7 @@ async function doPostNotification(
   const body = render.body;
   const headers: Record<string, string> = { "Content-Type": render.contentType };
   if (configuration.destinationType === "generic" && configuration.token !== null) {
-    headers["X-TFE-Notification-Signature"] = createHmac("sha512", configuration.token)
+    headers["X-TFE-Notification-Signature"] = createHmac("sha512", await decryptSecret(configuration.token))
       .update(body)
       .digest("hex");
   }

@@ -4,7 +4,7 @@ import { configurationVersions, runs, type users } from "../db/schema";
 import { eq, count, desc, and, inArray, notInArray, isNull, lt, or } from "drizzle-orm";
 import { apiURL, signedApiURL, validSignedApiURL, FINAL_RUN_STATUSES, findAuthorizedWorkspace, pageRequest, pagination , type DeepReadonly } from "../lib/utils";
 import { join } from "path";
-import { mkdir, rm, writeFile } from "fs/promises";
+import { mkdir, open, rm, writeFile } from "fs/promises";
 import { rmSync } from "node:fs";
 import { authPlugin } from "../auth";
 import { assertArchiveExpandedSize } from "../lib/archive";
@@ -26,6 +26,37 @@ type ParamCtx = Readonly<{
 }>;
 
 type ConfigurationVersion = typeof configurationVersions.$inferSelect;
+
+async function persistUploadBody(body: unknown, request: Request, path: string, limit: number): Promise<number> {
+  const direct = body instanceof ArrayBuffer
+    ? new Uint8Array(body)
+    : ArrayBuffer.isView(body)
+      ? new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
+      : null;
+  if (direct !== null) {
+    if (direct.byteLength > limit) throw new Error("too-large");
+    await writeFile(path, direct, { mode: 0o600 });
+    return direct.byteLength;
+  }
+  const stream = body instanceof Blob ? body.stream() : request.body;
+  const reader = stream?.getReader();
+  if (reader === undefined) return 0;
+  const file = await open(path, "w", 0o600);
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) throw new Error("too-large");
+      await file.write(value);
+    }
+  } finally {
+    await file.close();
+    await reader.cancel().catch(() => undefined);
+  }
+  return total;
+}
 
 function hasIngressData(cv: DeepReadonly<ConfigurationVersion>): boolean {
   const ingress = (cv.ingressAttributes ?? {}) as Record<string, unknown>;
@@ -196,29 +227,16 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     const tarName = `config-${cvId}.tar.gz`;
     const tarPath = join(CV_STORAGE_DIR, tarName);
     await mkdir(CV_STORAGE_DIR, { recursive: true });
-    let buffer: Uint8Array;
     try {
-      buffer = body instanceof ArrayBuffer
-        ? new Uint8Array(body)
-        : ArrayBuffer.isView(body)
-          ? new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
-          : body instanceof Blob
-            ? new Uint8Array(await body.arrayBuffer())
-            : new Uint8Array(await request.arrayBuffer());
+      const size = await persistUploadBody(body, request, tarPath, 100 * 1024 * 1024);
+      if (size === 0) throw new Error("empty");
     } catch {
+      rmSync(tarPath, { force: true });
       await db.update(configurationVersions).set({ uploadClaimExpiresAt: null }).where(eq(configurationVersions.id, cvId));
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Could not read configuration archive body" }] };
+      const tooLarge = Number(request.headers.get("content-length")) > 100 * 1024 * 1024;
+      (set as { status: number }).status = tooLarge ? 413 : 400;
+      return { errors: [{ status: String(tooLarge ? 413 : 400), title: tooLarge ? "Payload Too Large" : "Bad Request", detail: tooLarge ? "Configuration archive exceeds 100 MiB maximum" : "Could not read configuration archive body" }] };
     }
-    if (buffer.byteLength === 0) {
-      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null }).where(eq(configurationVersions.id, cvId));
-      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Configuration archive is empty" }] };
-    }
-    if (buffer.byteLength > 100 * 1024 * 1024) {
-      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null }).where(eq(configurationVersions.id, cvId));
-      (set as { status: number }).status = 413; return { errors: [{ status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds 100 MiB maximum" }] };
-    }
-    await writeFile(tarPath, buffer, { mode: 0o600 });
     try {
       await assertArchiveExpandedSize(tarPath);
       const listing = Bun.spawn(["tar", "-tzf", tarPath], { stdout: "pipe", stderr: "pipe" });

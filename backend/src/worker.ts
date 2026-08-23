@@ -46,7 +46,7 @@ import { isStorageDegraded, isDiskFullError, markStorageDegraded } from "./lib/s
 import { workspaceExecutionDirectory } from "./workspace";
 import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
 import { canTransitionRunStatus, isTerminalRunStatus } from "./lib/run-status";
-import { FINAL_RUN_STATUSES, signedApiURL } from "./lib/utils";
+import { FINAL_RUN_STATUSES, signedApiURL, decodeStatePayload } from "./lib/utils";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./lib/url-safety";
 import {
   emptyCostEstimate,
@@ -70,6 +70,7 @@ import { publish } from "./lib/event-bus";
 import { probeLandlockAbi, RunSandbox, removeSandboxWorkDir, runNetDenyEnabled, runSandboxRequired } from "./lib/sandbox";
 import { attachToRunCgroup, createRunCgroup, destroyRunCgroup, killRunCgroup } from "./lib/run-cgroup";
 import { decryptSecret } from "./lib/secrets";
+import { encryptStatePayload } from "./lib/validation";
 import { log } from "./lib/log";
 export type { ExecutionPhase } from "./worker/phases";
 export { executorBackendFromEnv, type ExecutorBackend, EXECUTOR_BACKENDS } from "./worker/executor-policy";
@@ -1516,7 +1517,7 @@ async function executeRunImpl(runId: string): Promise<void> {
     });
     plannedAgainstState = { id: latestState?.id ?? null, serial: latestState?.serial ?? 0 };
     if (latestState !== undefined && typeof latestState.statePayload === "string" && latestState.statePayload !== "") {
-      await writeFile(join(executionDir, "terraform.tfstate"), latestState.statePayload, { mode: 0o600 });
+      await writeFile(join(executionDir, "terraform.tfstate"), decodeStatePayload(latestState.statePayload), { mode: 0o600 });
       await writeLog(runId, "plan", `[terrence] Seeded workspace state serial #${latestState.serial}.`);
     }
 
@@ -2067,9 +2068,9 @@ async function executeApplyImpl(runId: string): Promise<void> {
         const nextSerial = await insertStateVersionWithSerialRetry({
           id: crypto.randomUUID(),
           workspaceId: workspace.id,
-          statePayload,
-          jsonState,
-          jsonStateOutputs,
+          statePayload: encryptStatePayload(statePayload),
+          jsonState: encryptStatePayload(jsonState),
+          jsonStateOutputs: encryptStatePayload(jsonStateOutputs),
           runId,
           status: "finalized",
           createdAt: Date.now(),
@@ -2732,7 +2733,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
       if (typeof latestState?.statePayload !== "string" || latestState.statePayload === "") {
         throw new Error("No finalized workspace state is available for assessment.");
       }
-      await writeFile(join(executionDir, "terraform.tfstate"), latestState.statePayload, { mode: 0o600 });
+      await writeFile(join(executionDir, "terraform.tfstate"), decodeStatePayload(latestState.statePayload), { mode: 0o600 });
 
       const variables = await executionVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
       const project = workspace.projectId === null ? undefined : await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) });

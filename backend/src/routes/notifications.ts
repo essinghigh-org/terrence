@@ -15,6 +15,7 @@ import {
 import { _ownershipVerified, postNotification, verifyDestinationOwnership, type NotificationDelivery } from "../lib/notifications";
 import { checkOrganizationPermission, checkOrgPermission, findAuthorizedWorkspace, notFound } from "../lib/utils";
 import { isNotificationDestination, isNotificationTrigger, RUN_NOTIFICATION_TRIGGERS } from "../lib/constants";
+import { encryptSecret } from "../lib/secrets";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -311,7 +312,10 @@ async function insertConfiguration(values: typeof notificationConfigurations.$in
       )).returning({ workspaceId: notificationWorkspaceCounters.workspaceId });
       if (reserved.length === 0) return false;
     }
-    await t.insert(notificationConfigurations).values(values);
+    await t.insert(notificationConfigurations).values({
+      ...values,
+      token: values.token === null || values.token === undefined ? values.token : await encryptSecret(values.token),
+    });
     return true;
   });
 }
@@ -446,7 +450,10 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
       (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: "Notification verification did not return a successful response" }] };
     }
-    await db.insert(notificationConfigurations).values(values);
+    await db.insert(notificationConfigurations).values({
+      ...values,
+      token: values.token === null || values.token === undefined ? values.token : await encryptSecret(values.token),
+    });
     const created = await db.query.notificationConfigurations.findFirst({ where: eq(notificationConfigurations.id, values.id) });
     (set as { status: number }).status = 201;
     return { data: notificationResource(created ?? values as NcItem) };
@@ -607,7 +614,9 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
         (set as { status: number }).status = 400;
         return { errors: [{ status: "400", title: "Bad Request", detail: "Notification verification did not return a successful response" }] };
       }
-      await db.update(notificationConfigurations).set(updates).where(eq(notificationConfigurations.id, id));
+      const persistedUpdates = { ...updates };
+      if (typeof persistedUpdates.token === "string") persistedUpdates.token = await encryptSecret(persistedUpdates.token);
+      await db.update(notificationConfigurations).set(persistedUpdates).where(eq(notificationConfigurations.id, id));
     }
     const updated = await db.query.notificationConfigurations.findFirst({
       where: eq(notificationConfigurations.id, id),

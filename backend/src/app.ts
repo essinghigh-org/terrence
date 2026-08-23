@@ -768,7 +768,6 @@ export const app = new Elysia()
   .use(adminRoutes)
   .use(scimAdminRoutes)
   .use(adminRegistrySharingRoutes)
-  .use(systemAdminRoutes)
   .use(policyRoutes)
   .use(permissionSimulatorRoutes)
   .use(workspaceScorecardRoutes)
@@ -803,8 +802,8 @@ export const app = new Elysia()
   .use(actionsRoutes)
   .use(registryComponentsRoutes);
 
-// The System API has its own listener in production. The same routes remain
-// mounted on the application listener as a compatibility extension.
+// The System API has its own listener in production; privileged diagnostics
+// are deliberately not mounted on the public application listener.
 export const systemApiApp = new Elysia({ name: "system-api-listener" })
   .use(systemHealthRoutes)
   .use(systemAdminRoutes)

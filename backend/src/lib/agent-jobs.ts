@@ -28,6 +28,7 @@ import {
 } from "./plan-json";
 import type { DeepReadonly } from "./utils";
 import { insertStateVersionWithSerialRetry } from "./state-serial";
+import { encryptStatePayload } from "./validation";
 
 export const MAX_AGENT_RESULT_BYTES = 64 * 1024;
 export const MAX_AGENT_RESULT_DEPTH = 8;
@@ -893,9 +894,9 @@ export async function completeAgentJob(
     await insertStateVersionWithSerialRetry({
       id: crypto.randomUUID(),
       workspaceId: completedState.workspaceId,
-      statePayload: completedState.statePayload,
-      jsonState: completedState.jsonState,
-      jsonStateOutputs: completedState.jsonStateOutputs,
+      statePayload: encryptStatePayload(completedState.statePayload),
+      jsonState: encryptStatePayload(completedState.jsonState),
+      jsonStateOutputs: encryptStatePayload(completedState.jsonStateOutputs),
       runId: completedState.runId,
       status: "finalized",
       createdAt: Date.now(),

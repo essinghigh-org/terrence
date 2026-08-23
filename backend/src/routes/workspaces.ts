@@ -12,7 +12,7 @@ import {
 } from "../lib/response";
 import { validVariableAttributes } from "../lib/validation";
 import { variableValueForWrite, variableValueForRead } from "../lib/variable-crypto";
-import { validateVersion, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, auditLog, strictAuditEnabled, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspaceData, lockPrincipal, ownsWorkspaceLock, ifMatchSatisfied, type DeepReadonly } from "../lib/utils";
+import { validateVersion, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, parseStatePayload, auditLog, strictAuditEnabled, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspaceData, lockPrincipal, ownsWorkspaceLock, ifMatchSatisfied, type DeepReadonly } from "../lib/utils";
 
 import { normalizeWorkingDirectory } from "../workspace";
 import { authPlugin } from "../auth";
@@ -65,12 +65,7 @@ function stateResourceAddress(resource: Record<string, unknown>): string | null 
 
 function dependencyGraphFromState(statePayload: string | null): readonly DependencyGraphNode[] {
   if (statePayload === null) return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(statePayload) as unknown;
-  } catch {
-    return [];
-  }
+  const parsed = parseStatePayload(statePayload);
   if (!isRecord(parsed) || !Array.isArray(parsed.resources)) return [];
 
   const resources = new Map<string, Set<string>>();

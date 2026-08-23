@@ -228,7 +228,13 @@ async function loadEncryptionKey(): Promise<Buffer> {
 }
 
 export function isEncryptedSecret(value: string): boolean {
-  return value.startsWith(`${ENCRYPTED_PREFIX}:`);
+  const parts = value.split(":");
+  if (parts.length !== 5 || `${parts[0]}:${parts[1]}` !== ENCRYPTED_PREFIX) return false;
+  // Do not classify arbitrary user plaintext beginning with `enc:v1:` as a
+  // ciphertext envelope. GCM envelopes always carry a 12-byte IV and 16-byte
+  // authentication tag; an empty ciphertext is valid for an empty secret.
+  return Buffer.from(parts[2] ?? "", "base64").length === 12
+    && Buffer.from(parts[3] ?? "", "base64").length === 16;
 }
 
 export async function encryptSecret(value: string): Promise<string> {
@@ -330,6 +336,21 @@ export function decryptSecretSync(value: string, storageDir: string): string {
     }
     throw error;
   }
+}
+
+/** Synchronous envelope writer for database payloads that are persisted by
+ * already-synchronous transaction code (notably Terraform state). */
+export function encryptSecretSync(value: string, storageDir: string): string {
+  if (isEncryptedSecret(value)) return value;
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", loadEncryptionKeySync(storageDir), iv);
+  const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+  return [
+    ENCRYPTED_PREFIX,
+    iv.toString("base64"),
+    cipher.getAuthTag().toString("base64"),
+    ciphertext.toString("base64"),
+  ].join(":");
 }
 
 function loadEncryptionKeySync(storageDir: string): Buffer {

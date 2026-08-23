@@ -63,6 +63,11 @@ const rateWindows = new Map<string, number>();
 /** One request per second per System API token, matching the reference format's system limit. */
 export function systemRateLimited(tokenId: string, set: { status?: number; headers: Record<string, string | number> }): boolean {
   const now = Date.now();
+  if (rateWindows.size > 1024) {
+    for (const [id, expiresAt] of rateWindows) {
+      if (expiresAt <= now) rateWindows.delete(id);
+    }
+  }
   const resetAt = rateWindows.get(tokenId) ?? 0;
   if (resetAt > now) {
     set.status = 429;

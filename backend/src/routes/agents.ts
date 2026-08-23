@@ -13,7 +13,7 @@ import {
   type users,
 } from "../db/schema";
 import { and, eq, inArray } from "drizzle-orm";
-import { checkOrganizationPermission , type DeepReadonly, auditLog, strictAuditEnabled } from "../lib/utils";
+import { checkOrganizationPermission, decodeStatePayload, type DeepReadonly, auditLog, strictAuditEnabled } from "../lib/utils";
 import { organizationName } from "../lib/response";
 import { hashAuthenticationToken } from "../lib/token-service";
 import { authPlugin } from "../auth";
@@ -902,7 +902,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     (set.headers as Record<string, string>)["Content-Type"] = "application/json";
-    return job.inputState.statePayload;
+    return decodeStatePayload(job.inputState.statePayload);
   })
   // --- Agent Pool Tokens ---
   .get("/api/v2/agent-pools/:pool_id/authentication-tokens", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {

@@ -69,6 +69,17 @@ export function isIPv4InCidr(host: string, cidr: string): boolean {
   } catch { return false; }
 }
 
+/** Private destinations explicitly allowed by the operator's egress policy. */
+export function outboundAllowlistAllows(hostname: string, addresses: readonly string[] = []): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  const allowHosts = (process.env.TERRENCE_OUTBOUND_ALLOW_HOSTS ?? "")
+    .split(",").map((value): string => value.trim().toLowerCase().replace(/\.$/, "")).filter(Boolean);
+  if (allowHosts.some((allowed): boolean => host === allowed || host.endsWith(`.${allowed}`))) return true;
+  const allowCidrs = (process.env.TERRENCE_OUTBOUND_ALLOW_CIDRS ?? "")
+    .split(",").map((value): string => value.trim()).filter(Boolean);
+  return allowCidrs.some((cidr): boolean => [hostname, ...addresses].some((address): boolean => isIPv4InCidr(address, cidr)));
+}
+
 function isPrivateV6(host: string): boolean {
   const lower = host.toLowerCase();
   // Normalize into the full 8-hextet sequence so embedded-IPv4 detection
@@ -259,7 +270,8 @@ export async function resolveExternalUrl(
   } catch {
     return { error: "URL could not be resolved safely" };
   }
-  const addressError = resolvedAddressesError(addresses, allowPrivate);
+  const allowlistedPrivate = outboundAllowlistAllows(hostname, addresses);
+  const addressError = resolvedAddressesError(addresses, allowPrivate || allowlistedPrivate);
   if (addressError !== null) return { error: addressError };
   const address = addresses[0];
   if (address === undefined) return { error: "URL could not be resolved safely" };

@@ -9,15 +9,17 @@ import {
   organizationMembershipRoles, organizationRoles,
 } from "../db/schema";
 import { and, desc, eq, exists, gte, inArray, isNull, like, lt, notInArray, or, sql } from "drizzle-orm";
-import { timingSafeEqual, createHash, createHmac } from "node:crypto";
+import { timingSafeEqual, createHash, createHmac, randomBytes } from "node:crypto";
 import { access, rm } from "node:fs/promises";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { recordFailure } from "./process-metrics";
 import { log } from "./log";
 import { isDiskFullError, markStorageDegraded } from "./storage-health";
 import { jsonExtract } from "./db-json";
 import { validateVersion } from "../binaryManager";
 import { decodeStatePayload, parseStatePayload } from "./validation";
-import { privateHostReason } from "./url-safety";
+import { outboundAllowlistAllows, privateHostReason } from "./url-safety";
 import { archiveRunLogs, deleteRunLogArchive } from "./run-logs";
 import { deletePlanJsonArtifact } from "./plan-json";
 import { currentSiteAdmin, currentTokenScopes, requestCacheGet, requestCacheSet } from "./request-scope";
@@ -1279,7 +1281,31 @@ export function apiURL(request: RequestWithUrl, path: string): string {
   return new URL(path, PUBLIC_URL ?? request.url).toString();
 }
 
-const SIGNED_URL_SECRET = process.env.SIGNED_URL_SECRET ?? crypto.randomUUID();
+function loadSignedUrlSecret(): string {
+  const storage = process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage");
+  const path = join(storage, ".signed-url-secret");
+  mkdirSync(storage, { recursive: true });
+  try {
+    const existing = readFileSync(path, "utf8").trim();
+    if (existing.length >= 32) return existing;
+  } catch {
+    // Create below; a missing/unreadable secret must not silently rotate on
+    // every request, so a write/read failure is surfaced by the caller.
+  }
+  const generated = randomBytes(32).toString("base64url");
+  try {
+    writeFileSync(path, generated, { mode: 0o600, flag: "wx" });
+    return generated;
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      const existing = readFileSync(path, "utf8").trim();
+      if (existing.length >= 32) return existing;
+    }
+    throw error;
+  }
+}
+
+const SIGNED_URL_SECRET = process.env.SIGNED_URL_SECRET ?? loadSignedUrlSecret();
 
 export function signedApiURL(request: RequestWithUrl, path: string, method = "GET", ttlSeconds?: number): string {
   const configuredTtl = ttlSeconds ?? Number(process.env.SIGNED_URL_TTL_SECONDS ?? 300);
@@ -1310,28 +1336,13 @@ export function validSignedApiURL(request: RequestWithUrl, path: string, method 
 // lib/url-safety.ts (privateHostReason); validateExternalUrl delegates there.
 
 
-/** Outbound allowlist: when TERRENCE_OUTBOUND_ALLOW_HOSTS/CIDRS restrict egress, check them. */
-function isOutboundAllowed(hostname: string, _href: string): boolean {
-  const allowHosts = (process.env.TERRENCE_OUTBOUND_ALLOW_HOSTS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-  if (allowHosts.length > 0 && allowHosts.some((h) => hostname.toLowerCase() === h || hostname.toLowerCase().endsWith(`.${h}`))) return true;
-  // CIDR allowlist (parsed via isPrivate-style check but inverted: if host is IPv4 within CIDR, allow)
-  const allowCidrs = (process.env.TERRENCE_OUTBOUND_ALLOW_CIDRS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  if (allowCidrs.length > 0) {
-    try {
-      const { isIPv4InCidr } = require("./url-safety") as { isIPv4InCidr?: (host: string, cidr: string) => boolean };
-      if (typeof isIPv4InCidr === "function" && allowCidrs.some((cidr) => isIPv4InCidr(hostname, cidr))) return true;
-    } catch { /* best-effort */ }
-  }
-  return false;
-}
-
 export function validateExternalUrl(url: string, allowPrivate = false): string | null {
   try {
     const parsed = new URL(url);
     if (!["http:", "https:"].includes(parsed.protocol)) return "Only http and https URLs are allowed";
     // 41-44: outbound allowlist/CIDR/DNS — when TERRENCE_OUTBOUND_ALLOW_HOSTS or CIDRS gate private access,
     // private-host denial is scoped to that policy; otherwise the global allowPrivate flag applies.
-    if (!allowPrivate && isOutboundAllowed(parsed.hostname, parsed.href)) return null;
+    if (!allowPrivate && outboundAllowlistAllows(parsed.hostname)) return null;
     if (!allowPrivate) {
       const reason = privateHostReason(parsed.hostname);
       if (reason !== null) return reason;

@@ -57,6 +57,7 @@ type MetricsCtx = Readonly<{
   token: Readonly<{ id: string }> | null;
   orgId: string | null;
   teamId: string | null;
+  systemToken?: Readonly<{ id: string }> | null;
 }>;
 
 const PING_SSO_CACHE_TTL_MS = 1_000;
@@ -766,10 +767,10 @@ export const healthRoutes = new Elysia({ name: "health" })
     };
   })
   .get("/healthz", (): string => "ok")
-  .get("/metrics", async ({ request, set, user, token, orgId, teamId }: MetricsCtx): Promise<unknown> => {
-    // Token-authenticated. Legacy tokens (scopes null) get instance-wide
-    // metrics; fine-grained tokens get only the org/workspace/agent data
-    // their scope is eligible for (enforced inside the collectors).
+  .get("/metrics", async ({ request, set, user, token, orgId, teamId, systemToken }: MetricsCtx): Promise<unknown> => {
+    // Token-authenticated. Fine-grained tokens get only the org/workspace/
+    // agent data their scope is eligible for. Instance-wide counters require
+    // a dedicated System API token or an explicitly site-admin user.
     //
     // Instance-wide metrics are reserved for verified legacy API tokens and
     // site admins. A browser-session access token (issued by login, tracked
@@ -785,7 +786,7 @@ export const healthRoutes = new Elysia({ name: "health" })
           columns: { id: true },
         })) !== undefined
       : false;
-    const allowInstanceMetrics = scopes === null && (isSiteAdmin || !isSessionToken);
+    const allowInstanceMetrics = scopes === null && (isSiteAdmin || systemToken !== null && systemToken !== undefined) && !isSessionToken;
 
     const collection = scopes !== null
       ? await collectScopedMetrics(scopes, user?.id, orgId, teamId)

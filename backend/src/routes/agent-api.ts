@@ -32,12 +32,36 @@ import {
   terraformReleaseInfo,
   type AgentJobDetails,
 } from "../lib/agent-api";
+import { revokeRunTokens } from "../lib/run-token";
 
 const MAX_AGENT_BODY_BYTES = 16 * 1024 * 1024;
-const MAX_AGENT_FILESYSTEM_BYTES = 256 * 1024 * 1024;
+// The public listener's native request cap is 100 MiB. Keep the endpoint's
+// advertised and enforced limit aligned so a body cannot claim a larger
+// contract and then be rejected before the route sees it.
+const MAX_AGENT_FILESYSTEM_BYTES = 100 * 1024 * 1024;
 const MAX_FORWARDED_RESPONSE_BASE64_BYTES = Math.ceil(10 * 1024 * 1024 * 4 / 3) + 8;
 const DEFAULT_AGENT_ACCEPT = "plan,apply,policy,assessment,stack_prepare,stack_plan,stack_apply,source_bundle,stack_aggregate_outputs,test";
 const AGENT_WORKLOAD_TYPES = `${DEFAULT_AGENT_ACCEPT},ingress`.split(",");
+
+async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
+  const { job, run } = claimed;
+  const queuedStatus = job.phase === "plan" ? "plan_queued" : "apply_queued";
+  await db.transaction(async (tx: unknown): Promise<void> => {
+    const t = tx as typeof db;
+    await t.update(agentJobs).set({
+      status: "queued",
+      agentId: null,
+      claimedAt: null,
+      completedAt: null,
+      errorMessage: null,
+    }).where(and(eq(agentJobs.id, job.id), eq(agentJobs.status, "claimed")));
+    const timestamps: Record<string, string> = run.statusTimestamps !== null && typeof run.statusTimestamps === "object"
+      ? { ...(run.statusTimestamps as Record<string, string>), [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() }
+      : { [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() };
+    await t.update(runs).set({ status: queuedStatus, statusTimestamps: timestamps }).where(and(eq(runs.id, run.id), eq(runs.status, job.phase === "plan" ? "planning" : "applying")));
+  });
+  await revokeRunTokens(run.id);
+}
 
 type AgentCtx = Readonly<{
   params: Readonly<Record<string, string>>;
@@ -603,31 +627,25 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       return await stackAgentPayload(stackClaimed, agentApiBaseUrl(ctx.request));
     }
     const { job, run, workspace, configuration } = claimed;
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
-    if (org === undefined) {
-      set.status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-
-    const baseUrl = agentApiBaseUrl(ctx.request);
-    const runToken = await agentRunToken(run.id, workspace.id, workspace.orgId);
-    const version = run.terraformVersion ?? workspace.terraformVersion ?? org.defaultTerraformVersion ?? "latest";
-    const terraformInfo = await terraformReleaseInfo(version);
-    if (terraformInfo === null) {
+    try {
+      const org = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
+      if (org === undefined) throw new Error("organization not found");
+      const baseUrl = agentApiBaseUrl(ctx.request);
+      const version = run.terraformVersion ?? workspace.terraformVersion ?? org.defaultTerraformVersion ?? "latest";
+      const terraformInfo = await terraformReleaseInfo(version, agent.architecture ?? "amd64");
+      if (terraformInfo === null) throw new Error("Unable to resolve Terraform release");
+      const environment = await agentEnvironment(workspace.id, workspace.orgId, workspace.projectId ?? null);
+      // Mint the run token only after all fallible lookups/resolution work has
+      // succeeded, so a failed payload build cannot accumulate valid tokens.
+      const runToken = await agentRunToken(run.id, workspace.id, workspace.orgId);
+      const details: AgentJobDetails = { job, run, workspace, organizationName: org.name, configuration };
+      const payload = await buildAgentJobPayload(details, baseUrl, runToken, terraformInfo, {}, environment);
+      return payload;
+    } catch (error: unknown) {
+      await releaseAgentClaim(claimed).catch(() => undefined);
       set.status = 503;
-      return { errors: [{ status: "503", title: "Service Unavailable", detail: "Unable to resolve Terraform release" }] };
+      return { errors: [{ status: "503", title: "Service Unavailable", detail: error instanceof Error ? error.message : "Unable to construct agent job" }] };
     }
-    const environment = await agentEnvironment(workspace.id, workspace.orgId, workspace.projectId ?? null);
-    const details: AgentJobDetails = { job, run, workspace, organizationName: org.name, configuration };
-    // The agent decodes `type`, `job_id` and the per-phase container from the
-    // response top level; `data` is the run attribute map. (Verified against
-    // tfc-agent 1.30.1: a payload nested under a single `data` key decodes
-    // with an empty job type and is not dispatchable.)
-    // Terraform variables are delivered as TF_VAR_* environment entries; the
-    // container `variables` object is not consumed by the agent, so send an
-    // empty object rather than duplicating sensitive values into a dead field.
-    const payload = await buildAgentJobPayload(details, baseUrl, runToken, terraformInfo, {}, environment);
-    return payload;
   })
 
   .get("/api/agent/jobs/:job_id/status", async (ctx: AgentCtx): Promise<unknown> => {
