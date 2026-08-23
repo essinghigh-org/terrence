@@ -51,6 +51,15 @@ describe("Bun.SQL Drizzle wrapper & metrics instrumentation", () => {
     expect(poolMetrics("postgres", 10).sampleCount).toBe(initialMetrics.sampleCount + 1);
   });
 
+  it("settles metrics through a direct catch call", async () => {
+    const initialMetrics = poolMetrics("postgres", 10);
+    const query = wrapPgQuery(thenable(Promise.reject(new Error("Query failed"))), "SELECT broken");
+
+    expect(await query.catch((error: unknown): string => (error as Error).message)).toBe("Query failed");
+    expect(poolMetrics("postgres", 10).pendingQueries).toBe(initialMetrics.pendingQueries);
+    expect(poolMetrics("postgres", 10).sampleCount).toBe(initialMetrics.sampleCount + 1);
+  });
+
   it("tracks execute/raw/simple/values derived queries through one lifecycle", async () => {
     for (const method of ["execute", "raw", "simple", "values"] as const) {
       _resetPoolMetrics();

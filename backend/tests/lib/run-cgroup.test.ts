@@ -203,7 +203,7 @@ describe("run cgroups (kanban 8/9)", () => {
         TERRENCE_RUN_CGROUP_PIDS_MAX: previous.pids,
         TERRENCE_RUN_CGROUP_CPU_WEIGHT: previous.cpu,
       })) {
-        if (value === undefined) delete process.env[key];
+        if (value === undefined) Reflect.deleteProperty(process.env, key);
         else process.env[key] = value;
       }
     }

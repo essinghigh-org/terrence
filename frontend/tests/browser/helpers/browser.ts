@@ -189,14 +189,18 @@ export class BrowserPage {
 
     await this.webview.navigate(url);
     await this.enableRuntimeCapture();
-    await Bun.sleep(50);
 
-    // Inject monitor script immediately
+    // Track requests started after navigation; app readiness below covers
+    // bootstrap requests that began before the monitor could be installed.
     await this.webview.evaluate(INJECT_MONITOR_SCRIPT).catch(ignoreNavigationRace);
 
     // Run registered init scripts
     for (const script of this.initScripts) {
       await this.webview.evaluate(script);
+    }
+
+    if (options.waitUntil === "networkidle") {
+      await this.waitForAppReady("#root", { timeout });
     }
 
     // Wait for target readiness state
