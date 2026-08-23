@@ -17,6 +17,40 @@ import {
 } from "drizzle-orm/pg-core";
 import * as sqliteSchema from "./schema-sqlite";
 
+export const actionInvocations = pgTable("action_invocations", {
+    id: text("id").notNull().primaryKey(),
+    actionId: text("action_id").notNull().references(() => actions.id, { onDelete: "cascade" }),
+    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
+    stackId: text("stack_id").references(() => stacks.id, { onDelete: "set null" }),
+    deploymentId: text("deployment_id"),
+    status: text("status").notNull().default("pending"),
+    output: jsonb("output"),
+    errorMessage: text("error_message"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.actionInvocations.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.actionInvocations.updatedAt.defaultFn!()),
+    completedAt: bigint("completed_at", { mode: "number" }),
+}, (table) => [
+    index("action_invocations_org_idx").on(table.orgId),
+    index("action_invocations_run_idx").on(table.runId),
+    index("action_invocations_stack_idx").on(table.stackId),
+    index("action_invocations_action_idx").on(table.actionId),
+  ]);
+
+export const actions = pgTable("actions", {
+    id: text("id").notNull().primaryKey(),
+    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    actionType: text("action_type").notNull().default("custom"),
+    status: text("status").notNull().default("active"),
+    configuration: jsonb("configuration").notNull().default({}),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.actions.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.actions.updatedAt.defaultFn!()),
+}, (table) => [
+    uniqueIndex("actions_org_name_idx").on(table.orgId, table.name),
+  ]);
+
 export const adminGeneralSettings = pgTable("admin_general_settings", {
     id: text("id").notNull().primaryKey(),
     limitUserOrganizationCreation: boolean("limit_user_organization_creation").notNull().default(true),
@@ -1019,6 +1053,23 @@ export const refreshSessions = pgTable("refresh_sessions", {
 }, (table) => [
     index("refresh_sessions_family_idx").on(table.familyId),
     index("refresh_sessions_user_idx").on(table.userId),
+  ]);
+
+export const registryComponents = pgTable("registry_components", {
+    id: text("id").notNull().primaryKey(),
+    orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    namespace: text("namespace").notNull().default("hashicorp"),
+    description: text("description"),
+    source: text("source").notNull().default("registry"),
+    sourceIdentifier: text("source_identifier").notNull(),
+    version: text("version").notNull().default("0.1.0"),
+    status: text("status").notNull().default("pending"),
+    publishedAt: bigint("published_at", { mode: "number" }),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.registryComponents.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" }).$defaultFn(() => sqliteSchema.registryComponents.updatedAt.defaultFn!()),
+}, (table) => [
+    uniqueIndex("registry_components_org_ns_name_idx").on(table.orgId, table.namespace, table.name),
   ]);
 
 export const registryGpgKeys = pgTable("registry_gpg_keys", {

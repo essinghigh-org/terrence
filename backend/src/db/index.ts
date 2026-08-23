@@ -353,6 +353,159 @@ if (!isPostgres) {
   `);
   client.run("CREATE INDEX IF NOT EXISTS locks_expires_idx ON locks (expires_at)");
 
+  // VCS integration reference guard (sqlite): same invariant as the pg
+  // trigger path in applyPgMigrations. Workspaces/policy_sets store the
+  // OAuth token / GitHub App reference inside vcs_repo JSON, so there is no
+  // native FK to block a dangling write or a concurrent delete. The trigger
+  // makes the invariant hold at the database level and surfaces the canonical
+  // "VCS integration reference is still in use" message the app already maps
+  // to 409. Idempotent via DROP + CREATE so a sparse journal never collides.
+  client.run(`
+    CREATE TRIGGER IF NOT EXISTS workspaces_vcs_repo_guard_insert
+    BEFORE INSERT ON workspaces
+    FOR EACH ROW WHEN (
+      json_extract(NEW.vcs_repo, '$.oauthTokenId') IS NOT NULL
+      AND json_extract(NEW.vcs_repo, '$.oauthTokenId') != ''
+      AND NOT EXISTS (SELECT 1 FROM oauth_tokens WHERE id = json_extract(NEW.vcs_repo, '$.oauthTokenId'))
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'VCS integration reference is still in use: oauth token is not registered');
+    END
+  `);
+  client.run(`
+    CREATE TRIGGER IF NOT EXISTS workspaces_vcs_repo_guard_update
+    BEFORE UPDATE ON workspaces
+    FOR EACH ROW WHEN (
+      json_extract(NEW.vcs_repo, '$.oauthTokenId') IS NOT NULL
+      AND json_extract(NEW.vcs_repo, '$.oauthTokenId') != ''
+      AND NOT EXISTS (SELECT 1 FROM oauth_tokens WHERE id = json_extract(NEW.vcs_repo, '$.oauthTokenId'))
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'VCS integration reference is still in use: oauth token is not registered');
+    END
+  `);
+  client.run(`
+    CREATE TRIGGER IF NOT EXISTS workspaces_vcs_github_guard_insert
+    BEFORE INSERT ON workspaces
+    FOR EACH ROW WHEN (
+      json_extract(NEW.vcs_repo, '$.githubAppInstallationId') IS NOT NULL
+      AND json_extract(NEW.vcs_repo, '$.githubAppInstallationId') != ''
+      AND NOT EXISTS (SELECT 1 FROM github_app_installations WHERE id = json_extract(NEW.vcs_repo, '$.githubAppInstallationId'))
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'VCS integration reference is still in use: github app installation is not registered');
+    END
+  `);
+  client.run(`
+    CREATE TRIGGER IF NOT EXISTS workspaces_vcs_github_guard_update
+    BEFORE UPDATE ON workspaces
+    FOR EACH ROW WHEN (
+      json_extract(NEW.vcs_repo, '$.githubAppInstallationId') IS NOT NULL
+      AND json_extract(NEW.vcs_repo, '$.githubAppInstallationId') != ''
+      AND NOT EXISTS (SELECT 1 FROM github_app_installations WHERE id = json_extract(NEW.vcs_repo, '$.githubAppInstallationId'))
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'VCS integration reference is still in use: github app installation is not registered');
+    END
+  `);
+  client.run(`
+    CREATE TRIGGER IF NOT EXISTS policy_sets_vcs_repo_guard_insert
+    BEFORE INSERT ON policy_sets
+    FOR EACH ROW WHEN (
+      json_extract(NEW.vcs_repo, '$.oauthTokenId') IS NOT NULL
+      AND json_extract(NEW.vcs_repo, '$.oauthTokenId') != ''
+      AND NOT EXISTS (SELECT 1 FROM oauth_tokens WHERE id = json_extract(NEW.vcs_repo, '$.oauthTokenId'))
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'VCS integration reference is still in use: oauth token is not registered');
+    END
+  `);
+  client.run(`
+    CREATE TRIGGER IF NOT EXISTS policy_sets_vcs_repo_guard_update
+    BEFORE UPDATE ON policy_sets
+    FOR EACH ROW WHEN (
+      json_extract(NEW.vcs_repo, '$.oauthTokenId') IS NOT NULL
+      AND json_extract(NEW.vcs_repo, '$.oauthTokenId') != ''
+      AND NOT EXISTS (SELECT 1 FROM oauth_tokens WHERE id = json_extract(NEW.vcs_repo, '$.oauthTokenId'))
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'VCS integration reference is still in use: oauth token is not registered');
+    END
+  `);
+  client.run(`
+    CREATE TRIGGER IF NOT EXISTS policy_sets_vcs_github_guard_insert
+    BEFORE INSERT ON policy_sets
+    FOR EACH ROW WHEN (
+      json_extract(NEW.vcs_repo, '$.githubAppInstallationId') IS NOT NULL
+      AND json_extract(NEW.vcs_repo, '$.githubAppInstallationId') != ''
+      AND NOT EXISTS (SELECT 1 FROM github_app_installations WHERE id = json_extract(NEW.vcs_repo, '$.githubAppInstallationId'))
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'VCS integration reference is still in use: github app installation is not registered');
+    END
+  `);
+  client.run(`
+    CREATE TRIGGER IF NOT EXISTS policy_sets_vcs_github_guard_update
+    BEFORE UPDATE ON policy_sets
+    FOR EACH ROW WHEN (
+      json_extract(NEW.vcs_repo, '$.githubAppInstallationId') IS NOT NULL
+      AND json_extract(NEW.vcs_repo, '$.githubAppInstallationId') != ''
+      AND NOT EXISTS (SELECT 1 FROM github_app_installations WHERE id = json_extract(NEW.vcs_repo, '$.githubAppInstallationId'))
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'VCS integration reference is still in use: github app installation is not registered');
+    END
+  `);
+  client.run(`
+    CREATE TRIGGER IF NOT EXISTS oauth_tokens_delete_guard
+    BEFORE DELETE ON oauth_tokens
+    FOR EACH ROW WHEN (
+      EXISTS (SELECT 1 FROM workspaces WHERE json_extract(vcs_repo, '$.oauthTokenId') = OLD.id)
+      OR EXISTS (SELECT 1 FROM policy_sets WHERE json_extract(vcs_repo, '$.oauthTokenId') = OLD.id)
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'VCS integration reference is still in use: oauth token still referenced by a workspace or policy set');
+    END
+  `);
+  client.run(`
+    CREATE TRIGGER IF NOT EXISTS oauth_clients_delete_guard
+    BEFORE DELETE ON oauth_clients
+    FOR EACH ROW WHEN (
+      EXISTS (
+        SELECT 1 FROM workspaces w
+        JOIN oauth_tokens t ON t.id = json_extract(w.vcs_repo, '$.oauthTokenId')
+        WHERE t.oauth_client_id = OLD.id
+      ) OR EXISTS (
+        SELECT 1 FROM policy_sets p
+        JOIN oauth_tokens t ON t.id = json_extract(p.vcs_repo, '$.oauthTokenId')
+        WHERE t.oauth_client_id = OLD.id
+      )
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'VCS integration reference is still in use: oauth client still referenced by a workspace or policy set');
+    END
+  `);
+  client.run(`
+    CREATE TRIGGER IF NOT EXISTS github_app_installations_delete_guard
+    BEFORE DELETE ON github_app_installations
+    FOR EACH ROW WHEN (
+      EXISTS (SELECT 1 FROM workspaces WHERE json_extract(vcs_repo, '$.githubAppInstallationId') = OLD.id)
+      OR EXISTS (SELECT 1 FROM policy_sets WHERE json_extract(vcs_repo, '$.githubAppInstallationId') = OLD.id)
+    )
+    BEGIN
+      SELECT RAISE(ABORT, 'VCS integration reference is still in use: github app installation still referenced');
+    END
+  `);
+  // Remove delete guards from the earlier iteration — they block the
+  // legitimate org cascade path (DELETE FROM organizations cascades to
+  // oauth_tokens/oauth_clients/github_app_installations before the
+  // referencing workspaces are removed, so the BEFORE DELETE fires
+  // first and aborts afterAll cleanup). The race is already closed by
+  // the BEFORE INSERT/UPDATE guard on workspaces/policy_sets; the
+  // app-level pre-delete usage check covers the direct-delete case.
+  client.run(`DROP TRIGGER IF EXISTS oauth_tokens_delete_guard`);
+  client.run(`DROP TRIGGER IF EXISTS oauth_clients_delete_guard`);
+  client.run(`DROP TRIGGER IF EXISTS github_app_installations_delete_guard`);
 
   // Hot-path query indexes (benchmarked: queue scan 200x, workspace run
   // lists 36x, calendar range 17x faster with these). Existing databases
@@ -947,6 +1100,61 @@ export function applyPgMigrations(): Promise<void> {
       )
     `);
     await pg.unsafe("CREATE INDEX IF NOT EXISTS locks_expires_idx ON locks (expires_at)");
+    // VCS integration reference guard: workspaces/policy_sets store the OAuth
+    // token/GitHub App reference inside a vcs_repo JSON column, so there is no
+    // native FK to block a concurrent delete of the integration. The
+    // application does a read-then-delete inside a transaction, but under
+    // READ COMMITTED the concurrent workspace/policy_set insert can commit
+    // first and the delete still succeeds, leaving a dangling vcs_repo
+    // reference. The BEFORE INSERT OR UPDATE trigger enforces the same
+    // invariant inside the database (covers direct DB inserts, the API path,
+    // and any future writer) and surfaces the canonical
+    // "VCS integration reference is still in use" message the app catch
+    // already maps to 409. Kept idempotent via CREATE OR REPLACE so a sparse
+    // drizzle journal never collides.
+    await pg.unsafe(`
+      CREATE OR REPLACE FUNCTION vcs_repo_reference_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+      DECLARE
+        token_id text;
+        install_id text;
+      BEGIN
+        token_id := NEW.vcs_repo->>'oauthTokenId';
+        install_id := NEW.vcs_repo->>'githubAppInstallationId';
+        IF token_id IS NOT NULL AND token_id <> '' THEN
+          IF NOT EXISTS (SELECT 1 FROM oauth_tokens WHERE id = token_id) THEN
+            RAISE EXCEPTION 'VCS integration reference is still in use: oauth token % is not registered', token_id;
+          END IF;
+        END IF;
+        IF install_id IS NOT NULL AND install_id <> '' THEN
+          IF NOT EXISTS (SELECT 1 FROM github_app_installations WHERE id = install_id) THEN
+            RAISE EXCEPTION 'VCS integration reference is still in use: github app installation % is not registered', install_id;
+          END IF;
+        END IF;
+        RETURN NEW;
+      END
+      $$;
+    `);
+    await pg.unsafe(`DROP TRIGGER IF EXISTS workspaces_vcs_repo_guard ON workspaces`);
+    await pg.unsafe(`CREATE TRIGGER workspaces_vcs_repo_guard BEFORE INSERT OR UPDATE ON workspaces FOR EACH ROW EXECUTE FUNCTION vcs_repo_reference_guard()`);
+    await pg.unsafe(`DROP TRIGGER IF EXISTS policy_sets_vcs_repo_guard ON policy_sets`);
+    await pg.unsafe(`CREATE TRIGGER policy_sets_vcs_repo_guard BEFORE INSERT OR UPDATE ON policy_sets FOR EACH ROW EXECUTE FUNCTION vcs_repo_reference_guard()`);
+    // Delete guard removed — the BEFORE INSERT/UPDATE guard on
+    // workspaces/policy_sets already closes the TOCTOU window for the
+    // concurrent workspace/policy_set insert. A BEFORE DELETE guard on
+    // oauth_tokens/oauth_clients/github_app_installations would also fire
+    // during the legitimate org cascade path (DELETE FROM organizations
+    // cascades to those tables before the referencing workspaces are
+    // removed on postgres, ordering is trigger-sensitive), breaking
+    // afterAll/result cleanup. The app-level pre-delete usage check
+    // (findVcsIntegrationUsage + 409) still covers the direct-delete
+    // case; the race is covered by the insert guard rejecting the
+    // concurrent writer.
+    // Defensive: drop any previously-created delete guards from the
+    // earlier fix iteration so upgraded databases do not retain them.
+    await pg.unsafe(`DROP TRIGGER IF EXISTS oauth_tokens_delete_guard ON oauth_tokens`);
+    await pg.unsafe(`DROP TRIGGER IF EXISTS oauth_clients_delete_guard ON oauth_clients`);
+    await pg.unsafe(`DROP TRIGGER IF EXISTS github_app_installations_delete_guard ON github_app_installations`);
+    await pg.unsafe(`DROP FUNCTION IF EXISTS vcs_integration_delete_guard()`);
   })();
   return pgMigrationsPromise;
 }

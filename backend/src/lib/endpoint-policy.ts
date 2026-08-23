@@ -21,6 +21,7 @@ export type RateLimitClass =
   | "scim-settings"
   | "scim-mapping"
   | "workspace-run-history"
+  | "metrics"
   | "none";
 
 export type BodyLimitClass = "api" | "upload";
@@ -175,6 +176,19 @@ export const ENDPOINT_POLICIES: readonly EndpointPolicy[] = [
     },
   },
   {
+    id: "metrics",
+    description: "Metrics endpoint (service-token / scoped-token auth).",
+    rateLimit: "metrics",
+    bodyLimit: "api",
+    auth: "authenticated",
+    audit: "none",
+    secretResponse: true,
+    match: (request): string | undefined => {
+      const p = pathnameOf(request);
+      return p === "/metrics" || p.startsWith("/metrics?") ? "/metrics" : undefined;
+    },
+  },
+  {
     id: "workspace-run-history",
     description: "Workspace run listing (separate bucket per TFE reference).",
     rateLimit: "workspace-run-history",
@@ -245,7 +259,6 @@ export function serverEndpointPath(request: Readonly<{ method: string; url: stri
 
 /** Resolve the rate-limit class for a request (first matching registry entry wins, else global/none). */
 /** @public Intentional surface: registry consumer for future enforcement layer. */
-/** @lintignore Intentional surface: registry enforcement layer will consume this. */
 export function rateLimitClassFor(request: Readonly<{ method: string; url: string }>): RateLimitClass {
   for (const entry of ENDPOINT_POLICIES) {
     if (entry.match(request) !== undefined) return entry.rateLimit;

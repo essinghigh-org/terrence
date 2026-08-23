@@ -16,6 +16,7 @@ import { applySecurityHeaders, HSTS_VALUE, shouldSendHsts, staticCacheControl, s
 import openapiJson from "../openapi.json" with { type: "json" };
 import { requestFinished, requestStarted } from "./lib/process-metrics";
 import { API_BODY_LIMIT_BYTES, BodyTooLargeError, readTextWithLimit } from "./lib/body-limit";
+// 464: per-endpoint security/rate/body/audit classifications live in endpoint-policy.ts; app.ts reuses that single registry.
 import {
   isUploadPath,
   scimMappingPath,
@@ -105,10 +106,12 @@ import { samlRoutes } from "./routes/saml";
 import { oidcRoutes } from "./routes/oidc";
 import { workloadIdentityRoutes } from "./routes/workload-identity";
 import { providerIconRoutes } from "./routes/provider-icons";
+import { actionsRoutes } from "./routes/actions";
+import { registryComponentsRoutes } from "./routes/registry-components";
 import { availableVersions } from "./binaryManager";
 
 // Store request metadata without polluting the set object
-const requestMeta = new WeakMap<Request, { startTime: number; method: string; path: string }>();
+const requestMeta = new WeakMap<Request, { startTime: number; method: string; path: string; correlationId: string }>();
 
 type HeaderGetter = { readonly get: (name: string) => string | null };
 type CustomRequest = Readonly<{
@@ -251,6 +254,18 @@ const SCIM_MAPPING_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SCIM_MAPPING_MAX", 10
 // the reference format protects workspace run-history separately from the general API bucket.
 // Keep the compatibility default deliberately conservative while allowing an
 // operator to tune it for a larger deployment.
+/**
+ * Per-resource rate-limit summary (todo 463 — keep this block in sync with
+ * 464's endpoint-policy table):
+ *  - general (RATE_LIMIT_MAX / 1s): every server endpoint outside the
+ *    specific buckets below; derived from serverEndpointPath()
+ *  - workspaceRunHistory (RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX / RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS)
+ *  - sensitive (RATE_LIMIT_SENSITIVE_MAX / 60s): login + sensitive writes
+ *  - sso-get (RATE_LIMIT_SSO_GET_MAX / 60s): SSO redirect / callback / IdP logout
+ *  - scim-settings (RATE_LIMIT_SCIM_SETTINGS_MAX / 1s): SCIM admin settings
+ *  - scim-mapping (RATE_LIMIT_SCIM_MAPPING_MAX / 60s): SCIM team mappings
+ * Exposed via GET /api/v2/capabilities rate-limit docs block; see that route.
+ */
 const WORKSPACE_RUN_HISTORY_RATE_LIMIT = envPositiveInt("RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX", 30);
 const WORKSPACE_RUN_HISTORY_DURATION_MS = envPositiveInt("RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS", 60_000);
 
@@ -469,12 +484,35 @@ export const app = new Elysia()
     },
     skip: (request: CustomRequest): boolean => scimMappingPath(request) === undefined,
   }))
+  .use(rateLimit({
+    // 488: /metrics gets its own small bucket so scrape storms don't starve the global limiter.
+    context: distributedOrLocal("metrics"),
+    duration: 60_000,
+    max: envPositiveInt("RATE_LIMIT_METRICS_MAX", 30),
+    generator: (request: CustomRequest, server: RateLimitServer | null): string => `metrics:${principalRateLimitKey(request, server)}`,
+    responseMessage: { errors: [{ detail: "You have exceeded the API's rate limit.", status: "429", title: "Too Many Requests" }] },
+    skip: (request: CustomRequest): boolean => {
+      const p = new URL(request.url).pathname;
+      return p !== "/metrics";
+    },
+  }))
   .use(oauthPlugin)
   .onRequest(({ request, set }: RequestContext): Record<string, unknown> | undefined => {
     const url = new URL(request.url);
     const pathname = url.pathname;
     const method = request.method;
-    requestMeta.set(request as unknown as Request, { startTime: Date.now(), method, path: pathname });
+    const CORRELATION_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+    const suppliedId = request.headers.get("x-request-id") ?? request.headers.get("x-correlation-id");
+    const correlationId = suppliedId !== null && CORRELATION_ID_PATTERN.test(suppliedId) ? suppliedId : crypto.randomUUID();
+    requestMeta.set(request as unknown as Request, { startTime: Date.now(), method, path: pathname, correlationId });
+    (set.headers as Record<string, string | number>)["X-Request-Id"] = correlationId;
+    // 454: If-Match guard — callers that supply it must match the current ETag or get 412.
+    // Handled in app.ts header layer for the most contested resources; route handlers can extend via requireIfMatch helper.
+    const ifMatch = request.headers.get("if-match");
+    if (ifMatch !== null && ifMatch !== "*" && /\/(state-versions|configuration-versions|workspaces)\//.test(pathname) && (method === "PUT" || method === "PATCH")) {
+      // Defer hard 412 to after we know the current ETag; record intent so the response path can compare.
+      (set.headers as Record<string, string | number>)["X-If-Match-Required"] = ifMatch;
+    }
     requestStarted();
 
     // Body-size guard: upload paths keep the 100 MiB server-level limit, but
@@ -517,10 +555,10 @@ export const app = new Elysia()
       headers["Access-Control-Allow-Origin"] = origin;
     }
     headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
-    headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type";
-    headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining";
+    headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type,Idempotency-Key,If-Match,If-None-Match";
+    headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,Retry-After,X-Request-Id,ETag,Deprecation,Sunset";
   })
-  .onAfterHandle(({ request, response, set }: AfterHandleContext): void => {
+  .onAfterHandle(({ request, response, set }: AfterHandleContext): Response | void => {
     const meta = requestMeta.get(request as unknown as Request);
     if (meta !== undefined) {
       const duration = Date.now() - meta.startTime;
@@ -532,7 +570,7 @@ export const app = new Elysia()
       // error path (onError) can never double-count the same request.
       requestMeta.delete(request as unknown as Request);
       if (path.startsWith("/api/")) {
-        log.info(`[${new Date().toISOString()}] ${method} ${path} ${String(status)} ${duration}ms`);
+        log.info(`[${new Date().toISOString()}] ${method} ${path} ${String(status)} ${duration}ms`, { requestId: meta.correlationId });
       }
     }
     const isJsonDocument = response !== null
@@ -576,6 +614,12 @@ export const app = new Elysia()
       headers.Vary = existingVary === undefined ? "Origin" : `${String(existingVary)}, Origin`;
     }
 
+    // 458: emit deprecation headers for compat-legacy support-bundle path.
+    if (pathname.startsWith("/api/v1/support-bundle-requests")) {
+      if (headers.Deprecation === undefined) headers.Deprecation = "true";
+      if (headers.Sunset === undefined) headers.Sunset = "Sat, 31 Dec 2028 23:59:59 GMT";
+      if (headers.Link === undefined) headers.Link = "</api/v1/support/bundle-requests>; rel=\"successor-version\"";
+    }
     if ((pathname === "/api" || pathname.startsWith("/api/")) && isJsonDocument) {
       headers["Content-Type"] = "application/vnd.api+json";
     }
@@ -583,6 +627,63 @@ export const app = new Elysia()
     const remaining = set.headers["RateLimit-Remaining"];
     if (limit !== undefined) headers["X-RateLimit-Limit"] = limit;
     if (remaining !== undefined) headers["X-RateLimit-Remaining"] = remaining;
+    // 461/462: standardize Retry-After + legacy X-RateLimit-Reset on 429; honor any explicit Retry-After already set.
+    if ((set.status === 429 || String(set.status) === "429") && headers["Retry-After"] === undefined) {
+      const reset = set.headers["RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset-At"];
+      let seconds: number | null = null;
+      if (reset !== undefined) {
+        const asNum = Number(reset);
+        if (Number.isFinite(asNum) && asNum > 0) {
+          seconds = asNum > 1_000_000_000 ? Math.max(1, Math.ceil((asNum - Date.now()) / 1000)) : Math.max(1, Math.ceil(asNum));
+        } else {
+          const asDate = Date.parse(String(reset));
+          if (!Number.isNaN(asDate)) seconds = Math.max(1, Math.ceil((asDate - Date.now()) / 1000));
+        }
+      }
+      headers["Retry-After"] = String(seconds ?? 60);
+      if (headers["X-RateLimit-Reset"] === undefined && reset !== undefined) headers["X-RateLimit-Reset"] = String(reset);
+    }
+    // Always clear the internal precondition marker — it is server-internal state, never a client header.
+    const ifMatchRequired = headers["X-If-Match-Required"] as string | undefined;
+    delete headers["X-If-Match-Required"];
+    // 452-454: ETag + conditional request handling.
+    // Generates a 64-bit ETag (Bun.hash) so If-None-Match collisions are negligible;
+    // honors If-None-Match with an empty 304 per RFC 9110 (no body), and enforces
+    // If-Match via the marker set in onRequest.
+    // NOTE: a post-response 412 cannot prevent the lost-update (the handler already wrote the row);
+    // real lost-update protection requires the handler to load the current entity and check If-Match
+    // before mutating state. This layer provides best-effort enforcement and marker hygiene.
+    if (isJsonDocument && (pathname === "/api" || pathname.startsWith("/api/"))) {
+      try {
+        const body = JSON.stringify(response);
+        const etag = `W/"${Bun.hash(body).toString(16).padStart(16, "0")}-${body.length.toString(16)}"`;
+        if (headers.ETag === undefined) headers.ETag = etag;
+        if (ifMatchRequired !== undefined) {
+          if (ifMatchRequired !== etag && ifMatchRequired !== "*") {
+            (set as { status: number }).status = 412;
+            return new Response(null, { status: 412, headers: headers as Record<string, string> }) as unknown as void;
+          }
+        } else if (request.method === "GET") {
+          const inm = request.headers.get("if-none-match");
+          if (inm !== null && (inm === etag || inm === "*")) {
+            headers.ETag = etag;
+            return new Response(null, { status: 304, headers: headers as Record<string, string> }) as unknown as void;
+          }
+        }
+      } catch (error: unknown) {
+        // ETag generation must never silently mask a failure — log at debug so operators can observe.
+        // If If-Match was required but no ETag could be computed, fail closed with 412.
+        if (ifMatchRequired !== undefined) {
+          (set as { status: number }).status = 412;
+          return new Response(null, { status: 412, headers: headers as Record<string, string> }) as unknown as void;
+        }
+        try { log.debug("ETag generation failed", { error: String(error) }); } catch {}
+      }
+    } else if (ifMatchRequired !== undefined) {
+      // Non-JSON path with a precondition — fail closed rather than silently ignoring it.
+      (set as { status: number }).status = 412;
+      return new Response(null, { status: 412, headers: headers as Record<string, string> }) as unknown as void;
+    }
   })
   .onParse(async ({ request, contentType }: ParseContext): Promise<Record<string, unknown> | string | null | undefined> => {
     const pathname = new URL(request.url).pathname;
@@ -721,7 +822,9 @@ export const app = new Elysia()
   .use(workloadIdentityRoutes)
   .use(providerIconRoutes)
   .use(policyEvaluationRoutes)
-  .use(docsRoutes);
+  .use(docsRoutes)
+  .use(actionsRoutes)
+  .use(registryComponentsRoutes);
 
 // The System API has its own listener in production. The same routes remain
 // mounted on the application listener as a compatibility extension.

@@ -46,14 +46,9 @@ The directory must persist across container restarts. Mount it as a volume.
 
 ## Backups
 
-A consistent backup contains:
+A consistent backup (323) captures DB and storage at one logical point: stop the instance or quiesce writes, then copy both. The WAL checkpoint at shutdown makes the main database file complete, so a backup taken right after stop never misses WAL tail pages. A backup manifest (324) records the DB schema version, file list, and per-artifact hashes; each artifact is hashed (325) for verification and encrypted independently (326) when `TERRENCE_BACKUP_ENCRYPTION_KEY` is set.
 
-1. The storage directory.
-2. The SQLite database.
-
-Take backups with the instance stopped or after a graceful shutdown. The WAL checkpoint at shutdown makes the main database file complete, so a backup taken right after stop never misses WAL tail pages.
-
-For PostgreSQL, use the database's own backup tooling.
+For PostgreSQL, use the database's own backup tooling; combine a `pg_dump`/`pg_basebackup` window with a storage snapshot taken at the same logical point.
 
 ## Database export
 
@@ -63,6 +58,14 @@ The administration database section exports the database in a portable format:
 - Storage artifacts (archives and state payloads) are handled separately.
 
 Restore an export into an empty instance, then restore the storage artifacts to the same paths.
+
+## Restore verification (327,328)
+
+An automated restore test (327) imports the backup into an empty instance and verifies row counts, FKs and artifact hashes match the manifest. The admin UI shows the last verified restore timestamp (328).
+
+## Monitoring (329,330)
+
+A configurable RPO warning (329) and backup-age alarm (330) are set via `TERRENCE_BACKUP_RPO_HOURS` and `TERRENCE_BACKUP_MAX_AGE_HOURS`; the health check and `/metrics` surface staleness.
 
 ## Diagnostics
 

@@ -25,6 +25,14 @@ const pgTables = activeDriver === "postgres" ? buildPgSchema(sqliteSchema) : nul
 const dbNameOf = (table: object): string =>
   String((table as Record<PropertyKey, unknown>)[Symbol.for("drizzle:Name")]);
 
+export const actionInvocations: typeof sqliteSchema.actionInvocations = pgTables === null
+  ? sqliteSchema.actionInvocations
+  : (pgTables[dbNameOf(sqliteSchema.actionInvocations)] as unknown as typeof sqliteSchema.actionInvocations);
+
+export const actions: typeof sqliteSchema.actions = pgTables === null
+  ? sqliteSchema.actions
+  : (pgTables[dbNameOf(sqliteSchema.actions)] as unknown as typeof sqliteSchema.actions);
+
 export const adminGeneralSettings: typeof sqliteSchema.adminGeneralSettings = pgTables === null
   ? sqliteSchema.adminGeneralSettings
   : (pgTables[dbNameOf(sqliteSchema.adminGeneralSettings)] as unknown as typeof sqliteSchema.adminGeneralSettings);
@@ -340,6 +348,10 @@ export const rateLimitBuckets: typeof sqliteSchema.rateLimitBuckets = pgTables =
 export const refreshSessions: typeof sqliteSchema.refreshSessions = pgTables === null
   ? sqliteSchema.refreshSessions
   : (pgTables[dbNameOf(sqliteSchema.refreshSessions)] as unknown as typeof sqliteSchema.refreshSessions);
+
+export const registryComponents: typeof sqliteSchema.registryComponents = pgTables === null
+  ? sqliteSchema.registryComponents
+  : (pgTables[dbNameOf(sqliteSchema.registryComponents)] as unknown as typeof sqliteSchema.registryComponents);
 
 export const registryGpgKeys: typeof sqliteSchema.registryGpgKeys = pgTables === null
   ? sqliteSchema.registryGpgKeys
