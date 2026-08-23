@@ -66,8 +66,7 @@ export const runsRoutes = new Elysia({ name: "admin-runs" })
     if (updated.length === 0 || updated[0] === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not cancelable" }] }; }
     const { cancelRunExecution, cleanupSavedPlan } = await import("../../worker");
     cancelRunExecution(runId);
-    await cleanupSavedPlan(runId);
-    await cancelAgentJobsForRun(runId);
+    await Promise.allSettled([cleanupSavedPlan(runId), cancelAgentJobsForRun(runId)]);
     return { data: runResource(updated[0], true) };
   })
   .post("/api/v2/admin/runs/:run_id/actions/force-cancel", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
@@ -79,7 +78,6 @@ export const runsRoutes = new Elysia({ name: "admin-runs" })
     if (updated.length === 0 || updated[0] === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-cancelable" }] }; }
     const { cancelRunExecution, cleanupSavedPlan } = await import("../../worker");
     cancelRunExecution(runId, true);
-    await cleanupSavedPlan(runId);
-    await cancelAgentJobsForRun(runId);
+    await Promise.allSettled([cleanupSavedPlan(runId), cancelAgentJobsForRun(runId)]);
     return { data: runResource(updated[0], true) };
   });

@@ -654,7 +654,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       const environment = await agentEnvironment(workspace.id, workspace.orgId, workspace.projectId ?? null);
       const runVars: Record<string, string> = {};
       if (Array.isArray(run.variables)) {
-        for (const v of run.variables as Array<{ key?: string; value?: string; category?: string }>) {
+        for (const v of run.variables as { key?: string; value?: string; category?: string }[]) {
           if (v && typeof v.key === "string" && typeof v.value === "string" && v.category === "terraform") {
             runVars[v.key] = v.value;
           }
