@@ -578,9 +578,11 @@ test("passes workspace run-task permission into the routed settings section", as
   await waitFor((): void => {
     expect(view.getByRole("button", { name: "Attach run task" })).toBeTruthy();
   });
-  expect(fetchMock.mock.calls.some(([input]): boolean =>
-    (isString(input) ? input : input instanceof URL ? input.toString() : input.url)
-      === "/api/v2/organizations/acme/run-tasks")).toBe(true);
+  await waitFor((): void => {
+    expect(fetchMock.mock.calls.some(([input]): boolean =>
+      (isString(input) ? input : input instanceof URL ? input.toString() : input.url)
+        === "/api/v2/organizations/acme/run-tasks")).toBe(true);
+  });
 });
 
 test("returns to the organization workspace list after deleting a workspace", async () => {
