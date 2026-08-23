@@ -117,7 +117,7 @@ async function seedOrgFixtures(s: ScopedSeed, opts: { tags?: boolean; includeUse
   if (opts.includeUsers === true) {
     await db.insert(organizationMemberships).values({ id: `fg-rate-mem-${s.suffix}`, userId: `fg-rate-${s.suffix}`, orgId: s.orgId, role: "owner" });
   }
-  await db.insert(apiTokens).values({ id: s.adminTokenId, token: s.adminToken, userId: s.userId });
+  await db.insert(apiTokens).values({ id: s.adminTokenId, token: createHash("sha256").update(s.adminToken).digest("hex"), userId: s.userId });
   await db.insert(projects).values([
     { id: s.projectA, orgId: s.orgId, name: "proj-a" },
     { id: s.projectB, orgId: s.orgId, name: "proj-b" },
@@ -1214,7 +1214,7 @@ describe("fine-grained run action grants", () => {
         const seeded3 = await createRunWith(s.adminToken, s.wsA1);
         expect(seeded3.status).toBe(201);
         const discardOk = await request(`/api/v2/runs/${seeded3.id}/actions/discard`, { method: "POST", headers: headers(discarder.secret) });
-        expect(discardOk.status).toBe(200);
+        expect(discardOk.status).toBe(202);
       } finally {
         await db.delete(apiTokens).where(eq(apiTokens.id, discarder.id));
       }
@@ -1236,7 +1236,7 @@ describe("fine-grained run action grants", () => {
       const a = await createRunWith(s.adminToken, s.wsA1);
       expect(a.status).toBe(201);
       const discard = await request(`/api/v2/runs/${a.id}/actions/discard`, { method: "POST", headers: headers(discardOnly.secret) });
-      expect(discard.status).toBe(200);
+      expect(discard.status).toBe(202);
 
       // Fresh run for the negative assertion: a run whose state already
       // changed could mask a permission failure with a state failure.
@@ -1248,7 +1248,7 @@ describe("fine-grained run action grants", () => {
       const b = await createRunWith(s.adminToken, s.wsA1);
       expect(b.status).toBe(201);
       const cancel = await request(`/api/v2/runs/${b.id}/actions/cancel`, { method: "POST", headers: headers(cancelOnly.secret) });
-      expect(cancel.status).toBe(200);
+      expect(cancel.status).toBe(202);
       const b2 = await createRunWith(s.adminToken, s.wsA1);
       expect(b2.status).toBe(201);
       const discardByCancel = await request(`/api/v2/runs/${b2.id}/actions/discard`, { method: "POST", headers: headers(cancelOnly.secret) });
@@ -1649,4 +1649,3 @@ describe("fine-grained org-level read grants", () => {
     }
   });
 });
-

@@ -13,10 +13,12 @@
 // after any admin settings write, so the sync rate-limit path can read it
 // without an async DB query per request.
 import { getSettings } from "./settings";
+import { isIPv4InCidr } from "./url-safety";
 
 type PeelServer = Readonly<{ readonly requestIP?: (request: unknown) => Readonly<{ readonly address?: string }> | null }> | null;
 
 let cachedTrustedHeaders: string[] = [];
+let cachedTrustedProxyCidrs: string[] = [];
 /** Re-read the trusted-header list from settings (startup + admin writes). */
 export async function refreshTrustedClientIpHeaders(): Promise<void> {
   try {
@@ -27,8 +29,16 @@ export async function refreshTrustedClientIpHeaders(): Promise<void> {
     } else {
       cachedTrustedHeaders = [];
     }
+    const configuredCidrs = next["trusted-client-ip-cidrs"];
+    const settingsCidrs = Array.isArray(configuredCidrs)
+      ? configuredCidrs.filter((cidr): cidr is string => typeof cidr === "string" && cidr.trim() !== "")
+      : [];
+    cachedTrustedProxyCidrs = settingsCidrs.length > 0
+      ? settingsCidrs
+      : (process.env.TERRENCE_TRUSTED_PROXY_CIDRS ?? "").split(",").map((cidr): string => cidr.trim()).filter(Boolean);
   } catch {
     cachedTrustedHeaders = [];
+    cachedTrustedProxyCidrs = [];
   }
 }
 
@@ -38,11 +48,9 @@ export function trustedClientIpHeaders(): readonly string[] {
   return cachedTrustedHeaders;
 }
 
-/** Synchronously resolve a request's IP from the configured trusted headers
- * (empty when no header matches the configured priority list). */
-export function syncedTrustedClientIp(request: unknown): string | null {
-  if (cachedTrustedHeaders.length === 0) return null;
-  return trustedHeaderValue(request);
+/** Read a forwarded client address only when the actual socket peer is trusted. */
+export function trustedClientIpForPeer(request: unknown, peer: string | null): string | null {
+  return trustedProxy(peer) ? trustedHeaderValue(request) : null;
 }
 
 /**
@@ -56,10 +64,10 @@ export function requestIsHttps(request: Readonly<{ url: string; headers: Readonl
   try {
     if (new URL(request.url).protocol === "https:") return true;
   } catch { /* fall through to header check */ }
-  // Only trust X-Forwarded-Proto when a trusted header list is configured (proxy in front).
-  if (cachedTrustedHeaders.length === 0) return false;
-  const forwarded = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
-  return forwarded === "https";
+  // This helper has no socket peer, so it cannot authenticate a proxy. Callers
+  // must use PUBLIC_URL when TLS terminates upstream; never trust a forwarded
+  // scheme from an unbound request object.
+  return false;
 }
 
 function headerValue(request: unknown, name: string): string | null {
@@ -78,6 +86,11 @@ function trustedHeaderValue(request: unknown): string | null {
   return null;
 }
 
+function trustedProxy(peer: string | null): boolean {
+  if (peer === null || cachedTrustedProxyCidrs.length === 0) return false;
+  return cachedTrustedProxyCidrs.some((cidr): boolean => isIPv4InCidr(peer, cidr));
+}
+
 function peerAddress(request: unknown, server: unknown): string | null {
   const peel = server as PeelServer;
   try {
@@ -89,29 +102,27 @@ function peerAddress(request: unknown, server: unknown): string | null {
   }
 }
 
+export function trustedForwardedProtocol(request: unknown, server: unknown): string | null {
+  const peer = peerAddress(request, server);
+  if (!trustedProxy(peer)) return null;
+  return headerValue(request, "x-forwarded-proto")?.toLowerCase() ?? null;
+}
+
 /**
  * Resolve the client IP for a request.
  * - When trusted headers are configured: return the first configured header's
  *   value, falling back to the peer address.
- * - Otherwise the peer (socket) address is authoritative. The app.handle()
- *   test-only path (no peer) falls back to X-Forwarded-For / X-Real-IP so a
- *   simulated client address can be supplied in tests.
+ * - Otherwise the peer (socket) address is authoritative. When it is
+ *   unavailable, no forwarded address is trusted.
  */
 export async function resolveClientIp(request: unknown, server: unknown): Promise<string | null> {
   const peer = peerAddress(request, server);
   if (peer !== null) {
-    if (cachedTrustedHeaders.length > 0) {
+    if (cachedTrustedHeaders.length > 0 && trustedProxy(peer)) {
       const trusted = trustedHeaderValue(request);
       if (trusted !== null) return trusted;
     }
     return peer;
   }
-  if (server !== null) return null;
-  if (cachedTrustedHeaders.length > 0) {
-    const trusted = trustedHeaderValue(request);
-    if (trusted !== null) return trusted;
-  }
-  const forwarded = headerValue(request, "x-forwarded-for");
-  if (forwarded !== null) return forwarded;
-  return headerValue(request, "x-real-ip");
+  return null;
 }

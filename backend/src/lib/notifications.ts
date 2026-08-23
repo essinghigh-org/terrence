@@ -19,6 +19,7 @@ import {
 } from "../db/schema";
 import type { DeepReadonly } from "./utils";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./url-safety";
+import { decryptSecret } from "./secrets";
 import { _resetSharedDeliveryState as resetSharedStateImpl, sharedBreakerRecordFailure, sharedBreakerRecordSuccess, sharedDedupRecord, sharedDedupSuppressed } from "./notification-state";
 import { getSettings } from "./settings";
 import { sendEmail } from "./smtp";
@@ -260,9 +261,22 @@ async function doPostNotification(
   const body = render.body;
   const headers: Record<string, string> = { "Content-Type": render.contentType };
   if (configuration.destinationType === "generic" && configuration.token !== null) {
-    headers["X-TFE-Notification-Signature"] = createHmac("sha512", configuration.token)
-      .update(body)
-      .digest("hex");
+    try {
+      headers["X-TFE-Notification-Signature"] = createHmac("sha512", await decryptSecret(configuration.token))
+        .update(body)
+        .digest("hex");
+    } catch (error: unknown) {
+      recordBreakerFailure(configuration.id);
+      return {
+        body: error instanceof Error ? error.message : String(error),
+        code: "422",
+        headers: {},
+        sentAt: new Date().toISOString(),
+        successful: false,
+        url: configuration.url,
+        attempts: 0,
+      };
+    }
   }
 
   let lastResponse: Response | undefined;

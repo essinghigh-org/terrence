@@ -1,5 +1,5 @@
 import { hashAuthenticationToken } from "./token-service";
-import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   agentJobs,
@@ -27,6 +27,8 @@ import {
   type PlanJson,
 } from "./plan-json";
 import type { DeepReadonly } from "./utils";
+import { insertStateVersionWithSerialTx } from "./state-serial";
+import { encryptStatePayload } from "./validation";
 
 export const MAX_AGENT_RESULT_BYTES = 64 * 1024;
 export const MAX_AGENT_RESULT_DEPTH = 8;
@@ -94,6 +96,7 @@ const AGENT_PING_WRITE_INTERVAL_MS = 15_000;
 // Lower bound so an operator-shrunk timeout cannot drive the write
 // interval to something pathological (sub-second DB writes).
 const MIN_PING_WRITE_INTERVAL_MS = 3_000;
+const MAX_INVALID_COMPLETION_REQUEUES = 3;
 
 export function configuredHeartbeatTimeoutMs(): number {
   const configured = Number(
@@ -552,6 +555,7 @@ export async function claimAgentJob(
   const agentBinaries = agent.iacBinaries !== null && agent.iacBinaries.length > 0
     ? agent.iacBinaries
     : ["terraform"];
+  const skippedApplyJobIds = new Set<string>();
 
   for (let attempts = 0; attempts < 10; attempts += 1) {
     const candidate = await db.query.agentJobs.findFirst({
@@ -560,6 +564,7 @@ export async function claimAgentJob(
         eq(agentJobs.status, "queued"),
         inArray(agentJobs.phase, [...acceptedPhases]),
         inArray(agentJobs.iacBinary, agentBinaries),
+        ...(skippedApplyJobIds.size > 0 ? [notInArray(agentJobs.id, [...skippedApplyJobIds])] : []),
       ),
       orderBy: [asc(agentJobs.createdAt)],
     });
@@ -593,6 +598,22 @@ export async function claimAgentJob(
       }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
       continue;
     }
+    if (candidate.phase === "apply") {
+      const locked = await db.update(workspaces).set({
+        locked: true,
+        lockedReason: `Run ${candidate.runId} is applying`,
+        lockOwnerType: "agent-run",
+        lockOwnerId: candidate.runId,
+      }).where(and(eq(workspaces.id, run.workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
+      if (locked.length === 0) {
+        skippedApplyJobIds.add(candidate.id);
+        await db.update(agentJobs).set({ agentId: null, status: "queued", claimedAt: null }).where(and(
+          eq(agentJobs.id, candidate.id),
+          eq(agentJobs.status, "claimed"),
+        ));
+        continue;
+      }
+    }
     const associated = await db.update(runs).set({
       agentPoolId: agent.agentPoolId,
       agentId: agent.id,
@@ -603,6 +624,14 @@ export async function claimAgentJob(
       eq(runs.status, expectedRunStatus),
     )).returning({ id: runs.id });
     if (associated.length === 0) {
+      if (candidate.phase === "apply") {
+        await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
+          eq(workspaces.id, run.workspaceId),
+          eq(workspaces.locked, true),
+          eq(workspaces.lockOwnerType, "agent-run"),
+          eq(workspaces.lockOwnerId, run.id),
+        ));
+      }
       await db.update(agentJobs).set({
         status: "canceled",
         completedAt: Date.now(),
@@ -625,6 +654,11 @@ export async function cancelAgentJobsForRun(runId: string): Promise<void> {
   }).where(and(
     eq(agentJobs.runId, runId),
     inArray(agentJobs.status, ["queued", "claimed"]),
+  ));
+  await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
+    eq(workspaces.locked, true),
+    eq(workspaces.lockOwnerType, "agent-run"),
+    eq(workspaces.lockOwnerId, runId),
   ));
 }
 
@@ -717,6 +751,7 @@ export async function insertAgentApplyJobTx(
     claimedAt: null,
     completedAt: null,
     createdAt: Date.now(),
+    requeueAttempts: 0,
   };
   await database.insert(agentJobs).values(job);
   const updated = await database.update(runs).set({
@@ -759,9 +794,46 @@ export async function completeAgentJob(
     if (job === undefined) return undefined;
     const run = await tx.query.runs.findFirst({ where: eq(runs.id, job.runId) });
     const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
-    if (run?.status !== expectedRunStatus) return undefined;
-    if (!isAgentResultValid(completion.result)) return undefined;
+    const requeueInvalidCompletion = async (reason: string): Promise<void> => {
+      const requeueAttempts = job.requeueAttempts + 1;
+      const terminal = requeueAttempts >= MAX_INVALID_COMPLETION_REQUEUES;
+      const updatedJobs = await tx.update(agentJobs).set({
+        status: terminal ? "canceled" : "queued",
+        agentId: null,
+        claimedAt: null,
+        completedAt: terminal ? Date.now() : null,
+        errorMessage: reason,
+        requeueAttempts,
+      }).where(and(eq(agentJobs.id, job.id), eq(agentJobs.agentId, agentId), eq(agentJobs.status, "claimed"))).returning({ id: agentJobs.id });
+      if (updatedJobs.length === 0) return;
+      const nextRunStatus = terminal ? "errored" : job.phase === "plan" ? "plan_queued" : "apply_queued";
+      if (run !== undefined) {
+        await tx.update(runs).set({
+          agentId: null,
+          status: nextRunStatus,
+          statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus),
+        }).where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus)));
+      }
+      if (job.phase === "apply" && run !== undefined) {
+        await tx.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
+          eq(workspaces.id, run.workspaceId),
+          eq(workspaces.locked, true),
+          eq(workspaces.lockOwnerType, "agent-run"),
+          eq(workspaces.lockOwnerId, run.id),
+        ));
+      }
+      await tx.update(agents).set({ status: "idle", lastPingAt: Date.now() }).where(eq(agents.id, agentId));
+    };
+    if (run?.status !== expectedRunStatus) {
+      await requeueInvalidCompletion("Run changed before agent completion");
+      return undefined;
+    }
+    if (!isAgentResultValid(completion.result)) {
+      await requeueInvalidCompletion("Invalid agent completion result");
+      return undefined;
+    }
     if (completion.planJson !== null && (completion.status !== "completed" || job.phase !== "plan")) {
+      await requeueInvalidCompletion("plan-json is only valid for completed plan jobs");
       return undefined;
     }
     if (completion.planJson !== null) {
@@ -770,9 +842,7 @@ export async function completeAgentJob(
     // Modern agent protocol uploads the plan JSON separately (PUT to the job's
     // plan-json URL) before completing; fall back to the stored artifact so
     // resource counts are still derived from the real plan.
-    const effectivePlanJson = completion.planJson !== null
-      ? completion.planJson
-      : await readPlanJsonArtifact(run.id);
+    const effectivePlanJson = completion.planJson ?? await readPlanJsonArtifact(run.id);
     const structuredPlanCounts = job.phase === "plan" && effectivePlanJson !== undefined
       ? planJsonResourceCounts(effectivePlanJson)
       : undefined;
@@ -817,10 +887,10 @@ export async function completeAgentJob(
         ? "errored"
         : policyOutcome.softFailed
           ? "policy_soft_failed"
-          : run.planOnly
-            ? "planned_and_finished"
-            : run.savePlan
+          : run.savePlan
               ? "planned_and_saved"
+              : run.planOnly
+                ? "planned_and_finished"
               : run.autoApply || run.allowEmptyApply
                 ? "apply_queued"
                 : "planned";
@@ -863,6 +933,31 @@ export async function completeAgentJob(
     )).returning({ id: runs.id });
     if (updatedRuns.length === 0) throw new Error("Run changed while its agent job was completing");
 
+    // Apply completion and the resulting state version commit together. A
+    // successful provider apply must never be acknowledged while its state
+    // insert is still a separate, failure-prone operation.
+    if (completion.status === "completed" && job.phase === "apply" && completion.statePayload !== null) {
+      await insertStateVersionWithSerialTx(tx, {
+        id: crypto.randomUUID(),
+        workspaceId: run.workspaceId,
+        statePayload: await encryptStatePayload(completion.statePayload),
+        jsonState: await encryptStatePayload(completion.jsonState ?? completion.statePayload),
+        jsonStateOutputs: await encryptStatePayload(completion.jsonStateOutputs),
+        runId: run.id,
+        status: "finalized",
+        createdAt: now,
+      });
+    }
+
+    if (job.phase === "apply") {
+      await tx.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
+        eq(workspaces.id, run.workspaceId),
+        eq(workspaces.locked, true),
+        eq(workspaces.lockOwnerType, "agent-run"),
+        eq(workspaces.lockOwnerId, run.id),
+      ));
+    }
+
     if (completion.status === "completed" && job.phase === "plan" && runStatus === "apply_queued") {
       await tx.insert(agentJobs).values({
         id: `ajob-${crypto.randomUUID()}`,
@@ -870,24 +965,6 @@ export async function completeAgentJob(
         agentPoolId: job.agentPoolId,
         phase: "apply",
         status: "queued",
-        createdAt: now,
-      });
-    }
-
-    if (completion.status === "completed" && job.phase === "apply" && completion.statePayload !== null) {
-      const latestState = await tx.query.stateVersions.findFirst({
-        where: eq(stateVersions.workspaceId, run.workspaceId),
-        orderBy: [desc(stateVersions.serial)],
-      });
-      await tx.insert(stateVersions).values({
-        id: crypto.randomUUID(),
-        workspaceId: run.workspaceId,
-        serial: (latestState?.serial ?? 0) + 1,
-        statePayload: completion.statePayload,
-        jsonState: completion.jsonState ?? completion.statePayload,
-        jsonStateOutputs: completion.jsonStateOutputs,
-        runId: run.id,
-        status: "finalized",
         createdAt: now,
       });
     }

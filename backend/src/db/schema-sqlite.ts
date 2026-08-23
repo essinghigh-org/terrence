@@ -335,6 +335,8 @@ export const workspaces = sqliteTable("workspaces", {
   settingOverwrites: text("setting_overwrites", { mode: "json" }).$type<Record<string, boolean>>(),
   locked: integer("locked", { mode: "boolean" }).default(false),
   lockedReason: text("locked_reason"),
+  lockOwnerType: text("lock_owner_type"),
+  lockOwnerId: text("lock_owner_id"),
   // Executor policy (36/37/39): per-workspace isolation level. When
   // `trustedExecution` is false, local Landlock execution is refused and the
   // run must be dispatched to an isolated executor (agent/container/k8s).
@@ -470,6 +472,7 @@ export const configurationVersions = sqliteTable("configuration_versions", {
   // simultaneous signed PUTs cannot race. Claim expires so a crashed
   // upload cannot wedge the version permanently.
   uploadClaimExpiresAt: integer("upload_claim_expires_at"),
+  uploadClaimToken: text("upload_claim_token"),
   error: text("error"),
   errorMessage: text("error_message"),
   softDeletedAt: integer("soft_deleted_at"),
@@ -695,6 +698,17 @@ export const stateVersions = sqliteTable("state_versions", {
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   uniqueIndex("state_versions_ws_serial_idx").on(table.workspaceId, table.serial),
+]);
+
+export const stateOutputIndex = sqliteTable("state_output_index", {
+  outputId: text("output_id").primaryKey(),
+  stateVersionId: text("state_version_id").notNull().references(() => stateVersions.id, { onDelete: "cascade" }),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  index("state_output_index_workspace_idx").on(table.workspaceId),
+  index("state_output_index_state_idx").on(table.stateVersionId),
 ]);
 
 export const workspaceTags = sqliteTable("workspace_tags", {
@@ -1564,6 +1578,7 @@ export const agentJobs = sqliteTable("agent_jobs", {
   status: text("status").notNull().default("queued"), // 'queued', 'claimed', 'completed', 'errored'
   result: text("result", { mode: "json" }).$type<Record<string, unknown>>(),
   errorMessage: text("error_message"),
+  requeueAttempts: integer("requeue_attempts").notNull().default(0),
   claimedAt: integer("claimed_at"),
   completedAt: integer("completed_at"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),

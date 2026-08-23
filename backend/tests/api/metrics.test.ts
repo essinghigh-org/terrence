@@ -11,14 +11,16 @@ import {
   projects,
   refreshSessions,
   runs,
+  systemApiTokens,
   users,
   workspaces,
 } from "../../src/db/schema";
 import { inArray } from "drizzle-orm";
+import { hashSystemApiToken } from "../../src/lib/system-api";
 
-// Token-authenticated /metrics (kanban 9.14): legacy tokens see instance-wide
-// metrics; fine-grained tokens see only the org/workspace/agent data their
-// scope is eligible for, never instance counters.
+// Token-authenticated /metrics (kanban 9.14): a dedicated System API token
+// sees instance-wide metrics; ordinary legacy and fine-grained tokens see only
+// the org/workspace/agent data their scope is eligible for.
 describe("instance metrics", () => {
   let server: { url: URL; stop: () => void };
   let baseUrl: string;
@@ -28,8 +30,10 @@ describe("instance metrics", () => {
   let noAgentGrantToken: string;
   let otherOrgToken: string;
   let sessionToken: string;
+  let monitoringToken: string;
 
   const suffix = crypto.randomUUID();
+  const monitoringTokenId = `metrics-system-${suffix}`;
   const sessionTokenId = `metrics-tok-session-${suffix}`;
   const sessionRefreshId = `metrics-refresh-session-${suffix}`;
   const userId = `metrics-user-${suffix}`;
@@ -112,6 +116,7 @@ describe("instance metrics", () => {
     noAgentGrantToken = `metrics-noagent-${suffix}`;
     otherOrgToken = `metrics-other-${suffix}`;
     sessionToken = `metrics-session-${suffix}`;
+    monitoringToken = `tfe-system-metrics-${suffix}`;
     await db.insert(apiTokens).values([
       // Legacy: no scopes = full permissions.
       { id: `metrics-tok-legacy-${suffix}`, token: legacyToken, userId },
@@ -172,8 +177,14 @@ describe("instance metrics", () => {
       tokenHash: `metrics-refresh-hash-${suffix}`,
       userId,
       accessTokenId: sessionTokenId,
-      expiresAt: Date.now() + 60_000,
+      expiresAt: Date.now() + 60 * 60_000,
       createdAt: Date.now(),
+    });
+    await db.insert(systemApiTokens).values({
+      id: monitoringTokenId,
+      tokenHash: hashSystemApiToken(monitoringToken),
+      description: "instance metrics test token",
+      expiresAt: Date.now() + 60 * 60_000,
     });
   });
 
@@ -185,6 +196,7 @@ describe("instance metrics", () => {
       process.env.AGENT_HEARTBEAT_TIMEOUT_MS = previousHeartbeatTimeout;
     }
     await db.delete(refreshSessions).where(inArray(refreshSessions.id, [sessionRefreshId]));
+    await db.delete(systemApiTokens).where(inArray(systemApiTokens.id, [monitoringTokenId]));
     await db.delete(apiTokens).where(inArray(apiTokens.id, [
       `metrics-tok-legacy-${suffix}`,
       sessionTokenId,
@@ -227,7 +239,7 @@ describe("instance metrics", () => {
   });
 
   test("legacy token sees instance-wide metrics plus agent queue depth", async () => {
-    const res = await fetch(`${baseUrl}metrics`, { headers: auth(legacyToken) });
+    const res = await fetch(`${baseUrl}metrics`, { headers: auth(monitoringToken) });
     expect(res.status).toBe(200);
     const { metrics } = await readJson(res) as { metrics: Record<string, unknown> };
 
@@ -287,6 +299,11 @@ describe("instance metrics", () => {
     expect(poolA_.oldest_queued_wait_seconds).toBeGreaterThanOrEqual(25);
   });
 
+  test("rejects an ordinary legacy token from instance-wide metrics", async () => {
+    const res = await fetch(`${baseUrl}metrics`, { headers: auth(legacyToken) });
+    expect(res.status).toBe(403);
+  });
+
   test("fine-grained token sees only its org, no instance counters", async () => {
     const res = await fetch(`${baseUrl}metrics`, { headers: auth(scopedToken) });
     expect(res.status).toBe(200);
@@ -344,7 +361,7 @@ describe("instance metrics", () => {
   });
 
   test("Prometheus text format carries queue-depth gauges with pool labels", async () => {
-    const res = await fetch(`${baseUrl}metrics?format=prometheus`, { headers: auth(legacyToken) });
+    const res = await fetch(`${baseUrl}metrics?format=prometheus`, { headers: auth(monitoringToken) });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/plain");
     const body = await res.text();

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -74,6 +75,10 @@ describe("State storage and retention", () => {
   });
 
   test("promotes the latest intermediate snapshot when the workspace unlocks", async () => {
+    expect((await app.handle(new Request(
+      `http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`,
+      { method: "POST", headers: authHeaders },
+    ))).status).toBe(200);
     const createState = (serial: number, intermediate = false) => app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
         method: "POST",
@@ -85,6 +90,7 @@ describe("State storage and retention", () => {
               serial,
               intermediate,
               state: Buffer.from(JSON.stringify({ version: 4, serial, resources: [] })).toString("base64"),
+              md5: createHash("md5").update(JSON.stringify({ version: 4, serial, resources: [] })).digest("base64"),
             },
           },
         }),
@@ -92,10 +98,6 @@ describe("State storage and retention", () => {
     );
 
     expect((await createState(1)).status).toBe(201);
-    expect((await app.handle(new Request(
-      `http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`,
-      { method: "POST", headers: authHeaders },
-    ))).status).toBe(200);
     // Non-intermediate uploads are allowed while locked (the reference format semantics);
     // the intermediate snapshot is still the one that gets promoted.
     const snapshotResponse = await createState(2, true);

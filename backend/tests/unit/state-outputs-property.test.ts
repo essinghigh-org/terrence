@@ -9,7 +9,7 @@
  * perpetual ForceNew diffs on `terraform apply` after a read.
  *
  * These tests assert the exact derivation the code performs:
- *   id = `wsout-${sha256(state.id + NUL + outputName).hex().slice(0,16)}`
+ *   id = `wsout-${sha256(state.id + NUL + outputName).hex()}`
  * plus structural fields (type, links.self, attributes shape) that go-tfe
  * depends on. Deterministic here is a correctness property, not an
  * implementation detail: a future edit that randomizes these IDs would
@@ -25,7 +25,7 @@ function stateRow(id: string, payload: string | null): StateParam {
 }
 
 function expectedId(stateId: string, name: string): string {
-  return `wsout-${createHash("sha256").update(`${stateId}\0${name}`).digest("hex").slice(0, 16)}`;
+  return `wsout-${createHash("sha256").update(`${stateId}\0${name}`).digest("hex")}`;
 }
 
 function parsePayload(outputs: Record<string, unknown>): string {

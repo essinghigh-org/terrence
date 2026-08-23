@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:f
 import { dirname, join, resolve } from "node:path";
 import { and, asc, desc, eq, lt } from "drizzle-orm";
 import { db } from "../db";
-import { agentForwardedRequests, agentPoolTokens, agents, agentJobs, logs, organizations, runs, stackAgentJobs } from "../db/schema";
+import { agentForwardedRequests, agentPoolTokens, agents, agentJobs, logs, organizations, runs, workspaces, stackAgentJobs } from "../db/schema";
 import { authPlugin } from "../auth";
 import {
   isAgentResultValid,
@@ -32,12 +32,49 @@ import {
   terraformReleaseInfo,
   type AgentJobDetails,
 } from "../lib/agent-api";
+import { revokeRunTokens } from "../lib/run-token";
+import { persistUploadBody } from "../lib/upload-body";
+import { log } from "../lib/log";
 
 const MAX_AGENT_BODY_BYTES = 16 * 1024 * 1024;
-const MAX_AGENT_FILESYSTEM_BYTES = 256 * 1024 * 1024;
+// The public listener's native request cap is 100 MiB. Keep the endpoint's
+// advertised and enforced limit aligned so a body cannot claim a larger
+// contract and then be rejected before the route sees it.
+const MAX_AGENT_FILESYSTEM_BYTES = 100 * 1024 * 1024;
 const MAX_FORWARDED_RESPONSE_BASE64_BYTES = Math.ceil(10 * 1024 * 1024 * 4 / 3) + 8;
 const DEFAULT_AGENT_ACCEPT = "plan,apply,policy,assessment,stack_prepare,stack_plan,stack_apply,source_bundle,stack_aggregate_outputs,test";
 const AGENT_WORKLOAD_TYPES = `${DEFAULT_AGENT_ACCEPT},ingress`.split(",");
+const AGENT_ARCHITECTURES = new Set(["amd64", "aarch64", "arm64", "386", "arm"]);
+
+async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
+  const { job, run } = claimed;
+  const queuedStatus = job.phase === "plan" ? "plan_queued" : "apply_queued";
+  // Revoke before requeueing: once the job is claimable another agent can mint
+  // a fresh run token, and a later revocation would kill that new token.
+  await revokeRunTokens(run.id);
+  await db.transaction(async (tx: unknown): Promise<void> => {
+    const t = tx as typeof db;
+    await t.update(agentJobs).set({
+      status: "queued",
+      agentId: null,
+      claimedAt: null,
+      completedAt: null,
+      errorMessage: null,
+    }).where(and(eq(agentJobs.id, job.id), eq(agentJobs.status, "claimed")));
+    const current = await t.query.runs.findFirst({ where: eq(runs.id, run.id), columns: { statusTimestamps: true } });
+    const timestamps: Record<string, string> = current?.statusTimestamps !== null && typeof current?.statusTimestamps === "object"
+      ? { ...(current.statusTimestamps as Record<string, string>), [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() }
+      : { [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() };
+    await t.update(runs).set({ status: queuedStatus, statusTimestamps: timestamps }).where(and(eq(runs.id, run.id), eq(runs.status, job.phase === "plan" ? "planning" : "applying")));
+    if (job.phase === "apply") {
+      await t.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
+        eq(workspaces.locked, true),
+        eq(workspaces.lockOwnerType, "agent-run"),
+        eq(workspaces.lockOwnerId, run.id),
+      ));
+    }
+  });
+}
 
 type AgentCtx = Readonly<{
   params: Readonly<Record<string, string>>;
@@ -188,7 +225,7 @@ async function configurationArchivePath(cvId: string): Promise<string> {
  * archives carry a top-level repo directory (git archive layout), so flatten
  * the archive once and cache it under storage/agent-cv/<cvId>.tar.gz.
  */
-async function flattenedConfigurationArchive(cvId: string): Promise<string> {
+async function flattenedConfigurationArchive(cvId: string, sourcePath?: string): Promise<string> {
   const cacheDir = join(storageRoot(), "agent-cv");
   const cached = join(cacheDir, `${cvId}.tar.gz`);
   try {
@@ -197,7 +234,7 @@ async function flattenedConfigurationArchive(cvId: string): Promise<string> {
   } catch {
     // not cached yet
   }
-  const source = await configurationArchivePath(cvId);
+    const source = sourcePath ?? await configurationArchivePath(cvId);
   const tmp = await mkdtemp(join(storageRoot(), ".agent-cv-"));
   try {
     const extract = Bun.spawnSync(["tar", "-xzf", source, "-C", tmp]);
@@ -267,6 +304,10 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
     }
     const name = typeof body.name === "string" && body.name !== "" ? body.name : "agent";
     const arch = typeof body.arch === "string" ? body.arch : null;
+    if (arch !== null && !AGENT_ARCHITECTURES.has(arch)) {
+      set.status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "arch must be amd64, aarch64, arm64, 386, or arm" }] };
+    }
     const version = ctx.request.headers.get("tfc-agent-version");
     const accept = typeof body.accept === "string" && body.accept !== "" ? body.accept : DEFAULT_AGENT_ACCEPT;
     if (accept !== "none" && (!/^[a-z_]+(?:,[a-z_]+)*$/.test(accept) || accept.split(",").some((value): boolean => !AGENT_WORKLOAD_TYPES.includes(value)))) {
@@ -603,31 +644,34 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       return await stackAgentPayload(stackClaimed, agentApiBaseUrl(ctx.request));
     }
     const { job, run, workspace, configuration } = claimed;
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
-    if (org === undefined) {
-      set.status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-
-    const baseUrl = agentApiBaseUrl(ctx.request);
-    const runToken = await agentRunToken(run.id, workspace.id, workspace.orgId);
-    const version = run.terraformVersion ?? workspace.terraformVersion ?? org.defaultTerraformVersion ?? "latest";
-    const terraformInfo = await terraformReleaseInfo(version);
-    if (terraformInfo === null) {
+    try {
+      const org = await db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) });
+      if (org === undefined) throw new Error("organization not found");
+      const baseUrl = agentApiBaseUrl(ctx.request);
+      const version = run.terraformVersion ?? workspace.terraformVersion ?? org.defaultTerraformVersion ?? "latest";
+      const terraformInfo = await terraformReleaseInfo(version, agent.architecture ?? "amd64");
+      if (terraformInfo === null) throw new Error("Unable to resolve Terraform release");
+      const environment = await agentEnvironment(workspace.id, workspace.orgId, workspace.projectId ?? null);
+      // Mint the run token only after all fallible lookups/resolution work has
+      // succeeded, so a failed payload build cannot accumulate valid tokens.
+      const runToken = await agentRunToken(run.id, workspace.id, workspace.orgId);
+      const details: AgentJobDetails = { job, run, workspace, organizationName: org.name, configuration };
+      const payload = await buildAgentJobPayload(details, baseUrl, runToken, terraformInfo, {}, environment);
+      return payload;
+    } catch (error: unknown) {
+      try {
+        await releaseAgentClaim(claimed);
+      } catch (releaseError: unknown) {
+        log.error("Failed to release an agent claim after payload construction failed", {
+          jobId: claimed.job.id,
+          runId: claimed.run.id,
+          error: releaseError,
+        });
+      }
+      log.error("Failed to construct an agent job payload", { jobId: claimed.job.id, runId: claimed.run.id, error });
       set.status = 503;
-      return { errors: [{ status: "503", title: "Service Unavailable", detail: "Unable to resolve Terraform release" }] };
+      return { errors: [{ status: "503", title: "Service Unavailable", detail: error instanceof Error ? error.message : "Unable to construct agent job" }] };
     }
-    const environment = await agentEnvironment(workspace.id, workspace.orgId, workspace.projectId ?? null);
-    const details: AgentJobDetails = { job, run, workspace, organizationName: org.name, configuration };
-    // The agent decodes `type`, `job_id` and the per-phase container from the
-    // response top level; `data` is the run attribute map. (Verified against
-    // tfc-agent 1.30.1: a payload nested under a single `data` key decodes
-    // with an empty job type and is not dispatchable.)
-    // Terraform variables are delivered as TF_VAR_* environment entries; the
-    // container `variables` object is not consumed by the agent, so send an
-    // empty object rather than duplicating sensitive values into a dead field.
-    const payload = await buildAgentJobPayload(details, baseUrl, runToken, terraformInfo, {}, environment);
-    return payload;
   })
 
   .get("/api/agent/jobs/:job_id/status", async (ctx: AgentCtx): Promise<unknown> => {
@@ -678,8 +722,14 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       set.status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    const configuration = details.configuration;
+    if (configuration === null || configuration.id !== cvId || configuration.status !== "uploaded" || configuration.archivePath === null || !(await Bun.file(configuration.archivePath).exists())) {
+      await rm(join(storageRoot(), "agent-cv", `${cvId}.tar.gz`), { force: true });
+      set.status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     try {
-      const data = await readFile(await flattenedConfigurationArchive(cvId));
+      const data = await readFile(await flattenedConfigurationArchive(cvId, configuration.archivePath));
       set.headers = { "content-type": "application/gzip", "content-length": String(data.byteLength) };
       return new Response(data);
     } catch {
@@ -712,14 +762,17 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const buffer = await rawBody(ctx);
-    if (buffer.byteLength > MAX_AGENT_FILESYSTEM_BYTES) {
-      set.status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
-    }
     const path = agentFilesystemPath(details.job.runId);
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, buffer, { mode: 0o600 });
+    try {
+      await mkdir(dirname(path), { recursive: true });
+      const size = await persistUploadBody(ctx.body, ctx.request, path, MAX_AGENT_FILESYSTEM_BYTES);
+      if (size === 0) throw new Error("empty");
+    } catch (error: unknown) {
+      await rm(path, { force: true });
+      const tooLarge = error instanceof Error && error.message === "too-large";
+      set.status = tooLarge ? 422 : 400;
+      return { errors: [{ status: String(set.status), title: tooLarge ? "Unprocessable Entity" : "Bad Request" }] };
+    }
     return {};
   })
 

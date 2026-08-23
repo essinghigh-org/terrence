@@ -81,6 +81,14 @@ describe("team token workspace authorization", () => {
     }
   };
 
+  const waitForWorkspaceUnlock = async (): Promise<void> => {
+    for (let attempt = 0; attempt < 500; attempt += 1) {
+      if ((await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId), columns: { locked: true } }))?.locked !== true) return;
+      await Bun.sleep(10);
+    }
+    throw new Error("Workspace remained locked after waiting for worker completion");
+  };
+
   const responseData = async <T>(response: Readonly<Response>): Promise<T> => {
     const document = await response.json() as Readonly<{ data: T }>;
     return document.data;
@@ -376,6 +384,8 @@ describe("team token workspace authorization", () => {
     expect((await db.query.runs.findFirst({ where: eq(runs.id, writeRunId) }))?.autoApply).toBe(true);
 
     expect((await request(`/api/v2/runs/${applyRunIds.write}/actions/apply`, tokens.write, "POST")).status).toBe(202);
+    await waitForTerminalRun(applyRunIds.write);
+    await waitForWorkspaceUnlock();
     expect((await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, tokens.write, "POST")).status).toBe(200);
     expect((await request(`/api/v2/workspaces/${workspaceId}/actions/unlock`, tokens.write, "POST")).status).toBe(200);
     expect((await request(`/api/v2/workspaces/${workspaceId}`, tokens.write, "PATCH", {
@@ -383,6 +393,8 @@ describe("team token workspace authorization", () => {
     })).status).toBe(403);
 
     expect((await request(`/api/v2/runs/${applyRunIds.custom}/actions/apply`, tokens.custom, "POST")).status).toBe(202);
+    await waitForTerminalRun(applyRunIds.custom);
+    await waitForWorkspaceUnlock();
     expect((await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, tokens.custom, "POST")).status).toBe(200);
     expect((await request(`/api/v2/workspaces/${workspaceId}/actions/unlock`, tokens.custom, "POST")).status).toBe(200);
     expect((await request(`/api/v2/workspaces/${workspaceId}`, tokens.custom, "PATCH", {
@@ -402,9 +414,15 @@ describe("team token workspace authorization", () => {
     expect((await responseData<{ attributes: { description: string } }>(patchResponse)).attributes.description).toBe("administered");
 
     const forceRunId = `run-force-${suffix}`;
-    await db.insert(runs).values({ id: forceRunId, workspaceId, status: "applying", createdAt: Date.now() });
+    await db.insert(runs).values({
+      id: forceRunId,
+      workspaceId,
+      status: "applying",
+      statusTimestamps: { "cancel-requested-at": new Date().toISOString() },
+      createdAt: Date.now(),
+    });
     expect((await request(`/api/v2/runs/${forceRunId}/actions/force-cancel`, tokens.write, "POST")).status).toBe(403);
-    expect((await request(`/api/v2/runs/${forceRunId}/actions/force-cancel`, tokens.admin, "POST")).status).toBe(200);
+    expect((await request(`/api/v2/runs/${forceRunId}/actions/force-cancel`, tokens.admin, "POST")).status).toBe(202);
   });
 
   it("propagates team workspace access through assessment and change request APIs", async () => {

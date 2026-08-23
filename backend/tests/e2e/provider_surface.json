@@ -1,5 +1,5 @@
 {
-  "_comment": "Authoritative hashicorp/tfe v0.80.0 provider surface, generated from `terraform providers schema -json` by backend/scripts/refresh-provider-surface.ts. Status values: covered (exercised by provider_e2e E2E), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).",
+  "_comment": "Authoritative hashicorp/tfe v0.80.0 provider surface, generated from `terraform providers schema -json` by backend/scripts/refresh-provider-surface.ts. Each entry includes a SHA-256 schema_hash over its full resource/data-source schema. Status values: covered (exercised by provider_e2e E2E), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).",
   "provider": "hashicorp/tfe v0.80.0",
   "resource_count": 72,
   "data_source_count": 43,
@@ -8,465 +8,580 @@
   "resources": [
     {
       "name": "tfe_admin_organization_settings",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "a23775348083ed814757419d48e3d8dee98feb5a630390272ae00bdfc42da707"
     },
     {
       "name": "tfe_admin_smtp_settings",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "5faa55f19496b39b5a083a4eacafef816afdb97408d362ba025e38290391f17d"
     },
     {
       "name": "tfe_agent_pool",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "64655c3caab5d6d90f5ffc4c3132297beed0de145ae8fcd23104f584c17a80dc"
     },
     {
       "name": "tfe_agent_pool_allowed_projects",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "05a412bfc1b975df3a1d1dd36a88c7bb546899e95d5b244a5c3718ebd2084bc5"
     },
     {
       "name": "tfe_agent_pool_allowed_workspaces",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "6782815050242b3362fd1529ef9280e49fe4bb0f1a4ce8ba868bec447b36adbd"
     },
     {
       "name": "tfe_agent_pool_excluded_workspaces",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "bd0f16df598de33b599cb02fe5c326a0fdb8cfdab92b30cf0a4d290837ffcc3e"
     },
     {
       "name": "tfe_agent_token",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "7b6ee4cbfdd2a4cd972416947b719cf4df03fe968faa19b7a72b5a5feade0ab7"
     },
     {
       "name": "tfe_audit_trail_token",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "3265f4f8c8872db2cd60e18e511b9cb14818126fa6df8a9689bb2ea470466c45"
     },
     {
       "name": "tfe_aws_oidc_configuration",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "84f55814d3ccd19432fe7c5991555086be070990a02bba475c771328927d686e"
     },
     {
       "name": "tfe_azure_oidc_configuration",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "f7c4db1dc1eed31084380e50b01dfcb0b5da64d7c2b88cfb48d4895633499cc4"
     },
     {
       "name": "tfe_data_retention_policy",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "8e31d3b66bd41add524ecf2c191624e0fa39bebac73c464e8995bfe5e58ce3a9"
     },
     {
       "name": "tfe_gcp_oidc_configuration",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "b4293ed8dc42feb6ccf205553cfbac5ff6ef6c206c4aa3fa678394610d51acdb"
     },
     {
       "name": "tfe_hyok_configuration",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "c62a587d59fe370e0c04e72636906e081030d446b7c763e35e4ff589a6eaf25e"
     },
     {
       "name": "tfe_no_code_module",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "a78b2ddc9bdc7aee72a07eb5c8ed36aef361949fd9cdb27aa5f8e56d73827ff3"
     },
     {
       "name": "tfe_notification_configuration",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "7fac378e9b628f240a1d6ff9b84051c68ee6ca8ad500528a9eaee7305572af11"
     },
     {
       "name": "tfe_oauth_client",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "180f9af8b6539f42716b783b5604f5aa6a8397723a77dcb87051b5ed95b850dd"
     },
     {
       "name": "tfe_opa_version",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "bcda8bc9e3c8f3f99e74442110a510ebaf668a1fd81d05242b4726ad1ee4aa0d"
     },
     {
       "name": "tfe_org_max_token_ttl_policy",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "75ec059df63d2ac8e2ccf4acfe3ad94d610d6ce84b97d7aa0b84d18b6a090930"
     },
     {
       "name": "tfe_organization",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "9e5866353f12f48f5f7a0480a459707504772398f8134ecdaa498c3363c57819"
     },
     {
       "name": "tfe_organization_default_settings",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "e6dd29ee03e5c1f38d3bcc297aaabf48c343aa514f5adfad727c4f7d9eae6473"
     },
     {
       "name": "tfe_organization_membership",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "44d36338b50f44bee9bc5e0f5123050b3f1fedbb092f2f98dd91878fc3c7f65c"
     },
     {
       "name": "tfe_organization_module_sharing",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "5fcdf03939ae013fb1c550c836a388ddfb436bd74afd4f8ea749d036ec58c5d2"
     },
     {
       "name": "tfe_organization_run_task",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "20f0792898e743f1b9e80706359f36d21787341e3104f6a35aa5a3e38c13fcb9"
     },
     {
       "name": "tfe_organization_run_task_global_settings",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "5bbb3e86b6126136bdd110692f01e7ac534032234f033c203ec1d7abed91cb08"
     },
     {
       "name": "tfe_organization_token",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "a45d82114870cad721262ad19569a367fd342121494e25e98454417b919be800"
     },
     {
       "name": "tfe_policy",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "76ee31726810edcd77e897d0147fdfd37443a6bf4938dcbe81f28ebb294d14f7"
     },
     {
       "name": "tfe_policy_set",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "6782c117bbc40e6c398ee942e385a26aa6cc4c47e8bc64f2e4bc786021e90f3a"
     },
     {
       "name": "tfe_policy_set_parameter",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "ef051de03da1ac408c41199121e76518a3f1303a3fa788a389054069d13f78a5"
     },
     {
       "name": "tfe_project",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "b3a782d7804dc28badaaa80e47d59f3056c9e8cf12db790284b73b0ff6992140"
     },
     {
       "name": "tfe_project_notification_configuration",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "3002f1ac51d1cf4faf11086b42adefff7b6b871c9e8cf218c43771f665248c53"
     },
     {
       "name": "tfe_project_oauth_client",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "7a9c6a6a82eab89db4b717a3776881a06d8dc5cde2e4f1c265ef6de6dda7adf8"
     },
     {
       "name": "tfe_project_policy_set",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "c88bac3901e3b0cda6562fc75273a3aed94cc686db5024d7ba271c3f4829134f"
     },
     {
       "name": "tfe_project_policy_set_exclusion",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "e26a7cf639d8432445e24ded461cb5a870bf4108fa1514142b786d8392c8a5ab"
     },
     {
       "name": "tfe_project_settings",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "3fa9dfacbf49dd57bb9bb456f6c77f6187111707e86b85fd70b46cbd0f2b3f29"
     },
     {
       "name": "tfe_project_variable_set",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "3aace750cc90fa39a0d5f9a5e4ecad34d0f5aed44301d35c6a5594c58fb86cdc"
     },
     {
       "name": "tfe_provider_set",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "c6628b1d72871763a724573d66eacbd3b4ec1a81d2beb7bf7cbddc0a64825028"
     },
     {
       "name": "tfe_registry_gpg_key",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "8bb9db3f2aac560396b234271d0144015361c538a97f1ee128009d4028ceb3c2"
     },
     {
       "name": "tfe_registry_module",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "4b2169bf8cb1ca526188424e1147b01b1b0707065c03410df2e99856dd7a068b"
     },
     {
       "name": "tfe_registry_provider",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "b95e64883d8abfa56b416631fab6bdb2d39c35b377943dcddfeb5f1a1b4d5ff7"
     },
     {
       "name": "tfe_run_trigger",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "fa97cad9bbac0e015d5d0411a11e1fcfabd7411e85a03927101a621b3107173d"
     },
     {
       "name": "tfe_saml_settings",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "c8c45de535e5ef337ac8789b2e7284918f543b2a7964fa803169d5116bb15971"
     },
     {
       "name": "tfe_scim_group_mapping",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "15fdb24709acefe4f17936653cd258593e950371cd3adea403507d4346809727"
     },
     {
       "name": "tfe_scim_settings",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "20a5b390938ced010209a0108a5a59389f2583e3db52cc4f6c970a4ac97775f2"
     },
     {
       "name": "tfe_scim_token",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "92669f629f096773afe6d9bb200ccb127e9950c9b909599248be0da2bfb394c0"
     },
     {
       "name": "tfe_sentinel_policy",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "88409f7f8ad0f6847b36fc265a578742b4ae0d17dac6b125bb304778221d6b2a"
     },
     {
       "name": "tfe_sentinel_version",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "880fa9e5d8cbe5246219939c257c84587cc0adbabd770e691be441b89ee0dae8"
     },
     {
       "name": "tfe_ssh_key",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "f0576562a6238189f43fa7d19139985bbdbbf5f77b8c5c6dc39eab05256e9015"
     },
     {
       "name": "tfe_stack",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "f7d35f7f9e0a295922b2f71c179d1022b907e0bf86d35c2e130136b084198338"
     },
     {
       "name": "tfe_stack_variable_set",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "2e7d6e2e08e3e2cf1db418fa4c9880f2184ef869cf4c5ff41d0858037d863401"
     },
     {
       "name": "tfe_tag_policy_set",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "74377f10582ac1f5f0e71876b09f4894cf9f03e3f657d1c87a2b834416196575"
     },
     {
       "name": "tfe_tag_policy_set_exclusion",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "88dc3cff631f728b745bf088845f84cd1fc9deec64a52b16d84081a46d9d92f6"
     },
     {
       "name": "tfe_team",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "0ce9fb17ef8dad1494c7b58e62b2de1152476d276551579e0e395a8ff43a8f78"
     },
     {
       "name": "tfe_team_access",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "f956cb204b0446c1bbd98b6e72b2faec4032b29feff65c6e6c910b4c11245ec4"
     },
     {
       "name": "tfe_team_member",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "74e77f176423af5c0a3058efd5381a85a5f5e31c0630b969fe385236ad258a7b"
     },
     {
       "name": "tfe_team_members",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "16815b9e15d0907dd9a338edd4722eca66dab060fc8408c6a6587fef17df0fa0"
     },
     {
       "name": "tfe_team_notification_configuration",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "0b1fa93e87c79493f0ad17b8e5df36c2eaabdbbf88cadd77ef1c36f626dc41d9"
     },
     {
       "name": "tfe_team_organization_member",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "3a4e09e4c0b7e557622a1c668a879e8d4e9e443e05cf22681e949ebd29bad6e3"
     },
     {
       "name": "tfe_team_organization_members",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "0062a22c72beb94a03e05ad66014f65d885f16dd4c522e23e384be0573df3373"
     },
     {
       "name": "tfe_team_project_access",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "d875a1e001ee34dcba6a0ad49f27115201dedd2a68eb1884e92e8e1e478af740"
     },
     {
       "name": "tfe_team_token",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "6537151e3338e1c26f9cb581ad85d0e89fff574ad3003e2350c1286b7cc2bf57"
     },
     {
       "name": "tfe_terraform_version",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "43142f922cb43616a8ee27b395cafb334d37e4afde6fcd0fb759b16cd1a724d8"
     },
     {
       "name": "tfe_test_variable",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "3caa856adaf7c0734bdb49cfc69e97fea1a493651da4ca5c53d5021c447ae209"
     },
     {
       "name": "tfe_variable",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "7e20ecd2d4fb57c7c84544d90a20966cbb845dc1248c6ad7d947ad9d49f43907"
     },
     {
       "name": "tfe_variable_set",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "2ead215028c3ba013a4b420bcd11e213476964a175b89d70c8eba16dd53611bc"
     },
     {
       "name": "tfe_vault_oidc_configuration",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "baca0732308e2a3b3d4bb17ba5ab22f43e8a74ddd76b557a1d44e8c1da628626"
     },
     {
       "name": "tfe_workspace",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "69428007236b3f8b46e6bddeea486409561b85f0b4b412b7d4f3ad12526b29fb"
     },
     {
       "name": "tfe_workspace_policy_set",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "631a43d427ea37e6a214e4531e0dc210002a562a264f761ac5a7cf908058e0a3"
     },
     {
       "name": "tfe_workspace_policy_set_exclusion",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "6f9044083d00e54e664f5fbc0c4ec17b0b0aa42bf128ccd3a44bcff99f921b85"
     },
     {
       "name": "tfe_workspace_run",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "c899739e6e9f17f506bde20545cd1deee8bfa8318fbd37cf152156518a5549ca"
     },
     {
       "name": "tfe_workspace_run_task",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "daf7768dc2ec06f698fcd8c4c2d05562c3dd5f5053cca9ed63c91d990f89bb0a"
     },
     {
       "name": "tfe_workspace_settings",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "5be9219c8237ac590568e9c6cfcb539fd0d9c3653ab573e9918f5577d263cc8c"
     },
     {
       "name": "tfe_workspace_variable_set",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "54f51516277de9af28586daca584a12f9f28b167975d117112794ca0d164d052"
     }
   ],
   "data_sources": [
     {
       "name": "tfe_admin_smtp_settings",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "9f8e48f1d7400bb3af66ffc4e8d271ebcea9ee0bdf4adb5201230becf9274555"
     },
     {
       "name": "tfe_agent_pool",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "073efad19cc467c43dcc1d2ad3bc0be6d7c0773af69f1f6291bc16aaada13256"
     },
     {
       "name": "tfe_current_user",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "e57d53463238de9af3ac43102ec98125e0f56b02ad7807e2712f3c81b23e052c"
     },
     {
       "name": "tfe_github_app_installation",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "ad3a81610fb0ebcd00e634072011a5c89c38213c9b0139fed6000131249c56b0"
     },
     {
       "name": "tfe_hyok_customer_key_version",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "e1dd42cab1edeec89aa73809b539f7a0fae454d4910a91c0993c3eab77491ac7"
     },
     {
       "name": "tfe_hyok_encrypted_data_key",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "1aed112d91430fa4972528ea1eb764fe95ae3c55ea44602cadbf2b68170182b2"
     },
     {
       "name": "tfe_ip_ranges",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "b8a0a4a63ef7a506f96da1c8151a5cfd4a0c5217ce33944acc99791559cf8a00"
     },
     {
       "name": "tfe_no_code_module",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "5b762e1a06f2ef0c739b92e99258eb7496bd68c4375f53fe6469d5c6cb295157"
     },
     {
       "name": "tfe_oauth_client",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "dacf4aafc30da322e9fa314bf8a1953ebc46c99b6ddb779ed737946d05db9e9e"
     },
     {
       "name": "tfe_org_max_token_ttl_policy",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "971d532b35373dc5c41e0723a30d1250fd7db613b360cc35e412aa7a87c69fd8"
     },
     {
       "name": "tfe_organization",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "dbdf9d2dd1cfc64afad2011f77d220c57940eebeb309a9110b2b6929692aa2f9"
     },
     {
       "name": "tfe_organization_audit_configuration",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "53274f1afc317733561353a1d9c1b6a278e69fe8fa6ddc7e43965c1759914f4f"
     },
     {
       "name": "tfe_organization_members",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "faf04f4c71c97cc5688667d5c2d26072d734b95ac878d15e5c1f16df7ddb9161"
     },
     {
       "name": "tfe_organization_membership",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "64c324cc18010b7085085f2dc4fd95c72f23acc7ef5504b7e4e52ca186893185"
     },
     {
       "name": "tfe_organization_run_task",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "95736f55c316cb4e946b583820695dab51e61125c97fdce6a536fc89c781a3d1"
     },
     {
       "name": "tfe_organization_run_task_global_settings",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "9618f2b337615648c147a9a7cc0daa465033d69428ae6221bea15a655da64fdd"
     },
     {
       "name": "tfe_organization_tags",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "a84a6e3ff058079470ab1d3f8b8def67861bf6a9c089576cc9d0b56f37d826f6"
     },
     {
       "name": "tfe_organizations",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "a9a3b33caf8d2573bc3f2691cb88f90280ceadf7ff1e881da872d079d76c95da"
     },
     {
       "name": "tfe_outputs",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "87466c26863d806bf10b865ae35b6924fd31600adafd8ff5e3a92ed6ebc022d8"
     },
     {
       "name": "tfe_policy_set",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "ecc5adcaf4483d07ab7a40156a49ac9b2cce25d9605bc149f96287ba6ad67261"
     },
     {
       "name": "tfe_project",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "4789e032e4914dea161328ea4e551048e84389e0785f8c739bae1b583c82704d"
     },
     {
       "name": "tfe_projects",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "88e98efc75abbb1099403255da3f44f0cc25235516fe5944fac45e825e3a713b"
     },
     {
       "name": "tfe_provider_set",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "f68d245f787fc82a58976cfd7786a9bed0a30eeb588ad72c52a3b34c4d562378"
     },
     {
       "name": "tfe_registry_gpg_key",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "36c48c5a84466252441f9c7949e091100904f1dae1b229d1cb3512fc0d07a00f"
     },
     {
       "name": "tfe_registry_gpg_keys",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "4f85f3cd0784cf1a6d028a25cef9a2c01297da5adc692a5e58f228292334e824"
     },
     {
       "name": "tfe_registry_module",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "a27f3f6dbb0dc19b0604b48f2b94bee345642902f330d8ff4ed73772e3294844"
     },
     {
       "name": "tfe_registry_provider",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "89cb6a9e36b97689d95025c159225d8795b10ba4dfe3f6504f0696dd02f83f5e"
     },
     {
       "name": "tfe_registry_providers",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "b2f5b23afa4a0bb24e54a4431c70379cb651c364060063b573a340e84d0ce3b5"
     },
     {
       "name": "tfe_saml_settings",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "6d9ce773d48c62698215da5be5625f40ed6c83e1255eec8682b3136dba8e18ec"
     },
     {
       "name": "tfe_scim_group",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "be19a52001c6264342ec7dc629082e7b3cac811d407c5f19792164d3ce9c995e"
     },
     {
       "name": "tfe_scim_settings",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "0b0bb40fb1a8bcb9e5f24b52623e1fd159cd480cbb93c7309f83979831d70a40"
     },
     {
       "name": "tfe_scim_token",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "4bd7fcaa3f2aba5c2cdb1969e56958035b0b293e27d1628978afe91fe41c86cb"
     },
     {
       "name": "tfe_slug",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "cf7cfc071a8f0168bad6cbdd0f8b42d81bf1e0c8947bcb47223c1f779e2df915"
     },
     {
       "name": "tfe_ssh_key",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "d018f531084026353be45908d969c77cd903b39d80fa3a79b1483d37423ebd09"
     },
     {
       "name": "tfe_team",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "971cbea91c9e8ad117be73071e0c6eb1ac52d03291d8206a7a75798226a79719"
     },
     {
       "name": "tfe_team_access",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "0a66636e3bf82b3af717324d904c2d4c07b224519bc2b5df27223141f20ab558"
     },
     {
       "name": "tfe_team_project_access",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "17533dddcf9d6decafb9a8ac47e784cabadd53c31b5fb82fde718cfaaded61bd"
     },
     {
       "name": "tfe_teams",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "dfe3aa44c3bf40343b9ab55110dcb4021c0de01323d77cbbe0e1fa1d2ac268aa"
     },
     {
       "name": "tfe_variable_set",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "5b0cc5162449344b728161558a3419b1a045a16ea7934d7ddda763f094ff6d65"
     },
     {
       "name": "tfe_variables",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "94e691d130f7bd9d4499c47b844d69f3febbb539876cd216fada4c50f98c55bd"
     },
     {
       "name": "tfe_workspace",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "4cd405ecbff2ebdb5a99621521b787c1e74429254d2ea77ad1d284d0ace53d84"
     },
     {
       "name": "tfe_workspace_ids",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "c89a6b72030d7920f2140a132c87cec4588566a214124a99f1d6489e7ed742e9"
     },
     {
       "name": "tfe_workspace_run_task",
-      "status": "covered"
+      "status": "covered",
+      "schema_hash": "87513e0e8e115089d4d483d516d366edc108cca4b40e628cb84277869191f56c"
     }
   ]
 }

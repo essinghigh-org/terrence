@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { log } from "./log";
 
-const ENCRYPTED_PREFIX = "enc:v1";
+export const ENCRYPTED_PREFIX = "enc:v1";
 const KEY_FILE_NAME = ".encryption-key";
 const SALT_FILE_NAME = ".encryption-salt";
 const KEY_LENGTH = 32;
@@ -111,6 +111,8 @@ const SALT_READ_RETRY_DELAY_MS = 25;
 // writing when EEXIST is observed.
 const KEY_READ_RETRIES = 20;
 const KEY_READ_RETRY_DELAY_MS = 25;
+const SYNC_READ_RETRIES = 20;
+const SYNC_READ_RETRY_DELAY_MS = 25;
 
 async function readExistingKeyWithRetry(keyPath: string): Promise<Buffer> {
   for (let attempt = 0; attempt < KEY_READ_RETRIES; attempt += 1) {
@@ -228,7 +230,13 @@ async function loadEncryptionKey(): Promise<Buffer> {
 }
 
 export function isEncryptedSecret(value: string): boolean {
-  return value.startsWith(`${ENCRYPTED_PREFIX}:`);
+  const parts = value.split(":");
+  if (parts.length !== 5 || `${parts[0]}:${parts[1]}` !== ENCRYPTED_PREFIX) return false;
+  // Do not classify arbitrary user plaintext beginning with `enc:v1:` as a
+  // ciphertext envelope. GCM envelopes always carry a 12-byte IV and 16-byte
+  // authentication tag; an empty ciphertext is valid for an empty secret.
+  return Buffer.from(parts[2] ?? "", "base64").length === 12
+    && Buffer.from(parts[3] ?? "", "base64").length === 16;
 }
 
 export async function encryptSecret(value: string): Promise<string> {
@@ -344,9 +352,21 @@ function loadEncryptionKeySync(storageDir: string): Buffer {
   const password = process.env.ENCRYPTION_PASSWORD;
   if (password !== undefined && password !== "") {
     const saltPath = join(resolvedDir, SALT_FILE_NAME);
-    let saltText: string;
+    let saltText: string | undefined;
     try {
-      saltText = readFileSync(saltPath, "utf8");
+      for (let attempt = 0; attempt < SYNC_READ_RETRIES; attempt += 1) {
+        try {
+          const candidate = Buffer.from(readFileSync(saltPath, "utf8").trim(), "base64");
+          if (candidate.length >= SALT_LENGTH) {
+            saltText = candidate.toString("base64");
+            break;
+          }
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "EAGAIN" && code !== "EINTR") throw error;
+        }
+        if (attempt + 1 < SYNC_READ_RETRIES) Bun.sleepSync(SYNC_READ_RETRY_DELAY_MS);
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         throw new Error(
@@ -356,9 +376,13 @@ function loadEncryptionKeySync(storageDir: string): Buffer {
       }
       throw error;
     }
-    const salt = Buffer.from(saltText.trim(), "base64");
+    const salt = Buffer.from(saltText ?? "", "base64");
     if (salt.length < SALT_LENGTH) {
       throw new Error(`Invalid KDF salt in ${saltPath}`);
+    }
+    if (saltWasRecreatedOnLoad) {
+      log.warn(KDF_SALT_RECREATED_WARNING);
+      saltWasRecreatedOnLoad = false;
     }
     const key = scryptSync(password, salt, KEY_LENGTH);
     cachedKey = key;
@@ -367,9 +391,21 @@ function loadEncryptionKeySync(storageDir: string): Buffer {
   }
 
   const keyPath = join(resolvedDir, KEY_FILE_NAME);
-  let keyText: string;
+  let keyText: string | undefined;
   try {
-    keyText = readFileSync(keyPath, "utf8");
+    for (let attempt = 0; attempt < SYNC_READ_RETRIES; attempt += 1) {
+      try {
+        const candidate = Buffer.from(readFileSync(keyPath, "utf8").trim(), "base64");
+        if (candidate.length === KEY_LENGTH) {
+          keyText = candidate.toString("base64");
+          break;
+        }
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EAGAIN" && code !== "EINTR") throw error;
+      }
+      if (attempt + 1 < SYNC_READ_RETRIES) Bun.sleepSync(SYNC_READ_RETRY_DELAY_MS);
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error(
@@ -379,7 +415,7 @@ function loadEncryptionKeySync(storageDir: string): Buffer {
     }
     throw error;
   }
-  const key = Buffer.from(keyText.trim(), "base64");
+  const key = Buffer.from(keyText ?? "", "base64");
   if (key.length !== KEY_LENGTH) {
     throw new Error(`Invalid encryption key in ${keyPath}`);
   }

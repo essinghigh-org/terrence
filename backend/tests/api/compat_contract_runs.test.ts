@@ -210,7 +210,7 @@ describe("remote-workflow runs contract", () => {
       headers,
       body: JSON.stringify({ data: { type: "runs", attributes: { comment: "Discarded after review" } } }),
     });
-    expect(discard.status).toBe(200);
+    expect(discard.status).toBe(202);
     const comments = await request(`/api/v2/runs/${runId}/comments`, { headers });
     expect((await comments.json()).data).toEqual(expect.arrayContaining([
       expect.objectContaining({

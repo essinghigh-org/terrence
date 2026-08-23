@@ -27,6 +27,7 @@
     "test:frontend": "cd frontend && bun test --parallel=8",
     "test": "bun run test:backend && bun run test:frontend",
     "lint": "eslint .",
+    "lint:budget": "node scripts/lint-budget.mjs",
     "lint:fix": "eslint . --fix",
     "typecheck": "bun run --cwd backend typecheck && bun run --cwd frontend typecheck",
     "tfectl": "bun run --cwd backend scripts/tfectl.ts",

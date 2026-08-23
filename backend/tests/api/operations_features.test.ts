@@ -290,6 +290,15 @@ describe("maintenance windows (21.6)", () => {
 describe("external approval webhook (21.8)", () => {
   it("blocks applies when external approval is enabled", async () => {
     await setSettings("approval-webhook", { enabled: true, secret: "test-secret", url: null });
+    let unlocked = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if ((await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId), columns: { locked: true } }))?.locked !== true) {
+        unlocked = true;
+        break;
+      }
+      await Bun.sleep(10);
+    }
+    if (!unlocked) throw new Error("Workspace remained locked before external approval test");
     const response = await request(`/api/v2/runs/${webhookRunId}/actions/apply`, "POST", {
       data: { type: "runs", attributes: {} },
     });

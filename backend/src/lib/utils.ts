@@ -9,15 +9,17 @@ import {
   organizationMembershipRoles, organizationRoles,
 } from "../db/schema";
 import { and, desc, eq, exists, gte, inArray, isNull, like, lt, notInArray, or, sql } from "drizzle-orm";
-import { timingSafeEqual, createHmac } from "node:crypto";
+import { timingSafeEqual, createHash, createHmac, randomBytes } from "node:crypto";
 import { access, rm } from "node:fs/promises";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { recordFailure } from "./process-metrics";
 import { log } from "./log";
 import { isDiskFullError, markStorageDegraded } from "./storage-health";
 import { jsonExtract } from "./db-json";
 import { validateVersion } from "../binaryManager";
 import { decodeStatePayload, parseStatePayload } from "./validation";
-import { privateHostReason } from "./url-safety";
+import { outboundAllowlistAllows, privateHostReason } from "./url-safety";
 import { archiveRunLogs, deleteRunLogArchive } from "./run-logs";
 import { deletePlanJsonArtifact } from "./plan-json";
 import { currentSiteAdmin, currentTokenScopes, requestCacheGet, requestCacheSet } from "./request-scope";
@@ -534,6 +536,35 @@ export type WorkspacePermission =
   | "state-outputs"
   | "state-read"
   | "state-write";
+
+export type LockPrincipal = Readonly<{ type: string; id: string }>;
+
+export function lockPrincipal(userId: string | null | undefined, orgId: string | null | undefined, teamId: string | null | undefined): LockPrincipal {
+  if (teamId !== null && teamId !== undefined && teamId !== "") return { type: "team", id: teamId };
+  if (userId !== null && userId !== undefined && userId !== "") return { type: "user", id: userId };
+  if (orgId !== null && orgId !== undefined && orgId !== "") return { type: "organization", id: orgId };
+  return { type: "service", id: "system" };
+}
+
+export function ownsWorkspaceLock(
+  workspace: Readonly<{ locked?: boolean | null; lockOwnerType?: string | null; lockOwnerId?: string | null }>,
+  principal: LockPrincipal,
+): boolean {
+  return workspace.locked === true
+    && workspace.lockOwnerType === principal.type
+    && workspace.lockOwnerId === principal.id;
+}
+
+export function strongDocumentEtag(document: unknown): string {
+  return `"${createHash("sha256").update(JSON.stringify(document)).digest("hex")}"`;
+}
+
+export function ifMatchSatisfied(request: Readonly<{ headers: Readonly<{ get(name: string): string | null }> }>, document: unknown): boolean {
+  const ifMatch = request.headers.get("if-match");
+  if (ifMatch === null || ifMatch.trim() === "*") return true;
+  const expected = strongDocumentEtag(document);
+  return ifMatch.split(",").map((tag): string => tag.trim()).some((tag): boolean => tag === expected);
+}
 
 function teamWorkspaceAllows(
   accessLevel: string,
@@ -1250,7 +1281,47 @@ export function apiURL(request: RequestWithUrl, path: string): string {
   return new URL(path, PUBLIC_URL ?? request.url).toString();
 }
 
-const SIGNED_URL_SECRET = process.env.SIGNED_URL_SECRET ?? crypto.randomUUID();
+/**
+ * Signed URLs must use the same key on every replica. Configure
+ * SIGNED_URL_SECRET consistently across a multi-replica deployment, or mount
+ * a shared STORAGE_DIR so the generated fallback file is shared. A single
+ * replica may continue using the local fallback.
+ */
+function loadSignedUrlSecret(): string {
+  const storage = process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage");
+  const path = join(storage, ".signed-url-secret");
+  mkdirSync(storage, { recursive: true });
+  try {
+    const existing = readFileSync(path, "utf8").trim();
+    if (existing.length >= 32) return existing;
+  } catch {
+    // Create below; a missing/unreadable secret must not silently rotate on
+    // every request, so a write/read failure is surfaced by the caller.
+  }
+  const generated = randomBytes(32).toString("base64url");
+  try {
+    writeFileSync(path, generated, { mode: 0o600, flag: "wx" });
+    return generated;
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      try {
+        const existing = readFileSync(path, "utf8").trim();
+        if (existing.length >= 32) return existing;
+      } catch {
+        // Another process may have created the file but not made it readable yet.
+      }
+      throw new Error(`Signed-URL secret at ${path} is present but unusable; replace the file before starting Terrence.`);
+    }
+    throw error;
+  }
+}
+
+const configuredSignedUrlSecret = process.env.SIGNED_URL_SECRET?.trim();
+const SIGNED_URL_SECRET = configuredSignedUrlSecret === undefined || configuredSignedUrlSecret === ""
+  ? loadSignedUrlSecret()
+  : configuredSignedUrlSecret.length >= 32
+    ? configuredSignedUrlSecret
+    : (() => { throw new Error("SIGNED_URL_SECRET must be at least 32 characters"); })();
 
 export function signedApiURL(request: RequestWithUrl, path: string, method = "GET", ttlSeconds?: number): string {
   const configuredTtl = ttlSeconds ?? Number(process.env.SIGNED_URL_TTL_SECONDS ?? 300);
@@ -1281,28 +1352,13 @@ export function validSignedApiURL(request: RequestWithUrl, path: string, method 
 // lib/url-safety.ts (privateHostReason); validateExternalUrl delegates there.
 
 
-/** Outbound allowlist: when TERRENCE_OUTBOUND_ALLOW_HOSTS/CIDRS restrict egress, check them. */
-function isOutboundAllowed(hostname: string, _href: string): boolean {
-  const allowHosts = (process.env.TERRENCE_OUTBOUND_ALLOW_HOSTS ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-  if (allowHosts.length > 0 && allowHosts.some((h) => hostname.toLowerCase() === h || hostname.toLowerCase().endsWith(`.${h}`))) return true;
-  // CIDR allowlist (parsed via isPrivate-style check but inverted: if host is IPv4 within CIDR, allow)
-  const allowCidrs = (process.env.TERRENCE_OUTBOUND_ALLOW_CIDRS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  if (allowCidrs.length > 0) {
-    try {
-      const { isIPv4InCidr } = require("./url-safety") as { isIPv4InCidr?: (host: string, cidr: string) => boolean };
-      if (typeof isIPv4InCidr === "function" && allowCidrs.some((cidr) => isIPv4InCidr(hostname, cidr))) return true;
-    } catch { /* best-effort */ }
-  }
-  return false;
-}
-
 export function validateExternalUrl(url: string, allowPrivate = false): string | null {
   try {
     const parsed = new URL(url);
     if (!["http:", "https:"].includes(parsed.protocol)) return "Only http and https URLs are allowed";
     // 41-44: outbound allowlist/CIDR/DNS — when TERRENCE_OUTBOUND_ALLOW_HOSTS or CIDRS gate private access,
     // private-host denial is scoped to that policy; otherwise the global allowPrivate flag applies.
-    if (!allowPrivate && isOutboundAllowed(parsed.hostname, parsed.href)) return null;
+    if (!allowPrivate && outboundAllowlistAllows(parsed.hostname)) return null;
     if (!allowPrivate) {
       const reason = privateHostReason(parsed.hostname);
       if (reason !== null) return reason;
@@ -1470,6 +1526,13 @@ export const CAPACITY_RUNNING_STATUSES = [
   "planning", "cost_estimating", "cost_estimated", "policy_checking",
   "policy_override", "policy_checked", "post_plan_running", "post_plan_completed",
   "applying",
+];
+export const WORKSPACE_BLOCKING_RUN_STATUSES = [
+  "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
+  "queuing", "plan_queued", "planning", "planned", "cost_estimating",
+  "cost_estimated", "policy_checking", "policy_override", "policy_checked",
+  "post_plan_running", "post_plan_completed", "policy_soft_failed",
+  "confirmed", "apply_queued", "applying",
 ];
 const DISCARDABLE_RUN_STATUSES = [
   "planned",

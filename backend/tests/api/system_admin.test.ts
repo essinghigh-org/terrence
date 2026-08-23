@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { eq } from "drizzle-orm";
-import { app } from "../../src/app";
+import { systemApiApp } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, organizations, users, workspaces } from "../../src/db/schema";
 
@@ -26,7 +26,7 @@ describe("System administration API contract", () => {
     // System API rate-limits each token to one request/second (matching the reference format),
     // so back-to-back calls need distinct tokens.
     const bearer = options.token === null ? null : options.token ?? (await tokenFor(path));
-    return app.handle(new Request(`http://terrence.test${path}`, {
+    return systemApiApp.handle(new Request(`http://terrence.test${path}`, {
       method: options.method ?? "GET",
       headers: {
         ...(bearer === null ? {} : { Authorization: `Bearer ${bearer}` }),

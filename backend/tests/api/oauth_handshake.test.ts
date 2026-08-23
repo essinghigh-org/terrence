@@ -81,18 +81,33 @@ describe("VCS OAuth handshakes", () => {
   const providerRequests: { path: string; authorization: string | null; body: string }[] = [];
   let provider: ReturnType<typeof Bun.serve>;
   let clientId = "";
+  let privateVcsUrlLock: Promise<void> = Promise.resolve();
+  const withPrivateVcsUrls = async <T>(operation: () => Promise<T>): Promise<T> => {
+    let release!: () => void;
+    const waiting = privateVcsUrlLock;
+    privateVcsUrlLock = new Promise<void>((resolve): void => { release = resolve; });
+    await waiting;
+    const previous = process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS;
+    process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS = "1";
+    try {
+      return await operation();
+    } finally {
+      if (previous === undefined) delete process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS;
+      else process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS = previous;
+      release();
+    }
+  };
 
   const request = (
     path: string,
     auth: string | null = apiToken,
     accept?: string,
-  ): Promise<Response> =>
-    app.handle(new Request(`http://terrence.test${path}`, {
+  ): Promise<Response> => withPrivateVcsUrls(() => app.handle(new Request(`http://terrence.test${path}`, {
       headers: {
         ...(auth === null ? {} : { Authorization: `Bearer ${auth}` }),
         ...(accept === undefined ? {} : { Accept: accept }),
       },
-    }));
+    })));
 
   beforeAll(async () => {
     provider = Bun.serve({
@@ -172,7 +187,7 @@ describe("VCS OAuth handshakes", () => {
     ]);
 
     const providerBase = `http://${provider.hostname}:${provider.port}`;
-    const createResponse = await app.handle(new Request(
+    const createResponse = await withPrivateVcsUrls(() => app.handle(new Request(
       `http://terrence.test/api/v2/organizations/${orgName}/oauth-clients`,
       {
         method: "POST",
@@ -197,7 +212,7 @@ describe("VCS OAuth handshakes", () => {
           },
         }),
       },
-    ));
+    )));
     expect(createResponse.status).toBe(201);
     const created = await createResponse.json();
     clientId = created.data.id;

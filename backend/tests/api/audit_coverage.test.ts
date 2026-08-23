@@ -87,7 +87,13 @@ beforeAll(async () => {
     { id: runIds.apply, workspaceId, status: "planned", createdAt: Date.now() },
     { id: runIds.discard, workspaceId, status: "pending", createdAt: Date.now() },
     { id: runIds.cancel, workspaceId, status: "planning", createdAt: Date.now() },
-    { id: runIds.forceCancel, workspaceId, status: "applying", createdAt: Date.now() },
+    {
+      id: runIds.forceCancel,
+      workspaceId,
+      status: "applying",
+      statusTimestamps: { "cancel-requested-at": new Date().toISOString() },
+      createdAt: Date.now(),
+    },
     { id: runIds.override, workspaceId, status: "policy_soft_failed", createdAt: Date.now() },
   ]);
 });
@@ -236,9 +242,7 @@ describe("audit coverage", () => {
         "POST",
         transition.action === "apply" ? { comment: secretMarker } : undefined,
       );
-      // The apply action is asynchronous (202), matching the reference format; the other
-      // transition actions complete synchronously (200).
-      expect(response.status).toBe(transition.action === "apply" ? 202 : 200);
+      expect(response.status).toBe(transition.action === "override-policy" ? 200 : 202);
     }
 
     const entries = await db.query.auditLogs.findMany({

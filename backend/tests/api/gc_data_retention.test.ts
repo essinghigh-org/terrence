@@ -3,6 +3,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { stateVersions } from "../../src/db/schema";
 import { and, eq } from "drizzle-orm";
+import { createHash } from "node:crypto";
 
 describe("the reference format API v2 - Data Retention & Garbage Collection", () => {
   let userToken: string;
@@ -63,6 +64,11 @@ describe("the reference format API v2 - Data Retention & Garbage Collection", ()
     );
     const wsBody = await wsRes.json();
     workspaceId = wsBody.data.id;
+    const lock = await app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${userToken}` },
+    }));
+    if (lock.status !== 200) throw new Error(`workspace lock failed: ${lock.status}`);
   });
 
   test("should create multiple state versions and enforce retention policy GC", async () => {
@@ -78,7 +84,7 @@ describe("the reference format API v2 - Data Retention & Garbage Collection", ()
             "Content-Type": "application/vnd.api+json",
           },
           body: JSON.stringify({
-            data: { attributes: { serial, state: b64State } },
+            data: { type: "state-versions", attributes: { serial, state: b64State, md5: createHash("md5").update(rawState).digest("base64") } },
           }),
         })
       );

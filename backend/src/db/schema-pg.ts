@@ -133,6 +133,7 @@ export const agentJobs = pgTable("agent_jobs", {
     status: text("status").notNull().default("queued"),
     result: jsonb("result"),
     errorMessage: text("error_message"),
+    requeueAttempts: bigint("requeue_attempts", { mode: "number" }).notNull().default(0),
     claimedAt: bigint("claimed_at", { mode: "number" }),
     completedAt: bigint("completed_at", { mode: "number" }),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.agentJobs.createdAt.defaultFn!()),
@@ -316,6 +317,7 @@ export const configurationVersions = pgTable("configuration_versions", {
     ingressAttributes: jsonb("ingress_attributes"),
     statusTimestamps: jsonb("status_timestamps"),
     uploadClaimExpiresAt: bigint("upload_claim_expires_at", { mode: "number" }),
+    uploadClaimToken: text("upload_claim_token"),
     error: text("error"),
     errorMessage: text("error_message"),
     softDeletedAt: bigint("soft_deleted_at", { mode: "number" }),
@@ -1506,6 +1508,17 @@ export const stacks = pgTable("stacks", {
     updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.stacks.updatedAt.defaultFn!()),
 });
 
+export const stateOutputIndex = pgTable("state_output_index", {
+    outputId: text("output_id").notNull().primaryKey(),
+    stateVersionId: text("state_version_id").notNull().references(() => stateVersions.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.stateOutputIndex.createdAt.defaultFn!()),
+}, (table) => [
+    index("state_output_index_workspace_idx").on(table.workspaceId),
+    index("state_output_index_state_idx").on(table.stateVersionId),
+  ]);
+
 export const stateVersions = pgTable("state_versions", {
     id: text("id").notNull().primaryKey(),
     workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
@@ -1810,6 +1823,8 @@ export const workspaces = pgTable("workspaces", {
     settingOverwrites: jsonb("setting_overwrites"),
     locked: boolean("locked").default(false),
     lockedReason: text("locked_reason"),
+    lockOwnerType: text("lock_owner_type"),
+    lockOwnerId: text("lock_owner_id"),
     trustedExecution: boolean("trusted_execution").notNull().default(true),
     ownedByType: text("owned_by_type"),
     ownedById: text("owned_by_id"),

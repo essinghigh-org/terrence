@@ -15,6 +15,7 @@ import {
 import { _ownershipVerified, postNotification, verifyDestinationOwnership, type NotificationDelivery } from "../lib/notifications";
 import { checkOrganizationPermission, checkOrgPermission, findAuthorizedWorkspace, notFound } from "../lib/utils";
 import { isNotificationDestination, isNotificationTrigger, RUN_NOTIFICATION_TRIGGERS } from "../lib/constants";
+import { decryptSecret, encryptSecret, isEncryptedSecret } from "../lib/secrets";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -53,6 +54,10 @@ function isWebhookUrl(value: string): boolean {
 }
 
 const EMAIL_ADDRESS_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isEncryptedTokenInput(value: unknown): boolean {
+  return typeof value === "string" && isEncryptedSecret(value);
+}
 
 function isValidEmailAddresses(value: unknown): value is readonly string[] {
   return Array.isArray(value)
@@ -116,8 +121,9 @@ type FieldError = { status: string; title: string; detail: string; source: { poi
  * (26.9). Returns [] when the input is valid. Each error carries a
  * JSON:API source.pointer so consumers can render per-field feedback.
  */
-function createValidationErrors(name: string, url: string, destinationType: string, emailAddresses: unknown): FieldError[] {
+function createValidationErrors(name: string, url: string, destinationType: string, emailAddresses: unknown, token: unknown): FieldError[] {
   const errors: FieldError[] = [];
+  if (isEncryptedTokenInput(token)) errors.push({ status: "422", title: "Unprocessable Entity", detail: "token must be plaintext", source: { pointer: "/data/attributes/token" } });
   if (name === "") errors.push({ status: "422", title: "Unprocessable Entity", detail: "Name is required", source: { pointer: "/data/attributes/name" } });
   if (!isNotificationDestination(destinationType)) errors.push({ status: "422", title: "Unprocessable Entity", detail: "destination-type must be one of generic, slack, microsoft-teams, or email", source: { pointer: "/data/attributes/destination-type" } });
   if (destinationType === "email") {
@@ -248,6 +254,7 @@ function createValues(
     ? attributes["destination-type"]
     : "";
   const emailAddresses = attributes["email-addresses"];
+  if (isEncryptedTokenInput(attributes.token)) return undefined;
   const emailUserIds = notificationUserIds(body, attributes);
   if (emailUserIds === false) return undefined;
   const emailAllMembers = typeof attributes["email-all-members"] === "boolean"
@@ -311,19 +318,29 @@ async function insertConfiguration(values: typeof notificationConfigurations.$in
       )).returning({ workspaceId: notificationWorkspaceCounters.workspaceId });
       if (reserved.length === 0) return false;
     }
-    await t.insert(notificationConfigurations).values(values);
+    await t.insert(notificationConfigurations).values({ ...values, token: await encryptNotificationToken(values.token) });
     return true;
   });
 }
 
+async function encryptNotificationToken(token: string | null | undefined): Promise<string | null | undefined> {
+  return token === null || token === undefined ? token : encryptSecret(token);
+}
+
 async function verifyBeforeSave(values: typeof notificationConfigurations.$inferInsert): Promise<boolean> {
   if (values.enabled !== true || values.destinationType === "email") return true;
-  const delivery = await postNotification(values as NcItem, {
+  const delivery = await postNotification(await decryptedNotification(values as NcItem), {
     payload_version: 1,
     notification_configuration_id: values.id,
     message: "Terrence notification verification",
   });
   return delivery.successful;
+}
+
+async function decryptedNotification(configuration: NcItem): Promise<NcItem> {
+  return configuration.token === null
+    ? configuration
+    : { ...configuration, token: isEncryptedSecret(configuration.token) ? await decryptSecret(configuration.token) : configuration.token };
 }
 
 export const notificationRoutes = new Elysia({ name: "notifications" })
@@ -348,6 +365,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
         typeof attributes.url === "string" ? attributes.url : "",
         typeof attributes["destination-type"] === "string" ? attributes["destination-type"] : "",
         attributes["email-addresses"],
+        attributes.token,
       );
       (set as { status: number }).status = 422;
       return { errors: errors.length > 0 ? errors : [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url or email-addresses, and destination-type are required" }] };
@@ -391,6 +409,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
         typeof attributes.url === "string" ? attributes.url : "",
         typeof attributes["destination-type"] === "string" ? attributes["destination-type"] : "",
         attributes["email-addresses"],
+        attributes.token,
       );
       (set as { status: number }).status = 422;
       return { errors: errors.length > 0 ? errors : [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url or email-addresses, and destination-type are required" }] };
@@ -434,6 +453,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
         typeof attributes.url === "string" ? attributes.url : "",
         typeof attributes["destination-type"] === "string" ? attributes["destination-type"] : "",
         attributes["email-addresses"],
+        attributes.token,
       );
       (set as { status: number }).status = 422;
       return { errors: errors.length > 0 ? errors : [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url or email-addresses, and destination-type are required" }] };
@@ -446,7 +466,10 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
       (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: "Notification verification did not return a successful response" }] };
     }
-    await db.insert(notificationConfigurations).values(values);
+    await db.insert(notificationConfigurations).values({
+      ...values,
+      token: await encryptNotificationToken(values.token),
+    });
     const created = await db.query.notificationConfigurations.findFirst({ where: eq(notificationConfigurations.id, values.id) });
     (set as { status: number }).status = 201;
     return { data: notificationResource(created ?? values as NcItem) };
@@ -552,7 +575,13 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
       updates.triggers = [...attributes.triggers];
     }
     if (typeof attributes.enabled === "boolean") updates.enabled = attributes.enabled;
-    if (attributes.token !== undefined) updates.token = typeof attributes.token === "string" ? attributes.token : null;
+    if (attributes.token !== undefined) {
+      if (isEncryptedTokenInput(attributes.token)) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "token must be plaintext" }] };
+      }
+      updates.token = typeof attributes.token === "string" ? attributes.token : null;
+    }
     if (typeof attributes["email-all-members"] === "boolean") updates.emailAllMembers = attributes["email-all-members"];
     const relationshipIds = relationshipUserIds(body);
     const recipientIds = relationshipIds !== undefined
@@ -607,7 +636,9 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
         (set as { status: number }).status = 400;
         return { errors: [{ status: "400", title: "Bad Request", detail: "Notification verification did not return a successful response" }] };
       }
-      await db.update(notificationConfigurations).set(updates).where(eq(notificationConfigurations.id, id));
+      const persistedUpdates = { ...updates };
+      if (attributes.token !== undefined) persistedUpdates.token = await encryptNotificationToken(persistedUpdates.token);
+      await db.update(notificationConfigurations).set(persistedUpdates).where(eq(notificationConfigurations.id, id));
     }
     const updated = await db.query.notificationConfigurations.findFirst({
       where: eq(notificationConfigurations.id, id),
@@ -675,7 +706,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
       };
     }
 
-    const delivery = await postNotification(configuration, samplePayload);
+    const delivery = await postNotification(await decryptedNotification(configuration), samplePayload);
     if (!delivery.successful) {
       (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: `Notification verification returned HTTP ${delivery.code}` }] };
@@ -694,7 +725,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     // Ownership verification (7.7): POST a one-time challenge token and require
     // the destination to echo it back (response body or header) as proof that
     // the operator controls the endpoint. Optional — it never gates delivery.
-    const outcome = await verifyDestinationOwnership(configuration);
+    const outcome = await verifyDestinationOwnership(await decryptedNotification(configuration));
     if (!outcome.successful) {
       (set as { status: number }).status = 400;
       const detail = outcome.echoed === null

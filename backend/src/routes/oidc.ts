@@ -18,6 +18,8 @@ import {
 } from "../lib/sso";
 import { clearSsoChallenges, consumeSsoChallenge, storeSsoChallenge } from "../lib/sso-challenges";
 import { issueSsoLogin } from "../lib/sso-login";
+import { fetchResolvedExternalUrl, resolveExternalUrl, type ResolvedExternalUrl } from "../lib/url-safety";
+import { secureRequest } from "../lib/secure-request";
 
 type HeaderValue = string | number | readonly string[];
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, HeaderValue>> }>;
@@ -67,6 +69,28 @@ const OIDC_STATE_COOKIE = "terrence_oidc_state";
 const JWKS_REFRESH_MIN_INTERVAL_MS = 30 * 1000;
 const OIDC_CHALLENGE_KIND = "oidc-login";
 
+function loopbackHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+/** Resolve OIDC network targets once so DNS rebinding cannot change the peer. */
+async function resolveOidcEndpoint(value: string): Promise<ResolvedExternalUrl> {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("OIDC endpoint is invalid");
+  }
+  // Local HTTP IdPs are supported for development and the loopback test
+  // provider. Public/private HTTPS endpoints still require the normal
+  // outbound allowlist when their resolved address is private.
+  const allowPrivate = parsed.protocol === "http:" && loopbackHost(parsed.hostname);
+  const resolved = await resolveExternalUrl(value, allowPrivate);
+  if ("error" in resolved) throw new Error(resolved.error);
+  return resolved.target;
+}
+
 /** Test hook: clear the discovery/JWKS caches between scenarios. */
 export async function resetOidcCaches(): Promise<void> {
   discoveryCache.clear();
@@ -87,11 +111,6 @@ function cookieValue(request: RequestInfo, name: string): string | undefined {
     }
   }
   return undefined;
-}
-
-function secureRequest(request: RequestInfo): boolean {
-  const forwarded = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
-  return (forwarded === "https" || forwarded === "https:") || new URL(request.url).protocol === "https:";
 }
 
 function stateCookie(request: RequestInfo, state: string, maxAge: number): string {
@@ -139,9 +158,10 @@ async function discovery(providerIssuer: string): Promise<OidcDiscovery> {
   if (pending !== undefined) return pending;
   const request = (async (): Promise<OidcDiscovery> => {
     const endpoint = `${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`;
-    const response = await fetch(endpoint, {
-      redirect: "error",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    const response = await fetchResolvedExternalUrl(await resolveOidcEndpoint(endpoint), {
+      method: "GET",
+      timeoutMs: FETCH_TIMEOUT_MS,
+      maxResponseBytes: 1024 * 1024,
     });
     if (!response.ok) throw new Error(`OIDC discovery failed: ${response.status}`);
     const config = await response.json() as Partial<Record<string, unknown>>;
@@ -201,8 +221,7 @@ function secureOidcEndpoint(value: string, issuer?: string): boolean {
     if (url.username !== "" || url.password !== "") return false;
     if (issuer === undefined) {
       const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-      const loopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-      return url.protocol === "https:" || (url.protocol === "http:" && loopback);
+      return url.protocol === "https:" || (url.protocol === "http:" && loopbackHost(hostname));
     }
     const issuerUrl = new URL(issuer);
     const issuerHost = issuerUrl.hostname.replace(/^\[|\]$/g, "").toLowerCase();
@@ -213,8 +232,7 @@ function secureOidcEndpoint(value: string, issuer?: string): boolean {
     if (url.protocol === "https:") return true;
     if (url.protocol !== "http:") return false;
     // Plain HTTP is only acceptable for loopback issuers (local testing).
-    const loopback = (host: string): boolean => host === "localhost" || host === "127.0.0.1" || host === "::1";
-    return issuerUrl.protocol === "http:" && loopback(issuerHost) && loopback(hostname);
+    return issuerUrl.protocol === "http:" && loopbackHost(issuerHost) && loopbackHost(hostname);
   } catch {
     return false;
   }
@@ -311,9 +329,10 @@ async function fetchJwks(jwksUri: string, forceRefresh = false): Promise<Record<
   if (pending !== undefined) return pending;
   if (forceRefresh) jwksRefreshes.set(jwksUri, now);
   const request = (async (): Promise<Record<string, unknown>[]> => {
-    const response = await fetch(jwksUri, {
-      redirect: "error",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    const response = await fetchResolvedExternalUrl(await resolveOidcEndpoint(jwksUri), {
+      method: "GET",
+      timeoutMs: FETCH_TIMEOUT_MS,
+      maxResponseBytes: 1024 * 1024,
     });
     if (!response.ok) throw new Error("Failed to fetch the OIDC provider JWKS");
     const jwks = await response.json() as { keys?: unknown };
@@ -528,12 +547,12 @@ async function handleCallback(
   }
   let tokenResponse: Response;
   try {
-    tokenResponse = await fetch(config.tokenEndpoint, {
+    tokenResponse = await fetchResolvedExternalUrl(await resolveOidcEndpoint(config.tokenEndpoint), {
       method: "POST",
       headers: tokenHeaders,
       body: tokenBody.toString(),
-      redirect: "error",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      timeoutMs: FETCH_TIMEOUT_MS,
+      maxResponseBytes: 1024 * 1024,
     });
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : "network error";

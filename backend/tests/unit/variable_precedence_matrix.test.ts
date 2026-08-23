@@ -158,13 +158,9 @@ describe("variable precedence matrix (VAR-005)", () => {
 
   });
 
-  it("later-inserted non-priority set wins ties within the same tier", async () => {
-    // The resolver iterates variableSetVariables ordered by id ascending and
-    // last-write-wins, so the set with the HIGHEST variableSetVariables id
-    // wins. To prove the resolution follows id/insertion order and NOT
-    // lexical set name, the winning set (higher id) carries a lexically LATER
-    // name while the losing set (lower id) carries a lexically EARLIER name. A
-    // name-ordered resolver would pick the opposite result.
+  it("lexically earliest non-priority set wins ties within the same tier", async () => {
+    // Equal-scope variable sets follow the reference format's deterministic
+    // lexical precedence: the earliest set name wins, with id as a tie-breaker.
     const lowerIdSet = `vs-lower-${suffix}`;
     const higherIdSet = `vs-higher-${suffix}`;
     await db.insert(variableSets).values({ id: lowerIdSet, orgId, name: "aaa-earlier-name", global: false, priority: false });
@@ -173,13 +169,13 @@ describe("variable precedence matrix (VAR-005)", () => {
       { id: `link-lower-${suffix}`, variableSetId: lowerIdSet, workspaceId: wsId },
       { id: `link-higher-${suffix}`, variableSetId: higherIdSet, workspaceId: wsId },
     ]);
-    // Higher id (vsv-zzz) on the set with the lexically LATER name.
-    await db.insert(variableSetVariables).values({ id: `vsv-zzz-${suffix}`, variableSetId: higherIdSet, key: "tier", value: "higher-id-wins", category: "terraform" });
-    await db.insert(variableSetVariables).values({ id: `vsv-aaa-${suffix}`, variableSetId: lowerIdSet, key: "tier", value: "lower-id-loses", category: "terraform" });
+    // Higher id (vsv-zzz) is on the set with the lexically LATER name.
+    await db.insert(variableSetVariables).values({ id: `vsv-zzz-${suffix}`, variableSetId: higherIdSet, key: "tier", value: "later-name-loses", category: "terraform" });
+    await db.insert(variableSetVariables).values({ id: `vsv-aaa-${suffix}`, variableSetId: lowerIdSet, key: "tier", value: "earlier-name-wins", category: "terraform" });
 
     const m = asMap(await executionVariables(wsId, orgId, null));
-    // vsv-zzz (higher id, later name) overwrites vsv-aaa (lower id, earlier name).
-    expect(m.get("terraform:tier")).toBe("higher-id-wins#priority=false");
+    // The lexically earlier set wins regardless of insertion/id order.
+    expect(m.get("terraform:tier")).toBe("earlier-name-wins#priority=false");
 
   });
 });

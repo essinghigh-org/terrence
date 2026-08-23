@@ -10,7 +10,7 @@ import { organizations, workspaceTags, variableSetWorkspaces,
 } from "../db/schema";
 import { eq, asc } from "drizzle-orm";
 import { apiURL, signedApiURL , type DeepReadonly } from "./utils";
-import { parseStatePayload } from "./validation";
+import { decodeStatePayload, parseStatePayload } from "./validation";
 import { cachedOrganizationName, cacheOrganizationName } from "./metadata-cache";
 import { vcsRepoResource } from "./vcs-repo";
 import { moduleTestTokenTtlBounds } from "./workload-identity";
@@ -841,7 +841,7 @@ export function stateOutputResources(state: StateParam): Record<string, unknown>
   if (outputs === null || outputs === undefined || typeof outputs !== "object" || Array.isArray(outputs)) return [];
 
   return Object.entries(outputs).map(([name, raw]: readonly [string, unknown]): Record<string, unknown> => {
-    const id = `wsout-${createHash("sha256").update(`${state.id}\0${name}`).digest("hex").slice(0, 16)}`;
+    const id = `wsout-${createHash("sha256").update(`${state.id}\0${name}`).digest("hex")}`;
     const output = raw !== null && raw !== undefined && typeof raw === "object" && !Array.isArray(raw)
       ? (raw as Record<string, unknown>)
       : { value: raw };
@@ -947,7 +947,7 @@ export function stateVersionResource(
   }
 
   const outputResources = stateOutputResources(state);
-  const payload = state.statePayload ?? "";
+  const payload = state.statePayload === null ? "" : decodeStatePayload(state.statePayload);
   const backingDataAvailable = state.status !== "backing_data_soft_deleted"
     && state.status !== "backing_data_permanently_deleted"
     && state.status !== "discarded";
@@ -958,7 +958,7 @@ export function stateVersionResource(
     id: state.id,
     type: "state-versions",
     attributes: {
-      ...(includeState ? { state: state.statePayload } : {}),
+      ...(includeState ? { state: payload } : {}),
       serial: state.serial,
       md5: createHash("md5").update(payload).digest("hex"),
       lineage: typeof parsed?.lineage === "string" ? parsed.lineage : null,

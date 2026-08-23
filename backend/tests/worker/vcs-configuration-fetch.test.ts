@@ -93,7 +93,7 @@ test("a run whose VCS configuration download errored fails loudly instead of pla
   });
   await createRun(runId, workspaceId, cvId);
 
-  await executeRun(runId);
+  await expect(executeRun(runId)).rejects.toThrow("VCS configuration download failed: tarball fetch rejected: 401");
 
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
   expect(run?.status).toBe("errored");
@@ -148,7 +148,7 @@ test("a settled configuration version without a readable archive fails loudly", 
   });
   await createRun(runId, workspaceId, cvId);
 
-  await executeRun(runId);
+  await expect(executeRun(runId)).rejects.toThrow("completed without a readable archive");
 
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
   expect(run?.status).toBe("errored");

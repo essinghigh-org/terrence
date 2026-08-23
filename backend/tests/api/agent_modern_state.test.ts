@@ -35,6 +35,7 @@ test("modern agent completion persists apply state payloads", async () => {
     const { eq } = await import("drizzle-orm");
     const { app } = await import("./src/app.ts");
     const { db } = await import("./src/db/index.ts");
+    const { decodeStatePayload } = await import("./src/lib/validation.ts");
     const { agentJobs, agentPoolTokens, agentPools, agents, organizations, runs, stateVersions, workspaces } = await import("./src/db/schema.ts");
     const token = "agent-state-token";
     const state = JSON.stringify({ version: 4, serial: 1, outputs: { answer: { value: 42 } } });
@@ -79,9 +80,9 @@ test("modern agent completion persists apply state payloads", async () => {
       runStatus: run?.status,
       applyResourceAdditions: run?.applyResourceAdditions,
       stateSerial: stateVersion?.serial,
-      statePayload: stateVersion?.statePayload,
-      jsonState: stateVersion?.jsonState,
-      jsonStateOutputs: stateVersion?.jsonStateOutputs,
+      statePayload: stateVersion?.statePayload === null || stateVersion?.statePayload === undefined ? stateVersion?.statePayload : decodeStatePayload(stateVersion.statePayload),
+      jsonState: stateVersion?.jsonState === null || stateVersion?.jsonState === undefined ? stateVersion?.jsonState : decodeStatePayload(stateVersion.jsonState),
+      jsonStateOutputs: stateVersion?.jsonStateOutputs === null || stateVersion?.jsonStateOutputs === undefined ? stateVersion?.jsonStateOutputs : decodeStatePayload(stateVersion.jsonStateOutputs),
     }));
     process.exit(0);
   `);

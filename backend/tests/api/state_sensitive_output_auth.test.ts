@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
@@ -72,12 +73,17 @@ describe("sensitive state output authorization (STATE-003)", () => {
     otherUserToken = `out-other-token-${suffix}`;
     await db.insert(workspaces).values({ id: wsId, name: `out-ws-${suffix}`, orgId });
     await db.insert(runs).values({ id: runId, workspaceId: wsId, status: "planned", isDestroy: false, createdAt: Date.now() });
+    const lock = await app.handle(new Request(`http://terrence.test/api/v2/workspaces/${wsId}/actions/lock`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${userToken}` },
+    }));
+    if (lock.status !== 200) throw new Error(`workspace lock failed: ${lock.status}`);
 
     const svRes = await request(
       `/api/v2/workspaces/${wsId}/state-versions`,
       userToken,
       "POST",
-      { data: { type: "state-versions", attributes: { serial: 1, state: STATE_PAYLOAD } } },
+      { data: { type: "state-versions", attributes: { serial: 1, state: STATE_PAYLOAD, md5: createHash("md5").update(STATE_PAYLOAD).digest("base64") } } },
     );
     expect(svRes.status).toBe(201);
     stateVersionId = (await svRes.json()).data.id as string;

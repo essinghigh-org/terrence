@@ -1,5 +1,6 @@
 import { describe, expect, test, beforeAll } from "bun:test";
 import { app } from "../../src/app";
+import { createHash } from "node:crypto";
 
 describe("the reference format API v2 - State-Run Relationships & Locking", () => {
   let userToken: string;
@@ -82,6 +83,11 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
     );
     const runBody = await runRes.json();
     runId = runBody.data.id;
+    const lockRes = await app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${userToken}` },
+    }));
+    if (lockRes.status !== 200) throw new Error(`workspace lock failed: ${lockRes.status}`);
   });
 
   test("should create initial state version linked to run", async () => {
@@ -100,7 +106,9 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
             attributes: {
               serial: 1,
               state: b64State,
+              md5: createHash("md5").update(rawState).digest("base64"),
             },
+            type: "state-versions",
             relationships: {
               run: { data: { id: runId, type: "runs" } },
             },
@@ -131,7 +139,7 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
 
   test("should include run status and message in state version list", async () => {
     // Create a state version linked to the existing run
-    const rawState = JSON.stringify({ version: 4, serial: 1, lineage: "abc-123", resources: [] });
+    const rawState = JSON.stringify({ version: 4, serial: 2, lineage: "abc-123", resources: [] });
     const b64State = Buffer.from(rawState).toString("base64");
     await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
@@ -142,7 +150,8 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
         },
         body: JSON.stringify({
           data: {
-            attributes: { serial: 1, state: b64State },
+            type: "state-versions",
+            attributes: { serial: 2, state: b64State, md5: createHash("md5").update(rawState).digest("base64") },
             relationships: {
               run: { data: { id: runId, type: "runs" } },
             },
@@ -193,7 +202,7 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
       })
     );
 
-    const rawState = JSON.stringify({ version: 4, serial: 2, lineage: "abc-123", resources: [] });
+    const rawState = JSON.stringify({ version: 4, serial: 3, lineage: "abc-123", resources: [] });
     const b64State = Buffer.from(rawState).toString("base64");
 
     const res = await app.handle(
@@ -206,9 +215,11 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
         body: JSON.stringify({
           data: {
             attributes: {
-              serial: 2,
+              serial: 3,
               state: b64State,
+              md5: createHash("md5").update(rawState).digest("base64"),
             },
+            type: "state-versions",
           },
         }),
       })

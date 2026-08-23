@@ -5260,15 +5260,8 @@
         ],
         "summary": "POST /api/v2/runs/{run_id}/actions/discard",
         "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/vnd.api+json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
+          "202": {
+            "description": "Accepted"
           },
           "401": {
             "description": "Unauthorized"
@@ -5297,15 +5290,8 @@
         ],
         "summary": "POST /api/v2/runs/{run_id}/actions/cancel",
         "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/vnd.api+json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
+          "202": {
+            "description": "Accepted"
           },
           "401": {
             "description": "Unauthorized"
@@ -5334,15 +5320,8 @@
         ],
         "summary": "POST /api/v2/runs/{run_id}/actions/force-cancel",
         "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/vnd.api+json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
+          "202": {
+            "description": "Accepted"
           },
           "401": {
             "description": "Unauthorized"
@@ -5408,15 +5387,8 @@
         ],
         "summary": "POST /api/v2/runs/{run_id}/actions/force-execute",
         "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/vnd.api+json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
+          "202": {
+            "description": "Accepted"
           },
           "401": {
             "description": "Unauthorized"
@@ -5460,6 +5432,90 @@
           },
           "404": {
             "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/v2/runs/{run_id}/recovery-state": {
+      "get": {
+        "operationId": "get-api-v2-runs-run-id-recovery-state",
+        "tags": [
+          "runs"
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "GET /api/v2/runs/{run_id}/recovery-state",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Terraform/OpenTofu state document"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/v2/runs/{run_id}/actions/recover-state": {
+      "post": {
+        "operationId": "post-api-v2-runs-run-id-actions-recover-state",
+        "tags": [
+          "runs"
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "POST /api/v2/runs/{run_id}/actions/recover-state",
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "422": {
+            "description": "Unprocessable Entity"
+          },
+          "409": {
+            "description": "Conflict"
           }
         }
       }

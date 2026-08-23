@@ -4,9 +4,10 @@ import { configurationVersions, runs, type users } from "../db/schema";
 import { eq, count, desc, and, inArray, notInArray, isNull, lt, or } from "drizzle-orm";
 import { apiURL, signedApiURL, validSignedApiURL, FINAL_RUN_STATUSES, findAuthorizedWorkspace, pageRequest, pagination , type DeepReadonly } from "../lib/utils";
 import { join } from "path";
-import { mkdir, rm, writeFile } from "fs/promises";
-import { rmSync } from "node:fs";
+import { mkdir, rm, rename } from "fs/promises";
 import { authPlugin } from "../auth";
+import { assertArchiveExpandedSize } from "../lib/archive";
+import { persistUploadBody } from "../lib/upload-body";
 
 const rawStorageDir = process.env.STORAGE_DIR;
 const storageDir = typeof rawStorageDir === "string" && rawStorageDir !== "" ? rawStorageDir : join(import.meta.dir, "../storage");
@@ -101,11 +102,12 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     const workspaceId = params.workspace_id ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "plan");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot create configuration versions" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
 
-    const id = crypto.randomUUID();
+    const id = `cv-${crypto.randomUUID()}`;
     const speculative = typeof attributes.speculative === "boolean" ? attributes.speculative : false;
     const provisional = typeof attributes.provisional === "boolean" ? attributes.provisional : false;
     // The Terraform/OpenTofu CLI does not send a source attribute; detect it
@@ -134,6 +136,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
       ingressAttributes: null,
       statusTimestamps: null,
       uploadClaimExpiresAt: null,
+      uploadClaimToken: null,
       error: null,
       errorMessage: null,
       softDeletedAt: null,
@@ -183,50 +186,69 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
         lt(configurationVersions.uploadClaimExpiresAt, Date.now()),
       ),
     );
+    const claimToken = crypto.randomUUID();
+    const tarPath = join(CV_STORAGE_DIR, `config-${cvId}-${claimToken}.tar.gz`);
+    const temporaryPath = `${tarPath}.tmp`;
     const claim = await db.update(configurationVersions)
-      .set({ uploadClaimExpiresAt: Date.now() + UPLOAD_CLAIM_TTL_MS })
+      .set({ uploadClaimExpiresAt: Date.now() + UPLOAD_CLAIM_TTL_MS, uploadClaimToken: claimToken })
       .where(claimFilter)
       .returning({ id: configurationVersions.id });
     if (claim.length === 0) {
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "An upload for this configuration version is already in progress" }] };
     }
-    const tarName = `config-${cvId}.tar.gz`;
-    const tarPath = join(CV_STORAGE_DIR, tarName);
-    await mkdir(CV_STORAGE_DIR, { recursive: true });
-    let buffer: Uint8Array;
     try {
-      buffer = body instanceof ArrayBuffer
-        ? new Uint8Array(body)
-        : ArrayBuffer.isView(body)
-          ? new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
-          : body instanceof Blob
-            ? new Uint8Array(await body.arrayBuffer())
-            : new Uint8Array(await request.arrayBuffer());
-    } catch {
-      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null }).where(eq(configurationVersions.id, cvId));
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Could not read configuration archive body" }] };
+      await mkdir(CV_STORAGE_DIR, { recursive: true });
+      const size = await persistUploadBody(body, request, temporaryPath, 100 * 1024 * 1024);
+      if (size === 0) throw new Error("empty");
+    } catch (error: unknown) {
+      await rm(temporaryPath, { force: true });
+      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null, uploadClaimToken: null }).where(and(eq(configurationVersions.id, cvId), eq(configurationVersions.uploadClaimToken, claimToken)));
+      const tooLarge = (error instanceof Error && error.message === "too-large")
+        || Number(request.headers.get("content-length")) > 100 * 1024 * 1024;
+      (set as { status: number }).status = tooLarge ? 413 : 400;
+      return { errors: [{ status: String(tooLarge ? 413 : 400), title: tooLarge ? "Payload Too Large" : "Bad Request", detail: tooLarge ? "Configuration archive exceeds 100 MiB maximum" : "Could not read configuration archive body" }] };
     }
-    if (buffer.byteLength === 0) {
-      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null }).where(eq(configurationVersions.id, cvId));
-      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "Configuration archive is empty" }] };
+    try {
+      await assertArchiveExpandedSize(temporaryPath);
+    } catch (error: unknown) {
+      await rm(temporaryPath, { force: true });
+      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null, uploadClaimToken: null }).where(and(eq(configurationVersions.id, cvId), eq(configurationVersions.uploadClaimToken, claimToken)));
+      const expanded = error instanceof Error && /expands beyond|contents exceed/i.test(error.message);
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: expanded ? "Configuration archive expands beyond the permitted size" : "Configuration archive is not a valid gzip tar archive" }] };
     }
-    if (buffer.byteLength > 100 * 1024 * 1024) {
-      await db.update(configurationVersions).set({ uploadClaimExpiresAt: null }).where(eq(configurationVersions.id, cvId));
-      (set as { status: number }).status = 413; return { errors: [{ status: "413", title: "Payload Too Large", detail: "Configuration archive exceeds 100 MiB maximum" }] };
+    const claimStillActive = await db.query.configurationVersions.findFirst({
+      where: and(
+        eq(configurationVersions.id, cvId),
+        eq(configurationVersions.status, "pending"),
+        isNull(configurationVersions.archivePath),
+        eq(configurationVersions.uploadClaimToken, claimToken),
+      ),
+      columns: { id: true },
+    });
+    if (claimStillActive === undefined) {
+      await rm(temporaryPath, { force: true });
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] };
     }
-    await writeFile(tarPath, buffer, { mode: 0o600 });
+    await rename(temporaryPath, tarPath);
     const uploadedAt = new Date().toISOString();
     const finalized = await db.update(configurationVersions).set({
       archivePath: tarPath,
       status: "uploaded",
       uploadClaimExpiresAt: null,
+      uploadClaimToken: null,
       statusTimestamps: { ...(cv.statusTimestamps ?? {}), uploadedAt },
-    }).where(and(eq(configurationVersions.id, cvId), eq(configurationVersions.status, "pending"), isNull(configurationVersions.archivePath))).returning({ id: configurationVersions.id });
+    }).where(and(
+      eq(configurationVersions.id, cvId),
+      eq(configurationVersions.status, "pending"),
+      isNull(configurationVersions.archivePath),
+      eq(configurationVersions.uploadClaimToken, claimToken),
+    )).returning({ id: configurationVersions.id });
     if (finalized.length === 0) {
       // Another request finalized between our claim and write; ours loses.
-      rmSync(tarPath, { force: true });
+      await rm(tarPath, { force: true });
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Configuration content was already uploaded" }] };
     }
@@ -247,12 +269,13 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
         columns: { id: true },
       });
       if (activeRun !== undefined) return undefined;
+      const archivePath = current.archivePath;
       const rows = await tx.update(configurationVersions).set({
         status: "archived",
         archivePath: null,
         statusTimestamps: { ...(current.statusTimestamps ?? {}), archivedAt: new Date().toISOString() },
-      }).where(and(eq(configurationVersions.id, current.id), eq(configurationVersions.status, "uploaded"))).returning({ id: configurationVersions.id, archivePath: configurationVersions.archivePath });
-      return rows[0];
+      }).where(and(eq(configurationVersions.id, current.id), eq(configurationVersions.status, "uploaded"))).returning({ id: configurationVersions.id });
+      return rows[0] === undefined ? undefined : { ...rows[0], archivePath };
     });
     if (archived === undefined) {
       (set as { status: number }).status = 409;

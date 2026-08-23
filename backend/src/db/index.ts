@@ -14,7 +14,7 @@ import { envEnabled } from '../lib/env';
 import { planJsonDirectory } from '../lib/plan-json';
 import { runLogsDirectory } from '../lib/run-logs';
 import { databaseUrl, isPostgres, storageDir } from './driver';
-import { poolMetrics, poolQueryEnd, poolQueryStart, recordSlowQuery } from '../lib/db-pool-metrics';
+import { poolMetrics, poolQueryEnd, poolQueryStart, poolTransactionEnd, poolTransactionStart, recordSlowQuery } from '../lib/db-pool-metrics';
 
 // Deliberately synchronous: a top-level await here made this module a TLA
 // module, and Bun's worker threads can resolve importers while the TLA is
@@ -103,7 +103,7 @@ if (isPostgres) {
   {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
     pgClient.unsafe = ((queryText: string, ...params: unknown[]) => {
-      const start = poolQueryStart();
+      const start = poolQueryStart(10);
       const queryTextCopy = queryText;
       const pending = originalUnsafe(queryText, ...(params as [never])) as unknown as {
         then: (onFulfilled: (v: unknown) => unknown, onRejected: (e: unknown) => unknown) => unknown;
@@ -186,6 +186,22 @@ export function setQueryLogging(enabled: boolean): void {
 type AppDb = BunSQLiteDatabase<typeof schema>;
 const sqliteDb = sqliteClient === null ? null : sqliteDrizzle(sqliteClient, { schema });
 const pgDb = pgClient === null ? null : pgDrizzle(pgClient, { schema });
+if (pgDb !== null) {
+  // Drizzle exposes transactions on the database object rather than through
+  // postgres.js's query hook, so instrument the boundary explicitly.
+  const instrumented = pgDb as unknown as {
+    transaction: (...args: never[]) => Promise<unknown>;
+  };
+  const originalTransaction = instrumented.transaction.bind(instrumented);
+  instrumented.transaction = (async (callback: unknown, config?: unknown): Promise<unknown> => {
+    const start = poolTransactionStart();
+    try {
+      return await originalTransaction(callback as never, config as never);
+    } finally {
+      poolTransactionEnd(start);
+    }
+  });
+}
 export const db = (isPostgres ? pgDb : sqliteDb) as unknown as AppDb;
 
 // ---------------------------------------------------------------------------
@@ -218,6 +234,7 @@ if (!isPostgres) {
     );
     const behavior = config?.behavior !== undefined ? ` ${config.behavior.toUpperCase()}` : '';
     client.run(`BEGIN${behavior}`);
+    const transactionStart = poolTransactionStart();
     try {
       const result = await fn(tx);
       client.run('COMMIT');
@@ -225,6 +242,8 @@ if (!isPostgres) {
     } catch (err) {
       client.run('ROLLBACK');
       throw err;
+    } finally {
+      poolTransactionEnd(transactionStart);
     }
   };
 

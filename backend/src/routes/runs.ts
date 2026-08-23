@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
-import { eq, and, desc, asc, count, inArray, ne, notInArray, isNull } from "drizzle-orm";
+import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource } from "../lib/response";
-import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
+import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, cursorPagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, readRunLogs } from "../lib/run-logs";
 import { deletePlanJsonArtifact, readPlanJsonArtifact, readPlanJsonSideArtifact, sanitizePlanJson } from "../lib/plan-json";
@@ -12,7 +12,7 @@ import { applyGateBlockReason } from "../lib/operations";
 import { authPlugin } from "../auth";
 import { queueRunNotification } from "../lib/notifications";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
-import { cancelAgentJobsForRun, enqueueAgentApplyJob } from "../lib/agent-jobs";
+import { cancelAgentJobsForRun, insertAgentApplyJobTx } from "../lib/agent-jobs";
 import { publish } from "../lib/event-bus";
 import { isPlanIncompleteRunStatus } from "../lib/run-status";
 import { AvatarService } from "../lib/avatars";
@@ -367,7 +367,7 @@ export async function createRun(
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "invoke-action-addrs accepts one address and cannot be combined with destroy or target addresses" }] };
   }
   const requestedAutoApply = typeof attributes["auto-apply"] === "boolean" ? attributes["auto-apply"] : undefined;
-  const requestedPlanOnly = requestedOperation === "plan" || requestedOperation === "plan_only" || requestedOperation === "save_plan"
+  const requestedPlanOnly = requestedOperation === "plan" || requestedOperation === "plan_only"
     ? true
     : typeof attributes["plan-only"] === "boolean" ? attributes["plan-only"] : undefined;
   const refresh = typeof attributes.refresh === "boolean" ? attributes.refresh : true;
@@ -427,7 +427,10 @@ export async function createRun(
   let configurationVersion: typeof configurationVersions.$inferSelect | undefined;
   if (cvId !== undefined) {
     configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
+    if (configurationVersion === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version was not found" }] }; }
     if (configurationVersion?.workspaceId !== workspaceId) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version does not belong to workspace" }] }; }
+    const pendingVcs = configurationVersion.status === "pending" && ["github", "gitlab", "bitbucket"].includes(configurationVersion.source ?? "");
+    if (configurationVersion.status !== "uploaded" && !pendingVcs) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Configuration version is not ready for a run" }] }; }
   } else if (workspace.vcsRepo?.identifier !== undefined) {
     // Auto-create a configuration version from VCS for manual runs
     const result = await createConfigurationVersionFromVcs(workspace);
@@ -443,7 +446,7 @@ export async function createRun(
     // creates runs without claiming a config version, and the worker only plans
     // runs that have one).
     const latest = await db.query.configurationVersions.findFirst({
-      where: and(eq(configurationVersions.workspaceId, workspaceId), inArray(configurationVersions.status, ["uploaded", "pending"])),
+      where: and(eq(configurationVersions.workspaceId, workspaceId), eq(configurationVersions.status, "uploaded")),
       orderBy: [desc(configurationVersions.createdAt)],
     });
     if (latest !== undefined) {
@@ -528,6 +531,23 @@ function lockedWorkspaceDetail(reason: string | null | undefined): string {
     : "Workspace is locked";
 }
 
+type RunCursor = Readonly<{ createdAt: number; id: string }>;
+
+function decodeRunCursor(value: string): RunCursor | null {
+  try {
+    const decoded = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<string, unknown>;
+    return typeof decoded.createdAt === "number" && Number.isSafeInteger(decoded.createdAt) && typeof decoded.id === "string" && decoded.id !== ""
+      ? { createdAt: decoded.createdAt, id: decoded.id }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function encodeRunCursor(run: Readonly<{ createdAt: number; id: string }>): string {
+  return Buffer.from(JSON.stringify({ createdAt: run.createdAt, id: run.id })).toString("base64url");
+}
+
 export const runRoutes = new Elysia({ name: "runs" })
   .use(authPlugin)
   .get("/api/v2/workspaces/:workspace_id/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -578,12 +598,59 @@ export const runRoutes = new Elysia({ name: "runs" })
       workspaceIdsForPermission(organization.id, user?.id, orgId ?? null, teamId ?? null, "apply"),
     ]);
     const { number, size } = pageRequest(request);
-    if (orgWorkspaces.length === 0) { return { data: [], ...pagination(request, number, size, 0) }; }
-    const queue = await db.query.runs.findMany({
-      where: and(inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)), inArray(runs.status, [...CAPACITY_PENDING_STATUSES, ...CAPACITY_RUNNING_STATUSES])),
-      orderBy: [asc(runs.createdAt)],
-    });
-    let position = queue.filter((r: Readonly<{ readonly status: string }>): boolean => CAPACITY_RUNNING_STATUSES.some((s: string): boolean => s === r.status)).length;
+    const rawCursor = new URL(request.url).searchParams.get("page[cursor]");
+    const cursorMode = rawCursor !== null;
+    const cursor = rawCursor === null ? null : decodeRunCursor(rawCursor);
+    if (cursorMode && cursor === null) {
+      (set as { status: number }).status = 400;
+      return { errors: [{ status: "400", title: "Bad Request", detail: "page[cursor] is invalid" }] };
+    }
+    if (orgWorkspaces.length === 0) {
+      return {
+        data: [],
+        ...(cursorMode ? cursorPagination(request, null, size, false) : pagination(request, number, size, 0)),
+      };
+    }
+    const baseQueueWhere = and(
+      inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)),
+      inArray(runs.status, [...CAPACITY_PENDING_STATUSES, ...CAPACITY_RUNNING_STATUSES]),
+    );
+    const queueWhere = and(
+      baseQueueWhere,
+      cursor === null ? undefined : or(
+        gt(runs.createdAt, cursor.createdAt),
+        and(eq(runs.createdAt, cursor.createdAt), gt(runs.id, cursor.id)),
+      ),
+    );
+    const [queueWithCursor, countRows, runningRows] = await Promise.all([
+      db.query.runs.findMany({
+        where: queueWhere,
+        orderBy: [asc(runs.createdAt), asc(runs.id)],
+        limit: cursorMode ? size + 1 : size,
+        offset: cursorMode ? undefined : (number - 1) * size,
+      }),
+      cursorMode ? Promise.resolve([{ total: 0 }]) : db.select({ total: count() }).from(runs).where(baseQueueWhere),
+      db.select({ total: count() }).from(runs).where(and(
+        baseQueueWhere,
+        inArray(runs.status, [...CAPACITY_RUNNING_STATUSES]),
+      )),
+    ]);
+    const hasMore = cursorMode && queueWithCursor.length > size;
+    const queue = hasMore ? queueWithCursor.slice(0, size) : queueWithCursor;
+    const first = queue[0];
+    let pendingBefore = 0;
+    if (first !== undefined) {
+      const rowsBefore = await db.select({ total: count() }).from(runs).where(and(
+        inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)),
+        inArray(runs.status, [...CAPACITY_PENDING_STATUSES]),
+        or(
+          lt(runs.createdAt, first.createdAt),
+          and(eq(runs.createdAt, first.createdAt), lt(runs.id, first.id)),
+        ),
+      ));
+      pendingBefore = rowsBefore[0]?.total ?? 0;
+    }
+    let position = (runningRows[0]?.total ?? 0) + pendingBefore;
     const applySet = new Set(applyIds ?? []);
     const origins = await originsForRuns(queue);
     const data = queue.map((r: RunItem): Record<string, unknown> => {
@@ -592,20 +659,27 @@ export const runRoutes = new Elysia({ name: "runs" })
       if (isPending) { position += 1; }
       const attrs = typeof resource.attributes === "object" && resource.attributes !== null ? (resource.attributes as Record<string, unknown>) : {};
       return { ...resource, attributes: { ...attrs, "position-in-queue": isPending ? position : 0 } };
-    }).slice((number - 1) * size, number * size);
+    });
     const included = await includedUsersForRuns(queue);
-    return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, queue.length) };
+    const last = queue.at(-1);
+    const pageMeta = cursorMode
+      ? cursorPagination(request, hasMore && last !== undefined ? encodeRunCursor(last) : null, size, hasMore)
+      : pagination(request, number, size, countRows[0]?.total ?? 0);
+    return { data, ...(included.length > 0 ? { included } : {}), ...pageMeta };
   })
   .get("/api/v2/organizations/:org_name/capacity", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const organization = await cachedOrgByName(orgName);
     if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const orgWorkspaces = await authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null);
-    const active = orgWorkspaces.length === 0 ? [] : await db.query.runs.findMany({
-      columns: { status: true },
-      where: and(inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)), inArray(runs.status, [...CAPACITY_PENDING_STATUSES, ...CAPACITY_RUNNING_STATUSES])),
-    });
-    return { data: { id: organization.name, type: "organization-capacity", attributes: { pending: active.filter((r: Readonly<{ readonly status: string }>): boolean => CAPACITY_PENDING_STATUSES.some((s: string): boolean => s === r.status)).length, running: active.filter((r: Readonly<{ readonly status: string }>): boolean => CAPACITY_RUNNING_STATUSES.some((s: string): boolean => s === r.status)).length } } };
+    const counts = orgWorkspaces.length === 0 ? [] : await db.select({ status: runs.status, total: count() }).from(runs).where(and(
+      inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)),
+      inArray(runs.status, [...CAPACITY_PENDING_STATUSES, ...CAPACITY_RUNNING_STATUSES]),
+    )).groupBy(runs.status);
+    const totalFor = (statuses: readonly string[]): number => counts
+      .filter((row): boolean => statuses.includes(row.status))
+      .reduce((sum, row): number => sum + Number(row.total), 0);
+    return { data: { id: organization.name, type: "organization-capacity", attributes: { pending: totalFor(CAPACITY_PENDING_STATUSES), running: totalFor(CAPACITY_RUNNING_STATUSES) } } };
   })
   .post("/api/v2/workspaces/:workspace_id/runs", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const wsId = params.workspace_id ?? "";
@@ -776,9 +850,10 @@ export const runRoutes = new Elysia({ name: "runs" })
     const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const inputStateId = authorized.run.statusTimestamps?.["input-state-version-id"];
+    if (typeof inputStateId !== "string" || inputStateId === "") return { data: null };
     const currentSV = await db.query.stateVersions.findFirst({
-      where: and(eq(stateVersions.workspaceId, authorized.run.workspaceId), ne(stateVersions.runId, runId)),
-      orderBy: desc(stateVersions.serial),
+      where: and(eq(stateVersions.id, inputStateId), eq(stateVersions.workspaceId, authorized.run.workspaceId)),
     });
     if (currentSV === undefined) return { data: null };
     const { stateVersionResource } = await import("../lib/response");
@@ -864,9 +939,38 @@ export const runRoutes = new Elysia({ name: "runs" })
       }
       agentPoolId = pool.id;
     }
+    if (agentPoolId !== null) {
+      const confirmedTimestamps = {
+        ...(before.statusTimestamps ?? {}),
+        "confirmed-at": new Date().toISOString(),
+      };
+      const job = await db.transaction(async (transaction) => {
+        const tx = transaction as unknown as typeof db;
+        const confirmed = await tx.update(runs).set({
+          status: "confirmed",
+          scheduledAt: null,
+          statusTimestamps: confirmedTimestamps,
+        }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+        if (confirmed.length === 0) return undefined;
+        return insertAgentApplyJobTx(tx, runId, agentPoolId, confirmedTimestamps);
+      });
+      if (job === undefined) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] };
+      }
+      await auditLog("apply", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
+        workspaceId: authorized.workspace.id,
+        fromStatus: before.status,
+        toStatus: "apply_queued",
+        ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+      });
+      const commentStr = actionComment(body);
+      if (commentStr !== "") await createRunComment({ runId, userId: user?.id ?? null, body: commentStr, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
+      (set as { status: number }).status = 202;
+      return new Response(null, { status: 202 });
+    }
     const confirmed = await db.update(runs).set({
       status: "confirmed",
-      // A manual confirm overrides any previously scheduled apply time.
       scheduledAt: null,
       statusTimestamps: {
         ...(before.statusTimestamps ?? {}),
@@ -882,15 +986,6 @@ export const runRoutes = new Elysia({ name: "runs" })
     });
     const commentStr = actionComment(body);
     if (commentStr !== "") await createRunComment({ runId, userId: user?.id ?? null, body: commentStr, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
-    if (agentPoolId !== null) {
-      const job = await enqueueAgentApplyJob(authorized.run.id, agentPoolId);
-      if (job === undefined) {
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] };
-      }
-      (set as { status: number }).status = 202;
-      return new Response(null, { status: 202 });
-    }
     const { executeApply } = await import("../worker");
     executeApply(authorized.run.id).catch((err: unknown): void => { if (err !== null && err !== undefined) { console.error(err); } });
     (set as { status: number }).status = 202;
@@ -913,10 +1008,9 @@ export const runRoutes = new Elysia({ name: "runs" })
       where: and(
         eq(runs.id, runId),
         inArray(runs.status, ["planned", "planned_and_saved"]),
-        // plan-only / saved-plan runs never apply; scheduling them would
-        // leave them confirmed forever (the poller skips them).
+        // A saved plan is specifically intended to be scheduled later. Only
+        // speculative/plan-only runs are excluded from apply scheduling.
         eq(runs.planOnly, false),
-        eq(runs.savePlan, false),
       ),
     });
     if (before === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must have a completed saved plan before apply" }] }; }
@@ -977,8 +1071,14 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "discard"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const updated = await db.update(runs).set({ status: "discarded" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
+    const updated = await db.update(runs).set({ status: "discarded" }).where(and(
+      eq(runs.id, runId),
+      eq(runs.status, authorized.run.status),
+      inArray(runs.status, ["pending", "planned", "planned_and_saved", "policy_soft_failed", "unreachable"]),
+    )).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not discardable" }] }; }
+    const { cleanupSavedPlan } = await import("../worker");
+    await cleanupSavedPlan(runId);
     const commentStr = actionComment(body);
     if (commentStr !== "") await createRunComment({ runId, userId: user?.id ?? null, body: commentStr, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
     await auditLog("discard", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
@@ -988,7 +1088,8 @@ export const runRoutes = new Elysia({ name: "runs" })
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
     queueRunNotification(runId, "run:errored", "discarded");
-    return { data: { id: runId, type: "runs", attributes: { status: "discarded" } } };
+    (set as { status: number }).status = 202;
+    return new Response(null, { status: 202 });
   })
   .post("/api/v2/runs/:run_id/actions/cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
@@ -996,10 +1097,28 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "cancel"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const updated = await db.update(runs).set({ status: "canceled" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
+    const canceledAt = new Date().toISOString();
+    const updated = await db.update(runs).set({
+      status: "canceled",
+      statusTimestamps: {
+        ...(authorized.run.statusTimestamps ?? {}),
+        "cancel-requested-at": canceledAt,
+        "canceled-at": canceledAt,
+      },
+    }).where(and(
+      eq(runs.id, runId),
+      eq(runs.status, authorized.run.status),
+      inArray(runs.status, [
+        "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
+        "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated",
+        "policy_checking", "policy_override", "policy_checked", "post_plan_running",
+        "post_plan_completed", "confirmed", "apply_queued", "applying",
+      ]),
+    )).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not cancelable" }] }; }
-    const { cancelRunExecution } = await import("../worker");
+    const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
     cancelRunExecution(runId);
+    await cleanupSavedPlan(runId);
     await cancelAgentJobsForRun(runId);
     await auditLog("cancel", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
       workspaceId: authorized.workspace.id,
@@ -1008,17 +1127,28 @@ export const runRoutes = new Elysia({ name: "runs" })
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
     queueRunNotification(runId, "run:errored", "canceled");
-    return { data: { id: runId, type: "runs", attributes: { status: "canceled" } } };
+    (set as { status: number }).status = 202;
+    return new Response(null, { status: 202 });
   })
   .post("/api/v2/runs/:run_id/actions/force-cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const updated = await db.update(runs).set({ status: "force_canceled" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
+    const cancelRequestedAt = authorized.run.statusTimestamps?.["cancel-requested-at"];
+    if (cancelRequestedAt === undefined || !["pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed", "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated", "policy_checking", "policy_override", "policy_checked", "post_plan_running", "post_plan_completed", "confirmed", "apply_queued", "applying", "canceled"].includes(authorized.run.status)) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Cancel the run before force-canceling it" }] };
+    }
+    const updated = await db.update(runs).set({ status: "force_canceled" }).where(and(
+      eq(runs.id, runId),
+      eq(runs.status, authorized.run.status),
+      inArray(runs.status, ["pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed", "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated", "policy_checking", "policy_override", "policy_checked", "post_plan_running", "post_plan_completed", "confirmed", "apply_queued", "applying", "canceled"]),
+    )).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-cancelable" }] }; }
-    const { cancelRunExecution } = await import("../worker");
+    const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
     cancelRunExecution(runId, true);
+    await cleanupSavedPlan(runId);
     await cancelAgentJobsForRun(runId);
     await auditLog("force-cancel", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
       workspaceId: authorized.workspace.id,
@@ -1027,7 +1157,8 @@ export const runRoutes = new Elysia({ name: "runs" })
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
     queueRunNotification(runId, "run:errored", "force_canceled");
-    return { data: { id: runId, type: "runs", attributes: { status: "force_canceled" } } };
+    (set as { status: number }).status = 202;
+    return new Response(null, { status: 202 });
   })
   .post("/api/v2/runs/:run_id/actions/override-policy", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
@@ -1036,8 +1167,9 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "policy-override"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const run = authorized.run;
     if (run.status !== "policy_soft_failed") { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be policy_soft_failed to override" }] }; }
+    const updated = await db.update(runs).set({ status: "planned" }).where(and(eq(runs.id, runId), eq(runs.status, "policy_soft_failed"))).returning({ id: runs.id });
+    if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is no longer awaiting policy override" }] }; }
     await db.update(policyChecks).set({ status: "overridden" }).where(and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])));
-    await db.update(runs).set({ status: "planned" }).where(eq(runs.id, runId));
     await auditLog("override-policy", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
       workspaceId: authorized.workspace.id,
       fromStatus: "policy_soft_failed",
@@ -1052,23 +1184,48 @@ export const runRoutes = new Elysia({ name: "runs" })
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    if (authorized.run.status !== "canceled") { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be canceled to force-execute" }] }; }
-    const updated = await db.update(runs).set({ status: "pending" }).where(and(eq(runs.id, runId), eq(runs.status, "canceled"))).returning();
+    if (authorized.run.status !== "pending") { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be pending to force-execute" }] }; }
+    const activeBlockingStatuses = ["plan_queued", "planning", "apply_queued", "applying"] as const;
+    const blockers = await db.query.runs.findMany({
+      where: and(eq(runs.workspaceId, authorized.workspace.id), inArray(runs.status, [...activeBlockingStatuses]), ne(runs.id, runId)),
+      orderBy: [asc(runs.createdAt), asc(runs.id)],
+    });
+    const blockingRuns = blockers.filter((run): boolean => run.planOnly !== true && run.savePlan !== true);
+    if (blockingRuns.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "No blocking run is available to force-execute" }] }; }
+    const blockerCanceled = await db.update(runs).set({ status: "force_canceled" }).where(and(
+      inArray(runs.id, blockingRuns.map((run): string => run.id)),
+      inArray(runs.status, [...activeBlockingStatuses]),
+    )).returning({ id: runs.id });
+    if (blockerCanceled.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "The blocking run changed before it could be stopped" }] }; }
+    const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
+    await Promise.all(blockerCanceled.map(async ({ id }): Promise<void> => {
+      cancelRunExecution(id, true);
+      await cleanupSavedPlan(id);
+      await cancelAgentJobsForRun(id);
+    }));
+    const updated = await db.update(runs).set({ status: "pending" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status))).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-executable" }] }; }
     await auditLog("force-execute", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
       workspaceId: authorized.workspace.id,
-      fromStatus: "canceled",
+      fromStatus: authorized.run.status,
       toStatus: "pending",
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
     queueRunNotification(runId, "run:needs_attention", "pending");
-    return { data: { id: runId, type: "runs", attributes: { status: "pending" } } };
+    (set as { status: number }).status = 202;
+    return new Response(null, { status: 202 });
   })
   .post("/api/v2/runs/:run_id/actions/queue", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    if (authorized.run.status === "plan_queued" || authorized.run.status === "apply_queued") {
+      const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
+      cancelRunExecution(runId, true);
+      await cleanupSavedPlan(runId);
+      await cancelAgentJobsForRun(runId);
+    }
     const updated = await db.update(runs).set({ status: "pending" }).where(and(
       eq(runs.id, runId),
       eq(runs.status, authorized.run.status),

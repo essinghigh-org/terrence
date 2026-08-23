@@ -202,7 +202,8 @@ describe("run token authorization", () => {
         type: "state-versions",
         attributes: {
           serial: 2,
-          state: JSON.stringify({ version: 4, terraform_version: "1.0.0", resources: [] }),
+          state: JSON.stringify({ version: 4, serial: 2, terraform_version: "1.0.0", resources: [] }),
+          md5: createHash("md5").update(JSON.stringify({ version: 4, serial: 2, terraform_version: "1.0.0", resources: [] })).digest("base64"),
         },
       },
     }));

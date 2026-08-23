@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "../../db";
 import {
   projects,
@@ -13,6 +13,9 @@ import {
   findAuthorizedWorkspace,
   findWorkspaceByName,
   workspaceIdsForPermission,
+  lockPrincipal,
+  ownsWorkspaceLock,
+  promoteIntermediateStateVersion,
 } from "../utils";
 import { validateVersion } from "../utils";
 import { isExecutionMode } from "../constants";
@@ -318,7 +321,14 @@ export const workspaceTools: readonly McpTool[] = [
       if (ws.locked === true) return toolBadRequest("Workspace is already locked");
       const reason = typeof args.reason === "string" ? args.reason.trim() : "";
       if (reason.length > 300) return toolBadRequest("Lock reason must be at most 300 characters");
-      await db.update(workspaces).set({ locked: true, lockedReason: reason === "" ? null : reason }).where(eq(workspaces.id, wsId));
+      const principal = lockPrincipal(session.userId, session.orgId ?? ws.orgId, session.teamId);
+      const locked = await db.update(workspaces).set({
+        locked: true,
+        lockedReason: reason === "" ? null : reason,
+        lockOwnerType: principal.type,
+        lockOwnerId: principal.id,
+      }).where(and(eq(workspaces.id, wsId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
+      if (locked.length === 0) return toolBadRequest("Workspace is already locked");
       return { id: wsId, locked: true, lockedReason: reason === "" ? null : reason };
     },
   },
@@ -339,7 +349,16 @@ export const workspaceTools: readonly McpTool[] = [
         return toolError("Not authorized to unlock this workspace");
       }
       if (ws.locked !== true) return toolBadRequest("Workspace is not locked");
-      await db.update(workspaces).set({ locked: false, lockedReason: null }).where(eq(workspaces.id, wsId));
+      const principal = lockPrincipal(session.userId, session.orgId ?? ws.orgId, session.teamId);
+      if (!ownsWorkspaceLock(ws, principal)) return toolError("Only the lock owner can unlock this workspace");
+      const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
+        eq(workspaces.id, wsId),
+        eq(workspaces.locked, true),
+        eq(workspaces.lockOwnerType, principal.type),
+        eq(workspaces.lockOwnerId, principal.id),
+      )).returning({ id: workspaces.id });
+      if (unlocked.length === 0) return toolError("Workspace lock changed while unlocking");
+      await promoteIntermediateStateVersion(wsId);
       return { id: wsId, locked: false };
     },
   },

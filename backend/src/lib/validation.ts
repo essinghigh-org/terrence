@@ -1,3 +1,19 @@
+import { decryptSecretSync, encryptSecret, isEncryptedSecret } from "./secrets";
+import { join } from "node:path";
+
+function stateStorageDir(): string {
+  return process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage");
+}
+
+/** Encrypt state fields at rest while keeping the API/parser representation plain. */
+export async function encryptStatePayload(payload: string | null): Promise<string | null> {
+  return payload === null ? null : encryptSecret(payload);
+}
+
+function decryptStatePayload(payload: string): string {
+  return isEncryptedSecret(payload) ? decryptSecretSync(payload, stateStorageDir()) : payload;
+}
+
 export function validVariableAttributes(attributes: unknown, partial = false): boolean {
   if (attributes === null || typeof attributes !== "object" || Array.isArray(attributes)) return false;
   const allowedFields = ["key", "value", "category", "sensitive", "hcl", "description"];
@@ -65,23 +81,25 @@ export function tokenExpiry(value: unknown): number | null {
 
 export function decodeStatePayload(state: unknown): string {
   if (typeof state !== "string") return JSON.stringify(state);
+  let plaintext = state;
   try {
-    JSON.parse(state);
-    return state;
+    plaintext = decryptStatePayload(state);
+    JSON.parse(plaintext);
+    return plaintext;
   } catch {
     try {
-      const decoded = Buffer.from(state, "base64").toString("utf8");
+      const decoded = Buffer.from(plaintext, "base64").toString("utf8");
       JSON.parse(decoded);
       return decoded;
     } catch {
-      return state;
+      return plaintext;
     }
   }
 }
 
 export function parseStatePayload(payload: string | null): Record<string, unknown> | null {
   try {
-    const state = JSON.parse(payload ?? "{}") as unknown;
+    const state = JSON.parse(payload === null ? "{}" : decodeStatePayload(payload)) as unknown;
     return state !== null && typeof state === "object" && !Array.isArray(state) ? (state as Record<string, unknown>) : null;
   } catch {
     return null;

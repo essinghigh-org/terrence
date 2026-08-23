@@ -28,9 +28,27 @@ export function agentFilesystemPath(runId: string): string {
 
 /** Public base URL for the job's absolute artifact URLs (caddy reverse proxy aware). */
 export function agentApiBaseUrl(request: { readonly headers: { readonly get: (name: string) => string | null } }): string {
-  const proto = request.headers.get("x-forwarded-proto") ?? "https";
-  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? "localhost";
-  return `${proto}://${host}`;
+  const configured = process.env.PUBLIC_URL?.trim();
+  if (configured) {
+    let parsed: URL;
+    try {
+      parsed = new URL(configured);
+    } catch {
+      throw new Error("PUBLIC_URL must be a valid http(s) URL");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("PUBLIC_URL must use http or https");
+    }
+    return parsed.origin;
+  }
+  // A Host header is attacker-controlled. Only use a loopback host for local
+  // development/test; deployed instances must configure their public origin.
+  if (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test") {
+    const host = request.headers.get("host") ?? "localhost";
+    if (/^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/.test(host)) return `http://${host}`;
+    return "http://localhost";
+  }
+  throw new Error("PUBLIC_URL must be configured for agent artifact URLs");
 }
 
 // --- Terraform release info (upstream URL + sha256, cached) -----------------
@@ -41,15 +59,19 @@ const RELEASE_INFO_TTL_MS = 60 * 60 * 1000;
 /** Resolve a terraform version constraint to an exact release URL + sha256. */
 export async function terraformReleaseInfo(
   versionInput: string,
+  architecture = "amd64",
 ): Promise<{ version: string; url: string; checksum: string } | null> {
   const constraint = versionInput === "" || versionInput === null ? "latest" : versionInput;
   const version = await resolveTerraformVersion(constraint);
   if (version === null) return null;
-  const cached = releaseInfoCache.get(version);
+  const normalizedArchitecture = architecture.toLowerCase() === "aarch64" || architecture.toLowerCase() === "arm64" ? "arm64" : "amd64";
+  const cacheKey = `${version}:${normalizedArchitecture}`;
+  const cached = releaseInfoCache.get(cacheKey);
   if (cached !== undefined && Date.now() - cached.at < RELEASE_INFO_TTL_MS) {
     return { version, url: cached.url, checksum: cached.checksum };
   }
-  const url = `https://releases.hashicorp.com/terraform/${version}/terraform_${version}_linux_amd64.zip`;
+  const zipName = `terraform_${version}_linux_${normalizedArchitecture}.zip`;
+  const url = `https://releases.hashicorp.com/terraform/${version}/${zipName}`;
   try {
     const sums = await fetch(
       `https://releases.hashicorp.com/terraform/${version}/terraform_${version}_SHA256SUMS`,
@@ -57,10 +79,10 @@ export async function terraformReleaseInfo(
     );
     if (!sums.ok) return null;
     const text = await sums.text();
-    const line = text.split("\n").find((l: string): boolean => l.includes("linux_amd64.zip"));
+    const line = text.split("\n").find((l: string): boolean => l.includes(zipName));
     const checksum = line?.split(/\s+/)[0];
     if (checksum === undefined || !/^[0-9a-f]{64}$/.test(checksum)) return null;
-    releaseInfoCache.set(version, { url, checksum, at: Date.now() });
+    releaseInfoCache.set(cacheKey, { url, checksum, at: Date.now() });
     return { version, url, checksum };
   } catch {
     return null;
@@ -112,7 +134,12 @@ function satisfiesConstraint(version: string, constraint: string): boolean {
     if (op === ">" && cmp <= 0) return false;
     if (op === "<" && cmp >= 0) return false;
     if (op === "!=" && cmp === 0) return false;
-    if (op === "~>" && (cmp < 0 || parts[0] !== target[0] || (target[1] !== undefined && (parts[1] ?? 0) !== target[1]))) return false;
+    if (op === "~>") {
+      if (cmp < 0 || parts[0] !== target[0]) return false;
+      // Terraform's two-component pessimistic constraint (`~> 1.2`) allows
+      // every 1.x release; a fully-qualified `~> 1.2.3` is limited to 1.2.x.
+      if (target.length >= 3 && (parts[1] ?? 0) !== (target[1] ?? 0)) return false;
+    }
     if (op === "==" && cmp !== 0) return false;
   }
   return true;

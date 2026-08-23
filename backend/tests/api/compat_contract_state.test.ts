@@ -21,15 +21,18 @@ describe("remote-workflow state versions contract", () => {
   const headers = jsonHeaders(seed.token);
   const workspaceId = `workspace-${seed.suffix}`;
   let stateVersionId = "";
+  const stateJson = (serial: number) =>
+    JSON.stringify({ version: 4, serial, lineage: "test-lineage", outputs: {} });
+  const stateMd5 = (serial: number) => createHash("md5").update(stateJson(serial)).digest("base64");
 
   const statePayload = {
     data: {
       type: "state-versions",
       attributes: {
         serial: 1,
-        md5: "d41d8cd98f00b204e9800998ecf8427e",
+        md5: stateMd5(1),
         lineage: "test-lineage",
-        state: "{\"version\":4,\"serial\":1,\"lineage\":\"test-lineage\",\"outputs\":{}}",
+        state: stateJson(1),
         "json-state-outputs": "{\"outputs\":{}}",
       },
     },
@@ -38,6 +41,8 @@ describe("remote-workflow state versions contract", () => {
   beforeAll(async () => {
     await persistSeed(seed);
     await db.insert(workspaces).values({ id: workspaceId, name: `state-${seed.suffix}`, orgId: seed.orgId });
+    const lock = await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, { method: "POST", headers });
+    expect(lock.status).toBe(200);
   });
 
   afterAll(async () => {
@@ -144,9 +149,9 @@ describe("remote-workflow state versions contract", () => {
             type: "state-versions",
             attributes: {
               serial: 2,
-              md5: "5d41402abc4b2a76b9719d911017c592",
+              md5: stateMd5(2),
               lineage: "test-lineage",
-              state: "{\"version\":4,\"serial\":2,\"lineage\":\"test-lineage\",\"outputs\":{}}",
+              state: stateJson(2),
               "json-state-outputs": "{\"outputs\":{}}",
             },
           },

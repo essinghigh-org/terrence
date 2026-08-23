@@ -1,7 +1,9 @@
 import { app, systemApiApp } from "./src/app";
+import { countLegacyPlaintextTokens, migrateLegacyPlaintextTokens } from "./src/auth";
 import { bootstrapInitialAdmin } from "./src/lib/bootstrap";
 import { refreshTrustedClientIpHeaders } from "./src/lib/client-ip";
 import { applyPgMigrations, isPostgres } from "./src/db";
+import { log } from "./src/lib/log";
 import { reconcileInterruptedLocalRuns, stopWorkerQueue, waitForWorkerDrain } from "./src/worker";
 import { markControlPlaneNodeDraining, startControlPlaneHeartbeat } from "./src/routes/health";
 
@@ -15,6 +17,29 @@ const systemPort = rawSystemPort !== undefined && rawSystemPort !== "" ? Number(
 if (!Number.isInteger(systemPort) || systemPort < 1 || systemPort > 65535) {
   throw new Error(`Invalid SYSTEM_API_PORT configuration: "${String(rawSystemPort)}". SYSTEM_API_PORT must be a valid integer between 1 and 65535.`);
 }
+const readEnv = (name: string): string | undefined => {
+  const value = process.env[name];
+  return value === undefined || value === "" ? undefined : value;
+};
+const systemHost = readEnv("SYSTEM_API_HOST") ?? "127.0.0.1";
+const systemTlsCertPath = readEnv("SYSTEM_API_TLS_CERT");
+const systemTlsKeyPath = readEnv("SYSTEM_API_TLS_KEY");
+const systemIsRemote = !["127.0.0.1", "::1", "localhost"].includes(systemHost);
+if ((systemTlsCertPath === undefined) !== (systemTlsKeyPath === undefined)) {
+  throw new Error("SYSTEM_API_TLS_CERT and SYSTEM_API_TLS_KEY must be configured together.");
+}
+if (systemIsRemote && (systemTlsCertPath === undefined || systemTlsKeyPath === undefined)) {
+  throw new Error("SYSTEM_API_HOST is remote; configure SYSTEM_API_TLS_CERT and SYSTEM_API_TLS_KEY before exposing the System API.");
+}
+const systemTls = systemTlsCertPath !== undefined && systemTlsKeyPath !== undefined
+  ? {
+      cert: Bun.file(systemTlsCertPath),
+      key: Bun.file(systemTlsKeyPath),
+    }
+  : undefined;
+if (systemTls !== undefined && (!(await systemTls.cert.exists()) || !(await systemTls.key.exists()) || systemTls.cert.size === 0 || systemTls.key.size === 0)) {
+  throw new Error("SYSTEM_API_TLS_CERT and SYSTEM_API_TLS_KEY must point to non-empty files.");
+}
 
 // The background worker queue is started by src/app.ts (deferred out of
 // module evaluation so the TLA module graph fully resolves first). Do NOT
@@ -27,6 +52,15 @@ await refreshTrustedClientIpHeaders();
 // must be migrated before the server accepts traffic.
 if (isPostgres) {
   await applyPgMigrations();
+}
+const legacyTokenCount = await countLegacyPlaintextTokens();
+if (legacyTokenCount > 0) {
+  if (process.env.TERRENCE_ALLOW_LEGACY_TOKENS === "1") {
+    const migrated = await migrateLegacyPlaintextTokens();
+    log.warn(`[terrence] Migrated ${migrated} legacy plaintext API token(s) to SHA-256 hashes. Remove TERRENCE_ALLOW_LEGACY_TOKENS after this upgrade.`);
+  } else {
+    log.warn(`[terrence] Found ${legacyTokenCount} legacy plaintext API token(s). Set TERRENCE_ALLOW_LEGACY_TOKENS=1 for one startup to migrate them, then unset it.`);
+  }
 }
 startControlPlaneHeartbeat();
 
@@ -61,16 +95,17 @@ systemApiApp.listen({
   // support-bundle downloads). Bind it to loopback by default so it is not
   // reachable from other hosts on the same network; override with
   // SYSTEM_API_HOST when a remote agent pool needs to call it directly.
-  hostname: process.env.SYSTEM_API_HOST ?? "127.0.0.1",
+  hostname: systemHost,
   port: systemPort,
   maxRequestBodySize: 100 * 1024 * 1024,
+  ...(systemTls === undefined ? {} : { tls: systemTls }),
 });
 
 console.log(
   `🦊 Backend is running at ${String(app.server?.hostname)}:${String(app.server?.port)}`
 );
 console.log(
-  `[terrence] System API is running at ${String(systemApiApp.server?.hostname)}:${String(systemApiApp.server?.port)} (host ${String(process.env.SYSTEM_API_HOST ?? "127.0.0.1")})`
+  `[terrence] System API is running at ${String(systemApiApp.server?.hostname)}:${String(systemApiApp.server?.port)}${systemTls === undefined ? " (HTTP loopback)" : " (TLS)"}`
 );
 
 if (isPostgres) {

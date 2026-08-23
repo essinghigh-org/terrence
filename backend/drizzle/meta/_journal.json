@@ -239,6 +239,34 @@
       "when": 1787448093117,
       "tag": "0033_actions_api",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1787455944697,
+      "tag": "0034_mighty_umar",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1787457908392,
+      "tag": "0035_aromatic_zarek",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1787486015152,
+      "tag": "0036_foamy_zaran",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1787487895688,
+      "tag": "0037_ordinary_morlocks",
+      "breakpoints": true
     }
   ]
 }

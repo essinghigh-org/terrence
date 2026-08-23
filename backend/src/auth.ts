@@ -31,16 +31,6 @@ type HeaderGetter = { readonly get: (name: string) => string | null };
 type DeriveContext = { readonly request: { readonly headers: HeaderGetter } };
 
 
-/** Returns the hyphen-delimited prefix (text before the first `-`), or `null` when none exists.
- * Underscore-delimited prefixes such as `trun_…` are intentionally *not* recognized — they
- * return `null` and fall through to the legacy lookup chain.
- */
-function tokenPrefix(tokenString: string): string | null {
-  const dash = tokenString.indexOf("-");
-  if (dash <= 0) return null;
-  return tokenString.slice(0, dash);
-}
-
 const rateLimitPrincipals = new WeakMap<object, string>();
 
 export function authenticatedRateLimitKey(request: object): string | undefined {
@@ -140,6 +130,8 @@ export const authPlugin = new Elysia({ name: "auth" })
     // costs ONE query instead of two (api_tokens + users). Portable across
     // backends: .get() is sqlite-only, so use limit(1) + await (drizzle query
     // builders are thenable on both dialects).
+    const isRunPrefix = tokenString.startsWith("trun_");
+    const isSystemPrefix = tokenString.startsWith("tfe-system-");
     const lookup = async (): Promise<{ token: AuthToken | undefined; user: (typeof users.$inferSelect) | null }> => {
       const rows = await db.select({ token: apiTokens, user: users })
         .from(apiTokens)
@@ -149,17 +141,16 @@ export const authPlugin = new Elysia({ name: "auth" })
       const row = rows[0];
       return { token: row?.token, user: row?.user ?? null };
     };
-    // Todo 335: prefix-based dispatch. Known prefixes route to their table
-    // first; unknown/no-prefix falls through to the existing chain for compat.
-    const prefix = tokenPrefix(tokenString);
-    void prefix;
-    let { token, user } = await lookup();
+    // Only run/system credentials have dedicated tables. Other prefixed
+    // credentials still use the indexed API-token lookup.
+    const skipApiLookup = isRunPrefix || isSystemPrefix;
+    let { token, user } = skipApiLookup ? { token: undefined, user: null } : await lookup();
 
 
     // Legacy fallback: re-hash plaintext token on successful use (todo 331).
-    // Gated behind TERRENCE_ALLOW_LEGACY_TOKENS (default 1 for compat). Set to
-    // "0" once the legacy counter reads zero to fully remove the plaintext path.
-    const allowLegacyTokens = process.env.TERRENCE_ALLOW_LEGACY_TOKENS !== "0";
+    // Legacy plaintext rows are an explicit migration escape hatch, never the
+    // default authentication path.
+    const allowLegacyTokens = process.env.TERRENCE_ALLOW_LEGACY_TOKENS === "1";
     if (allowLegacyTokens && token === undefined) {
       const legacyToken = await db.query.apiTokens.findFirst({
         where: eq(apiTokens.token, tokenString),
@@ -177,8 +168,6 @@ export const authPlugin = new Elysia({ name: "auth" })
     // not map to a user/team/org token row; the run row carries the scope.
     // Todo 335: prefix dispatch - run tokens are `trun_`, so skip this lookup
     // for tokens whose prefix clearly indicates another credential class.
-    const isRunPrefix = tokenString.startsWith("trun_");
-    const isSystemPrefix = tokenString.startsWith("tfe-system-");
     if (token === undefined && (isRunPrefix || !isSystemPrefix)) {
       const runRows = await db.select().from(runTokens)
         .where(eq(runTokens.tokenHash, tokenHash))
@@ -289,6 +278,17 @@ export const authPlugin = new Elysia({ name: "auth" })
 
           if (!value) return;
           if (token === null || token === undefined) {
+            (set as { status: number }).status = 401;
+            return { errors: [{ status: "401", title: "Unauthorized" }] };
+          }
+        },
+      };
+    },
+    systemAuth(value: boolean): Record<string, unknown> {
+      return {
+        beforeHandle({ token, systemToken, set }: { readonly token?: unknown; readonly systemToken?: unknown; readonly set: Readonly<{ status: number }> }): Record<string, unknown> | undefined {
+          if (!value) return;
+          if ((token === null || token === undefined) && (systemToken === null || systemToken === undefined)) {
             (set as { status: number }).status = 401;
             return { errors: [{ status: "401", title: "Unauthorized" }] };
           }

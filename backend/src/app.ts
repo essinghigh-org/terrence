@@ -7,10 +7,11 @@ import { envEnabled } from "./lib/env";
 import { authPlugin, authenticatedRateLimitKey } from "./auth";
 import { distributedFixedWindowContext } from "./lib/distributed-rate-limit";
 import { isPostgres } from "./db/driver";
-import { syncedTrustedClientIp } from "./lib/client-ip";
+import { trustedClientIpForPeer } from "./lib/client-ip";
 import { oauthPlugin } from "./oauth";
 import { log } from "./lib/log";
 import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
+import { strongDocumentEtag } from "./lib/utils";
 import { setRequestTokenScopes, setRequestSiteAdmin } from "./lib/request-scope";
 import { applySecurityHeaders, HSTS_VALUE, shouldSendHsts, staticCacheControl, staticMimeFor } from "./lib/security-headers";
 import openapiJson from "../openapi.json" with { type: "json" };
@@ -316,11 +317,11 @@ function fixedWindowContext(): RateLimitContext {
 function ipRateLimitKey(request: CustomRequest, server: RateLimitServer | null): string {
   // When the admin has opted into trusting forwarded headers (behind Cloudflare
   // etc.), key rate limits on the real client IP instead of the proxy peer.
-  const trusted = syncedTrustedClientIp(request);
-  if (trusted !== null && trusted !== "") return `ip:${trusted}`;
   const directAddress = typeof server?.requestIP === "function"
-    ? server.requestIP(request)?.address
-    : undefined;
+    ? server.requestIP(request)?.address ?? null
+    : null;
+  const trusted = trustedClientIpForPeer(request, directAddress);
+  if (trusted !== null && trusted !== "") return `ip:${trusted}`;
   const forwardedAddress = server === null
     ? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
     : undefined;
@@ -506,13 +507,6 @@ export const app = new Elysia()
     const correlationId = suppliedId !== null && CORRELATION_ID_PATTERN.test(suppliedId) ? suppliedId : crypto.randomUUID();
     requestMeta.set(request as unknown as Request, { startTime: Date.now(), method, path: pathname, correlationId });
     (set.headers as Record<string, string | number>)["X-Request-Id"] = correlationId;
-    // 454: If-Match guard — callers that supply it must match the current ETag or get 412.
-    // Handled in app.ts header layer for the most contested resources; route handlers can extend via requireIfMatch helper.
-    const ifMatch = request.headers.get("if-match");
-    if (ifMatch !== null && ifMatch !== "*" && /\/(state-versions|configuration-versions|workspaces)\//.test(pathname) && (method === "PUT" || method === "PATCH")) {
-      // Defer hard 412 to after we know the current ETag; record intent so the response path can compare.
-      (set.headers as Record<string, string | number>)["X-If-Match-Required"] = ifMatch;
-    }
     requestStarted();
 
     // Body-size guard: upload paths keep the 100 MiB server-level limit, but
@@ -644,8 +638,6 @@ export const app = new Elysia()
       if (headers["X-RateLimit-Reset"] === undefined && reset !== undefined) headers["X-RateLimit-Reset"] = String(reset);
     }
     // Always clear the internal precondition marker — it is server-internal state, never a client header.
-    const ifMatchRequired = headers["X-If-Match-Required"] as string | undefined;
-    delete headers["X-If-Match-Required"];
     // 452-454: ETag + conditional request handling.
     // Generates a 64-bit ETag (Bun.hash) so If-None-Match collisions are negligible;
     // honors If-None-Match with an empty 304 per RFC 9110 (no body), and enforces
@@ -655,15 +647,9 @@ export const app = new Elysia()
     // before mutating state. This layer provides best-effort enforcement and marker hygiene.
     if (isJsonDocument && (pathname === "/api" || pathname.startsWith("/api/"))) {
       try {
-        const body = JSON.stringify(response);
-        const etag = `W/"${Bun.hash(body).toString(16).padStart(16, "0")}-${body.length.toString(16)}"`;
+        const etag = strongDocumentEtag(response);
         if (headers.ETag === undefined) headers.ETag = etag;
-        if (ifMatchRequired !== undefined) {
-          if (ifMatchRequired !== etag && ifMatchRequired !== "*") {
-            (set as { status: number }).status = 412;
-            return new Response(null, { status: 412, headers: headers as Record<string, string> }) as unknown as void;
-          }
-        } else if (request.method === "GET") {
+        if (request.method === "GET") {
           const inm = request.headers.get("if-none-match");
           if (inm !== null && (inm === etag || inm === "*")) {
             headers.ETag = etag;
@@ -672,17 +658,8 @@ export const app = new Elysia()
         }
       } catch (error: unknown) {
         // ETag generation must never silently mask a failure — log at debug so operators can observe.
-        // If If-Match was required but no ETag could be computed, fail closed with 412.
-        if (ifMatchRequired !== undefined) {
-          (set as { status: number }).status = 412;
-          return new Response(null, { status: 412, headers: headers as Record<string, string> }) as unknown as void;
-        }
         try { log.debug("ETag generation failed", { error: String(error) }); } catch {}
       }
-    } else if (ifMatchRequired !== undefined) {
-      // Non-JSON path with a precondition — fail closed rather than silently ignoring it.
-      (set as { status: number }).status = 412;
-      return new Response(null, { status: 412, headers: headers as Record<string, string> }) as unknown as void;
     }
   })
   .onParse(async ({ request, contentType }: ParseContext): Promise<Record<string, unknown> | string | null | undefined> => {
@@ -791,7 +768,6 @@ export const app = new Elysia()
   .use(adminRoutes)
   .use(scimAdminRoutes)
   .use(adminRegistrySharingRoutes)
-  .use(systemAdminRoutes)
   .use(policyRoutes)
   .use(permissionSimulatorRoutes)
   .use(workspaceScorecardRoutes)
@@ -826,8 +802,8 @@ export const app = new Elysia()
   .use(actionsRoutes)
   .use(registryComponentsRoutes);
 
-// The System API has its own listener in production. The same routes remain
-// mounted on the application listener as a compatibility extension.
+// The System API has its own listener in production; privileged diagnostics
+// are deliberately not mounted on the public application listener.
 export const systemApiApp = new Elysia({ name: "system-api-listener" })
   .use(systemHealthRoutes)
   .use(systemAdminRoutes)

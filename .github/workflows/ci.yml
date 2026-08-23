@@ -28,7 +28,11 @@ jobs:
           # Raises the tofu release-lookup ceiling from 60/hr (per shared
           # runner IP) to 5000/hr when both matrix jobs run e2e downloads.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: cd backend && bun test
+        # Some historical fixtures still use plaintext tokens; scope the
+        # migration compatibility flag to that test process only.
+        run: cd backend && TERRENCE_ALLOW_LEGACY_TOKENS=1 bun test
+      - name: Verify legacy tokens require explicit opt-in
+        run: cd backend && bun test tests/api/auth_legacy_default.test.ts
 
   backend-postgres:
     name: Backend (Postgres)
@@ -62,7 +66,13 @@ jobs:
         env:
           DATABASE_URL: postgres://terrence:terrence@localhost:5432/terrence_test
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: cd backend && bun test
+        # Some historical fixtures still use plaintext tokens; scope the
+        # migration compatibility flag to that test process only.
+        run: cd backend && TERRENCE_ALLOW_LEGACY_TOKENS=1 bun test
+      - name: Verify legacy tokens require explicit opt-in
+        env:
+          DATABASE_URL: postgres://terrence:terrence@localhost:5432/terrence_test
+        run: cd backend && bun test tests/api/auth_legacy_default.test.ts
 
   frontend:
     name: Frontend
@@ -101,6 +111,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -109,39 +120,21 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Typecheck
         run: bun run typecheck
-      # Lint debt (~1.5k pre-existing errors across the monorepo, mostly
-      # stylistic strict-type-checked rules) predates the Checks job and is
-      # tracked for a dedicated cleanup slice. Non-blocking until then so the
-      # gate reports Typecheck + Knip regressions without drowning them out.
-      - name: Lint (non-blocking)
+      - name: Lint (baseline report)
         run: bun run lint
+        # The repository still carries the pre-existing lint inventory. The
+        # blocking lint:budget step below prevents that inventory from growing.
         continue-on-error: true
+      - name: Lint debt budget
+        run: bun run lint:budget
       - name: Knip
         run: bun run knip
       - name: Security endpoint coverage (todo 143)
-        run: |
-          set -o pipefail
-          # Fail if new security-sensitive routes lack explicit security metadata.
-          # The registry lives in backend/src/lib/security-endpoints.ts when present;
-          # otherwise this is a no-op until the registry is introduced.
-          if [ -f backend/src/lib/security-endpoints.ts ]; then
-            bun run --cwd backend scripts/check-security-endpoints.ts 2>&1 | tail -n 30
-          else
-            echo "security-endpoints registry not yet present; skipping (todo 143 stub)"
-          fi
-        continue-on-error: true
+        run: bun test backend/tests/unit/endpoint-policy-compliance.test.ts
       - name: Secret fingerprint check (todo 116)
-        run: |
-          set -o pipefail
-          # Verifies control-plane secrets do not leak into run env/logs/artifacts.
-          # Stub until the fingerprint corpus is wired; non-blocking to avoid
-          # hard-failing before the secret inventory lands.
-          echo "secret fingerprint check stub (todo 116) — wire fingerprint corpus in follow-up"
-        continue-on-error: true
+        run: bun test backend/tests/worker/env-isolation.test.ts
 
-  # Lightweight supply-chain / artifact verification (todos 828, 889, 800).
-  # These are non-blocking so they can surface regressions without hard-failing
-  # the entire pipeline while the budgets/provenance settle.
+  # Supply-chain / artifact verification (todos 828, 889, 800).
   build-verification:
     name: Build verification
     runs-on: ubuntu-latest
@@ -162,26 +155,18 @@ jobs:
         run: |
           docker build -f Dockerfile --target builder -t terrence:ci-builder . > /tmp/docker-build.log 2>&1 || (cat /tmp/docker-build.log; exit 1)
           echo "Docker builder stage OK"
-        continue-on-error: true
       - name: Bundle size budget (todo 800)
         run: |
           node -e '
             const fs=require("fs"), path=require("path");
             const dist="frontend/dist";
-            if(!fs.existsSync(dist)){console.log("no dist, skipping budget");process.exit(0)}
+            if(!fs.existsSync(dist)){console.error("frontend/dist is missing");process.exit(1)}
             const files=(function walk(d){return fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(d,e.name)):[path.join(d,e.name)])})(dist);
             const total=files.reduce((s,f)=>s+fs.statSync(f).size,0);
             const budget=6*1024*1024; // 6 MiB initial budget for frontend/dist
             console.log(`bundle total ${(total/1024/1024).toFixed(2)} MiB (budget ${(budget/1024/1024).toFixed(2)} MiB)`);
             if(total>budget){console.error(`bundle exceeds budget by ${((total-budget)/1024).toFixed(0)} KiB`);process.exit(1)}
           '
-        continue-on-error: true
-      - name: Reproducible lockfile check (todo 889)
-        run: |
-          bun install --frozen-lockfile
-          if ! git diff --quiet -- bun.lock; then echo "::warning::bun.lock drifted after install"; git diff -- bun.lock | head -n 50; fi
-        continue-on-error: true
-
   accessibility:
     name: Accessibility (axe)
     runs-on: ubuntu-latest

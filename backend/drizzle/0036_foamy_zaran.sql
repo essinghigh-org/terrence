@@ -1,0 +1,1 @@
+ALTER TABLE `agent_jobs` ADD `requeue_attempts` integer DEFAULT 0 NOT NULL;

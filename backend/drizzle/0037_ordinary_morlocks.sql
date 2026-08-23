@@ -1,0 +1,1 @@
+ALTER TABLE `configuration_versions` ADD `upload_claim_token` text;

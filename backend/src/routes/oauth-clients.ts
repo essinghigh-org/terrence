@@ -3,13 +3,15 @@ import { createHmac, createSign } from "node:crypto";
 import { db, isPostgres } from "../db";
 import { agentPools, oauthClientProjects, oauthClients, oauthTokens, organizations, projects, type users } from "../db/schema";
 import { and, asc, count, eq, inArray, sql } from "drizzle-orm";
-import { encryptSecret } from "../lib/secrets";
+import { decryptSecret, encryptSecret, isEncryptedSecret } from "../lib/secrets";
 import { organizationName } from "../lib/response";
 import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission, pageRequest, pagination, serviceProviderDisplayName } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail, type VcsIntegrationUsage } from "../lib/vcs-integration-usage";
 import { cachedOrgByName } from "../lib/cached-lookups";
 import { forwardFetch } from "../lib/agent-forwarding";
+import { envEnabled } from "../lib/env";
+import { fetchResolvedExternalUrl, resolveExternalUrl } from "../lib/url-safety";
 import {
   pruneExpiredOAuthHandshakeStates,
   putOAuthHandshakeState,
@@ -31,8 +33,34 @@ type ParamCtx = Readonly<{
 
 type OcItem = Readonly<typeof oauthClients.$inferSelect>;
 
-function oauthFetch(oc: OcItem, url: string, init?: RequestInit): Promise<Response> {
-  return oc.agentPoolId === null ? fetch(url, init) : forwardFetch(oc.agentPoolId, url, init);
+async function storedClientSecret(value: string): Promise<string> {
+  return isEncryptedSecret(value) ? decryptSecret(value) : value;
+}
+
+async function oauthFetch(oc: OcItem, url: string, init?: RequestInit): Promise<Response> {
+  if (oc.agentPoolId !== null) return forwardFetch(oc.agentPoolId, url, init);
+  const destination = await resolveExternalUrl(url, envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS));
+  if ("error" in destination) return new Response(destination.error, { status: 422 });
+  const headers = Object.fromEntries(new Headers(init?.headers).entries());
+  const rawBody = init?.body;
+  if (rawBody !== undefined && rawBody !== null
+    && typeof rawBody !== "string"
+    && !(rawBody instanceof URLSearchParams)) {
+    return new Response("Unsupported request body", { status: 422 });
+  }
+  const body = rawBody === undefined || rawBody === null
+    ? undefined
+    : typeof rawBody === "string"
+      ? rawBody
+      : rawBody.toString();
+  const requestInit: { method: string; headers: Record<string, string>; timeoutMs: number; maxResponseBytes: number; body?: string } = {
+    method: init?.method ?? "GET",
+    headers,
+    timeoutMs: 15_000,
+    maxResponseBytes: 16 * 1024 * 1024,
+  };
+  if (body !== undefined) requestInit.body = body;
+  return fetchResolvedExternalUrl(destination.target, requestInit);
 }
 
 function oauthTokenResource(token: Readonly<typeof oauthTokens.$inferSelect>): Record<string, unknown> {
@@ -234,6 +262,7 @@ async function oauth1TokenRequest(
   tokenSecret = "",
 ): Promise<{ token: string; tokenSecret: string; callbackConfirmed: boolean } | null> {
   if (oc.key === null || oc.key === "" || oc.secret === null || oc.secret === "") return null;
+  const secret = await storedClientSecret(oc.secret);
   const response = await oauthFetch(oc, url, {
     method: "POST",
     headers: {
@@ -242,7 +271,7 @@ async function oauth1TokenRequest(
         "POST",
         url,
         oc.key,
-        oc.secret,
+        secret,
         token,
         tokenSecret,
         extraParameters,
@@ -269,10 +298,11 @@ async function oauth1ProviderUser(
   tokenSecret: string,
 ): Promise<string | null> {
   if (oc.key === null || oc.key === "" || oc.secret === null || oc.secret === "") return null;
+  const secret = await storedClientSecret(oc.secret);
   const response = await oauthFetch(oc, url, {
     headers: {
       Accept: "application/json, text/plain",
-      Authorization: oauth1Authorization("GET", url, oc.key, oc.secret, token, tokenSecret),
+      Authorization: oauth1Authorization("GET", url, oc.key, secret, token, tokenSecret),
     },
   });
   if (!response.ok) return null;
@@ -318,6 +348,7 @@ async function exchangeAuthorizationCode(
   redirectUri: string,
 ): Promise<{ accessToken: string; serviceProviderUser: string | null } | null> {
   if (oc.key === null || oc.key === "" || oc.secret === null || oc.secret === "") return null;
+  const secret = await storedClientSecret(oc.secret);
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code,
@@ -328,10 +359,10 @@ async function exchangeAuthorizationCode(
     "Content-Type": "application/x-www-form-urlencoded",
   };
   if (basicTokenAuth) {
-    headers.Authorization = `Basic ${Buffer.from(`${oc.key}:${oc.secret}`).toString("base64")}`;
+    headers.Authorization = `Basic ${Buffer.from(`${oc.key}:${secret}`).toString("base64")}`;
   } else {
     body.set("client_id", oc.key);
-    body.set("client_secret", oc.secret);
+    body.set("client_secret", secret);
   }
 
   const tokenResponse = await oauthFetch(oc, tokenUrl, { method: "POST", headers, body });
@@ -577,7 +608,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
         apiUrl,
         httpUrl,
         key,
-        secret,
+        secret: secret === null ? null : await encryptSecret(secret),
         rsaPublicKey,
         createdAt: Date.now(),
       });
@@ -625,7 +656,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     if (attributes["api-url"] !== undefined) updates.apiUrl = typeof attributes["api-url"] === "string" ? attributes["api-url"] : null;
     if (attributes["http-url"] !== undefined) updates.httpUrl = typeof attributes["http-url"] === "string" ? attributes["http-url"] : null;
     if (attributes.key !== undefined) updates.key = typeof attributes.key === "string" ? attributes.key : null;
-    if (attributes.secret !== undefined) updates.secret = typeof attributes.secret === "string" ? attributes.secret : null;
+    if (attributes.secret !== undefined) updates.secret = typeof attributes.secret === "string" ? await encryptSecret(attributes.secret) : null;
     if (attributes["rsa-public-key"] !== undefined) updates.rsaPublicKey = typeof attributes["rsa-public-key"] === "string" ? attributes["rsa-public-key"] : null;
     if (Object.keys(updates).length > 0) await db.update(oauthClients).set(updates).where(eq(oauthClients.id, ocId));
     if (projectIds !== undefined) await replaceProjectScope(ocId, projectIds);

@@ -59,14 +59,41 @@ export function systemAuthError(
 }
 
 const rateWindows = new Map<string, number>();
+const MAX_RATE_WINDOW_ENTRIES = 4096;
+const RATE_WINDOW_CLEANUP_THRESHOLD = 1024;
+const RATE_WINDOW_CLEANUP_BATCH = 64;
+let rateWindowCleanupCursor: Iterator<[string, number]> | undefined;
 
 /** One request per second per System API token, matching the reference format's system limit. */
 export function systemRateLimited(tokenId: string, set: { status?: number; headers: Record<string, string | number> }): boolean {
   const now = Date.now();
+  if (rateWindows.size > RATE_WINDOW_CLEANUP_THRESHOLD) {
+    rateWindowCleanupCursor ??= rateWindows.entries();
+    for (let checked = 0; checked < RATE_WINDOW_CLEANUP_BATCH; checked += 1) {
+      const next = rateWindowCleanupCursor.next();
+      if (next.done) {
+        rateWindowCleanupCursor = undefined;
+        break;
+      }
+      const [id, expiresAt] = next.value;
+      if (expiresAt <= now) rateWindows.delete(id);
+    }
+  }
   const resetAt = rateWindows.get(tokenId) ?? 0;
   if (resetAt > now) {
     set.status = 429;
     set.headers["Retry-After"] = Math.ceil((resetAt - now) / 1000);
+    return true;
+  }
+  if (!rateWindows.has(tokenId) && rateWindows.size >= MAX_RATE_WINDOW_ENTRIES) {
+    for (const [id, expiresAt] of rateWindows) {
+      if (expiresAt <= now) rateWindows.delete(id);
+    }
+    rateWindowCleanupCursor = undefined;
+  }
+  if (!rateWindows.has(tokenId) && rateWindows.size >= MAX_RATE_WINDOW_ENTRIES) {
+    set.status = 429;
+    set.headers["Retry-After"] = 1;
     return true;
   }
   rateWindows.set(tokenId, now + 1000);

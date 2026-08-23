@@ -1,9 +1,9 @@
-import { and, desc, eq, inArray, notInArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db";
 import { agentPools, runs, runComments } from "../../db/schema";
 import type { users } from "../../db/schema";
 import { checkWorkspacePermission, findAuthorizedRun, findAuthorizedWorkspace, auditLog } from "../utils";
-import { enqueueAgentApplyJob } from "../agent-jobs";
+import { cancelAgentJobsForRun, insertAgentApplyJobTx } from "../agent-jobs";
 import { agentPoolAllowsWorkspace } from "../agent-pool-scope";
 import { queueRunNotification } from "../notifications";
 import { createRun } from "../../routes/runs";
@@ -139,6 +139,32 @@ export const runTools: readonly McpTool[] = [
         }
         agentPoolId = pool.id;
       }
+      if (agentPoolId !== null) {
+        const job = await db.transaction(async (transaction) => {
+          const tx = transaction as unknown as typeof db;
+          const confirmedTimestamps = {
+            ...(before.statusTimestamps ?? {}),
+            "confirmed-at": new Date().toISOString(),
+          };
+          const confirmed = await tx.update(runs).set({
+            status: "confirmed",
+            statusTimestamps: confirmedTimestamps,
+          }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+          if (confirmed.length === 0) return undefined;
+          return insertAgentApplyJobTx(tx, runId, agentPoolId, confirmedTimestamps);
+        });
+        if (job === undefined) return toolBadRequest("Run apply is already queued");
+        await auditLog("apply", "runs", runId, session.userId ?? null, authorized.workspace.orgId, {
+          workspaceId: authorized.workspace.id,
+          fromStatus: before.status,
+          toStatus: "apply_queued",
+          ...(session.teamId !== null ? { teamId: session.teamId } : {}),
+        });
+        if (typeof args.comment === "string" && args.comment.trim() !== "") {
+          await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId: session.userId ?? null, body: args.comment.trim(), createdAt: Date.now() });
+        }
+        return { id: authorized.run.id, status: "apply_queued" };
+      }
       const confirmed = await db.update(runs).set({
         status: "confirmed",
         statusTimestamps: {
@@ -155,11 +181,6 @@ export const runTools: readonly McpTool[] = [
       });
       if (typeof args.comment === "string" && args.comment.trim() !== "") {
         await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId: session.userId ?? null, body: args.comment.trim(), createdAt: Date.now() });
-      }
-      if (agentPoolId !== null) {
-        const job = await enqueueAgentApplyJob(authorized.run.id, agentPoolId);
-        if (job === undefined) return toolBadRequest("Run apply is already queued");
-        return { id: authorized.run.id, status: "apply_queued" };
       }
       const { executeApply } = await import("../../worker");
       executeApply(authorized.run.id).catch((err: unknown): void => { if (err !== null && err !== undefined) console.error(err); });
@@ -185,7 +206,11 @@ export const runTools: readonly McpTool[] = [
       if (!(await checkWorkspacePermission(authorized.workspace, session.userId ?? undefined, session.orgId, session.teamId, "discard"))) {
         return toolError("Not authorized to discard this run");
       }
-      const updated = await db.update(runs).set({ status: "discarded" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
+      const updated = await db.update(runs).set({ status: "discarded" }).where(and(
+        eq(runs.id, runId),
+        eq(runs.status, authorized.run.status),
+        inArray(runs.status, ["pending", "planned", "planned_and_saved", "policy_soft_failed", "unreachable"]),
+      )).returning();
       if (updated.length === 0) return toolBadRequest("Run is not discardable");
       if (typeof args.comment === "string" && args.comment.trim() !== "") {
         await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId: session.userId ?? null, body: args.comment.trim(), createdAt: Date.now() });
@@ -216,8 +241,24 @@ export const runTools: readonly McpTool[] = [
       if (!(await checkWorkspacePermission(authorized.workspace, session.userId ?? undefined, session.orgId, session.teamId, "cancel"))) {
         return toolError("Not authorized to cancel this run");
       }
-      const updated = await db.update(runs).set({ status: "canceled" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
+      const updated = await db.update(runs).set({
+        status: "canceled",
+        statusTimestamps: { ...(authorized.run.statusTimestamps ?? {}), "cancel-requested-at": new Date().toISOString() },
+      }).where(and(
+        eq(runs.id, runId),
+        eq(runs.status, authorized.run.status),
+        inArray(runs.status, [
+          "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
+          "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated",
+          "policy_checking", "policy_override", "policy_checked", "post_plan_running",
+          "post_plan_completed", "confirmed", "apply_queued", "applying",
+        ]),
+      )).returning();
       if (updated.length === 0) return toolBadRequest("Run is not cancelable");
+      const { cancelRunExecution, cleanupSavedPlan } = await import("../../worker");
+      cancelRunExecution(runId);
+      await cleanupSavedPlan(runId);
+      await cancelAgentJobsForRun(runId);
       await auditLog("cancel", "runs", runId, session.userId ?? null, authorized.workspace.orgId, {
         workspaceId: authorized.workspace.id,
         fromStatus: authorized.run.status,

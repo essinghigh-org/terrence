@@ -268,7 +268,7 @@ describe("browser refresh sessions", () => {
         "created-at": expect.any(String),
         "last-rotated-at": expect.any(String),
         "expires-at": expect.any(String),
-        "ip-address": "203.0.113.42",
+        "ip-address": null,
         "user-agent": expect.stringContaining("Chrome/126.0.0.0"),
       },
     });

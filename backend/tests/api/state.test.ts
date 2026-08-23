@@ -3,6 +3,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { workspaceVariables, workspaces, stateVersions } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
+import { createHash } from "node:crypto";
 
 describe("the reference format API v2 - State Versions & Locking", () => {
   let workspaceId = "";
@@ -107,6 +108,14 @@ describe("the reference format API v2 - State Versions & Locking", () => {
   });
 
   it("should create a state version", async () => {
+    const lockResponse = await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/actions/lock`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${userToken}` },
+      }),
+    );
+    expect(lockResponse.status).toBe(200);
+    const rawState = JSON.stringify({ version: 4, serial: 1, terraform_version: "1.5.0", resources: [] });
     const response = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
         method: "POST",
@@ -116,9 +125,11 @@ describe("the reference format API v2 - State Versions & Locking", () => {
         },
         body: JSON.stringify({
           data: {
+            type: "state-versions",
             attributes: {
               serial: 1,
-              state: JSON.stringify({ version: 4, terraform_version: "1.5.0" }),
+              state: rawState,
+              md5: createHash("md5").update(rawState).digest("base64"),
             },
           },
         }),

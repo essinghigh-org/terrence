@@ -30,10 +30,10 @@ let totalTransactions = 0;
 let queriesExhausted = 0;
 
 /** Called on query start: increments pending and total. Returns start timestamp. */
-export function poolQueryStart(): number {
+export function poolQueryStart(maxConnections = 1): number {
   pendingQueries += 1;
   totalQueries += 1;
-  if (pendingQueries > 1) queriesExhausted += 1;
+  if (pendingQueries > Math.max(1, maxConnections)) queriesExhausted += 1;
   return performance.now();
 }
 
@@ -147,7 +147,6 @@ export type SlowQuery = Readonly<{
   at: number;
   durationMs: number;
   fingerprint: string;
-  rawPreview: string;
 }>;
 
 const SLOW_THRESHOLD_MS = (() => {
@@ -163,11 +162,7 @@ const MAX_SLOW = 64;
 export function recordSlowQuery(sqlText: string, durationMs: number): void {
   if (durationMs < SLOW_THRESHOLD_MS) return;
   const fp = fingerprintQuery(sqlText);
-  // Keep raw preview truncated so values cannot leak in full: first 120 chars
-  // of the original statement (already threshold-gated) is enough to locate
-  // the call site; fingerprints are the primary grouping key.
-  const preview = sqlText.slice(0, 120);
-  slowQueries.push({ at: Date.now(), durationMs, fingerprint: fp, rawPreview: preview });
+  slowQueries.push({ at: Date.now(), durationMs, fingerprint: fp });
   if (slowQueries.length > MAX_SLOW) slowQueries.splice(0, slowQueries.length - MAX_SLOW);
   // Also emit to stderr at debug so an operator tailing logs sees the hit
   // without scraping /metrics; bounded to one line.
@@ -188,4 +183,3 @@ export { fingerprintQuery };
 
 /** @public keep fingerprint import honest for knip when not otherwise referenced */
 export const _slowThresholdMs = SLOW_THRESHOLD_MS;
-

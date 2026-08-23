@@ -12,7 +12,7 @@ import {
   workspaces,
 } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { hashRunToken, mintRunToken, revokeRunTokens } from "../../src/lib/run-token";
 
 // RUN-022: run-scoped token scopes / lifetime / revocation differential.
@@ -58,10 +58,19 @@ describe("run-scoped token scope/lifetime/revocation (RUN-022)", () => {
       { id: runA, workspaceId: wsA, status: "planned", isDestroy: false, createdAt: Date.now() },
       { id: runB, workspaceId: wsB, status: "planned", isDestroy: false, createdAt: Date.now() },
     ]);
+    for (const workspaceId of [wsA, wsB]) {
+      const lock = await app.handle(new Request(`http://terrence.test/api/v2/workspaces/${workspaceId}/actions/lock`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${userToken}` },
+      }));
+      if (lock.status !== 200) throw new Error(`workspace lock failed: ${lock.status}`);
+    }
+    const stateA = JSON.stringify({ ...JSON.parse(STATE_A), serial: 1, resources: [] });
+    const stateB = JSON.stringify({ ...JSON.parse(STATE_B), serial: 1, resources: [] });
     const post = await app.handle(new Request(`http://terrence.test/api/v2/workspaces/${wsA}/state-versions`, {
       method: "POST",
       headers: { Authorization: `Bearer ${userToken}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({ data: { type: "state-versions", attributes: { serial: 1, state: STATE_A } } }),
+      body: JSON.stringify({ data: { type: "state-versions", attributes: { serial: 1, state: stateA, md5: createHash("md5").update(stateA).digest("base64") } } }),
     }));
     expect(post.status).toBe(201);
     svA = (await post.json()).data.id as string;
@@ -71,7 +80,7 @@ describe("run-scoped token scope/lifetime/revocation (RUN-022)", () => {
     const postB = await app.handle(new Request(`http://terrence.test/api/v2/workspaces/${wsB}/state-versions`, {
       method: "POST",
       headers: { Authorization: `Bearer ${userToken}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({ data: { type: "state-versions", attributes: { serial: 1, state: STATE_B } } }),
+      body: JSON.stringify({ data: { type: "state-versions", attributes: { serial: 1, state: stateB, md5: createHash("md5").update(stateB).digest("base64") } } }),
     }));
     expect(postB.status).toBe(201);
     svB = (await postB.json()).data.id as string;

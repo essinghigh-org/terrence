@@ -15,6 +15,7 @@ import {
 import { canConsumeRemoteState } from "../../src/lib/utils";
 import { mintRunToken } from "../../src/lib/run-token";
 import { eq } from "drizzle-orm";
+import { createHash } from "node:crypto";
 
 // STATE-005: global/project/explicit consumer precedence.
 //
@@ -78,10 +79,16 @@ describe("remote-state consumer precedence (STATE-005)", () => {
     await db.insert(remoteStateConsumers).values([
       { id: `rsc-${suffix}`, workspaceId: producer, consumerWorkspaceId: explicitConsumer },
     ]);
+    const lock = await app.handle(new Request(`http://terrence.test/api/v2/workspaces/${producer}/actions/lock`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${userToken}` },
+    }));
+    if (lock.status !== 200) throw new Error(`workspace lock failed: ${lock.status}`);
+    const state = JSON.stringify({ ...JSON.parse(STATE), serial: 1, resources: [] });
     const post = await app.handle(new Request(`http://terrence.test/api/v2/workspaces/${producer}/state-versions`, {
       method: "POST",
       headers: { Authorization: `Bearer ${userToken}`, "Content-Type": "application/vnd.api+json" },
-      body: JSON.stringify({ data: { type: "state-versions", attributes: { serial: 1, state: STATE } } }),
+      body: JSON.stringify({ data: { type: "state-versions", attributes: { serial: 1, state, md5: createHash("md5").update(state).digest("base64") } } }),
     }));
     expect(post.status).toBe(201);
   });
