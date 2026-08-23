@@ -496,6 +496,16 @@ if (!isPostgres) {
       SELECT RAISE(ABORT, 'VCS integration reference is still in use: github app installation still referenced');
     END
   `);
+  // Remove delete guards from the earlier iteration — they block the
+  // legitimate org cascade path (DELETE FROM organizations cascades to
+  // oauth_tokens/oauth_clients/github_app_installations before the
+  // referencing workspaces are removed, so the BEFORE DELETE fires
+  // first and aborts afterAll cleanup). The race is already closed by
+  // the BEFORE INSERT/UPDATE guard on workspaces/policy_sets; the
+  // app-level pre-delete usage check covers the direct-delete case.
+  client.run(`DROP TRIGGER IF EXISTS oauth_tokens_delete_guard`);
+  client.run(`DROP TRIGGER IF EXISTS oauth_clients_delete_guard`);
+  client.run(`DROP TRIGGER IF EXISTS github_app_installations_delete_guard`);
 
   // Hot-path query indexes (benchmarked: queue scan 200x, workspace run
   // lists 36x, calendar range 17x faster with these). Existing databases
@@ -1128,47 +1138,23 @@ export function applyPgMigrations(): Promise<void> {
     await pg.unsafe(`CREATE TRIGGER workspaces_vcs_repo_guard BEFORE INSERT OR UPDATE ON workspaces FOR EACH ROW EXECUTE FUNCTION vcs_repo_reference_guard()`);
     await pg.unsafe(`DROP TRIGGER IF EXISTS policy_sets_vcs_repo_guard ON policy_sets`);
     await pg.unsafe(`CREATE TRIGGER policy_sets_vcs_repo_guard BEFORE INSERT OR UPDATE ON policy_sets FOR EACH ROW EXECUTE FUNCTION vcs_repo_reference_guard()`);
-    // Delete guard: block deletion of an OAuth token / GitHub App installation
-    // while any workspace or policy set still references it. The API already
-    // does a pre-delete usage check, but under concurrency that check can race
-    // a workspace insert; the trigger makes the invariant hold at the database
-    // level and surfaces the same 409-mapped message.
-    await pg.unsafe(`
-      CREATE OR REPLACE FUNCTION vcs_integration_delete_guard() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN
-        IF TG_TABLE_NAME = 'oauth_tokens' THEN
-          IF EXISTS (SELECT 1 FROM workspaces WHERE vcs_repo->>'oauthTokenId' = OLD.id)
-             OR EXISTS (SELECT 1 FROM policy_sets WHERE vcs_repo->>'oauthTokenId' = OLD.id) THEN
-            RAISE EXCEPTION 'VCS integration reference is still in use: oauth token % still referenced by a workspace or policy set', OLD.id;
-          END IF;
-        ELSIF TG_TABLE_NAME = 'oauth_clients' THEN
-          IF EXISTS (
-            SELECT 1 FROM workspaces w
-            JOIN oauth_tokens t ON t.id = w.vcs_repo->>'oauthTokenId'
-            WHERE t.oauth_client_id = OLD.id
-          ) OR EXISTS (
-            SELECT 1 FROM policy_sets p
-            JOIN oauth_tokens t ON t.id = p.vcs_repo->>'oauthTokenId'
-            WHERE t.oauth_client_id = OLD.id
-          ) THEN
-            RAISE EXCEPTION 'VCS integration reference is still in use: oauth client % still referenced by a workspace or policy set', OLD.id;
-          END IF;
-        ELSIF TG_TABLE_NAME = 'github_app_installations' THEN
-          IF EXISTS (SELECT 1 FROM workspaces WHERE vcs_repo->>'githubAppInstallationId' = OLD.id)
-             OR EXISTS (SELECT 1 FROM policy_sets WHERE vcs_repo->>'githubAppInstallationId' = OLD.id) THEN
-            RAISE EXCEPTION 'VCS integration reference is still in use: github app installation % still referenced', OLD.id;
-          END IF;
-        END IF;
-        RETURN OLD;
-      END
-      $$;
-    `);
+    // Delete guard removed — the BEFORE INSERT/UPDATE guard on
+    // workspaces/policy_sets already closes the TOCTOU window for the
+    // concurrent workspace/policy_set insert. A BEFORE DELETE guard on
+    // oauth_tokens/oauth_clients/github_app_installations would also fire
+    // during the legitimate org cascade path (DELETE FROM organizations
+    // cascades to those tables before the referencing workspaces are
+    // removed on postgres, ordering is trigger-sensitive), breaking
+    // afterAll/result cleanup. The app-level pre-delete usage check
+    // (findVcsIntegrationUsage + 409) still covers the direct-delete
+    // case; the race is covered by the insert guard rejecting the
+    // concurrent writer.
+    // Defensive: drop any previously-created delete guards from the
+    // earlier fix iteration so upgraded databases do not retain them.
     await pg.unsafe(`DROP TRIGGER IF EXISTS oauth_tokens_delete_guard ON oauth_tokens`);
-    await pg.unsafe(`CREATE TRIGGER oauth_tokens_delete_guard BEFORE DELETE ON oauth_tokens FOR EACH ROW EXECUTE FUNCTION vcs_integration_delete_guard()`);
     await pg.unsafe(`DROP TRIGGER IF EXISTS oauth_clients_delete_guard ON oauth_clients`);
-    await pg.unsafe(`CREATE TRIGGER oauth_clients_delete_guard BEFORE DELETE ON oauth_clients FOR EACH ROW EXECUTE FUNCTION vcs_integration_delete_guard()`);
     await pg.unsafe(`DROP TRIGGER IF EXISTS github_app_installations_delete_guard ON github_app_installations`);
-    await pg.unsafe(`CREATE TRIGGER github_app_installations_delete_guard BEFORE DELETE ON github_app_installations FOR EACH ROW EXECUTE FUNCTION vcs_integration_delete_guard()`);
+    await pg.unsafe(`DROP FUNCTION IF EXISTS vcs_integration_delete_guard()`);
   })();
   return pgMigrationsPromise;
 }
