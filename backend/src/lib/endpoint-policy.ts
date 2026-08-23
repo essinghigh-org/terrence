@@ -259,7 +259,6 @@ export function serverEndpointPath(request: Readonly<{ method: string; url: stri
 
 /** Resolve the rate-limit class for a request (first matching registry entry wins, else global/none). */
 /** @public Intentional surface: registry consumer for future enforcement layer. */
-/** @lintignore Intentional surface: registry enforcement layer will consume this. */
 export function rateLimitClassFor(request: Readonly<{ method: string; url: string }>): RateLimitClass {
   for (const entry of ENDPOINT_POLICIES) {
     if (entry.match(request) !== undefined) return entry.rateLimit;
