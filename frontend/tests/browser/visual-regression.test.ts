@@ -40,7 +40,12 @@ describe("visual regression tests", () => {
 
       // Mask dynamic relative timestamps
       await page.evaluate(`
-        (() => {
+        (async () => {
+          const style = document.createElement("style");
+          style.textContent = '* { font-family: "DejaVu Sans" !important; }';
+          document.head.append(style);
+          await document.fonts.ready;
+
           window.__terrence_masked_ts = [];
           const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
           let node;
