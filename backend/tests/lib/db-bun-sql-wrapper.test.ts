@@ -1,8 +1,6 @@
-import { describe, expect, it, beforeAll, afterAll } from "bun:test";
-import { SQL } from "bun";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { wrapPgQuery } from "../../src/db";
 import {
-  poolQueryStart,
-  poolQueryEnd,
   recordSlowQuery,
   poolMetrics,
   slowQueriesSnapshot,
@@ -10,135 +8,68 @@ import {
   type SlowQuery,
 } from "../../src/lib/db-pool-metrics";
 
+function thenable<T>(promise: Promise<T>): Pick<Promise<T>, "then" | "catch"> {
+  return {
+    then: promise.then.bind(promise),
+    catch: promise.catch.bind(promise),
+  };
+}
+
 describe("Bun.SQL Drizzle wrapper & metrics instrumentation", () => {
-  let client: InstanceType<typeof SQL>;
-
-  beforeAll(() => {
-    client = new SQL();
-    const originalUnsafe = client.unsafe.bind(client);
-
-    function wrapQuery<T>(queryObj: T, queryText: string): T {
-      const start = poolQueryStart(10);
-      let settled = false;
-      const finish = (): void => {
-        if (!settled) {
-          settled = true;
-          const durationMs = poolQueryEnd(start);
-          recordSlowQuery(queryText, durationMs);
-        }
-      };
-      const attach = (target: unknown): void => {
-        const anyObj = target as {
-          then?: (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) => unknown;
-          values?: (...args: unknown[]) => unknown;
-          catch?: (fn: (e: unknown) => unknown) => unknown;
-        } | null;
-        if (anyObj !== null && typeof anyObj === "object" && typeof anyObj.then === "function") {
-          const originalThen = anyObj.then.bind(anyObj);
-          anyObj.then = (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown): unknown => {
-            return originalThen(
-              (val: unknown): unknown => {
-                finish();
-                return onFulfilled !== undefined ? onFulfilled(val) : val;
-              },
-              (err: unknown): unknown => {
-                finish();
-                if (onRejected !== undefined) return onRejected(err);
-                throw err;
-              }
-            );
-          };
-          if (typeof anyObj.values === "function") {
-            const originalValues = anyObj.values.bind(anyObj);
-            anyObj.values = (...args: unknown[]): unknown => {
-              const derived = originalValues(...args);
-              attach(derived);
-              return derived;
-            };
-          }
-          if (typeof anyObj.catch === "function") {
-            const originalCatch = anyObj.catch.bind(anyObj);
-            anyObj.catch = (fn: (e: unknown) => unknown): unknown => {
-              return originalCatch((err: unknown): unknown => {
-                finish();
-                return fn(err);
-              });
-            };
-          }
-        } else {
-          finish();
-        }
-      };
-      attach(queryObj);
-      return queryObj;
-    }
-
-    client.unsafe = ((queryText: string, ...params: unknown[]): unknown => {
-      const queryObj = originalUnsafe(queryText, ...(params as [never]));
-      return wrapQuery(queryObj, queryText);
-    }) as typeof client.unsafe;
+  beforeEach((): void => {
+    _resetPoolMetrics();
   });
 
-  afterAll(async () => {
-    try {
-      await client.close();
-    } catch {}
+  afterEach((): void => {
     _resetPoolMetrics();
   });
 
   it("handles raw unsafe query success and returns pool pending to baseline", async () => {
     const initialMetrics = poolMetrics("postgres", 10);
-    const start = poolQueryStart(10);
+    const query = wrapPgQuery(thenable(Promise.resolve([{ id: "row-1" }])), "SELECT id FROM rows");
     expect(poolMetrics("postgres", 10).pendingQueries).toBe(initialMetrics.pendingQueries + 1);
-    poolQueryEnd(start);
+    expect(await query).toEqual([{ id: "row-1" }]);
     expect(poolMetrics("postgres", 10).pendingQueries).toBe(initialMetrics.pendingQueries);
+    expect(poolMetrics("postgres", 10).totalQueries).toBe(initialMetrics.totalQueries + 1);
+    expect(poolMetrics("postgres", 10).sampleCount).toBe(initialMetrics.sampleCount + 1);
   });
 
   it("handles raw unsafe query failure and returns pool pending to baseline without double completion", async () => {
     const initialMetrics = poolMetrics("postgres", 10);
-    let settledCount = 0;
-    const start = poolQueryStart(10);
-    const finish = (): void => {
-      settledCount++;
-      poolQueryEnd(start);
-    };
+    const wrapped = wrapPgQuery(thenable(Promise.reject(new Error("Database connection lost"))), "SELECT broken");
 
-    const failingPromise = Promise.reject(new Error("Database connection lost"));
-    const wrapped = failingPromise.then(
-      (v) => { finish(); return v; },
-      (err) => { finish(); throw err; }
-    );
-
-    await expect(wrapped).rejects.toThrow("Database connection lost");
-    expect(settledCount).toBe(1);
+    let caught: unknown;
+    try {
+      await wrapped;
+    } catch (error: unknown) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe("Database connection lost");
     expect(poolMetrics("postgres", 10).pendingQueries).toBe(initialMetrics.pendingQueries);
+    expect(poolMetrics("postgres", 10).totalQueries).toBe(initialMetrics.totalQueries + 1);
+    expect(poolMetrics("postgres", 10).sampleCount).toBe(initialMetrics.sampleCount + 1);
   });
 
-  it("correctly propagates .values() derived queries without double-decrementing metrics", async () => {
-    let settledCount = 0;
-    const start = poolQueryStart(10);
-    const finish = (): void => {
-      settledCount++;
-      poolQueryEnd(start);
-    };
+  it("tracks execute/raw/simple/values derived queries through one lifecycle", async () => {
+    for (const method of ["execute", "raw", "simple", "values"] as const) {
+      _resetPoolMetrics();
+      const baseline = poolMetrics("postgres", 10);
+      const rows = [["row1"], ["row2"]];
+      const derived = thenable(Promise.resolve(rows));
+      const base = Object.assign(thenable(Promise.resolve(rows)), {
+        execute: (): PromiseLike<string[][]> => derived,
+        raw: (): PromiseLike<string[][]> => derived,
+        simple: (): PromiseLike<string[][]> => derived,
+        values: (): PromiseLike<string[][]> => derived,
+      });
+      const query = wrapPgQuery(base, `SELECT via ${method}`);
 
-    const baseQuery = {
-      then(onFulfilled?: (v: unknown) => unknown) {
-        finish();
-        return Promise.resolve([["row1"], ["row2"]]).then(onFulfilled);
-      },
-      values() {
-        return {
-          then(onFulfilled?: (v: unknown) => unknown) {
-            finish();
-            return Promise.resolve([["row1"], ["row2"]]).then(onFulfilled);
-          },
-        };
-      },
-    };
-
-    const res = await baseQuery.values().then((v) => v);
-    expect(res).toEqual([["row1"], ["row2"]]);
+      expect(await query[method]()).toEqual(rows);
+      expect(poolMetrics("postgres", 10).pendingQueries).toBe(baseline.pendingQueries);
+      expect(poolMetrics("postgres", 10).totalQueries).toBe(baseline.totalQueries + 1);
+      expect(poolMetrics("postgres", 10).sampleCount).toBe(baseline.sampleCount + 1);
+    }
   });
 
   it("records slow queries exceeding threshold", () => {

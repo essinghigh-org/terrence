@@ -1748,26 +1748,26 @@ export function RunDetail({
               onSummaryChange={handlePlanSummaryChange}
             />
 
-            <details
-              className="group border-t border-border"
-            >
-              <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+            <div className="relative border-t border-border">
+              <details className="group">
+              <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 pr-16 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
                 <span>Raw plan log</span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="shrink-0"
-                  onClick={(event: React.MouseEvent<HTMLButtonElement>) => { event.preventDefault(); event.stopPropagation(); setFullscreenLog("plan"); }}
-                  aria-label="Open raw plan log fullscreen"
-                >
-                  <Maximize2 className="size-4" aria-hidden="true" />
-                </Button>
               </summary>
               <pre className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
                 {planLogs !== "" ? planLogs : planRawLogMessage}
               </pre>
-            </details>
+              </details>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="absolute right-5 top-1.5"
+                onClick={(): void => { setFullscreenLog("plan"); }}
+                aria-label="Open raw plan log fullscreen"
+              >
+                <Maximize2 className="size-4" aria-hidden="true" />
+              </Button>
+            </div>
           </details>
 
           {showCostEstimate && (
@@ -2002,24 +2002,26 @@ export function RunDetail({
                 </pre>
               </section>
             )}
-            <details className="group">
-              <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+            <div className="relative">
+              <details className="group">
+              <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 pr-16 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
                 <span>Raw apply log</span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="shrink-0"
-                  onClick={(event: React.MouseEvent<HTMLButtonElement>) => { event.preventDefault(); event.stopPropagation(); setFullscreenLog("apply"); }}
-                  aria-label="Open raw apply log fullscreen"
-                >
-                  <Maximize2 className="size-4" aria-hidden="true" />
-                </Button>
               </summary>
               <pre className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
                 {applyLogs !== "" ? applyLogs : applyRawLogMessage}
               </pre>
-            </details>
+              </details>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="absolute right-5 top-1.5"
+                onClick={(): void => { setFullscreenLog("apply"); }}
+                aria-label="Open raw apply log fullscreen"
+              >
+                <Maximize2 className="size-4" aria-hidden="true" />
+              </Button>
+            </div>
           </details>
           )}
 

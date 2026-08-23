@@ -24,9 +24,10 @@ describe("public asset URLs in built HTML", () => {
 
     for (const rawUrl of urlMatches) {
       if (typeof rawUrl !== "string") continue;
+      if (/^[a-z][a-z\d+.-]*:/i.test(rawUrl) || rawUrl.startsWith("//") || rawUrl.startsWith("#")) continue;
       // Normalize relative path
-      const urlPath = rawUrl.replace(/^\.\//, "/");
-      const res = await fetch(`${server.baseUrl}${urlPath}`);
+      const urlPath = rawUrl.startsWith("/") ? rawUrl : `/${rawUrl.replace(/^\.\//, "")}`;
+      const res = await server.fetch(urlPath);
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toBeTruthy();
     }

@@ -74,6 +74,69 @@ function parseTimeoutMs(raw: string | undefined, fallback: number): number {
   return Math.min(Math.round(n), 86_400_000);
 }
 
+const PG_QUERY_DERIVERS = ['execute', 'raw', 'simple', 'values'] as const;
+
+/** Keep Bun.SQL's lazy Query object intact while recording one lifecycle. */
+export function wrapPgQuery<T>(queryObj: T, queryText: string): T {
+  const start = poolQueryStart(10);
+  let settled = false;
+  const attached = new WeakSet<object>();
+  const finish = (): void => {
+    if (settled) return;
+    settled = true;
+    const durationMs = poolQueryEnd(start);
+    recordSlowQuery(queryText, durationMs);
+  };
+  const attach = (target: unknown): void => {
+    if (target === null || typeof target !== 'object' || attached.has(target)) return;
+    const query = target as Record<string, unknown>;
+    if (typeof query.then !== 'function') {
+      finish();
+      return;
+    }
+    attached.add(target);
+
+    const originalThen = query.then.bind(target) as (
+      onFulfilled?: (value: unknown) => unknown,
+      onRejected?: (error: unknown) => unknown,
+    ) => unknown;
+    query.then = (
+      onFulfilled?: (value: unknown) => unknown,
+      onRejected?: (error: unknown) => unknown,
+    ): unknown => originalThen(
+      (value: unknown): unknown => {
+        finish();
+        return onFulfilled === undefined ? value : onFulfilled(value);
+      },
+      (error: unknown): unknown => {
+        finish();
+        if (onRejected !== undefined) return onRejected(error);
+        throw error;
+      },
+    );
+
+    if (typeof query.catch === 'function') {
+      const originalCatch = query.catch.bind(target) as (onRejected: (error: unknown) => unknown) => unknown;
+      query.catch = (onRejected: (error: unknown) => unknown): unknown => originalCatch((error: unknown): unknown => {
+        finish();
+        return onRejected(error);
+      });
+    }
+
+    for (const method of PG_QUERY_DERIVERS) {
+      if (typeof query[method] !== 'function') continue;
+      const original = query[method].bind(target) as (...args: unknown[]) => unknown;
+      query[method] = (...args: unknown[]): unknown => {
+        const derived = original(...args);
+        attach(derived);
+        return derived;
+      };
+    }
+  };
+  attach(queryObj);
+  return queryObj;
+}
+
 let pgClient: BunSQL | null = null;
 if (isPostgres) {
   const statementTimeoutMs = parseTimeoutMs(process.env.TERRENCE_DB_STATEMENT_TIMEOUT_MS, 30_000);
@@ -98,73 +161,17 @@ if (isPostgres) {
   // both drizzle and raw SQL on postgres.
   {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
-    function wrapQuery<T>(queryObj: T, queryText: string): T {
-      const start = poolQueryStart(10);
-      let settled = false;
-      const finish = (): void => {
-        if (!settled) {
-          settled = true;
-          const durationMs = poolQueryEnd(start);
-          recordSlowQuery(queryText, durationMs);
-        }
-      };
-      const attach = (target: unknown): void => {
-        const anyObj = target as {
-          then?: (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) => unknown;
-          values?: (...args: unknown[]) => unknown;
-          catch?: (fn: (e: unknown) => unknown) => unknown;
-        } | null;
-        if (anyObj !== null && typeof anyObj === 'object' && typeof anyObj.then === 'function') {
-          const originalThen = anyObj.then.bind(anyObj);
-          anyObj.then = (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown): unknown => {
-            return originalThen(
-              (val: unknown): unknown => {
-                finish();
-                return onFulfilled !== undefined ? onFulfilled(val) : val;
-              },
-              (err: unknown): unknown => {
-                finish();
-                if (onRejected !== undefined) return onRejected(err);
-                throw err;
-              },
-            );
-          };
-          if (typeof anyObj.values === 'function') {
-            const originalValues = anyObj.values.bind(anyObj);
-            anyObj.values = (...args: unknown[]): unknown => {
-              const derived = originalValues(...args);
-              attach(derived);
-              return derived;
-            };
-          }
-          if (typeof anyObj.catch === 'function') {
-            const originalCatch = anyObj.catch.bind(anyObj);
-            anyObj.catch = (fn: (e: unknown) => unknown): unknown => {
-              return originalCatch((err: unknown): unknown => {
-                finish();
-                return fn(err);
-              });
-            };
-          }
-        } else {
-          finish();
-        }
-      };
-      attach(queryObj);
-      return queryObj;
-    }
-
-    pgClient.unsafe = ((queryText: string, ...params: unknown[]): unknown => {
-      const queryObj = originalUnsafe(queryText, ...(params as [never]));
-      return wrapQuery(queryObj, queryText);
+    pgClient.unsafe = ((queryText: string, values?: unknown[] | Record<string, unknown>): ReturnType<BunSQL['unsafe']> => {
+      const queryObj = originalUnsafe(queryText, values as never);
+      return wrapPgQuery(queryObj, queryText);
     }) as typeof pgClient.unsafe;
   }
   if (envEnabled(process.env.TERRENCE_QUERY_COUNT)) {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
-    pgClient.unsafe = ((queryText: string, ...params: unknown[]): unknown => {
+    pgClient.unsafe = ((queryText: string, values?: unknown[] | Record<string, unknown>): ReturnType<BunSQL['unsafe']> => {
       queryCount += 1;
       if (queryLogEnabled) queryLog.push(queryText);
-      return originalUnsafe(queryText, ...(params as [never]));
+      return originalUnsafe(queryText, values as never);
     }) as typeof pgClient.unsafe;
   }
 }
@@ -235,8 +242,10 @@ if (!isPostgres) {
   // bun:sqlite's native transaction() rolls back only when its callback throws
   // synchronously; drizzle-orm/bun-sqlite delegates transaction() straight to it, so
   // an async callback that throws would silently COMMIT partial writes. Wrap it with
-  // explicit BEGIN/COMMIT/ROLLBACK that awaits the callback instead.
+  // explicit BEGIN/COMMIT/ROLLBACK that awaits the callback instead. Queue callbacks
+  // because every async transaction shares this one native connection.
   const session = (db as unknown as { session: SQLiteBunSession<Record<string, unknown>, never> }).session;
+  let transactionTail = Promise.resolve();
   (session as unknown as { transaction: unknown }).transaction = async function (
     // The callback signature mirrors drizzle's own session.transaction type.
     // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
@@ -245,25 +254,30 @@ if (!isPostgres) {
     config?: { behavior?: 'deferred' | 'immediate' | 'exclusive' },
   ): Promise<unknown> {
     const sess = this as unknown as { dialect: SQLiteSyncDialect; schema: unknown };
-    const tx = new SQLiteBunTransaction<Record<string, unknown>, never>(
-      'sync',
-      sess.dialect,
-      this as unknown as SQLiteSession<'sync', void, Record<string, unknown>, never>,
-      sess.schema as never,
-    );
-    const behavior = config?.behavior !== undefined ? ` ${config.behavior.toUpperCase()}` : '';
-    client.run(`BEGIN${behavior}`);
-    const transactionStart = poolTransactionStart();
-    try {
-      const result = await fn(tx);
-      client.run('COMMIT');
-      return result;
-    } catch (err) {
-      client.run('ROLLBACK');
-      throw err;
-    } finally {
-      poolTransactionEnd(transactionStart);
-    }
+    const run = async (): Promise<unknown> => {
+      const tx = new SQLiteBunTransaction<Record<string, unknown>, never>(
+        'sync',
+        sess.dialect,
+        this as unknown as SQLiteSession<'sync', void, Record<string, unknown>, never>,
+        sess.schema as never,
+      );
+      const behavior = config?.behavior !== undefined ? ` ${config.behavior.toUpperCase()}` : '';
+      client.run(`BEGIN${behavior}`);
+      const transactionStart = poolTransactionStart();
+      try {
+        const result = await fn(tx);
+        client.run('COMMIT');
+        return result;
+      } catch (err) {
+        client.run('ROLLBACK');
+        throw err;
+      } finally {
+        poolTransactionEnd(transactionStart);
+      }
+    };
+    const transaction = transactionTail.then(run, run);
+    transactionTail = transaction.then((): undefined => undefined, (): undefined => undefined);
+    return transaction;
   };
 
   // The durable-job dedupe index became unique across all statuses. Preserve
@@ -1164,17 +1178,28 @@ export function applyPgMigrations(): Promise<void> {
       CREATE OR REPLACE FUNCTION vcs_repo_reference_guard() RETURNS trigger LANGUAGE plpgsql AS $$
       DECLARE
         token_id text;
+        client_id text;
         install_id text;
       BEGIN
         token_id := NEW.vcs_repo->>'oauthTokenId';
         install_id := NEW.vcs_repo->>'githubAppInstallationId';
         IF token_id IS NOT NULL AND token_id <> '' THEN
-          IF NOT EXISTS (SELECT 1 FROM oauth_tokens WHERE id = token_id) THEN
+          SELECT oauth_client_id INTO client_id FROM oauth_tokens WHERE id = token_id;
+          IF client_id IS NULL THEN
+            RAISE EXCEPTION 'VCS integration reference is still in use: oauth token % is not registered', token_id;
+          END IF;
+          PERFORM id FROM oauth_clients WHERE id = client_id FOR KEY SHARE;
+          IF NOT FOUND THEN
+            RAISE EXCEPTION 'VCS integration reference is still in use: oauth token % is not registered', token_id;
+          END IF;
+          PERFORM id FROM oauth_tokens WHERE id = token_id AND oauth_client_id = client_id FOR KEY SHARE;
+          IF NOT FOUND THEN
             RAISE EXCEPTION 'VCS integration reference is still in use: oauth token % is not registered', token_id;
           END IF;
         END IF;
         IF install_id IS NOT NULL AND install_id <> '' THEN
-          IF NOT EXISTS (SELECT 1 FROM github_app_installations WHERE id = install_id) THEN
+          PERFORM id FROM github_app_installations WHERE id = install_id FOR KEY SHARE;
+          IF NOT FOUND THEN
             RAISE EXCEPTION 'VCS integration reference is still in use: github app installation % is not registered', install_id;
           END IF;
         END IF;

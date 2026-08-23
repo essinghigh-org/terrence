@@ -1,6 +1,7 @@
 // Test setup: redirect database to an isolated temp directory so tests
 // never touch the production database.
 import { afterAll } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +19,12 @@ process.env.TERRENCE_RUN_SANDBOX ??= "false";
 // that need it opt back in with TERRENCE_DISABLE_WORKER=0.
 process.env.TERRENCE_DISABLE_WORKER ??= "1";
 process.env.TERRENCE_SETUP_RAN = "yes";
+
+export function makeTestDbName(prefix: string): string {
+  const name = `${prefix}_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) throw new Error(`Invalid database identifier: ${name}`);
+  return name;
+}
 
 const testDir = mkdtempSync(join(tmpdir(), "terrence-test-"));
 process.env.DATABASE_URL ??= `file:${join(testDir, "terrence.db")}`;
@@ -85,13 +92,8 @@ process.env.TERRENCE_BINARY_CACHE_DIR ??= join(import.meta.dir, "..", "storage",
 // with `SELECT datname FROM pg_database WHERE datname LIKE 'terrence_test_%'`.
 const testDbUrl = process.env.DATABASE_URL ?? "";
 if (testDbUrl.startsWith("postgres")) {
-  const { randomUUID } = await import("node:crypto");
   const { SQL } = await import("bun");
-  const rawId = randomUUID().replace(/-/g, "").slice(0, 12);
-  const dbName = `terrence_test_${rawId}`;
-  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(dbName)) {
-    throw new Error(`Invalid database identifier: ${dbName}`);
-  }
+  const dbName = makeTestDbName("terrence_test");
   const admin = new SQL(testDbUrl);
   try {
     await admin.unsafe(`CREATE DATABASE "${dbName}"`);
@@ -117,5 +119,5 @@ if (testDbUrl.startsWith("postgres")) {
     } finally {
       await cleanup.close();
     }
-  });
+  }, 30_000);
 }

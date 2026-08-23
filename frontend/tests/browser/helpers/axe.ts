@@ -70,7 +70,7 @@ export async function expectNoA11yViolations(page: BrowserPage, options: A11yOpt
 
   const filtered = results.violations
     .map((v): AxeViolation | null => {
-      if (v.id !== "color-contrast" || options.filterInputPlaceholderContrast === false) {
+      if (v.id !== "color-contrast" || options.filterInputPlaceholderContrast !== true) {
         return v;
       }
       // Only filter out specific nodes that are input elements; keep other nodes

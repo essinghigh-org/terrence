@@ -1,9 +1,10 @@
 import { isAbsolute, join, normalize, relative, resolve } from "node:path";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 export type TestServer = {
   baseUrl: string;
   apiUrl: string;
+  fetch: (path: string) => Promise<Response>;
   close: () => Promise<void>;
 };
 
@@ -339,6 +340,24 @@ function handleMockApi(req: Request): Response | null {
     );
   }
 
+  if (path === "/api/v2/applies/apply-423b4c6e-3b0b-4707-94c6-678d80c43f09") {
+    return new Response(
+      JSON.stringify({
+        data: {
+          id: "apply-1",
+          type: "applies",
+          attributes: {
+            status: "finished",
+            "resource-additions": 3,
+            "resource-changes": 0,
+            "resource-destructions": 0,
+          },
+        },
+      }),
+      { headers: jsonHeaders }
+    );
+  }
+
   if (path === "/api/v2/admin/security") {
     return new Response(
       JSON.stringify({
@@ -520,18 +539,15 @@ export async function startStaticServer(customDistDir?: string): Promise<TestSer
       }
 
       try {
-        const stat = statSync(filePath);
-        if (stat.isFile()) {
-          const ext = pathname.slice(pathname.lastIndexOf("."));
-          const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
-          const content = readFileSync(filePath);
-          return new Response(content, {
-            headers: {
-              "content-type": contentType,
-              "cache-control": "no-cache",
-            },
-          });
-        }
+        const content = readFileSync(filePath);
+        const ext = pathname.slice(pathname.lastIndexOf("."));
+        const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
+        return new Response(content, {
+          headers: {
+            "content-type": contentType,
+            "cache-control": "no-cache",
+          },
+        });
       } catch {
         // Fall through to SPA fallback
       }
@@ -557,6 +573,7 @@ export async function startStaticServer(customDistDir?: string): Promise<TestSer
   return {
     baseUrl: `http://127.0.0.1:${server.port}`,
     apiUrl: `http://127.0.0.1:${server.port}/api`,
+    fetch: async (path: string): Promise<Response> => await server.fetch(new Request(`http://127.0.0.1:${server.port}${path}`)),
     close: async (): Promise<void> => {
       await server.stop(true);
     },

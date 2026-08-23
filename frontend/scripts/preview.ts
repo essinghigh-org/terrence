@@ -67,7 +67,9 @@ const server = Bun.serve({
           // Precise cache-matching: content-hashed build artifacts get 1-year immutable caching;
           // stable public assets get shorter caching with revalidation.
           const isContentHashed = /^\/(?:chunk-[a-z0-9]+|[a-zA-Z0-9_-]+-[a-z0-9]{8,16})\.(?:js|css|svg|png|jpg|jpeg|webp|ico|webmanifest|woff2)$/i.test(pathname);
-          if (isContentHashed) {
+          if (pathname.endsWith(".html")) {
+            headers.set("cache-control", "no-cache, no-store, must-revalidate");
+          } else if (isContentHashed) {
             headers.set("cache-control", "public, max-age=31536000, immutable");
           } else {
             headers.set("cache-control", "public, max-age=3600, must-revalidate");

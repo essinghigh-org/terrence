@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeAll, afterAll } from "bun:test";
+import { describe, expect, test, beforeAll, afterAll, beforeEach } from "bun:test";
 import { createBrowser, type BrowserPage } from "./helpers/browser";
 import { startTestServer, type TestServer } from "./helpers/server";
 import { authInitStorage } from "./helpers/auth";
@@ -16,6 +16,11 @@ describe("run-detail smoke tests", () => {
   afterAll(async (): Promise<void> => {
     page?.close();
     await server?.close();
+  });
+
+  beforeEach((): void => {
+    page.pageErrors.length = 0;
+    page.consoleErrors.length = 0;
   });
 
   test("run detail page does not crash", async (): Promise<void> => {

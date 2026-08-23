@@ -34,13 +34,7 @@ describe("accessibility-static: public routes across themes", () => {
       });
       await page.waitForAppReady();
 
-      const activeTheme = await page.evaluate<string>(`
-        (() => {
-          localStorage.setItem("terrence-theme", ${JSON.stringify(theme.id)});
-          document.documentElement.dataset.theme = ${JSON.stringify(theme.id)};
-          return document.documentElement.dataset.theme;
-        })()
-      `);
+      const activeTheme = await page.evaluate<string>("document.documentElement.dataset.theme");
       expect(activeTheme).toBe(theme.id);
 
       const currentPath = new URL(page.url).pathname;
@@ -56,13 +50,7 @@ describe("accessibility-static: public routes across themes", () => {
       });
       await page.waitForAppReady();
 
-      const activeTheme = await page.evaluate<string>(`
-        (() => {
-          localStorage.setItem("terrence-theme", ${JSON.stringify(theme.id)});
-          document.documentElement.dataset.theme = ${JSON.stringify(theme.id)};
-          return document.documentElement.dataset.theme;
-        })()
-      `);
+      const activeTheme = await page.evaluate<string>("document.documentElement.dataset.theme");
       expect(activeTheme).toBe(theme.id);
 
       const currentPath = new URL(page.url).pathname;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -169,18 +169,43 @@ describe("run cgroups (kanban 8/9)", () => {
   it("prepareRunCgroup and cleanupRunCgroup maintain active run cgroup mapping with configured limits", (): void => {
     const root = makeFakeRoot();
     created.push(root);
-    const oldRoot = process.env.TERRENCE_RUN_CGROUP_ROOT;
-    process.env.TERRENCE_RUN_CGROUP_ROOT = root;
+    const previous = {
+      root: process.env.TERRENCE_RUN_CGROUP_ROOT,
+      memory: process.env.TERRENCE_RUN_CGROUP_MEMORY_MAX,
+      pids: process.env.TERRENCE_RUN_CGROUP_PIDS_MAX,
+      cpu: process.env.TERRENCE_RUN_CGROUP_CPU_WEIGHT,
+    };
+    Object.assign(process.env, {
+      TERRENCE_RUN_CGROUP_ROOT: root,
+      TERRENCE_RUN_CGROUP_MEMORY_MAX: "1048576",
+      TERRENCE_RUN_CGROUP_PIDS_MAX: "32",
+      TERRENCE_RUN_CGROUP_CPU_WEIGHT: "50",
+    });
     try {
       const runId = "run-apply-scheduled-1";
+      const groupPath = join(root, runId);
+      mkdirSync(groupPath);
+      for (const controller of ["memory.max", "pids.max", "cpu.weight"]) {
+        writeFileSync(join(groupPath, controller), "");
+      }
       const path = prepareRunCgroup(runId);
-      expect(path).toBe(join(root, runId));
+      expect(path).toBe(groupPath);
       expect(getRunCgroup(runId)).toBe(path);
+      expect(readFileSync(join(root, runId, "memory.max"), "utf8")).toBe("1048576");
+      expect(readFileSync(join(root, runId, "pids.max"), "utf8")).toBe("32");
+      expect(readFileSync(join(root, runId, "cpu.weight"), "utf8")).toBe("50");
       cleanupRunCgroup(runId);
       expect(getRunCgroup(runId)).toBeNull();
     } finally {
-      if (oldRoot !== undefined) process.env.TERRENCE_RUN_CGROUP_ROOT = oldRoot;
-      else delete process.env.TERRENCE_RUN_CGROUP_ROOT;
+      for (const [key, value] of Object.entries({
+        TERRENCE_RUN_CGROUP_ROOT: previous.root,
+        TERRENCE_RUN_CGROUP_MEMORY_MAX: previous.memory,
+        TERRENCE_RUN_CGROUP_PIDS_MAX: previous.pids,
+        TERRENCE_RUN_CGROUP_CPU_WEIGHT: previous.cpu,
+      })) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 });

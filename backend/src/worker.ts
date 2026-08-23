@@ -693,6 +693,7 @@ function parseJsonObject(raw: string): JsonObject {
 }
 
 async function readPlanJson(
+  runId: string,
   executionDir: string,
   planBinaryPath?: string,
 ): Promise<JsonObject | undefined> {
@@ -704,17 +705,17 @@ async function readPlanJson(
   )];
   for (const binary of binaries) {
     try {
-      const process = runSandbox !== null
-        ? runSandbox.spawn([binary, "show", "-json", tfplanPath], {
-            cwd: executionDir,
-            env: { PATH: processEnv("PATH") },
-          })
-        : spawn([binary, "show", "-json", tfplanPath], {
-            cwd: executionDir,
-            env: { PATH: processEnv("PATH") },
-            stdout: "pipe",
-            stderr: "pipe",
-          });
+      const process = spawnRunProcess(
+        runId,
+        [binary, "show", "-json", tfplanPath],
+        {
+          cwd: executionDir,
+          env: { PATH: processEnv("PATH") },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+        runSandbox,
+      );
       const [exitCode, stdout] = await Promise.all([
         process.exited,
         new Response(process.stdout).text(),
@@ -1722,7 +1723,7 @@ async function executeRunImpl(runId: string): Promise<void> {
 
     const planJson = isSimulatedAllowed
       ? parseJsonObject(process.env.SIMULATED_PLAN_JSON ?? "{}")
-      : await readPlanJson(executionDir, resolved?.binaryPath);
+      : await readPlanJson(runId, executionDir, resolved?.binaryPath);
     if (planJson !== undefined) {
       await writePlanJsonArtifact(runId, planJson);
       // The structured plan is persisted: tell SSE clients to fetch it once
@@ -1969,6 +1970,8 @@ async function finalizeNoCodeUpgrade(
 
 /** Tracked wrapper: shutdown drain waits for in-flight apply executions. */
 export function executeApply(runId: string): Promise<void> {
+  const ownsCgroup = getRunCgroup(runId) === null;
+  if (ownsCgroup) prepareRunCgroup(runId);
   return trackLocalExecution(
     executeApplyImpl(runId).catch(async (error: unknown): Promise<void> => {
       if (!(await runWasCanceled(runId))) {
@@ -1986,6 +1989,8 @@ export function executeApply(runId: string): Promise<void> {
         }
       }
       throw error;
+    }).finally((): void => {
+      if (ownsCgroup) cleanupRunCgroup(runId);
     }),
   );
 }
@@ -2020,17 +2025,12 @@ async function releaseRunWorkspaceLock(workspaceId: string, runId: string): Prom
 
 async function executeApplyImpl(runId: string): Promise<void> {
   assertRunSandboxAvailable();
-  const cgroupCreatedHere = !activeRunCgroups.has(runId);
-  if (cgroupCreatedHere) {
-    prepareRunCgroup(runId);
-  }
-  try {
-    const run = await db.query.runs.findFirst({
-      where: eq(runs.id, runId),
-    });
+  const run = await db.query.runs.findFirst({
+    where: eq(runs.id, runId),
+  });
 
-    if (run === undefined) return;
-    if (run.status === "canceled" || run.status === "force_canceled") return;
+  if (run === undefined) return;
+  if (run.status === "canceled" || run.status === "force_canceled") return;
 
   const workspace = await db.query.workspaces.findFirst({
     where: eq(workspaces.id, run.workspaceId),
@@ -2291,11 +2291,6 @@ async function executeApplyImpl(runId: string): Promise<void> {
     });
   }
 }
-} finally {
-  if (cgroupCreatedHere) {
-    cleanupRunCgroup(runId);
-  }
-}
 }
 
 /**
@@ -2348,7 +2343,7 @@ export async function runPolicyChecks(
   const generatedPlanJson = preloadedPlanJson ?? (
     executionDir === undefined || executionDir === ""
       ? undefined
-      : await readPlanJson(executionDir, planBinaryPath)
+      : await readPlanJson(runId, executionDir, planBinaryPath)
   );
   let planJsonPayload = generatedPlanJson === undefined ? null : JSON.stringify(generatedPlanJson);
 
@@ -2940,7 +2935,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
         throw new Error(`${resolved.tool} assessment plan failed with exit code ${String(plan.exitCode)}`);
       }
 
-      const generatedPlan = await readPlanJson(executionDir, resolved.binaryPath);
+      const generatedPlan = await readPlanJson(assessmentResultId, executionDir, resolved.binaryPath);
       if (generatedPlan === undefined) throw new Error("Unable to read assessment plan JSON.");
       planJson = generatedPlan;
 

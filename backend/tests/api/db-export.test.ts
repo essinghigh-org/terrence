@@ -16,6 +16,7 @@ import { db } from "../../src/db";
 import { apiTokens, users } from "../../src/db/schema";
 import { storageDir } from "../../src/db/driver";
 import { defaultOutputName, sanitizeOutputName } from "../../src/lib/db-export";
+import { makeTestDbName } from "../setup";
 
 process.env.TERRENCE_DISABLE_RESTART ??= "1";
 
@@ -89,11 +90,7 @@ beforeAll(async (): Promise<void> => {
   try {
     // Fresh PostgreSQL source database with the real migration set applied.
     const { SQL } = await import("bun");
-    const rawId = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-    sourceDbName = `terrence_export_${rawId}`;
-    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(sourceDbName)) {
-      throw new Error(`Invalid database identifier: ${sourceDbName}`);
-    }
+    sourceDbName = makeTestDbName("terrence_export");
     const admin = new SQL(PG_ADMIN_URL);
     try {
       await admin.unsafe(`CREATE DATABASE "${sourceDbName}"`);
@@ -226,7 +223,7 @@ describe("Postgres -> SQLite database export", (): void => {
   test("test-connection rejects a database without the Terrence schema", async (): Promise<void> => {
     if (!postgresAvailable) return;
     const { SQL } = await import("bun");
-    const emptyName = `terrence_empty_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const emptyName = makeTestDbName("terrence_empty");
     const admin = new SQL(PG_ADMIN_URL);
     try {
       await admin.unsafe(`CREATE DATABASE "${emptyName}"`);
@@ -353,11 +350,11 @@ describe("Postgres -> SQLite database export", (): void => {
     const client = new SQL(sourceUrl);
     try {
       const activeRunId = `run-active-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
-      await client.unsafe(`
+      await client`
         INSERT INTO runs (id, workspace_id, status, is_destroy, auto_apply, plan_only, refresh, refresh_only,
                           debugging_mode, allow_empty_apply, save_plan, allow_config_generation, created_at)
-        VALUES ('${activeRunId}', '${workspaceId}', 'pending', false, true, false, true, false, false, true, true, true, ${Date.now()})
-      `);
+        VALUES (${activeRunId}, ${workspaceId}, 'pending', false, true, false, true, false, false, true, true, true, ${Date.now()})
+      `;
       try {
         const blocked = await startExport({
           data: { attributes: { "postgres-url": sourceUrl, "output-name": "export-blocked.db" } },
@@ -373,7 +370,7 @@ describe("Postgres -> SQLite database export", (): void => {
         expect(forcedJob.status).toBe("done");
         expect(existsSync(join(storageDir, "exports", "export-forced.db"))).toBe(true);
       } finally {
-        await client.unsafe(`DELETE FROM runs WHERE id = '${activeRunId}'`);
+        await client`DELETE FROM runs WHERE id = ${activeRunId}`;
       }
     } finally {
       await client.close();

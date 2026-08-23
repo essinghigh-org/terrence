@@ -91,7 +91,7 @@ jobs:
       - name: Run frontend tests
         env:
           NO_COLOR: "1"
-        run: cd frontend && bun test --parallel=4
+        run: cd frontend && bun run test
       - name: Frontend build
         run: cd frontend && bun run build
 
@@ -148,7 +148,7 @@ jobs:
       - name: Docker full build and runtime smoke check (todo 828)
         run: |
           docker build -f Dockerfile -t terrence:ci . > /tmp/docker-build.log 2>&1 || (cat /tmp/docker-build.log; exit 1)
-          docker run --rm terrence:ci bun --version
+          docker run --rm terrence:ci /usr/bin/bun --version
           echo "Docker image build and runtime smoke check OK"
       - name: Bundle size budget (todo 800)
         run: bun run check:bundle-size
@@ -170,4 +170,4 @@ jobs:
       - name: Build static frontend
         run: cd frontend && bun run build
       - name: Run browser E2E, accessibility & visual regression suite (Bun.WebView)
-        run: cd frontend && xvfb-run --auto-servernum bun test tests/browser/
+        run: cd frontend && bun run test:browser

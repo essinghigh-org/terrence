@@ -3,17 +3,18 @@ import { resolve } from "node:path";
 import { createBrowser, type BrowserPage } from "./helpers/browser";
 import { startTestServer, type TestServer } from "./helpers/server";
 import { authInitStorage } from "./helpers/auth";
+import { TEST_PATHS } from "./helpers/fixture";
 import { compareScreenshots } from "./helpers/image-diff";
 
 let server: TestServer;
 let page: BrowserPage;
 
 const PAGES: readonly { name: string; path: string }[] = [
-  { name: "admin-security", path: "/app/admin" },
-  { name: "admin-operations", path: "/app/admin/operations" },
-  { name: "org-workspaces", path: "/app/essinghigh-org/workspaces" },
-  { name: "org-change-calendar", path: "/app/essinghigh-org/calendar" },
-  { name: "account-settings", path: "/app/account" },
+  { name: "admin-security", path: TEST_PATHS.adminSecurity },
+  { name: "admin-operations", path: TEST_PATHS.adminOperations },
+  { name: "org-workspaces", path: TEST_PATHS.orgWorkspaces },
+  { name: "org-change-calendar", path: TEST_PATHS.orgCalendar },
+  { name: "account-settings", path: TEST_PATHS.accountSettings },
 ];
 
 describe("visual regression tests", () => {
@@ -71,10 +72,10 @@ describe("visual regression tests", () => {
               delete window.__terrence_masked_ts;
             }
           })()
-        `).catch(() => {});
+        `).catch((): undefined => undefined);
       }
 
-      const baselinePath = resolve(import.meta.dir, `./baselines/${name}-linux.png`);
+      const baselinePath = resolve(import.meta.dir, `./baselines/${name}-${process.platform}.png`);
 
       const diffResult = await compareScreenshots(page, screenshotBuffer, baselinePath, {
         maxDiffPercentage: 0.1,

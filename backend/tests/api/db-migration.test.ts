@@ -16,6 +16,7 @@ import { apiTokens, organizations, runs, users, workspaces } from "../../src/db/
 import { isMaintenanceActive, exitMaintenance } from "../../src/lib/maintenance";
 import { readBootConfigFile } from "../../src/lib/boot-config";
 import { storageDir } from "../../src/db/driver";
+import { makeTestDbName } from "../setup";
 
 process.env.TERRENCE_DISABLE_RESTART ??= "1";
 process.env.MIGRATION_SKIP_DRAIN = "true";
@@ -125,13 +126,8 @@ beforeAll(async (): Promise<void> => {
 
   try {
     // Fresh PostgreSQL target database (mirrors the per-file setup pattern).
-    const { randomUUID } = await import("node:crypto");
     const { SQL } = await import("bun");
-    const rawId = randomUUID().replace(/-/g, "").slice(0, 12);
-    targetDbName = `terrence_migrate_${rawId}`;
-    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(targetDbName)) {
-      throw new Error(`Invalid database identifier: ${targetDbName}`);
-    }
+    targetDbName = makeTestDbName("terrence_migrate");
     const admin = new SQL(PG_ADMIN_URL);
     try {
       await admin.unsafe(`CREATE DATABASE "${targetDbName}"`);

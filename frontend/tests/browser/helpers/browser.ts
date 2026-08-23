@@ -20,6 +20,27 @@ export type ScreenshotOptions = {
   mask?: string[];
 };
 
+const ignoreNavigationRace = (error: unknown): undefined => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message === "'Runtime.evaluate' wasn't found") return undefined;
+  throw error;
+};
+const describeConsoleArg = (arg: unknown): string => {
+  if (typeof arg === "string") return arg;
+  if (typeof arg === "number" || typeof arg === "boolean" || typeof arg === "bigint") return arg.toString();
+  if (typeof arg === "undefined") return "undefined";
+  if (typeof arg === "symbol") return arg.description ?? "Symbol";
+  if (typeof arg === "function") return arg.name || "[function]";
+  if (arg === null) return "null";
+  if (typeof arg !== "object") return "[unknown]";
+  if ("description" in arg && typeof arg.description === "string") return arg.description;
+  try {
+    return JSON.stringify(arg) ?? "[object]";
+  } catch {
+    return "[unserializable object]";
+  }
+};
+
 const INJECT_MONITOR_SCRIPT = `
 (() => {
   if (window.__terrence_monitor_installed) return;
@@ -59,20 +80,27 @@ const INJECT_MONITOR_SCRIPT = `
       }
     };
   }
-})();
+})()
 `;
 
 export class BrowserPage {
   readonly webview: InstanceType<typeof Bun.WebView>;
   readonly consoleErrors: string[] = [];
   readonly pageErrors: string[] = [];
+  private readonly backend: "chrome" | "webkit";
+  private runtimeCaptureEnabled = false;
   private initScripts: string[] = [];
 
   constructor(options: BrowserOptions = {}) {
+    this.backend = options.backend ?? (process.platform === "darwin" ? "webkit" : "chrome");
     this.webview = new Bun.WebView({
-      ...(options.backend !== undefined ? { backend: options.backend } : {}),
+      backend: this.backend,
       width: options.width ?? 1440,
       height: options.height ?? 1000,
+      console: (type: string, ...args: unknown[]): void => {
+        if (type !== "error") return;
+        this.consoleErrors.push(args.map(describeConsoleArg).join(" "));
+      },
     });
   }
 
@@ -115,16 +143,39 @@ export class BrowserPage {
       script = fnOrScript;
     }
     this.initScripts.push(script);
-    await this.webview.evaluate(script).catch(() => {
-      // Ignore evaluation errors before document load
+    if (this.webview.url !== "" && this.webview.url !== "about:blank") await this.webview.evaluate(script);
+  }
+
+  private async enableRuntimeCapture(): Promise<void> {
+    if (this.backend !== "chrome" || this.runtimeCaptureEnabled) return;
+    await this.webview.cdp("Runtime.enable");
+    this.webview.addEventListener("Runtime.exceptionThrown", (event: Event): void => {
+      const details = (event as MessageEvent<{
+        exceptionDetails?: { text?: string; exception?: { description?: string } };
+      }>).data.exceptionDetails;
+      this.pageErrors.push(details?.exception?.description ?? details?.text ?? "Unknown page exception");
     });
+    this.webview.addEventListener("Runtime.consoleAPICalled", (event: Event): void => {
+      const data = (event as MessageEvent<{
+        type?: string;
+        args?: { description?: string; value?: unknown }[];
+      }>).data;
+      if (data.type !== "error") return;
+      this.consoleErrors.push((data.args ?? []).map((arg): string =>
+        arg.description ?? describeConsoleArg(arg.value)).join(" "));
+    });
+    this.runtimeCaptureEnabled = true;
   }
 
   async goto(url: string, options: GotoOptions = {}): Promise<void> {
     const timeout = options.timeout ?? 15000;
 
-    // Set initial localStorage items if provided before navigate if already on origin
+    // Establish the target origin before setting localStorage, then navigate to
+    // the protected route so application bootstrap sees the initialized state.
     if (options.initStorage) {
+      const target = new URL(url);
+      await this.webview.navigate(new URL("/login", target).toString());
+      await this.enableRuntimeCapture();
       const storagePairs = Object.entries(options.initStorage);
       const setStorageScript = `
         (() => {
@@ -133,31 +184,19 @@ export class BrowserPage {
           } catch {}
         })()
       `;
-      await this.webview.evaluate(setStorageScript).catch(() => {});
+      await this.webview.evaluate(setStorageScript);
     }
 
     await this.webview.navigate(url);
+    await this.enableRuntimeCapture();
     await Bun.sleep(50);
 
-    // Set initial localStorage items if provided after navigation starts
-    if (options.initStorage) {
-      const storagePairs = Object.entries(options.initStorage);
-      const setStorageScript = `
-        (() => {
-          try {
-            ${storagePairs.map(([k, v]) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)});`).join("\n")}
-          } catch {}
-        })()
-      `;
-      await this.webview.evaluate(setStorageScript).catch(() => {});
-    }
-
     // Inject monitor script immediately
-    await this.webview.evaluate(INJECT_MONITOR_SCRIPT).catch(() => {});
+    await this.webview.evaluate(INJECT_MONITOR_SCRIPT).catch(ignoreNavigationRace);
 
     // Run registered init scripts
     for (const script of this.initScripts) {
-      await this.webview.evaluate(script).catch(() => {});
+      await this.webview.evaluate(script);
     }
 
     // Wait for target readiness state
@@ -169,7 +208,7 @@ export class BrowserPage {
     } else {
       while (Date.now() - start < timeout) {
         // Re-inject monitor if page changed/reloaded
-        await this.webview.evaluate(INJECT_MONITOR_SCRIPT).catch(() => {});
+        await this.webview.evaluate(INJECT_MONITOR_SCRIPT).catch(ignoreNavigationRace);
 
         const readyState = await this.evaluate<string>("document.readyState").catch(() => "loading");
         if (options.waitUntil === "domcontentloaded") {
@@ -382,7 +421,7 @@ export class BrowserPage {
               delete window.__terrence_masked_elements;
             }
           })()
-        `).catch(() => {});
+        `).catch(ignoreNavigationRace);
       }
     }
   }
