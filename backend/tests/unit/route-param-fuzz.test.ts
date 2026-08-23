@@ -1,9 +1,12 @@
-import { describe, expect, it } from "bun:test";
-import { Elysia } from "elysia";
+import { beforeAll, describe, expect, it } from "bun:test";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { app } from "../../src/app";
+import { db } from "../../src/db";
+import { apiTokens, organizationMemberships, organizations, users } from "../../src/db/schema";
 
-// 470-475: lightweight param robustness — verifies the API doesn't crash or leak
-// on oversized / encoded / invalid-UTF8 identifiers. Real auth/lookup may 404
-// but must never 500.
+// 470-475: probe the real app router with adversarial identifiers so validator/error paths are exercised.
 
 function statusOf(response: Response | { errors?: unknown[] } | null): number | null {
   if (response instanceof Response) return response.status;
@@ -15,40 +18,48 @@ function statusOf(response: Response | { errors?: unknown[] } | null): number | 
 }
 
 describe("route param fuzzing (470-475)", () => {
-  it("extremely long ID (471)", async () => {
+  const suffix = crypto.randomUUID();
+  const userId = `user-fuzz-${suffix}`;
+  const orgName = `fuzz-org-${suffix}`;
+  const token = `fuzz-token-${suffix}`;
+  beforeAll(async () => {
+    await mkdtemp(join(tmpdir(), "terrence-fuzz-"));
+    await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
+    await db.insert(organizations).values([{ id: `org-${suffix}`, name: orgName }]);
+    await db.insert(organizationMemberships).values([{ id: crypto.randomUUID(), userId, orgId: `org-${suffix}`, role: "owner" }]);
+    await db.insert(apiTokens).values([{ id: crypto.randomUUID() as string, token, userId }]);
+  });
+
+  async function fuzzPath(path: string, method = "GET"): Promise<number | null> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const resp = await (app as any).handle(new Request(`http://terrence.test${path}`, { method, headers: { Authorization: `Bearer ${token}` } }));
+    return statusOf(resp as Response | { errors?: unknown[] });
+  }
+
+  it("extremely long ID (471) never 500s real routes", async () => {
     const huge = "x".repeat(5000);
-    const app = new Elysia().get("/test/:id", ({ params }: { params: { id: string } }) => ({ id: params.id }));
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const resp = await (app as any).handle(new Request(`http://x/test/${encodeURIComponent(huge)}`));
-    const s = statusOf(resp);
+    const s1 = await fuzzPath(`/api/v2/organizations/${encodeURIComponent(huge)}`);
+    const s2 = await fuzzPath(`/api/v2/workspaces/${encodeURIComponent(huge)}`);
+    expect(s1).not.toBe(500);
+    expect(s2).not.toBe(500);
+  });
+
+  it("encoded slash (472) never 500s", async () => {
+    const s = await fuzzPath("/api/v2/organizations/foo%2Fbar");
     expect(s).not.toBe(500);
   });
 
-  it("encoded slash (472)", async () => {
-    const app = new Elysia().get("/test/:id", ({ params }: { params: { id: string } }) => ({ id: params.id }));
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const resp = await (app as any).handle(new Request("http://x/test/foo%2Fbar"));
-    const s = statusOf(resp);
-    expect(s).not.toBe(500);
-  });
-
-  it("invalid UTF-8 / malformed percent (473 / 475)", async () => {
-    const app = new Elysia().get("/test/:id", ({ params }: { params: { id: string } }) => ({ id: params.id }));
-    for (const u of ["http://x/test/%FF", "http://x/test/%ZZ", "http://x/test/%2", "http://x/test/hello%00world"]) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const resp = await (app as any).handle(new Request(u));
-      const s = statusOf(resp);
-      expect(s === null ? 0 : s).toBeGreaterThanOrEqual(400);
-      expect([400, 404, 422, 0].includes(s as number)).toBe(true);
+  it("invalid UTF-8 / malformed percent (473 / 475) maps to 400/404/422", async () => {
+    for (const path of ["/api/v2/organizations/%FF", "/api/v2/organizations/%ZZ", "/api/v2/organizations/%2", "/api/v2/organizations/hello%00world"]) {
+      const s = await fuzzPath(path);
+      expect(s === null ? 400 : s).toBeGreaterThanOrEqual(400);
+      expect([400, 404, 422].includes(s as number) || s === null).toBe(true);
     }
   });
 
-  it("encoded NUL (474)", async () => {
-    const app = new Elysia().get("/test/:id", ({ params }: { params: { id: string } }) => ({ id: params.id }));
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const resp = await (app as any).handle(new Request("http://x/test/foo%00bar"));
-    const s = statusOf(resp);
-    expect(s === null ? 0 : s).toBeGreaterThanOrEqual(400);
-    expect(s === null || [400, 404, 422].includes(s)).toBe(true);
+  it("encoded NUL (474) maps to 400/404/422", async () => {
+    const s = await fuzzPath("/api/v2/organizations/foo%00bar");
+    expect([400, 404, 422, null].includes(s as number | null)).toBe(true);
+    if (s !== null) expect(s).toBeGreaterThanOrEqual(400);
   });
 });

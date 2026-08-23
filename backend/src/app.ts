@@ -501,7 +501,9 @@ export const app = new Elysia()
     const url = new URL(request.url);
     const pathname = url.pathname;
     const method = request.method;
-    const correlationId = request.headers.get("x-request-id") ?? request.headers.get("x-correlation-id") ?? crypto.randomUUID();
+    const CORRELATION_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+    const suppliedId = request.headers.get("x-request-id") ?? request.headers.get("x-correlation-id");
+    const correlationId = suppliedId !== null && CORRELATION_ID_PATTERN.test(suppliedId) ? suppliedId : crypto.randomUUID();
     requestMeta.set(request as unknown as Request, { startTime: Date.now(), method, path: pathname, correlationId });
     (set.headers as Record<string, string | number>)["X-Request-Id"] = correlationId;
     // 454: If-Match guard — callers that supply it must match the current ETag or get 412.
@@ -554,9 +556,9 @@ export const app = new Elysia()
     }
     headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
     headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type,Idempotency-Key,If-Match,If-None-Match";
-    headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,Retry-After,X-Request-Id";
+    headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,Retry-After,X-Request-Id,ETag,Deprecation,Sunset";
   })
-  .onAfterHandle(({ request, response, set }: AfterHandleContext): void => {
+  .onAfterHandle(({ request, response, set }: AfterHandleContext): Response | void => {
     const meta = requestMeta.get(request as unknown as Request);
     if (meta !== undefined) {
       const duration = Date.now() - meta.startTime;
@@ -616,7 +618,7 @@ export const app = new Elysia()
     if (pathname.startsWith("/api/v1/support-bundle-requests")) {
       if (headers.Deprecation === undefined) headers.Deprecation = "true";
       if (headers.Sunset === undefined) headers.Sunset = "Sat, 31 Dec 2028 23:59:59 GMT";
-      if (headers["Sunset-Link"] === undefined) headers["Sunset-Link"] = "</api/v1/support/bundle-requests>; rel=\"successor-version\"";
+      if (headers.Link === undefined) headers.Link = "</api/v1/support/bundle-requests>; rel=\"successor-version\"";
     }
     if ((pathname === "/api" || pathname.startsWith("/api/")) && isJsonDocument) {
       headers["Content-Type"] = "application/vnd.api+json";
@@ -641,38 +643,34 @@ export const app = new Elysia()
       headers["Retry-After"] = String(seconds ?? 60);
       if (headers["X-RateLimit-Reset"] === undefined && reset !== undefined) headers["X-RateLimit-Reset"] = String(reset);
     }
-    // 452/453: weak ETag for read-heavy JSON GET responses; honor If-None-Match.
+    // 452-454: ETag + conditional request handling.
+    // Generates a 64-bit ETag (Bun.hash) so If-None-Match collisions are negligible;
+    // honors If-None-Match with an empty 304 per RFC 9110 (no body), and enforces
+    // If-Match via the X-If-Match-Required marker set in onRequest (header is always
+    // cleared so it never leaks to clients).
     if (isJsonDocument && (pathname === "/api" || pathname.startsWith("/api/"))) {
       try {
-        if (request.method === "GET") {
-          const body = JSON.stringify(response);
-          let hash = 0;
-          for (let i = 0; i < body.length; i++) hash = ((hash << 5) - hash + body.charCodeAt(i)) | 0;
-          const etag = 'W/"' + Math.abs(hash).toString(16).padStart(8, "0") + '-' + body.length.toString(16) + '"';
+        const body = JSON.stringify(response);
+        const etag = `W/"${Bun.hash(body).toString(16).padStart(16, "0")}-${body.length.toString(16)}"`;
+        if (headers.ETag === undefined) headers.ETag = etag;
+        const required = headers["X-If-Match-Required"] as string | undefined;
+        if (required !== undefined) {
+          delete headers["X-If-Match-Required"];
+          if (required !== etag && required !== "*") {
+            (set as { status: number }).status = 412;
+            return new Response(null, { status: 412, headers: headers as Record<string, string> }) as unknown as void;
+          }
+        } else if (request.method === "GET") {
           const inm = request.headers.get("if-none-match");
-          if (inm !== null && (inm === etag || inm === "*" )) {
-            (set as { status: number }).status = 304;
+          if (inm !== null && (inm === etag || inm === "*")) {
             headers.ETag = etag;
-          } else if (headers.ETag === undefined) {
-            headers.ETag = etag;
+            return new Response(null, { status: 304, headers: headers as Record<string, string> }) as unknown as void;
           }
-          // 454: enforce If-Match when the request carried it — compare against the ETag we just computed.
-          const required = headers["X-If-Match-Required"] as string | undefined;
-          if (required !== undefined) {
-            delete headers["X-If-Match-Required"];
-            if (required !== headers.ETag && required !== "*") {
-              (set as { status: number }).status = 412;
-            }
-          }
-        } else {
-          // For non-GET, still emit an ETag so a subsequent If-Match can be validated.
-          const body = JSON.stringify(response);
-          let hash = 0;
-          for (let i = 0; i < body.length; i++) hash = ((hash << 5) - hash + body.charCodeAt(i)) | 0;
-          const etag = 'W/"' + Math.abs(hash).toString(16).padStart(8, "0") + '-' + body.length.toString(16) + '"';
-          if (headers.ETag === undefined) headers.ETag = etag;
         }
-      } catch {}
+      } catch (error: unknown) {
+        // ETag generation must never silently mask a failure — log at debug so operators can observe.
+        try { log.debug("ETag generation failed", { error: String(error) }); } catch {}
+      }
     }
   })
   .onParse(async ({ request, contentType }: ParseContext): Promise<Record<string, unknown> | string | null | undefined> => {

@@ -25,7 +25,8 @@ export function executorPolicyAllows(
   if (project?.allowedExecutionModes !== null && project?.allowedExecutionModes !== undefined && project.allowedExecutionModes !== "") {
     const allowed = project.allowedExecutionModes.split(",").map((s) => s.trim()).filter(Boolean);
     const backendMode = backend === "agent" ? "agent" : backend === "landlock" ? "remote" : backend;
-    if (!allowed.includes(backendMode) && !allowed.includes(backend) && !allowed.includes("remote:agent") && !allowed.includes("*")) {
+    const allowsAgentAlias = backend === "agent" && allowed.includes("remote:agent");
+    if (!allowed.includes(backendMode) && !allowed.includes(backend) && !allowsAgentAlias && !allowed.includes("*")) {
       return { allowed: false, reason: `Project restricts execution to [${allowed.join(", ")}]; ${backend} is not allowed.` };
     }
   }

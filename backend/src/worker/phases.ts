@@ -30,17 +30,20 @@ const PHASE_ORDER: ExecutionPhase[] = [
 ];
 
 // Terminal phases that never need resume — the run has stopped.
+// Note: canceled is NOT terminal (re-queueable via force-execute), so it stays out.
+// See backend/src/lib/run-status.ts RUN_TERMINAL_STATUSES for the canonical source.
 const TERMINAL_PHASES: ReadonlySet<ExecutionPhase> = new Set([
-  "applied","errored","canceled","discarded",
+  "applied","errored","discarded",
 ]);
 
 // Phases that have been observed to hold significant persisted state.
 const DURABLE_PHASES: ReadonlySet<ExecutionPhase> = new Set([
-  "planning","cost_estimating","policy_checking","planned","applying",
+  "planning","cost_estimating","policy_checking","planned","confirmed","applying",
 ]);
 
-export function phaseOrder(phase: ExecutionPhase): number {
-  return PHASE_ORDER.indexOf(phase);
+export function phaseOrder(phase: ExecutionPhase): number | undefined {
+  const idx = PHASE_ORDER.indexOf(phase);
+  return idx === -1 ? undefined : idx;
 }
 
 /** True when the phase represents a durable checkpoint (has persisted state worth resuming). */
@@ -55,8 +58,7 @@ export function isDurablePhase(phase: ExecutionPhase): boolean {
  * for durability and chaos tests.
  */
 export function checkpointPhase(phase: ExecutionPhase): ExecutionPhase {
-  const idx = PHASE_ORDER.indexOf(phase);
-  if (idx === -1 && !TERMINAL_PHASES.has(phase)) {
+  if (!PHASE_ORDER.includes(phase) && !TERMINAL_PHASES.has(phase) && phase !== "canceled" && phase !== "discarded") {
     throw new Error(`Unknown execution phase: ${phase}`);
   }
   return phase;
