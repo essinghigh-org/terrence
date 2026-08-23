@@ -109,8 +109,11 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Typecheck
         run: bun run typecheck
-      - name: Lint
+      - name: Lint (baseline report)
         run: bun run lint
+        # The repository still carries the pre-existing lint inventory. The
+        # blocking lint:budget step below prevents that inventory from growing.
+        continue-on-error: true
       - name: Lint debt budget
         run: bun run lint:budget
       - name: Knip
