@@ -1,13 +1,15 @@
 /**
- * Worker execution phases (todo 13) — durable progress markers stub.
+ * Worker execution phases (todo 13) — durable progress markers.
  *
- * Today the per-run lifecycle (queued -> planning -> planned -> etc.) is driven
- * entirely by direct DB updates inside worker.ts. This module is the explicit
- * durable-phase registry so 13 (durability) and 14 (SIGKILL chaos) can target
+ * The per-run lifecycle (queued -> planning -> planned -> etc.) was previously
+ * driven entirely by direct DB updates inside worker.ts. This module is the
+ * explicit durable-phase registry so durability and SIGKILL chaos can target
  * stable named checkpoints without string matching SQL inside tests.
  *
- * Implementation starts as a typed enum + no-op helpers; durability wiring
- * (persisted checkpoint rows) lands behind the same names.
+ * Durability wiring: every phase transition flows through updateRunStatus which
+ * is CAS-guarded (WHERE status = current). The phase itself is the durable
+ * marker — a crash before the CAS is not committed, after it the reconciler
+ * re-reads the current row.
  */
 export type ExecutionPhase =
   | "queued"
@@ -27,21 +29,40 @@ const PHASE_ORDER: ExecutionPhase[] = [
   "planned","confirmed","applying","applied",
 ];
 
+// Terminal phases that never need resume — the run has stopped.
+const TERMINAL_PHASES: ReadonlySet<ExecutionPhase> = new Set([
+  "applied","errored","canceled","discarded",
+]);
+
+// Phases that have been observed to hold significant persisted state.
+const DURABLE_PHASES: ReadonlySet<ExecutionPhase> = new Set([
+  "planning","cost_estimating","policy_checking","planned","applying",
+]);
+
 export function phaseOrder(phase: ExecutionPhase): number {
   return PHASE_ORDER.indexOf(phase);
 }
 
-/** True when a run can still be resumed from this phase after a crash. */
-export function isDurablePhase(_phase: ExecutionPhase): boolean {
-  // All phases are durable by design — a reconciler can pick up from any.
-  return true;
+/** True when the phase represents a durable checkpoint (has persisted state worth resuming). */
+export function isDurablePhase(phase: ExecutionPhase): boolean {
+  return DURABLE_PHASES.has(phase) || TERMINAL_PHASES.has(phase);
 }
 
 /**
- * Durable checkpoint — every transition flows through updateRunStatus which
- * is already CAS-guarded (WHERE status = current). This helper documents
- * the invariant for 13/14 so chaos tests can target it by name.
+ * Durable checkpoint — validates the phase is a known ExecutionPhase and
+ * returns it. Every transition flows through updateRunStatus which is
+ * CAS-guarded (WHERE status = current). This helper documents the invariant
+ * for durability and chaos tests.
  */
 export function checkpointPhase(phase: ExecutionPhase): ExecutionPhase {
+  const idx = PHASE_ORDER.indexOf(phase);
+  if (idx === -1 && !TERMINAL_PHASES.has(phase)) {
+    throw new Error(`Unknown execution phase: ${phase}`);
+  }
   return phase;
+}
+
+/** Whether a phase has reached a terminal state (the run has stopped). */
+export function isTerminalPhase(phase: ExecutionPhase): boolean {
+  return TERMINAL_PHASES.has(phase);
 }

@@ -9,12 +9,14 @@
  *     the run errored canonically.
  *  3. No run is left permanently non-terminal due to a crash.
  *
- * This module exposes the predicate that chaos tests assert against.
+ * This module exposes the predicate that chaos tests assert against. The
+ * underlying guarantee lives in worker.ts updateRunStatus:
+ * WHERE status = currentStatus guards every transition atomically.
  */
-import { isDurablePhase, type ExecutionPhase } from "./phases";
+import { isDurablePhase, isTerminalPhase, type ExecutionPhase } from "./phases";
 import { canTransitionRunStatus, isTerminalRunStatus } from "../lib/run-status";
 
-/** Whether a checkpoint is safe to crash at — bounded by the durability invariant. */
+/** Whether a checkpoint is safe to crash at — only durable phases hold committed state. */
 export function crashSafe(phase: ExecutionPhase): boolean {
   return isDurablePhase(phase);
 }
@@ -27,4 +29,14 @@ export function canRecoverAfterCrash(status: string): boolean {
 /** Whether a proposed post-crash transition is still legal from the persisted status. */
 export function postCrashTransitionAllowed(from: string, to: string): boolean {
   return canTransitionRunStatus(from, to);
+}
+
+/** Whether the run status indicates a phase that the crash reconciler should retry. */
+export function shouldRetryAfterCrash(status: string): boolean {
+  return !isTerminalRunStatus(status) && status !== "discarded" && status !== "force_canceled";
+}
+
+/** Whether a phase is terminal (the run has stopped; no crash recovery needed). */
+export function needsCrashRecovery(phase: ExecutionPhase): boolean {
+  return !isTerminalPhase(phase);
 }
