@@ -140,23 +140,19 @@ export const runTools: readonly McpTool[] = [
         agentPoolId = pool.id;
       }
       if (agentPoolId !== null) {
-        let job;
-        try {
-          job = await db.transaction(async (transaction) => {
-            const tx = transaction as unknown as typeof db;
-            const confirmed = await tx.update(runs).set({
-              status: "confirmed",
-              statusTimestamps: {
-                ...(before.statusTimestamps ?? {}),
-                "confirmed-at": new Date().toISOString(),
-              },
-            }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
-            if (confirmed.length === 0) return undefined;
-            return insertAgentApplyJobTx(tx, runId, agentPoolId, before.statusTimestamps);
-          });
-        } catch {
-          job = undefined;
-        }
+        const job = await db.transaction(async (transaction) => {
+          const tx = transaction as unknown as typeof db;
+          const confirmedTimestamps = {
+            ...(before.statusTimestamps ?? {}),
+            "confirmed-at": new Date().toISOString(),
+          };
+          const confirmed = await tx.update(runs).set({
+            status: "confirmed",
+            statusTimestamps: confirmedTimestamps,
+          }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+          if (confirmed.length === 0) return undefined;
+          return insertAgentApplyJobTx(tx, runId, agentPoolId, confirmedTimestamps);
+        });
         if (job === undefined) return toolBadRequest("Run apply is already queued");
         await auditLog("apply", "runs", runId, session.userId ?? null, authorized.workspace.orgId, {
           workspaceId: authorized.workspace.id,

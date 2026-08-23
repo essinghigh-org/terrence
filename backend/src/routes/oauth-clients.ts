@@ -3,7 +3,7 @@ import { createHmac, createSign } from "node:crypto";
 import { db, isPostgres } from "../db";
 import { agentPools, oauthClientProjects, oauthClients, oauthTokens, organizations, projects, type users } from "../db/schema";
 import { and, asc, count, eq, inArray, sql } from "drizzle-orm";
-import { decryptSecret, encryptSecret } from "../lib/secrets";
+import { decryptSecret, encryptSecret, isEncryptedSecret } from "../lib/secrets";
 import { organizationName } from "../lib/response";
 import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission, pageRequest, pagination, serviceProviderDisplayName } from "../lib/utils";
 import { authPlugin } from "../auth";
@@ -32,6 +32,10 @@ type ParamCtx = Readonly<{
 }>;
 
 type OcItem = Readonly<typeof oauthClients.$inferSelect>;
+
+async function storedClientSecret(value: string): Promise<string> {
+  return isEncryptedSecret(value) ? decryptSecret(value) : value;
+}
 
 async function oauthFetch(oc: OcItem, url: string, init?: RequestInit): Promise<Response> {
   if (oc.agentPoolId !== null) return forwardFetch(oc.agentPoolId, url, init);
@@ -254,7 +258,7 @@ async function oauth1TokenRequest(
   tokenSecret = "",
 ): Promise<{ token: string; tokenSecret: string; callbackConfirmed: boolean } | null> {
   if (oc.key === null || oc.key === "" || oc.secret === null || oc.secret === "") return null;
-  const secret = await decryptSecret(oc.secret);
+  const secret = await storedClientSecret(oc.secret);
   const response = await oauthFetch(oc, url, {
     method: "POST",
     headers: {
@@ -290,7 +294,7 @@ async function oauth1ProviderUser(
   tokenSecret: string,
 ): Promise<string | null> {
   if (oc.key === null || oc.key === "" || oc.secret === null || oc.secret === "") return null;
-  const secret = await decryptSecret(oc.secret);
+  const secret = await storedClientSecret(oc.secret);
   const response = await oauthFetch(oc, url, {
     headers: {
       Accept: "application/json, text/plain",
@@ -340,7 +344,7 @@ async function exchangeAuthorizationCode(
   redirectUri: string,
 ): Promise<{ accessToken: string; serviceProviderUser: string | null } | null> {
   if (oc.key === null || oc.key === "" || oc.secret === null || oc.secret === "") return null;
-  const secret = await decryptSecret(oc.secret);
+  const secret = await storedClientSecret(oc.secret);
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code,

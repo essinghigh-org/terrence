@@ -1,7 +1,9 @@
 import { app, systemApiApp } from "./src/app";
+import { countLegacyPlaintextTokens, migrateLegacyPlaintextTokens } from "./src/auth";
 import { bootstrapInitialAdmin } from "./src/lib/bootstrap";
 import { refreshTrustedClientIpHeaders } from "./src/lib/client-ip";
 import { applyPgMigrations, isPostgres } from "./src/db";
+import { log } from "./src/lib/log";
 import { reconcileInterruptedLocalRuns, stopWorkerQueue, waitForWorkerDrain } from "./src/worker";
 import { markControlPlaneNodeDraining, startControlPlaneHeartbeat } from "./src/routes/health";
 
@@ -15,9 +17,13 @@ const systemPort = rawSystemPort !== undefined && rawSystemPort !== "" ? Number(
 if (!Number.isInteger(systemPort) || systemPort < 1 || systemPort > 65535) {
   throw new Error(`Invalid SYSTEM_API_PORT configuration: "${String(rawSystemPort)}". SYSTEM_API_PORT must be a valid integer between 1 and 65535.`);
 }
-const systemHost = process.env.SYSTEM_API_HOST ?? "127.0.0.1";
-const systemTlsCertPath = process.env.SYSTEM_API_TLS_CERT;
-const systemTlsKeyPath = process.env.SYSTEM_API_TLS_KEY;
+const readEnv = (name: string): string | undefined => {
+  const value = process.env[name];
+  return value === undefined || value === "" ? undefined : value;
+};
+const systemHost = readEnv("SYSTEM_API_HOST") ?? "127.0.0.1";
+const systemTlsCertPath = readEnv("SYSTEM_API_TLS_CERT");
+const systemTlsKeyPath = readEnv("SYSTEM_API_TLS_KEY");
 const systemIsRemote = !["127.0.0.1", "::1", "localhost"].includes(systemHost);
 if ((systemTlsCertPath === undefined) !== (systemTlsKeyPath === undefined)) {
   throw new Error("SYSTEM_API_TLS_CERT and SYSTEM_API_TLS_KEY must be configured together.");
@@ -46,6 +52,15 @@ await refreshTrustedClientIpHeaders();
 // must be migrated before the server accepts traffic.
 if (isPostgres) {
   await applyPgMigrations();
+}
+const legacyTokenCount = await countLegacyPlaintextTokens();
+if (legacyTokenCount > 0) {
+  if (process.env.TERRENCE_ALLOW_LEGACY_TOKENS === "1") {
+    const migrated = await migrateLegacyPlaintextTokens();
+    log.warn(`[terrence] Migrated ${migrated} legacy plaintext API token(s) to SHA-256 hashes. Remove TERRENCE_ALLOW_LEGACY_TOKENS after this upgrade.`);
+  } else {
+    log.warn(`[terrence] Found ${legacyTokenCount} legacy plaintext API token(s). Set TERRENCE_ALLOW_LEGACY_TOKENS=1 for one startup to migrate them, then unset it.`);
+  }
 }
 startControlPlaneHeartbeat();
 

@@ -200,6 +200,12 @@ function resolvedAddressesError(ips: readonly string[], allowPrivate: boolean): 
   return null;
 }
 
+function privateAddress(ip: string): boolean {
+  if (ip.includes(":")) return isPrivateV6(ip);
+  const n = v4ToNumber(ip.split("."));
+  return n !== null && isPrivateV4(n);
+}
+
 /**
  * Async URL validation with an injectable resolver: rejects private/loopback
  * literals synchronously (same rules as validateExternalUrl) and additionally
@@ -270,10 +276,15 @@ export async function resolveExternalUrl(
   } catch {
     return { error: "URL could not be resolved safely" };
   }
-  const allowlistedPrivate = outboundAllowlistAllows(hostname, addresses);
-  const addressError = resolvedAddressesError(addresses, allowPrivate || allowlistedPrivate);
+  const addressError = resolvedAddressesError(addresses, true);
   if (addressError !== null) return { error: addressError };
-  const address = addresses[0];
+  if (!allowPrivate && addresses.some((candidate): boolean =>
+    privateAddress(candidate) && !outboundAllowlistAllows(hostname, [candidate]))) {
+    return { error: PRIVATE_MSG };
+  }
+  const permitted = addresses.filter((candidate): boolean =>
+    allowPrivate || !privateAddress(candidate) || outboundAllowlistAllows(hostname, [candidate]));
+  const address = permitted[0];
   if (address === undefined) return { error: "URL could not be resolved safely" };
   return { target: { address, url: parsed.toString() } };
 }

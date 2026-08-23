@@ -102,6 +102,13 @@ describe("native Terraform organization run queue", () => {
     expect(body.links.next).toContain("page%5Bcursor%5D=");
   });
 
+  it("rejects a malformed queue cursor", async () => {
+    const response = await request(`/api/v2/organizations/${orgName}/runs/queue?page[cursor]=not-a-cursor`);
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.errors[0].detail).toBe("page[cursor] is invalid");
+  });
+
   it("reports pending and running organization capacity", async () => {
     const response = await request(`/api/v2/organizations/${orgName}/capacity`);
     expect(response.status).toBe(200);

@@ -65,7 +65,7 @@ function stateResourceAddress(resource: Record<string, unknown>): string | null 
 
 function dependencyGraphFromState(statePayload: string | null): readonly DependencyGraphNode[] {
   if (statePayload === null) return [];
-  const parsed = parseStatePayload(statePayload);
+  const parsed = parseStatePayload(decodeStatePayload(statePayload));
   if (!isRecord(parsed) || !Array.isArray(parsed.resources)) return [];
 
   const resources = new Map<string, Set<string>>();

@@ -9,6 +9,10 @@ if (result.error !== undefined) {
   console.error(result.error.message);
   process.exit(1);
 }
+if (result.status === null) {
+  console.error("ESLint was terminated before returning a result");
+  process.exit(1);
+}
 let reports;
 try {
   reports = JSON.parse(result.stdout || "[]");

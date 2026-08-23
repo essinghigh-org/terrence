@@ -788,10 +788,34 @@ export async function completeAgentJob(
     });
     if (job === undefined) return undefined;
     const run = await tx.query.runs.findFirst({ where: eq(runs.id, job.runId) });
+    const requeueInvalidCompletion = async (reason: string): Promise<void> => {
+      await tx.update(agentJobs).set({
+        status: "queued",
+        agentId: null,
+        claimedAt: null,
+        errorMessage: reason,
+      }).where(and(eq(agentJobs.id, job.id), eq(agentJobs.agentId, agentId), eq(agentJobs.status, "claimed")));
+      if (job.phase === "apply" && run !== undefined) {
+        await tx.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
+          eq(workspaces.id, run.workspaceId),
+          eq(workspaces.locked, true),
+          eq(workspaces.lockOwnerType, "agent-run"),
+          eq(workspaces.lockOwnerId, run.id),
+        ));
+      }
+      await tx.update(agents).set({ status: "idle", lastPingAt: Date.now() }).where(eq(agents.id, agentId));
+    };
     const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
-    if (run?.status !== expectedRunStatus) return undefined;
-    if (!isAgentResultValid(completion.result)) return undefined;
+    if (run?.status !== expectedRunStatus) {
+      await requeueInvalidCompletion("Run changed before agent completion");
+      return undefined;
+    }
+    if (!isAgentResultValid(completion.result)) {
+      await requeueInvalidCompletion("Invalid agent completion result");
+      return undefined;
+    }
     if (completion.planJson !== null && (completion.status !== "completed" || job.phase !== "plan")) {
+      await requeueInvalidCompletion("plan-json is only valid for completed plan jobs");
       return undefined;
     }
     if (completion.planJson !== null) {

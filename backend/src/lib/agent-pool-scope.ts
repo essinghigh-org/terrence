@@ -25,8 +25,14 @@ export async function agentPoolAllowsWorkspace(
   pool: AgentPool,
   workspaceId: string,
   projectId: string | null,
+  allowedWorkspaceIds?: ReadonlySet<string>,
+  allowedProjectIds?: ReadonlySet<string>,
 ): Promise<boolean> {
   if (pool.organizationScoped !== false) return true;
+  if (allowedWorkspaceIds !== undefined && allowedProjectIds !== undefined) {
+    return allowedWorkspaceIds.has(workspaceId)
+      || (projectId !== null && allowedProjectIds.has(projectId));
+  }
   const [workspaceGrant, projectGrant] = await Promise.all([
     db.query.agentPoolAllowedWorkspaces.findFirst({
       where: and(

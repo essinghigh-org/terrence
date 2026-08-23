@@ -1300,6 +1300,7 @@ function loadSignedUrlSecret(): string {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
       const existing = readFileSync(path, "utf8").trim();
       if (existing.length >= 32) return existing;
+      throw new Error(`Signed-URL secret at ${path} is present but unusable; replace the file before starting Terrence.`);
     }
     throw error;
   }

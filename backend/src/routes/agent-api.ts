@@ -46,6 +46,9 @@ const AGENT_WORKLOAD_TYPES = `${DEFAULT_AGENT_ACCEPT},ingress`.split(",");
 async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
   const { job, run } = claimed;
   const queuedStatus = job.phase === "plan" ? "plan_queued" : "apply_queued";
+  // Revoke before requeueing: once the job is claimable another agent can mint
+  // a fresh run token, and a later revocation would kill that new token.
+  await revokeRunTokens(run.id);
   await db.transaction(async (tx: unknown): Promise<void> => {
     const t = tx as typeof db;
     await t.update(agentJobs).set({
@@ -67,7 +70,6 @@ async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
       eq(workspaces.lockOwnerId, run.id),
     ));
   }
-  await revokeRunTokens(run.id);
 }
 
 type AgentCtx = Readonly<{

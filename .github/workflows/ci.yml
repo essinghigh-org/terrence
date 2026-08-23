@@ -158,7 +158,7 @@ jobs:
           '
       - name: Reproducible lockfile check (todo 889)
         run: |
-          bun install --frozen-lockfile
+          bun install
           git diff --exit-code -- bun.lock
 
   accessibility:

@@ -216,6 +216,10 @@ function savedPlanDirectory(runId: string): string {
   return join(storageDir, "saved-plans", runId);
 }
 
+export async function cleanupSavedPlan(runId: string): Promise<void> {
+  await rm(savedPlanDirectory(runId), { recursive: true, force: true });
+}
+
 function savedPlanFile(runId: string): string {
   return join(savedPlanDirectory(runId), "tfplan");
 }
@@ -1827,6 +1831,7 @@ async function executeRunImpl(runId: string): Promise<void> {
     log.error(`Run ${runId} planning failed`, { error: errMsg });
     await writeLog(runId, "plan", `[terrence ERROR] ${errMsg}`);
     await updateRunStatus(runId, "errored");
+    await cleanupSavedPlan(runId);
   } finally {
     if (!keepPlan) {
       try {
@@ -2009,13 +2014,18 @@ async function executeApplyImpl(runId: string): Promise<void> {
   }
 
   if (!(await acquireRunWorkspaceLock(workspace.id, runId))) {
-    await writeLog(runId, "apply", "[terrence] Apply deferred because the workspace is locked.");
+    const key = `workspace-lock:${runId}`;
+    if (scheduledBlockReasons.get(key) !== "workspace-locked") {
+      scheduledBlockReasons.set(key, "workspace-locked");
+      await writeLog(runId, "apply", "[terrence] Apply deferred because the workspace is locked.");
+    }
     await db.update(runs).set({ status: "confirmed" }).where(and(
       eq(runs.id, runId),
       inArray(runs.status, ["confirmed", "apply_queued"]),
     ));
     return;
   }
+  scheduledBlockReasons.delete(`workspace-lock:${runId}`);
   let workspaceRunLock = true;
 
   try {
@@ -2182,13 +2192,14 @@ async function executeApplyImpl(runId: string): Promise<void> {
     });
     applySuccess = true;
     await writeLog(runId, "apply", `[terrence] Run status updated to 'applied'.`);
-    if (run.savePlan) await rm(savedPlanDirectory(runId), { recursive: true, force: true });
+    if (run.savePlan) await cleanupSavedPlan(runId);
   } catch (error: unknown) {
     if (await runWasCanceled(runId)) return;
     const errMsg = error instanceof Error ? error.message : String(error);
     log.error("Run apply failed", { runId, error });
     await writeLog(runId, "apply", `[terrence ERROR] ${errMsg}`);
     await updateRunStatus(runId, "errored");
+    await cleanupSavedPlan(runId);
   } finally {
     if (applySuccess) {
       try {
@@ -3051,12 +3062,6 @@ export async function pollWorkerQueue(): Promise<string[]> {
       break;
     }
     morePages = pendingRuns.length === SCAN_PAGE_SIZE;
-    const last = pendingRuns[pendingRuns.length - 1];
-    if (last !== undefined) {
-      cursorCreatedAt = last.createdAt;
-      cursorId = last.id;
-      workerQueueCursor = { createdAt: cursorCreatedAt, id: cursorId };
-    }
 
   // Pre-fetch workspaces to avoid N+1 inside the loop
   const workspaceIds = [...new Set(pendingRuns.map((run): string => run.workspaceId))];
@@ -3088,11 +3093,25 @@ export async function pollWorkerQueue(): Promise<string[]> {
   const poolsById = new Map(poolRows.map((pool): [string, typeof agentPools.$inferSelect] => [pool.id, pool]));
   const projectsById = new Map(projectRows.map((project): [string, typeof projects.$inferSelect] => [project.id, project]));
   const organizationsById = new Map(organizationRows.map((organization): [string, typeof organizations.$inferSelect] => [organization.id, organization]));
-  const allowedWorkspaceKeys = new Set(allowedWorkspaceRows.map((row): string => `${row.agentPoolId}:${row.workspaceId}`));
-  const allowedProjectKeys = new Set(allowedProjectRows.map((row): string => `${row.agentPoolId}:${row.projectId}`));
+  const allowedWorkspacesByPool = new Map<string, Set<string>>();
+  for (const row of allowedWorkspaceRows) {
+    const values = allowedWorkspacesByPool.get(row.agentPoolId) ?? new Set<string>();
+    values.add(row.workspaceId);
+    allowedWorkspacesByPool.set(row.agentPoolId, values);
+  }
+  const allowedProjectsByPool = new Map<string, Set<string>>();
+  for (const row of allowedProjectRows) {
+    const values = allowedProjectsByPool.get(row.agentPoolId) ?? new Set<string>();
+    values.add(row.projectId);
+    allowedProjectsByPool.set(row.agentPoolId, values);
+  }
+  const noAllowedIds = new Set<string>();
 
   for (const run of pendingRuns) {
     if (claimedRunIds.length === MAX_CLAIMS) break;
+    cursorCreatedAt = run.createdAt;
+    cursorId = run.id;
+    workerQueueCursor = { createdAt: cursorCreatedAt, id: cursorId };
     if (claimedWorkspaceIds.has(run.workspaceId)) continue;
 
     const workspace = workspacesById.get(run.workspaceId);
@@ -3133,9 +3152,13 @@ export async function pollWorkerQueue(): Promise<string[]> {
       const pool = workspace.agentPoolId === null ? undefined : poolsById.get(workspace.agentPoolId);
       if (
         pool?.orgId !== workspace.orgId
-        || (pool.organizationScoped === false
-          && !allowedWorkspaceKeys.has(`${pool.id}:${workspace.id}`)
-          && (workspace.projectId === null || !allowedProjectKeys.has(`${pool.id}:${workspace.projectId}`)))
+        || !(await agentPoolAllowsWorkspace(
+          pool,
+          workspace.id,
+          workspace.projectId,
+          allowedWorkspacesByPool.get(pool.id) ?? noAllowedIds,
+          allowedProjectsByPool.get(pool.id) ?? noAllowedIds,
+        ))
       ) {
         const unreachable = await db.update(runs).set({
           status: "unreachable",
@@ -3614,20 +3637,25 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
   const rawRetention = process.env.TERRENCE_RECOVERY_RETENTION_MS;
   const parsedRetention = rawRetention === undefined || rawRetention === "" ? 7 * 24 * 60 * 60 * 1000 : Number(rawRetention);
   const retentionMs = Number.isSafeInteger(parsedRetention) && parsedRetention >= 0 ? parsedRetention : 7 * 24 * 60 * 60 * 1000;
-  const root = join(storageDir, "recovery");
-  const entries = await readdir(root, { withFileTypes: true, encoding: "utf8" }).catch(() => null);
-  if (entries === null) return;
   const cutoff = Date.now() - retentionMs;
-  await Promise.all(entries
-    .filter((entry): boolean => entry.isDirectory())
-    .map(async (entry): Promise<void> => {
-      const path = join(root, entry.name);
-      try {
-        if ((await stat(path)).mtimeMs < cutoff) await rm(path, { recursive: true, force: true });
-      } catch {
-        // Best effort: a concurrent reconciliation or cleanup may own it.
-      }
-    }));
+  const pruneRoot = async (root: string): Promise<void> => {
+    const entries = await readdir(root, { withFileTypes: true, encoding: "utf8" }).catch(() => null);
+    if (entries === null) return;
+    await Promise.all(entries
+      .filter((entry): boolean => entry.isDirectory())
+      .map(async (entry): Promise<void> => {
+        const path = join(root, entry.name);
+        try {
+          if ((await stat(path)).mtimeMs < cutoff) await rm(path, { recursive: true, force: true });
+        } catch {
+          // Best effort: a concurrent reconciliation or cleanup may own it.
+        }
+      }));
+  };
+  await Promise.all([
+    pruneRoot(join(storageDir, "recovery")),
+    pruneRoot(join(storageDir, "saved-plans")),
+  ]);
 }
 
 export async function reconcileInterruptedLocalRuns(): Promise<{

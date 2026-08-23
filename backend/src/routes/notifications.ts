@@ -15,7 +15,7 @@ import {
 import { _ownershipVerified, postNotification, verifyDestinationOwnership, type NotificationDelivery } from "../lib/notifications";
 import { checkOrganizationPermission, checkOrgPermission, findAuthorizedWorkspace, notFound } from "../lib/utils";
 import { isNotificationDestination, isNotificationTrigger, RUN_NOTIFICATION_TRIGGERS } from "../lib/constants";
-import { encryptSecret } from "../lib/secrets";
+import { decryptSecret, encryptSecret } from "../lib/secrets";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -322,12 +322,18 @@ async function insertConfiguration(values: typeof notificationConfigurations.$in
 
 async function verifyBeforeSave(values: typeof notificationConfigurations.$inferInsert): Promise<boolean> {
   if (values.enabled !== true || values.destinationType === "email") return true;
-  const delivery = await postNotification(values as NcItem, {
+  const delivery = await postNotification(await decryptedNotification(values as NcItem), {
     payload_version: 1,
     notification_configuration_id: values.id,
     message: "Terrence notification verification",
   });
   return delivery.successful;
+}
+
+async function decryptedNotification(configuration: NcItem): Promise<NcItem> {
+  return configuration.token === null
+    ? configuration
+    : { ...configuration, token: await decryptSecret(configuration.token) };
 }
 
 export const notificationRoutes = new Elysia({ name: "notifications" })
@@ -684,7 +690,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
       };
     }
 
-    const delivery = await postNotification(configuration, samplePayload);
+    const delivery = await postNotification(await decryptedNotification(configuration), samplePayload);
     if (!delivery.successful) {
       (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: `Notification verification returned HTTP ${delivery.code}` }] };
@@ -703,7 +709,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     // Ownership verification (7.7): POST a one-time challenge token and require
     // the destination to echo it back (response body or header) as proof that
     // the operator controls the endpoint. Optional — it never gates delivery.
-    const outcome = await verifyDestinationOwnership(configuration);
+    const outcome = await verifyDestinationOwnership(await decryptedNotification(configuration));
     if (!outcome.successful) {
       (set as { status: number }).status = 400;
       const detail = outcome.echoed === null

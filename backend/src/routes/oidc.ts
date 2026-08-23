@@ -19,6 +19,7 @@ import {
 import { clearSsoChallenges, consumeSsoChallenge, storeSsoChallenge } from "../lib/sso-challenges";
 import { issueSsoLogin } from "../lib/sso-login";
 import { fetchResolvedExternalUrl, resolveExternalUrl, type ResolvedExternalUrl } from "../lib/url-safety";
+import { secureRequest } from "../lib/secure-request";
 
 type HeaderValue = string | number | readonly string[];
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, HeaderValue>> }>;
@@ -110,10 +111,6 @@ function cookieValue(request: RequestInfo, name: string): string | undefined {
     }
   }
   return undefined;
-}
-
-function secureRequest(request: RequestInfo): boolean {
-  return new URL(request.url).protocol === "https:";
 }
 
 function stateCookie(request: RequestInfo, state: string, maxAge: number): string {

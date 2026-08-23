@@ -1,4 +1,4 @@
-import { decryptSecretSync, encryptSecret } from "./secrets";
+import { decryptSecretSync, encryptSecret, isEncryptedSecret } from "./secrets";
 import { join } from "node:path";
 
 function stateStorageDir(): string {
@@ -11,11 +11,7 @@ export async function encryptStatePayload(payload: string | null): Promise<strin
 }
 
 function decryptStatePayload(payload: string): string {
-  try {
-    return decryptSecretSync(payload, stateStorageDir());
-  } catch {
-    return payload;
-  }
+  return isEncryptedSecret(payload) ? decryptSecretSync(payload, stateStorageDir()) : payload;
 }
 
 export function validVariableAttributes(attributes: unknown, partial = false): boolean {

@@ -935,24 +935,20 @@ export const runRoutes = new Elysia({ name: "runs" })
       agentPoolId = pool.id;
     }
     if (agentPoolId !== null) {
-      let job: Awaited<ReturnType<typeof insertAgentApplyJobTx>> | undefined;
-      try {
-        job = await db.transaction(async (transaction) => {
-          const tx = transaction as unknown as typeof db;
-          const confirmed = await tx.update(runs).set({
-            status: "confirmed",
-            scheduledAt: null,
-            statusTimestamps: {
-              ...(before.statusTimestamps ?? {}),
-              "confirmed-at": new Date().toISOString(),
-            },
-          }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
-          if (confirmed.length === 0) return undefined;
-          return insertAgentApplyJobTx(tx, runId, agentPoolId, before.statusTimestamps);
-        });
-      } catch {
-        job = undefined;
-      }
+      const confirmedTimestamps = {
+        ...(before.statusTimestamps ?? {}),
+        "confirmed-at": new Date().toISOString(),
+      };
+      const job = await db.transaction(async (transaction) => {
+        const tx = transaction as unknown as typeof db;
+        const confirmed = await tx.update(runs).set({
+          status: "confirmed",
+          scheduledAt: null,
+          statusTimestamps: confirmedTimestamps,
+        }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+        if (confirmed.length === 0) return undefined;
+        return insertAgentApplyJobTx(tx, runId, agentPoolId, confirmedTimestamps);
+      });
       if (job === undefined) {
         (set as { status: number }).status = 409;
         return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] };
@@ -1076,6 +1072,8 @@ export const runRoutes = new Elysia({ name: "runs" })
       inArray(runs.status, ["pending", "planned", "planned_and_saved", "policy_soft_failed", "unreachable"]),
     )).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not discardable" }] }; }
+    const { cleanupSavedPlan } = await import("../worker");
+    await cleanupSavedPlan(runId);
     const commentStr = actionComment(body);
     if (commentStr !== "") await createRunComment({ runId, userId: user?.id ?? null, body: commentStr, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
     await auditLog("discard", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
@@ -1108,8 +1106,9 @@ export const runRoutes = new Elysia({ name: "runs" })
       ]),
     )).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not cancelable" }] }; }
-    const { cancelRunExecution } = await import("../worker");
+    const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
     cancelRunExecution(runId);
+    await cleanupSavedPlan(runId);
     await cancelAgentJobsForRun(runId);
     await auditLog("cancel", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
       workspaceId: authorized.workspace.id,
@@ -1137,8 +1136,9 @@ export const runRoutes = new Elysia({ name: "runs" })
       inArray(runs.status, ["pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed", "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated", "policy_checking", "policy_override", "policy_checked", "post_plan_running", "post_plan_completed", "confirmed", "apply_queued", "applying", "canceled"]),
     )).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-cancelable" }] }; }
-    const { cancelRunExecution } = await import("../worker");
+    const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
     cancelRunExecution(runId, true);
+    await cleanupSavedPlan(runId);
     await cancelAgentJobsForRun(runId);
     await auditLog("force-cancel", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
       workspaceId: authorized.workspace.id,
@@ -1182,8 +1182,9 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (blocker === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "No blocking run is available to force-execute" }] }; }
     const blockerCanceled = await db.update(runs).set({ status: "force_canceled" }).where(and(eq(runs.id, blocker.id), inArray(runs.status, ["fetching", "planning", "applying", "plan_queued", "apply_queued"]))).returning({ id: runs.id });
     if (blockerCanceled.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "The blocking run changed before it could be stopped" }] }; }
-    const { cancelRunExecution } = await import("../worker");
+    const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
     cancelRunExecution(blocker.id, true);
+    await cleanupSavedPlan(blocker.id);
     await cancelAgentJobsForRun(blocker.id);
     const updated = await db.update(runs).set({ status: "pending" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status))).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-executable" }] }; }
@@ -1203,8 +1204,9 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     if (authorized.run.status === "plan_queued" || authorized.run.status === "apply_queued") {
-      const { cancelRunExecution } = await import("../worker");
+      const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
       cancelRunExecution(runId, true);
+      await cleanupSavedPlan(runId);
       await cancelAgentJobsForRun(runId);
     }
     const updated = await db.update(runs).set({ status: "pending" }).where(and(

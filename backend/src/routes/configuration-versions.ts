@@ -200,16 +200,17 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     try {
       const size = await persistUploadBody(body, request, tarPath, 100 * 1024 * 1024);
       if (size === 0) throw new Error("empty");
-    } catch {
+    } catch (error: unknown) {
       rmSync(tarPath, { force: true });
       await db.update(configurationVersions).set({ uploadClaimExpiresAt: null }).where(eq(configurationVersions.id, cvId));
-      const tooLarge = Number(request.headers.get("content-length")) > 100 * 1024 * 1024;
+      const tooLarge = (error instanceof Error && error.message === "too-large")
+        || Number(request.headers.get("content-length")) > 100 * 1024 * 1024;
       (set as { status: number }).status = tooLarge ? 413 : 400;
       return { errors: [{ status: String(tooLarge ? 413 : 400), title: tooLarge ? "Payload Too Large" : "Bad Request", detail: tooLarge ? "Configuration archive exceeds 100 MiB maximum" : "Could not read configuration archive body" }] };
     }
     try {
       await assertArchiveExpandedSize(tarPath);
-      const listing = Bun.spawn(["tar", "-tzf", tarPath], { stdout: "pipe", stderr: "pipe" });
+      const listing = Bun.spawn(["tar", "-tzf", tarPath], { stdout: "ignore", stderr: "ignore" });
       if (await listing.exited !== 0) throw new Error("invalid tar archive");
     } catch {
       rmSync(tarPath, { force: true });

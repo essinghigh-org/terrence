@@ -170,12 +170,12 @@ describe("variable precedence matrix (VAR-005)", () => {
       { id: `link-higher-${suffix}`, variableSetId: higherIdSet, workspaceId: wsId },
     ]);
     // Higher id (vsv-zzz) is on the set with the lexically LATER name.
-    await db.insert(variableSetVariables).values({ id: `vsv-zzz-${suffix}`, variableSetId: higherIdSet, key: "tier", value: "higher-id-wins", category: "terraform" });
-    await db.insert(variableSetVariables).values({ id: `vsv-aaa-${suffix}`, variableSetId: lowerIdSet, key: "tier", value: "lower-id-loses", category: "terraform" });
+    await db.insert(variableSetVariables).values({ id: `vsv-zzz-${suffix}`, variableSetId: higherIdSet, key: "tier", value: "later-name-loses", category: "terraform" });
+    await db.insert(variableSetVariables).values({ id: `vsv-aaa-${suffix}`, variableSetId: lowerIdSet, key: "tier", value: "earlier-name-wins", category: "terraform" });
 
     const m = asMap(await executionVariables(wsId, orgId, null));
     // The lexically earlier set wins regardless of insertion/id order.
-    expect(m.get("terraform:tier")).toBe("lower-id-loses#priority=false");
+    expect(m.get("terraform:tier")).toBe("earlier-name-wins#priority=false");
 
   });
 });

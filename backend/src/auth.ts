@@ -31,16 +31,6 @@ type HeaderGetter = { readonly get: (name: string) => string | null };
 type DeriveContext = { readonly request: { readonly headers: HeaderGetter } };
 
 
-/** Returns the hyphen-delimited prefix (text before the first `-`), or `null` when none exists.
- * Underscore-delimited prefixes such as `trun_…` are intentionally *not* recognized — they
- * return `null` and fall through to the legacy lookup chain.
- */
-function tokenPrefix(tokenString: string): string | null {
-  const dash = tokenString.indexOf("-");
-  if (dash <= 0) return null;
-  return tokenString.slice(0, dash);
-}
-
 const rateLimitPrincipals = new WeakMap<object, string>();
 
 export function authenticatedRateLimitKey(request: object): string | undefined {
@@ -151,14 +141,9 @@ export const authPlugin = new Elysia({ name: "auth" })
       const row = rows[0];
       return { token: row?.token, user: row?.user ?? null };
     };
-    // Todo 335: prefix-based dispatch. Known prefixes route to their table
-    // first; unknown/no-prefix falls through to the existing chain for compat.
-    const prefix = tokenPrefix(tokenString);
-    // Run/system prefixes have dedicated tables. All other credentials still
-    // get one indexed hash lookup: this keeps migrated legacy rows usable
-    // after their first request without reopening the plaintext fallback.
-    const dedicatedPrefix = prefix !== null && ["scim", "saml", "oidc"].includes(prefix);
-    const skipApiLookup = isRunPrefix || isSystemPrefix || dedicatedPrefix;
+    // Only run/system credentials have dedicated tables. Other prefixed
+    // credentials still use the indexed API-token lookup.
+    const skipApiLookup = isRunPrefix || isSystemPrefix;
     let { token, user } = skipApiLookup ? { token: undefined, user: null } : await lookup();
 
 
