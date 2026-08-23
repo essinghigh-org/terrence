@@ -643,20 +643,23 @@ export const app = new Elysia()
       headers["Retry-After"] = String(seconds ?? 60);
       if (headers["X-RateLimit-Reset"] === undefined && reset !== undefined) headers["X-RateLimit-Reset"] = String(reset);
     }
+    // Always clear the internal precondition marker — it is server-internal state, never a client header.
+    const ifMatchRequired = headers["X-If-Match-Required"] as string | undefined;
+    delete headers["X-If-Match-Required"];
     // 452-454: ETag + conditional request handling.
     // Generates a 64-bit ETag (Bun.hash) so If-None-Match collisions are negligible;
     // honors If-None-Match with an empty 304 per RFC 9110 (no body), and enforces
-    // If-Match via the X-If-Match-Required marker set in onRequest (header is always
-    // cleared so it never leaks to clients).
+    // If-Match via the marker set in onRequest.
+    // NOTE: a post-response 412 cannot prevent the lost-update (the handler already wrote the row);
+    // real lost-update protection requires the handler to load the current entity and check If-Match
+    // before mutating state. This layer provides best-effort enforcement and marker hygiene.
     if (isJsonDocument && (pathname === "/api" || pathname.startsWith("/api/"))) {
       try {
         const body = JSON.stringify(response);
         const etag = `W/"${Bun.hash(body).toString(16).padStart(16, "0")}-${body.length.toString(16)}"`;
         if (headers.ETag === undefined) headers.ETag = etag;
-        const required = headers["X-If-Match-Required"] as string | undefined;
-        if (required !== undefined) {
-          delete headers["X-If-Match-Required"];
-          if (required !== etag && required !== "*") {
+        if (ifMatchRequired !== undefined) {
+          if (ifMatchRequired !== etag && ifMatchRequired !== "*") {
             (set as { status: number }).status = 412;
             return new Response(null, { status: 412, headers: headers as Record<string, string> }) as unknown as void;
           }
@@ -669,8 +672,17 @@ export const app = new Elysia()
         }
       } catch (error: unknown) {
         // ETag generation must never silently mask a failure — log at debug so operators can observe.
+        // If If-Match was required but no ETag could be computed, fail closed with 412.
+        if (ifMatchRequired !== undefined) {
+          (set as { status: number }).status = 412;
+          return new Response(null, { status: 412, headers: headers as Record<string, string> }) as unknown as void;
+        }
         try { log.debug("ETag generation failed", { error: String(error) }); } catch {}
       }
+    } else if (ifMatchRequired !== undefined) {
+      // Non-JSON path with a precondition — fail closed rather than silently ignoring it.
+      (set as { status: number }).status = 412;
+      return new Response(null, { status: 412, headers: headers as Record<string, string> }) as unknown as void;
     }
   })
   .onParse(async ({ request, contentType }: ParseContext): Promise<Record<string, unknown> | string | null | undefined> => {
