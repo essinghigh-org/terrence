@@ -4,10 +4,11 @@ import { configurationVersions, runs, type users } from "../db/schema";
 import { eq, count, desc, and, inArray, notInArray, isNull, lt, or } from "drizzle-orm";
 import { apiURL, signedApiURL, validSignedApiURL, FINAL_RUN_STATUSES, findAuthorizedWorkspace, pageRequest, pagination , type DeepReadonly } from "../lib/utils";
 import { join } from "path";
-import { mkdir, open, rm, writeFile } from "fs/promises";
+import { mkdir, rm } from "fs/promises";
 import { rmSync } from "node:fs";
 import { authPlugin } from "../auth";
 import { assertArchiveExpandedSize } from "../lib/archive";
+import { persistUploadBody } from "../lib/upload-body";
 
 const rawStorageDir = process.env.STORAGE_DIR;
 const storageDir = typeof rawStorageDir === "string" && rawStorageDir !== "" ? rawStorageDir : join(import.meta.dir, "../storage");
@@ -26,37 +27,6 @@ type ParamCtx = Readonly<{
 }>;
 
 type ConfigurationVersion = typeof configurationVersions.$inferSelect;
-
-async function persistUploadBody(body: unknown, request: Request, path: string, limit: number): Promise<number> {
-  const direct = body instanceof ArrayBuffer
-    ? new Uint8Array(body)
-    : ArrayBuffer.isView(body)
-      ? new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
-      : null;
-  if (direct !== null) {
-    if (direct.byteLength > limit) throw new Error("too-large");
-    await writeFile(path, direct, { mode: 0o600 });
-    return direct.byteLength;
-  }
-  const stream = body instanceof Blob ? body.stream() : request.body;
-  const reader = stream?.getReader();
-  if (reader === undefined) return 0;
-  const file = await open(path, "w", 0o600);
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > limit) throw new Error("too-large");
-      await file.write(value);
-    }
-  } finally {
-    await file.close();
-    await reader.cancel().catch(() => undefined);
-  }
-  return total;
-}
 
 function hasIngressData(cv: DeepReadonly<ConfigurationVersion>): boolean {
   const ingress = (cv.ingressAttributes ?? {}) as Record<string, unknown>;

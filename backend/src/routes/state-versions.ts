@@ -1,5 +1,7 @@
 import { Elysia } from "elysia";
 import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { db } from "../db";
 import { stateOutputIndex, stateVersions, workspaces, runs, organizationMemberships, teams, type users } from "../db/schema";
 import { eq, and, desc, count, inArray } from "drizzle-orm";
@@ -24,6 +26,8 @@ import { isUniqueConstraintError } from "../lib/validation";
 import { authPlugin } from "../auth";
 import { scheduleExplorerInventory } from "../lib/explorer-inventory";
 import { insertStateOutputIndex } from "../lib/state-output-index";
+import { persistUploadBody } from "../lib/upload-body";
+import { storageDir } from "../db/driver";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -34,7 +38,7 @@ type ParamCtx = Readonly<{
   orgId: string | null;
   teamId: string | null;
   run: { runId: string; workspaceId: string; organizationId: string } | null;
-  request: Readonly<{ url: string; headers: Headers; arrayBuffer: () => Promise<ArrayBuffer> }>;
+  request: Request;
   set: SetObj;
 }>;
 
@@ -53,14 +57,17 @@ async function withStateSerialRetry<T>(operation: () => Promise<T>): Promise<T> 
 
 async function requestBodyText(
   body: unknown,
-  request: Readonly<{ arrayBuffer: () => Promise<ArrayBuffer> }>,
+  request: Request,
 ): Promise<string> {
-  if (typeof body === "string") return body;
-  if (body instanceof ArrayBuffer) return new TextDecoder().decode(body);
-  if (ArrayBuffer.isView(body)) return new TextDecoder().decode(body);
-  if (body instanceof Blob) return body.text();
-  if (body !== undefined && body !== null) return JSON.stringify(body);
-  return new TextDecoder().decode(await request.arrayBuffer());
+  const uploadDir = join(storageDir, "state-uploads");
+  const path = join(uploadDir, `state-${crypto.randomUUID()}.json`);
+  await mkdir(uploadDir, { recursive: true });
+  try {
+    await persistUploadBody(body, request, path, MAX_IMPORTED_STATE_BYTES);
+    return await readFile(path, "utf8");
+  } finally {
+    await rm(path, { force: true });
+  }
 }
 
 export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
