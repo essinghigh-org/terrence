@@ -167,14 +167,6 @@ export async function confirmRunForApply(
   if (workspace === undefined) {
     return { ok: false, reason: "Run workspace no longer exists" };
   }
-  // Machine-to-machine confirmation: audit as the webhook, not a user.
-  await auditLog("apply", "runs", runId, null, workspace.orgId, {
-    workspaceId: workspace.id,
-    fromStatus: before.status,
-    toStatus: "confirmed",
-    source: "approval-webhook",
-  });
-  queueRunNotification(runId, "run:confirmed", "confirmed");
   if (workspace.executionMode === "agent") {
     const poolId = workspace.agentPoolId;
     if (poolId === null) return { ok: false, reason: "The workspace does not have an agent pool" };
@@ -206,6 +198,13 @@ export async function confirmRunForApply(
         reason: queueError === null ? "Run apply is already queued" : `Agent apply job could not be queued: ${queueError}`,
       };
     }
+    await auditLog("apply", "runs", runId, null, workspace.orgId, {
+      workspaceId: workspace.id,
+      fromStatus: before.status,
+      toStatus: "apply_queued",
+      source: "approval-webhook",
+    });
+    queueRunNotification(runId, "run:confirmed", "apply_queued");
     void reportRunVcsStatus(runId, "apply_queued");
     return { ok: true, status: "apply_queued" };
   }
@@ -219,6 +218,13 @@ export async function confirmRunForApply(
   if (confirmed.length === 0) {
     return { ok: false, reason: "Run apply is already queued" };
   }
+  await auditLog("apply", "runs", runId, null, workspace.orgId, {
+    workspaceId: workspace.id,
+    fromStatus: before.status,
+    toStatus: "confirmed",
+    source: "approval-webhook",
+  });
+  queueRunNotification(runId, "run:confirmed", "confirmed");
   const { executeApply } = await import("../worker");
   executeApply(runId).catch((error: unknown): void => {
     if (error !== null && error !== undefined) console.error(error);

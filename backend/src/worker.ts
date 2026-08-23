@@ -379,8 +379,7 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
     // "applied" after the operator action has already returned.
     const currentStatus = existing?.status;
     if (currentStatus !== undefined && currentStatus !== status && !canTransitionRunStatus(currentStatus, status)) {
-      log.error(`Illegal run status transition for ${runId}: ${currentStatus} -> ${status} (see lib/run-status.ts)`);
-      return;
+      throw new Error(`Illegal run status transition for ${runId}: ${currentStatus} -> ${status}`);
     }
     const timestamps = { ...existingTimestamps, [statusKey]: now };
     const updated = await db.update(runs)
@@ -390,11 +389,11 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
     if (updated.length === 0) {
       // A concurrent cancel/force-cancel won the race after the read above.
       // Do not publish or notify a transition that was not persisted.
-      return;
+      throw new Error(`Run ${runId} status transition to ${status} lost its compare-and-set race`);
     }
   } catch (err: unknown) {
     log.error(`Failed to update run ${runId} status to ${status}`, { error: err instanceof Error ? err.message : String(err) });
-    return;
+    throw err;
   }
   const trigger = status === "planning"
     ? "run:planning"
@@ -1235,10 +1234,28 @@ async function waitForVcsConfigurationDownload(
 export function executeRun(runId: string): Promise<void> {
   prepareRunCgroup(runId);
   return trackLocalExecution(
-    executeRunImpl(runId).finally((): void => {
-      // Cgroup teardown retries are cheap: rmdir only succeeds on empty groups.
-      cleanupRunCgroup(runId);
-    }),
+    executeRunImpl(runId)
+      .catch(async (error: unknown): Promise<void> => {
+        if (!(await runWasCanceled(runId))) {
+          try {
+            const current = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { statusTimestamps: true } });
+            await db.update(runs).set({
+              status: "errored",
+              statusTimestamps: { ...(current?.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+            }).where(and(
+              eq(runs.id, runId),
+              notInArray(runs.status, ["canceled", "force_canceled", "applied", "errored", "discarded"]),
+            ));
+          } catch (statusError: unknown) {
+            log.error("Failed to fence a run after an execution error", { runId, error: statusError });
+          }
+        }
+        throw error;
+      })
+      .finally((): void => {
+        // Cgroup teardown retries are cheap: rmdir only succeeds on empty groups.
+        cleanupRunCgroup(runId);
+      }),
   );
 }
 
@@ -1273,7 +1290,11 @@ async function executeRunImpl(runId: string): Promise<void> {
       org !== undefined ? { requireHardIsolation: (org as unknown as { requireHardIsolation?: boolean | null } | undefined)?.requireHardIsolation ?? null } : null,
     );
     if (policyError !== null) {
-      await db.update(runs).set({ status: "errored", statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() } }).where(eq(runs.id, runId));
+      const policyRejected = await db.update(runs).set({ status: "errored", statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() } }).where(and(
+        eq(runs.id, runId),
+        eq(runs.status, run.status),
+      )).returning({ id: runs.id });
+      if (policyRejected.length === 0) return;
       await writeLog(runId, "plan", `[terrence ERROR] ${policyError}`);
       publish("run.status", { "run-id": runId, "workspace-id": workspace.id, "org-id": workspace.orgId, status: "errored", at: new Date().toISOString() });
       queueRunNotification(runId, "run:errored", "errored");
@@ -1635,11 +1656,11 @@ async function executeRunImpl(runId: string): Promise<void> {
           keepPlan = true;
           await executeApply(runId);
         }
-      } else if (run.planOnly) {
-        await updateRunStatus(runId, "planned_and_finished");
       } else if (run.savePlan) {
         await updateRunStatus(runId, "planned_and_saved");
         keepPlan = true;
+      } else if (run.planOnly) {
+        await updateRunStatus(runId, "planned_and_finished");
       } else if (run.autoApply === true) {
         if (await runWasCanceled(runId)) return;
         // Auto-apply must not bypass the site-wide apply gates: when an
@@ -1767,7 +1788,25 @@ async function finalizeNoCodeUpgrade(
 
 /** Tracked wrapper: shutdown drain waits for in-flight apply executions. */
 export function executeApply(runId: string): Promise<void> {
-  return trackLocalExecution(executeApplyImpl(runId));
+  return trackLocalExecution(
+    executeApplyImpl(runId).catch(async (error: unknown): Promise<void> => {
+      if (!(await runWasCanceled(runId))) {
+        try {
+          const current = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { statusTimestamps: true } });
+          await db.update(runs).set({
+            status: "errored",
+            statusTimestamps: { ...(current?.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+          }).where(and(
+            eq(runs.id, runId),
+            notInArray(runs.status, ["canceled", "force_canceled", "applied", "errored", "discarded"]),
+          ));
+        } catch (statusError: unknown) {
+          log.error("Failed to fence a run after an apply error", { runId, error: statusError });
+        }
+      }
+      throw error;
+    }),
+  );
 }
 
 async function executeApplyImpl(runId: string): Promise<void> {
@@ -2764,6 +2803,7 @@ export async function pollAssessmentQueue(): Promise<string[]> {
 }
 
 let isWorkerLoopRunning = false;
+let workerQueueCursor: { createdAt: number; id: string } = { createdAt: 0, id: "" };
 
 export async function pollWorkerQueue(): Promise<string[]> {
   return withQueueGate("worker", async (): Promise<string[]> => {
@@ -2784,8 +2824,8 @@ export async function pollWorkerQueue(): Promise<string[]> {
   const MAX_SCAN_PAGES = 10;
   const claimedRunIds: string[] = [];
   const claimedWorkspaceIds = new Set<string>();
-  let cursorCreatedAt = 0;
-  let cursorId = "";
+  let cursorCreatedAt = workerQueueCursor.createdAt;
+  let cursorId = workerQueueCursor.id;
   let morePages = true;
   let scannedPages = 0;
   while (claimedRunIds.length < MAX_CLAIMS && morePages && scannedPages < MAX_SCAN_PAGES) {
@@ -2803,12 +2843,18 @@ export async function pollWorkerQueue(): Promise<string[]> {
       orderBy: [asc(runs.createdAt), asc(runs.id)],
       limit: SCAN_PAGE_SIZE,
     });
-    if (pendingRuns.length === 0) break;
+    if (pendingRuns.length === 0) {
+      // A complete pass reached the end of the pending set. Wrap so newly
+      // queued runs and previously blocked prefixes are eligible next poll.
+      workerQueueCursor = { createdAt: 0, id: "" };
+      break;
+    }
     morePages = pendingRuns.length === SCAN_PAGE_SIZE;
     const last = pendingRuns[pendingRuns.length - 1];
     if (last !== undefined) {
       cursorCreatedAt = last.createdAt;
       cursorId = last.id;
+      workerQueueCursor = { createdAt: cursorCreatedAt, id: cursorId };
     }
 
   // Pre-fetch workspaces to avoid N+1 inside the loop
@@ -3004,7 +3050,6 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
       isNotNull(runs.scheduledAt),
       sql`${runs.scheduledAt} <= ${now}`,
       eq(runs.planOnly, false),
-      eq(runs.savePlan, false),
     ),
     limit: 50,
   });
@@ -3019,7 +3064,7 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
   }
   const applied: string[] = [];
   for (const run of dueRuns) {
-    if (run.planOnly === true || run.savePlan === true) continue;
+    if (run.planOnly === true) continue;
     try {
       const workspace = await db.query.workspaces.findFirst({
         columns: { id: true, orgId: true, locked: true, executionMode: true, agentPoolId: true, projectId: true },

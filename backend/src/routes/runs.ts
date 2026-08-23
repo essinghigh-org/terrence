@@ -12,7 +12,7 @@ import { applyGateBlockReason } from "../lib/operations";
 import { authPlugin } from "../auth";
 import { queueRunNotification } from "../lib/notifications";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
-import { cancelAgentJobsForRun, enqueueAgentApplyJob } from "../lib/agent-jobs";
+import { cancelAgentJobsForRun, insertAgentApplyJobTx } from "../lib/agent-jobs";
 import { publish } from "../lib/event-bus";
 import { isPlanIncompleteRunStatus } from "../lib/run-status";
 import { AvatarService } from "../lib/avatars";
@@ -367,7 +367,7 @@ export async function createRun(
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "invoke-action-addrs accepts one address and cannot be combined with destroy or target addresses" }] };
   }
   const requestedAutoApply = typeof attributes["auto-apply"] === "boolean" ? attributes["auto-apply"] : undefined;
-  const requestedPlanOnly = requestedOperation === "plan" || requestedOperation === "plan_only" || requestedOperation === "save_plan"
+  const requestedPlanOnly = requestedOperation === "plan" || requestedOperation === "plan_only"
     ? true
     : typeof attributes["plan-only"] === "boolean" ? attributes["plan-only"] : undefined;
   const refresh = typeof attributes.refresh === "boolean" ? attributes.refresh : true;
@@ -864,9 +864,42 @@ export const runRoutes = new Elysia({ name: "runs" })
       }
       agentPoolId = pool.id;
     }
+    if (agentPoolId !== null) {
+      let job: Awaited<ReturnType<typeof insertAgentApplyJobTx>> | undefined;
+      try {
+        job = await db.transaction(async (transaction) => {
+          const tx = transaction as unknown as typeof db;
+          const confirmed = await tx.update(runs).set({
+            status: "confirmed",
+            scheduledAt: null,
+            statusTimestamps: {
+              ...(before.statusTimestamps ?? {}),
+              "confirmed-at": new Date().toISOString(),
+            },
+          }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+          if (confirmed.length === 0) return undefined;
+          return insertAgentApplyJobTx(tx, runId, agentPoolId, before.statusTimestamps);
+        });
+      } catch {
+        job = undefined;
+      }
+      if (job === undefined) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] };
+      }
+      await auditLog("apply", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
+        workspaceId: authorized.workspace.id,
+        fromStatus: before.status,
+        toStatus: "apply_queued",
+        ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+      });
+      const commentStr = actionComment(body);
+      if (commentStr !== "") await createRunComment({ runId, userId: user?.id ?? null, body: commentStr, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
+      (set as { status: number }).status = 202;
+      return new Response(null, { status: 202 });
+    }
     const confirmed = await db.update(runs).set({
       status: "confirmed",
-      // A manual confirm overrides any previously scheduled apply time.
       scheduledAt: null,
       statusTimestamps: {
         ...(before.statusTimestamps ?? {}),
@@ -882,15 +915,6 @@ export const runRoutes = new Elysia({ name: "runs" })
     });
     const commentStr = actionComment(body);
     if (commentStr !== "") await createRunComment({ runId, userId: user?.id ?? null, body: commentStr, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
-    if (agentPoolId !== null) {
-      const job = await enqueueAgentApplyJob(authorized.run.id, agentPoolId);
-      if (job === undefined) {
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: "Run apply is already queued" }] };
-      }
-      (set as { status: number }).status = 202;
-      return new Response(null, { status: 202 });
-    }
     const { executeApply } = await import("../worker");
     executeApply(authorized.run.id).catch((err: unknown): void => { if (err !== null && err !== undefined) { console.error(err); } });
     (set as { status: number }).status = 202;
@@ -913,10 +937,9 @@ export const runRoutes = new Elysia({ name: "runs" })
       where: and(
         eq(runs.id, runId),
         inArray(runs.status, ["planned", "planned_and_saved"]),
-        // plan-only / saved-plan runs never apply; scheduling them would
-        // leave them confirmed forever (the poller skips them).
+        // A saved plan is specifically intended to be scheduled later. Only
+        // speculative/plan-only runs are excluded from apply scheduling.
         eq(runs.planOnly, false),
-        eq(runs.savePlan, false),
       ),
     });
     if (before === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must have a completed saved plan before apply" }] }; }
@@ -977,7 +1000,11 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, null, teamId ?? null, "discard"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    const updated = await db.update(runs).set({ status: "discarded" }).where(and(eq(runs.id, runId), eq(runs.status, authorized.run.status), notInArray(runs.status, ["applied", "planned_and_finished", "errored", "canceled", "discarded", "force_canceled"]))).returning();
+    const updated = await db.update(runs).set({ status: "discarded" }).where(and(
+      eq(runs.id, runId),
+      eq(runs.status, authorized.run.status),
+      inArray(runs.status, ["pending", "planned", "planned_and_saved", "policy_soft_failed", "unreachable"]),
+    )).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not discardable" }] }; }
     const commentStr = actionComment(body);
     if (commentStr !== "") await createRunComment({ runId, userId: user?.id ?? null, body: commentStr, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
