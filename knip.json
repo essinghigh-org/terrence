@@ -1,15 +1,18 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignore": [],
-  "ignoreDependencies": [
-    "shadcn"
-  ],
+  "ignoreDependencies": [],
   "ignoreExportsUsedInFile": true,
   "tags": [
     "-lintignore"
   ],
   "workspaces": {
-    ".": {},
+    ".": {
+      "entry": [
+        "index.ts",
+        "scripts/*.ts"
+      ]
+    },
     "backend": {
       "entry": [
         "src/app.ts",
@@ -24,8 +27,11 @@
     },
     "frontend": {
       "entry": [
+        "src/main.tsx",
+        "src/index.css",
         "src/App.tsx",
         "src/components/ui/*.tsx",
+        "scripts/*.ts",
         "tools/oxlint/**/*.ts",
         "tests/**/*.ts",
         "tests/**/*.tsx",
@@ -34,6 +40,6 @@
     }
   },
   "ignoreBinaries": [
-    "playwright-static.config.ts"
+    "dedupe"
   ]
 }

@@ -470,7 +470,7 @@ export function ApplyOutput({
         <span className="text-xs text-muted-foreground">
           Terraform {planJson.terraform_version ?? "unknown"}
           {planJson.format_version !== undefined && ` · JSON ${planJson.format_version}`}
-          <span className="ml-1.5 text-muted-foreground/70">· {changedResources.length} resource{changedResources.length === 1 ? "" : "s"}</span>
+          <span className="ml-1.5 text-muted-foreground">· {changedResources.length} resource{changedResources.length === 1 ? "" : "s"}</span>
         </span>
       </div>
 

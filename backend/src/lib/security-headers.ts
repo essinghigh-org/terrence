@@ -69,7 +69,7 @@ const SHORT_ASSET_AGE = 86_400; // 1 day for favicon/icons
 
 /**
  * Cache-Control policy for static responses keyed by path.
- * - Vite emits hashed files under /assets/<name>-<hash>.<ext>: immutable.
+ * - Bundler emits hashed files under /assets/<name>-<hash>.<ext>: immutable.
  * - index.html is revalidated so a new deploy (with new hashes) is picked up.
  * - favicon/manifest/icons: short-lived public cache (revalidate occasionally).
  * `undefined` means "leave the framework default" (API/uncategorised paths).

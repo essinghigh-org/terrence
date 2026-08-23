@@ -1,0 +1,4 @@
+[install]
+# Reject releases newer than three days (259200 seconds); add dependency
+# exceptions to minimumReleaseAgeExcludes instead of lowering this guard.
+minimumReleaseAge = 259200

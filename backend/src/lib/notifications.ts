@@ -224,9 +224,9 @@ export async function deliveryDeduplicated(scope: "run" | "assessment", key: str
 }
 
 /** Record a logical emission in both the local TTL map and the shared store. */
-export function deliveryDedupRecord(scope: "run" | "assessment", key: string): void {
+export async function deliveryDedupRecord(scope: "run" | "assessment", key: string): Promise<void> {
   dedupRecord(scope, key);
-  void sharedDedupRecord(scope, key).catch((): void => {
+  await sharedDedupRecord(scope, key).catch((): void => {
     /* best-effort: worst case a duplicate notification on failover */
   });
 }
@@ -756,8 +756,7 @@ export async function deliverRunNotifications(
   // destination and a delivery will actually be attempted, so a config-less
   // or breaker-closed run does not consume the dedup window.
   if (matching.length > 0) {
-    dedupRecord("run", dedupKey);
-    deliveryDedupRecord("run", dedupKey);
+    await deliveryDedupRecord("run", dedupKey);
   }
 
   return Promise.all(matching.map(async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>
@@ -852,8 +851,7 @@ export async function deliverAssessmentNotifications(
   } as const;
 
   if (matching.length > 0) {
-    dedupRecord("assessment", `${assessmentResultId}:${trigger}`);
-    deliveryDedupRecord("assessment", `${assessmentResultId}:${trigger}`);
+    await deliveryDedupRecord("assessment", `${assessmentResultId}:${trigger}`);
   }
 
   return Promise.all(matching.map(async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>

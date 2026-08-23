@@ -12,9 +12,8 @@
 #   - glibc runtime: matches Debian ABI, so on-demand tofu/terraform/infracost/
 #     opa Go binaries and the static C landlock runner behave identically
 #     (musl-Alpine needed extra libstdc++/libgcc handling and is not used here).
-#   - apk ships bun, git, unzip, wget, curl, ca-certificates-bundle as first-class
-#     packages, so there is no manual Bun tarball and no external downloader to
-#     hand-roll for the runtime toolchain.
+#   - The pinned Bun binary comes from the builder stage; apk provides the
+#     remaining runtime tools without another downloader.
 #   - Runs as uid 65532 (nonroot) by default, matching the app's unprivileged
 #     Landlock sandbox model (no chroot, no capabilities).
 #
@@ -31,14 +30,21 @@ FROM golang:1.26-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf993092
 RUN CGO_ENABLED=0 GOBIN=/out go install github.com/hashicorp/terraform-config-inspect@v0.0.0-20260709150029-2fb54c236733
 
 # ---------- Build stage: Bun backend workspaces + frontend + static landlock ---
-FROM oven/bun:1@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 AS builder
+FROM oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6 AS builder
 WORKDIR /app
 
-# Copy the entire monorepo
-COPY . .
+# Copy dependency manifests first for optimal Docker layer caching
+COPY bunfig.toml ./
+COPY bun.lock ./
+COPY package.json ./
+COPY backend/package.json ./backend/
+COPY frontend/package.json ./frontend/
 
 # Install dependencies (workspaces)
 RUN bun install --frozen-lockfile
+
+# Copy the rest of the monorepo
+COPY . .
 
 # Build frontend
 WORKDIR /app/frontend
@@ -58,8 +64,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
 # Tag at pin time: cgr.dev/chainguard/wolfi-base:latest. Bump deliberately
 # after reviewing what changed in the new tag (pin the new digest).
 FROM cgr.dev/chainguard/wolfi-base@sha256:30f03343947c7ae3581fda727a6e2aa7b8ce7009b7bfc2ab8d5c9483ace5812f
-# Pin the full -rN revision so apk exact-matches; bump together with bun bumps.
-ARG BUN_VERSION=1.3.14-r3
 ARG BUILD_VERSION=0.0.0
 ARG BUILD_SHA=unknown
 WORKDIR /app
@@ -72,33 +76,33 @@ ENV NODE_ENV=production \
     BUILD_SHA=${BUILD_SHA}
 
 # wolfi-base ships busybox (tar/cp/which), glibc, apk and ca-certificates-bundle.
-# Add the external tools the worker shells out to at runtime. Bun comes from apk
-# (pinned) — world-executable /usr/bin/bun, so the healthcheck works without
-# a dedicated user-home install (the OLD alpine/Debian /root/.bun healthcheck bug
-# came from a curl-installed bun living under an untraversable /root).
+# Add the external tools the worker shells out to at runtime. Copy the exact Bun
+# binary that built the application to a world-executable runtime path.
 #
 # Infracost is intentionally NOT baked into the image: it is installed on demand
 # at runtime into <storage>/binaries/infracost/<version>/ (digest-verified) by
 # backend/src/lib/infracost-bin.ts, selected by INFRACOST_VERSION. Baking it was
 # the single remaining CVE surface in the image and forced a rebuild to bump the
 # version; managing it like tofu/terraform removes both.
+COPY --from=builder /usr/local/bin/bun /usr/bin/bun
 RUN apk add --no-cache \
         git \
-        "bun=${BUN_VERSION}" \
         unzip \
         wget \
         curl \
         ca-certificates-bundle \
-    && git config --global init.defaultBranch main 2>/dev/null || true
+    && (git config --system init.defaultBranch main 2>/dev/null || true)
 
 # Workspace root + backend ONLY (no frontend -> no esbuild/vite/rolldown dev
 # tooling). Mirrors the previous runtime COPY set exactly.
+COPY bunfig.toml ./
 COPY bun.lock ./
 COPY package.json ./
 COPY backend/package.json ./backend/
 COPY backend/drizzle.config.ts ./backend/
 COPY backend/drizzle ./backend/drizzle
 COPY backend/index.ts ./backend/
+COPY backend/openapi.json ./backend/
 COPY backend/src ./backend/src
 COPY backend/docs ./backend/docs
 
@@ -111,7 +115,7 @@ COPY --from=config-inspect-builder /out/terraform-config-inspect ./backend/bin/t
 # (workspaces) + bun.lock are present and the frontend is absent.
 WORKDIR /app/backend
 RUN bun install --production --frozen-lockfile && \
-    rm -rf /root/.bun/install/cache 2>/dev/null || true
+    (rm -rf /root/.bun/install/cache 2>/dev/null || true)
 
 # Copy built frontend static assets
 COPY --from=builder /app/frontend/dist /app/frontend/dist

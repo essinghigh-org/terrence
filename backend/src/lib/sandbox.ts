@@ -233,7 +233,7 @@ export class RunSandbox {
      * Uses the same rules as terraform/tofu but with a custom binary. */
     public spawnGeneric(
       args: readonly string[],
-      opts: Readonly<{ cwd: string; env: Readonly<Record<string, string>> }>,
+      opts: Readonly<{ cwd: string; env: Readonly<Record<string, string>>; cgroup?: string | null }>,
     ): Subprocess<"ignore", "pipe", "pipe"> {
       let binaryPath = args[0] ?? "";
       if (this.runner === null) {
@@ -279,7 +279,17 @@ export class RunSandbox {
         ...resolvedArgs,
       ];
 
-      return Bun.spawn(runnerArgs, { env, stdout: "pipe", stderr: "pipe", detached: true });
+      const spawnOpts: Record<string, unknown> = {
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+        detached: true,
+      };
+      if (typeof opts.cgroup === "string" && opts.cgroup !== "") {
+        spawnOpts.cgroup = opts.cgroup;
+      }
+
+      return Bun.spawn(runnerArgs, spawnOpts as never);
     }
 
     /** Spawn a terraform/tofu command under the Landlock allow-list.
@@ -289,7 +299,7 @@ export class RunSandbox {
      */
     public spawn(
       args: readonly string[],
-      opts: Readonly<{ cwd: string; env: Readonly<Record<string, string>> }>,
+      opts: Readonly<{ cwd: string; env: Readonly<Record<string, string>>; cgroup?: string | null }>,
     ): Subprocess<"ignore", "pipe", "pipe"> {
       return this.spawnGeneric(args, opts);
     }

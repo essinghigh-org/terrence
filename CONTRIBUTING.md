@@ -3,7 +3,7 @@
 ## Getting Started
 
 1. Clone the repository
-2. Ensure Bun >= 1.3 is installed
+2. Ensure Bun >= 1.4.0 is installed
 3. Run `bun install` at the project root
 4. Run `cd backend && bun run index.ts` to start the server
 5. Open `http://localhost:3000` to access the UI
@@ -72,8 +72,9 @@ Key directories:
 ### Frontend
 
 - **Framework**: React 19 + TypeScript
-- **Build**: Vite + Rolldown
-- **UI**: shadcn/ui components (built on Radix UI + Tailwind CSS)
+- **Build**: Bun native bundler (`Bun.build`) with `bun-plugin-tailwind`
+- **UI**: Tailwind CSS UI components (built on Radix UI)
+- **Testing**: `bun:test` + `Bun.WebView` browser testing + axe-core accessibility
 - **State**: Local state with `useState`/`useEffect` — no global state manager
 - **API Client**: Custom `fetchApi()` wrapper with token refresh
 

@@ -76,6 +76,16 @@ describe("pg schema parity", () => {
     }
   });
 
+  test("runtime jsonb columns pass objects directly to Bun.SQL", () => {
+    const runtime = buildPgSchema(sqliteSchema);
+    const workspaceColumns = (runtime.workspaces as unknown as Record<PropertyKey, unknown>)[COLUMNS] as Record<
+      string,
+      { mapToDriverValue(value: unknown): unknown }
+    >;
+    const value = { identifier: "hashicorp/terraform", branch: "main" };
+    expect(workspaceColumns.vcsRepo?.mapToDriverValue(value)).toBe(value);
+  });
+
   test("indexes are identical per table", () => {
     const runtime = buildPgSchema(sqliteSchema);
     for (const [exportName, sqliteTable] of Object.entries(sqliteSchema)) {

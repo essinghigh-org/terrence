@@ -16,6 +16,7 @@ import { db } from "../../src/db";
 import { apiTokens, users } from "../../src/db/schema";
 import { storageDir } from "../../src/db/driver";
 import { defaultOutputName, sanitizeOutputName } from "../../src/lib/db-export";
+import { makeTestDbName } from "../setup";
 
 process.env.TERRENCE_DISABLE_RESTART ??= "1";
 
@@ -88,24 +89,24 @@ beforeAll(async (): Promise<void> => {
 
   try {
     // Fresh PostgreSQL source database with the real migration set applied.
-    const postgres = (await import("postgres")).default;
-    sourceDbName = `terrence_export_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
-    const admin = postgres(PG_ADMIN_URL, { max: 1, connect_timeout: 3, onnotice: () => {} });
+    const { SQL } = await import("bun");
+    sourceDbName = makeTestDbName("terrence_export");
+    const admin = new SQL(PG_ADMIN_URL);
     try {
-      await admin`CREATE DATABASE ${admin(sourceDbName)}`;
+      await admin.unsafe(`CREATE DATABASE "${sourceDbName}"`);
     } finally {
-      await admin.end();
+      await admin.close();
     }
     const source = new URL(PG_ADMIN_URL);
     source.pathname = `/${sourceDbName}`;
     sourceUrl = source.toString();
 
-    const client = postgres(sourceUrl, { max: 1, onnotice: () => {} });
+    const client = new SQL(sourceUrl);
     try {
-      const { migrate } = await import("drizzle-orm/postgres-js/migrator");
-      const { drizzle: pgDrizzle } = await import("drizzle-orm/postgres-js");
+      const { migrate } = await import("drizzle-orm/bun-sql/migrator");
+      const { drizzle: pgDrizzle } = await import("drizzle-orm/bun-sql");
       const pgSchema = await import("../../src/db/schema-pg");
-      const pgDb = pgDrizzle(client, { schema: pgSchema });
+      const pgDb = pgDrizzle({ client, schema: pgSchema });
       await migrate(pgDb, { migrationsFolder: join(import.meta.dir, "../../drizzle/pg") });
       await client.unsafe(`
         CREATE TABLE IF NOT EXISTS locks (
@@ -181,7 +182,7 @@ beforeAll(async (): Promise<void> => {
         createdAt: Date.now(),
       });
     } finally {
-      await client.end();
+      await client.close();
     }
     postgresAvailable = true;
   } catch (error: unknown) {
@@ -195,15 +196,15 @@ afterAll(async (): Promise<void> => {
   await db.delete(apiTokens).where(inArray(apiTokens.id, [adminTokenId]));
   await db.delete(users).where(inArray(users.id, [adminId]));
   if (sourceUrl !== "") {
-    const postgres = (await import("postgres")).default;
-    const cleanup = postgres(PG_ADMIN_URL, { max: 1, onnotice: () => {} });
+    const { SQL } = await import("bun");
+    const cleanup = new SQL(PG_ADMIN_URL);
     try {
       await cleanup`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${sourceDbName} AND pid <> pg_backend_pid()`;
-      await cleanup`DROP DATABASE ${cleanup(sourceDbName)}`;
+      await cleanup.unsafe(`DROP DATABASE IF EXISTS "${sourceDbName}"`);
     } catch {
       // Best-effort cleanup.
     } finally {
-      await cleanup.end();
+      await cleanup.close();
     }
   }
 });
@@ -221,13 +222,13 @@ describe("Postgres -> SQLite database export", (): void => {
 
   test("test-connection rejects a database without the Terrence schema", async (): Promise<void> => {
     if (!postgresAvailable) return;
-    const postgres = (await import("postgres")).default;
-    const emptyName = `terrence_empty_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
-    const admin = postgres(PG_ADMIN_URL, { max: 1, onnotice: () => {} });
+    const { SQL } = await import("bun");
+    const emptyName = makeTestDbName("terrence_empty");
+    const admin = new SQL(PG_ADMIN_URL);
     try {
-      await admin`CREATE DATABASE ${admin(emptyName)}`;
+      await admin.unsafe(`CREATE DATABASE "${emptyName}"`);
     } finally {
-      await admin.end();
+      await admin.close();
     }
     const url = new URL(PG_ADMIN_URL);
     url.pathname = `/${emptyName}`;
@@ -239,12 +240,12 @@ describe("Postgres -> SQLite database export", (): void => {
       const body = (await response.json()) as { errors: { title: string }[] };
       expect(body.errors[0]?.title).toBe("Incompatible database");
     } finally {
-      const cleanup = postgres(PG_ADMIN_URL, { max: 1, onnotice: () => {} });
+      const cleanup = new SQL(PG_ADMIN_URL);
       try {
-        await cleanup`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${emptyName} AND pid <> pg_backend_pid()`;
-        await cleanup`DROP DATABASE ${cleanup(emptyName)}`;
+        await cleanup.unsafe(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${emptyName}' AND pid <> pg_backend_pid()`);
+        await cleanup.unsafe(`DROP DATABASE IF EXISTS "${emptyName}"`);
       } finally {
-        await cleanup.end();
+        await cleanup.close();
       }
     }
   }, 30_000);
@@ -345,8 +346,8 @@ describe("Postgres -> SQLite database export", (): void => {
 
   test("an active run blocks the export unless force is set", async (): Promise<void> => {
     if (!postgresAvailable) return;
-    const postgres = (await import("postgres")).default;
-    const client = postgres(sourceUrl, { max: 1, onnotice: () => {} });
+    const { SQL } = await import("bun");
+    const client = new SQL(sourceUrl);
     try {
       const activeRunId = `run-active-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
       await client`
@@ -372,7 +373,7 @@ describe("Postgres -> SQLite database export", (): void => {
         await client`DELETE FROM runs WHERE id = ${activeRunId}`;
       }
     } finally {
-      await client.end();
+      await client.close();
     }
   }, 30_000);
 

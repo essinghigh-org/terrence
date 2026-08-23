@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import { db, rawQueryAll } from "../db";
+import { db, isPostgres, rawQueryAll } from "../db";
 import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, runs, configurationVersions, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, variableSets, variableSetWorkspaces, type users } from "../db/schema";
 import { eq, and, asc, desc, count, inArray, isNull, like, notInArray, or, sql } from "drizzle-orm";
 import {
@@ -230,6 +230,7 @@ async function normalizeVcsRepo(
   input: unknown,
   orgId: string,
   existing?: DeepReadonly<WorkspaceVcsRepo>,
+  database: typeof db = db,
 ): Promise<Readonly<{ value: WorkspaceVcsRepo | null }> | Readonly<{ error: string }>> {
   if (input === null) return { value: null };
   if (typeof input !== "object") return { error: "vcs-repo must be an object or null" };
@@ -261,16 +262,24 @@ async function normalizeVcsRepo(
   }
 
   if (installationId !== undefined && installationId !== "") {
-    const installation = await db.query.githubAppInstallations.findFirst({
+    const installation = await database.query.githubAppInstallations.findFirst({
       where: and(eq(githubAppInstallations.id, installationId), eq(githubAppInstallations.orgId, orgId)),
     });
     if (installation === undefined) return { error: "GitHub App installation is not registered in this organization" };
   }
   if (oauthTokenId !== undefined && oauthTokenId !== "") {
-    const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId) });
+    let token = await database.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId) });
+    if (token !== undefined && isPostgres) {
+      const execute = (database as unknown as { execute: (query: unknown) => Promise<unknown> }).execute.bind(database);
+      // Match deletion's client-before-token lock order, then re-read after
+      // waiting so a delete that won the race cannot leave a JSON reference.
+      await execute(sql`SELECT id FROM oauth_clients WHERE id = ${token.oauthClientId} FOR KEY SHARE`);
+      await execute(sql`SELECT id FROM oauth_tokens WHERE id = ${oauthTokenId} FOR KEY SHARE`);
+      token = await database.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId) });
+    }
     const client = token === undefined
       ? undefined
-      : await db.query.oauthClients.findFirst({
+      : await database.query.oauthClients.findFirst({
           where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, orgId)),
         });
     if (client === undefined) return { error: "OAuth token is not registered in this organization" };
@@ -636,15 +645,6 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (iacBinary !== undefined && iacBinary !== null && typeof iacBinary === "string" && !["tofu", "terraform"].includes(iacBinary)) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binary must be tofu or terraform" }] };
     }
-    let vcsRepo: typeof workspaces.$inferInsert.vcsRepo;
-    if (rawVcsRepo !== undefined && rawVcsRepo !== null) {
-      const normalized = await normalizeVcsRepo(rawVcsRepo, org.id);
-      if ("error" in normalized) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: normalized.error }] };
-      }
-      vcsRepo = normalized.value;
-    }
     let normalizedWorkingDirectory: string | null = null;
     if (workingDirectory !== undefined && workingDirectory !== null && typeof workingDirectory === "string") {
       try { normalizedWorkingDirectory = normalizeWorkingDirectory(workingDirectory); } catch (error: unknown) {
@@ -739,30 +739,43 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const finalIac = typeof iacBinary === "string"
       ? iacBinary
       : request.headers.get("terraform-version") !== null ? "terraform" : (org.defaultIacBinary ?? null);
-    await db.insert(workspaces).values({
-      id, name, orgId: org.id, description: finalDesc, projectId: project.id,
-      autoApply, terraformVersion: finalTfVer,
-      workingDirectory: normalizedWorkingDirectory, sourceName,
-      sourceUrl, source, iacBinary: finalIac, vcsRepo,
-      executionMode: effectiveExecutionMode,
-      agentPoolId,
-      autoDestroyActivityDuration: inheritsProjectAutoDestroy
-        ? project.autoDestroyActivityDuration
-        : rawAutoDestroyActivityDuration,
-      inheritsProjectAutoDestroy,
-      settingOverwrites: workspaceSettingOverwrites,
-      ownedByType: ownedByType === undefined || ownedByType === null ? null : ownedByType as "team" | "user" | "service",
-      ownedById: ownedById === undefined || ownedById === null ? null : ownedById as string,
-      contactEmail: contactEmail === undefined || contactEmail === null ? null : contactEmail as string,
-      createdAt: Date.now(),
+    const vcsError = await db.transaction(async (tx): Promise<string | null> => {
+      let vcsRepo: typeof workspaces.$inferInsert.vcsRepo;
+      if (rawVcsRepo !== undefined && rawVcsRepo !== null) {
+        const normalized = await normalizeVcsRepo(rawVcsRepo, org.id, undefined, tx as unknown as typeof db);
+        if ("error" in normalized) return normalized.error;
+        vcsRepo = normalized.value;
+      }
+      await tx.insert(workspaces).values({
+        id, name, orgId: org.id, description: finalDesc, projectId: project.id,
+        autoApply, terraformVersion: finalTfVer,
+        workingDirectory: normalizedWorkingDirectory, sourceName,
+        sourceUrl, source, iacBinary: finalIac, vcsRepo,
+        executionMode: effectiveExecutionMode,
+        agentPoolId,
+        autoDestroyActivityDuration: inheritsProjectAutoDestroy
+          ? project.autoDestroyActivityDuration
+          : rawAutoDestroyActivityDuration,
+        inheritsProjectAutoDestroy,
+        settingOverwrites: workspaceSettingOverwrites,
+        ownedByType: ownedByType === undefined || ownedByType === null ? null : ownedByType as "team" | "user" | "service",
+        ownedById: ownedById === undefined || ownedById === null ? null : ownedById as string,
+        contactEmail: contactEmail === undefined || contactEmail === null ? null : contactEmail as string,
+        createdAt: Date.now(),
+      });
+      if (tagBindings !== undefined && tagBindings.length > 0) {
+        await tx.insert(workspaceTags).values(tagBindings.map((binding): typeof workspaceTags.$inferInsert => ({
+          id: crypto.randomUUID(),
+          workspaceId: id,
+          key: binding.key,
+          value: binding.value,
+        })));
+      }
+      return null;
     });
-    if (tagBindings !== undefined && tagBindings.length > 0) {
-      await db.insert(workspaceTags).values(tagBindings.map((binding): typeof workspaceTags.$inferInsert => ({
-        id: crypto.randomUUID(),
-        workspaceId: id,
-        key: binding.key,
-        value: binding.value,
-      })));
+    if (vcsError !== null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: vcsError }] };
     }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, id) });
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -1707,16 +1720,6 @@ async function updateWorkspaceResponse(
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Tag key "${lockedTagKey}" cannot override its inherited project tag` }] };
   }
-  let newVcsRepo = workspace.vcsRepo;
-  if (rawVcsRepo !== undefined) {
-    const normalized = await normalizeVcsRepo(rawVcsRepo, workspace.orgId, workspace.vcsRepo ?? undefined);
-    if ("error" in normalized) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: normalized.error }] };
-    }
-    newVcsRepo = normalized.value;
-  }
-
   const updated: Partial<typeof workspaces.$inferInsert> = {
     name: name ?? workspace.name,
     description: typeof description === "string" ? description : (description === null ? null : workspace.description),
@@ -1726,7 +1729,7 @@ async function updateWorkspaceResponse(
     fileTriggersEnabled: typeof attributes["file-triggers-enabled"] === "boolean" ? attributes["file-triggers-enabled"] : workspace.fileTriggersEnabled,
     triggerPrefixes: Array.isArray(attributes["trigger-prefixes"]) ? (attributes["trigger-prefixes"] as string[]) : workspace.triggerPrefixes === null ? null : [...workspace.triggerPrefixes],
     triggerPatterns: Array.isArray(attributes["trigger-patterns"]) ? (attributes["trigger-patterns"] as string[]) : workspace.triggerPatterns === null ? null : [...workspace.triggerPatterns],
-    vcsRepo: newVcsRepo,
+    vcsRepo: workspace.vcsRepo,
     queueAllRuns: typeof attributes["queue-all-runs"] === "boolean" ? attributes["queue-all-runs"] : workspace.queueAllRuns,
     speculativeEnabled: typeof attributes["speculative-enabled"] === "boolean" ? attributes["speculative-enabled"] : workspace.speculativeEnabled,
     allowDestroyPlan: typeof attributes["allow-destroy-plan"] === "boolean" ? attributes["allow-destroy-plan"] : workspace.allowDestroyPlan,
@@ -1756,15 +1759,24 @@ async function updateWorkspaceResponse(
       : (attributes["contact-email"] === null ? null : workspace.contactEmail),
   };
 
-  await db.update(workspaces).set(updated).where(eq(workspaces.id, workspace.id));
-  if (tagBindings !== undefined) {
-    await db.transaction(async (tx: unknown): Promise<void> => {
-      const dbTx = tx as typeof db;
-      await dbTx.delete(workspaceTags).where(eq(workspaceTags.workspaceId, workspace.id));
+  const vcsError = await db.transaction(async (tx): Promise<string | null> => {
+    if (rawVcsRepo !== undefined) {
+      const normalized = await normalizeVcsRepo(rawVcsRepo, workspace.orgId, workspace.vcsRepo ?? undefined, tx as unknown as typeof db);
+      if ("error" in normalized) return normalized.error;
+      updated.vcsRepo = normalized.value;
+    }
+    await tx.update(workspaces).set(updated).where(eq(workspaces.id, workspace.id));
+    if (tagBindings !== undefined) {
+      await tx.delete(workspaceTags).where(eq(workspaceTags.workspaceId, workspace.id));
       if (tagBindings.length > 0) {
-        await dbTx.insert(workspaceTags).values(tagBindings.map((b: Readonly<{ key: string; value: string }>): { id: string; workspaceId: string; key: string; value: string } => ({ id: crypto.randomUUID(), workspaceId: workspace.id, ...b })));
+        await tx.insert(workspaceTags).values(tagBindings.map((b: Readonly<{ key: string; value: string }>): { id: string; workspaceId: string; key: string; value: string } => ({ id: crypto.randomUUID(), workspaceId: workspace.id, ...b })));
       }
-    });
+    }
+    return null;
+  });
+  if (vcsError !== null) {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: vcsError }] };
   }
   const saved = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspace.id) });
   if (saved === undefined) throw new Error("Unable to update workspace");

@@ -1,6 +1,7 @@
 // Test setup: redirect database to an isolated temp directory so tests
 // never touch the production database.
 import { afterAll } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +19,12 @@ process.env.TERRENCE_RUN_SANDBOX ??= "false";
 // that need it opt back in with TERRENCE_DISABLE_WORKER=0.
 process.env.TERRENCE_DISABLE_WORKER ??= "1";
 process.env.TERRENCE_SETUP_RAN = "yes";
+
+export function makeTestDbName(prefix: string): string {
+  const name = `${prefix}_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) throw new Error(`Invalid database identifier: ${name}`);
+  return name;
+}
 
 const testDir = mkdtempSync(join(tmpdir(), "terrence-test-"));
 process.env.DATABASE_URL ??= `file:${join(testDir, "terrence.db")}`;
@@ -85,14 +92,13 @@ process.env.TERRENCE_BINARY_CACHE_DIR ??= join(import.meta.dir, "..", "storage",
 // with `SELECT datname FROM pg_database WHERE datname LIKE 'terrence_test_%'`.
 const testDbUrl = process.env.DATABASE_URL ?? "";
 if (testDbUrl.startsWith("postgres")) {
-  const { randomUUID } = await import("node:crypto");
-  const postgres = (await import("postgres")).default;
-  const dbName = `terrence_test_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
-  const admin = postgres(testDbUrl, { max: 1, onnotice: () => {} });
+  const { SQL } = await import("bun");
+  const dbName = makeTestDbName("terrence_test");
+  const admin = new SQL(testDbUrl);
   try {
-    await admin`CREATE DATABASE ${admin(dbName)}`;
+    await admin.unsafe(`CREATE DATABASE "${dbName}"`);
   } finally {
-    await admin.end();
+    await admin.close();
   }
   const fileUrl = new URL(testDbUrl);
   fileUrl.pathname = `/${dbName}`;
@@ -100,14 +106,18 @@ if (testDbUrl.startsWith("postgres")) {
   const { applyPgMigrations } = await import("../src/db");
   await applyPgMigrations();
   afterAll(async (): Promise<void> => {
-    const cleanup = postgres(testDbUrl, { max: 1, onnotice: () => {} });
+    try {
+      const { closeDatabase } = await import("../src/db");
+      await closeDatabase();
+    } catch {}
+    const cleanup = new SQL(testDbUrl);
     try {
       await cleanup`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${dbName} AND pid <> pg_backend_pid()`;
-      await cleanup`DROP DATABASE ${cleanup(dbName)}`;
+      await cleanup.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`);
     } catch {
       // Best-effort cleanup: a failed drop must never mask test results.
     } finally {
-      await cleanup.end();
+      await cleanup.close();
     }
-  });
+  }, 30_000);
 }

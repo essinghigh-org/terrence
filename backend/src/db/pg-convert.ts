@@ -457,11 +457,24 @@ export function buildPgSchema(sqliteSchema: Record<string, unknown>): Record<str
       extra.push(builder);
     }
 
-    pg[name] = pgTable(
+    const pgTableValue = pgTable(
       name,
       columns as never,
       extra.length > 0 ? ((): unknown[] => extra) as never : undefined,
     );
+    // Drizzle's jsonb mapper stringifies values for drivers such as postgres.js.
+    // Bun.SQL accepts objects directly and would stringify that string again,
+    // storing a JSON string instead of a JSON object.
+    const pgColumns = (pgTableValue as unknown as Record<PropertyKey, unknown>)[COLS] as Record<
+      string,
+      { columnType?: string; mapToDriverValue?: (value: unknown) => unknown }
+    >;
+    for (const column of Object.values(pgColumns)) {
+      if (column.columnType === "PgJsonb") {
+        column.mapToDriverValue = (value: unknown): unknown => value;
+      }
+    }
+    pg[name] = pgTableValue;
   }
 
   return pg;

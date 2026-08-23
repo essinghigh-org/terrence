@@ -703,15 +703,11 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     const ocId = params.oc_id ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    // Serialize against concurrent references: on PostgreSQL the usage check
-    // and delete run inside one transaction with a row lock on the parent, so
-    // a concurrent workspace insert cannot slip between them (both committing
-    // would leave a dangling reference; sqlite serializes natively).
+    // Serialize against workspace API writes, which take matching shared row
+    // locks while validating their JSON-backed VCS references.
     const conflict = await db.transaction(async (tx): Promise<VcsIntegrationUsage | null> => {
       if (isPostgres) {
-        // Row lock on the parent row: a concurrent workspace insert's FK
-        // check blocks on it, so it cannot slip between the usage check and
-        // the delete. The sqlite transaction type has no execute(); the pg
+        // The sqlite transaction type has no execute(); the pg
         // runtime instance does (the db interface is sqlite-typed by design).
         await (tx as unknown as { execute: (query: unknown) => Promise<unknown> })
           .execute(sql`SELECT id FROM oauth_clients WHERE id = ${ocId} FOR UPDATE`);
@@ -719,7 +715,9 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
       const usage = await findVcsIntegrationUsage(oc.orgId, { kind: "oauth-client", id: oc.id }, tx);
       if (usage.workspaces.length > 0 || usage.policySets.length > 0) return usage;
       try {
-        await tx.delete(oauthClients).where(eq(oauthClients.id, ocId));
+        await tx.transaction(async (savepoint): Promise<void> => {
+          await savepoint.delete(oauthClients).where(eq(oauthClients.id, ocId));
+        });
       } catch (error: unknown) {
         if (!isVcsIntegrationReferenceConflict(error)) throw error;
         return findVcsIntegrationUsage(oc.orgId, { kind: "oauth-client", id: oc.id }, tx);
@@ -950,8 +948,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     if (ot === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    // Same serialization as the oauth-client delete: row lock on the token
-    // so a concurrent workspace insert cannot commit a dangling reference.
+    // Same serialization as the oauth-client delete.
     const conflict = await db.transaction(async (tx): Promise<VcsIntegrationUsage | null> => {
       if (isPostgres) {
         await (tx as unknown as { execute: (query: unknown) => Promise<unknown> })
@@ -960,7 +957,9 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
       const usage = await findVcsIntegrationUsage(oc.orgId, { kind: "oauth-token", id: ot.id }, tx);
       if (usage.workspaces.length > 0 || usage.policySets.length > 0) return usage;
       try {
-        await tx.delete(oauthTokens).where(eq(oauthTokens.id, otId));
+        await tx.transaction(async (savepoint): Promise<void> => {
+          await savepoint.delete(oauthTokens).where(eq(oauthTokens.id, otId));
+        });
       } catch (error: unknown) {
         if (!isVcsIntegrationReferenceConflict(error)) throw error;
         return findVcsIntegrationUsage(oc.orgId, { kind: "oauth-token", id: ot.id }, tx);

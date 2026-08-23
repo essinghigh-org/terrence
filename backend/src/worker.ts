@@ -70,7 +70,7 @@ import { applyGateBlockReason } from "./lib/operations";
 import { isMaintenanceActive } from "./lib/maintenance";
 import { publish } from "./lib/event-bus";
 import { probeLandlockAbi, RunSandbox, removeSandboxWorkDir, runNetDenyEnabled, runSandboxRequired } from "./lib/sandbox";
-import { attachToRunCgroup, createRunCgroup, destroyRunCgroup, killRunCgroup } from "./lib/run-cgroup";
+import { createRunCgroup, destroyRunCgroup, killRunCgroup } from "./lib/run-cgroup";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "./lib/secrets";
 import { encryptStatePayload } from "./lib/validation";
 import { log } from "./lib/log";
@@ -329,6 +329,44 @@ export function prepareRunCgroup(runId: string): string | null {
   return path;
 }
 
+export function getRunCgroup(runId: string): string | null {
+  return activeRunCgroups.get(runId) ?? null;
+}
+
+function spawnRunProcess(
+  runId: string,
+  args: readonly string[],
+  options: {
+    cwd: string;
+    env?: Record<string, string>;
+    stdout?: "pipe" | "ignore" | "inherit";
+    stderr?: "pipe" | "ignore" | "inherit";
+  },
+  sandbox?: RunSandbox | null,
+): TrackedRunProcess {
+  const cgroup = activeRunCgroups.get(runId) ?? null;
+  if (sandbox !== undefined && sandbox !== null) {
+    const proc = sandbox.spawnGeneric(args, {
+      cwd: options.cwd,
+      env: options.env ?? {},
+      cgroup,
+    });
+    return trackRunProcess(runId, proc);
+  }
+  const spawnOpts: Record<string, unknown> = {
+    cwd: options.cwd,
+    env: options.env ?? (process.env as Record<string, string>),
+    stdout: options.stdout ?? "pipe",
+    stderr: options.stderr ?? "pipe",
+    detached: true,
+  };
+  if (cgroup !== null && cgroup !== "") {
+    spawnOpts.cgroup = cgroup;
+  }
+  const proc = spawn(args as string[], spawnOpts as never);
+  return trackRunProcess(runId, proc);
+}
+
 function trackRunProcess(runId: string, process: unknown): TrackedRunProcess {
   const child = process as TrackedRunProcess & { pid?: number | null };
   // Each tracked run subprocess is spawned with `detached: true`, making it the
@@ -344,7 +382,6 @@ function trackRunProcess(runId: string, process: unknown): TrackedRunProcess {
     stdout: child.stdout,
     stderr: child.stderr,
   } as TrackedRunProcess;
-  if (tracked.pid !== null) attachToRunCgroup(tracked.pid, activeRunCgroups.get(runId) ?? null);
   const processes = activeRunProcesses.get(runId) ?? new Set<TrackedRunProcess>();
   processes.add(tracked);
   activeRunProcesses.set(runId, processes);
@@ -656,6 +693,7 @@ function parseJsonObject(raw: string): JsonObject {
 }
 
 async function readPlanJson(
+  runId: string,
   executionDir: string,
   planBinaryPath?: string,
 ): Promise<JsonObject | undefined> {
@@ -667,17 +705,17 @@ async function readPlanJson(
   )];
   for (const binary of binaries) {
     try {
-      const process = runSandbox !== null
-        ? runSandbox.spawn([binary, "show", "-json", tfplanPath], {
-            cwd: executionDir,
-            env: { PATH: processEnv("PATH") },
-          })
-        : spawn([binary, "show", "-json", tfplanPath], {
-            cwd: executionDir,
-            env: { PATH: processEnv("PATH") },
-            stdout: "pipe",
-            stderr: "pipe",
-          });
+      const process = spawnRunProcess(
+        runId,
+        [binary, "show", "-json", tfplanPath],
+        {
+          cwd: executionDir,
+          env: { PATH: processEnv("PATH") },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+        runSandbox,
+      );
       const [exitCode, stdout] = await Promise.all([
         process.exited,
         new Response(process.stdout).text(),
@@ -775,16 +813,16 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
     if (managed === null) {
       throw new Error("Infracost binary is unavailable (no INFRACOST_BINARY override and managed install failed)");
     }
-    const costProcess = trackRunProcess(runId, spawn(
+    const costProcess = spawnRunProcess(
+      runId,
       [managed.binaryPath, "breakdown", "--path", inputPath, "--format", "json", "--no-color"],
       {
         cwd: executionDir,
         env: await infracostEnvironment(gcpCredentialsPath),
         stdout: "pipe",
         stderr: "pipe",
-        detached: true,
       },
-    ));
+    );
     const [exitCode, stdout, stderr] = await Promise.all([
       costProcess.exited,
       new Response(costProcess.stdout).text(),
@@ -1604,18 +1642,17 @@ async function executeRunImpl(runId: string): Promise<void> {
       if (await runWasCanceled(runId)) return;
       await writeLog(runId, "plan", `\n--- Executing ${resolved.tool} init ---`);
       if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
-      const initProc = trackRunProcess(runId, runSandbox !== null
-        ? runSandbox.spawn([binary, "init", "-reconfigure", "-no-color", "-input=false"], {
-            cwd: executionDir,
-            env: envVars,
-          })
-        : spawn([binary, "init", "-reconfigure", "-no-color", "-input=false"], {
-            cwd: executionDir,
-            env: envVars,
-            stdout: "pipe",
-            stderr: "pipe",
-            detached: true,
-          }));
+      const initProc = spawnRunProcess(
+        runId,
+        [binary, "init", "-reconfigure", "-no-color", "-input=false"],
+        {
+          cwd: executionDir,
+          env: envVars,
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+        runSandbox,
+      );
 
       const [initExit] = await Promise.all([
         initProc.exited,
@@ -1653,18 +1690,17 @@ async function executeRunImpl(runId: string): Promise<void> {
       }
       planArgs.push("-out=tfplan");
 
-      const planProc = trackRunProcess(runId, runSandbox !== null
-        ? runSandbox.spawn(planArgs, {
-            cwd: executionDir,
-            env: envVars,
-          })
-        : spawn(planArgs, {
-            cwd: executionDir,
-            env: envVars,
-            stdout: "pipe",
-            stderr: "pipe",
-            detached: true,
-          }));
+      const planProc = spawnRunProcess(
+        runId,
+        planArgs,
+        {
+          cwd: executionDir,
+          env: envVars,
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+        runSandbox,
+      );
 
       const [planExit] = await Promise.all([
         planProc.exited,
@@ -1687,7 +1723,7 @@ async function executeRunImpl(runId: string): Promise<void> {
 
     const planJson = isSimulatedAllowed
       ? parseJsonObject(process.env.SIMULATED_PLAN_JSON ?? "{}")
-      : await readPlanJson(executionDir, resolved?.binaryPath);
+      : await readPlanJson(runId, executionDir, resolved?.binaryPath);
     if (planJson !== undefined) {
       await writePlanJsonArtifact(runId, planJson);
       // The structured plan is persisted: tell SSE clients to fetch it once
@@ -1934,6 +1970,8 @@ async function finalizeNoCodeUpgrade(
 
 /** Tracked wrapper: shutdown drain waits for in-flight apply executions. */
 export function executeApply(runId: string): Promise<void> {
+  const ownsCgroup = getRunCgroup(runId) === null;
+  if (ownsCgroup) prepareRunCgroup(runId);
   return trackLocalExecution(
     executeApplyImpl(runId).catch(async (error: unknown): Promise<void> => {
       if (!(await runWasCanceled(runId))) {
@@ -1951,6 +1989,8 @@ export function executeApply(runId: string): Promise<void> {
         }
       }
       throw error;
+    }).finally((): void => {
+      if (ownsCgroup) cleanupRunCgroup(runId);
     }),
   );
 }
@@ -2157,18 +2197,17 @@ async function executeApplyImpl(runId: string): Promise<void> {
         await writeLog(runId, "apply", `[terrence] Recorded state version serial #${nextSerial}`);
       };
 
-      const applyProc = trackRunProcess(runId, runSandbox !== null
-        ? runSandbox.spawn(applyArgs, {
-            cwd: executionDir,
-            env: envVars,
-          })
-        : spawn(applyArgs, {
-            cwd: executionDir,
-            env: envVars,
-            stdout: "pipe",
-            stderr: "pipe",
-            detached: true,
-          }));
+      const applyProc = spawnRunProcess(
+        runId,
+        applyArgs,
+        {
+          cwd: executionDir,
+          env: envVars,
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+        runSandbox,
+      );
 
       const [applyExit] = await Promise.all([
         applyProc.exited,
@@ -2244,14 +2283,14 @@ async function executeApplyImpl(runId: string): Promise<void> {
       } catch {}
     }
   }
-  } finally {
-    if (workspaceRunLock) {
-      workspaceRunLock = false;
-      await releaseRunWorkspaceLock(workspace.id, runId).catch((error: unknown): void => {
-        log.error("Failed to release run workspace lock", { runId, workspaceId: workspace.id, error });
-      });
-    }
+} finally {
+  if (workspaceRunLock) {
+    workspaceRunLock = false;
+    await releaseRunWorkspaceLock(workspace.id, runId).catch((error: unknown): void => {
+      log.error("Failed to release run workspace lock", { runId, workspaceId: workspace.id, error });
+    });
   }
+}
 }
 
 /**
@@ -2304,7 +2343,7 @@ export async function runPolicyChecks(
   const generatedPlanJson = preloadedPlanJson ?? (
     executionDir === undefined || executionDir === ""
       ? undefined
-      : await readPlanJson(executionDir, planBinaryPath)
+      : await readPlanJson(runId, executionDir, planBinaryPath)
   );
   let planJsonPayload = generatedPlanJson === undefined ? null : JSON.stringify(generatedPlanJson);
 
@@ -2366,13 +2405,16 @@ export async function runPolicyChecks(
           : "data";
         // Validate OPA query to prevent argument injection — only allow safe query syntax
         const opaQuerySafe = /^[a-zA-Z0-9_.]+$/.test(opaQuery) ? opaQuery : "data";
-        const opaProc = trackRunProcess(runId, spawn(["opa", "eval", "--data", policyPath, "--input", dataPath, opaQuerySafe], {
-          cwd: workDir,
-          env: { PATH: process.env.PATH ?? "" },
-          stdout: "pipe",
-          stderr: "pipe",
-          detached: true,
-        }));
+        const opaProc = spawnRunProcess(
+          runId,
+          ["opa", "eval", "--data", policyPath, "--input", dataPath, opaQuerySafe],
+          {
+            cwd: workDir,
+            env: { PATH: process.env.PATH ?? "" },
+            stdout: "pipe",
+            stderr: "pipe",
+          },
+        );
         const [opaExit, opaStdout] = await Promise.all([
           opaProc.exited,
           new Response(opaProc.stdout).text(),
@@ -2425,18 +2467,17 @@ export async function runPolicyChecks(
           throw new Error("Landlock sandbox is required but unavailable for policy evaluation");
         }
         const runSandbox = sandboxRequired ? new RunSandbox() : null;
-        const sentinelProc = trackRunProcess(runId, runSandbox !== null
-          ? runSandbox.spawnGeneric(args, {
-              cwd: workDir,
-              env: { PATH: process.env.PATH ?? "" },
-            })
-          : spawn(args, {
-              cwd: workDir,
-              env: { PATH: process.env.PATH ?? "" },
-              stdout: "pipe",
-              stderr: "pipe",
-              detached: true,
-            }));
+        const sentinelProc = spawnRunProcess(
+          runId,
+          args,
+          {
+            cwd: workDir,
+            env: { PATH: process.env.PATH ?? "" },
+            stdout: "pipe",
+            stderr: "pipe",
+          },
+          runSandbox,
+        );
         const [sentinelExit, sentinelStdout, sentinelStderr] = await Promise.all([
           sentinelProc.exited,
           new Response(sentinelProc.stdout).text(),
@@ -2894,7 +2935,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
         throw new Error(`${resolved.tool} assessment plan failed with exit code ${String(plan.exitCode)}`);
       }
 
-      const generatedPlan = await readPlanJson(executionDir, resolved.binaryPath);
+      const generatedPlan = await readPlanJson(assessmentResultId, executionDir, resolved.binaryPath);
       if (generatedPlan === undefined) throw new Error("Unable to read assessment plan JSON.");
       planJson = generatedPlan;
 

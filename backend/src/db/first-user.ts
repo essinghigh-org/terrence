@@ -4,7 +4,7 @@
 // run a count-then-insert inside a transaction to elect the first user as
 // site admin. On PostgreSQL that is not atomic by default: two concurrent
 // transactions can both observe zero users and both insert an admin. SQLite
-// is safe (single connection, serialized writers), but the pooled postgres.js
+// is safe (single connection, serialized writers), but the pooled Bun.SQL
 // backend can interleave. A transaction-scoped advisory lock serializes the
 // election on PostgreSQL and is a no-op elsewhere.
 import { sql, type SQL } from "drizzle-orm";
@@ -20,7 +20,7 @@ const FIRST_USER_LOCK_KEY = 0x74657272;
  */
 export async function lockFirstUserElection(tx: unknown): Promise<void> {
   if (!isPostgres) return;
-  // SAFETY: only the postgres-js drizzle client (which always exposes
+  // SAFETY: only the PostgreSQL drizzle client (which always exposes
   // execute()) reaches this call; the sqlite AppDb type is a runtime no-op.
   const client = tx as { readonly execute: (query: SQL) => Promise<unknown> };
   await client.execute(sql`SELECT pg_advisory_xact_lock(${FIRST_USER_LOCK_KEY})`);

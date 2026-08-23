@@ -1,13 +1,13 @@
 import { Elysia } from "elysia";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import jwt from "jsonwebtoken";
 import { authPlugin } from "../auth";
-import { db } from "../db";
+import { db, isPostgres } from "../db";
 import { apiTokens, githubAppInstallations, oauthTokens, organizations, type users } from "../db/schema";
 import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission } from "../lib/utils";
 import { decryptSecret } from "../lib/secrets";
 import { getGitHubAppAccessToken } from "../lib/webhooks";
-import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail } from "../lib/vcs-integration-usage";
+import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail, type VcsIntegrationUsage } from "../lib/vcs-integration-usage";
 import { AvatarService } from "../lib/avatars";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -418,18 +418,26 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const usage = await findVcsIntegrationUsage(org.id, { kind: "github-app", id: installation.id });
-    if (usage.workspaces.length > 0 || usage.policySets.length > 0) {
+    const conflict = await db.transaction(async (tx): Promise<VcsIntegrationUsage | null> => {
+      if (isPostgres) {
+        await (tx as unknown as { execute: (query: unknown) => Promise<unknown> })
+          .execute(sql`SELECT id FROM github_app_installations WHERE id = ${installation.id} FOR UPDATE`);
+      }
+      const usage = await findVcsIntegrationUsage(org.id, { kind: "github-app", id: installation.id }, tx);
+      if (usage.workspaces.length > 0 || usage.policySets.length > 0) return usage;
+      try {
+        await tx.transaction(async (savepoint): Promise<void> => {
+          await savepoint.delete(githubAppInstallations).where(eq(githubAppInstallations.id, installation.id));
+        });
+      } catch (error: unknown) {
+        if (!isVcsIntegrationReferenceConflict(error)) throw error;
+        return findVcsIntegrationUsage(org.id, { kind: "github-app", id: installation.id }, tx);
+      }
+      return null;
+    });
+    if (conflict !== null) {
       (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(usage) }] };
-    }
-    try {
-      await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, installation.id));
-    } catch (error: unknown) {
-      if (!isVcsIntegrationReferenceConflict(error)) throw error;
-      const currentUsage = await findVcsIntegrationUsage(org.id, { kind: "github-app", id: installation.id });
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(currentUsage) }] };
+      return { errors: [{ status: "409", title: "Conflict", detail: vcsIntegrationUsageDetail(conflict) }] };
     }
     (set as { status: number }).status = 204;
     return {};

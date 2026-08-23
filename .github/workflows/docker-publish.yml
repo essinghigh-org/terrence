@@ -22,6 +22,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+          no-cache: true
+
       - name: Determine version from tag
         id: version
         run: |
@@ -32,7 +38,7 @@ jobs:
             echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
             echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           else
-            pkg_version=$(node -p "String(require('./package.json').version ?? '0.0.0')" 2>/dev/null || echo "0.0.0")
+            pkg_version=$(bun -e "console.log(String(require('./package.json').version ?? '0.0.0'))" 2>/dev/null || echo "0.0.0")
             echo "version=${pkg_version}" >> "$GITHUB_OUTPUT"
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
