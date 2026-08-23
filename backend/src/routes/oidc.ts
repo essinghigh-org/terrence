@@ -113,8 +113,7 @@ function cookieValue(request: RequestInfo, name: string): string | undefined {
 }
 
 function secureRequest(request: RequestInfo): boolean {
-  const forwarded = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
-  return (forwarded === "https" || forwarded === "https:") || new URL(request.url).protocol === "https:";
+  return new URL(request.url).protocol === "https:";
 }
 
 function stateCookie(request: RequestInfo, state: string, maxAge: number): string {

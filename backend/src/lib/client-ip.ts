@@ -51,6 +51,11 @@ export function syncedTrustedClientIp(request: unknown): string | null {
   return trustedHeaderValue(request);
 }
 
+/** Read a forwarded client address only when the actual socket peer is trusted. */
+export function trustedClientIpForPeer(request: unknown, peer: string | null): string | null {
+  return trustedProxy(peer) ? trustedHeaderValue(request) : null;
+}
+
 /**
  * Whether the current request was served over HTTPS.
  * Respects X-Forwarded-Proto when the admin has configured trusted proxy headers,
@@ -62,10 +67,10 @@ export function requestIsHttps(request: Readonly<{ url: string; headers: Readonl
   try {
     if (new URL(request.url).protocol === "https:") return true;
   } catch { /* fall through to header check */ }
-  // Only trust X-Forwarded-Proto when a trusted header list is configured (proxy in front).
-  if (cachedTrustedHeaders.length === 0 || cachedTrustedProxyCidrs.length === 0) return false;
-  const forwarded = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
-  return forwarded === "https";
+  // This helper has no socket peer, so it cannot authenticate a proxy. Callers
+  // must use PUBLIC_URL when TLS terminates upstream; never trust a forwarded
+  // scheme from an unbound request object.
+  return false;
 }
 
 function headerValue(request: unknown, name: string): string | null {

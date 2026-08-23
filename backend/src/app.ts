@@ -7,7 +7,7 @@ import { envEnabled } from "./lib/env";
 import { authPlugin, authenticatedRateLimitKey } from "./auth";
 import { distributedFixedWindowContext } from "./lib/distributed-rate-limit";
 import { isPostgres } from "./db/driver";
-import { syncedTrustedClientIp } from "./lib/client-ip";
+import { trustedClientIpForPeer } from "./lib/client-ip";
 import { oauthPlugin } from "./oauth";
 import { log } from "./lib/log";
 import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
@@ -317,11 +317,11 @@ function fixedWindowContext(): RateLimitContext {
 function ipRateLimitKey(request: CustomRequest, server: RateLimitServer | null): string {
   // When the admin has opted into trusting forwarded headers (behind Cloudflare
   // etc.), key rate limits on the real client IP instead of the proxy peer.
-  const trusted = syncedTrustedClientIp(request);
-  if (trusted !== null && trusted !== "") return `ip:${trusted}`;
   const directAddress = typeof server?.requestIP === "function"
-    ? server.requestIP(request)?.address
-    : undefined;
+    ? server.requestIP(request)?.address ?? null
+    : null;
+  const trusted = trustedClientIpForPeer(request, directAddress);
+  if (trusted !== null && trusted !== "") return `ip:${trusted}`;
   const forwardedAddress = server === null
     ? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
     : undefined;

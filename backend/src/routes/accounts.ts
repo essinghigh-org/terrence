@@ -12,7 +12,6 @@ import { authPlugin } from "../auth";
 import { lockFirstUserElection } from "../db/first-user";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
 import { encryptSecret, decryptSecret, isEncryptedSecret } from "../lib/secrets";
-import { syncedTrustedClientIp } from "../lib/client-ip";
 import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
 
 // HTTPS source of truth for cookie flags (todo 134): when PUBLIC_URL is
@@ -123,11 +122,6 @@ function secureRequest(request: RequestInfo | undefined): boolean {
   // The configured PUBLIC_URL (todo 134) is the HTTPS source of truth for
   // deployments that terminate TLS at a proxy without header trust.
   if (PUBLIC_URL !== null) return PUBLIC_URL.protocol === "https:";
-  const forwardedTrusted = syncedTrustedClientIp(request) !== null;
-  if (forwardedTrusted) {
-    const forwarded = request?.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
-    if (forwarded !== undefined && forwarded !== "") return forwarded === "https";
-  }
   return request !== undefined && new URL(request.url).protocol === "https:";
 }
 

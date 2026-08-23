@@ -220,17 +220,12 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     // Secure flag under HTTPS (todo 135): the state cookie is a bearer
     // capability for the OAuth handshake and must not cross plaintext HTTP.
     // Share the HTTPS policy with accounts.ts / oidc.ts: PUBLIC_URL is
-    // authoritative when configured; forwarded headers only matter behind a
-    // trusted proxy; otherwise the request's own protocol is used.
+    // authoritative when configured; otherwise the request's own protocol is
+    // used. A request object alone cannot authenticate a forwarded scheme.
     const secure = await (async (): Promise<boolean> => {
       const publicUrl = process.env["PUBLIC_URL"];
       if (typeof publicUrl === "string" && publicUrl !== "") {
         try { const proto = new URL(publicUrl).protocol; if (proto === "https:") return true; if (proto !== "") return false; } catch {}
-      }
-      const { syncedTrustedClientIp } = await import("./lib/client-ip");
-      if (syncedTrustedClientIp(request) !== null) {
-        const forwarded = request?.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
-        if (forwarded !== undefined && forwarded !== "") return forwarded === "https";
       }
       return request !== undefined && new URL(request.url).protocol === "https:";
     })();
