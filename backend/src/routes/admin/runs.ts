@@ -1,3 +1,4 @@
+import { cancelAgentJobsForRun } from "../../lib/agent-jobs";
 import { Elysia } from "elysia";
 import { authPlugin } from "../../auth";
 import { db } from "../../db";
@@ -63,6 +64,9 @@ export const runsRoutes = new Elysia({ name: "admin-runs" })
     if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const updated = await db.update(runs).set({ status: "canceled" }).where(and(eq(runs.id, runId), notInArray(runs.status, FINAL_RUN_STATUSES))).returning();
     if (updated.length === 0 || updated[0] === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not cancelable" }] }; }
+    const { cancelRunExecution, cleanupSavedPlan } = await import("../../worker");
+    cancelRunExecution(runId);
+    await Promise.allSettled([cleanupSavedPlan(runId), cancelAgentJobsForRun(runId)]);
     return { data: runResource(updated[0], true) };
   })
   .post("/api/v2/admin/runs/:run_id/actions/force-cancel", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
@@ -72,5 +76,8 @@ export const runsRoutes = new Elysia({ name: "admin-runs" })
     if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const updated = await db.update(runs).set({ status: "force_canceled" }).where(and(eq(runs.id, runId), notInArray(runs.status, FINAL_RUN_STATUSES))).returning();
     if (updated.length === 0 || updated[0] === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-cancelable" }] }; }
+    const { cancelRunExecution, cleanupSavedPlan } = await import("../../worker");
+    cancelRunExecution(runId, true);
+    await Promise.allSettled([cleanupSavedPlan(runId), cancelAgentJobsForRun(runId)]);
     return { data: runResource(updated[0], true) };
   });

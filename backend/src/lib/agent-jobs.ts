@@ -836,6 +836,10 @@ export async function completeAgentJob(
       await requeueInvalidCompletion("plan-json is only valid for completed plan jobs");
       return undefined;
     }
+    if (job.phase === "apply" && completion.status === "completed" && (completion.statePayload === null || completion.statePayload === undefined)) {
+      await requeueInvalidCompletion("Completed apply job must return non-null statePayload");
+      return undefined;
+    }
     if (completion.planJson !== null) {
       await writePlanJsonArtifact(run.id, completion.planJson);
     }

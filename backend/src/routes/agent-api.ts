@@ -652,11 +652,19 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       const terraformInfo = await terraformReleaseInfo(version, agent.architecture ?? "amd64");
       if (terraformInfo === null) throw new Error("Unable to resolve Terraform release");
       const environment = await agentEnvironment(workspace.id, workspace.orgId, workspace.projectId ?? null);
+      const runVars: Record<string, string> = {};
+      if (Array.isArray(run.variables)) {
+        for (const v of run.variables as { key?: string; value?: string; category?: string }[]) {
+          if (v && typeof v.key === "string" && typeof v.value === "string" && v.category === "terraform") {
+            runVars[v.key] = v.value;
+          }
+        }
+      }
       // Mint the run token only after all fallible lookups/resolution work has
       // succeeded, so a failed payload build cannot accumulate valid tokens.
       const runToken = await agentRunToken(run.id, workspace.id, workspace.orgId);
       const details: AgentJobDetails = { job, run, workspace, organizationName: org.name, configuration };
-      const payload = await buildAgentJobPayload(details, baseUrl, runToken, terraformInfo, {}, environment);
+      const payload = await buildAgentJobPayload(details, baseUrl, runToken, terraformInfo, runVars, environment);
       return payload;
     } catch (error: unknown) {
       try {
