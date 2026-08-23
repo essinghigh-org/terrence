@@ -31,9 +31,13 @@ export type A11yOptions = {
 }
 
 export async function injectAxe(page: BrowserPage): Promise<void> {
-  const isAxeLoaded = await page.evaluate<boolean>("typeof window.axe !== 'undefined'").catch(() => false);
+  const isAxeLoaded = await page.evaluate<boolean>("typeof window.axe !== 'undefined'").catch((): boolean => false);
   if (!isAxeLoaded) {
-    await page.evaluate(`window.eval(${JSON.stringify(axe.source)})`);
+    await page.evaluate(`
+      (() => {
+        ${axe.source}
+      })()
+    `);
   }
 }
 

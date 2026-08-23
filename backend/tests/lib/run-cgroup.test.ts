@@ -14,6 +14,7 @@ import {
   runCgroupHasProcesses,
   runCgroupPath,
 } from "../../src/lib/run-cgroup";
+import { prepareRunCgroup, getRunCgroup, cleanupRunCgroup } from "../../src/worker";
 
 /** Build a fake delegated cgroup v2 root: the files the module touches exist
  * and accept writes, so the real kernel is not required for unit coverage. */
@@ -155,6 +156,7 @@ describe("run cgroups (kanban 8/9)", () => {
   });
 
   it("Bun.spawn with nonexistent cgroup path fails fast with ENOENT", (): void => {
+    if (process.platform !== "linux") return;
     expect((): void => {
       Bun.spawn(["true"], {
         cgroup: "/nonexistent/terrence-cgroup-path",
@@ -162,5 +164,23 @@ describe("run cgroups (kanban 8/9)", () => {
         stderr: "ignore",
       });
     }).toThrow();
+  });
+
+  it("prepareRunCgroup and cleanupRunCgroup maintain active run cgroup mapping with configured limits", (): void => {
+    const root = makeFakeRoot();
+    created.push(root);
+    const oldRoot = process.env.TERRENCE_RUN_CGROUP_ROOT;
+    process.env.TERRENCE_RUN_CGROUP_ROOT = root;
+    try {
+      const runId = "run-apply-scheduled-1";
+      const path = prepareRunCgroup(runId);
+      expect(path).toBe(join(root, runId));
+      expect(getRunCgroup(runId)).toBe(path);
+      cleanupRunCgroup(runId);
+      expect(getRunCgroup(runId)).toBeNull();
+    } finally {
+      if (oldRoot !== undefined) process.env.TERRENCE_RUN_CGROUP_ROOT = oldRoot;
+      else delete process.env.TERRENCE_RUN_CGROUP_ROOT;
+    }
   });
 });

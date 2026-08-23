@@ -1,4 +1,4 @@
-import { join, resolve } from "node:path";
+import { isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { existsSync, readFileSync, statSync } from "node:fs";
 
 export type TestServer = {
@@ -32,43 +32,62 @@ export async function startStaticServer(customDistDir?: string): Promise<TestSer
       stdout: "pipe",
       stderr: "pipe",
     });
-    await buildProc.exited;
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(buildProc.stdout).text(),
+      new Response(buildProc.stderr).text(),
+      buildProc.exited,
+    ]);
+    if (exitCode !== 0) {
+      throw new Error(`Frontend build failed (exit ${String(exitCode)}):\n${stdout}\n${stderr}`);
+    }
   }
 
   const server = Bun.serve({
     port: 0,
-    fetch(req) {
+    fetch(req: Readonly<Request>): Response {
       const url = new URL(req.url);
       let pathname = decodeURIComponent(url.pathname);
       if (pathname === "/") pathname = "/index.html";
 
-      const filePath = resolve(distDir, `.${pathname}`);
-      if (!filePath.startsWith(distDir)) {
+      const normalized = normalize(pathname).replace(/^(\.\.[\/\\])+/, "");
+      const filePath = resolve(distDir, "." + normalized);
+      const rel = relative(distDir, filePath);
+      if (rel.startsWith("..") || isAbsolute(rel)) {
         return new Response("Forbidden", { status: 403 });
       }
 
-      if (existsSync(filePath) && statSync(filePath).isFile()) {
-        const ext = pathname.slice(pathname.lastIndexOf("."));
-        const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
-        const content = readFileSync(filePath);
-        return new Response(content, {
-          headers: {
-            "content-type": contentType,
-            "cache-control": "no-cache",
-          },
-        });
+      try {
+        const stat = statSync(filePath);
+        if (stat.isFile()) {
+          const ext = pathname.slice(pathname.lastIndexOf("."));
+          const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
+          const content = readFileSync(filePath);
+          return new Response(content, {
+            headers: {
+              "content-type": contentType,
+              "cache-control": "no-cache",
+            },
+          });
+        }
+      } catch {
+        // Fall through to SPA fallback
+      }
+
+      // Do not serve index.html for missing asset requests with file extensions
+      if (/\.[a-zA-Z0-9]+$/.test(pathname)) {
+        return new Response("Not Found", { status: 404 });
       }
 
       // SPA fallback to index.html
-      const indexPath = join(distDir, "index.html");
-      if (existsSync(indexPath)) {
+      try {
+        const indexPath = join(distDir, "index.html");
         const content = readFileSync(indexPath, "utf8");
         return new Response(content, {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
+      } catch {
+        return new Response("Not Found", { status: 404 });
       }
-
-      return new Response("Not Found", { status: 404 });
     },
   });
 

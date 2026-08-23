@@ -3,7 +3,7 @@
 ## Getting Started
 
 1. Clone the repository
-2. Ensure Bun >= 1.3 is installed
+2. Ensure Bun >= 1.4.0 is installed
 3. Run `bun install` at the project root
 4. Run `cd backend && bun run index.ts` to start the server
 5. Open `http://localhost:3000` to access the UI

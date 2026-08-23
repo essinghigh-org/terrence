@@ -49,7 +49,7 @@ cd backend && bun run typecheck
 
 ### Prerequisites
 
-- **Bun** >= 1.3 (install via `curl -fsSL https://bun.sh/install | bash`)
+- **Bun** >= 1.4.0 (install via `curl -fsSL https://bun.sh/install | bash`)
 - **OpenTofu** >= 1.7 or **Terraform** >= 1.9 (for run execution)
 - **Infracost** >= 0.10 (optional, for cost estimation)
 

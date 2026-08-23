@@ -9,13 +9,13 @@
     "build-dev": "tsc -b && bun run scripts/build.ts --development",
     "lint": "eslint .",
     "lint:oxlint": "oxlint .",
-    "test": "bun test --parallel",
+    "test": "bun test tests/*.test.tsx tests/*.test.ts --parallel",
     "typecheck": "tsc -b",
     "preview": "bun run scripts/preview.ts",
-    "test:browser": "bun test tests/browser",
-    "test:browser:axe": "bun test tests/browser/accessibility-*.test.ts",
-    "test:visual": "bun test tests/browser/visual-regression.test.ts",
-    "test:visual:update": "UPDATE_SNAPSHOTS=true bun test tests/browser/visual-regression.test.ts"
+    "test:browser": "xvfb-run --auto-servernum bun test tests/browser",
+    "test:browser:axe": "xvfb-run --auto-servernum bun test tests/browser/accessibility-*.test.ts",
+    "test:visual": "xvfb-run --auto-servernum bun test tests/browser/visual-regression.test.ts",
+    "test:visual:update": "UPDATE_SNAPSHOTS=true xvfb-run --auto-servernum bun test tests/browser/visual-regression.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

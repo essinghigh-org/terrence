@@ -24,8 +24,9 @@ async function proxyToBackend(req: Request): Promise<Response> {
     });
 
     const responseHeaders = new Headers(res.headers);
-    // Keep hop-by-hop headers clean
+    // Keep hop-by-hop and payload length headers clean
     responseHeaders.delete("content-encoding");
+    responseHeaders.delete("content-length");
 
     return new Response(res.body, {
       status: res.status,
@@ -34,7 +35,7 @@ async function proxyToBackend(req: Request): Promise<Response> {
     });
   } catch (err) {
     console.error(`[proxy error] failed to proxy ${req.method} ${url.pathname} to ${target.toString()}:`, err);
-    return new Response(JSON.stringify({ error: "Backend proxy error", details: String(err) }), {
+    return new Response(JSON.stringify({ error: "Backend proxy error" }), {
       status: 502,
       headers: { "content-type": "application/json" },
     });

@@ -108,46 +108,60 @@ if (isPostgres) {
           recordSlowQuery(queryText, durationMs);
         }
       };
-      const anyObj = queryObj as unknown as {
-        then?: (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) => unknown;
-        values?: (...args: unknown[]) => unknown;
-        catch?: (fn: (e: unknown) => unknown) => unknown;
+      const attach = (target: unknown): void => {
+        const anyObj = target as {
+          then?: (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) => unknown;
+          values?: (...args: unknown[]) => unknown;
+          catch?: (fn: (e: unknown) => unknown) => unknown;
+        } | null;
+        if (anyObj !== null && typeof anyObj === 'object' && typeof anyObj.then === 'function') {
+          const originalThen = anyObj.then.bind(anyObj);
+          anyObj.then = (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown): unknown => {
+            return originalThen(
+              (val: unknown): unknown => {
+                finish();
+                return onFulfilled !== undefined ? onFulfilled(val) : val;
+              },
+              (err: unknown): unknown => {
+                finish();
+                if (onRejected !== undefined) return onRejected(err);
+                throw err;
+              },
+            );
+          };
+          if (typeof anyObj.values === 'function') {
+            const originalValues = anyObj.values.bind(anyObj);
+            anyObj.values = (...args: unknown[]): unknown => {
+              const derived = originalValues(...args);
+              attach(derived);
+              return derived;
+            };
+          }
+          if (typeof anyObj.catch === 'function') {
+            const originalCatch = anyObj.catch.bind(anyObj);
+            anyObj.catch = (fn: (e: unknown) => unknown): unknown => {
+              return originalCatch((err: unknown): unknown => {
+                finish();
+                return fn(err);
+              });
+            };
+          }
+        } else {
+          finish();
+        }
       };
-      if (anyObj !== null && typeof anyObj === 'object' && typeof anyObj.then === 'function') {
-        const originalThen = anyObj.then.bind(anyObj);
-        anyObj.then = (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown): unknown => {
-          return originalThen(
-            (val: unknown) => { finish(); return onFulfilled !== undefined ? onFulfilled(val) : val; },
-            (err: unknown) => { finish(); if (onRejected !== undefined) return onRejected(err); throw err; },
-          );
-        };
-        if (typeof anyObj.values === 'function') {
-          const originalValues = anyObj.values.bind(anyObj);
-          anyObj.values = (...args: unknown[]): unknown => {
-            const v = originalValues(...args);
-            return wrapQuery(v, queryText);
-          };
-        }
-        if (typeof anyObj.catch === 'function') {
-          const originalCatch = anyObj.catch.bind(anyObj);
-          anyObj.catch = (fn: (e: unknown) => unknown): unknown => {
-            return originalCatch((err: unknown) => { finish(); return fn(err); });
-          };
-        }
-      } else {
-        finish();
-      }
+      attach(queryObj);
       return queryObj;
     }
 
-    pgClient.unsafe = ((queryText: string, ...params: unknown[]) => {
+    pgClient.unsafe = ((queryText: string, ...params: unknown[]): unknown => {
       const queryObj = originalUnsafe(queryText, ...(params as [never]));
       return wrapQuery(queryObj, queryText);
     }) as typeof pgClient.unsafe;
   }
   if (envEnabled(process.env.TERRENCE_QUERY_COUNT)) {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
-    pgClient.unsafe = ((queryText: string, ...params: unknown[]) => {
+    pgClient.unsafe = ((queryText: string, ...params: unknown[]): unknown => {
       queryCount += 1;
       if (queryLogEnabled) queryLog.push(queryText);
       return originalUnsafe(queryText, ...(params as [never]));

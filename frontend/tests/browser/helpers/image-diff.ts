@@ -25,7 +25,7 @@ export async function compareScreenshots(
   const maxDiffPercentage = options.maxDiffPercentage ?? 0.1;
   const colorThreshold = options.colorThreshold ?? 5;
 
-  if (!existsSync(baselinePath) || shouldUpdate) {
+  if (shouldUpdate) {
     mkdirSync(dirname(baselinePath), { recursive: true });
     writeFileSync(baselinePath, actualBuffer);
     return {
@@ -36,7 +36,12 @@ export async function compareScreenshots(
     };
   }
 
-  const baselineBuffer = readFileSync(baselinePath);
+  let baselineBuffer: Buffer;
+  try {
+    baselineBuffer = readFileSync(baselinePath);
+  } catch {
+    throw new Error(`Baseline snapshot does not exist at "${baselinePath}". Run with UPDATE_SNAPSHOTS=true to generate it.`);
+  }
 
   // Exact binary match fast-path
   if (actualBuffer.equals(baselineBuffer)) {

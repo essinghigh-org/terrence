@@ -100,6 +100,10 @@ if (testDbUrl.startsWith("postgres")) {
   const { applyPgMigrations } = await import("../src/db");
   await applyPgMigrations();
   afterAll(async (): Promise<void> => {
+    try {
+      const { closeDatabase } = await import("../src/db");
+      await closeDatabase();
+    } catch {}
     const cleanup = new SQL(testDbUrl);
     try {
       await cleanup.unsafe(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${dbName}' AND pid <> pg_backend_pid()`);

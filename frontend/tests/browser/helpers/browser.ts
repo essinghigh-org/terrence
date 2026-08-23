@@ -23,6 +23,7 @@ export class BrowserPage {
   readonly webview: InstanceType<typeof Bun.WebView>;
   readonly consoleErrors: string[] = [];
   readonly pageErrors: string[] = [];
+  private readonly initScripts: string[] = [];
 
   constructor(options: BrowserOptions = {}) {
     this.webview = new Bun.WebView({
@@ -42,14 +43,30 @@ export class BrowserPage {
 
     // Wait for document to be ready
     const start = Date.now();
+    let ready = false;
     while (Date.now() - start < timeout) {
       const readyState = await this.evaluate<string>("document.readyState").catch(() => "loading");
       if (options.waitUntil === "domcontentloaded") {
-        if (readyState === "interactive" || readyState === "complete") break;
+        if (readyState === "interactive" || readyState === "complete") {
+          ready = true;
+          break;
+        }
       } else {
-        if (readyState === "complete") break;
+        if (readyState === "complete") {
+          ready = true;
+          break;
+        }
       }
       await Bun.sleep(50);
+    }
+
+    if (!ready) {
+      throw new Error(`Timeout waiting for "${url}" to reach readyState "${options.waitUntil ?? "complete"}"`);
+    }
+
+    // Re-apply registered init scripts on the navigated page
+    for (const script of this.initScripts) {
+      await this.webview.evaluate(script);
     }
 
     if (options.waitUntil === "networkidle") {
@@ -58,8 +75,7 @@ export class BrowserPage {
     }
   }
 
-   
-  async evaluate<T = any>(fnOrScript: string | ((...args: any[]) => any), ...args: any[]): Promise<T> {
+  async evaluate<T = unknown>(fnOrScript: string | ((...args: unknown[]) => unknown), ...args: unknown[]): Promise<T> {
     let script: string;
     if (typeof fnOrScript === "function") {
       script = `(${fnOrScript.toString()})(${args.map((a) => JSON.stringify(a)).join(",")})`;
@@ -76,8 +92,8 @@ export class BrowserPage {
     } else {
       script = fnOrScript;
     }
-    // Pre-evaluate before navigations or on current page
-    await this.webview.evaluate(`window.eval(${JSON.stringify(script)})`).catch((err: unknown): void => {
+    this.initScripts.push(script);
+    await this.webview.evaluate(script).catch((err: unknown): void => {
       void err;
     });
   }

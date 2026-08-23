@@ -91,7 +91,7 @@ jobs:
       - name: Run frontend tests
         env:
           NO_COLOR: "1"
-        run: cd frontend && bun test --timeout 15000 --preload ./tests/setup.ts --parallel=8
+        run: cd frontend && bun test tests/*.test.tsx tests/*.test.ts --timeout 15000 --preload ./tests/setup.ts --parallel=8
       - name: Frontend build
         run: cd frontend && bun run build
 
@@ -169,4 +169,4 @@ jobs:
       - name: Build static frontend
         run: cd frontend && bun run build
       - name: Run axe on static preview (Bun.WebView)
-        run: cd frontend && bun test tests/browser/accessibility-static.test.ts
+        run: cd frontend && xvfb-run --auto-servernum bun test tests/browser/accessibility-static.test.ts

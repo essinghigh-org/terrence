@@ -2020,6 +2020,10 @@ async function releaseRunWorkspaceLock(workspaceId: string, runId: string): Prom
 
 async function executeApplyImpl(runId: string): Promise<void> {
   assertRunSandboxAvailable();
+  const cgroupCreatedHere = !activeRunCgroups.has(runId);
+  if (cgroupCreatedHere) {
+    prepareRunCgroup(runId);
+  }
   const run = await db.query.runs.findFirst({
     where: eq(runs.id, runId),
   });
@@ -2284,6 +2288,9 @@ async function executeApplyImpl(runId: string): Promise<void> {
       await releaseRunWorkspaceLock(workspace.id, runId).catch((error: unknown): void => {
         log.error("Failed to release run workspace lock", { runId, workspaceId: workspace.id, error });
       });
+    }
+    if (cgroupCreatedHere) {
+      cleanupRunCgroup(runId);
     }
   }
 }

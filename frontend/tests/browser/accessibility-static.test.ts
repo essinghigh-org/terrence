@@ -16,8 +16,8 @@ beforeAll(async (): Promise<void> => {
 });
 
 afterAll(async (): Promise<void> => {
-  page.close();
-  await server.close();
+  page?.close();
+  await server?.close();
 });
 
 describe("accessibility-static: public routes across themes", () => {
