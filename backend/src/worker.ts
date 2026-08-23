@@ -1929,6 +1929,34 @@ export function executeApply(runId: string): Promise<void> {
   );
 }
 
+/** Claim the workspace lock for the apply itself, so a manual lock acquired
+ * during planning cannot race the apply gate. The conditional update is the
+ * lock acquisition: only an actually-unlocked workspace can be owned by a run.
+ */
+async function acquireRunWorkspaceLock(workspaceId: string, runId: string): Promise<boolean> {
+  const locked = await db.update(workspaces).set({
+    locked: true,
+    lockedReason: `Run ${runId} is applying`,
+    lockOwnerType: "run",
+    lockOwnerId: runId,
+  }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, false))).returning({ id: workspaces.id });
+  return locked.length > 0;
+}
+
+async function releaseRunWorkspaceLock(workspaceId: string, runId: string): Promise<void> {
+  await db.update(workspaces).set({
+    locked: false,
+    lockedReason: null,
+    lockOwnerType: null,
+    lockOwnerId: null,
+  }).where(and(
+    eq(workspaces.id, workspaceId),
+    eq(workspaces.locked, true),
+    eq(workspaces.lockOwnerType, "run"),
+    eq(workspaces.lockOwnerId, runId),
+  ));
+}
+
 async function executeApplyImpl(runId: string): Promise<void> {
   assertRunSandboxAvailable();
   const run = await db.query.runs.findFirst({
@@ -1973,10 +2001,21 @@ async function executeApplyImpl(runId: string): Promise<void> {
     }
   }
 
-  if (!["confirmed", "apply_queued", "applying"].includes(run.status)) await updateRunStatus(runId, "confirmed");
-  await updateRunStatus(runId, "apply_queued");
-  await updateRunStatus(runId, "applying");
-  if (await runWasCanceled(runId)) return;
+  if (!(await acquireRunWorkspaceLock(workspace.id, runId))) {
+    await writeLog(runId, "apply", "[terrence] Apply deferred because the workspace is locked.");
+    await db.update(runs).set({ status: "confirmed" }).where(and(
+      eq(runs.id, runId),
+      inArray(runs.status, ["confirmed", "apply_queued"]),
+    ));
+    return;
+  }
+  let workspaceRunLock = true;
+
+  try {
+    if (!["confirmed", "apply_queued", "applying"].includes(run.status)) await updateRunStatus(runId, "confirmed");
+    await updateRunStatus(runId, "apply_queued");
+    await updateRunStatus(runId, "applying");
+    if (await runWasCanceled(runId)) return;
   const workDir = runWorkDir(runId);
 
   let applySuccess = false;
@@ -2158,6 +2197,14 @@ async function executeApplyImpl(runId: string): Promise<void> {
         if (runSandbox !== null) await removeSandboxWorkDir(runId);
         else await rm(workDir, { recursive: true, force: true });
       } catch {}
+    }
+  }
+  } finally {
+    if (workspaceRunLock) {
+      workspaceRunLock = false;
+      await releaseRunWorkspaceLock(workspace.id, runId).catch((error: unknown): void => {
+        log.error("Failed to release run workspace lock", { runId, workspaceId: workspace.id, error });
+      });
     }
   }
 }
@@ -3589,6 +3636,7 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
       // Mirrors the executeRun/executeApply error path: publishes the
       // transition, reports VCS status, revokes the run token, notifies.
       await updateRunStatus(run.id, "errored");
+      if (applySide) await releaseRunWorkspaceLock(run.workspaceId, run.id);
       try {
         if (runSandbox !== null) await removeSandboxWorkDir(run.id);
         else await rm(runWorkDir(run.id), { recursive: true, force: true });

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:f
 import { dirname, join, resolve } from "node:path";
 import { and, asc, desc, eq, lt } from "drizzle-orm";
 import { db } from "../db";
-import { agentForwardedRequests, agentPoolTokens, agents, agentJobs, logs, organizations, runs, stackAgentJobs } from "../db/schema";
+import { agentForwardedRequests, agentPoolTokens, agents, agentJobs, logs, organizations, runs, workspaces, stackAgentJobs } from "../db/schema";
 import { authPlugin } from "../auth";
 import {
   isAgentResultValid,
@@ -60,6 +60,13 @@ async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
       : { [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() };
     await t.update(runs).set({ status: queuedStatus, statusTimestamps: timestamps }).where(and(eq(runs.id, run.id), eq(runs.status, job.phase === "plan" ? "planning" : "applying")));
   });
+  if (job.phase === "apply") {
+    await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
+      eq(workspaces.locked, true),
+      eq(workspaces.lockOwnerType, "agent-run"),
+      eq(workspaces.lockOwnerId, run.id),
+    ));
+  }
   await revokeRunTokens(run.id);
 }
 

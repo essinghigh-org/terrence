@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
-import { eq, and, desc, asc, count, inArray, ne, isNull } from "drizzle-orm";
+import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource } from "../lib/response";
 import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
@@ -582,11 +582,37 @@ export const runRoutes = new Elysia({ name: "runs" })
     ]);
     const { number, size } = pageRequest(request);
     if (orgWorkspaces.length === 0) { return { data: [], ...pagination(request, number, size, 0) }; }
-    const queue = await db.query.runs.findMany({
-      where: and(inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)), inArray(runs.status, [...CAPACITY_PENDING_STATUSES, ...CAPACITY_RUNNING_STATUSES])),
-      orderBy: [asc(runs.createdAt)],
-    });
-    let position = queue.filter((r: Readonly<{ readonly status: string }>): boolean => CAPACITY_RUNNING_STATUSES.some((s: string): boolean => s === r.status)).length;
+    const queueWhere = and(
+      inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)),
+      inArray(runs.status, [...CAPACITY_PENDING_STATUSES, ...CAPACITY_RUNNING_STATUSES]),
+    );
+    const [queue, countRows, runningRows] = await Promise.all([
+      db.query.runs.findMany({
+        where: queueWhere,
+        orderBy: [asc(runs.createdAt), asc(runs.id)],
+        limit: size,
+        offset: (number - 1) * size,
+      }),
+      db.select({ total: count() }).from(runs).where(queueWhere),
+      db.select({ total: count() }).from(runs).where(and(
+        queueWhere,
+        inArray(runs.status, [...CAPACITY_RUNNING_STATUSES]),
+      )),
+    ]);
+    const first = queue[0];
+    let pendingBefore = 0;
+    if (first !== undefined) {
+      const rowsBefore = await db.select({ total: count() }).from(runs).where(and(
+        inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)),
+        inArray(runs.status, [...CAPACITY_PENDING_STATUSES]),
+        or(
+          lt(runs.createdAt, first.createdAt),
+          and(eq(runs.createdAt, first.createdAt), lt(runs.id, first.id)),
+        ),
+      ));
+      pendingBefore = rowsBefore[0]?.total ?? 0;
+    }
+    let position = (runningRows[0]?.total ?? 0) + pendingBefore;
     const applySet = new Set(applyIds ?? []);
     const origins = await originsForRuns(queue);
     const data = queue.map((r: RunItem): Record<string, unknown> => {
@@ -595,20 +621,23 @@ export const runRoutes = new Elysia({ name: "runs" })
       if (isPending) { position += 1; }
       const attrs = typeof resource.attributes === "object" && resource.attributes !== null ? (resource.attributes as Record<string, unknown>) : {};
       return { ...resource, attributes: { ...attrs, "position-in-queue": isPending ? position : 0 } };
-    }).slice((number - 1) * size, number * size);
+    });
     const included = await includedUsersForRuns(queue);
-    return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, queue.length) };
+    return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, countRows[0]?.total ?? 0) };
   })
   .get("/api/v2/organizations/:org_name/capacity", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const organization = await cachedOrgByName(orgName);
     if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const orgWorkspaces = await authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null);
-    const active = orgWorkspaces.length === 0 ? [] : await db.query.runs.findMany({
-      columns: { status: true },
-      where: and(inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)), inArray(runs.status, [...CAPACITY_PENDING_STATUSES, ...CAPACITY_RUNNING_STATUSES])),
-    });
-    return { data: { id: organization.name, type: "organization-capacity", attributes: { pending: active.filter((r: Readonly<{ readonly status: string }>): boolean => CAPACITY_PENDING_STATUSES.some((s: string): boolean => s === r.status)).length, running: active.filter((r: Readonly<{ readonly status: string }>): boolean => CAPACITY_RUNNING_STATUSES.some((s: string): boolean => s === r.status)).length } } };
+    const counts = orgWorkspaces.length === 0 ? [] : await db.select({ status: runs.status, total: count() }).from(runs).where(and(
+      inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id)),
+      inArray(runs.status, [...CAPACITY_PENDING_STATUSES, ...CAPACITY_RUNNING_STATUSES]),
+    )).groupBy(runs.status);
+    const totalFor = (statuses: readonly string[]): number => counts
+      .filter((row): boolean => statuses.includes(row.status))
+      .reduce((sum, row): number => sum + Number(row.total), 0);
+    return { data: { id: organization.name, type: "organization-capacity", attributes: { pending: totalFor(CAPACITY_PENDING_STATUSES), running: totalFor(CAPACITY_RUNNING_STATUSES) } } };
   })
   .post("/api/v2/workspaces/:workspace_id/runs", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const wsId = params.workspace_id ?? "";

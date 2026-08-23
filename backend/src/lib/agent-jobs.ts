@@ -595,6 +595,21 @@ export async function claimAgentJob(
       }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
       continue;
     }
+    if (candidate.phase === "apply") {
+      const locked = await db.update(workspaces).set({
+        locked: true,
+        lockedReason: `Run ${candidate.runId} is applying`,
+        lockOwnerType: "agent-run",
+        lockOwnerId: candidate.runId,
+      }).where(and(eq(workspaces.id, run.workspaceId), eq(workspaces.locked, false))).returning({ id: workspaces.id });
+      if (locked.length === 0) {
+        await db.update(agentJobs).set({ agentId: null, status: "queued", claimedAt: null }).where(and(
+          eq(agentJobs.id, candidate.id),
+          eq(agentJobs.status, "claimed"),
+        ));
+        continue;
+      }
+    }
     const associated = await db.update(runs).set({
       agentPoolId: agent.agentPoolId,
       agentId: agent.id,
@@ -605,6 +620,14 @@ export async function claimAgentJob(
       eq(runs.status, expectedRunStatus),
     )).returning({ id: runs.id });
     if (associated.length === 0) {
+      if (candidate.phase === "apply") {
+        await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
+          eq(workspaces.id, run.workspaceId),
+          eq(workspaces.locked, true),
+          eq(workspaces.lockOwnerType, "agent-run"),
+          eq(workspaces.lockOwnerId, run.id),
+        ));
+      }
       await db.update(agentJobs).set({
         status: "canceled",
         completedAt: Date.now(),
@@ -627,6 +650,11 @@ export async function cancelAgentJobsForRun(runId: string): Promise<void> {
   }).where(and(
     eq(agentJobs.runId, runId),
     inArray(agentJobs.status, ["queued", "claimed"]),
+  ));
+  await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
+    eq(workspaces.locked, true),
+    eq(workspaces.lockOwnerType, "agent-run"),
+    eq(workspaces.lockOwnerId, runId),
   ));
 }
 
@@ -865,6 +893,15 @@ export async function completeAgentJob(
       eq(runs.status, expectedRunStatus),
     )).returning({ id: runs.id });
     if (updatedRuns.length === 0) throw new Error("Run changed while its agent job was completing");
+
+    if (job.phase === "apply") {
+      await tx.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
+        eq(workspaces.id, run.workspaceId),
+        eq(workspaces.locked, true),
+        eq(workspaces.lockOwnerType, "agent-run"),
+        eq(workspaces.lockOwnerId, run.id),
+      ));
+    }
 
     if (completion.status === "completed" && job.phase === "plan" && runStatus === "apply_queued") {
       await tx.insert(agentJobs).values({
