@@ -25,6 +25,7 @@
  * The caller (workflow or human) diffs the JSON to decide whether to commit.
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -36,7 +37,7 @@ const SURFACE_E2E = join(REPO_ROOT, "backend", "tests", "e2e", "provider_surface
 const PLUGIN_CACHE = join(REPO_ROOT, "backend", "storage", "e2e-plugin-cache");
 const TERRAFORM_BIN = process.env.TERRAFORM_BIN ?? "terraform";
 
-type SurfaceEntry = Readonly<{ name: string; status: string }>;
+type SurfaceEntry = Readonly<{ name: string; status: string; schema_hash?: string }>;
 
 type Surface = Readonly<{
   _comment: string;
@@ -71,7 +72,19 @@ async function resolveTargetVersion(current: string | null): Promise<string> {
   return latest;
 }
 
-function generateSchema(version: string): { resources: string[]; dataSources: string[] } {
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => [key, canonical(entry)]));
+  }
+  return value;
+}
+
+function schemaHash(schema: unknown): string {
+  return createHash("sha256").update(JSON.stringify(canonical(schema))).digest("hex");
+}
+
+function generateSchema(version: string): { resources: Record<string, unknown>; dataSources: Record<string, unknown> } {
   const dir = mkdtempSync(join(tmpdir(), "provider-surface-"));
   try {
     writeFileSync(join(dir, "main.tf"), [
@@ -106,28 +119,33 @@ function generateSchema(version: string): { resources: string[]; dataSources: st
       throw new Error("The generated schema does not contain a hashicorp/tfe provider entry.");
     }
     return {
-      resources: Object.keys(providerSchema.resource_schemas ?? {}).sort(),
-      dataSources: Object.keys(providerSchema.data_source_schemas ?? {}).sort(),
+      resources: providerSchema.resource_schemas ?? {},
+      dataSources: providerSchema.data_source_schemas ?? {},
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
-function mergeStatuses(existing: SurfaceEntry[], names: string[]): SurfaceEntry[] {
+function mergeStatuses(existing: SurfaceEntry[], schemas: Record<string, unknown>): SurfaceEntry[] {
   const byName = new Map(existing.map((entry): [string, string] => [entry.name, entry.status]));
-  return names.map((name): SurfaceEntry => ({ name, status: byName.get(name) ?? "backend-gap" }));
+  return Object.keys(schemas).sort().map((name): SurfaceEntry => ({
+    name,
+    status: byName.get(name) ?? "backend-gap",
+    schema_hash: schemaHash(schemas[name]),
+  }));
 }
 
 function commentFor(version: string): string {
-  return `Authoritative hashicorp/tfe v${version} provider surface, generated from \`terraform providers schema -json\` by backend/scripts/refresh-provider-surface.ts. Status values: covered (exercised by provider_e2e E2E), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).`;
+  return `Authoritative hashicorp/tfe v${version} provider surface, generated from \`terraform providers schema -json\` by backend/scripts/refresh-provider-surface.ts. Each entry includes a SHA-256 schema_hash over its full resource/data-source schema. Status values: covered (exercised by provider_e2e E2E), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).`;
 }
 
 async function main(): Promise<void> {
   const existing = loadSurface(SURFACE_SRC);
   const current = catalogVersion(existing);
   const target = await resolveTargetVersion(current);
-  if (target === current) {
+  const hasSchemaHashes = [...existing.resources, ...existing.data_sources].every((entry): boolean => typeof entry.schema_hash === "string" && entry.schema_hash.length === 64);
+  if (target === current && hasSchemaHashes && process.env.TERRENCE_PROVIDER_SURFACE_FORCE !== "1") {
     console.log(`Provider surface already current (v${target}).`);
     process.exit(0);
   }
@@ -146,8 +164,12 @@ async function main(): Promise<void> {
     data_sources: mergedDataSources,
   };
 
-  const added = resources.filter((name): boolean => !existing.resources.some((entry): boolean => entry.name === name));
-  const removed = existing.resources.filter((entry): boolean => !resources.includes(entry.name)).map((entry): string => entry.name);
+  const resourceNames = Object.keys(resources);
+  const dataSourceNames = Object.keys(dataSources);
+  const added = resourceNames.filter((name): boolean => !existing.resources.some((entry): boolean => entry.name === name));
+  const removed = existing.resources.filter((entry): boolean => !resourceNames.includes(entry.name)).map((entry): string => entry.name);
+  const addedDataSources = dataSourceNames.filter((name): boolean => !existing.data_sources.some((entry): boolean => entry.name === name));
+  const removedDataSources = existing.data_sources.filter((entry): boolean => !dataSourceNames.includes(entry.name)).map((entry): string => entry.name);
 
   const payload = `${JSON.stringify(next, null, 2)}\n`;
   writeFileSync(SURFACE_SRC, payload);
@@ -157,6 +179,8 @@ async function main(): Promise<void> {
   console.log(`Data sources: ${existing.data_source_count} -> ${next.data_source_count} (covered ${next.data_sources_covered})`);
   if (added.length > 0) console.log(`Added (backend-gap): ${added.join(", ")}`);
   if (removed.length > 0) console.log(`Removed: ${removed.join(", ")}`);
+  if (addedDataSources.length > 0) console.log(`Added data sources (backend-gap): ${addedDataSources.join(", ")}`);
+  if (removedDataSources.length > 0) console.log(`Removed data sources: ${removedDataSources.join(", ")}`);
 }
 
 main();
