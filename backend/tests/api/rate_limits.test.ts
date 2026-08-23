@@ -56,6 +56,16 @@ beforeAll(async () => {
   await seedUser(2);
   await seedUser(2);
   await seedUser(0);
+  // postgres distributed buckets persist in rate_limit_buckets across
+  // parallel test files/processes; clear them so this file's 30/s and 5/s
+  // expectations are not polluted by prior runs in the same CI worker.
+  if (process.env.DATABASE_URL?.startsWith("postgres")) {
+    try {
+      const { sql } = await import("drizzle-orm");
+      const { db: appDb } = await import("../../src/db");
+      await (appDb as unknown as { execute: (q: unknown) => Promise<unknown> }).execute(sql`DELETE FROM rate_limit_buckets`);
+    } catch {}
+  }
 });
 
 afterAll(async () => {
