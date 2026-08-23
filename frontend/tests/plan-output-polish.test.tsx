@@ -255,7 +255,9 @@ test("keeps moves, imports, drift, and output values visible", async () => {
   });
 
   expect(view.getByLabelText("1 to import")).toBeTruthy();
-  expect(onSummaryChange).toHaveBeenLastCalledWith({ actionCount: 1, importCount: 1 });
+  await waitFor((): void => {
+    expect(onSummaryChange).toHaveBeenLastCalledWith({ actionCount: 1, importCount: 1 });
+  });
   expect(view.getByText("1 move")).toBeTruthy();
   expect(view.getByText("1 drifted resource")).toBeTruthy();
   expect(view.getByText("1 action to invoke")).toBeTruthy();
@@ -302,7 +304,9 @@ test("counts an imported resource's planned update as both import and change", a
   expect(view.getByLabelText("1 to change")).toBeTruthy();
   expect(view.getByText("to change")).toBeTruthy();
   expect(view.getByText("import")).toBeTruthy();
-  expect(onSummaryChange).toHaveBeenLastCalledWith({ actionCount: 0, importCount: 1 });
+  await waitFor((): void => {
+    expect(onSummaryChange).toHaveBeenLastCalledWith({ actionCount: 0, importCount: 1 });
+  });
 
   fireEvent.change(view.getByLabelText("Filter by operation"), {
     target: { value: "import" },

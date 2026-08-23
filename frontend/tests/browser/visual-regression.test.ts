@@ -80,7 +80,8 @@ describe("visual regression tests", () => {
         `).catch((): undefined => undefined);
       }
 
-      const baselinePath = resolve(import.meta.dir, `./baselines/${name}-${process.platform}.png`);
+      const platform = process.env.GITHUB_ACTIONS === "true" ? "ubuntu" : process.platform;
+      const baselinePath = resolve(import.meta.dir, `./baselines/${name}-${platform}.png`);
 
       const diffResult = await compareScreenshots(page, screenshotBuffer, baselinePath, {
         maxDiffPercentage: 0.1,
