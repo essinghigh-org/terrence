@@ -287,9 +287,7 @@ export async function resolveExternalUrl(
     privateAddress(candidate) && !allowlistAllows(hostname, [candidate], allowlist))) {
     return { error: PRIVATE_MSG };
   }
-  const permitted = addresses.filter((candidate): boolean =>
-    allowPrivate || !privateAddress(candidate) || allowlistAllows(hostname, [candidate], allowlist));
-  const address = permitted[0];
+  const address = addresses[0];
   if (address === undefined) return { error: "URL could not be resolved safely" };
   return { target: { address, url: parsed.toString() } };
 }

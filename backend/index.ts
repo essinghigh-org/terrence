@@ -37,7 +37,7 @@ const systemTls = systemTlsCertPath !== undefined && systemTlsKeyPath !== undefi
       key: Bun.file(systemTlsKeyPath),
     }
   : undefined;
-if (systemTls !== undefined && (systemTls.cert.size === 0 || systemTls.key.size === 0)) {
+if (systemTls !== undefined && (!(await systemTls.cert.exists()) || !(await systemTls.key.exists()) || systemTls.cert.size === 0 || systemTls.key.size === 0)) {
   throw new Error("SYSTEM_API_TLS_CERT and SYSTEM_API_TLS_KEY must point to non-empty files.");
 }
 
