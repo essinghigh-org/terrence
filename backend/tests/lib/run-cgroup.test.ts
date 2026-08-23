@@ -153,4 +153,14 @@ describe("run cgroups (kanban 8/9)", () => {
     destroyRunCgroup("run-dirty", env);
     rmSync(join(root, "run-dirty"), { recursive: true, force: true });
   });
+
+  it("Bun.spawn with nonexistent cgroup path fails fast with ENOENT", (): void => {
+    expect((): void => {
+      Bun.spawn(["true"], {
+        cgroup: "/nonexistent/terrence-cgroup-path",
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+    }).toThrow();
+  });
 });

@@ -536,7 +536,7 @@ export const app = new Elysia()
     // http://localhost:5173 previously exposed the API to any localhost page).
     // If CORS_ORIGIN is set (comma-separated allow-list) we reflect only an
     // Origin that matches it. Otherwise, in non-production builds we reflect a
-    // Vite dev Origin explicitly — no origin, no CORS header.
+    // frontend dev Origin explicitly — no origin, no CORS header.
     const origin = request.headers.get("origin");
     const allowedOrigins = (process.env.CORS_ORIGIN ?? "")
       .split(",")

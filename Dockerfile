@@ -31,14 +31,20 @@ FROM golang:1.26-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf993092
 RUN CGO_ENABLED=0 GOBIN=/out go install github.com/hashicorp/terraform-config-inspect@v0.0.0-20260709150029-2fb54c236733
 
 # ---------- Build stage: Bun backend workspaces + frontend + static landlock ---
-FROM oven/bun:1@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 AS builder
+FROM oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6 AS builder
 WORKDIR /app
 
-# Copy the entire monorepo
-COPY . .
+# Copy dependency manifests first for optimal Docker layer caching
+COPY bun.lock ./
+COPY package.json ./
+COPY backend/package.json ./backend/
+COPY frontend/package.json ./frontend/
 
 # Install dependencies (workspaces)
 RUN bun install --frozen-lockfile
+
+# Copy the rest of the monorepo
+COPY . .
 
 # Build frontend
 WORKDIR /app/frontend
@@ -59,7 +65,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
 # after reviewing what changed in the new tag (pin the new digest).
 FROM cgr.dev/chainguard/wolfi-base@sha256:30f03343947c7ae3581fda727a6e2aa7b8ce7009b7bfc2ab8d5c9483ace5812f
 # Pin the full -rN revision so apk exact-matches; bump together with bun bumps.
-ARG BUN_VERSION=1.3.14-r3
+ARG BUN_VERSION=1.4.0-r0
 ARG BUILD_VERSION=0.0.0
 ARG BUILD_SHA=unknown
 WORKDIR /app

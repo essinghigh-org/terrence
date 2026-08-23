@@ -72,8 +72,9 @@ Key directories:
 ### Frontend
 
 - **Framework**: React 19 + TypeScript
-- **Build**: Vite + Rolldown
-- **UI**: shadcn/ui components (built on Radix UI + Tailwind CSS)
+- **Build**: Bun native bundler (`Bun.build`) with `bun-plugin-tailwind`
+- **UI**: Tailwind CSS UI components (built on Radix UI)
+- **Testing**: `bun:test` + `Bun.WebView` browser testing + axe-core accessibility
 - **State**: Local state with `useState`/`useEffect` — no global state manager
 - **API Client**: Custom `fetchApi()` wrapper with token refresh
 

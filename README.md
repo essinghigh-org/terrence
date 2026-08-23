@@ -16,7 +16,7 @@ terrence/
 │   │   └── worker.ts # Background run executor (OpenTofu/Terraform)
 │   ├── drizzle/      # Drizzle migrations
 │   └── tests/        # Backend test suite
-├── frontend/         # React 19 + Vite + shadcn/ui
+├── frontend/         # React 19 + Bun.build + Tailwind CSS
 │   ├── src/
 │   │   ├── views/    # Page-level components (Dashboard, Workspaces, Runs...)
 │   │   ├── components/ # Reusable UI components

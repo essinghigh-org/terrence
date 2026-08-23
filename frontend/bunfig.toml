@@ -1,5 +1,5 @@
 [test]
 preload = ["./tests/setup.ts"]
-# Playwright e2e specs live in tests/e2e with a `.pw.ts` extension and run via
-# `npx playwright test` (see playwright.config.ts), not the bun unit/integration
-# suite. The `.pw.ts` extension keeps `bun test` from auto-discovering them.
+
+[serve.static]
+plugins = ["bun-plugin-tailwind"]

@@ -86,13 +86,13 @@ process.env.TERRENCE_BINARY_CACHE_DIR ??= join(import.meta.dir, "..", "storage",
 const testDbUrl = process.env.DATABASE_URL ?? "";
 if (testDbUrl.startsWith("postgres")) {
   const { randomUUID } = await import("node:crypto");
-  const postgres = (await import("postgres")).default;
+  const { SQL } = await import("bun");
   const dbName = `terrence_test_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
-  const admin = postgres(testDbUrl, { max: 1, onnotice: () => {} });
+  const admin = new SQL(testDbUrl);
   try {
-    await admin`CREATE DATABASE ${admin(dbName)}`;
+    await admin.unsafe(`CREATE DATABASE "${dbName}"`);
   } finally {
-    await admin.end();
+    await admin.close();
   }
   const fileUrl = new URL(testDbUrl);
   fileUrl.pathname = `/${dbName}`;
@@ -100,14 +100,14 @@ if (testDbUrl.startsWith("postgres")) {
   const { applyPgMigrations } = await import("../src/db");
   await applyPgMigrations();
   afterAll(async (): Promise<void> => {
-    const cleanup = postgres(testDbUrl, { max: 1, onnotice: () => {} });
+    const cleanup = new SQL(testDbUrl);
     try {
-      await cleanup`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${dbName} AND pid <> pg_backend_pid()`;
-      await cleanup`DROP DATABASE ${cleanup(dbName)}`;
+      await cleanup.unsafe(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${dbName}' AND pid <> pg_backend_pid()`);
+      await cleanup.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`);
     } catch {
       // Best-effort cleanup: a failed drop must never mask test results.
     } finally {
-      await cleanup.end();
+      await cleanup.close();
     }
   });
 }

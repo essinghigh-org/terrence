@@ -3,8 +3,8 @@ import { drizzle as sqliteDrizzle, SQLiteBunTransaction, type BunSQLiteDatabase 
 import type { SQLiteBunSession } from 'drizzle-orm/bun-sqlite';
 import type { SQLiteSession, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { migrate as sqliteMigrate } from 'drizzle-orm/bun-sqlite/migrator';
-import { drizzle as pgDrizzle } from 'drizzle-orm/postgres-js';
-import postgres from 'postgres';
+import { SQL as BunSQL } from 'bun';
+import { drizzle as pgDrizzle } from 'drizzle-orm/bun-sql';
 import { type SQL } from 'drizzle-orm';
 import { mkdirSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -61,7 +61,7 @@ if (!isPostgres) {
 }
 
 // ---------------------------------------------------------------------------
-// PostgreSQL backend: postgres.js pooled client. Schema DDL comes from the
+// PostgreSQL backend: Bun.SQL pooled client. Schema DDL comes from the
 // generated drizzle-pg migrations, applied at boot (backend/index.ts) and in
 // the test harness (tests/setup.ts) — never here, because the migrator is
 // async and this module must stay synchronous for bun's worker threads.
@@ -74,27 +74,23 @@ function parseTimeoutMs(raw: string | undefined, fallback: number): number {
   return Math.min(Math.round(n), 86_400_000);
 }
 
-let pgClient: postgres.Sql | null = null;
+let pgClient: BunSQL | null = null;
 if (isPostgres) {
   const statementTimeoutMs = parseTimeoutMs(process.env.TERRENCE_DB_STATEMENT_TIMEOUT_MS, 30_000);
   const lockTimeoutMs = parseTimeoutMs(process.env.TERRENCE_DB_LOCK_TIMEOUT_MS, 10_000);
   const idleInTxTimeoutMs = parseTimeoutMs(process.env.TERRENCE_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS, 60_000);
-  pgClient = postgres(databaseUrl, {
+  pgClient = new BunSQL({
+    url: databaseUrl,
     max: 10,
-    idle_timeout: 20,
-    connect_timeout: 10,
+    idleTimeout: 20,
+    connectionTimeout: 10,
     // Fail-safe: a stuck query / contended lock / idle transaction is killed
     // server-side instead of holding a pool connection forever (todos 287/288).
-    // Postgres.js forwards `connection` keys as startup GUC params, so every
-    // pooled connection inherits these defaults without a SET per query.
     connection: {
       statement_timeout: statementTimeoutMs,
       lock_timeout: lockTimeoutMs,
       idle_in_transaction_session_timeout: idleInTxTimeoutMs,
     },
-    // The app surfaces database errors itself; postgres.js NOTICE noise
-    // (e.g. "relation already exists" during idempotent DDL) is suppressed.
-    onnotice: () => {},
   });
   // Always-on lightweight pool observation (todos 289,290,291): pending + latency
   // samples are recorded for /metrics; zero branching in the hot path beyond
@@ -102,42 +98,51 @@ if (isPostgres) {
   // both drizzle and raw SQL on postgres.
   {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
-    pgClient.unsafe = ((queryText: string, ...params: unknown[]) => {
+    function wrapQuery<T>(queryObj: T, queryText: string): T {
       const start = poolQueryStart(10);
-      const queryTextCopy = queryText;
-      const pending = originalUnsafe(queryText, ...(params as [never])) as unknown as {
-        then: (onFulfilled: (v: unknown) => unknown, onRejected: (e: unknown) => unknown) => unknown;
-      } & Record<string, unknown>;
+      let settled = false;
       const finish = (): void => {
-        const durationMs = poolQueryEnd(start);
-        recordSlowQuery(queryTextCopy, durationMs);
-      };
-      // Preserve the PendingQuery shape (postgres.js returns a thenable with
-      // extra methods like .values()/.execute() that drizzle relies on).
-      // Decorate .then rather than replacing the object with a plain Promise.
-      if (pending !== null && typeof pending === 'object' && typeof pending.then === 'function') {
-        const originalThen = pending.then.bind(pending);
-        (pending as unknown as { then: unknown }).then = (
-          onFulfilled: (v: unknown) => unknown,
-          onRejected?: (e: unknown) => unknown,
-        ): unknown => originalThen(
-          (value: unknown) => { finish(); return onFulfilled(value); },
-          (err: unknown) => { finish(); if (onRejected !== undefined) return onRejected(err); throw err; },
-        );
-        // For lazy queries that never call .then (e.g. fire-and-forget), also
-        // finish on next tick if not already settled — bounded to one call.
-        let settled = false;
-        const onceFinish = (): void => { if (!settled) { settled = true; finish(); } };
-        // Wrap .catch as well if present
-        const origCatch = (pending as unknown as { catch?: (fn: (e: unknown) => unknown) => unknown }).catch;
-        if (typeof origCatch === 'function') {
-          (pending as unknown as { catch: unknown }).catch = (fn: (e: unknown) => unknown): unknown =>
-            origCatch.call(pending, (err: unknown) => { onceFinish(); return fn(err); });
+        if (!settled) {
+          settled = true;
+          const durationMs = poolQueryEnd(start);
+          recordSlowQuery(queryText, durationMs);
         }
-        return pending as unknown as ReturnType<typeof originalUnsafe>;
+      };
+      const anyObj = queryObj as unknown as {
+        then?: (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) => unknown;
+        values?: (...args: unknown[]) => unknown;
+        catch?: (fn: (e: unknown) => unknown) => unknown;
+      };
+      if (anyObj !== null && typeof anyObj === 'object' && typeof anyObj.then === 'function') {
+        const originalThen = anyObj.then.bind(anyObj);
+        anyObj.then = (onFulfilled?: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown): unknown => {
+          return originalThen(
+            (val: unknown) => { finish(); return onFulfilled !== undefined ? onFulfilled(val) : val; },
+            (err: unknown) => { finish(); if (onRejected !== undefined) return onRejected(err); throw err; },
+          );
+        };
+        if (typeof anyObj.values === 'function') {
+          const originalValues = anyObj.values.bind(anyObj);
+          anyObj.values = (...args: unknown[]): unknown => {
+            const v = originalValues(...args);
+            return wrapQuery(v, queryText);
+          };
+        }
+        if (typeof anyObj.catch === 'function') {
+          const originalCatch = anyObj.catch.bind(anyObj);
+          anyObj.catch = (fn: (e: unknown) => unknown): unknown => {
+            return originalCatch((err: unknown) => { finish(); return fn(err); });
+          };
+        }
+      } else {
+        finish();
       }
-      finish();
-      return pending as unknown as ReturnType<typeof originalUnsafe>;
+      return queryObj;
+    }
+
+    pgClient.unsafe = ((queryText: string, ...params: unknown[]) => {
+      const queryObj = originalUnsafe(queryText, ...(params as [never]));
+      return wrapQuery(queryObj, queryText);
     }) as typeof pgClient.unsafe;
   }
   if (envEnabled(process.env.TERRENCE_QUERY_COUNT)) {
@@ -185,7 +190,7 @@ export function setQueryLogging(enabled: boolean): void {
 // with the default (empty) schema and type db.query as {}.
 type AppDb = BunSQLiteDatabase<typeof schema>;
 const sqliteDb = sqliteClient === null ? null : sqliteDrizzle(sqliteClient, { schema });
-const pgDb = pgClient === null ? null : pgDrizzle(pgClient, { schema });
+const pgDb = pgClient === null ? null : pgDrizzle({ client: pgClient, schema });
 if (pgDb !== null) {
   // Drizzle exposes transactions on the database object rather than through
   // postgres.js's query hook, so instrument the boundary explicitly.
@@ -919,7 +924,7 @@ export async function databaseMetrics(): Promise<Readonly<{
   freelistBytes: number | null;
 }>> {
   if (isPostgres) {
-    const client = pgClient as postgres.Sql;
+    const client = pgClient as BunSQL;
     const rows = await client.unsafe(
       "SELECT pg_database_size(current_database()) AS size, current_setting('block_size')::int AS \"blockSize\"",
     ) as unknown as readonly { size: number | bigint; blockSize: number }[];
@@ -1005,6 +1010,16 @@ export function databasePoolMetrics(): ReturnType<typeof poolMetrics> {
   return poolMetrics(driver, max);
 }
 
+/** @public Cleanly close the database connection/pool (application shutdown, tests). */
+export async function closeDatabase(): Promise<void> {
+  if (sqliteClient !== null) {
+    sqliteClient.close();
+  }
+  if (pgClient !== null) {
+    await pgClient.close();
+  }
+}
+
 let cachedSchemaVersion: string | null | undefined;
 /** Drizzle journal tag of the last migration bundled with this build (e.g. "0028_melodic_micromax").
  * This is the packaged *target* schema, not the DB-applied state — during a
@@ -1043,7 +1058,7 @@ export function applyPgMigrations(): Promise<void> {
   pgMigrationsPromise = (async (): Promise<void> => {
     const instance = pgDb;
     if (instance === null) throw new Error("postgres backend not initialized");
-    const pg = pgClient as postgres.Sql;
+    const pg = pgClient as BunSQL;
     const durableJobsTable = await pg.unsafe<{ exists: boolean }[]>("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'durable_jobs') AS exists");
     if (durableJobsTable[0]?.exists === true) {
       await pg.unsafe(`
@@ -1062,7 +1077,7 @@ export function applyPgMigrations(): Promise<void> {
         WHERE durable_jobs.id = ranked.id AND ranked.row_rank > 1
       `);
     }
-    const { migrate } = await import("drizzle-orm/postgres-js/migrator");
+    const { migrate } = await import("drizzle-orm/bun-sql/migrator");
     await migrate(instance, { migrationsFolder: join(import.meta.dir, "../../drizzle/pg") });
     await pg.unsafe("UPDATE organizations SET default_iac_binary = 'terraform' WHERE default_iac_binary = 'tofu'");
     await pg.unsafe("UPDATE policy_sets SET overridable = false WHERE overridable = true");

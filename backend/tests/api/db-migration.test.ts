@@ -126,13 +126,13 @@ beforeAll(async (): Promise<void> => {
   try {
     // Fresh PostgreSQL target database (mirrors the per-file setup pattern).
     const { randomUUID } = await import("node:crypto");
-    const postgres = (await import("postgres")).default;
+    const { SQL } = await import("bun");
     targetDbName = `terrence_migrate_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
-    const admin = postgres(PG_ADMIN_URL, { max: 1, connect_timeout: 3, onnotice: () => {} });
+    const admin = new SQL(PG_ADMIN_URL);
     try {
-      await admin`CREATE DATABASE ${admin(targetDbName)}`;
+      await admin.unsafe(`CREATE DATABASE "${targetDbName}"`);
     } finally {
-      await admin.end();
+      await admin.close();
     }
     const target = new URL(PG_ADMIN_URL);
     target.pathname = `/${targetDbName}`;
@@ -155,15 +155,15 @@ afterAll(async (): Promise<void> => {
   await db.delete(apiTokens).where(inArray(apiTokens.id, [adminTokenId]));
   await db.delete(users).where(inArray(users.id, [adminId]));
   if (targetUrl !== "") {
-    const postgres = (await import("postgres")).default;
-    const cleanup = postgres(PG_ADMIN_URL, { max: 1, onnotice: () => {} });
+    const { SQL } = await import("bun");
+    const cleanup = new SQL(PG_ADMIN_URL);
     try {
-      await cleanup`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${targetDbName} AND pid <> pg_backend_pid()`;
-      await cleanup`DROP DATABASE ${cleanup(targetDbName)}`;
+      await cleanup.unsafe(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${targetDbName}' AND pid <> pg_backend_pid()`);
+      await cleanup.unsafe(`DROP DATABASE IF EXISTS "${targetDbName}"`);
     } catch {
       // Best-effort cleanup.
     } finally {
-      await cleanup.end();
+      await cleanup.close();
     }
   }
 });
