@@ -82,7 +82,11 @@ function scimEmail(payload: ScimPayload): string | null {
   const primary = emails.find((email): boolean => email !== null && typeof email === "object" && (email as Record<string, unknown>).primary === true);
   const first = primary ?? emails[0];
   const value = first !== null && typeof first === "object" ? (first as Record<string, unknown>).value : undefined;
-  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+  // Lowercase to the canonical form used by every other identity path (SSO,
+  // invitations, membership add). Without this, a mixed-case SCIM email
+  // bypasses the exact-match lookups and provisions duplicate users.
+  if (typeof value !== "string" || value.trim() === "") return null;
+  return value.trim().toLowerCase();
 }
 
 function scimMemberIds(value: unknown): string[] | null {
