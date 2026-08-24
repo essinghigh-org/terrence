@@ -1,9 +1,9 @@
 import { Elysia } from "elysia";
 import { randomUUID } from "node:crypto";
-import { hashAuthenticationToken } from "../lib/token-service";
+import { tokenHashCandidates } from "../lib/token-service";
 import { db } from "../db";
 import { apiTokens, teams } from "../db/schema";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { parseTokenScopes, scopeGrants, type TokenScopes, type WorkspacePermissionGrant } from "../lib/token-scopes";
 import { setRequestTokenScopes } from "../lib/request-scope";
 import { allMcpTools } from "../lib/mcp";
@@ -14,16 +14,17 @@ import type { McpSession, McpTool } from "../lib/mcp/types";
 // ---------------------------------------------------------------------------
 class McpAuthError extends Error {}
 
-function hashToken(token: string): string {
-  return hashAuthenticationToken(token);
-}
-
 async function resolveToken(raw: string): Promise<McpSession | null> {
-  const tokenHash = hashToken(raw);
-  const tok = await db.query.apiTokens.findFirst({
-    where: eq(apiTokens.token, tokenHash),
+  const [tokenHash, legacyTokenHash] = tokenHashCandidates(raw);
+  const rows = await db.query.apiTokens.findMany({
+    where: inArray(apiTokens.token, [tokenHash, legacyTokenHash]),
+    limit: 2,
   });
+  const tok = rows.find((candidate) => candidate.token === tokenHash) ?? rows[0];
   if (tok === undefined) return null;
+  if (tok.token === legacyTokenHash) {
+    await db.update(apiTokens).set({ token: tokenHash }).where(eq(apiTokens.id, tok.id));
+  }
   if (tok.expiresAt !== null && tok.expiresAt < Date.now()) return null;
   const team = tok.teamId === null
     ? undefined

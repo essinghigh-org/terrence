@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { refreshSessions, users } from "../../src/db/schema";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 
 // Two-tab simultaneous refresh (todo 124-127): two tabs presenting the SAME
 // old refresh cookie must not trigger family revocation. The second request
@@ -100,8 +101,7 @@ describe("refresh token two-tab concurrency grace", () => {
 
     // Simulate the grace window expiring: backdate rotatedAtMs on the
     // presented (now rotated) session.
-    const presentedHash = (await import("node:crypto")).createHash("sha256")
-      .update(originalCookie.split("=")[1] ?? "").digest("hex");
+    const presentedHash = hashAuthenticationToken(originalCookie.split("=")[1] ?? "");
     await db.update(refreshSessions)
       .set({ rotatedAtMs: Date.now() - 10 * 60 * 1000 })
       .where(eq(refreshSessions.tokenHash, presentedHash));

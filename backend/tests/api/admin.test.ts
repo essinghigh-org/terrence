@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
+import { eq } from "drizzle-orm";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
@@ -269,7 +270,7 @@ describe("Admin Operations API contract", () => {
     const impersonate = await request(`/api/v2/admin/users/${targetId}/actions/impersonate`, "POST");
     expect(impersonate.status).toBe(200);
     const tokenValue = (await impersonate.json()).data.attributes.token as string;
-    const tokenHash = createHash("sha256").update(tokenValue).digest("hex");
+    const tokenHash = hashAuthenticationToken(tokenValue);
     const issued = await db.query.apiTokens.findFirst({ where: eq(apiTokens.token, tokenHash) });
     expect(issued?.userId).toBe(targetId);
     expect(issued?.expiresAt).toBeGreaterThan(Date.now());

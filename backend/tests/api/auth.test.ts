@@ -3,7 +3,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { users, apiTokens } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
-import { createHash } from "node:crypto";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 
 describe("the reference format API Authentication (Local Auth MVP)", () => {
   const testUser = `auth_user_${Date.now()}`;
@@ -112,7 +112,7 @@ describe("the reference format API Authentication (Local Auth MVP)", () => {
 
     // Token is stored hashed in DB; verify lookup works via auth plugin
     const rawToken = data.data.attributes.token;
-    const tokenHash = createHash("sha256").update(rawToken as string).digest("hex");
+    const tokenHash = hashAuthenticationToken(rawToken as string);
     const tokenInDb = await db.query.apiTokens.findFirst({
       where: eq(apiTokens.token, tokenHash),
     });

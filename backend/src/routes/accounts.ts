@@ -12,7 +12,7 @@ import { authPlugin } from "../auth";
 import { lockFirstUserElection } from "../db/first-user";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
 import { encryptSecret, decryptSecret, isEncryptedSecret } from "../lib/secrets";
-import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
+import { generateAuthenticationToken, hashAuthenticationToken, tokenHashCandidates } from "../lib/token-service";
 
 import { issueMfaChallenge, consumeMfaChallenge } from "../lib/mfa-challenge";
 import { withDbLock } from "../lib/db-lock";
@@ -99,6 +99,20 @@ export function tokenHash(token: string): string {
   return hashAuthenticationToken(token);
 }
 
+async function refreshSessionForToken(rawToken: string): Promise<typeof refreshSessions.$inferSelect | undefined> {
+  const [currentHash, legacyHash] = tokenHashCandidates(rawToken);
+  const rows = await db.query.refreshSessions.findMany({
+    where: inArray(refreshSessions.tokenHash, [currentHash, legacyHash]),
+    limit: 2,
+  });
+  const row = rows.find((candidate) => candidate.tokenHash === currentHash) ?? rows[0];
+  if (row?.tokenHash === legacyHash) {
+    await db.update(refreshSessions).set({ tokenHash: currentHash }).where(eq(refreshSessions.id, row.id));
+    return { ...row, tokenHash: currentHash };
+  }
+  return row;
+}
+
 export function isUserLoginBlocked(user: Readonly<typeof users.$inferSelect>): boolean {
   return user.isSuspended === true
     || (user as unknown as { deletedAt?: number | null }).deletedAt != null;
@@ -162,9 +176,7 @@ export async function revokeBrowserSession(
   return withRefreshRotationLock(async (): Promise<boolean> => {
     let revoked = false;
     for (const token of candidates) {
-      const current = await db.query.refreshSessions.findFirst({
-        where: eq(refreshSessions.tokenHash, tokenHash(token)),
-      });
+      const current = await refreshSessionForToken(token);
       if (current === undefined) continue;
       if (await revokeRefreshFamily(current.familyId, current.userId)) revoked = true;
     }
@@ -177,9 +189,7 @@ export async function browserSessionDetails(
   request: RequestInfo | undefined,
 ): Promise<{ user: Readonly<typeof users.$inferSelect>; session: Readonly<typeof refreshSessions.$inferSelect> } | null> {
   for (const token of refreshCookieCandidates(request)) {
-    const current = await db.query.refreshSessions.findFirst({
-      where: eq(refreshSessions.tokenHash, tokenHash(token)),
-    });
+    const current = await refreshSessionForToken(token);
     if (current === undefined || current.rotatedAt !== null || current.revokedAt !== null || current.expiresAt <= Date.now()) continue;
     const user = await db.query.users.findFirst({ where: eq(users.id, current.userId) });
     if (user === undefined || isUserLoginBlocked(user)) continue;
@@ -678,9 +688,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         const key = tokenHash(presentedToken);
         let current = seen.get(key) ?? null;
         if (current === null) {
-          const row = await db.query.refreshSessions.findFirst({
-            where: eq(refreshSessions.tokenHash, key),
-          });
+          const row = await refreshSessionForToken(presentedToken);
           if (row === undefined) continue;
           seen.set(key, row);
           current = row;
@@ -861,9 +869,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       for (const token of candidates) {
         const key = tokenHash(token);
         if (seen.has(key)) continue;
-        const row = await db.query.refreshSessions.findFirst({
-          where: eq(refreshSessions.tokenHash, key),
-        });
+        const row = await refreshSessionForToken(token);
         if (row === undefined) continue;
         seen.set(key, row);
         if (row.rotatedAt !== null) {
@@ -882,9 +888,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     if (candidates.length > 0) {
       await withRefreshRotationLock(async (): Promise<void> => {
         for (const token of candidates) {
-          const current = await db.query.refreshSessions.findFirst({
-            where: eq(refreshSessions.tokenHash, tokenHash(token)),
-          });
+          const current = await refreshSessionForToken(token);
           if (current !== undefined) await revokeRefreshFamily(current.familyId, current.userId);
         }
       });
@@ -1231,9 +1235,12 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     await auditLog("verify", "mfa", user.id, user.id, null, { userId: user.id });
     const token = refreshCookieCandidates(request)[0];
     if (token !== undefined && token !== "") {
-      await db.update(refreshSessions)
-        .set({ mfaVerified: true })
-        .where(eq(refreshSessions.tokenHash, tokenHash(token)));
+      const session = await refreshSessionForToken(token);
+      if (session !== undefined) {
+        await db.update(refreshSessions)
+          .set({ mfaVerified: true })
+          .where(eq(refreshSessions.id, session.id));
+      }
     }
     return { data: { type: "mfa", attributes: { enabled: true } } };
   })

@@ -12,7 +12,7 @@ This page describes the security model and the hardening applied across the inst
 ## Authentication and sessions
 
 - Passwords are hashed with bcrypt.
-- API tokens are stored as SHA-256 hashes, never plaintext.
+- API tokens are stored as installation-keyed HMAC-SHA-256 hashes, never plaintext. Existing SHA-256 rows are accepted once and upgraded on use.
 - Browser access tokens live in memory. The refresh token lives in an HttpOnly cookie.
 - Failed logins are rate limited.
 - The first administrator is created only by the bootstrap flow, under an exclusive lock.

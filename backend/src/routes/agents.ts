@@ -15,7 +15,7 @@ import {
 import { and, eq, inArray } from "drizzle-orm";
 import { checkOrganizationPermission, type DeepReadonly, auditLog, strictAuditEnabled } from "../lib/utils";
 import { organizationName } from "../lib/response";
-import { hashAuthenticationToken } from "../lib/token-service";
+import { hashAuthenticationToken, tokenHashCandidates } from "../lib/token-service";
 import { authPlugin } from "../auth";
 import {
   appendAgentJobLog,
@@ -361,11 +361,16 @@ async function canRegisterAgent(
   if (await checkOrganizationPermission(pool.orgId, userId, tokenOrgId, tokenTeamId, "manage-agent-pools")) return true;
   const authorization = request.headers.get("authorization");
   if (authorization?.startsWith("Bearer agent-") !== true) return false;
-  const tokenHash = hashAuthenticationToken(authorization.slice(7));
-  const token = await db.query.agentPoolTokens.findFirst({
-    where: and(eq(agentPoolTokens.agentPoolId, pool.id), eq(agentPoolTokens.token, tokenHash)),
+  const [tokenHash, legacyTokenHash] = tokenHashCandidates(authorization.slice(7));
+  const tokenRows = await db.query.agentPoolTokens.findMany({
+    where: and(eq(agentPoolTokens.agentPoolId, pool.id), inArray(agentPoolTokens.token, [tokenHash, legacyTokenHash])),
+    limit: 2,
   });
+  const token = tokenRows.find((candidate) => candidate.token === tokenHash) ?? tokenRows[0];
   if (token === undefined) return false;
+  if (token.token === legacyTokenHash) {
+    await db.update(agentPoolTokens).set({ token: tokenHash }).where(eq(agentPoolTokens.id, token.id));
+  }
   if (token.lastUsedAt === null || Date.now() - token.lastUsedAt >= 60_000) {
     await db.update(agentPoolTokens).set({ lastUsedAt: Date.now() }).where(eq(agentPoolTokens.id, token.id));
   }

@@ -1,8 +1,8 @@
 import { Elysia } from "elysia";
-import { hashAuthenticationToken } from "../lib/token-service";
+import { tokenHashCandidates } from "../lib/token-service";
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { and, asc, desc, eq, lt } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt } from "drizzle-orm";
 import { db } from "../db";
 import { agentForwardedRequests, agentPoolTokens, agents, agentJobs, logs, organizations, runs, workspaces, stackAgentJobs } from "../db/schema";
 import { authPlugin } from "../auth";
@@ -122,8 +122,12 @@ function bearerToken(authorization: string | null): string | undefined {
 
 /** Resolve the agent pool that owns an agent token (or undefined). */
 async function poolForToken(token: string): Promise<{ poolId: string; tokenId: string } | undefined> {
-  const tokenHash = hashAuthenticationToken(token);
-  const row = await db.query.agentPoolTokens.findFirst({ where: eq(agentPoolTokens.token, tokenHash) });
+  const [tokenHash, legacyTokenHash] = tokenHashCandidates(token);
+  const rows = await db.query.agentPoolTokens.findMany({ where: inArray(agentPoolTokens.token, [tokenHash, legacyTokenHash]), limit: 2 });
+  const row = rows.find((candidate) => candidate.token === tokenHash) ?? rows[0];
+  if (row !== undefined && row.token === legacyTokenHash) {
+    await db.update(agentPoolTokens).set({ token: tokenHash }).where(eq(agentPoolTokens.id, row.id));
+  }
   return row === undefined ? undefined : { poolId: row.agentPoolId, tokenId: row.id };
 }
 

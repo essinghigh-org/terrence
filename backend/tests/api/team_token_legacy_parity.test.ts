@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { and, eq, inArray } from "drizzle-orm";
-import { createHash } from "node:crypto";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
@@ -10,6 +9,7 @@ import {
   teams,
   users,
 } from "../../src/db/schema";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 
 // TFE parity regression tests: the singular legacy team-token endpoints
 // (/teams/:id/authentication-token) and the modern plural endpoints
@@ -102,7 +102,7 @@ describe("team token legacy/plural separation (TFE parity)", () => {
 
   const legacyHashExists = async (secret: string): Promise<boolean> =>
     (await db.select({ id: apiTokens.id }).from(apiTokens)
-      .where(eq(apiTokens.token, createHash("sha256").update(secret).digest("hex")))).length > 0;
+      .where(eq(apiTokens.token, hashAuthenticationToken(secret)))).length > 0;
 
   it("rotating the legacy token leaves all modern tokens intact", async () => {
     expect(await countTeamTokens(true)).toBe(1);

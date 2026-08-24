@@ -1,11 +1,11 @@
 import { Elysia } from "elysia";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 import { db } from "../db";
 import { emailVerificationTokens, users } from "../db/schema";
 import { authPlugin } from "../auth";
 import { apiURL, auditLog } from "../lib/utils";
 import { decryptSecret } from "../lib/secrets";
-import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
+import { generateAuthenticationToken, hashAuthenticationToken, tokenHashCandidates } from "../lib/token-service";
 import { normalizeEmail } from "../lib/identity";
 import { getSettings } from "../lib/settings";
 import { sendEmail } from "../lib/smtp";
@@ -124,9 +124,13 @@ export const emailVerificationRoutes = new Elysia({ name: "email-verification" }
   .get("/api/v2/account/email/verify", async (ctx: Ctx): Promise<unknown> => {
     const rawToken = tokenFromContext(ctx);
     if (rawToken.trim() === "") return error(ctx.set, 422, "Verification token is required");
-    const tokenHash = hashAuthenticationToken(rawToken);
-    const row = await db.query.emailVerificationTokens.findFirst({ where: eq(emailVerificationTokens.tokenHash, tokenHash) });
+    const [tokenHash, legacyTokenHash] = tokenHashCandidates(rawToken);
+    const tokenRows = await db.query.emailVerificationTokens.findMany({ where: inArray(emailVerificationTokens.tokenHash, [tokenHash, legacyTokenHash]), limit: 2 });
+    const row = tokenRows.find((candidate) => candidate.tokenHash === tokenHash) ?? tokenRows[0];
     if (row === undefined || row.usedAt !== null || row.expiresAt <= Date.now()) return error(ctx.set, 404, "Verification token is invalid or expired");
+    if (row.tokenHash === legacyTokenHash) {
+      await db.update(emailVerificationTokens).set({ tokenHash }).where(eq(emailVerificationTokens.id, row.id));
+    }
     const target = await db.query.users.findFirst({ where: eq(users.id, row.userId) });
     if (target === undefined || target.email === null || normalizeEmail(target.email) !== row.email) return error(ctx.set, 409, "The email address has changed; request a new verification email");
     if (target.deletedAt !== null || target.isSuspended === true) return error(ctx.set, 403, "Suspended accounts cannot verify email");

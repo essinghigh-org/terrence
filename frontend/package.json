@@ -13,9 +13,7 @@
     "typecheck": "tsc -b",
     "preview": "bun run scripts/preview.ts",
     "test:browser": "cd tests/browser && xvfb-run --auto-servernum bun test .",
-    "test:browser:axe": "cd tests/browser && xvfb-run --auto-servernum bun test ./accessibility-*.test.ts",
-    "test:visual": "cd tests/browser && xvfb-run --auto-servernum bun test ./visual-regression.test.ts",
-    "test:visual:update": "cd tests/browser && UPDATE_SNAPSHOTS=true xvfb-run --auto-servernum bun test ./visual-regression.test.ts"
+    "test:browser:axe": "cd tests/browser && xvfb-run --auto-servernum bun test ./accessibility-*.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

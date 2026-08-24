@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import { hashAuthenticationToken } from "../lib/token-service";
+import { tokenHashCandidates } from "../lib/token-service";
 import { db } from "../db";
 import { apiTokens, identityLinks, organizationInvitations, refreshSessions, scimGroups, scimGroupMemberships, scimTokens, scimUserIdentities, scimSettings,
   teamMemberships, teamScimGroupMappings, teams, users } from "../db/schema";
@@ -22,10 +22,14 @@ async function validateScimToken(request: { headers: { get(name: string): string
   const match = auth === null ? null : /^Bearer\s+(.+)$/i.exec(auth.trim());
   if (match === null) { (set as { status: number }).status = 401; return false; }
   const rawToken = match[1] ?? "";
-  const hash = hashAuthenticationToken(rawToken);
+  const [hash, legacyHash] = tokenHashCandidates(rawToken);
   const now = Date.now();
-  const token = await db.query.scimTokens.findFirst({ where: eq(scimTokens.tokenHash, hash) });
+  const tokenRows = await db.query.scimTokens.findMany({ where: inArray(scimTokens.tokenHash, [hash, legacyHash]), limit: 2 });
+  const token = tokenRows.find((candidate) => candidate.tokenHash === hash) ?? tokenRows[0];
   if (!token || token.expiresAt < now) { (set as { status: number }).status = 401; return false; }
+  if (token.tokenHash === legacyHash) {
+    await db.update(scimTokens).set({ tokenHash: hash }).where(eq(scimTokens.id, token.id));
+  }
   const settings = await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") });
   if (!settings?.enabled || settings.paused === true) { (set as { status: number }).status = 401; return false; }
   await db.update(scimTokens).set({ lastUsedAt: now }).where(eq(scimTokens.id, token.id));

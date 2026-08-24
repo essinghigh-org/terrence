@@ -1,10 +1,10 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { organizationInvitations, organizationMemberships, users } from "../db/schema";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { checkOrganizationPermission, checkOrgPermission, auditLog } from "../lib/utils";
-import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
+import { generateAuthenticationToken, hashAuthenticationToken, tokenHashCandidates } from "../lib/token-service";
 import { normalizeEmail } from "../lib/identity";
 import { cachedOrgByName } from "../lib/cached-lookups";
 import { publish } from "../lib/event-bus";
@@ -115,9 +115,13 @@ export const organizationInvitationRoutes = new Elysia({ name: "organization-inv
     const rawToken = params.token ?? "";
     if (rawToken.trim() === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invitation token is required" }] }; }
     if (user === null || user === undefined) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
-    const tokenHash = hashAuthenticationToken(rawToken);
-    const invite = await db.query.organizationInvitations.findFirst({ where: eq(organizationInvitations.tokenHash, tokenHash) });
+    const [tokenHash, legacyTokenHash] = tokenHashCandidates(rawToken);
+    const inviteRows = await db.query.organizationInvitations.findMany({ where: inArray(organizationInvitations.tokenHash, [tokenHash, legacyTokenHash]), limit: 2 });
+    const invite = inviteRows.find((candidate) => candidate.tokenHash === tokenHash) ?? inviteRows[0];
     if (invite === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found", detail: "Invitation not found" }] }; }
+    if (invite.tokenHash === legacyTokenHash) {
+      await db.update(organizationInvitations).set({ tokenHash }).where(eq(organizationInvitations.id, invite.id));
+    }
     if (invite.status !== "pending") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Invitation is ${invite.status}` }] }; }
     if (invite.expiresAt < Date.now()) {
       await db.update(organizationInvitations).set({ status: "expired", updatedAt: Date.now() }).where(eq(organizationInvitations.id, invite.id));

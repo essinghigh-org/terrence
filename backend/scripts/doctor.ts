@@ -191,6 +191,7 @@ function checkConfig(): void {
         ["GITHUB_APP_ID", "optional"],
         ["TERRENCE_DISABLE_WORKER", "optional"],
         ["AUDIT_STRICT", "optional"],
+        ["TERRENCE_TOKEN_HASH_SECRET", "optional"],
         ["TERRENCE_LANDLOCK_RUNNER", "optional"],
     ];
     const set = (name: string): boolean => {

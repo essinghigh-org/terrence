@@ -18,6 +18,7 @@ import {
   teams,
   users,
 } from "../../src/db/schema";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 
 const DAY_MS = 86_400_000;
 const suffix = crypto.randomUUID();
@@ -209,7 +210,7 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
   const secondToken = (await secondTokenResponse.json()).data;
   expect(firstToken.attributes.token).toStartWith("scim-");
   const storedToken = await db.query.scimTokens.findFirst({ where: eq(scimTokens.id, firstToken.id) });
-  expect(storedToken?.tokenHash).toBe(createHash("sha256").update(firstToken.attributes.token).digest("hex"));
+  expect(storedToken?.tokenHash).toBe(hashAuthenticationToken(firstToken.attributes.token));
   const shownToken = await request("GET", `/api/v2/admin/scim-tokens/${firstToken.id}`, adminToken);
   expect((await shownToken.json()).data.attributes.token).toBeNull();
   const listedTokens = await request("GET", "/api/v2/admin/scim-tokens", adminToken);
