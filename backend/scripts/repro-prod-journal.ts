@@ -1,15 +1,17 @@
 /**
- * Local reproduction of the 2026-08-23 prod crash loop (throwaway script, not committed).
+ * Local reproduction of the 2026-08-23 prod crash loop.
  * Builds a prod-shaped DB: journal stops at 0025 (old image), api_tokens.legacy added
  * out-of-journal by the Aug-19 boot guard — then boots the CURRENT db module.
+ * Expected output: "boot OK", journal rows = bundled count, all post-0025 tables present.
  */
 import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
-import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-const dir = "/tmp/terrence-prod-shape";
-rmSync(dir, { recursive: true, force: true });
+const dir = mkdtempSync(join(tmpdir(), "terrence-prod-shape-"));
 mkdirSync(`${dir}/storage`, { recursive: true });
 
 // 1. Fresh DB through the OLD image's migrator: journal + files stop at 0025.
