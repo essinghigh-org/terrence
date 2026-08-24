@@ -417,11 +417,22 @@ export const userRoutes = new Elysia({ name: "users" })
     }
     return result;
   })
-  .delete("/api/v2/organization-memberships/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/organization-memberships/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
     const memId = params.id ?? "";
     const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
     if (mem === undefined || !(await checkOrganizationPermission(mem.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    // Last-owner guard: removing the only active owner would orphan the org.
+    if (mem.role === "owner" && mem.status === "active") {
+      const owners = await db.query.organizationMemberships.findMany({
+        where: and(eq(organizationMemberships.orgId, mem.orgId), eq(organizationMemberships.role, "owner"), eq(organizationMemberships.status, "active")),
+        columns: { id: true },
+      });
+      if (owners.length <= 1) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Cannot remove the last active owner of the organization" }] };
+      }
     }
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
