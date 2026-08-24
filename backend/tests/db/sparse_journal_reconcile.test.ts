@@ -144,13 +144,15 @@ test("plan classifier: skips existing objects, runs missing ones, leaves untouch
 
   const plan = sparseJournalReconcilePlan(DRIZZLE_DIR, [entry26, entry27, entry28], facts);
   // 0026 is partially present -> planned with statement-level repair.
-  const plan26 = plan.find((entry) => entry.tag === entry26.tag)!;
-  expect(plan26.statements[0]).toEqual({ sql: expect.stringContaining("ADD `legacy`"), skip: true });
-  expect(plan26.statements.find((statement) => statement.sql.includes("is_provisional"))?.skip).toBe(false);
-  expect(plan26.statements.every((statement) => statement.sql.length > 0)).toBe(true);
-  // 0027 creates identity_links which is missing -> left to drizzle entirely.
+  const plan26 = plan.find((entry) => entry.tag === entry26.tag);
+  expect(plan26, "journal entry 0026 must be planned").toBeDefined();
+  expect(plan26?.statements[0]).toEqual({ sql: expect.stringContaining("ADD `legacy`"), skip: true });
+  expect(plan26?.statements.find((statement) => statement.sql.includes("is_provisional"))?.skip).toBe(false);
+  expect(plan26?.statements.every((statement) => statement.sql.length > 0)).toBe(true);
+  // 0027 creates identity_links which is missing -> NOT planned, and the scan
+  // stops so no later entry can be stamped past an unapplied migration.
   expect(plan.find((entry) => entry.tag === entry27.tag)).toBeUndefined();
-  // 0028 likewise untouched.
+  // 0028 likewise untouched (also excluded by the contiguous-stamp rule).
   expect(plan.find((entry) => entry.tag === entry28.tag)).toBeUndefined();
 
   // Fully-present migration -> planned with every statement skipped (stamp-only).

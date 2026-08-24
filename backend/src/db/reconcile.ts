@@ -70,7 +70,9 @@ export type SparseJournalPlanEntry = {
  *     executing nothing, the caller just stamps the journal row,
  *   - partially present                    -> existing-object statements are
  *     marked skip, the rest still run (statement-level repair),
- *   - nothing present                      -> NOT planned; drizzle applies it.
+ *   - nothing present                      -> NOT planned; scanning STOPS so
+ *     no later entry is ever stamped past an unapplied one (drizzle compares
+ *     against max(created_at), which would permanently skip it).
  *
  * Statement classification covers what generated migrations emit: ADD COLUMN,
  * CREATE TABLE, CREATE [UNIQUE] INDEX. Anything else (data rewrites, DROPs)
@@ -91,12 +93,12 @@ export function sparseJournalReconcilePlan(
   const plan: SparseJournalPlanEntry[] = [];
 
   for (const entry of entries) {
+    // Only entries drizzle would REPLAY can need reconciling; entries whose
+    // exact hash is already recorded are applied regardless of timestamp order.
     const sqlPath = join(bundledFolder, `${entry.tag}.sql`);
     const migrationSql = readFileSync(sqlPath, "utf8");
     // Drizzle journals sha256(migration file text); compute it identically.
     const hash = createHash("sha256").update(migrationSql).digest("hex");
-    // Only entries drizzle would REPLAY can need reconciling; entries whose
-    // exact hash is already recorded are applied regardless of timestamp order.
     if (entry.when <= newestAppliedAt || appliedHashes.has(hash)) continue;
 
     const statements = migrationSql
@@ -137,9 +139,12 @@ export function sparseJournalReconcilePlan(
       planned.push({ sql, skip: false });
     }
 
-    // A migration drizzle would apply cleanly (nothing present yet) is left to
-    // drizzle entirely — including its batch transactionality.
-    if (!anyPresent) continue;
+    // A migration with nothing present is left to drizzle entirely — including
+    // its batch transactionality. STOP the scan here: drizzle replays by
+    // max(created_at) comparison, so stamping any later entry would make it
+    // consider this earlier one applied and skip it forever. Journal rows may
+    // only advance contiguously.
+    if (!anyPresent) break;
     plan.push({ tag: entry.tag, hash, when: entry.when, statements: planned });
   }
   return plan;
