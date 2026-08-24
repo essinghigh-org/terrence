@@ -149,8 +149,28 @@ export const userRoutes = new Elysia({ name: "users" })
     if (typeof attrs.email === "string") {
       const ne = attrs.email.trim() === "" ? null : normalizeEmail(attrs.email);
       if (attrs.email.trim() !== "" && ne === null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email" }] }; }
+      // Reject emails already claimed by ANOTHER account up front; the users
+      // table enforces this with a UNIQUE constraint whose raw violation would
+      // otherwise surface as an opaque 500.
+      if (ne !== null) {
+        const claimant = await db.query.users.findFirst({ where: eq(users.email, ne), columns: { id: true } });
+        if (claimant !== undefined && claimant.id !== userId) {
+          (set as { status: number }).status = 409;
+          return { errors: [{ status: "409", title: "Conflict", detail: "That email address is already in use" }] };
+        }
+      }
       updates.email = ne ?? attrs.email.trim();
       if (ne === null && attrs.email.trim() === "") updates.email = null as unknown as string;
+    }
+    if (typeof attrs.username === "string" && attrs.username.trim() !== "") {
+      const nu2 = normalizeUsername(attrs.username);
+      if (nu2 !== null && nu2 !== targetUser.username) {
+        const nameClaimant = await db.query.users.findFirst({ where: eq(users.username, nu2), columns: { id: true } });
+        if (nameClaimant !== undefined && nameClaimant.id !== userId) {
+          (set as { status: number }).status = 409;
+          return { errors: [{ status: "409", title: "Conflict", detail: "That username is already in use" }] };
+        }
+      }
     }
     if (Object.keys(updates).length > 0) {
       await db.update(users).set(updates).where(eq(users.id, userId));
