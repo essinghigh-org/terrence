@@ -28,7 +28,7 @@ Terraform Cloud shut down its free tier. Terraform Enterprise costs more than mo
 
 Terrence gives you the missing middle: a self-hosted run platform that speaks the same API your existing tooling already expects. Your state lives on your storage. Your runs execute on your hardware. Your team gets a real interface for reviewing plans before they touch production.
 
-- **Your infrastructure, your rules** — nothing leaves your network. State, logs, and variables stay in your database.
+- **Your infrastructure, your rules** — state, logs, and variables stay in your database on your hardware, not a vendor's cloud.
 - **Drop-in compatible** — the JSON:API format the Terraform CLI speaks means `terraform login`, CI pipelines, and tfc-agent-style workers work without rewrites.
 - **Runs with guardrails** — policy checks (Sentinel or OPA) gate every plan, with hard-mandatory rules that block bad applies.
 - **One container** — SQLite by default, single Docker image, runs fine on a homelab box.
@@ -47,7 +47,7 @@ Terrence gives you the missing middle: a self-hosted run platform that speaks th
 | **State management** | Versioned state storage with browsing, downloads, and outputs inspection. |
 | **Variables** | Workspace and environment variables plus reusable variable sets. |
 | **Policy enforcement** | Sentinel and OPA/Rego checks evaluated after every plan. Failed hard-mandatory policies block the apply. |
-| **Cost estimates** | Optional Infracost integration prices every plan before it runs. |
+| **Cost estimates** | Optional Infracost integration can price plans when enabled and the binary is available. |
 | **Notifications** | Webhooks, email, and Slack when runs need attention. |
 | **SSO** | SAML 2.0, OIDC, and LDAP sign-in with group-to-team mapping. Local auth can be disabled entirely. |
 | **Private registry** | Publish and version Terraform modules from your own repos. No-code provisioning deploys them to new workspaces. |
@@ -68,30 +68,33 @@ docker run -d --name terrence -p 3000:3000 \
 
 Open `http://localhost:3000`, sign in as `admin` with the password you set, create an organization, and connect a workspace.
 
+> **Run sandbox:** run execution requires Landlock (Linux >= 5.13). The container is fail-closed by default — if your host cannot provide Landlock, add `-e TERRENCE_RUN_SANDBOX=0` (or use the bundled `docker-compose.unsandboxed.yml` override). Without isolation or an explicit opt-out, runs stay queued.
+
 Or with compose:
 
 ```bash
 git clone https://github.com/essinghigh-org/terrence.git && cd terrence
-ADMIN_PASSWORD="pick-a-long-password" docker compose up -d
+ADMIN_PASSWORD="pick-a-long-password" GITHUB_WEBHOOK_SECRET="a-webhook-secret" \
+  docker compose up -d
 ```
 
-The first admin is created from `ADMIN_PASSWORD` on first boot. To allow open registration instead of (or alongside) the bootstrap admin, set `TERRENCE_ENABLE_LOCAL_SIGNUP=true`.
+Both variables pass through to the container via compose interpolation (`${...:-}` placeholders in `docker-compose.yml`). The first admin is created from `ADMIN_PASSWORD` on first boot. To allow open registration instead of (or alongside) the bootstrap admin, set `TERRENCE_ENABLE_LOCAL_SIGNUP=true`.
 
 ### Developing
 
 Prerequisites: **Bun** >= 1.4.0, plus OpenTofu >= 1.7 or Terraform >= 1.9 on the worker host (Infracost >= 0.10 optional, for cost estimation).
 
 ```bash
-bun install                     # Bun >= 1.4.0
-cd frontend && bun run build    # static SPA served by the backend
-cd backend && bun run index.ts  # dev server on :3000
+bun install                                  # Bun >= 1.4.0
+(cd frontend && bun run build)               # static SPA served by the backend
+(cd backend && bun run index.ts)             # dev server on :3000
 ```
 
 Run the test suites with `cd backend && bun test` and `cd frontend && bun test`. After schema changes, generate migrations with `bun drizzle-kit generate` in `backend/` — never write them by hand.
 
 ## How it works
 
-```
+```text
 ┌──────────────┐    JSON:API     ┌─────────────────────────────┐
 │  Terraform   │◄───────────────►│  Terrence                   │
 │  CLI / CI    │                 │  ┌───────────────────────┐  │
@@ -161,7 +164,7 @@ Terrence runs with none of these set in development. Production deployments usua
 <details>
 <summary><strong>Container user & storage permissions</strong></summary>
 
-The image runs as the unprivileged `nonroot` user (uid 65532, Wolfi distroless base). When bind-mounting `./storage`, the host directory must be owned by uid 65532 (or world-writable), otherwise the app cannot write its database. Named volumes in `docker-compose.yml` inherit the correct ownership automatically.
+The image runs as the unprivileged `nonroot` user (uid 65532, Wolfi distroless base). When bind-mounting `./storage`, the host directory must be owned by uid 65532 (e.g. `chown -R 65532:65532 ./storage`), otherwise the app cannot write its database. Avoid world-writable permissions — that directory holds your database, state archives, and managed binaries. Named volumes in `docker-compose.yml` inherit the correct ownership automatically.
 
 Verify a running container executes as `nonroot`:
 
@@ -179,7 +182,7 @@ Terrence evaluates policies at run time after plan generation. Each policy set k
 - **Sentinel** (the default kind): evaluated with `sentinel apply` against the generated plan JSON, exposed as the `tfplan` global. Policy-set parameters pass as `-param` entries; evaluation is bounded by a 30 second timeout. Set `SENTINEL_BINARY_PATH` to pin a binary. VCS-synced sets must carry a `sentinel.hcl` manifest and at least one `.sentinel` file.
 - **OPA/Rego**: evaluated with `opa eval`, receiving the plan JSON as `--input`. A result containing a non-empty `violations` array marks the check failed. VCS-synced sets must contain at least one `.rego` file.
 
-Both CLIs must be on the worker host's `PATH`. A check whose tool is missing or errors records as `errored` — it never silently passes. Enforcement level (`hard-mandatory`, `soft-mandatory`, `advisory`) decides whether a failed check blocks the run.
+Each selected CLI must be available to the worker — on `PATH`, or at the configured override (`SENTINEL_BINARY_PATH` for Sentinel). A check whose tool is missing or errors records as `errored` — it never silently passes. Enforcement level (`hard-mandatory`, `soft-mandatory`, `advisory`) decides whether a failed check blocks the run.
 
 </details>
 
