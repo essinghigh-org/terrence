@@ -7,7 +7,6 @@
 
 <p align="center">
   <a href="https://github.com/essinghigh-org/terrence/blob/master/LICENSE"><img alt="License" src="https://img.shields.io/github/license/essinghigh-org/terrence?style=flat-square"></a>
-  <a href="https://github.com/essinghigh-org/terrence/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/essinghigh-org/terrence?style=flat-square"></a>
   <a href="https://github.com/essinghigh-org/terrence/pkgs/container/terrence"><img alt="Container" src="https://img.shields.io/badge/container-ghcr.io-blue?style=flat-square"></a>
   <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/essinghigh-org/terrence/ci.yml?branch=master&style=flat-square">
 </p>
