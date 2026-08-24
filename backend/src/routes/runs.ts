@@ -18,6 +18,7 @@ import { isPlanIncompleteRunStatus } from "../lib/run-status";
 import { AvatarService } from "../lib/avatars";
 import { cachedOrgByName } from "../lib/cached-lookups";
 import { scheduleExplorerInventory } from "../lib/explorer-inventory";
+import { runExecutionDurationMilliseconds } from "../lib/run-duration";
 
 type SetObj = { status?: number | string; headers: Record<string, string | number> };
 
@@ -41,12 +42,8 @@ export async function runDurationBaseline(
   "median-duration-seconds": number;
   "is-slow": boolean;
 }> | null> {
-  const timestamps = (run.statusTimestamps ?? {}) as Readonly<Record<string, string | undefined>>;
-  const start = timestamps["planned-at"] ?? timestamps["pending-at"];
-  const end = timestamps["applied-at"] ?? timestamps["planned-finished-at"] ?? timestamps["applied-finished-at"] ?? timestamps["errored-at"];
-  if (typeof start !== "string" || typeof end !== "string") return null;
-  const durationMs = Date.parse(end) - Date.parse(start);
-  if (!Number.isFinite(durationMs) || durationMs <= 0) return null;
+  const durationMs = runExecutionDurationMilliseconds(run.statusTimestamps, run.planOnly === true);
+  if (durationMs === null || durationMs <= 0) return null;
 
   const comparable = await db.query.runs.findMany({
     columns: { statusTimestamps: true },
@@ -63,13 +60,8 @@ export async function runDurationBaseline(
   });
   const durations: number[] = [];
   for (const other of comparable) {
-    const ts = (other.statusTimestamps ?? {}) as Readonly<Record<string, string | undefined>>;
-    const otherStart = ts["planned-at"] ?? ts["pending-at"];
-    const otherEnd = ts["applied-at"] ?? ts["planned-finished-at"] ?? ts["applied-finished-at"] ?? ts["errored-at"];
-    if (typeof otherStart === "string" && typeof otherEnd === "string") {
-      const ms = Date.parse(otherEnd) - Date.parse(otherStart);
-      if (Number.isFinite(ms) && ms > 0) durations.push(ms);
-    }
+    const ms = runExecutionDurationMilliseconds(other.statusTimestamps, run.planOnly === true);
+    if (ms !== null && ms > 0) durations.push(ms);
   }
   if (durations.length < 3) return null;
 
@@ -109,6 +101,12 @@ type RunOrigin = Readonly<{ source: string; triggerReason: string; branch?: stri
 type LogItem = DeepReadonly<typeof logs.$inferSelect>;
 type CommentItem = DeepReadonly<typeof runComments.$inferSelect>;
 type AuditItem = DeepReadonly<typeof auditLogs.$inferSelect>;
+
+function rawRunLogFilename(runId: string, phase: "plan" | "apply"): string {
+  const safeRunId = runId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128);
+  const base = safeRunId.startsWith("run-") ? safeRunId : `run-${safeRunId}`;
+  return `${base}-${phase}.txt`;
+}
 
 function originForConfiguration(
   configuration: ConfigurationVersionItem | undefined,
@@ -678,7 +676,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     )).groupBy(runs.status);
     const totalFor = (statuses: readonly string[]): number => counts
       .filter((row): boolean => statuses.includes(row.status))
-      .reduce((sum, row): number => sum + Number(row.total), 0);
+      .reduce((sum, row): number => sum + row.total, 0);
     return { data: { id: organization.name, type: "organization-capacity", attributes: { pending: totalFor(CAPACITY_PENDING_STATUSES), running: totalFor(CAPACITY_RUNNING_STATUSES) } } };
   })
   .post("/api/v2/workspaces/:workspace_id/runs", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -790,7 +788,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     }
     const location = signedApiURL(request, `/api/v2/state-versions/${state.id}/download`, "GET");
     (set as { status: number }).status = 307;
-    (set.headers as Record<string, string>) ["Location"] = location;
+    (set.headers as Record<string, string>) .Location = location;
     return {};
   })
   .get("/api/v2/runs/:run_id/run-events", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -838,10 +836,9 @@ export const runRoutes = new Elysia({ name: "runs" })
         relationships: { comment: { data: { id: comment.id, type: "comments" } } },
       })),
     ].sort((left, right): number => (Number(left.createdAt) - Number(right.createdAt)) || String(left.id).localeCompare(String(right.id)))
-      .map((resource): Record<string, unknown> => {
-        const { createdAt: _createdAt, ...publicResource } = resource;
-        return publicResource;
-      });
+      .map((resource): Record<string, unknown> => Object.fromEntries(
+        Object.entries(resource).filter(([key]): boolean => key !== "createdAt"),
+      ));
     return {
       data: eventResources,
     };
@@ -871,7 +868,8 @@ export const runRoutes = new Elysia({ name: "runs" })
     const logToken = params.log_token ?? "";
     if ((await findLogCapability(runId, logToken)) === undefined) { (set as { status: number }).status = 404; return "Not Found"; }
     const planLogs = await readRunLogs(runId, "plan");
-    set.headers["Content-Type"] = "text/plain";
+    set.headers["Content-Type"] = "text/plain; charset=utf-8";
+    set.headers["Content-Disposition"] = `attachment; filename="${rawRunLogFilename(runId, "plan")}"`;
     return logChunk(planLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
   .get("/api/v2/runs/:run_id/apply/log/:log_token", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
@@ -879,7 +877,8 @@ export const runRoutes = new Elysia({ name: "runs" })
     const logToken = params.log_token ?? "";
     if ((await findLogCapability(runId, logToken)) === undefined) { (set as { status: number }).status = 404; return "Not Found"; }
     const applyLogs = await readRunLogs(runId, "apply");
-    set.headers["Content-Type"] = "text/plain";
+    set.headers["Content-Type"] = "text/plain; charset=utf-8";
+    set.headers["Content-Disposition"] = `attachment; filename="${rawRunLogFilename(runId, "apply")}"`;
     return logChunk(applyLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
   .get("/api/v2/runs/:run_id/plan/log", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -887,7 +886,8 @@ export const runRoutes = new Elysia({ name: "runs" })
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const planLogs = await readRunLogs(runId, "plan");
-    set.headers["Content-Type"] = "text/plain";
+    set.headers["Content-Type"] = "text/plain; charset=utf-8";
+    set.headers["Content-Disposition"] = `attachment; filename="${rawRunLogFilename(runId, "plan")}"`;
     return logChunk(planLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
   .get("/api/v2/runs/:run_id/apply/log", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -895,7 +895,8 @@ export const runRoutes = new Elysia({ name: "runs" })
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const applyLogs = await readRunLogs(runId, "apply");
-    set.headers["Content-Type"] = "text/plain";
+    set.headers["Content-Type"] = "text/plain; charset=utf-8";
+    set.headers["Content-Disposition"] = `attachment; filename="${rawRunLogFilename(runId, "apply")}"`;
     return logChunk(applyLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
   .get("/api/v2/runs/:run_id/apply", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {

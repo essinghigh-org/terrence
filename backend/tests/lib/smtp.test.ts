@@ -7,8 +7,9 @@ import { sendEmail, type SmtpSettings } from "../../src/lib/smtp";
  * refusal, AUTH PLAIN, MAIL/RCPT/DATA, QUIT. Captures the raw message.
  */
 function createFakeSmtpServer(options: Readonly<{ rejectRcpt?: string }> = {}) {
-  let received: Array<string> = [];
+  let received: string[] = [];
   let inData = false;
+  let authLoginStep = 0;
 
   const server = Bun.listen({
     hostname: "127.0.0.1",
@@ -36,6 +37,15 @@ function createFakeSmtpServer(options: Readonly<{ rejectRcpt?: string }> = {}) {
           } else if (line === "STARTTLS") {
             socket.write("502 STARTTLS not supported\r\n");
           } else if (line.startsWith("AUTH PLAIN")) {
+            socket.write("235 authenticated\r\n");
+          } else if (line === "AUTH LOGIN") {
+            authLoginStep = 1;
+            socket.write("334 VXNlcm5hbWU6\r\n");
+          } else if (authLoginStep === 1) {
+            authLoginStep = 2;
+            socket.write("334 UGFzc3dvcmQ6\r\n");
+          } else if (authLoginStep === 2) {
+            authLoginStep = 0;
             socket.write("235 authenticated\r\n");
           } else if (line.startsWith("MAIL FROM")) {
             socket.write("250 ok\r\n");
@@ -114,6 +124,41 @@ describe("sendEmail", () => {
     expect(fake.received()).toContain("normal");
   });
 
+  test("delivers multipart/alternative messages when HTML is provided", async () => {
+    fake.reset();
+    await sendEmail(testSettings, {
+      to: ["one@example.com"],
+      subject: "HTML test",
+      text: "Status: applied",
+      html: "<html><body><strong>Status:</strong> applied £</body></html>",
+    });
+    const lines = fake.received();
+    expect(lines.some((line): boolean => line.startsWith("Content-Type: multipart/alternative; boundary=\""))).toBeTrue();
+    expect(lines).toContain("Content-Type: text/plain; charset=utf-8");
+    expect(lines).toContain("Content-Type: text/html; charset=utf-8");
+    expect(lines).toContain("Content-Transfer-Encoding: quoted-printable");
+    expect(lines).toContain("<html><body><strong>Status:</strong> applied =C2=A3</body></html>");
+  });
+
+  test("honors LOGIN authentication", async () => {
+    await sendEmail({ ...testSettings, auth: "login" }, {
+      to: ["one@example.com"],
+      subject: "Login auth",
+      text: "body",
+    });
+    expect(fake.received()).toContain("body");
+  });
+
+  test("encodes non-ASCII plain text without HTML", async () => {
+    fake.reset();
+    await sendEmail(testSettings, {
+      to: ["one@example.com"],
+      subject: "Plain UTF-8",
+      text: "Amount: £10",
+    });
+    expect(fake.received()).toContain("Amount: =C2=A310");
+  });
+
   test("sanitizes CRLF out of the subject", async () => {
     fake.reset();
     await sendEmail(testSettings, {
@@ -122,6 +167,16 @@ describe("sendEmail", () => {
       text: "body",
     });
     expect(fake.received()).toContain("Subject: Injection  Bcc: evil@example.com");
+  });
+
+  test("sanitizes other control characters out of the subject", async () => {
+    fake.reset();
+    await sendEmail(testSettings, {
+      to: ["one@example.com"],
+      subject: "Control\u0000\u000btest",
+      text: "body",
+    });
+    expect(fake.received()).toContain("Subject: Control  test");
   });
 
   test("fails when a recipient is rejected", async () => {
@@ -134,5 +189,21 @@ describe("sendEmail", () => {
     } finally {
       strict.stop();
     }
+  });
+
+  test("rejects header-injection addresses before connecting", async () => {
+    await expect(sendEmail(testSettings, {
+      to: ["victim@example.com\r\nBcc: attacker@example.com"],
+      subject: "s",
+      text: "b",
+    })).rejects.toThrow("Invalid SMTP recipient address");
+  });
+
+  test("rejects an empty SMTP host before connecting", async () => {
+    await expect(sendEmail({ ...testSettings, host: "" }, {
+      to: ["one@example.com"],
+      subject: "s",
+      text: "b",
+    })).rejects.toThrow("Invalid SMTP host");
   });
 });

@@ -550,7 +550,7 @@ describe("AI plan explainer (21.2)", () => {
       expect(body.errors[0]?.detail ?? "").toContain("unreachable");
     } else {
       const body = (await response.json()) as { data: { attributes: Record<string, unknown> } };
-      expect(String(body.data.attributes["status"] ?? body.data.attributes["job-id"] ?? "queued")).toMatch(/queued|running|failed/);
+      expect(String(body.data.attributes.status ?? body.data.attributes["job-id"] ?? "queued")).toMatch(/queued|running|failed/);
     }
   });
 
@@ -572,7 +572,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
   let upstreamCalls = 0;
   let upstreamMode: "json" | "json-reasoning" | "sse" = "json";
   let endpointUrl = "";
-  let upstreamBodies: Array<Readonly<{ stream: unknown; model: unknown; maxTokens: unknown; reasoning: unknown; reasoningEffort: unknown; prompt: string | null }>> = [];
+  let upstreamBodies: Readonly<{ stream: unknown; model: unknown; maxTokens: unknown; reasoning: unknown; reasoningEffort: unknown; prompt: string | null }>[] = [];
 
   beforeAll(async () => {
     await db.insert(runs).values([
@@ -622,7 +622,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
             max_tokens?: unknown;
             reasoning?: unknown;
             reasoning_effort?: unknown;
-            messages?: Array<{ content?: unknown }>;
+            messages?: { content?: unknown }[];
           };
           stream = body.stream ?? null;
           model = body.model ?? null;
@@ -685,7 +685,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     if (first.status === 202) { await new Promise(r => setTimeout(r, 200)); }
     if (first.status === 202) {
       const env = (await first.json()) as { data: { attributes: Record<string, unknown> } };
-      expect(String(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
+      expect(String(env.data.attributes.status ?? "queued")).toMatch(/queued|running/);
       // Job is async with worker off; ensure at least the enqueue happened
       expect(upstreamCalls).toBe(0);
     } else {
@@ -739,7 +739,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     if (generated.status === 202) { await new Promise(r => setTimeout(r, 200)); }
     if (generated.status === 202) {
       const env = (await generated.json()) as { data: { attributes: Record<string, unknown> } };
-      expect(String(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
+      expect(String(env.data.attributes.status ?? "queued")).toMatch(/queued|running/);
     } else {
       const generatedBody = (await generated.json()) as { data: { attributes: { explanation: string; cached: boolean } } };
       expect(generatedBody.data.attributes.explanation).toContain("adds one instance");
@@ -887,7 +887,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     if (response.status === 202) { await new Promise(r => setTimeout(r, 200)); }
     if (response.status === 202) {
       const env = (await response.json()) as { data: { attributes: Record<string, unknown> } };
-      expect(String(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
+      expect(String(env.data.attributes.status ?? "queued")).toMatch(/queued|running/);
     } else {
       const body = (await response.json()) as { data: { attributes: { explanation: string } } };
       expect(body.data.attributes.explanation).toContain("adds one instance");
@@ -1118,7 +1118,7 @@ describe("admin operations settings surface", () => {
       headers: { Authorization: `Bearer ${adminToken}` },
     }));
     expect(providers.status).toBe(200);
-    const providersBody = (await providers.json()) as { data: Array<{ id: string; attributes: { name: string; "model-count": number } }> };
+    const providersBody = (await providers.json()) as { data: { id: string; attributes: { name: string; "model-count": number } }[] };
     expect(providersBody.data.length).toBeGreaterThan(0);
     const ids = providersBody.data.map((p) => p.id);
     expect(ids).toContain("openrouter");
@@ -1143,7 +1143,7 @@ describe("admin operations settings surface", () => {
       headers: { Authorization: `Bearer ${adminToken}` },
     }));
     expect(models.status).toBe(200);
-    const modelsBody = (await models.json()) as { data: Array<{ id: string; attributes: { name: string } }>; meta: { "model-count": number } };
+    const modelsBody = (await models.json()) as { data: { id: string; attributes: { name: string } }[]; meta: { "model-count": number } };
     expect(modelsBody.meta["model-count"]).toBeGreaterThan(0);
     expect(modelsBody.data.every((m) => typeof m.id === "string" && m.id !== "")).toBe(true);
 

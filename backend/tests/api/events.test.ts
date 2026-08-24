@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { app } from "../../src/app";
 import { publish } from "../../src/lib/event-bus";
 import { db } from "../../src/db";
-import { organizationMemberships } from "../../src/db/schema";
+import { organizationMemberships, users } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 import {
   cleanupSeed,
@@ -34,7 +34,7 @@ async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, marker
       const result = await Promise.race([
         reader.read(),
         new Promise<{ done: false; value: undefined; timedOut: true }>((resolve): void => {
-          setTimeout((): void => resolve({ done: false, value: undefined, timedOut: true }), 250);
+          setTimeout((): void => { resolve({ done: false, value: undefined, timedOut: true }); }, 250);
         }),
       ]);
       if (result.done) break;
@@ -145,7 +145,7 @@ describe("authenticated SSE event stream (10.20)", () => {
     const result = await Promise.race([
       reader.read(),
       new Promise<{ done: false; timedOut: true }>((resolve): void => {
-        setTimeout((): void => resolve({ done: false, timedOut: true }), 500);
+        setTimeout((): void => { resolve({ done: false, timedOut: true }); }, 500);
       }),
     ]);
     expect(result.done).toBe(true);
@@ -172,31 +172,35 @@ describe("authenticated SSE event stream (10.20)", () => {
   });
 
   it("closes the stream when the user's org membership is deleted via the API", async () => {
-    const extraMembershipId = `membership-events-${crypto.randomUUID()}`;
+    const recoveryOwnerId = `user-events-recovery-${crypto.randomUUID()}`;
+    const recoveryMembershipId = `membership-events-recovery-${crypto.randomUUID()}`;
+    await db.insert(users).values({ id: recoveryOwnerId, username: recoveryOwnerId, passwordHash: "unused" });
     await db.insert(organizationMemberships).values({
-      id: extraMembershipId,
-      userId: seed.userId,
+      id: recoveryMembershipId,
+      userId: recoveryOwnerId,
       orgId: seed.orgId,
-      role: "viewer",
+      role: "owner",
     });
     try {
       const reader = await openStream(headers);
       const response = await app.handle(new Request(
-        `http://localhost/api/v2/organization-memberships/${extraMembershipId}`,
+        `http://localhost/api/v2/organization-memberships/${seed.membershipId}`,
         { method: "DELETE", headers },
       ));
       expect(response.status).toBe(204);
       const result = await Promise.race([
         reader.read(),
         new Promise<{ done: false; timedOut: true }>((resolve): void => {
-          setTimeout((): void => resolve({ done: false, timedOut: true }), 500);
+          setTimeout((): void => { resolve({ done: false, timedOut: true }); }, 500);
         }),
       ]);
       expect(result.done).toBe(true);
       await reader.cancel().catch((): void => {});
       reader.releaseLock();
     } finally {
-      await db.delete(organizationMemberships).where(eq(organizationMemberships.id, extraMembershipId)).catch((): void => {});
+      await db.delete(organizationMemberships).where(eq(organizationMemberships.id, seed.membershipId)).catch((): void => {});
+      await db.delete(organizationMemberships).where(eq(organizationMemberships.id, recoveryMembershipId)).catch((): void => {});
+      await db.delete(users).where(eq(users.id, recoveryOwnerId)).catch((): void => {});
     }
   });
 });

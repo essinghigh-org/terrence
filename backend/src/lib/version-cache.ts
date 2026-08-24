@@ -34,7 +34,7 @@ export function loadVersionCacheFile(filePath: string): VersionCacheFile {
     const raw = readFileSync(filePath, "utf8");
     const value = JSON.parse(raw) as unknown;
     if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
-    parsed = value as VersionCacheFile;
+    parsed = value;
   } catch {
     return {};
   }

@@ -41,7 +41,7 @@ function formatSessionDate(value: string): string {
 }
 
 export function AccountSettings(): React.JSX.Element {
-  type Account = { id: string; attributes: { username: string; email: string | null; "must-change-password"?: boolean; "avatar-url"?: string; theme?: string } };
+  type Account = { id: string; attributes: { username: string; email: string | null; "email-verified"?: boolean; "must-change-password"?: boolean; "avatar-url"?: string; theme?: string } };
   const location = useLocation();
   const layoutContext = useOutletContext<LayoutOutletContext | null>();
   const [account, setAccount] = useState<Account | null>(null);
@@ -50,6 +50,7 @@ export function AccountSettings(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+  const [verificationLoading, setVerificationLoading] = useState(false);
 
   // Profile Form
   const [username, setUsername] = useState("");
@@ -259,6 +260,22 @@ export function AccountSettings(): React.JSX.Element {
     }
   }
 
+  async function handleRequestEmailVerification(): Promise<void> {
+    if (updatingProfile) return;
+    if (account?.attributes.email === null || account?.attributes.email === undefined || account.attributes.email.trim() === "") return;
+    setVerificationLoading(true);
+    setError("");
+    setSuccessMsg("");
+    try {
+      await fetchApi("/account/email/verification", { method: "POST" });
+      setSuccessMsg("Verification email sent. Check your inbox to confirm this address.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not send a verification email");
+    } finally {
+      setVerificationLoading(false);
+    }
+  }
+
   async function handleThemeChange(nextThemeId: string): Promise<void> {
     const previousThemeId = themeId;
     const selectedTheme = getTheme(nextThemeId).id;
@@ -465,6 +482,29 @@ export function AccountSettings(): React.JSX.Element {
         </CardFooter>
       </Card>
 
+      {!mustChangePassword && account?.attributes.email !== null && account?.attributes.email !== undefined && account.attributes.email !== "" && (
+        <Card id="email-verification" className="scroll-mt-20">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg"><Check className="size-4" />Email verification</CardTitle>
+            <CardDescription>Verify your email address so organization invitations and account recovery can be trusted.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {account.attributes["email-verified"] === true ? (
+              <Badge variant="secondary">Verified</Badge>
+            ) : (
+              <p className="text-sm text-muted-foreground">{account.attributes.email} is not verified.</p>
+            )}
+          </CardContent>
+          {account.attributes["email-verified"] !== true && (
+            <CardFooter>
+              <Button type="button" variant="outline" disabled={verificationLoading || updatingProfile} onClick={(): void => { void handleRequestEmailVerification(); }}>
+                {verificationLoading ? "Sending…" : "Send verification email"}
+              </Button>
+            </CardFooter>
+          )}
+        </Card>
+      )}
+
       <Card id="appearance" className={mustChangePassword ? "hidden" : "scroll-mt-20"}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
@@ -606,7 +646,7 @@ export function AccountSettings(): React.JSX.Element {
                           disabled={revokingSessionId === session.id}
                           aria-label={`Revoke session ${session.id}`}
                           onClick={(): void => {
-                            const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
+                            const isTestEnv = window?.navigator.userAgent.includes("jsdom") ?? false;
                             if (isTestEnv) {
                               void handleRevokeSession(session);
                             } else {
@@ -852,7 +892,7 @@ export function AccountSettings(): React.JSX.Element {
                         aria-label={`Delete token ${token.id}`}
                         disabled={deletingTokenId === token.id}
                         onClick={(): void => {
-                          const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
+                          const isTestEnv = window?.navigator.userAgent.includes("jsdom") ?? false;
                           if (isTestEnv) {
                             void handleDeleteToken(token.id);
                           } else {

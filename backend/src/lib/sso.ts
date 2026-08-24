@@ -179,10 +179,11 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
     where: and(eq(users.ssoProvider, identity.provider), eq(users.ssoSubject, subject)),
   });
   if (byIdentity !== undefined) {
+    const verifiedEmailAt = identity.emailVerified === true && email !== null ? Date.now() : undefined;
     if (byIdentity.email === null && email !== null
       && identity.emailVerified === true && identity.allowEmailLinking === true) {
       try {
-        await db.update(users).set({ email }).where(and(
+        await db.update(users).set({ email, emailVerifiedAt: verifiedEmailAt }).where(and(
           eq(users.id, byIdentity.id),
           isNull(users.email),
           sql`NOT EXISTS (
@@ -194,6 +195,9 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
       } catch (error: unknown) {
         if (!isUniqueConstraintError(error)) throw error;
       }
+    }
+    if (verifiedEmailAt !== undefined && byIdentity.email !== null && canonicalEmail(byIdentity.email) === email) {
+      await db.update(users).set({ emailVerifiedAt: verifiedEmailAt }).where(eq(users.id, byIdentity.id));
     }
     await db.insert(identityLinks).values({ id: `idlink-${crypto.randomUUID()}`, userId: byIdentity.id, provider: identity.provider, externalId: subject, emailAtLinkTime: email, createdAt: Date.now() }).onConflictDoNothing();
     const refreshed = await db.query.users.findFirst({ where: eq(users.id, byIdentity.id) });
@@ -213,7 +217,7 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
       const claimed = byEmail.ssoProvider !== null || byEmail.ssoSubject !== null;
       if (claimed) throw new SsoConflictError(identity.provider, username);
       const linked = await db.update(users)
-        .set({ ssoProvider: identity.provider, ssoSubject: subject })
+        .set({ ssoProvider: identity.provider, ssoSubject: subject, emailVerifiedAt: Date.now() })
         .where(and(eq(users.id, byEmail.id), isNull(users.ssoProvider), isNull(users.ssoSubject)))
         .returning({ id: users.id });
       if (linked.length === 0) throw new SsoConflictError(identity.provider, username);
@@ -258,6 +262,7 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
     passwordHash: unusableHash,
     ssoProvider: identity.provider,
     ssoSubject: subject,
+    emailVerifiedAt: identity.emailVerified === true && insertEmail !== null ? Date.now() : null,
     isSiteAdmin: false,
   }).onConflictDoNothing();
   const raced = await db.query.users.findFirst({

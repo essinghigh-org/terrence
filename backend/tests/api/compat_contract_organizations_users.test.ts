@@ -22,15 +22,20 @@ describe("remote-workflow organizations and users contract", () => {
   const extraOrgName = `extra-${seed.suffix}`;
   const memberUsername = `member-${seed.suffix}`;
   const memberId = `member-user-${seed.suffix}`;
+  const noEmailMemberId = `no-email-member-${seed.suffix}`;
   let membershipId = "";
 
   beforeAll(async () => {
     await persistSeed(seed);
-    await db.insert(users).values({ id: memberId, username: memberUsername, email: `${memberUsername}@example.com`, passwordHash: "unused" });
+    await db.insert(users).values([
+      { id: memberId, username: memberUsername, email: `${memberUsername}@example.com`, passwordHash: "unused" },
+      { id: noEmailMemberId, username: noEmailMemberId, passwordHash: "unused" },
+    ]);
   });
 
   afterAll(async () => {
     await db.delete(users).where(eq(users.id, memberId));
+    await db.delete(users).where(eq(users.id, noEmailMemberId));
     await db.delete(organizations).where(eq(organizations.id, extraOrgId));
     await cleanupSeed(seed);
   });
@@ -141,6 +146,27 @@ describe("remote-workflow organizations and users contract", () => {
     const items = expectCollection(body, "organization-memberships");
     expect(items.map((m) => m.id)).toContain(membershipId);
     expectPaginationMeta(body);
+  });
+
+  it("requires an email address when adding a member", async () => {
+    const missingEmail = await request(`/api/v2/organizations/${seed.orgName}/organization-memberships`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        data: {
+          type: "organization-memberships",
+          attributes: { username: noEmailMemberId },
+        },
+      }),
+    });
+    await expectErrorResponse(missingEmail, 422);
+
+    const missingTarget = await request(`/api/v2/organizations/${seed.orgName}/organization-memberships`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ data: { type: "organization-memberships", attributes: {} } }),
+    });
+    await expectErrorResponse(missingTarget, 422);
   });
 
   it("shows the current user", async () => {

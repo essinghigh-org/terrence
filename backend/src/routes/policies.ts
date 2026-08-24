@@ -1106,7 +1106,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const polList = await db.query.policies.findMany({ where: eq(policies.policySetId, policySetId) });
     const orgName = await organizationName(ps.orgId);
-    return { data: await Promise.all(polList.map((p: PolItem): Promise<Record<string, unknown>> => policyResource(p, orgName))) };
+    return { data: await Promise.all(polList.map(async (p: PolItem): Promise<Record<string, unknown>> => policyResource(p, orgName))) };
   })
   .post("/api/v2/policy-sets/:policy_set_id/policies", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const policySetId = params.policy_set_id ?? "";

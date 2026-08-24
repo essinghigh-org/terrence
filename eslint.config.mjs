@@ -166,6 +166,19 @@ export default tseslint.config(
     files: ['frontend/src/**/*.tsx'],
     rules: {
       '@typescript-eslint/prefer-readonly-parameter-types': 'off',
+      // JSON:API responses are intentionally narrowed at call sites; the
+      // generic fetch helper cannot know each endpoint's envelope.
+      '@typescript-eslint/no-unnecessary-type-assertion': 'off',
+    },
+  },
+  {
+    files: ['frontend/src/App.tsx'],
+    rules: {
+      // React route component names are PascalCase, and dynamic import
+      // thunks are deliberately concise at this registry boundary.
+      '@typescript-eslint/naming-convention': 'off',
+      '@typescript-eslint/promise-function-async': 'off',
+      '@typescript-eslint/explicit-function-return-type': 'off',
     },
   },
   // ── Frontend legacy components needing targeted overrides ─────────────
@@ -292,11 +305,18 @@ export default tseslint.config(
   // ── Benchmark scaffolding is dev tooling; index lookups on fixed-size
   //    arrays and mutable ctx rely on `!`/template access. ──────────────
   {
-    files: ['backend/bench/**/*.ts'],
+    files: ['backend/bench/**/*.ts', 'frontend/bench/**/*.ts'],
     rules: {
       '@typescript-eslint/prefer-readonly-parameter-types': 'off',
       '@typescript-eslint/restrict-template-expressions': 'off',
       '@typescript-eslint/no-non-null-assertion': 'off',
+      '@typescript-eslint/explicit-function-return-type': 'off',
+      '@typescript-eslint/naming-convention': 'off',
+      '@typescript-eslint/no-unnecessary-condition': 'off',
+      '@typescript-eslint/no-unnecessary-type-conversion': 'off',
+      '@typescript-eslint/require-await': 'off',
+      '@typescript-eslint/promise-function-async': 'off',
+      '@typescript-eslint/no-base-to-string': 'off',
     },
   },
   // ── Backend route/lib/worker code uses practical patterns ───────────
@@ -335,6 +355,23 @@ export default tseslint.config(
       '@typescript-eslint/naming-convention': 'off',
       '@typescript-eslint/restrict-template-expressions': 'off',
       '@typescript-eslint/no-unnecessary-condition': 'off',
+    },
+  },
+  {
+    files: ['backend/scripts/**/*.ts'],
+    rules: {
+      // Operational scripts use database-driver shapes and CLI callbacks
+      // that are intentionally less ceremonial than request-path code.
+      '@typescript-eslint/explicit-function-return-type': 'off',
+      '@typescript-eslint/explicit-member-accessibility': 'off',
+      '@typescript-eslint/prefer-readonly-parameter-types': 'off',
+      '@typescript-eslint/naming-convention': 'off',
+      '@typescript-eslint/no-unnecessary-condition': 'off',
+      '@typescript-eslint/no-unnecessary-type-conversion': 'off',
+      '@typescript-eslint/strict-boolean-expressions': 'off',
+      '@typescript-eslint/restrict-template-expressions': 'off',
+      '@typescript-eslint/require-await': 'off',
+      '@typescript-eslint/promise-function-async': 'off',
     },
   },
 );

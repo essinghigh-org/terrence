@@ -550,7 +550,7 @@ async function readinessResponse(
 type ReadinessResult = {
   node: string;
   status: string;
-  checks: Array<{ check: string; status: string }>;
+  checks: { check: string; status: string }[];
 };
 
 export async function markControlPlaneNodeDraining(): Promise<void> {

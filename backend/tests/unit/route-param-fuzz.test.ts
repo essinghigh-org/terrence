@@ -31,7 +31,7 @@ describe("route param fuzzing (470-475)", () => {
   });
 
   async function fuzzPath(path: string, method = "GET"): Promise<number | null> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const resp = await (app as any).handle(new Request(`http://terrence.test${path}`, { method, headers: { Authorization: `Bearer ${token}` } }));
     return statusOf(resp as Response | { errors?: unknown[] });
   }
@@ -53,7 +53,7 @@ describe("route param fuzzing (470-475)", () => {
     for (const path of ["/api/v2/organizations/%FF", "/api/v2/organizations/%ZZ", "/api/v2/organizations/%2", "/api/v2/organizations/helloworld"]) {
       const s = await fuzzPath(path);
       expect(s === null ? 400 : s).toBeGreaterThanOrEqual(400);
-      expect([400, 404, 422].includes(s as number) || s === null).toBe(true);
+      expect([400, 404, 422].includes(s!) || s === null).toBe(true);
     }
   });
 

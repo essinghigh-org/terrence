@@ -252,14 +252,16 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     const search = (urlParams.get("q[name]") ?? urlParams.get("q") ?? "").trim();
     let organizationIds = orgId !== null && orgId !== undefined
       ? [orgId]
-      : user !== null && user !== undefined
-        ? [...new Set((await db.query.organizationMemberships.findMany({
-            where: and(
-              eq(organizationMemberships.userId, user.id),
-              eq(organizationMemberships.status, "active"),
-            ),
-          })).map((membership: Readonly<{ readonly orgId: string }>): string => membership.orgId))]
-        : [];
+      : user?.isSiteAdmin === true
+        ? (await db.query.organizations.findMany({ columns: { id: true } })).map((organization): string => organization.id)
+        : user !== null && user !== undefined
+          ? [...new Set((await db.query.organizationMemberships.findMany({
+              where: and(
+                eq(organizationMemberships.userId, user.id),
+                eq(organizationMemberships.status, "active"),
+              ),
+            })).map((membership: Readonly<{ readonly orgId: string }>): string => membership.orgId))]
+          : [];
     // Fine-grained token: intersect with declared org scope.
     const scopes = currentTokenScopes();
     if (scopes !== null && scopes.orgs.length > 0) {

@@ -18,6 +18,7 @@ import {
 } from "../lib/sso";
 import { clearSsoChallenges, consumeSsoChallenge, storeSsoChallenge } from "../lib/sso-challenges";
 import { issueSsoLogin } from "../lib/sso-login";
+import { isUserLoginBlocked } from "./accounts";
 import { fetchResolvedExternalUrl, resolveExternalUrl, type ResolvedExternalUrl } from "../lib/url-safety";
 import { secureRequest } from "../lib/secure-request";
 
@@ -619,6 +620,10 @@ async function handleCallback(
     const detail = error instanceof Error ? error.message : "provisioning failed";
     await auditLog("sso-failure", "oidc", null, null, null, { reason: detail });
     return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "Sign-in could not be completed. Please try again."), 500);
+  }
+  if (isUserLoginBlocked(result.user)) {
+    await auditLog("sso-failure", "oidc", result.user.id, result.user.id, null, { reason: "account is suspended or deleted" });
+    return callbackResponse(request, set, ssoHtmlPage("OpenID Connect", "This account is not available."), 403);
   }
   await auditLog("sso-login", "oidc", result.user.id, result.user.id, null, { username: result.user.username });
   await issueSsoLogin(result.user, { set, request, server }, { wantsToken: false });

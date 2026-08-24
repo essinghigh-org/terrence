@@ -88,7 +88,7 @@ test("downloads a verified binary once and reuses the cached copy", async () => 
   }
 });
 
-test("does not silently substitute the system binary for an exact version", async () => {
+test("does not substitute a system binary whose version cannot be verified", async () => {
   const testDir = await mkdtemp(join(tmpdir(), "terrence-binary-exact-"));
 
   try {
@@ -102,7 +102,6 @@ test("does not silently substitute the system binary for an exact version", asyn
       await writeFile(join(binDir, "which"), "#!/bin/sh\\necho " + JSON.stringify(binary) + "\\n");
       await chmod(binary, 0o755);
       await chmod(join(binDir, "which"), 0o755);
-      process.env.PATH = binDir;
       globalThis.fetch = async () => new Response("", { status: 404 });
 
       const { ensureBinary } = await import("./src/binaryManager.ts");
@@ -114,6 +113,7 @@ test("does not silently substitute the system binary for an exact version", asyn
         TEST_DIR: testDir,
         STORAGE_DIR: join(testDir, "storage"),
         ALLOW_TOOL_FALLBACK: "false",
+        PATH: join(testDir, "bin"),
         TERRENCE_BINARY_CACHE_DIR: join(testDir, "storage", "binaries"),
       },
       stdout: "pipe",
@@ -127,6 +127,185 @@ test("does not silently substitute the system binary for an exact version", asyn
 
     if (exitCode !== 0) throw new Error(stderr || stdout);
     expect(JSON.parse(stdout.trim().split("\n").at(-1)!)).toEqual({ result: null });
+  } finally {
+    await rm(testDir, { recursive: true, force: true });
+  }
+});
+
+test("uses a matching system binary when an exact cached version is unavailable", async () => {
+  const testDir = await mkdtemp(join(tmpdir(), "terrence-binary-system-fallback-"));
+
+  try {
+    const child = Bun.spawn([Bun.which("bun")!, "-e", `
+      const { chmod, mkdir, writeFile } = await import("fs/promises");
+      const { join } = await import("path");
+      const binDir = join(process.env.TEST_DIR, "bin");
+      const binary = join(binDir, "terraform");
+      await mkdir(binDir);
+      await writeFile(binary, "#!/bin/sh\\necho Terraform v9.9.9\\n");
+      await writeFile(join(binDir, "which"), "#!/bin/sh\\necho " + JSON.stringify(binary) + "\\n");
+      await chmod(binary, 0o755);
+      await chmod(join(binDir, "which"), 0o755);
+      globalThis.fetch = async () => new Response("", { status: 404 });
+
+      const { ensureBinary } = await import("./src/binaryManager.ts");
+      console.log(JSON.stringify({ result: await ensureBinary("terraform", "9.9.9") }));
+    `], {
+      cwd: join(import.meta.dir, "../.."),
+      env: {
+        ...Bun.env,
+        TEST_DIR: testDir,
+        STORAGE_DIR: join(testDir, "storage"),
+        ALLOW_TOOL_FALLBACK: "false",
+        PATH: join(testDir, "bin"),
+        TERRENCE_BINARY_CACHE_DIR: join(testDir, "storage", "binaries"),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+
+    if (exitCode !== 0) throw new Error(stderr || stdout);
+    expect(JSON.parse(stdout.trim().split("\n").at(-1)!)).toMatchObject({
+      result: { binaryPath: join(testDir, "bin", "terraform"), tool: "terraform", version: "9.9.9" },
+    });
+  } finally {
+    await rm(testDir, { recursive: true, force: true });
+  }
+});
+
+test("uses a matching system binary when latest-version discovery is unavailable", async () => {
+  const testDir = await mkdtemp(join(tmpdir(), "terrence-binary-latest-fallback-"));
+
+  try {
+    const child = Bun.spawn([Bun.which("bun")!, "-e", `
+      const { chmod, mkdir, writeFile } = await import("fs/promises");
+      const { join } = await import("path");
+      const binDir = join(process.env.TEST_DIR, "bin");
+      const binary = join(binDir, "terraform");
+      await mkdir(binDir);
+      await writeFile(binary, "#!/bin/sh\\necho Terraform v1.9.8\\n");
+      await writeFile(join(binDir, "which"), "#!/bin/sh\\necho " + JSON.stringify(binary) + "\\n");
+      await chmod(binary, 0o755);
+      await chmod(join(binDir, "which"), 0o755);
+      globalThis.fetch = async () => new Response("", { status: 503 });
+
+      const { ensureBinary } = await import("./src/binaryManager.ts");
+      console.log(JSON.stringify({ result: await ensureBinary("terraform", "latest") }));
+    `], {
+      cwd: join(import.meta.dir, "../.."),
+      env: {
+        ...Bun.env,
+        TEST_DIR: testDir,
+        STORAGE_DIR: join(testDir, "storage"),
+        ALLOW_TOOL_FALLBACK: "false",
+        PATH: join(testDir, "bin"),
+        TERRENCE_BINARY_CACHE_DIR: join(testDir, "storage", "binaries"),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+
+    if (exitCode !== 0) throw new Error(stderr || stdout);
+    expect(JSON.parse(stdout.trim().split("\n").at(-1)!)).toMatchObject({
+      result: { binaryPath: join(testDir, "bin", "terraform"), tool: "terraform", version: "1.9.8" },
+    });
+  } finally {
+    await rm(testDir, { recursive: true, force: true });
+  }
+});
+
+test("does not accept a different prerelease for an exact system-version request", async () => {
+  const testDir = await mkdtemp(join(tmpdir(), "terrence-binary-prerelease-"));
+
+  try {
+    const child = Bun.spawn([Bun.which("bun")!, "-e", `
+      const { chmod, mkdir, writeFile } = await import("fs/promises");
+      const { join } = await import("path");
+      const binDir = join(process.env.TEST_DIR, "bin");
+      const binary = join(binDir, "terraform");
+      await mkdir(binDir);
+      await writeFile(binary, "#!/bin/sh\\necho Terraform v9.9.9-rc.2\\n");
+      await writeFile(join(binDir, "which"), "#!/bin/sh\\necho " + JSON.stringify(binary) + "\\n");
+      await chmod(binary, 0o755);
+      await chmod(join(binDir, "which"), 0o755);
+      globalThis.fetch = async () => new Response("", { status: 404 });
+
+      const { ensureBinary } = await import("./src/binaryManager.ts");
+      console.log(JSON.stringify({ result: await ensureBinary("terraform", "9.9.9-rc.1") }));
+    `], {
+      cwd: join(import.meta.dir, "../.."),
+      env: {
+        ...Bun.env,
+        TEST_DIR: testDir,
+        STORAGE_DIR: join(testDir, "storage"),
+        PATH: join(testDir, "bin"),
+        TERRENCE_BINARY_CACHE_DIR: join(testDir, "storage", "binaries"),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    if (exitCode !== 0) throw new Error(stderr || stdout);
+    expect(JSON.parse(stdout.trim().split("\n").at(-1)!)).toEqual({ result: null });
+  } finally {
+    await rm(testDir, { recursive: true, force: true });
+  }
+});
+
+test("times out a hung system-binary version probe", async () => {
+  const testDir = await mkdtemp(join(tmpdir(), "terrence-binary-timeout-"));
+
+  try {
+    const child = Bun.spawn([Bun.which("bun")!, "-e", `
+      const { chmod, mkdir, writeFile } = await import("fs/promises");
+      const { join } = await import("path");
+      const binDir = join(process.env.TEST_DIR, "bin");
+      const binary = join(binDir, "terraform");
+      await mkdir(binDir);
+      await writeFile(binary, "#!/bin/sh\\n/bin/sleep 1\\necho Terraform v9.9.9\\n");
+      await writeFile(join(binDir, "which"), "#!/bin/sh\\necho " + JSON.stringify(binary) + "\\n");
+      await chmod(binary, 0o755);
+      await chmod(join(binDir, "which"), 0o755);
+      globalThis.fetch = async () => new Response("", { status: 503 });
+
+      const { ensureBinary } = await import("./src/binaryManager.ts");
+      const started = performance.now();
+      try { await ensureBinary("terraform", "latest"); } catch {}
+      console.log(JSON.stringify({ elapsed: performance.now() - started }));
+    `], {
+      cwd: join(import.meta.dir, "../.."),
+      env: {
+        ...Bun.env,
+        TEST_DIR: testDir,
+        STORAGE_DIR: join(testDir, "storage"),
+        PATH: join(testDir, "bin"),
+        TERRENCE_BINARY_PROBE_TIMEOUT_MS: "25",
+        TERRENCE_BINARY_CACHE_DIR: join(testDir, "storage", "binaries"),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    if (exitCode !== 0) throw new Error(stderr || stdout);
+    expect(JSON.parse(stdout.trim().split("\n").at(-1)!).elapsed).toBeLessThan(500);
   } finally {
     await rm(testDir, { recursive: true, force: true });
   }

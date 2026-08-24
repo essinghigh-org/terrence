@@ -3,7 +3,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, organizations } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
-import { createHash } from "node:crypto";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 
 describe("the reference format API Authentication - Tokens", () => {
   let userToken: string;
@@ -93,7 +93,7 @@ describe("the reference format API Authentication - Tokens", () => {
     expect(data.data.type).toBe("authentication-tokens");
     expect(data.data.attributes.token).toBeDefined();
 
-    const tokenHash = createHash("sha256").update(data.data.attributes.token as string).digest("hex");
+    const tokenHash = hashAuthenticationToken(data.data.attributes.token as string);
     const tokenInDb = await db.query.apiTokens.findFirst({
         where: eq(apiTokens.token, tokenHash)
     });

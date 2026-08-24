@@ -37,12 +37,12 @@ export type CatalogProvider = Readonly<{
   id: string;
   name: string;
   baseUrl: string | null;
-  models: ReadonlyArray<Readonly<{
+  models: readonly Readonly<{
     id: string;
     name: string;
     reasoning: boolean;
     context: number | null;
-  }>>;
+  }>[];
 }>;
 
 export type ModelCatalog = Readonly<{
@@ -206,12 +206,12 @@ export async function getModelCatalog(now: number = Date.now()): Promise<ModelCa
 /** Providers for the admin dropdown: id, name, base URL (when known), and
  * text-capable model count. Sorted by name, with the synthetic
  * "OpenAI Compatible (Custom)" entry pinned first (it is the default). */
-export async function listCatalogProviders(now: number = Date.now()): Promise<ReadonlyArray<Readonly<{
+export async function listCatalogProviders(now: number = Date.now()): Promise<readonly Readonly<{
   id: string;
   name: string;
   baseUrl: string | null;
   modelCount: number;
-}>>> {
+}>[]> {
   const catalog = await getModelCatalog(now);
   const rows = catalog.providers
     .filter((provider) => provider.id !== CUSTOM_PROVIDER_ID)

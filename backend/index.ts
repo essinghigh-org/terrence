@@ -57,7 +57,7 @@ const legacyTokenCount = await countLegacyPlaintextTokens();
 if (legacyTokenCount > 0) {
   if (process.env.TERRENCE_ALLOW_LEGACY_TOKENS === "1") {
     const migrated = await migrateLegacyPlaintextTokens();
-    log.warn(`[terrence] Migrated ${migrated} legacy plaintext API token(s) to SHA-256 hashes. Remove TERRENCE_ALLOW_LEGACY_TOKENS after this upgrade.`);
+    log.warn(`[terrence] Migrated ${migrated} legacy plaintext API token(s) to keyed hashes. Remove TERRENCE_ALLOW_LEGACY_TOKENS after this upgrade.`);
   } else {
     log.warn(`[terrence] Found ${legacyTokenCount} legacy plaintext API token(s). Set TERRENCE_ALLOW_LEGACY_TOKENS=1 for one startup to migrate them, then unset it.`);
   }
@@ -155,7 +155,7 @@ async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
       // graceful stop has not completed within the deadline, force-close.
       const graceful = server.stop(false);
       const deadline = new Promise<"timeout">((resolve): void => {
-        setTimeout((): void => resolve("timeout"), 5000);
+        setTimeout((): void => { resolve("timeout"); }, 5000);
       });
       const outcome = await Promise.race([
         graceful.then((): "drained" => "drained"),

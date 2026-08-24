@@ -337,7 +337,7 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
     // of simultaneous write transactions.
     const AUDIT_CONCURRENCY = 10;
     for (let i = 0; i < records.length; i += AUDIT_CONCURRENCY) {
-      await Promise.all(records.slice(i, i + AUDIT_CONCURRENCY).map((record): Promise<void> =>
+      await Promise.all(records.slice(i, i + AUDIT_CONCURRENCY).map(async (record): Promise<void> =>
         auditLog("create", "change-requests", record.id, user?.id ?? null, organization.id, {
           workspaceId: record.workspaceId,
           toStatus: "pending",
@@ -408,7 +408,7 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
     };
     const [rows, counts] = await Promise.all([
       chunked(
-        (ids): Promise<Readonly<typeof changeRequests.$inferSelect>[]> =>
+        async (ids): Promise<Readonly<typeof changeRequests.$inferSelect>[]> =>
           db.query.changeRequests.findMany({
             where: and(inArray(changeRequests.workspaceId, ids), ...statusesWhere),
             orderBy: [desc(changeRequests.createdAt), desc(changeRequests.id)],
@@ -425,7 +425,7 @@ export const changeRequestRoutes = new Elysia({ name: "change-requests" })
         },
       ),
       chunked(
-        (ids): Promise<Readonly<{ total: number }>[]> =>
+        async (ids): Promise<Readonly<{ total: number }>[]> =>
           db.select({ total: count() }).from(changeRequests)
             .where(and(inArray(changeRequests.workspaceId, ids), ...statusesWhere)),
         (chunks): { total: number }[] => [{

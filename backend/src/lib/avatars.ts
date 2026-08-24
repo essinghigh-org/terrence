@@ -349,7 +349,7 @@ async function resolveHost(hostname: string): Promise<string[] | null> {
     const result = await Promise.race([
       lookup(hostname, { all: true, verbatim: true }),
       new Promise<null>((resolvePromise): void => {
-        setTimeout(() => resolvePromise(null), DNS_TIMEOUT_MS);
+        setTimeout(() => { resolvePromise(null); }, DNS_TIMEOUT_MS);
       }),
     ]);
     if (result === null) return null;
@@ -415,7 +415,7 @@ type RawResponse = Readonly<{
   truncated: boolean;
 }>;
 
-function requestPinned(target: {
+async function requestPinned(target: {
   scheme: "http" | "https";
   address: string;  // validated IP / literal host to connect to
   hostname: string; // original hostname (no port) for Host + TLS SNI
@@ -474,7 +474,7 @@ function requestPinned(target: {
         rejectPromise(error);
       });
     });
-    request.on("error", (error: Error): void => rejectPromise(error));
+    request.on("error", (error: Error): void => { rejectPromise(error); });
     request.end();
   });
 }
@@ -552,7 +552,7 @@ async function doRefreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
     return { ok: false, status: 413, message: "avatar exceeds the 2 MiB limit", meta };
   }
   const contentType = typeof raw.headers["content-type"] === "string"
-    ? (raw.headers["content-type"] as string).toLowerCase()
+    ? (raw.headers["content-type"]).toLowerCase()
     : "";
   if (!contentType.startsWith("image/")) {
     return { ok: false, status: 415, message: "upstream returned a non-image content type", meta };
@@ -701,7 +701,7 @@ async function sweepAvatarCache(): Promise<{ removed: number }> {
   }
   // 2) Budget-based: evict least-recently-fetched until within limits.
   let totalBytes = 0;
-  const live: Array<{ key: string; last: number; size: number }> = [];
+  const live: { key: string; last: number; size: number }[] = [];
   for (const [key, record] of entries) {
     if (removals.has(key)) continue;
     totalBytes += record.size;

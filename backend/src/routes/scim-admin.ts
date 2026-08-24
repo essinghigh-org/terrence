@@ -1,6 +1,6 @@
 import { hashAuthenticationToken } from "../lib/token-service";
 import { Elysia } from "elysia";
-import { and, asc, count, eq, inArray } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { db } from "../db";
 import {
@@ -14,7 +14,7 @@ import {
   teamMemberships,
   teamScimGroupMappings,
   teams,
-  type users,
+  users,
 } from "../db/schema";
 import { pageRequest, pagination, apiError } from "../lib/utils";
 
@@ -107,7 +107,7 @@ function tokenResource(token: ScimToken, rawToken?: string): Record<string, unkn
   };
 }
 
-async function reconcileTeam(team: MappedTeam, groupId: string, transaction: unknown): Promise<void> {
+export async function reconcileTeam(team: MappedTeam, groupId: string, transaction: unknown): Promise<void> {
   const tx = transaction as typeof db;
   const links = await tx.query.scimGroupMemberships.findMany({
     where: eq(scimGroupMemberships.groupId, groupId),
@@ -119,7 +119,9 @@ async function reconcileTeam(team: MappedTeam, groupId: string, transaction: unk
     });
   const userIds = [...new Set(identities.map((identity): string => identity.userId))];
 
-  await tx.delete(teamMemberships).where(eq(teamMemberships.teamId, team.id));
+  // SCIM owns only the rows it created. Manual/admin team assignments must
+  // survive the next directory sync.
+  await tx.delete(teamMemberships).where(and(eq(teamMemberships.teamId, team.id), eq(teamMemberships.ssoSource, "scim")));
 
   // Pre-fetch all org memberships to avoid N+1
   const existingMemberships = userIds.length === 0
@@ -149,7 +151,40 @@ async function reconcileTeam(team: MappedTeam, groupId: string, transaction: unk
       teamId: team.id,
       userId,
       createdAt: Date.now(),
+      ssoSource: "scim",
     }).onConflictDoNothing();
+  }
+}
+
+/** Reconcile the configured SCIM site-admin group without touching manual or SAML grants. */
+export async function reconcileScimSiteAdmins(transaction: unknown): Promise<void> {
+  const tx = transaction as typeof db;
+  const settings = await tx.query.scimSettings.findFirst({ where: eq(scimSettings.id, SCIM_SETTINGS_ID) });
+  const groupId = settings?.enabled === true ? settings.siteAdminGroupScimId : null;
+  const desiredUserIds = new Set<string>();
+  if (groupId !== null) {
+    const links = await tx.query.scimGroupMemberships.findMany({ where: eq(scimGroupMemberships.groupId, groupId), columns: { scimUserId: true } });
+    if (links.length > 0) {
+      const identities = await tx.query.scimUserIdentities.findMany({ where: inArray(scimUserIdentities.id, links.map((link): string => link.scimUserId)), columns: { userId: true } });
+      for (const identity of identities) desiredUserIds.add(identity.userId);
+    }
+  }
+
+  const current = await tx.query.users.findMany({
+    where: eq(users.scimSiteAdmin, true),
+    columns: { id: true, ssoSiteAdmin: true },
+  });
+  for (const user of current) {
+    if (desiredUserIds.has(user.id)) continue;
+    await tx.update(users).set({ scimSiteAdmin: false, isSiteAdmin: user.ssoSiteAdmin === true }).where(eq(users.id, user.id));
+  }
+  if (desiredUserIds.size === 0) return;
+  const liveUsers = await tx.query.users.findMany({
+    where: and(inArray(users.id, [...desiredUserIds]), isNull(users.deletedAt)),
+    columns: { id: true },
+  });
+  for (const user of liveUsers) {
+    await tx.update(users).set({ scimSiteAdmin: true, isSiteAdmin: true }).where(eq(users.id, user.id));
   }
 }
 
@@ -196,14 +231,17 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
       if (group === undefined) return apiError(set, 422, "Unprocessable Entity", "SCIM group not found");
     }
 
-    await db.update(scimSettings).set({
-      enabled,
-      paused,
-      siteAdminGroupScimId: requestedGroup === undefined
-        ? current.siteAdminGroupScimId
-        : requestedGroup,
-      updatedAt: Date.now(),
-    }).where(eq(scimSettings.id, SCIM_SETTINGS_ID));
+    await db.transaction(async (tx): Promise<void> => {
+      await tx.update(scimSettings).set({
+        enabled,
+        paused,
+        siteAdminGroupScimId: requestedGroup === undefined
+          ? current.siteAdminGroupScimId
+          : requestedGroup,
+        updatedAt: Date.now(),
+      }).where(eq(scimSettings.id, SCIM_SETTINGS_ID));
+      await reconcileScimSiteAdmins(tx);
+    });
     return { data: await settingsResource(await currentSettings()) };
   })
   .delete("/api/v2/admin/scim-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
@@ -217,11 +255,16 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
         siteAdminGroupScimId: null,
         updatedAt: Date.now(),
       }).where(eq(scimSettings.id, SCIM_SETTINGS_ID));
+      const mappedTeams = await tx.query.teamScimGroupMappings.findMany({ columns: { teamId: true } });
+      if (mappedTeams.length > 0) {
+        await tx.delete(teamMemberships).where(and(eq(teamMemberships.ssoSource, "scim"), inArray(teamMemberships.teamId, mappedTeams.map((mapping): string => mapping.teamId))));
+      }
       await tx.delete(teamScimGroupMappings);
       await tx.delete(scimGroupMemberships);
       await tx.delete(scimGroups);
       await tx.delete(scimUserIdentities);
       await tx.delete(scimTokens);
+      await reconcileScimSiteAdmins(tx);
     });
     return { data: await settingsResource(await currentSettings()) };
   })
@@ -399,8 +442,10 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
       (set as { status: number }).status = 204;
       return;
     }
-    await db.delete(teamScimGroupMappings)
-      .where(eq(teamScimGroupMappings.teamId, team.id));
+    await db.transaction(async (tx): Promise<void> => {
+      await tx.delete(teamScimGroupMappings).where(eq(teamScimGroupMappings.teamId, team.id));
+      await tx.delete(teamMemberships).where(and(eq(teamMemberships.teamId, team.id), eq(teamMemberships.ssoSource, "scim")));
+    });
     (set as { status: number }).status = 204;
     return;
   });

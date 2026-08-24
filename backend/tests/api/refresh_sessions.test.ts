@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, refreshSessions, users } from "../../src/db/schema";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 
 describe("browser refresh sessions", () => {
   const suffix = crypto.randomUUID();
@@ -88,7 +88,7 @@ describe("browser refresh sessions", () => {
       where: eq(apiTokens.id, document.data.id),
     });
     expect(stored).toMatchObject({
-      token: createHash("sha256").update(document.data.attributes.token).digest("hex"),
+      token: hashAuthenticationToken(document.data.attributes.token),
       expiresAt: null,
     });
     expect(await accountStatus(document.data.attributes.token).then((result): number => result.status)).toBe(200);
@@ -116,7 +116,7 @@ describe("browser refresh sessions", () => {
     const firstSession = await db.query.refreshSessions.findFirst({
       where: eq(
         refreshSessions.tokenHash,
-        createHash("sha256").update(firstRefreshToken).digest("hex"),
+        hashAuthenticationToken(firstRefreshToken),
       ),
     });
     expect(firstSession).toMatchObject({
@@ -163,7 +163,7 @@ describe("browser refresh sessions", () => {
 
     // Outside the grace window the same presented token is genuine reuse:
     // family revocation + 401.
-    const presentedHash = createHash("sha256").update(rawCookieToken(firstCookie)).digest("hex");
+    const presentedHash = hashAuthenticationToken(rawCookieToken(firstCookie));
     await db.update(refreshSessions)
       .set({ rotatedAtMs: Date.now() - 10 * 60 * 1000 })
       .where(eq(refreshSessions.tokenHash, presentedHash));
@@ -191,7 +191,7 @@ describe("browser refresh sessions", () => {
     const session = await db.query.refreshSessions.findFirst({
       where: eq(
         refreshSessions.tokenHash,
-        createHash("sha256").update(rawCookieToken(refreshCookie)).digest("hex"),
+        hashAuthenticationToken(rawCookieToken(refreshCookie)),
       ),
     });
     const loginDocument = await loginResponse.json() as {
@@ -383,12 +383,26 @@ describe("browser refresh sessions", () => {
       expect(await accountStatus(document.data.attributes.token).then((result): number => result.status)).toBe(200);
     }
     // The family survives the race.
-    const presentedHash = createHash("sha256").update(rawCookieToken(refreshCookie)).digest("hex");
+    const presentedHash = hashAuthenticationToken(rawCookieToken(refreshCookie));
     const presented = await db.query.refreshSessions.findFirst({ where: eq(refreshSessions.tokenHash, presentedHash) });
     const family = await db.query.refreshSessions.findMany({
       where: eq(refreshSessions.familyId, presented?.familyId ?? ""),
     });
     expect(family.length).toBeGreaterThanOrEqual(2);
     expect(family.every((session): boolean => session.revokedAt === null)).toBeTrue();
+  });
+
+  test("suspending a user invalidates refresh rotation", async () => {
+    const loginResponse = await login(true);
+    expect(loginResponse.status).toBe(200);
+    const refreshCookie = cookie(loginResponse);
+    try {
+      await db.update(users).set({ isSuspended: true }).where(eq(users.id, userId));
+      const response = await request("/api/v2/users/refresh", undefined, { Cookie: refreshCookie });
+      expect(response.status).toBe(401);
+      expect((await db.query.refreshSessions.findMany({ where: eq(refreshSessions.userId, userId) })).every((row) => row.revokedAt !== null)).toBeTrue();
+    } finally {
+      await db.update(users).set({ isSuspended: false }).where(eq(users.id, userId));
+    }
   });
 });

@@ -1,14 +1,14 @@
 // Minimal RFC 5321 SMTP client.
 //
 // Supports plain, STARTTLS, and implicit TLS (SMTPS on port 465) transports
-// with PLAIN authentication. Dependency-free: one message at a time, strict
+// with PLAIN or LOGIN authentication. Dependency-free: one message at a time, strict
 // per-step timeouts, and a hard overall deadline so a misconfigured SMTP
 // server can never hang a notification delivery.
 //
 // Connection rules:
 //   port 465: implicit TLS from the first byte
 //   any other port: plaintext, upgraded via STARTTLS when the server
-//     accepts the upgrade (502/454 responses fall back to plaintext)
+//     accepts the upgrade; known unsupported replies fall back to plaintext
 
 import { connect, type Socket } from "bun";
 
@@ -18,12 +18,14 @@ export type SmtpSettings = Readonly<{
   username: string | null;
   password: string | null;
   senderEmail: string;
+  auth?: "none" | "plain" | "login" | null;
 }>;
 
 export type EmailMessage = Readonly<{
   to: readonly string[];
   subject: string;
   text: string;
+  html?: string;
 }>;
 
 type Response = Readonly<{ code: number; message: string }>;
@@ -31,14 +33,43 @@ type Response = Readonly<{ code: number; message: string }>;
 const STEP_TIMEOUT_MS = 10_000;
 const OVERALL_TIMEOUT_MS = 30_000;
 
+function validateMailbox(value: string, label: string): void {
+  if (value === "" || value.trim() !== value || /[\s<> ,\r\n\u0000-\u001f\u007f]/.test(value) || !value.includes("@")) {
+    throw new SmtpError(`Invalid SMTP ${label}`, 0);
+  }
+}
+
+/** Encode UTF-8 MIME text without relying on an SMTP 8BITMIME extension. */
+function quotedPrintable(value: string): string {
+  const lines = value.replace(/\r?\n/g, "\r\n").split("\r\n");
+  return lines.map((line): string => {
+    const bytes = Buffer.from(line, "utf8");
+    let encoded = "";
+    let lineLength = 0;
+    for (let index = 0; index < bytes.length; index += 1) {
+      const byte = bytes[index] ?? 0;
+      const atLineEnd = index === bytes.length - 1;
+      const safe = (byte >= 33 && byte <= 60) || (byte >= 62 && byte <= 126) || ((byte === 32 || byte === 9) && !atLineEnd);
+      const token = safe ? String.fromCharCode(byte) : `=${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+      if (lineLength + token.length > 75) {
+        encoded += "=\r\n";
+        lineLength = 0;
+      }
+      encoded += token;
+      lineLength += token.length;
+    }
+    return encoded;
+  }).join("\r\n");
+}
+
 class SmtpError extends Error {
-  constructor(message: string, readonly code: number) {
+  constructor(message: string, public readonly code: number) {
     super(message);
     this.name = "SmtpError";
   }
 }
 
-interface Session {
+type Session = {
   socket: Socket;
   nextResponse(): Promise<Response>;
   send(line: string): Promise<Response>;
@@ -47,17 +78,17 @@ interface Session {
 
 async function createSession(host: string, port: number, tls: boolean): Promise<Session> {
   let buffer = "";
-  const pending: Array<(response: Response) => void> = [];
+  const pending: ((response: Response) => void)[] = [];
   let closed = false;
 
-  const failWaiting = (error: Error): void => {
+  const failWaiting = (error: Readonly<Error>): void => {
     while (pending.length > 0) {
       pending.shift()?.({ code: 0, message: error.message });
     }
   };
 
   const handlers = {
-    data(_sock: Socket, chunk: Uint8Array): void {
+    data(_sock: unknown, chunk: Readonly<{ toString(): string }>): void {
       buffer += chunk.toString();
       let lineEnd: number;
       while ((lineEnd = buffer.indexOf("\r\n")) !== -1) {
@@ -72,7 +103,7 @@ async function createSession(host: string, port: number, tls: boolean): Promise<
         }
       }
     },
-    error(_sock: Socket, error: Error): void {
+    error(_sock: unknown, error: Readonly<{ message: string }>): void {
       failWaiting(new Error(`SMTP connection error: ${error.message}`));
     },
     close(): void {
@@ -86,7 +117,7 @@ async function createSession(host: string, port: number, tls: boolean): Promise<
 
   return {
     socket,
-    nextResponse(): Promise<Response> {
+    async nextResponse(): Promise<Response> {
       return new Promise((resolve) => {
         pending.push(resolve);
       });
@@ -111,12 +142,15 @@ async function createSession(host: string, port: number, tls: boolean): Promise<
   };
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+async function withTimeout<T>(promise: Readonly<Promise<T>>, ms: number, what: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`SMTP ${what} timed out`)), ms);
+    const timer = setTimeout(() => { reject(new Error(`SMTP ${what} timed out`)); }, ms);
     promise.then(
       (value) => { clearTimeout(timer); resolve(value); },
-      (error: unknown) => { clearTimeout(timer); reject(error); },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
     );
   });
 }
@@ -128,9 +162,23 @@ function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<
  * how to record the failed delivery.
  */
 export async function sendEmail(settings: SmtpSettings, message: EmailMessage): Promise<void> {
+  if (!Number.isInteger(settings.port) || settings.port < 1 || settings.port > 65535) {
+    throw new SmtpError("Invalid SMTP port", 0);
+  }
+  if (settings.host === "" || settings.host.trim() !== settings.host || /[\r\n\u0000-\u001f\u007f]/.test(settings.host)) {
+    throw new SmtpError("Invalid SMTP host", 0);
+  }
+  validateMailbox(settings.senderEmail, "sender address");
+  if (message.to.length === 0) throw new SmtpError("SMTP message has no recipients", 0);
+  for (const recipient of message.to) validateMailbox(recipient, "recipient address");
+
   const implicitTls = settings.port === 465;
+  const authMode = settings.auth ?? (settings.username === null || settings.username === "" ? "none" : "plain");
+  if (authMode !== "none" && authMode !== "plain" && authMode !== "login") {
+    throw new SmtpError(`Unsupported SMTP authentication mode: ${String(authMode)}`, 0);
+  }
   const deadline = Date.now() + OVERALL_TIMEOUT_MS;
-  const step = <T>(promise: Promise<T>, what: string): Promise<T> =>
+  const step = async <T>(promise: Readonly<Promise<T>>, what: string): Promise<T> =>
     withTimeout(promise, Math.min(STEP_TIMEOUT_MS, Math.max(1, deadline - Date.now())), what);
 
   const session = await step(createSession(settings.host, settings.port, implicitTls), "connect");
@@ -145,24 +193,35 @@ export async function sendEmail(settings: SmtpSettings, message: EmailMessage): 
       throw new SmtpError(`EHLO rejected: ${ehlo.code} ${ehlo.message}`, ehlo.code);
     }
 
-    // STARTTLS on non-465 ports. A 502/454 response means the server does
-    // not support it; continue in plaintext in that case.
+    // STARTTLS on non-465 ports. Only known unsupported replies continue in
+    // plaintext; other failures must not silently downgrade delivery.
     if (!implicitTls) {
       const startTls = await step(session.send("STARTTLS"), "STARTTLS");
       if (startTls.code === 220) {
-        (session.socket as unknown as { upgradeTLS?(options?: Record<string, never>): boolean }).upgradeTLS?.({});
+        (session.socket as unknown as { upgradeTLS?(options?: Readonly<Record<string, never>>): boolean }).upgradeTLS?.({});
         const tlsEhlo = await step(session.send("EHLO terrence.local"), "EHLO after STARTTLS");
         if (tlsEhlo.code !== 250) {
           throw new SmtpError(`EHLO after STARTTLS rejected: ${tlsEhlo.code} ${tlsEhlo.message}`, tlsEhlo.code);
         }
+      } else if (![500, 502, 504].includes(startTls.code)) {
+        throw new SmtpError(`STARTTLS rejected: ${startTls.code} ${startTls.message}`, startTls.code);
       }
     }
 
-    if (settings.username !== null && settings.username !== "") {
-      const authLine = `AUTH PLAIN ${Buffer.from(`\0${settings.username}\0${settings.password ?? ""}`).toString("base64")}`;
-      const auth = await step(session.send(authLine), "AUTH");
-      if (auth.code !== 235) {
-        throw new SmtpError(`AUTH rejected: ${auth.code} ${auth.message}`, auth.code);
+    if (authMode !== "none" && settings.username !== null && settings.username !== "") {
+      if (authMode === "plain") {
+        const authLine = `AUTH PLAIN ${Buffer.from(`\0${settings.username}\0${settings.password ?? ""}`).toString("base64")}`;
+        const auth = await step(session.send(authLine), "AUTH");
+        if (auth.code !== 235) {
+          throw new SmtpError(`AUTH rejected: ${auth.code} ${auth.message}`, auth.code);
+        }
+      } else {
+        const auth = await step(session.send("AUTH LOGIN"), "AUTH LOGIN");
+        if (auth.code !== 334) throw new SmtpError(`AUTH LOGIN rejected: ${auth.code} ${auth.message}`, auth.code);
+        const username = await step(session.send(Buffer.from(settings.username).toString("base64")), "AUTH LOGIN username");
+        if (username.code !== 334) throw new SmtpError(`AUTH LOGIN username rejected: ${username.code} ${username.message}`, username.code);
+        const password = await step(session.send(Buffer.from(settings.password ?? "").toString("base64")), "AUTH LOGIN password");
+        if (password.code !== 235) throw new SmtpError(`AUTH LOGIN rejected: ${password.code} ${password.message}`, password.code);
       }
     }
 
@@ -182,15 +241,40 @@ export async function sendEmail(settings: SmtpSettings, message: EmailMessage): 
       throw new SmtpError(`DATA rejected: ${data.code} ${data.message}`, data.code);
     }
 
+    const plainText = message.text.replace(/\r?\n/g, "\r\n");
+    const mimeBody = message.html === undefined
+      ? [
+          "Content-Type: text/plain; charset=utf-8",
+          "Content-Transfer-Encoding: quoted-printable",
+          "",
+          quotedPrintable(plainText),
+        ].join("\r\n")
+      : (() => {
+          const boundary = `=_terrence_${crypto.randomUUID()}`;
+          const html = message.html.replace(/\r?\n/g, "\r\n");
+          return [
+            `Content-Type: multipart/alternative; boundary=\"${boundary}\"`,
+            "",
+            `--${boundary}`,
+            "Content-Type: text/plain; charset=utf-8",
+            "Content-Transfer-Encoding: quoted-printable",
+            "",
+            quotedPrintable(plainText),
+            `--${boundary}`,
+            "Content-Type: text/html; charset=utf-8",
+            "Content-Transfer-Encoding: quoted-printable",
+            "",
+            quotedPrintable(html),
+            `--${boundary}--`,
+          ].join("\r\n");
+        })();
     const headers = [
       `From: ${settings.senderEmail}`,
       `To: ${message.to.join(", ")}`,
-      `Subject: ${message.subject.replace(/[\r\n]/g, " ")}`,
+      `Subject: ${message.subject.replace(/[\u0000-\u001f\u007f]/g, " ")}`,
       "MIME-Version: 1.0",
-      "Content-Type: text/plain; charset=utf-8",
       "",
-      // SMTP requires CRLF line endings; normalize any bare LF in the body.
-      message.text.replace(/\r?\n/g, "\r\n"),
+      mimeBody,
     ].join("\r\n");
     // Dot-stuffing: a line that starts with "." gets an extra leading ".".
     const stuffed = headers.replace(/^\./gm, "..");

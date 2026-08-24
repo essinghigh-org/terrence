@@ -19,7 +19,7 @@
 // limit (Bun.password.hash), independent of the configured rules. This module
 // is pure and framework-free so it can be unit-tested without a server.
 
-export interface PasswordPolicyRules {
+export type PasswordPolicyRules = {
   minLength: number;
   requireUpper: boolean;
   requireLower: boolean;
@@ -48,7 +48,7 @@ export function loadPasswordPolicy(): PasswordPolicyRules {
   };
 }
 
-export interface PasswordCheckResult {
+export type PasswordCheckResult = {
   ok: boolean;
   errors: string[];
 }

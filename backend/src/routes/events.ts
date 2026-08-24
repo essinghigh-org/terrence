@@ -1,7 +1,8 @@
 import { Elysia } from "elysia";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
-import { organizationMemberships, users } from "../db/schema";
+import type { users } from "../db/schema";
+import { organizationMemberships } from "../db/schema";
 import { authPlugin } from "../auth";
 import { subscribe } from "../lib/event-bus";
 
@@ -145,7 +146,7 @@ export const eventsRoutes = new Elysia({ name: "events" })
         // One subscription per relayed topic; all are disposed by the
         // shared cleanup path so a dead connection can never leak a
         // listener on the bus.
-        const disposers: Array<() => void> = [];
+        const disposers: (() => void)[] = [];
         disposeSubscriptions = (): void => {
           for (const dispose of disposers) dispose();
           disposers.length = 0;

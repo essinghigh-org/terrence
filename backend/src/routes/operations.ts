@@ -187,7 +187,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
             where: inArray(workspaces.id, workspaceIds),
           })).map((w: Readonly<{ id: string; name: string }>): [string, string] => [w.id, w.name]));
       for (const run of confirmedRuns) {
-        const confirmedAt = (run.statusTimestamps as Readonly<Record<string, string>> | null)?.["confirmed-at"];
+        const confirmedAt = (run.statusTimestamps)?.["confirmed-at"];
         const scheduledAt = run.scheduledAt;
         // scheduled_at semantics (kanban t_19f3556e): an apply is only a
         // FUTURE scheduled action while its scheduled time is still ahead.
@@ -383,8 +383,8 @@ export const operationsRoutes = new Elysia({ name: "operations" })
 
   function readExplainAttributes(body: unknown): Readonly<Record<string, unknown>> {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload["data"];
-    const attributes = data !== null && typeof data === "object" ? (data as Record<string, unknown>)["attributes"] : undefined;
+    const data = payload.data;
+    const attributes = data !== null && typeof data === "object" ? (data as Record<string, unknown>).attributes : undefined;
     return attributes !== null && typeof attributes === "object" ? (attributes as Record<string, unknown>) : {};
   }
 

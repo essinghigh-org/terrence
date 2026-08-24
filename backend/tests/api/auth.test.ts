@@ -3,7 +3,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { users, apiTokens } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
-import { createHash } from "node:crypto";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 
 describe("the reference format API Authentication (Local Auth MVP)", () => {
   const testUser = `auth_user_${Date.now()}`;
@@ -112,10 +112,28 @@ describe("the reference format API Authentication (Local Auth MVP)", () => {
 
     // Token is stored hashed in DB; verify lookup works via auth plugin
     const rawToken = data.data.attributes.token;
-    const tokenHash = createHash("sha256").update(rawToken as string).digest("hex");
+    const tokenHash = hashAuthenticationToken(rawToken as string);
     const tokenInDb = await db.query.apiTokens.findFirst({
       where: eq(apiTokens.token, tokenHash),
     });
     expect(tokenInDb).toBeDefined();
+  });
+
+  it("does not issue credentials to suspended accounts", async () => {
+    const blockedId = `auth-blocked-${crypto.randomUUID()}`;
+    const blockedPassword = "blocked-password-123";
+    const passwordHash = await Bun.password.hash(blockedPassword, { algorithm: "bcrypt", cost: 10 });
+    await db.insert(users).values({ id: blockedId, username: blockedId, passwordHash, isSuspended: true });
+    try {
+      const response = await app.handle(new Request("http://localhost/api/v2/users/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({ data: { attributes: { username: blockedId, password: blockedPassword } } }),
+      }));
+      expect(response.status).toBe(401);
+      expect((await db.query.apiTokens.findMany({ where: eq(apiTokens.userId, blockedId) })).length).toBe(0);
+    } finally {
+      await db.delete(users).where(eq(users.id, blockedId));
+    }
   });
 });

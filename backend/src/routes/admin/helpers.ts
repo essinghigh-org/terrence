@@ -1,6 +1,7 @@
 // Shared admin helpers (split from routes/admin.ts).
 import { db, isPostgres } from "../../db";
-import { users, organizations, workspaces, runs, registryPartnerships, samlSettings, adminSettings } from "../../db/schema";
+import type { users, organizations, workspaces, runs} from "../../db/schema";
+import { registryPartnerships, samlSettings, adminSettings } from "../../db/schema";
 import { eq } from "drizzle-orm";
 import { AvatarService } from "../../lib/avatars";
 import { type Settings, getSettings, invalidateSettingsCache, normalizePlanExplainerBaseUrl } from "../../lib/settings";
@@ -351,6 +352,7 @@ export function adminUserResource(u: UserItem): Record<string, unknown> {
     attributes: {
       username: u.username,
       email: u.email,
+      "email-verified": (u as Record<string, unknown>).emailVerifiedAt !== null && (u as Record<string, unknown>).emailVerifiedAt !== undefined,
       "is-site-admin": u.isSiteAdmin === true,
       "is-admin": u.isSiteAdmin === true,
       "is-site-auditor": (u as Record<string, unknown>).isSiteAuditor === true,

@@ -22,7 +22,7 @@ export const providerIconRoutes = new Elysia()
     // Fallback when the runtime collapsed the query into `query` only (single value).
     if (raw.length === 0 && query !== undefined) {
       const single = (query as Record<string, string>)["provider-name"]
-        ?? (query as Record<string, string>)["provider_name"];
+        ?? (query as Record<string, string>).provider_name;
       if (typeof single === "string" && single !== "") raw.push(single);
     }
     const names = raw

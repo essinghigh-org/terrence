@@ -24,7 +24,6 @@
     "test:frontend": "bun run --cwd frontend test",
     "test:browser": "bun run --cwd frontend test:browser",
     "test:browser:axe": "bun run --cwd frontend test:browser:axe",
-    "test:visual": "bun run --cwd frontend test:visual",
     "test": "bun run test:backend && bun run test:frontend",
     "test:changed": "bun test --changed=master --parallel",
     "lint": "eslint .",

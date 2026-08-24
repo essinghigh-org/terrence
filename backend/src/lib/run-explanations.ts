@@ -187,12 +187,12 @@ export function upstreamRequest(settings: Readonly<Record<string, unknown>>, pro
 
 /** Non-streaming completion parse: answer content plus transient reasoning. */
 export function parseCompletionBody(parsed: unknown): CompletionParts {
-  const choices = (parsed as Readonly<{ choices?: ReadonlyArray<Readonly<{ message?: Readonly<Record<string, unknown>> }>> }>)?.choices;
+  const choices = (parsed as Readonly<{ choices?: readonly Readonly<{ message?: Readonly<Record<string, unknown>> }>[] }>)?.choices;
   const message = choices?.[0]?.message;
   const contentValue = message?.content;
   let content = typeof contentValue === "string" ? contentValue : "";
   let thinking = "";
-  const reasoningContent = message?.["reasoning_content"];
+  const reasoningContent = message?.reasoning_content;
   const reasoning = message?.reasoning;
   if (typeof reasoningContent === "string" && reasoningContent !== "") {
     thinking = reasoningContent;
@@ -263,11 +263,11 @@ export async function forEachUpstreamDelta(
       } catch {
         continue;
       }
-      const delta = (chunk as Readonly<{ choices?: ReadonlyArray<Readonly<{ delta?: Readonly<Record<string, unknown>> }>> }>)?.choices?.[0]?.delta;
+      const delta = (chunk as Readonly<{ choices?: readonly Readonly<{ delta?: Readonly<Record<string, unknown>> }>[] }>)?.choices?.[0]?.delta;
       if (delta === undefined) continue;
       const content = delta.content;
       if (typeof content === "string" && content !== "") await emitInlineContent(content);
-      const reasoningContent = delta["reasoning_content"];
+      const reasoningContent = delta.reasoning_content;
       const reasoning = delta.reasoning;
       const thinkingPart = typeof reasoningContent === "string" && reasoningContent !== ""
         ? reasoningContent
@@ -298,13 +298,13 @@ export async function fetchUpstream<T>(
   consume: (upstream: Readonly<Response>, tick: () => void) => Promise<T>,
 ): Promise<T> {
   const controller = new AbortController();
-  const abortWithTimeout = (): void => controller.abort(new Error("request timed out"));
+  const abortWithTimeout = (): void => { controller.abort(new Error("request timed out")); };
   let deadline = setTimeout(abortWithTimeout, EXPLAIN_TIMEOUT_MS);
   const tick = (): void => {
     clearTimeout(deadline);
     deadline = setTimeout(abortWithTimeout, EXPLAIN_TIMEOUT_MS);
   };
-  const onExternalAbort = (): void => controller.abort();
+  const onExternalAbort = (): void => { controller.abort(); };
   signal?.addEventListener("abort", onExternalAbort, { once: true });
   try {
     let upstream: Readonly<Response>;
