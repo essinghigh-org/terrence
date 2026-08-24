@@ -439,6 +439,66 @@ export const userRoutes = new Elysia({ name: "users" })
     (set as { status: number }).status = 204;
     return {};
   })
+  .patch("/api/v2/organization-memberships/:id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }): Promise<unknown> => {
+    const memId = params.id ?? "";
+    const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
+    if (mem === undefined || !(await checkOrganizationPermission(mem.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
+      (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const data = payload.data as Record<string, unknown> | undefined;
+    if (data !== undefined && typeof data.type === "string" && data.type !== "organization-memberships") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be \"organization-memberships\"" }] };
+    }
+    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const updates: Partial<typeof organizationMemberships.$inferInsert> = {};
+
+    // Status: invited <-> active is the activation path for provisioned members.
+    if (attrs.status !== undefined) {
+      if (typeof attrs.status !== "string" || !["active", "invited"].includes(attrs.status)) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "status must be one of: active, invited" }] };
+      }
+      updates.status = attrs.status;
+    }
+
+    // Role: owner promotion/demotion. Guard the last owner so an org can never
+    // lose its only owner through a demote (the DELETE path has the same hole,
+    // tracked separately).
+    if (attrs.role !== undefined) {
+      if (typeof attrs.role !== "string" || !["owner", "member"].includes(attrs.role)) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "role must be one of: owner, member" }] };
+      }
+      if (mem.role !== attrs.role) updates.role = attrs.role;
+    }
+
+    if (updates.role !== undefined && mem.role === "owner") {
+      const owners = await db.query.organizationMemberships.findMany({
+        where: and(eq(organizationMemberships.orgId, mem.orgId), eq(organizationMemberships.role, "owner"), eq(organizationMemberships.status, "active")),
+        columns: { id: true },
+      });
+      if (owners.length <= 1) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Cannot demote the last active owner of the organization" }] };
+      }
+    }
+
+    if (Object.keys(updates).length === 0) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No changes requested" }] };
+    }
+
+    await db.update(organizationMemberships).set(updates).where(eq(organizationMemberships.id, memId));
+    await auditLog("update", "organization-memberships", memId, user?.id ?? null, mem.orgId, { userId: mem.userId, ...updates });
+    // Status/role changes alter permissions immediately; revoke stale streams.
+    publish("authz.changed", { "user-id": mem.userId, "org-id": mem.orgId });
+    const updated = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
+    if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const targetUser = await db.query.users.findFirst({ where: eq(users.id, updated.userId) });
+    return { data: await orgMembershipResource(updated, targetUser) };
+  })
   // --- Auth Tokens ---
   .get("/api/v2/users/:user_id/authentication-tokens", async ({ params, user, request, set }: ParamCtx): Promise<unknown> => {
     const userId = params.user_id ?? "";
