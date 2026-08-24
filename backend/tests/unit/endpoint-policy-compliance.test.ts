@@ -8,7 +8,7 @@ import {
 
 describe("endpoint-policy (465-469)", () => {
   // Representative samples: at least one path per auth/rate/body bucket is exercised.
-  const probes: ReadonlyArray<{ method: string; url: string; rate: import("../../src/lib/endpoint-policy").RateLimitClass }> = [
+  const probes: readonly { method: string; url: string; rate: import("../../src/lib/endpoint-policy").RateLimitClass }[] = [
     { method: "GET", url: "http://x/api/v2/workspaces/ws-1/runs", rate: "workspace-run-history" },
     { method: "DELETE", url: "http://x/api/v2/admin/scim-settings", rate: "scim-settings" },
     { method: "POST", url: "http://x/api/v2/admin/teams/t-1/scim-group-mapping", rate: "scim-mapping" },

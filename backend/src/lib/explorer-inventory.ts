@@ -75,9 +75,9 @@ type ExplorerInventoryCatalogRow = Readonly<{
   moduleItems?: string | undefined;
 }>;
 
-function membershipRows(row: ExplorerInventoryCatalogRow): Array<typeof explorerCatalogMemberships.$inferInsert> {
+function membershipRows(row: ExplorerInventoryCatalogRow): typeof explorerCatalogMemberships.$inferInsert[] {
   const now = Date.now();
-  const items: Array<Readonly<{ kind: string; item: ExplorerCatalogItem }>> = [
+  const items: Readonly<{ kind: string; item: ExplorerCatalogItem }>[] = [
     { kind: "tf_versions", item: { name: row.terraformVersion ?? "latest", source: "", version: row.terraformVersion ?? "latest" } },
     ...jsonItems(row.providerItems ?? "[]").map((item): Readonly<{ kind: string; item: ExplorerCatalogItem }> => ({ kind: "providers", item })),
     ...jsonItems(row.moduleItems ?? "[]").map((item): Readonly<{ kind: string; item: ExplorerCatalogItem }> => ({ kind: "modules", item })),
@@ -199,7 +199,7 @@ async function backfillExplorerInventory(orgId: string, context: DurableJobConte
     const missing = page.filter((workspace) => !existing.has(workspace.id));
     for (let index = 0; index < missing.length; index += 25) {
       if (await context.canceled()) return;
-      await Promise.all(missing.slice(index, index + 25).map((workspace) => refreshExplorerWorkspace(workspace.id, false)));
+      await Promise.all(missing.slice(index, index + 25).map(async (workspace) => refreshExplorerWorkspace(workspace.id, false)));
     }
     cursor = page[page.length - 1]?.id ?? cursor;
     await context.heartbeat();
@@ -265,7 +265,7 @@ export async function ensureExplorerInventory(orgId: string): Promise<void> {
     const missing = workspacesInOrg.filter((workspace) => !existing.has(workspace.id));
     const batchSize = 25;
     for (let index = 0; index < missing.length; index += batchSize) {
-      await Promise.all(missing.slice(index, index + batchSize).map((workspace) => refreshExplorerWorkspace(workspace.id, false)));
+      await Promise.all(missing.slice(index, index + batchSize).map(async (workspace) => refreshExplorerWorkspace(workspace.id, false)));
     }
     await rebuildExplorerCatalog(orgId);
     return;

@@ -1064,6 +1064,18 @@ function matchesConfiguredBranch(
   return eventBranch !== undefined && eventBranch !== "" && vcsRepo.branch === eventBranch;
 }
 
+function matchesVcsTrigger(
+  vcsRepo: DeepReadonly<VcsRepo>,
+  details: DeepReadonly<WebhookDetails>,
+): boolean {
+  // TFE tag-triggered workspaces are tag-only: once tags-regex is configured,
+  // ordinary branch pushes and pull requests must not queue a second run.
+  if (typeof vcsRepo.tagsRegex === "string" && vcsRepo.tagsRegex !== "") {
+    return details.tag !== undefined && matchesTag(vcsRepo, details.tag);
+  }
+  return details.tag === undefined && matchesConfiguredBranch(vcsRepo, details);
+}
+
 async function handleOAuthProviderWebhook(
   provider: OAuthProvider,
   kind: "push" | "pull_request",
@@ -1077,8 +1089,7 @@ async function handleOAuthProviderWebhook(
   const branchMatchedWorkspaces = candidates.filter((workspace: DeepReadonly<typeof workspaces.$inferSelect>): boolean => {
     const vcsRepo = workspace.vcsRepo;
     if (vcsRepo?.identifier !== details.repoFullName) return false;
-    if (details.tag !== undefined) return matchesTag(vcsRepo, details.tag);
-    return matchesConfiguredBranch(vcsRepo, details);
+    return matchesVcsTrigger(vcsRepo, details);
   });
   // PR/MR payloads carry no changed-file list (kanban 1.6): fetch it from the
   // provider API once per event so file trigger patterns actually filter
@@ -1222,8 +1233,7 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
   const branchMatchedWorkspaces = candidates.filter((workspace: DeepReadonly<typeof workspaces.$inferSelect>): boolean => {
     const vcsRepo = workspace.vcsRepo;
     if (vcsRepo?.identifier !== details.repoFullName) return false;
-    if (details.tag !== undefined) return matchesTag(vcsRepo, details.tag);
-    return matchesConfiguredBranch(vcsRepo, details);
+    return matchesVcsTrigger(vcsRepo, details);
   });
   let triggerDetails = details;
   if (eventName === "pull_request") {

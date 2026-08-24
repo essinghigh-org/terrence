@@ -65,7 +65,7 @@ export function WorkspaceSshKey({
         const data = response.data;
         setKeys(Array.isArray(data) ? data : []);
       })
-      .catch((caught): void => {
+      .catch((caught: unknown): void => {
         if (active) setError(messageFrom(caught, "Failed to load SSH keys"));
       })
       .finally((): void => {
@@ -183,7 +183,7 @@ export function WorkspaceRunTriggers({
     setLoading(true);
     setError("");
     load()
-      .catch((caught): void => {
+      .catch((caught: unknown): void => {
         if (active) setError(messageFrom(caught, "Failed to load run triggers"));
       })
       .finally((): void => {
@@ -352,6 +352,24 @@ type HealthWorkspace = {
   };
 };
 
+type HealthAssessment = {
+  id: string;
+  attributes: {
+    status: string;
+    drifted?: boolean | null;
+    "resources-drifted"?: number;
+    "resources-undrifted"?: number;
+    "all-checks-succeeded"?: boolean | null;
+    "checks-passed"?: number;
+    "checks-failed"?: number;
+    "checks-errored"?: number;
+    "checks-unknown"?: number;
+    "error-msg"?: string | null;
+    "created-at"?: string;
+    "completed-at"?: string | null;
+  };
+};
+
 export function WorkspaceHealth({
   workspace,
   onSaved,
@@ -363,7 +381,28 @@ export function WorkspaceHealth({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [assessments, setAssessments] = useState<HealthAssessment[]>([]);
+  const [assessmentsLoading, setAssessmentsLoading] = useState(true);
   const canUpdate = workspace.attributes.permissions?.["can-update"] === true;
+
+  useEffect((): (() => void) => {
+    const controller = new AbortController();
+    setAssessmentsLoading(true);
+    void fetchApi<{ data?: HealthAssessment[] }>(
+      `/workspaces/${encodeURIComponent(workspace.id)}/assessment-results`,
+      { signal: controller.signal },
+    )
+      .then((response): void => {
+        if (!controller.signal.aborted) setAssessments(Array.isArray(response.data) ? response.data : []);
+      })
+      .catch((): void => {
+        if (!controller.signal.aborted) setAssessments([]);
+      })
+      .finally((): void => {
+        if (!controller.signal.aborted) setAssessmentsLoading(false);
+      });
+    return (): void => { controller.abort(); };
+  }, [workspace.id]);
 
   const save = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
@@ -393,7 +432,34 @@ export function WorkspaceHealth({
   };
 
   return (
-    <form onSubmit={save} className="max-w-3xl">
+    <div className="max-w-4xl space-y-5">
+      <Card>
+        <CardHeader>
+          <CardTitle>Latest health result</CardTitle>
+          <CardDescription>Drift detection and continuous validation results for this workspace.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {assessmentsLoading && <p className="text-sm text-muted-foreground">Loading health results…</p>}
+          {!assessmentsLoading && assessments[0] === undefined && (
+            <p className="text-sm text-muted-foreground">No health assessment has run yet.</p>
+          )}
+          {!assessmentsLoading && assessments[0] !== undefined && ((): React.JSX.Element => {
+            const latest = assessments[0];
+            const attrs = latest.attributes;
+            const checksFailed = (attrs["checks-failed"] ?? 0) + (attrs["checks-errored"] ?? 0);
+            return (
+              <dl className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <div><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</dt><dd className="mt-1 font-medium capitalize">{attrs.status.replace(/_/g, " ")}</dd></div>
+                <div><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Drift</dt><dd className="mt-1 font-medium">{attrs.drifted === true ? `${attrs["resources-drifted"] ?? 0} resource(s) drifted` : attrs.drifted === false ? "No drift detected" : "Not available"}</dd></div>
+                <div><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Validation</dt><dd className="mt-1 font-medium">{attrs["checks-passed"] ?? 0} passed{checksFailed > 0 ? ` · ${checksFailed} failed` : ""}</dd></div>
+                <div><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Completed</dt><dd className="mt-1 font-medium">{attrs["completed-at"] === null || attrs["completed-at"] === undefined ? "In progress" : formatDate(attrs["completed-at"])}</dd></div>
+                {attrs["error-msg"] !== null && attrs["error-msg"] !== undefined && <div className="sm:col-span-2 lg:col-span-4"><dt className="text-xs font-semibold uppercase tracking-wide text-destructive">Error</dt><dd className="mt-1 text-sm text-destructive">{attrs["error-msg"]}</dd></div>}
+              </dl>
+            );
+          })()}
+        </CardContent>
+      </Card>
+      <form onSubmit={save}>
       <Card>
         <CardHeader>
           <CardTitle>Health assessments</CardTitle>
@@ -430,6 +496,7 @@ export function WorkspaceHealth({
           </Button>
         </CardFooter>
       </Card>
-    </form>
+      </form>
+    </div>
   );
 }

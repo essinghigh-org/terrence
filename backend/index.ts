@@ -155,7 +155,7 @@ async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
       // graceful stop has not completed within the deadline, force-close.
       const graceful = server.stop(false);
       const deadline = new Promise<"timeout">((resolve): void => {
-        setTimeout((): void => resolve("timeout"), 5000);
+        setTimeout((): void => { resolve("timeout"); }, 5000);
       });
       const outcome = await Promise.race([
         graceful.then((): "drained" => "drained"),

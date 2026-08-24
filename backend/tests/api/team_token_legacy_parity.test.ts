@@ -195,7 +195,7 @@ describe("team token legacy/plural separation (TFE parity)", () => {
     const getRes = await request(`/api/v2/authentication-tokens/${modernIds[1]}`, "GET", undefined, authB);
     expect(getRes.status).toBe(200);
     const gotBody = (await getRes.json()) as { data: { id: string; attributes: Record<string, unknown> } };
-    expect(gotBody.data.id).toBe(modernIds[1] as string);
+    expect(gotBody.data.id).toBe(modernIds[1]!);
     expect(String(gotBody.data.attributes.token ?? "")).toBe("");
 
     // The legacy credential is NOT manageable via the generic route.

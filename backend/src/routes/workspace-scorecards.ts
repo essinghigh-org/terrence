@@ -1,6 +1,7 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { users, workspaces, workspaceTags, policySetWorkspaces } from "../db/schema";
+import type { users} from "../db/schema";
+import { workspaces, workspaceTags, policySetWorkspaces } from "../db/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { checkOrganizationPermission } from "../lib/utils";
 import { authPlugin } from "../auth";

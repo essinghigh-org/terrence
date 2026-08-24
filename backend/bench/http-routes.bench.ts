@@ -46,9 +46,9 @@ await db.insert(runs).values(
 );
 
 const authHeaders = { Authorization: `Bearer ${token}` };
-const runsList = (): Promise<Response> => app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}/runs?page%5Bnumber%5D=1&page%5Bsize%5D=50`, { headers: authHeaders }));
-const ping = (): Promise<Response> => app.handle(new Request("http://localhost/api/v2/ping"));
-const readyz = (): Promise<Response> => app.handle(new Request("http://localhost/readyz"));
+const runsList = async (): Promise<Response> => app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}/runs?page%5Bnumber%5D=1&page%5Bsize%5D=50`, { headers: authHeaders }));
+const ping = async (): Promise<Response> => app.handle(new Request("http://localhost/api/v2/ping"));
+const readyz = async (): Promise<Response> => app.handle(new Request("http://localhost/readyz"));
 
 // 5 iterations: the app's rate limiter allows 30 requests/min per key, and
 // each iteration here is one real HTTP request.

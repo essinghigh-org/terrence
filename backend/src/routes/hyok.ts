@@ -107,7 +107,7 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
       if (bucket === undefined) keyVersionsByConfig.set(kv.hyokConfigId, [kv]);
       else (bucket as (typeof hyokCustomerKeyVersions.$inferSelect)[]).push(kv);
     }
-    return { data: await Promise.all(rows.map((row) => hyokResource(row, org.name, keyVersionsByConfig))) };
+    return { data: await Promise.all(rows.map(async (row) => hyokResource(row, org.name, keyVersionsByConfig))) };
   })
   .post("/api/v2/organizations/:org_name/hyok-configurations", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";

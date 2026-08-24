@@ -3,10 +3,13 @@ import { db } from "../db";
 import { organizationInvitations, organizationMemberships, users } from "../db/schema";
 import { and, eq, sql } from "drizzle-orm";
 import { authPlugin } from "../auth";
-import { checkOrganizationPermission, auditLog } from "../lib/utils";
+import { checkOrganizationPermission, checkOrgPermission, auditLog } from "../lib/utils";
 import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
 import { normalizeEmail } from "../lib/identity";
 import { cachedOrgByName } from "../lib/cached-lookups";
+import { publish } from "../lib/event-bus";
+
+class InvitationActivationConflict extends Error {}
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 type Ctx = Readonly<{ params: Readonly<Record<string,string>>; body?: unknown; query: Readonly<Record<string,string>>; user?: Readonly<typeof users.$inferSelect> | null; orgId: string | null; teamId: string | null; request: Readonly<{ url: string }>; set: SetObj }>;
@@ -58,7 +61,17 @@ export const organizationInvitationRoutes = new Elysia({ name: "organization-inv
     const rawEmail = typeof attrs.email === "string" ? attrs.email : "";
     const email = normalizeEmail(rawEmail);
     if (email === null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A valid email is required for invitations" }] }; }
-    const role = typeof attrs.role === "string" && ["owner","member"].includes(attrs.role) ? attrs.role : "member";
+    if (attrs.role !== undefined && (typeof attrs.role !== "string" || !["owner", "member"].includes(attrs.role))) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "role must be one of: owner, member" }] };
+    }
+    const role = typeof attrs.role === "string" ? attrs.role : "member";
+    // Team-delegated membership managers may invite members, but may not grant
+    // the organization-owner role.
+    if (role === "owner" && user?.isSiteAdmin !== true && !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId, null))) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     const existingMember = await db.query.users.findFirst({ where: sql`lower(${users.email}) = lower(${email})` });
     if (existingMember !== undefined) {
       const mem = await db.query.organizationMemberships.findFirst({ where: and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.userId, existingMember.id)) });
@@ -78,7 +91,11 @@ export const organizationInvitationRoutes = new Elysia({ name: "organization-inv
     await auditLog("create", "organization-invitations", id, user?.id ?? null, org.id, { email, role });
     const row = await db.query.organizationInvitations.findFirst({ where: eq(organizationInvitations.id, id) });
     (set as { status: number }).status = 201;
-    return { data: invitationResource(row!), meta: { token: rawToken } };
+    if (row === undefined) {
+      (set as { status: number }).status = 500;
+      return { errors: [{ status: "500", title: "Internal Server Error" }] };
+    }
+    return { data: invitationResource(row), meta: { token: rawToken } };
   })
   .delete("/api/v2/organizations/:org_name/organization-invitations/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: Ctx): Promise<unknown> => {
     const org = await cachedOrgByName(params.org_name ?? "");
@@ -99,7 +116,7 @@ export const organizationInvitationRoutes = new Elysia({ name: "organization-inv
     if (rawToken.trim() === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invitation token is required" }] }; }
     if (user === null || user === undefined) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
     const tokenHash = hashAuthenticationToken(rawToken);
-    let invite = await db.query.organizationInvitations.findFirst({ where: eq(organizationInvitations.tokenHash, tokenHash) });
+    const invite = await db.query.organizationInvitations.findFirst({ where: eq(organizationInvitations.tokenHash, tokenHash) });
     if (invite === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found", detail: "Invitation not found" }] }; }
     if (invite.status !== "pending") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Invitation is ${invite.status}` }] }; }
     if (invite.expiresAt < Date.now()) {
@@ -114,12 +131,39 @@ export const organizationInvitationRoutes = new Elysia({ name: "organization-inv
     if ((user as unknown as Record<string,unknown>).isSuspended === true) {
       (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Suspended accounts cannot accept invitations" }] };
     }
+    if (user.emailVerifiedAt === null || user.emailVerifiedAt === undefined) {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: "Verify your email address before accepting an invitation" }] };
+    }
     const existing = await db.query.organizationMemberships.findFirst({ where: and(eq(organizationMemberships.orgId, invite.orgId), eq(organizationMemberships.userId, user.id)) });
     if (existing !== undefined) {
-      const claimed = await db.update(organizationInvitations).set({ status: "accepted", acceptedBy: user.id, updatedAt: Date.now() }).where(and(eq(organizationInvitations.id, invite.id), eq(organizationInvitations.status, "pending"))).returning();
-      if (claimed.length === 0) invite = (await db.query.organizationInvitations.findFirst({ where: eq(organizationInvitations.id, invite.id) })) ?? invite;
-      else invite = { ...invite, status: "accepted" as const, acceptedBy: user.id };
-      (set as { status: number }).status = 200; return { data: invitationResource({ ...invite, status: "accepted", acceptedBy: user.id } as typeof invite) };
+      const acceptedInvite = invite;
+      let activated = false;
+      try {
+        activated = await db.transaction(async (tx: unknown): Promise<boolean> => {
+          const t = tx as typeof db;
+          const claimed = await t.update(organizationInvitations).set({ status: "accepted", acceptedBy: user.id, updatedAt: Date.now() }).where(and(eq(organizationInvitations.id, acceptedInvite.id), eq(organizationInvitations.status, "pending"))).returning();
+          if (claimed.length === 0) return false;
+          if (existing.status === "invited") {
+            const activation = await t.update(organizationMemberships).set({ status: "active" }).where(and(eq(organizationMemberships.id, existing.id), eq(organizationMemberships.status, "invited"))).returning({ id: organizationMemberships.id });
+            if (activation.length === 0) throw new InvitationActivationConflict();
+          }
+          return true;
+        });
+      } catch (error: unknown) {
+        if (!(error instanceof InvitationActivationConflict)) throw error;
+      }
+      if (!activated) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Invitation is no longer pending" }] };
+      }
+      const resultInvite = { ...acceptedInvite, status: "accepted" as const, acceptedBy: user.id };
+      await auditLog("accept", "organization-invitations", resultInvite.id, user.id, resultInvite.orgId, { email: resultInvite.email });
+      if (existing.status === "invited") {
+        await auditLog("update", "organization-memberships", existing.id, user.id, resultInvite.orgId, { status: "active", via: "invitation" });
+        publish("authz.changed", { "user-id": user.id, "org-id": resultInvite.orgId });
+      }
+      (set as { status: number }).status = 200; return { data: invitationResource({ ...resultInvite, status: "accepted", acceptedBy: user.id }) };
     }
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
@@ -133,6 +177,11 @@ export const organizationInvitationRoutes = new Elysia({ name: "organization-inv
     });
     await auditLog("accept", "organization-invitations", invite.id, user.id, invite.orgId, { email: invite.email });
     await auditLog("create", "organization-memberships", invite.id, user.id, invite.orgId, { email: invite.email, role: invite.role, via: "invitation" });
+    publish("authz.changed", { "user-id": user.id, "org-id": invite.orgId });
     const updated = await db.query.organizationInvitations.findFirst({ where: eq(organizationInvitations.id, invite.id) });
-    return { data: invitationResource(updated!) };
+    if (updated === undefined) {
+      (set as { status: number }).status = 500;
+      return { errors: [{ status: "500", title: "Internal Server Error" }] };
+    }
+    return { data: invitationResource(updated) };
   });

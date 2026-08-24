@@ -28,7 +28,7 @@ describe("refresh token two-tab concurrency grace", () => {
 
   const cookieFrom = (res: Response, name = "terrence_refresh"): string => {
     const setCookie = res.headers.get("set-cookie") ?? "";
-    const match = setCookie.match(new RegExp(`${name}=([^;]*)`));
+    const match = new RegExp(`${name}=([^;]*)`).exec(setCookie);
     return match === null ? "" : `${name}=${match[1]}`;
   };
 

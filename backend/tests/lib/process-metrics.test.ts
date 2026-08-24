@@ -64,10 +64,10 @@ describe("worker poll tracking", () => {
     expect(snapshot.worker.polls).toBeGreaterThanOrEqual(1);
     expect(snapshot.worker.lastPollOk).toBe(true);
     expect(snapshot.worker.lastPollDurationMs).toBeGreaterThanOrEqual(0);
-    const queuePoller = snapshot.worker.pollers["pollWorkerQueue"];
+    const queuePoller = snapshot.worker.pollers.pollWorkerQueue;
     expect(queuePoller?.runs).toBeGreaterThanOrEqual(1);
     expect(queuePoller?.lastOk).toBe(true);
-    const assessmentPoller = snapshot.worker.pollers["enqueueDueAssessments"];
+    const assessmentPoller = snapshot.worker.pollers.enqueueDueAssessments;
     expect(assessmentPoller?.errors).toBeGreaterThanOrEqual(1);
     expect(assessmentPoller?.lastOk).toBe(false);
     expect(snapshot.worker.lastPollAt).toBeGreaterThanOrEqual(0);

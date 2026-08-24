@@ -50,7 +50,7 @@ export function isStackAgentResultValid(result: unknown): boolean {
     // them from the size budget so large valid Terraform state does not reject
     // the run.
     const { state: _s, json_state: _js, ...metadata } = result as Record<string, unknown>;
-    const serialized = JSON.stringify(Object.keys(metadata).length === Object.keys(result as object).length ? result : metadata);
+    const serialized = JSON.stringify(Object.keys(metadata).length === Object.keys(result).length ? result : metadata);
     if (new TextEncoder().encode(serialized).byteLength > MAX_STACK_AGENT_RESULT_BYTES) return false;
   } catch {
     return false;

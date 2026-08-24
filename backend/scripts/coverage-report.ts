@@ -69,7 +69,7 @@ const run = spawnSync(
 
 if (run.status !== 0) {
   const detail = run.error !== undefined
-    ? `${run.error.message}`
+    ? run.error.message
     : run.signal !== null
       ? `terminated by signal ${run.signal}`
       : `exit ${run.status}`;
@@ -81,15 +81,15 @@ if (run.status !== 0) {
 // ---------------------------------------------------------------------------
 // 2. Parse lcov records (SF/LF/LH).
 // ---------------------------------------------------------------------------
-interface LcovRecord {
+type LcovRecord = {
   file: string;
   lf: number;
   lh: number;
 }
 
-interface CoverageRecord extends LcovRecord {
+type CoverageRecord = {
   pct: number;
-}
+} & LcovRecord
 
 function parseLcov(text: string): LcovRecord[] {
   const records: LcovRecord[] = [];
@@ -163,7 +163,7 @@ for (const record of records) {
 // ---------------------------------------------------------------------------
 // 4. Report.
 // ---------------------------------------------------------------------------
-interface ReportShape {
+type ReportShape = {
   threshold: number;
   totalFiles: number;
   coveredFiles: number;
@@ -171,9 +171,9 @@ interface ReportShape {
   totalLines: number;
   coveredLines: number;
   lineCoveragePct: number;
-  belowThreshold: Array<{ file: string; pct: number; lf: number; lh: number }>;
+  belowThreshold: { file: string; pct: number; lf: number; lh: number }[];
   uncovered: string[];
-  rollups: Array<{ dir: string; pct: number; lf: number; lh: number }>;
+  rollups: { dir: string; pct: number; lf: number; lh: number }[];
 }
 
 const totalLf = records.reduce((sum, record) => sum + record.lf, 0);

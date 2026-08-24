@@ -25,9 +25,9 @@ const cache = new Map<string, CacheEntry>();
 const inflightByKey = new Map<string, Promise<string | null>>();
 const MAX_REGISTRY_CONCURRENCY = 8;
 let registryInFlight = 0;
-const registryQueue: Array<() => void> = [];
+const registryQueue: (() => void)[] = [];
 
-function acquireRegistrySlot(): Promise<void> {
+async function acquireRegistrySlot(): Promise<void> {
   if (registryInFlight < MAX_REGISTRY_CONCURRENCY) {
     registryInFlight += 1;
     return Promise.resolve();
@@ -46,7 +46,7 @@ function releaseRegistrySlot(): void {
 
 function setCache(key: string, url: string | null, ttlMs: number): void {
   if (cache.size >= MAX_CACHE_ENTRIES && !cache.has(key)) {
-    const first = cache.keys().next().value as string | undefined;
+    const first = cache.keys().next().value;
     if (first !== undefined) cache.delete(first);
   }
   cache.set(key, { url, expiresAt: Date.now() + ttlMs });
@@ -116,7 +116,7 @@ async function fetchLogoUrl(nsName: string): Promise<string | null> {
   }
   if (body === null || typeof body !== "object") return null;
   const rec = body as Record<string, unknown>;
-  const raw = rec["logo_url"] ?? rec["logo-url"];
+  const raw = rec.logo_url ?? rec["logo-url"];
   if (typeof raw !== "string") return null;
     return absoluteLogoUrl(raw);
   } finally {

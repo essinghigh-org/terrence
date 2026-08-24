@@ -22,6 +22,7 @@ import {
 } from "../lib/sso";
 import { claimSsoChallenge, consumeSsoChallenge, storeSsoChallenge } from "../lib/sso-challenges";
 import { issueSsoLogin } from "../lib/sso-login";
+import { isUserLoginBlocked } from "./accounts";
 import { browserSessionUser, revokeBrowserSession } from "./accounts";
 
 type HeaderValue = string | number | readonly string[];
@@ -839,6 +840,15 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     }
     let user = result.user;
 
+    // Do not synchronize groups or elevate a suspended/tombstoned account
+    // while processing a signed assertion. Those writes must never happen
+    // before the account-availability check.
+    if (user.isSuspended === true || user.deletedAt !== null) {
+      await auditLog("sso-failure", "saml", user.id, user.id, null, { reason: "account is suspended or deleted" });
+      (set as { status: number }).status = 403;
+      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "This account is not available."), 403);
+    }
+
     if (attrGroupsConfigured) {
       await syncSamlGroupMappings(user.id, groups);
     }    // The site-admin attribute is authoritative in both directions: matching
@@ -861,6 +871,10 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The signed-in account is unavailable."), 500);
     }
     user = refreshedUser;
+    if (isUserLoginBlocked(user)) {
+      await auditLog("sso-failure", "saml", user.id, user.id, null, { reason: "account is suspended or deleted" });
+      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "This account is not available."), 403);
+    }
 
     const tokenTtlMs = typeof settings.ssoApiTokenSessionTimeout === "number" && settings.ssoApiTokenSessionTimeout > 0
       ? settings.ssoApiTokenSessionTimeout * 1000

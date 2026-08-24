@@ -47,7 +47,7 @@ await suite("url-safety", {
 
 // --- plan JSON resource counts (runs once per plan completion) ---
 function syntheticPlan(resources: number): PlanJson {
-  const resourceChanges: Array<Record<string, unknown>> = [];
+  const resourceChanges: Record<string, unknown>[] = [];
   for (let i = 0; i < resources; i += 1) {
     resourceChanges.push({
       mode: i % 7 === 0 ? "data" : "managed",
@@ -59,7 +59,7 @@ function syntheticPlan(resources: number): PlanJson {
       },
     });
   }
-  return { resource_changes: resourceChanges } as unknown as PlanJson;
+  return { resource_changes: resourceChanges };
 }
 const plan1000 = syntheticPlan(1000);
 const plan100 = syntheticPlan(100);
@@ -116,7 +116,7 @@ function syntheticRun(id: string): Record<string, unknown> {
     replaceAddrs: null,
     variables: [],
     logToken: "token",
-  } as Record<string, unknown>;
+  };
 }
 const runList100 = Array.from({ length: 100 }, (_, i) => syntheticRun(`run-${i}`));
 await suite("run-resource", {

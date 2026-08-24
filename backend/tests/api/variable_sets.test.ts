@@ -138,7 +138,7 @@ describe("organization variable set API contract", () => {
 
     const related = await request(`/api/v2/varsets/${variableSetId}/relationships/workspaces`, "GET");
     expect(related.status).toBe(200);
-    expect(((await related.json()).data as Array<{ id: string; type: string }>))
+    expect(((await related.json()).data as { id: string; type: string }[]))
       .toEqual([...workspaceIds].sort().map(id => ({ id, type: "workspaces" })));
     expect((await request(`/api/v2/varsets/${variableSetId}/relationships/workspaces`, "GET", undefined, unrelatedToken)).status).toBe(404);
 
@@ -146,14 +146,14 @@ describe("organization variable set API contract", () => {
     // variables are never flattened into the workspace-variable collection.
     const workspaceSets = await request(`/api/v2/workspaces/${workspaceIds[0]}/varsets`);
     expect(workspaceSets.status).toBe(200);
-    const workspaceSetsData = (await workspaceSets.json()).data as Array<{ id: string }>;
+    const workspaceSetsData = (await workspaceSets.json()).data as { id: string }[];
     expect(workspaceSetsData).toHaveLength(1);
     expect(workspaceSetsData[0]!.id).toBe(variableSetId);
     expect((await request(`/api/v2/workspaces/${workspaceIds[0]}/varsets`, "GET", undefined, unrelatedToken)).status).toBe(404);
     expect((await request(`/api/v2/workspaces/${unrelatedWorkspaceId}/varsets`)).status).toBe(404);
     const noSetWorkspace = await request(`/api/v2/workspaces/${detachedWorkspaceId}/varsets`);
     expect(noSetWorkspace.status).toBe(200);
-    expect(((await noSetWorkspace.json()).data as Array<unknown>)).toEqual([]);
+    expect(((await noSetWorkspace.json()).data as unknown[])).toEqual([]);
 
     const shown = await request(`/api/v2/varsets/${variableSetId}`);
     const shownData = (await shown.json()).data;

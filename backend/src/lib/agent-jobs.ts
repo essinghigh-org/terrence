@@ -489,7 +489,7 @@ export async function authenticateAgent(
       lastPingAt: now,
       status: sql<string>`CASE WHEN ${agents.status} = 'unknown' THEN 'idle' ELSE ${agents.status} END`,
     }).where(eq(agents.id, agent.id)).returning();
-    refreshedAgent = rows[0] as Agent | undefined;
+    refreshedAgent = rows[0];
   }
   return refreshedAgent ?? { ...agent, lastPingAt: now };
 }

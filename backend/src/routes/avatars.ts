@@ -56,12 +56,12 @@ export const avatarHandler = async ({ params, request, set }: AvatarHandlerCtx):
     const etagValue = current.contentHash ?? key;
     const etag = `"${etagValue}"`;
     const headers = new Headers();
-    const incoming = request.headers as Headers;
+    const incoming = request.headers;
     if (incoming.get("if-none-match") === etag) {
       // A proper 304 carries the cache metadata so the browser can keep it.
       s.status = 304;
       s.headers["Cache-Control"] = AVATAR_CLIENT_CACHE;
-      s.headers["ETag"] = etag;
+      s.headers.ETag = etag;
       headers.set("ETag", etag);
       headers.set("Cache-Control", AVATAR_CLIENT_CACHE);
       return new Response(null, { status: 304, headers });
@@ -70,7 +70,7 @@ export const avatarHandler = async ({ params, request, set }: AvatarHandlerCtx):
     s.status = 200;
     s.headers["Content-Type"] = current.contentType ?? "image/png";
     s.headers["Cache-Control"] = AVATAR_CLIENT_CACHE;
-    s.headers["ETag"] = etag;
+    s.headers.ETag = etag;
     headers.set("Content-Type", current.contentType ?? "image/png");
     headers.set("Cache-Control", AVATAR_CLIENT_CACHE);
     headers.set("ETag", etag);

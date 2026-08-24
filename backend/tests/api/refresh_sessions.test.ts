@@ -391,4 +391,18 @@ describe("browser refresh sessions", () => {
     expect(family.length).toBeGreaterThanOrEqual(2);
     expect(family.every((session): boolean => session.revokedAt === null)).toBeTrue();
   });
+
+  test("suspending a user invalidates refresh rotation", async () => {
+    const loginResponse = await login(true);
+    expect(loginResponse.status).toBe(200);
+    const refreshCookie = cookie(loginResponse);
+    try {
+      await db.update(users).set({ isSuspended: true }).where(eq(users.id, userId));
+      const response = await request("/api/v2/users/refresh", undefined, { Cookie: refreshCookie });
+      expect(response.status).toBe(401);
+      expect((await db.query.refreshSessions.findMany({ where: eq(refreshSessions.userId, userId) })).every((row) => row.revokedAt !== null)).toBeTrue();
+    } finally {
+      await db.update(users).set({ isSuspended: false }).where(eq(users.id, userId));
+    }
+  });
 });

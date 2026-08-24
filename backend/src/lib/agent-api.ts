@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { configurationVersions, runs, workspaces } from "../db/schema";
+import type { configurationVersions, runs, workspaces } from "../db/schema";
 import { availableVersions, resolveLatestVersion, validateVersion } from "../binaryManager";
 import { mintRunToken } from "./run-token";
 import { executionVariables } from "../worker";
@@ -116,7 +116,7 @@ function satisfiesConstraint(version: string, constraint: string): boolean {
   const parts = v.split(".").map((n: string): number => Number.parseInt(n, 10) || 0);
   for (const clause of constraint.split(",")) {
     const trimmed = clause.trim();
-    const match = trimmed.match(/^(>=|<=|>|<|!=|~>|==)?\s*(.+)$/);
+    const match = /^(>=|<=|>|<|!=|~>|==)?\s*(.+)$/.exec(trimmed);
     if (match === null) return false;
     const op = match[1] ?? "==";
     const target = (match[2] ?? "0").replace(/^v/, "").split(".").map((n: string): number => Number.parseInt(n, 10) || 0);

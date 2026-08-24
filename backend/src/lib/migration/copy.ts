@@ -102,15 +102,15 @@ export async function copyTable(
 
   let total = 0;
   // rowid values are always integers (SQLite rowid / _rowid_ columns).
-  let cursor: number = 0;
+  let cursor = 0;
   for (;;) {
     if (options.isCancelled?.() === true) break;
-    let rows: ReadonlyArray<Readonly<Record<string, unknown>>>;
+    let rows: readonly Readonly<Record<string, unknown>>[];
     try {
       rows = (rowid === null
         ? source.query(`SELECT * FROM ${quoted(table.name)} LIMIT ? OFFSET ?`).all(batchSize, total)
         : source.query(`SELECT ${rowid} AS "_terrence_rowid", * FROM ${quoted(table.name)} WHERE ${rowid} > ? ORDER BY ${rowid} LIMIT ?`).all(cursor, batchSize)) as
-        ReadonlyArray<Readonly<Record<string, unknown>>>;
+        readonly Readonly<Record<string, unknown>>[];
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       const sql = rowid === null
@@ -122,7 +122,7 @@ export async function copyTable(
 
     const params: unknown[] = [];
     const valueGroups: string[] = [];
-    for (const row of rows as ReadonlyArray<Readonly<Record<string, unknown>>>) {
+    for (const row of rows) {
       const values: unknown[] = [];
       for (const column of table.columns) {
         values.push(coerceCell(row[column.name], column.mode));
@@ -136,7 +136,7 @@ export async function copyTable(
     });
     total += rows.length;
     if (rowid !== null) {
-      const lastRow = rows[rows.length - 1] as Readonly<Record<string, unknown>>;
+      const lastRow = rows[rows.length - 1]!;
       const last = lastRow._terrence_rowid;
       if (typeof last !== "number") break; // no usable keyset cursor; stop rather than loop forever
       cursor = last;
@@ -150,7 +150,7 @@ export async function copyTable(
 export function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  const keys = Object.keys(value as Record<string, unknown>).sort();
+  const keys = Object.keys(value).sort();
   return `{${keys.map((key): string => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`).join(",")}}`;
 }
 
@@ -223,7 +223,7 @@ export function digestTableSource(
   const statement = source.query(`SELECT * FROM ${quoted(table.name)} ORDER BY ${order}`);
   // `all()` streams through bun:sqlite's internal cursor in one pass; rows
   // are materialized per-table which is acceptable for digest verification.
-  const all = statement.all() as ReadonlyArray<Readonly<Record<string, unknown>>>;
+  const all = statement.all() as readonly Readonly<Record<string, unknown>>[];
   for (const row of all) {
     const cells = table.columns.map((column): string => canonicalCell(row[column.name], column.mode));
     hash.update(JSON.stringify(cells));

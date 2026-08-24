@@ -10,48 +10,127 @@ import { pageRequest, pagination } from "../../lib/utils";
 import { db } from "../../db";
 import { workloadIdentityKeys } from "../../db/schema";
 import { count, desc } from "drizzle-orm";
+import { sendEmail } from "../../lib/smtp";
+import { normalizeEmail } from "../../lib/identity";
+import { decryptSecret, encryptSecret } from "../../lib/secrets";
 
 function hidden(set: ParamCtx["set"]): Record<string, unknown> {
   (set as { status: number }).status = 404;
   return { errors: [{ status: "404", title: "Not Found" }] };
 }
 
+function smtpSettingsResource(values: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const safe = { ...values };
+  const password = safe.password;
+  delete safe.password;
+  safe["password-set"] = typeof password === "string" && password !== "";
+  return settingResource("smtp-settings", safe);
+}
+
+function redactedSettingsResource(
+  id: string,
+  values: Readonly<Record<string, unknown>>,
+  secretKeys: readonly string[],
+): Record<string, unknown> {
+  const safe = { ...values };
+  for (const key of secretKeys) {
+    const value = safe[key];
+    delete safe[key];
+    safe[`${key}-set`] = value !== null && value !== undefined && value !== "";
+  }
+  return settingResource(id, safe);
+}
+
 export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
   .use(authPlugin)
   .get("/api/v2/admin/cost-estimation-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
-    return settingResource("cost-estimation-settings", await getSettings("cost"));
+    return redactedSettingsResource("cost-estimation-settings", await getSettings("cost"), [
+      "infracost-api-key",
+      "aws-access-key-id",
+      "aws-secret-key",
+      "gcp-credentials",
+      "azure-client-secret",
+    ]);
   })
   .patch("/api/v2/admin/cost-estimation-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    return settingResource("cost-estimation-settings", await updateSettings("cost", attrs));
+    return redactedSettingsResource("cost-estimation-settings", await updateSettings("cost", attrs), [
+      "infracost-api-key",
+      "aws-access-key-id",
+      "aws-secret-key",
+      "gcp-credentials",
+      "azure-client-secret",
+    ]);
   })
   // --- B.5 SMTP Settings ---
   .get("/api/v2/admin/smtp-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
-    return settingResource("smtp-settings", await getSettings("smtp"));
+    return smtpSettingsResource(await getSettings("smtp"));
   })
   .patch("/api/v2/admin/smtp-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    return settingResource("smtp-settings", await updateSettings("smtp", attrs));
+    const updated = { ...attrs };
+    delete updated["test-email-address"];
+    if (typeof updated.password === "string" && updated.password !== "") {
+      updated.password = await encryptSecret(updated.password);
+    }
+    return smtpSettingsResource(await updateSettings("smtp", updated));
+  })
+  .post("/api/v2/admin/smtp-settings/test", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) return hidden(set);
+    const settings = await getSettings("smtp");
+    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
+    const attrs = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
+    const recipient = typeof attrs.email === "string" ? normalizeEmail(attrs.email) : null;
+    const host = typeof settings.host === "string" ? settings.host.trim() : "";
+    const senderEmail = typeof settings["sender-email"] === "string" ? settings["sender-email"].trim() : "";
+    if (settings.enabled !== true || host === "" || senderEmail === "" || recipient === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "SMTP must be enabled and configured, and a valid email is required" }] };
+    }
+    try {
+      await sendEmail(
+        {
+          host,
+          port: typeof settings.port === "number" ? settings.port : 25,
+          username: typeof settings.username === "string" && settings.username !== "" ? settings.username : null,
+          password: typeof settings.password === "string" ? await decryptSecret(settings.password) : null,
+          senderEmail,
+          auth: settings.auth === "none" || settings.auth === "login" || settings.auth === "plain" ? settings.auth : "plain",
+        },
+        {
+          to: [recipient],
+          subject: "Terrence SMTP test",
+          text: "This is a test message from Terrence SMTP settings.",
+          html: "<html><body><p>This is a test message from Terrence SMTP settings.</p></body></html>",
+        },
+      );
+    } catch {
+      (set as { status: number }).status = 502;
+      return { errors: [{ status: "502", title: "Bad Gateway", detail: "SMTP test delivery failed" }] };
+    }
+    (set as { status: number }).status = 204;
+    return {};
   })
   // --- B.6 Twilio Settings ---
   .get("/api/v2/admin/twilio-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
-    return settingResource("twilio-settings", await getSettings("twilio"));
+    return redactedSettingsResource("twilio-settings", await getSettings("twilio"), ["auth-token"]);
   })
   .patch("/api/v2/admin/twilio-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    return settingResource("twilio-settings", await updateSettings("twilio", attrs));
+    return redactedSettingsResource("twilio-settings", await updateSettings("twilio", attrs), ["auth-token"]);
   })
   .post("/api/v2/admin/twilio-settings/verify", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);

@@ -111,12 +111,12 @@ export const authPlugin = new Elysia({ name: "auth" })
     const authHeader = request.headers.get("authorization");
     // Scheme is case-insensitive per RFC 7235 (todo 176); the credential that
     // follows is not.
-    const bearerMatch = typeof authHeader === "string" ? authHeader.match(/^bearer\s+/i) : null;
+    const bearerMatch = typeof authHeader === "string" ? (/^bearer\s+/i.exec(authHeader)) : null;
     if (bearerMatch === null) {
       return { user: null, token: null, orgId: null, teamId: null, tokenError: null , run: null };
     }
 
-    const tokenString = (authHeader as string).slice(bearerMatch[0].length).trim();
+    const tokenString = (authHeader!).slice(bearerMatch[0].length).trim();
     // Cheap rejection BEFORE any DB lookup (todo 175): a bearer token longer
     // than any legitimate credential format is garbage — hashing + querying
     // it only serves a denial-of-wallet on the database. 512 chars covers
@@ -246,16 +246,20 @@ export const authPlugin = new Elysia({ name: "auth" })
       // The joined lookup already resolves the user for hashed tokens. Only
       // tokens found via the plaintext legacy fallback re-query (rare).
       const resolvedUser = user ?? await db.query.users.findFirst({ where: eq(users.id, token.userId) });
+      // A token whose owner row has been removed is no longer a valid user
+      // credential.  Without this guard the token would survive a partial
+      // cleanup and be returned as authenticated with a null user.
+      if (resolvedUser === undefined || resolvedUser === null) {
+        return { user: null, token: null, orgId: null, teamId: null, tokenError: "invalid", run: null };
+      }
       if ((resolvedUser as unknown as { deletedAt: number | null | undefined })?.deletedAt != null) {
         return { user: null, token: null, orgId: null, teamId: null, tokenError: "invalid" , run: null };
       }
       if (resolvedUser?.isSuspended === true) {
         return { user: null, token: null, orgId: null, teamId: null, tokenError: "suspended" , run: null };
       }
-      if (resolvedUser !== undefined) {
-        setRequestSiteAdmin(resolvedUser.id, resolvedUser.isSiteAdmin === true);
-      }
-      return { user: resolvedUser ?? null, token: usedToken, orgId: null, teamId: null, tokenError: null , run: null };
+      setRequestSiteAdmin(resolvedUser.id, resolvedUser.isSiteAdmin === true);
+      return { user: resolvedUser, token: usedToken, orgId: null, teamId: null, tokenError: null , run: null };
     }
 
     if (token.teamId !== null) {

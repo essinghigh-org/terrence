@@ -371,6 +371,18 @@ export const durableJobs = pgTable("durable_jobs", {
     index("durable_jobs_lease_idx").on(table.status, table.leaseExpiresAt),
   ]);
 
+export const emailVerificationTokens = pgTable("email_verification_tokens", {
+    id: text("id").notNull().primaryKey(),
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.emailVerificationTokens.createdAt.defaultFn!()),
+    usedAt: bigint("used_at", { mode: "number" }),
+}, (table) => [
+    index("email_verification_tokens_user_idx").on(table.userId),
+  ]);
+
 export const explorerCatalogItems = pgTable("explorer_catalog_items", {
     id: text("id").notNull().primaryKey(),
     orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
@@ -789,7 +801,9 @@ export const organizationMemberships = pgTable("organization_memberships", {
     role: text("role").notNull().default("member"),
     status: text("status").notNull().default("active"),
     ssoSource: text("sso_source"),
-});
+}, (table) => [
+    uniqueIndex("organization_memberships_org_user_idx").on(table.orgId, table.userId),
+  ]);
 
 export const organizationRoles = pgTable("organization_roles", {
     id: text("id").notNull().primaryKey(),
@@ -1663,6 +1677,8 @@ export const users = pgTable("users", {
     ssoSiteAdmin: boolean("sso_site_admin").notNull().default(false),
     deletedAt: bigint("deleted_at", { mode: "number" }),
     deletedEmailHash: text("deleted_email_hash"),
+    emailVerifiedAt: bigint("email_verified_at", { mode: "number" }),
+    scimSiteAdmin: boolean("scim_site_admin").notNull().default(false),
 }, (table) => [
     uniqueIndex("users_sso_identity_idx").on(table.ssoProvider, table.ssoSubject),
   ]);

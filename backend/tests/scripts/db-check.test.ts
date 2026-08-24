@@ -8,7 +8,7 @@ import { checkpointWal } from "../../src/db";
 
 const SCRIPT = join(import.meta.dir, "../../scripts/db-check.ts");
 
-interface RunResult {
+type RunResult = {
     status: number;
     stdout: string;
     stderr: string;

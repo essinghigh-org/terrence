@@ -448,7 +448,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "read-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const pools = await db.query.agentPools.findMany({ where: eq(agentPools.orgId, org.id) });
-    const poolData = await Promise.all(pools.map((p): Promise<Record<string, unknown>> => agentPoolResource(p, org.name)));
+    const poolData = await Promise.all(pools.map(async (p): Promise<Record<string, unknown>> => agentPoolResource(p, org.name)));
     return { data: poolData };
   })
   .post("/api/v2/organizations/:org_name/agent-pools", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {

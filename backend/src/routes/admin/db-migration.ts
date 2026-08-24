@@ -115,7 +115,7 @@ export const dbMigrationRoutes = new Elysia({ name: "admin-db-migration" })
       setStatus(set, 422);
       return errorBody(422, "Unprocessable Entity", "A postgres connection URL is required");
     }
-    return runWizardAction((): Promise<unknown> => testConnection(url), set);
+    return runWizardAction(async (): Promise<unknown> => testConnection(url), set);
   })
   .post("/api/v2/admin/db-migration/compatibility", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (!requireAdmin(user, set)) return;
@@ -124,7 +124,7 @@ export const dbMigrationRoutes = new Elysia({ name: "admin-db-migration" })
       setStatus(set, 422);
       return errorBody(422, "Unprocessable Entity", "A postgres connection URL is required");
     }
-    return runWizardAction((): Promise<unknown> => checkCompatibility(url), set);
+    return runWizardAction(async (): Promise<unknown> => checkCompatibility(url), set);
   })
   .post("/api/v2/admin/db-migration/start", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (!requireAdmin(user, set)) return;
@@ -143,7 +143,7 @@ export const dbMigrationRoutes = new Elysia({ name: "admin-db-migration" })
   })
   .post("/api/v2/admin/db-migration/cancel", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (!requireAdmin(user, set)) return;
-    return runWizardAction((): unknown => requestCancel(), set);
+    return runWizardAction((): void => { requestCancel(); }, set);
   })
   .post("/api/v2/admin/db-migration/switch", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (!requireAdmin(user, set)) return;

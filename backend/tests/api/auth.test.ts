@@ -118,4 +118,22 @@ describe("the reference format API Authentication (Local Auth MVP)", () => {
     });
     expect(tokenInDb).toBeDefined();
   });
+
+  it("does not issue credentials to suspended accounts", async () => {
+    const blockedId = `auth-blocked-${crypto.randomUUID()}`;
+    const blockedPassword = "blocked-password-123";
+    const passwordHash = await Bun.password.hash(blockedPassword, { algorithm: "bcrypt", cost: 10 });
+    await db.insert(users).values({ id: blockedId, username: blockedId, passwordHash, isSuspended: true });
+    try {
+      const response = await app.handle(new Request("http://localhost/api/v2/users/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({ data: { attributes: { username: blockedId, password: blockedPassword } } }),
+      }));
+      expect(response.status).toBe(401);
+      expect((await db.query.apiTokens.findMany({ where: eq(apiTokens.userId, blockedId) })).length).toBe(0);
+    } finally {
+      await db.delete(users).where(eq(users.id, blockedId));
+    }
+  });
 });

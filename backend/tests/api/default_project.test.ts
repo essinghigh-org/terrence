@@ -61,7 +61,7 @@ describe("Default Project assignment (RBAC-008)", () => {
   it("auto-creates a Default Project when the org is first queried", async () => {
     const listed = await request(`/api/v2/organizations/${orgName}/projects`);
     expect(listed.status).toBe(200);
-    const projects = (await listed.json()).data as ReadonlyArray<{ attributes: { name: string } }>;
+    const projects = (await listed.json()).data as readonly { attributes: { name: string } }[];
     expect(projects.find((p) => p.attributes.name === "Default Project")).toBeDefined();
   });
 

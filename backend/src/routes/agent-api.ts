@@ -63,7 +63,7 @@ async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
     }).where(and(eq(agentJobs.id, job.id), eq(agentJobs.status, "claimed")));
     const current = await t.query.runs.findFirst({ where: eq(runs.id, run.id), columns: { statusTimestamps: true } });
     const timestamps: Record<string, string> = current?.statusTimestamps !== null && typeof current?.statusTimestamps === "object"
-      ? { ...(current.statusTimestamps as Record<string, string>), [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() }
+      ? { ...(current.statusTimestamps), [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() }
       : { [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() };
     await t.update(runs).set({ status: queuedStatus, statusTimestamps: timestamps }).where(and(eq(runs.id, run.id), eq(runs.status, job.phase === "plan" ? "planning" : "applying")));
     if (job.phase === "apply") {

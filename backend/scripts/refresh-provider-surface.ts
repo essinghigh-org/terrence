@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-/* eslint-disable @typescript-eslint/naming-convention, @typescript-eslint/prefer-readonly-parameter-types, @typescript-eslint/explicit-function-return-type, @typescript-eslint/restrict-template-expressions, @typescript-eslint/no-unnecessary-condition -- provider schema JSON and CLI process APIs use external shapes. */
 /**
  * Regenerate the provider-surface catalog from the latest hashicorp/tfe release.
  *

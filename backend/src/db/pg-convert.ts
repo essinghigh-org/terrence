@@ -78,32 +78,32 @@ const columnTable = (column: AnyColumn): SqliteTable => {
 
 type SqliteTable = {
   [COLS]: Record<string, AnyColumn & { config: Record<string, unknown>; defaultFn?: unknown }>;
-  [EXTRA]?: (table: unknown) => ReadonlyArray<unknown>;
-  [FKS]?: ReadonlyArray<{
+  [EXTRA]?: (table: unknown) => readonly unknown[];
+  [FKS]?: readonly {
     reference: () => {
-      columns: ReadonlyArray<AnyColumn>;
-      foreignColumns: ReadonlyArray<AnyColumn>;
+      columns: readonly AnyColumn[];
+      foreignColumns: readonly AnyColumn[];
       onDelete?: string;
       onUpdate?: string;
     };
     onDelete?: string;
     onUpdate?: string;
-  }>;
+  }[];
   [NAME]: string;
 };
 
 type IndexConfig = {
   name: string;
-  columns: ReadonlyArray<AnyColumn>;
+  columns: readonly AnyColumn[];
   unique?: boolean;
   where?: SQL & { text: string };
   type?: string;
 };
 
 type ResolvedFk = {
-  localColumns: ReadonlyArray<string>;
+  localColumns: readonly string[];
   foreignTable: string;
-  foreignColumns: ReadonlyArray<string>;
+  foreignColumns: readonly string[];
   onDelete?: string;
   onUpdate?: string;
 };
@@ -135,8 +135,8 @@ const isIndexBuilder = (item: unknown): item is { config: IndexConfig } =>
 // pg-core equivalent, keyed by index name. An unlisted partial index throws
 // at build time so the mirror can never silently diverge.
 const PARTIAL_INDEX_WHERE: Readonly<Record<string, (table: Record<string, unknown>) => SQL>> = {
-  projects_org_default_idx: (table): SQL => sql`${table["isDefault"]} = true`,
-  organization_invitations_org_email_pending_idx: (table): SQL => sql`${table["status"]} = 'pending'`,
+  projects_org_default_idx: (table): SQL => sql`${table.isDefault} = true`,
+  organization_invitations_org_email_pending_idx: (table): SQL => sql`${table.status} = 'pending'`,
 };
 
 function tableName(table: SqliteTable): string {
@@ -275,9 +275,9 @@ function buildExtraConfig(
       const ref = (item as {
         reference: () => {
           name?: string;
-          columns: ReadonlyArray<AnyColumn>;
+          columns: readonly AnyColumn[];
           foreignTable: unknown;
-          foreignColumns: ReadonlyArray<AnyColumn>;
+          foreignColumns: readonly AnyColumn[];
         };
         _onDelete?: string;
         _onUpdate?: string;
@@ -291,7 +291,7 @@ function buildExtraConfig(
         );
       }
       const foreign = ref.foreignColumns.map((c): unknown => {
-        const column = pgColumnByDbName(target as Record<string, unknown>, columnName(c));
+        const column = pgColumnByDbName(target, columnName(c));
         if (column === undefined) {
           throw new Error(
             `pg-convert: composite FK column "${foreignTable}.${columnName(c)}" not found`,
@@ -308,10 +308,10 @@ function buildExtraConfig(
       item !== null &&
       typeof item === "object" &&
       "columns" in item &&
-      Array.isArray((item as { columns: unknown }).columns)
+      Array.isArray((item).columns)
     ) {
       // Composite primary key (PrimaryKeyBuilder).
-      const columns = (item as { columns: ReadonlyArray<AnyColumn> }).columns.map(resolveColumn);
+      const columns = (item as { columns: readonly AnyColumn[] }).columns.map(resolveColumn);
       items.push(pgPrimaryKey({ columns: columns as never }));
     } else {
       throw new Error(
@@ -333,7 +333,7 @@ export function buildPgSchema(sqliteSchema: Record<string, unknown>): Record<str
 
   // 2. Resolve foreign keys up front (the metadata callbacks are deferred,
   // so reading them needs no construction order).
-  const fksByTable = new Map<string, ReadonlyArray<ResolvedFk>>();
+  const fksByTable = new Map<string, readonly ResolvedFk[]>();
   for (const [key, table] of sqliteTables) {
     const raw = table[FKS];
     if (raw === undefined) {
@@ -375,7 +375,7 @@ export function buildPgSchema(sqliteSchema: Record<string, unknown>): Record<str
     }
     visiting.add(key);
     for (const fk of fksByTable.get(key) ?? []) {
-      const target = [...sqliteTables.keys()].find((k): boolean => tableName(sqliteTables.get(k) as SqliteTable) === fk.foreignTable);
+      const target = [...sqliteTables.keys()].find((k): boolean => tableName(sqliteTables.get(k)!) === fk.foreignTable);
       if (target !== undefined && target !== key) visit(target);
     }
     visiting.delete(key);
@@ -387,7 +387,7 @@ export function buildPgSchema(sqliteSchema: Record<string, unknown>): Record<str
   // 4. Build pg tables in dependency order.
   const pg: Record<string, unknown> = {};
   for (const key of ordered) {
-    const sqliteTable = sqliteTables.get(key) as SqliteTable;
+    const sqliteTable = sqliteTables.get(key)!;
     if (sqliteTable === undefined) {
       throw new Error(`pg-convert: table "${key}" vanished during ordering`);
     }
@@ -406,7 +406,7 @@ export function buildPgSchema(sqliteSchema: Record<string, unknown>): Record<str
     const simpleFks = fks.filter((fk): boolean => fk.localColumns.length === 1 && fk.foreignColumns.length === 1);
     const compositeFks = fks.filter((fk): boolean => !(fk.localColumns.length === 1 && fk.foreignColumns.length === 1));
     for (const fk of simpleFks) {
-      const localColumn = fk.localColumns[0] as string;
+      const localColumn = fk.localColumns[0]!;
       const column = columnsByDbName[localColumn] as {
         references?: (ref: () => unknown, actions?: { onDelete?: string; onUpdate?: string }) => unknown;
       };
@@ -417,7 +417,7 @@ export function buildPgSchema(sqliteSchema: Record<string, unknown>): Record<str
       if (target === undefined) {
         throw new Error(`pg-convert: foreign key on "${name}" references unknown table "${fk.foreignTable}"`);
       }
-      const foreignColumn = fk.foreignColumns[0] as string;
+      const foreignColumn = fk.foreignColumns[0]!;
       const targetColumn = (target as Record<string, unknown>)[foreignColumn];
       if (targetColumn === undefined) {
         throw new Error(

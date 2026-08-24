@@ -156,7 +156,7 @@ const SLOW_THRESHOLD_MS = (() => {
   return Number.isFinite(n) && n > 0 ? n : 1000;
 })();
 
-let slowQueries: SlowQuery[] = [];
+const slowQueries: SlowQuery[] = [];
 const MAX_SLOW = 64;
 
 export function recordSlowQuery(sqlText: string, durationMs: number): void {

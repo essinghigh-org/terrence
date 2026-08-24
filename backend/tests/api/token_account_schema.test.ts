@@ -99,6 +99,11 @@ describe("account, token, and variable schema contracts", () => {
 
     const stored = await db.query.users.findFirst({ where: eq(users.id, userId) });
     expect(stored).toMatchObject({ username, email: null });
+
+    const invalid = await request("/api/v2/account/update", "PATCH", {
+      data: { type: "users", attributes: { username: "@@@" } },
+    });
+    expect(invalid.status).toBe(422);
   });
 
   it("persists a validated account theme", async () => {

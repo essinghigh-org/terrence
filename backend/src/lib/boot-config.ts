@@ -93,7 +93,7 @@ export function parseBootConfig(raw: unknown, source: string): BootConfig {
   }
   const record = raw as Record<string, unknown>;
   const result: Record<string, unknown> = { ...record };
-  if (record.database === undefined) return result as BootConfig;
+  if (record.database === undefined) return result;
   const db = record.database as Record<string, unknown> | null;
   if (db === null || typeof db !== "object" || Array.isArray(db)) {
     throw new BootConfigError(`Invalid boot configuration in ${source}: "database" must be an object`);
@@ -134,7 +134,7 @@ export function parseBootConfig(raw: unknown, source: string): BootConfig {
     ...(url !== undefined ? { url } : {}),
     ...(urlSecret !== undefined ? { urlSecret } : {}),
   };
-  return result as BootConfig;
+  return result;
 }
 
 function validatePostgresUrl(url: string, source: string): void {
@@ -295,7 +295,7 @@ export function writeBootDatabaseConfig(storageDir: string, database: BootDataba
   const path = bootConfigPath(storageDir);
   const existing = readBootConfigFile(storageDir);
   // parseBootConfig guarantees a database section when one is supplied.
-  const validated = parseBootConfig({ database }, path).database as BootDatabaseConfig;
+  const validated = parseBootConfig({ database }, path).database!;
   const next: BootConfig = {
     ...existing,
     database: validated,

@@ -75,7 +75,7 @@ export const actionsRoutes = new Elysia({ name: "actions" })
       });
     }
     const h = (set as { headers: Record<string, string | number> }).headers;
-    (h as Record<string, string | number>)["TFP-API-Version"] = TFP_API_VERSION;
+    (h)["TFP-API-Version"] = TFP_API_VERSION;
     return { data: rows.map(actionResource), meta: { pagination: { "current-page": 1, "total-pages": 1, "total-count": rows.length } } };
   })
   .post("/api/v2/actions", async ({ body, user, orgId: tokenOrgId, teamId, set }: Ctx): Promise<unknown> => {
@@ -185,7 +185,7 @@ export const actionsRoutes = new Elysia({ name: "actions" })
     const runId = params.run_id ?? "";
     const rows = await db.query.actionInvocations.findMany({ where: eq(actionInvocations.runId, runId), orderBy: [desc(actionInvocations.createdAt)] });
     const h = (set as { headers: Record<string, string | number> }).headers;
-    (h as Record<string, string | number>)["TFP-API-Version"] = TFP_API_VERSION;
+    (h)["TFP-API-Version"] = TFP_API_VERSION;
     return { data: rows.map(invocationResource), meta: { pagination: { "current-page": 1, "total-pages": 1, "total-count": rows.length } } };
   })
   .get("/api/v2/actions/:id/output", async ({ params, set }: Ctx): Promise<unknown> => {
@@ -209,6 +209,6 @@ export const actionsRoutes = new Elysia({ name: "actions" })
     const stackId = params.stack_id ?? "";
     const rows = await db.query.actionInvocations.findMany({ where: eq(actionInvocations.stackId, stackId), orderBy: [desc(actionInvocations.createdAt)] });
     const h = (set as { headers: Record<string, string | number> }).headers;
-    (h as Record<string, string | number>)["TFP-API-Version"] = TFP_API_VERSION;
+    (h)["TFP-API-Version"] = TFP_API_VERSION;
     return { data: rows.map(invocationResource), meta: { pagination: { "current-page": 1, "total-pages": 1, "total-count": rows.length } } };
   });

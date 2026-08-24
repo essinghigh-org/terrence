@@ -133,6 +133,10 @@ export const durableJobs: typeof sqliteSchema.durableJobs = pgTables === null
   ? sqliteSchema.durableJobs
   : (pgTables[dbNameOf(sqliteSchema.durableJobs)] as unknown as typeof sqliteSchema.durableJobs);
 
+export const emailVerificationTokens: typeof sqliteSchema.emailVerificationTokens = pgTables === null
+  ? sqliteSchema.emailVerificationTokens
+  : (pgTables[dbNameOf(sqliteSchema.emailVerificationTokens)] as unknown as typeof sqliteSchema.emailVerificationTokens);
+
 export const explorerCatalogItems: typeof sqliteSchema.explorerCatalogItems = pgTables === null
   ? sqliteSchema.explorerCatalogItems
   : (pgTables[dbNameOf(sqliteSchema.explorerCatalogItems)] as unknown as typeof sqliteSchema.explorerCatalogItems);

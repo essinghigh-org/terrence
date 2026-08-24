@@ -22,7 +22,7 @@ const MARKER = /ponytail\s*:\s*/;
 // ponytail(perf):  ponytail(scale):  ponytail(compat):  ...
 const CATEGORY = /ponytail\(\s*([a-z0-9-]+)\s*\)\s*:/;
 
-interface MarkerHit {
+type MarkerHit = {
     file: string;
     line: number;
     text: string;

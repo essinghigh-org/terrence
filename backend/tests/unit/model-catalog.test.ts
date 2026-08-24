@@ -143,7 +143,7 @@ describe("getModelCatalog / listCatalogProviders / getCatalogProviderModels", ()
     const origFetch = globalThis.fetch;
     // Avoid the 30 s network timeout in CI — fail fast and exercise the
     // stale-fallback path without hitting the network.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     (globalThis as any).fetch = () => Promise.reject(new Error("offline"));
     try {
       const catalog = await getModelCatalog(Date.now());

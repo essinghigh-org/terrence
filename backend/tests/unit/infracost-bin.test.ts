@@ -146,7 +146,7 @@ test("concurrent resolutions of the same version download exactly once and share
     `;
     const out = await runChild(script, { TEST_DIR: dir });
     const parsed = JSON.parse(out.trim());
-    const results = parsed.results as Array<{ binaryPath: string; version: string } | null>;
+    const results = parsed.results as ({ binaryPath: string; version: string } | null)[];
     expect(results).toHaveLength(4);
     for (const r of results) expect(r).not.toBeNull();
     // Every caller resolves to the same published path...

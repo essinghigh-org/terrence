@@ -415,7 +415,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
       })
     );
     expect(listRes.status).toBe(200);
-    const listed = (await listRes.json()).data as Array<{ id: string; attributes: Record<string, unknown> }>;
+    const listed = (await listRes.json()).data as { id: string; attributes: Record<string, unknown> }[];
     expect(listed.map((a) => a.attributes["iac-binaries"])).toEqual(expect.arrayContaining([
       ["tofu", "terraform"],
       ["tofu"],
@@ -464,7 +464,7 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
     );
     const poolToken = (await tokenRes.json()).data.attributes.token as string;
 
-    const invalidPayloads: Array<Record<string, unknown>> = [
+    const invalidPayloads: Record<string, unknown>[] = [
       { name: "bad-value", "iac-binaries": ["golang"] },
       { name: "mixed-bad", "iac-binaries": ["tofu", "golang"] },
       { name: "empty", "iac-binaries": [] },

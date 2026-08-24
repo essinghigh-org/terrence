@@ -384,9 +384,10 @@ describe("Terraform cloud protocol contract", () => {
     expect(plan.attributes["log-read-url"]).toBe(
       `http://terrence.test/api/v2/runs/${runId}/plan/log/${runId}`,
     );
-    expect(await (await request(
-      `/api/v2/runs/${runId}/plan/log/${runId}?offset=2&limit=3`,
-    )).text()).toBe("cde");
+    const planLogDownload = await request(`/api/v2/runs/${runId}/plan/log/${runId}?offset=2&limit=3`);
+    expect(await planLogDownload.text()).toBe("cde");
+    expect(planLogDownload.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(planLogDownload.headers.get("content-disposition")).toBe(`attachment; filename="${runId}-plan.txt"`);
     expect((await request(`/api/v2/runs/${runId}/plan/log/not-the-token`)).status).toBe(404);
 
     const applyResponse = await request(`/api/v2/applies/apply-${runId}`, { headers: authHeaders });
@@ -396,9 +397,9 @@ describe("Terraform cloud protocol contract", () => {
     expect(apply.attributes["log-read-url"]).toBe(
       `http://terrence.test/api/v2/runs/${runId}/apply/log/${runId}`,
     );
-    expect(await (await request(
-      `/api/v2/runs/${runId}/apply/log/${runId}?offset=6&limit=3`,
-    )).text()).toBe("");
+    const applyLogDownload = await request(`/api/v2/runs/${runId}/apply/log/${runId}?offset=6&limit=3`);
+    expect(await applyLogDownload.text()).toBe("");
+    expect(applyLogDownload.headers.get("content-disposition")).toBe(`attachment; filename="${runId}-apply.txt"`);
 
     const runEventsResponse = await request(
       `/api/v2/runs/${runId}/run-events`,

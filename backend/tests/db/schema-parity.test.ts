@@ -33,7 +33,7 @@ function columnFingerprint(table: object): Readonly<Record<string, Col>> {
   return out;
 }
 
-function indexFingerprint(table: object): ReadonlyArray<{ name: string; unique: boolean; columns: string[] }> {
+function indexFingerprint(table: object): readonly { name: string; unique: boolean; columns: string[] }[] {
   const extra = (table as { [EXTRA]?: (t: object) => unknown[] })[EXTRA];
   if (extra === undefined) return [];
   const rows = extra(table) as ExtraRow[];
