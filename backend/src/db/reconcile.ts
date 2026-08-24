@@ -80,11 +80,14 @@ export type SparseJournalPlanEntry = {
 export function sparseJournalReconcilePlan(
   bundledFolder: string,
   entries: readonly MigrationJournalEntry[],
+  // The facts object is consumed wholesale; the rule's structural check cannot
+  // see through the ReadonlySet members, so mark it read-only by hand.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   facts: SparseJournalFacts,
 ): readonly SparseJournalPlanEntry[] {
   if (entries.length === 0 || facts.appliedRows.length === 0) return [];
-  const newestAppliedAt = Math.max(...facts.appliedRows.map((row) => row.createdAt));
-  const appliedHashes = new Set(facts.appliedRows.map((row) => row.hash));
+  const newestAppliedAt = Math.max(...facts.appliedRows.map((row: { readonly createdAt: number }): number => row.createdAt));
+  const appliedHashes = new Set(facts.appliedRows.map((row: { readonly hash: string }): string => row.hash));
   const plan: SparseJournalPlanEntry[] = [];
 
   for (const entry of entries) {
@@ -96,7 +99,10 @@ export function sparseJournalReconcilePlan(
     // exact hash is already recorded are applied regardless of timestamp order.
     if (entry.when <= newestAppliedAt || appliedHashes.has(hash)) continue;
 
-    const statements = migrationSql.split("--> statement-breakpoint").map((sql) => sql.trim()).filter((sql) => sql !== "");
+    const statements = migrationSql
+      .split("--> statement-breakpoint")
+      .map((sql: string): string => sql.trim())
+      .filter((sql: string): boolean => sql !== "");
     const planned: PlannedMigrationStatement[] = [];
     let anyPresent = false;
 
@@ -113,7 +119,7 @@ export function sparseJournalReconcilePlan(
       }
       // CREATE TABLE: skip when the table already exists.
       const createTable = /CREATE TABLE (?:IF NOT EXISTS )?[`"`]?([\w-]+)[`"`]?\s*\(/.exec(sql);
-      if (createTable !== null && createTable[1] !== undefined) {
+      if (createTable?.[1] !== undefined) {
         const present = facts.tables.has(createTable[1]);
         planned.push({ sql, skip: present });
         if (present) anyPresent = true;
@@ -121,7 +127,7 @@ export function sparseJournalReconcilePlan(
       }
       // CREATE [UNIQUE] INDEX: skip when the named index already exists.
       const createIndex = /CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?[`"`]?([\w-]+)[`"`]?\s+ON/.exec(sql);
-      if (createIndex !== null && createIndex[1] !== undefined) {
+      if (createIndex?.[1] !== undefined) {
         const present = facts.indexes.has(createIndex[1]);
         planned.push({ sql, skip: present });
         if (present) anyPresent = true;
@@ -157,7 +163,11 @@ export type SparseJournalAdapter = {
  * metadata read is awaited. Executes planned statements and stamps their rows.
  * The sqlite boot path drives sparseJournalReconcilePlan() directly.
  */
-export async function reconcileSparseMigrationJournal(adapter: SparseJournalAdapter): Promise<number> {
+export async function reconcileSparseMigrationJournal(
+  // Same rule limitation as sparseJournalReconcilePlan above.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  adapter: SparseJournalAdapter,
+): Promise<number> {
   const [entries, appliedRows, tables, indexes, columnPairs] = await Promise.all([
     Promise.resolve(readBundledMigrationJournal(adapter.bundledFolder)),
     adapter.appliedRows(),
@@ -169,7 +179,7 @@ export async function reconcileSparseMigrationJournal(adapter: SparseJournalAdap
     appliedRows,
     tables: new Set(tables),
     indexes: new Set(indexes),
-    columns: new Set(columnPairs.map((pair) => `${pair.table}.${pair.column}`)),
+    columns: new Set(columnPairs.map((pair: { readonly table: string; readonly column: string }): string => `${pair.table}.${pair.column}`)),
   });
   for (const entry of plan) {
     for (const statement of entry.statements) {

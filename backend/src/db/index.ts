@@ -162,6 +162,7 @@ if (isPostgres) {
   // both drizzle and raw SQL on postgres.
   {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
+    // eslint-disable-next-line @typescript-eslint/promise-function-async -- mirrors Bun.SQL's non-async unsafe() signature; the cast below is the type boundary.
     pgClient.unsafe = ((queryText: string, values?: unknown[] | Record<string, unknown>): ReturnType<BunSQL['unsafe']> => {
       const queryObj = originalUnsafe(queryText, values as never);
       return wrapPgQuery(queryObj, queryText);
@@ -169,6 +170,7 @@ if (isPostgres) {
   }
   if (envEnabled(process.env.TERRENCE_QUERY_COUNT)) {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
+    // eslint-disable-next-line @typescript-eslint/promise-function-async -- mirrors Bun.SQL's non-async unsafe() signature; the cast below is the type boundary.
     pgClient.unsafe = ((queryText: string, values?: unknown[] | Record<string, unknown>): ReturnType<BunSQL['unsafe']> => {
       queryCount += 1;
       if (queryLogEnabled) queryLog.push(queryText);
@@ -238,7 +240,7 @@ export const db = (isPostgres ? pgDb : sqliteDb) as unknown as AppDb;
 // migrations, so none of it applies there.
 // ---------------------------------------------------------------------------
 if (!isPostgres) {
-  const client = sqliteClient as Database;
+  const client = sqliteClient!;
 
   // bun:sqlite's native transaction() rolls back only when its callback throws
   // synchronously; drizzle-orm/bun-sqlite delegates transaction() straight to it, so
@@ -337,20 +339,24 @@ if (!isPostgres) {
       hash text NOT NULL,
       created_at numeric
     )`);
-    const journalRows = client.query("SELECT hash, created_at FROM __drizzle_migrations").all() as readonly { hash: string; created_at: number }[];
+    // SQL result rows carry snake_case columns verbatim; the naming-convention
+    // suppressions mirror how the wire format names these fields.
+    const journalRows = client
+      .query("SELECT hash, created_at FROM __drizzle_migrations")
+      .all() as readonly { hash: string; "created_at": number }[]; // eslint-disable-line @typescript-eslint/naming-convention
     const tableNames = client.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as readonly { name: string }[];
     const indexNames = client.query("SELECT name FROM sqlite_master WHERE type = 'index'").all() as readonly { name: string }[];
-    const columnPairs: Array<{ table: string; column: string }> = [];
+    const columnPairs: { table: string; column: string }[] = [];
     for (const { name } of tableNames) {
       for (const column of client.query(`PRAGMA table_info("${name}")`).all() as readonly { name: string }[]) {
         columnPairs.push({ table: name, column: column.name });
       }
     }
     const plan = sparseJournalReconcilePlan(drizzleFolder, readBundledMigrationJournal(drizzleFolder), {
-      appliedRows: journalRows.map(({ hash, created_at }) => ({ hash, createdAt: created_at })),
-      tables: new Set(tableNames.map(({ name }) => name)),
-      indexes: new Set(indexNames.map(({ name }) => name)),
-      columns: new Set(columnPairs.map(({ table, column }) => `${table}.${column}`)),
+      appliedRows: journalRows.map(({ hash, "created_at": createdAt }): { readonly hash: string; readonly createdAt: number } => ({ hash, createdAt })),
+      tables: new Set(tableNames.map(({ name }: { readonly name: string }): string => name)),
+      indexes: new Set(indexNames.map(({ name }: { readonly name: string }): string => name)),
+      columns: new Set(columnPairs.map(({ table, column }): string => `${table}.${column}`)),
     });
     let executedStatements = 0;
     for (const entry of plan) {
@@ -775,7 +781,7 @@ if (!isPostgres) {
   // -------------------------------------------------------------------------
   {
     // Runs-keyed artifact directories, mirrored from plan-json.ts / run-logs.ts.
-    const RUN_SIDECAR_DIRS: Readonly<{ dir: string; suffix: string }[]> = [
+    const RUN_SIDECAR_DIRS: readonly { dir: string; suffix: string }[] = [
       { dir: planJsonDirectory, suffix: ".json" },
       { dir: runLogsDirectory, suffix: ".json.gz" },
     ];
@@ -796,7 +802,7 @@ if (!isPostgres) {
       }
     };
 
-    const ID_FORMATS: Readonly<{ table: string; prefix: string; fullUuidSuffix: boolean }[]> = [
+    const ID_FORMATS: readonly { table: string; prefix: string; fullUuidSuffix: boolean }[] = [
       { table: "organizations", prefix: "org-", fullUuidSuffix: true },
       { table: "users", prefix: "usr-", fullUuidSuffix: true },
       { table: "workspaces", prefix: "ws-", fullUuidSuffix: false },
@@ -828,8 +834,8 @@ if (!isPostgres) {
 
     // Build a table -> [{column, ref}] for every column that references each
     // entity, discovered from the live foreign_key metadata.
-    const buildRefs = (entities: ReadonlySet<string>): Map<string, Array<{ table: string; column: string }>> => {
-      const refs = new Map<string, Array<{ table: string; column: string }>>();
+    const buildRefs = (entities: ReadonlySet<string>): Map<string, { table: string; column: string }[]> => {
+      const refs = new Map<string, { table: string; column: string }[]>();
       const allTables = client.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[];
       for (const { name } of allTables) {
         const fks = client.prepare(`PRAGMA foreign_key_list("${name}")`).all() as { table: string; from: string }[];
@@ -848,7 +854,7 @@ if (!isPostgres) {
     // persisted journal makes the whole operation resumable after a crash.
     const applyRekey = (
       entityMaps: Map<string, Map<string, string>>,
-      refs: Map<string, Array<{ table: string; column: string }>>,
+      refs: Map<string, { table: string; column: string }[]>,
     ): void => {
       client.run("PRAGMA foreign_keys = OFF");
       try {
@@ -960,12 +966,12 @@ if (!isPostgres) {
  */
 export function checkpointWal(): void {
   if (isPostgres) return;
-  const client = sqliteClient as Database;
+  const client = sqliteClient!;
   // wal_checkpoint(TRUNCATE) reports { busy, log, checkpointed }; a nonzero
   // busy count means frames could not be flushed (a concurrent writer or a
   // read transaction still holding the WAL), so the main DB file is not yet
   // complete. Fail loudly instead of discarding the result (kanban 4.17).
-  interface WalCheckpointRow { busy: number; log: number; checkpointed: number; }
+  type WalCheckpointRow = { busy: number; log: number; checkpointed: number; }
   const row = client.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as WalCheckpointRow | null | undefined;
   if (row !== null && row !== undefined && row.busy > 0) {
     throw new Error(`WAL checkpoint left ${row.busy} frame(s) busy; main DB file may be incomplete`);
@@ -997,7 +1003,7 @@ export async function databaseMetrics(): Promise<Readonly<{
   freelistBytes: number | null;
 }>> {
   if (isPostgres) {
-    const client = pgClient as BunSQL;
+    const client = pgClient!;
     const rows = await client.unsafe(
       "SELECT pg_database_size(current_database()) AS size, current_setting('block_size')::int AS \"blockSize\"",
     ) as unknown as readonly { size: number | bigint; blockSize: number }[];
@@ -1023,7 +1029,7 @@ export async function databaseMetrics(): Promise<Readonly<{
       freelistBytes: null,
     };
   }
-  const client = sqliteClient as Database;
+  const client = sqliteClient!;
   const dbPath = databaseUrl === ':memory:' ? ':memory:' : databaseUrl.replace(/^file:/, '');
   const pageSize = (client.query("PRAGMA page_size").get() as { page_size: number } | null)?.page_size ?? 4096;
   const pageCount = (client.query("PRAGMA page_count").get() as { page_count: number } | null)?.page_count ?? 0;
@@ -1125,13 +1131,13 @@ export function databaseSchemaVersion(): string | null {
  * harness (tests/setup.ts). Memoized: safe to call from both.
  */
 let pgMigrationsPromise: Promise<void> | null = null;
-export function applyPgMigrations(): Promise<void> {
+export async function applyPgMigrations(): Promise<void> {
   if (!isPostgres) return Promise.resolve();
   if (pgMigrationsPromise !== null) return pgMigrationsPromise;
   pgMigrationsPromise = (async (): Promise<void> => {
     const instance = pgDb;
     if (instance === null) throw new Error("postgres backend not initialized");
-    const pg = pgClient as BunSQL;
+    const pg = pgClient!;
     const durableJobsTable = await pg.unsafe<{ exists: boolean }[]>("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'durable_jobs') AS exists");
     if (durableJobsTable[0]?.exists === true) {
       await pg.unsafe(`
@@ -1162,30 +1168,39 @@ export function applyPgMigrations(): Promise<void> {
       hash text NOT NULL,
       created_at bigint
     )`);
+    // SQL result rows carry snake_case columns verbatim; quote the property
+    // names so they satisfy the camelCase naming rule without renaming.
     const stampedPg = await reconcileSparseMigrationJournal({
       bundledFolder: join(import.meta.dir, "../../drizzle/pg"),
-      appliedRows: async () =>
-        (await pg.unsafe<{ hash: string; created_at: string | number }[]>("SELECT hash, created_at FROM drizzle.__drizzle_migrations")).map(
-          ({ hash, created_at }) => ({ hash, createdAt: Number(created_at) }),
+      appliedRows: async (): Promise<readonly { readonly hash: string; readonly createdAt: number }[]> =>
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
+        (await pg.unsafe<{ hash: string; "created_at": string | number }[]>("SELECT hash, created_at FROM drizzle.__drizzle_migrations")).map(
+          ({ hash, "created_at": createdAt }): { readonly hash: string; readonly createdAt: number } => ({ hash, createdAt: Number(createdAt) }),
         ),
-      existingTables: async () =>
-        (await pg.unsafe<{ table_name: string }[]>("SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()")).map(
-          ({ table_name }) => table_name,
-        ),
-      existingIndexes: async () =>
-        (await pg.unsafe<{ indexname: string }[]>("SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()")).map(
-          ({ indexname }) => indexname,
-        ),
-      existingColumns: async () =>
+      existingTables: async (): Promise<readonly string[]> =>
         (
-          await pg.unsafe<{ table_name: string; column_name: string }[]>(
+          await pg.unsafe<{ "table_name": string }[]>( // eslint-disable-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()",
+          )
+        ).map(({ "table_name": tableName }): string => tableName),
+      existingIndexes: async (): Promise<readonly string[]> =>
+        (await pg.unsafe<{ indexname: string }[]>("SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()")).map(
+          ({ indexname }): string => indexname,
+        ),
+      existingColumns: async (): Promise<readonly { readonly table: string; readonly column: string }[]> =>
+        (
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
+          await pg.unsafe<{ "table_name": string; "column_name": string }[]>(
             "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = current_schema()",
           )
-        ).map(({ table_name, column_name }) => ({ table: table_name, column: column_name })),
-      runStatement: async (sql) => {
+        ).map(({ "table_name": tableName, "column_name": columnName }): { readonly table: string; readonly column: string } => ({
+          table: tableName,
+          column: columnName,
+        })),
+      runStatement: async (sql: string): Promise<void> => {
         await pg.unsafe(sql);
       },
-      markApplied: async (hash, createdAt) => {
+      markApplied: async (hash: string, createdAt: number): Promise<void> => {
         await pg.unsafe('INSERT INTO "drizzle"."__drizzle_migrations" ("hash", "created_at") VALUES($1, $2)', [hash, createdAt]);
       },
     });
