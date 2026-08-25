@@ -20,8 +20,12 @@ function createFakeSmtpServer(options: Readonly<{ rejectRcpt?: string }> = {}) {
       },
       data(socket, chunk): void {
         const text = chunk.toString();
-        for (const rawLine of text.split("\r\n")) {
-          if (rawLine === "") continue;
+        // Preserve interior blank lines (the MIME header/body separator);
+        // only drop the trailing empty segment produced by split().
+        const segments = text.split("\r\n");
+        const lineCount = segments[segments.length - 1] === "" ? segments.length - 1 : segments.length;
+        for (let segmentIndex = 0; segmentIndex < lineCount; segmentIndex += 1) {
+          const rawLine = segments[segmentIndex] ?? "";
           const line = rawLine.trim();
           if (inData) {
             if (line === ".") {
@@ -109,6 +113,11 @@ describe("sendEmail", () => {
     expect(lines).toContain("To: one@example.com, two@example.com");
     expect(lines).toContain("Subject: Drift Detected - prod");
     expect(lines).toContain("Content-Type: text/plain; charset=utf-8");
+    // Entity headers must sit ABOVE the blank header/body separator;
+    // anything below it renders as literal body text in the receiving MUA.
+    const separatorIndex = lines.indexOf("");
+    expect(separatorIndex).toBeGreaterThan(-1);
+    expect(lines.indexOf("Content-Type: text/plain; charset=utf-8")).toBeLessThan(separatorIndex);
     expect(lines).toContain("Workspace: prod");
     expect(lines).toContain("Details: https://terraform.example.test/run/1");
   });
@@ -133,7 +142,15 @@ describe("sendEmail", () => {
       html: "<html><body><strong>Status:</strong> applied £</body></html>",
     });
     const lines = fake.received();
-    expect(lines.some((line): boolean => line.startsWith("Content-Type: multipart/alternative; boundary=\""))).toBeTrue();
+    const contentTypeLine = lines.find((line): boolean => line.startsWith("Content-Type: multipart/alternative; boundary=\""));
+    expect(contentTypeLine).toBeDefined();
+    const separatorIndex = lines.indexOf("");
+    expect(separatorIndex).toBeGreaterThan(-1);
+    expect(lines.indexOf(contentTypeLine ?? "")).toBeLessThan(separatorIndex);
+    const boundary = /boundary="([^"]+)"/.exec(contentTypeLine ?? "")?.[1];
+    expect(boundary).toBeDefined();
+    expect(lines[separatorIndex + 1]).toBe(`--${boundary}`);
+    expect(lines.at(-1)).toBe(`--${boundary}--`);
     expect(lines).toContain("Content-Type: text/plain; charset=utf-8");
     expect(lines).toContain("Content-Type: text/html; charset=utf-8");
     expect(lines).toContain("Content-Transfer-Encoding: quoted-printable");
