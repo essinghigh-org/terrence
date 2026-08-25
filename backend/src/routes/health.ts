@@ -787,9 +787,11 @@ export const healthRoutes = new Elysia({ name: "health" })
     // A site admin's browser-session access token is an accepted credential
     // for instance-wide metrics: the UI cannot attach any other bearer to a
     // fetch, and the session already grants full administrative reach.
-    // Ordinary (non-admin) session principals keep the fail-closed 403.
+    // Ordinary (non-admin) session principals keep the fail-closed 403, as do
+    // ordinary legacy API tokens — instance counters were never available to
+    // them and the pinned test below keeps it that way.
     const allowInstanceMetrics = scopes === null
-      && ((isSiteAdmin && user !== null && user !== undefined) || systemToken !== null && systemToken !== undefined);
+      && ((systemToken !== null && systemToken !== undefined) || (isSiteAdmin && user !== null && user !== undefined));
 
     const collection = scopes !== null
       ? await collectScopedMetrics(scopes, user?.id, orgId, teamId)
