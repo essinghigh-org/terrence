@@ -133,6 +133,9 @@ describe("remote-workflow organizations and users contract", () => {
     membershipId = created.id;
     expect(created.attributes.status).toBe("active");
     expect(created.attributes.role).toBe("member");
+    // The membership resource carries the user's username so org user lists
+    // can render it without a follow-up fetch.
+    expect(created.attributes.username).toBe(memberUsername);
     expect(created.relationships?.user).toMatchObject({
       data: { id: memberId, type: "users" },
     });
