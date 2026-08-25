@@ -59,9 +59,9 @@ import {
 
 import {
   Dialog,
-  DialogContent,
   DialogTitle,
   DialogTrigger,
+  DrawerContent,
 } from "./ui/dialog";
 import {
   DropdownMenu,
@@ -1143,16 +1143,16 @@ export function Layout({
                   <Menu data-icon="inline-start" />
                 </Button>
               } />
-              <DialogContent
+              <DrawerContent
                 id="mobile-app-sidebar"
                 aria-describedby={undefined}
-                className="bottom-0 left-0 top-[52px] h-[calc(100dvh-52px)] w-[280px] max-w-none translate-x-0 translate-y-0 gap-0 rounded-none border-y-0 border-l-0 p-0 data-closed:slide-out-to-left data-open:slide-in-from-left sm:rounded-none lg:hidden"
+                className="top-[52px] bottom-0 h-[calc(100dvh-52px)] max-w-none rounded-none border-y-0 p-0 gap-0 lg:hidden"
               >
                 <DialogTitle className="sr-only">Application navigation</DialogTitle>
                 <nav aria-label="Application navigation" className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-3 pt-12">
                   {renderNavigation()}
                 </nav>
-              </DialogContent>
+              </DrawerContent>
             </Dialog>
 
             <Link

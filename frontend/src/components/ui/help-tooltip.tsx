@@ -46,7 +46,7 @@ export function HelpTooltip({
         <div
           id={tooltipId}
           role="tooltip"
-          className="absolute bottom-full left-1/2 z-50 mb-2 w-64 -translate-x-1/2 rounded-md border border-border bg-popover p-3 text-xs text-popover-foreground shadow-md transition-[opacity,transform] animate-in fade-in-0 zoom-in-95 duration-150"
+          className="absolute bottom-full left-1/2 z-50 mb-2 ml-[-8rem] w-64 rounded-md border border-border bg-popover p-3 text-xs text-popover-foreground shadow-md origin-top duration-150 animate-in fade-in-0 zoom-in-95"
         >
           {title !== undefined && (
             <div className="mb-1 font-semibold text-foreground">{title}</div>

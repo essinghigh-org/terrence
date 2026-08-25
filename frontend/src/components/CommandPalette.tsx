@@ -364,7 +364,7 @@ export function CommandPalette({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl p-0 gap-0 overflow-hidden shadow-2xl">
+      <DialogContent align="top" hideClose className="max-w-xl p-0 gap-0 overflow-hidden shadow-2xl">
         <DialogHeader className="sr-only">
           <DialogTitle>Quick Command Palette</DialogTitle>
         </DialogHeader>
