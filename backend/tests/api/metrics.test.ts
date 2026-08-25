@@ -30,12 +30,15 @@ describe("instance metrics", () => {
   let noAgentGrantToken: string;
   let otherOrgToken: string;
   let sessionToken: string;
+  let adminSessionToken: string;
   let monitoringToken: string;
 
   const suffix = crypto.randomUUID();
   const monitoringTokenId = `metrics-system-${suffix}`;
   const sessionTokenId = `metrics-tok-session-${suffix}`;
   const sessionRefreshId = `metrics-refresh-session-${suffix}`;
+  const adminSessionTokenId = `metrics-tok-admin-session-${suffix}`;
+  const adminSessionRefreshId = `metrics-refresh-admin-${suffix}`;
   const userId = `metrics-user-${suffix}`;
   const otherUserId = `metrics-other-${suffix}`;
   const orgA = `metrics-org-a-${suffix}`;
@@ -69,6 +72,7 @@ describe("instance metrics", () => {
     await db.insert(users).values([
       { id: userId, username: `metrics-${suffix}@test`, passwordHash: "hash" },
       { id: otherUserId, username: `metrics-other-${suffix}@test`, passwordHash: "hash" },
+      { id: `metrics-admin-${suffix}`, username: `metrics-admin-${suffix}@test`, passwordHash: "hash", isSiteAdmin: true },
     ]);
     await db.insert(organizations).values([
       { id: orgA, name: `metrics-a-${suffix}` },
@@ -116,6 +120,7 @@ describe("instance metrics", () => {
     noAgentGrantToken = `metrics-noagent-${suffix}`;
     otherOrgToken = `metrics-other-${suffix}`;
     sessionToken = `metrics-session-${suffix}`;
+    adminSessionToken = `metrics-admin-session-${suffix}`;
     monitoringToken = `tfe-system-metrics-${suffix}`;
     await db.insert(apiTokens).values([
       // Legacy: no scopes = full permissions.
@@ -123,6 +128,8 @@ describe("instance metrics", () => {
       // Browser session access token: no scopes, but tracked in
       // refresh_sessions. Must NOT see instance-wide metrics.
       { id: sessionTokenId, token: sessionToken, userId, description: "Browser session access token" },
+      // Site admin's browser session access token: accepted for instance-wide metrics.
+      { id: adminSessionTokenId, token: adminSessionToken, userId: `metrics-admin-${suffix}`, description: "Browser session access token" },
       // Fine-grained: full org A coverage, both grants.
       {
         id: `metrics-tok-scoped-${suffix}`,
@@ -180,6 +187,16 @@ describe("instance metrics", () => {
       expiresAt: Date.now() + 60 * 60_000,
       createdAt: Date.now(),
     });
+    // The site admin's browser-session tracking row.
+    await db.insert(refreshSessions).values({
+      id: adminSessionRefreshId,
+      familyId: `metrics-admin-family-${suffix}`,
+      tokenHash: `metrics-admin-refresh-hash-${suffix}`,
+      userId: `metrics-admin-${suffix}`,
+      accessTokenId: adminSessionTokenId,
+      expiresAt: Date.now() + 60 * 60_000,
+      createdAt: Date.now(),
+    });
     await db.insert(systemApiTokens).values({
       id: monitoringTokenId,
       tokenHash: hashSystemApiToken(monitoringToken),
@@ -195,11 +212,12 @@ describe("instance metrics", () => {
     } else {
       process.env.AGENT_HEARTBEAT_TIMEOUT_MS = previousHeartbeatTimeout;
     }
-    await db.delete(refreshSessions).where(inArray(refreshSessions.id, [sessionRefreshId]));
+    await db.delete(refreshSessions).where(inArray(refreshSessions.id, [sessionRefreshId, adminSessionRefreshId]));
     await db.delete(systemApiTokens).where(inArray(systemApiTokens.id, [monitoringTokenId]));
     await db.delete(apiTokens).where(inArray(apiTokens.id, [
       `metrics-tok-legacy-${suffix}`,
       sessionTokenId,
+      adminSessionTokenId,
       `metrics-tok-scoped-${suffix}`,
       `metrics-tok-ws-${suffix}`,
       `metrics-tok-noagent-${suffix}`,
@@ -218,7 +236,7 @@ describe("instance metrics", () => {
     await db.delete(projects).where(inArray(projects.id, [`metrics-prj-a-${suffix}`, `metrics-prj-b-${suffix}`]));
     await db.delete(organizationMemberships).where(inArray(organizationMemberships.id, [`metrics-mem-a-${suffix}`, `metrics-mem-b-${suffix}`]));
     await db.delete(organizations).where(inArray(organizations.id, [orgA, orgB]));
-    await db.delete(users).where(inArray(users.id, [userId, otherUserId]));
+    await db.delete(users).where(inArray(users.id, [userId, otherUserId, `metrics-admin-${suffix}`]));
   });
 
   test("rejects unauthenticated access", async () => {
@@ -231,11 +249,19 @@ describe("instance metrics", () => {
     expect(res.status).toBe(401);
   });
 
-  test("rejects a browser session access token (no instance metrics)", async () => {
+  test("rejects a browser session access token from a non-admin (no instance metrics)", async () => {
     const res = await fetch(`${baseUrl}metrics`, { headers: auth(sessionToken) });
     expect(res.status).toBe(403);
     const body = await readJson(res) as { errors: { status: string }[] };
     expect(body.errors[0]?.status).toBe("403");
+  });
+
+  test("accepts a site admin's browser session access token for instance-wide metrics", async () => {
+    const res = await fetch(`${baseUrl}metrics`, { headers: auth(adminSessionToken) });
+    expect(res.status).toBe(200);
+    const { metrics } = await readJson(res) as { metrics: Record<string, unknown> };
+    // Instance-wide counters are present (not the scoped-org shape).
+    expect(typeof metrics.terrence_users_total).toBe("number");
   });
 
   test("legacy token sees instance-wide metrics plus agent queue depth", async () => {
