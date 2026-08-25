@@ -1,9 +1,11 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { workspaceTransfers, type users } from "../db/schema";
-import { eq, count, desc } from "drizzle-orm";
+import { workspaceTransfers, workspaces, organizationMemberships, organizations, projects, type users } from "../db/schema";
+import { eq, inArray, or, sql, count, desc } from "drizzle-orm";
 import { authPlugin } from "../auth";
-import { pageRequest, pagination } from "../lib/utils";
+import { checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, pageRequest, pagination } from "../lib/utils";
+import { scopeCoversOrg } from "../lib/token-scopes";
+import { currentTokenScopes } from "../lib/request-scope";
 import { organizationName } from "../lib/response";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -20,6 +22,52 @@ type ParamCtx = Readonly<{
 }>;
 
 type WorkspaceTransferItem = Readonly<typeof workspaceTransfers.$inferSelect>;
+
+/** Resolve the orgs a transfer touches: the source workspace's org and the
+ * destination org. Either side may be null on legacy/partial records. */
+async function transferOrgIds(transfer: WorkspaceTransferItem): Promise<{ sourceOrgId: string | null; destinationOrgId: string | null }> {
+  const sourceOrgId = transfer.sourceWorkspaceId !== null
+    ? (await db.query.workspaces.findFirst({ where: eq(workspaces.id, transfer.sourceWorkspaceId), columns: { orgId: true } }))?.orgId ?? null
+    : null;
+  return { sourceOrgId, destinationOrgId: transfer.destinationOrgId };
+}
+
+/**
+ * The organizations this principal may see transfers for.
+ *
+ * Site admins get null (= unrestricted). Everyone else gets the orgs their
+ * USER belongs to intersected with the token's org coverage: a fine-grained
+ * token scoped to org A must not widen access to org B merely because the
+ * underlying user is also a member of B. The empty set means "no visibility".
+ */
+export async function visibleTransferOrgIds(user: NonNullable<ParamCtx["user"]>): Promise<Set<string> | null> {
+  if (user.isSiteAdmin === true) return null;
+  const memberships = await db.query.organizationMemberships.findMany({
+    where: eq(organizationMemberships.userId, user.id),
+    columns: { orgId: true },
+  });
+  const memberOrgIds = memberships.map((membership): string => membership.orgId);
+  const scopes = currentTokenScopes();
+  // Legacy tokens (scopes null) carry the user's full membership reach;
+  // fine-grained tokens are limited to the orgs inside their scope.
+  if (scopes === null) return new Set(memberOrgIds);
+  return new Set(memberOrgIds.filter((orgId): boolean => scopeCoversOrg(scopes, orgId)));
+}
+
+/** Whether the principal may see or act on this transfer: site admins can,
+ * as can members of either the source workspace's org or the destination
+ * organization (within token coverage). Transfers move state, variables,
+ * and policy sets between orgs, so their existence and shape are sensitive
+ * across that boundary. */
+async function canSeeTransfer(
+  visibleOrgIds: Set<string> | null,
+  transfer: WorkspaceTransferItem,
+): Promise<boolean> {
+  if (visibleOrgIds === null) return true;
+  const { sourceOrgId, destinationOrgId } = await transferOrgIds(transfer);
+  return (sourceOrgId !== null && visibleOrgIds.has(sourceOrgId))
+    || (destinationOrgId !== null && visibleOrgIds.has(destinationOrgId));
+}
 
 async function transferResource(t: WorkspaceTransferItem): Promise<Record<string, unknown>> {
   return {
@@ -48,6 +96,14 @@ async function transferResource(t: WorkspaceTransferItem): Promise<Record<string
 
 export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" })
   .use(authPlugin)
+  // Authorization helpers. Workspace transfers move configuration, state,
+  // and variables between organizations, so they are gated at the same
+  // level as destructive workspace administration: the caller must be a
+  // site admin, an admin of the SOURCE workspace, and (for creation) an
+  // owner of the DESTINATION organization.
+  .derive(async ({ user }: { user?: Readonly<typeof users.$inferSelect> | null }): Promise<{ isSiteAdmin: boolean }> => {
+    return { isSiteAdmin: user?.isSiteAdmin === true };
+  })
   .post("/api/v2/workspace-transfers", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
 
     if (user === null || user === undefined) {
@@ -66,6 +122,51 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
     const sourceWorkspaceId = typeof (srcWsRel?.data as Record<string, unknown>)?.id === "string" ? ((srcWsRel?.data as Record<string, unknown>).id as string) : null;
     const destinationOrgId = typeof (destOrgRel?.data as Record<string, unknown>)?.id === "string" ? ((destOrgRel?.data as Record<string, unknown>).id as string) : null;
     const destinationProjectId = typeof (destProjRel?.data as Record<string, unknown>)?.id === "string" ? ((destProjRel?.data as Record<string, unknown>).id as string) : null;
+
+    if (sourceWorkspaceId === null || destinationOrgId === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A source workspace and a destination organization are required" }] };
+    }
+
+    // Authorization: creating a transfer requires admin over the SOURCE
+    // workspace and org-owner of the DESTINATION organization (or site
+    // admin). Without this any authenticated user could stage a transfer
+    // moving an arbitrary workspace into an arbitrary organization.
+    // Authorization is bypassed for site admins; VALIDATION IS NOT —
+    // referenced entities must exist and be consistent for everyone.
+    const isSiteAdmin = user.isSiteAdmin === true;
+    const sourceWorkspace = await findAuthorizedWorkspace(sourceWorkspaceId, user.id, null, null);
+    if (sourceWorkspace === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found", detail: "Source workspace not found or not accessible" }] };
+    }
+    if (!isSiteAdmin && !(await checkWorkspacePermission(sourceWorkspace, user.id, null, null, "admin"))) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found", detail: "Source workspace not found or not accessible" }] };
+    }
+    const destinationOrg = await db.query.organizations.findFirst({ where: eq(organizations.id, destinationOrgId), columns: { id: true } });
+    if (destinationOrg === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found", detail: "Destination organization not found" }] };
+    }
+    if (destinationOrg.id === sourceWorkspace.orgId) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The destination organization must differ from the workspace's current organization" }] };
+    }
+    if (!isSiteAdmin && !(await checkOrgPermission(user.id, destinationOrgId, "owner"))) {
+      // Mirror the collection's not-found convention for cross-org probes:
+      // do not reveal whether the destination organization exists.
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found", detail: "Destination organization not found" }] };
+    }
+    if (destinationProjectId !== null) {
+      // The project must belong to the destination organization.
+      const project = await db.query.projects.findFirst({ where: eq(projects.id, destinationProjectId), columns: { orgId: true } });
+      if (project === undefined || project.orgId !== destinationOrgId) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The destination project must belong to the destination organization" }] };
+      }
+    }
 
     const id = `wt-${crypto.randomUUID()}`;
     const transfer: WorkspaceTransferItem = {
@@ -97,15 +198,44 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const { number, size } = pageRequest(request);
-    const total = (await db.select({ value: count() }).from(workspaceTransfers))[0]?.value ?? 0;
-    const items = await db.query.workspaceTransfers.findMany({
-      orderBy: [desc(workspaceTransfers.createdAt)],
-      offset: (number - 1) * size,
-      limit: size,
-    });
+    // Visibility: site admins see every transfer; everyone else sees only
+    // transfers touching organizations covered by their membership + token
+    // scope. Transfers move state, variables, and policy sets between orgs,
+    // so their existence and shape are sensitive across that boundary.
+    const visibleOrgIds = await visibleTransferOrgIds(user);
+    if (visibleOrgIds !== null && visibleOrgIds.size === 0) {
+      return {
+        data: [],
+        ...pagination(request, number, size, 0),
+      };
+    }
+    // Resolve the workspace ids belonging to the visible orgs so the filter
+    // can run entirely in SQL (sourceWorkspaceId is not an org id itself).
+    let sourceWorkspaceIds: string[] | null = null;
+    if (visibleOrgIds !== null) {
+      sourceWorkspaceIds = (await db.query.workspaces.findMany({
+        where: inArray(workspaces.orgId, [...visibleOrgIds]),
+        columns: { id: true },
+      })).map((workspace): string => workspace.id);
+    }
+    const where = visibleOrgIds === null
+      ? undefined
+      : or(
+          inArray(workspaceTransfers.destinationOrgId, [...visibleOrgIds]),
+          sourceWorkspaceIds !== null && sourceWorkspaceIds.length > 0 ? inArray(workspaceTransfers.sourceWorkspaceId, sourceWorkspaceIds) : sql`false`,
+        );
+    const [items, countRows] = await Promise.all([
+      db.query.workspaceTransfers.findMany({
+        ...(where !== undefined ? { where } : {}),
+        orderBy: [desc(workspaceTransfers.createdAt)],
+        limit: size,
+        offset: (number - 1) * size,
+      }),
+      db.select({ value: count() }).from(workspaceTransfers).where(where ?? sql`true`),
+    ]);
     return {
       data: await Promise.all(items.map(async (t) => transferResource(t))),
-      ...pagination(request, number, size, total),
+      ...pagination(request, number, size, countRows[0]?.value ?? 0),
     };
   })
   .get("/api/v2/workspace-transfers/:transfer_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
@@ -114,7 +244,8 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const transfer = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, params.transfer_id ?? "") });
-    if (transfer === undefined) {
+    const visibleOrgIds = await visibleTransferOrgIds(user);
+    if (transfer === undefined || !(await canSeeTransfer(visibleOrgIds, transfer))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -127,7 +258,8 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
     }
     const id = params.transfer_id ?? "";
     const transfer = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
-    if (transfer === undefined) {
+    const visibleOrgIds = await visibleTransferOrgIds(user);
+    if (transfer === undefined || !(await canSeeTransfer(visibleOrgIds, transfer))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -143,7 +275,8 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
     }
     const id = params.transfer_id ?? "";
     const transfer = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
-    if (transfer === undefined) {
+    const visibleOrgIds = await visibleTransferOrgIds(user);
+    if (transfer === undefined || !(await canSeeTransfer(visibleOrgIds, transfer))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
