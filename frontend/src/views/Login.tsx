@@ -53,7 +53,9 @@ export function Login(): React.JSX.Element {
   // post-login destination pointing at Account so "Verified" is visible.
   useEffect((): void => {
     if (searchParams.get("email-verified") === "1") {
-      toast.add({ title: "Email verified", description: "Sign in to continue.", type: "success" });
+      // Neutral wording: this browser cannot prove which account the token
+      // verified, so don't assert the signed-in state here.
+      toast.add({ title: "Verification link processed", description: "Sign in to see your verification status.", type: "success" });
       return;
     }
     const failed = searchParams.get("email-verification");

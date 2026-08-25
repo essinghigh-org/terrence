@@ -153,5 +153,5 @@ test("arriving at login from the verification redirect shows a confirmation toas
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("Email verified")).toBeTruthy(); });
+  await waitFor((): void => { expect(view.getByText("Verification link processed")).toBeTruthy(); });
 });

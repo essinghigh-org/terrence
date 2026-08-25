@@ -51,6 +51,7 @@ export function AccountSettings(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+  const [verificationNotice, setVerificationNotice] = useState<"visited" | null>(null);
   const [verificationLoading, setVerificationLoading] = useState(false);
 
   // Profile Form
@@ -104,10 +105,12 @@ export function AccountSettings(): React.JSX.Element {
   }, [loading, location.hash]);
 
   // The email-verification click-through lands here with a result flag
-  // (backend 302). Surface it once, then strip the flag from the URL.
+  // (backend 302). Consume the flag immediately; the visible message is only
+  // emitted once the freshly loaded account record confirms the outcome, so
+  // a hand-crafted URL can never claim an unverified account got verified.
   useEffect((): void => {
     if (searchParams.get("email-verified") === "1") {
-      setSuccessMsg("Your email address is now verified.");
+      setVerificationNotice("visited");
       setSearchParams({}, { replace: true });
       return;
     }
@@ -123,6 +126,18 @@ export function AccountSettings(): React.JSX.Element {
       setSearchParams({}, { replace: true });
     }
   }, [searchParams, setSearchParams]);
+
+  useEffect((): void => {
+    if (verificationNotice === null || loading) return;
+    if (verificationNotice === "visited" && account?.attributes["email-verified"] === true) {
+      setSuccessMsg("Your email address is now verified.");
+      return;
+    }
+    // Neutral completion: the link worked, but this session's account does
+    // not (yet) show verified — e.g. the token belonged to another account.
+    setSuccessMsg("Verification link processed. See the email verification section below for the current status.");
+    document.getElementById("email-verification")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [verificationNotice, loading, account]);
 
   async function loadAccount(): Promise<void> {
     setAccount(null);
