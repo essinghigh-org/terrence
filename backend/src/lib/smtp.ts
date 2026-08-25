@@ -241,40 +241,39 @@ export async function sendEmail(settings: SmtpSettings, message: EmailMessage): 
       throw new SmtpError(`DATA rejected: ${data.code} ${data.message}`, data.code);
     }
 
+    // Entity headers (Content-Type, Content-Transfer-Encoding) belong ABOVE
+    // the blank line that separates headers from body; anything below it is
+    // rendered as literal body text by the receiving MUA.
     const plainText = message.text.replace(/\r?\n/g, "\r\n");
-    const mimeBody = message.html === undefined
-      ? [
+    const boundary = `=_terrence_${crypto.randomUUID()}`;
+    const encodedText = quotedPrintable(plainText);
+    const entityBody = message.html === undefined
+      ? encodedText
+      : [
+          `--${boundary}`,
           "Content-Type: text/plain; charset=utf-8",
           "Content-Transfer-Encoding: quoted-printable",
           "",
-          quotedPrintable(plainText),
-        ].join("\r\n")
-      : (() => {
-          const boundary = `=_terrence_${crypto.randomUUID()}`;
-          const html = message.html.replace(/\r?\n/g, "\r\n");
-          return [
-            `Content-Type: multipart/alternative; boundary=\"${boundary}\"`,
-            "",
-            `--${boundary}`,
-            "Content-Type: text/plain; charset=utf-8",
-            "Content-Transfer-Encoding: quoted-printable",
-            "",
-            quotedPrintable(plainText),
-            `--${boundary}`,
-            "Content-Type: text/html; charset=utf-8",
-            "Content-Transfer-Encoding: quoted-printable",
-            "",
-            quotedPrintable(html),
-            `--${boundary}--`,
-          ].join("\r\n");
-        })();
+          encodedText,
+          `--${boundary}`,
+          "Content-Type: text/html; charset=utf-8",
+          "Content-Transfer-Encoding: quoted-printable",
+          "",
+          quotedPrintable(message.html.replace(/\r?\n/g, "\r\n")),
+          `--${boundary}--`,
+          "",
+        ].join("\r\n");
     const headers = [
       `From: ${settings.senderEmail}`,
       `To: ${message.to.join(", ")}`,
       `Subject: ${message.subject.replace(/[\u0000-\u001f\u007f]/g, " ")}`,
       "MIME-Version: 1.0",
+      message.html === undefined
+        ? "Content-Type: text/plain; charset=utf-8"
+        : `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      ...(message.html === undefined ? ["Content-Transfer-Encoding: quoted-printable"] : []),
       "",
-      mimeBody,
+      entityBody,
     ].join("\r\n");
     // Dot-stuffing: a line that starts with "." gets an extra leading ".".
     const stuffed = headers.replace(/^\./gm, "..");
