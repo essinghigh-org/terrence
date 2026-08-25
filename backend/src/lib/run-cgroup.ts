@@ -139,16 +139,22 @@ export function createRunCgroup(runId: string, env: NodeJS.ProcessEnv = process.
     const limits = resolveCgroupLimits(env);
     // On a real cgroup the controller files always exist; on a freshly
     // created directory (tests, or a kernel that materializes lazily) they
-    // may not — create them so the limit write below is not skipped.
+    // may not — create them so the limit write below is not skipped. The
+    // open is O_APPEND-create: an existing kernel file is untouched, and a
+    // race with an external creator just means both sides write the same
+    // virtual file, which the cgroupfs serializes.
     for (const controller of ["memory.max", "pids.max", "cpu.weight"]) {
       const file = join(path, controller);
       if (!existsSync(file)) {
         try { closeSync(openSync(file, "a")); } catch { /* read-only fs: skip */ }
       }
+      const value = controller === "memory.max" ? limits.memoryMax
+        : controller === "pids.max" ? String(limits.pidMax)
+          : limits.cpuWeight;
+      try {
+        writeFileSync(file, value);
+      } catch { /* read-only or absent controller: skip */ }
     }
-    writeIfPossible(join(path, "memory.max"), limits.memoryMax);
-    writeIfPossible(join(path, "pids.max"), String(limits.pidMax));
-    writeIfPossible(join(path, "cpu.weight"), limits.cpuWeight);
     return path;
   } catch {
     // Partial creation is harmless: an empty cgroup consumes nothing.
