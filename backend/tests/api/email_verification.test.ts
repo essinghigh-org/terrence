@@ -47,15 +47,16 @@ test("verifies an email token once and rejects replay or changed addresses", asy
   });
 
   const first = await request(`/api/v2/account/email/verify?token=${encodeURIComponent(rawToken)}`);
-  expect(first.status).toBe(200);
-  expect((await first.json()).data.attributes.verified).toBe(true);
+  expect(first.status).toBe(302);
+  expect(first.headers.get("Location")).toBe("/app/account?email-verified=1");
   const verified = await db.query.users.findFirst({ where: eq(users.id, userId) });
   expect(verified?.emailVerifiedAt).toBeTypeOf("number");
   const claimed = await db.query.emailVerificationTokens.findFirst({ where: eq(emailVerificationTokens.userId, userId) });
   expect(claimed?.usedAt).toBeTypeOf("number");
 
   const replay = await request(`/api/v2/account/email/verify?token=${encodeURIComponent(rawToken)}`);
-  expect(replay.status).toBe(404);
+  expect(replay.status).toBe(302);
+  expect(replay.headers.get("Location")).toBe("/app/account?email-verification=expired");
 
   const changedToken = `email-verify-changed-${crypto.randomUUID()}`;
   await db.update(users).set({ email: `changed-${email}`, emailVerifiedAt: null }).where(eq(users.id, userId));
@@ -68,8 +69,8 @@ test("verifies an email token once and rejects replay or changed addresses", asy
     createdAt: now,
   });
   const changed = await request(`/api/v2/account/email/verify?token=${encodeURIComponent(changedToken)}`);
-  expect(changed.status).toBe(409);
-  expect((await changed.json()).errors[0].title).toBe("Conflict");
+  expect(changed.status).toBe(302);
+  expect(changed.headers.get("Location")).toBe("/app/account?email-verification=changed");
   await db.update(users).set({ email, emailVerifiedAt: null }).where(eq(users.id, userId));
   await db.delete(emailVerificationTokens).where(and(eq(emailVerificationTokens.userId, userId), eq(emailVerificationTokens.tokenHash, hashAuthenticationToken(changedToken))));
 });
@@ -87,9 +88,16 @@ test("does not verify an email for a suspended account", async () => {
   await db.update(users).set({ isSuspended: true, emailVerifiedAt: null }).where(eq(users.id, userId));
   try {
     const response = await request(`/api/v2/account/email/verify?token=${encodeURIComponent(rawToken)}`);
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(302);
+    expect(response.headers.get("Location")).toBe("/app/account?email-verification=suspended");
   } finally {
     await db.update(users).set({ isSuspended: false }).where(eq(users.id, userId));
     await db.delete(emailVerificationTokens).where(eq(emailVerificationTokens.tokenHash, hashAuthenticationToken(rawToken)));
   }
+});
+
+test("redirects to the account page with a failure flag when the token is missing", async () => {
+  const response = await request("/api/v2/account/email/verify");
+  expect(response.status).toBe(302);
+  expect(response.headers.get("Location")).toBe("/app/account?email-verification=missing");
 });

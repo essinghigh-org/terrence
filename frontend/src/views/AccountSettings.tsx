@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useLocation, useOutletContext } from "react-router-dom";
+import { useLocation, useOutletContext, useSearchParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import type { LayoutOutletContext } from "../components/Layout";
 import { formatDateTime } from "../lib/utils";
@@ -43,6 +43,7 @@ function formatSessionDate(value: string): string {
 export function AccountSettings(): React.JSX.Element {
   type Account = { id: string; attributes: { username: string; email: string | null; "email-verified"?: boolean; "must-change-password"?: boolean; "avatar-url"?: string; theme?: string } };
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const layoutContext = useOutletContext<LayoutOutletContext | null>();
   const [account, setAccount] = useState<Account | null>(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
@@ -50,6 +51,7 @@ export function AccountSettings(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+  const [verificationNotice, setVerificationNotice] = useState<"visited" | null>(null);
   const [verificationLoading, setVerificationLoading] = useState(false);
 
   // Profile Form
@@ -101,6 +103,41 @@ export function AccountSettings(): React.JSX.Element {
       element.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }, [loading, location.hash]);
+
+  // The email-verification click-through lands here with a result flag
+  // (backend 302). Consume the flag immediately; the visible message is only
+  // emitted once the freshly loaded account record confirms the outcome, so
+  // a hand-crafted URL can never claim an unverified account got verified.
+  useEffect((): void => {
+    if (searchParams.get("email-verified") === "1") {
+      setVerificationNotice("visited");
+      setSearchParams({}, { replace: true });
+      return;
+    }
+    const failed = searchParams.get("email-verification");
+    if (failed !== null) {
+      const reasons: Record<string, string> = {
+        missing: "This verification link was incomplete. Send a new one below.",
+        expired: "This verification link has expired or was already used. Send a new one below.",
+        changed: "Your email address changed since this link was sent. Request a new verification email.",
+        suspended: "Suspended accounts cannot verify their email address.",
+      };
+      setError(reasons[failed] ?? "The verification link was not accepted.");
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
+  useEffect((): void => {
+    if (verificationNotice === null || loading) return;
+    if (verificationNotice === "visited" && account?.attributes["email-verified"] === true) {
+      setSuccessMsg("Your email address is now verified.");
+      return;
+    }
+    // Neutral completion: the link worked, but this session's account does
+    // not (yet) show verified — e.g. the token belonged to another account.
+    setSuccessMsg("Verification link processed. See the email verification section below for the current status.");
+    document.getElementById("email-verification")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [verificationNotice, loading, account]);
 
   async function loadAccount(): Promise<void> {
     setAccount(null);
