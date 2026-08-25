@@ -67,7 +67,29 @@ test("unauthenticated deep links carry their destination to /login", () => {
   );
 
   expect(capturedPathname).toBe("/login");
-  expect(capturedSearch).toBe(`?returnTo=${encodeURIComponent("/app/account?email-verified=1")}`);
+  const loginQuery = new URLSearchParams(capturedSearch);
+  expect(loginQuery.get("returnTo")).toBe("/app/account?email-verified=1");
+});
+
+test("verification flags ride along to the login URL and raise the login toast", async () => {
+  const view = render(
+    <MemoryRouter initialEntries={["/app/account?email-verified=1"]}>
+      <Toaster />
+      <Routes>
+        <Route path="/login" element={<><LocationCapture /><Login /></>} />
+        <Route path="/app/*" element={<ProtectedRoute><div>APP</div></ProtectedRoute>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  // Full unauthenticated click-through: ProtectedRoute must surface the
+  // verification flag at the top level of the login query string, not just
+  // encode it inside returnTo, for the Login effect to see it.
+  await waitFor((): void => {
+    expect(capturedSearch.startsWith("?")).toBe(true);
+    expect(new URLSearchParams(capturedSearch).get("email-verified")).toBe("1");
+  });
+  await waitFor((): void => { expect(view.getByText("Verification link processed")).toBeTruthy(); });
 });
 
 test("non-app paths do not get a returnTo parameter", () => {
