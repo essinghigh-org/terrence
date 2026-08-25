@@ -95,6 +95,7 @@ export async function orgMembershipResource(
     type: "organization-memberships",
     attributes: {
       status: typeof mem.status === "string" && mem.status !== "" ? mem.status : "active",
+      username: userObj?.username ?? null,
       email: userObj?.email ?? null,
       role: mem.role,
     },
