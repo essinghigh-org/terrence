@@ -134,9 +134,17 @@ function RouteFallback(): JSX.Element {
   );
 }
 
-function ProtectedRoute({ children }: Readonly<{ readonly children?: ReactNode }>): JSX.Element {
+export function ProtectedRoute({ children }: Readonly<{ readonly children?: ReactNode }>): JSX.Element {
   const token = getAuthToken();
+  const location = useLocation();
   if (token === null || token === "") {
+    // Carry the intended destination through the sign-in round-trip so deep
+    // links (and redirects like email verification) survive authentication.
+    // Only /app paths are forwarded; everything else uses the plain login.
+    const target = `${location.pathname}${location.search}${location.hash}`;
+    if (location.pathname === "/app" || location.pathname.startsWith("/app/")) {
+      return <Navigate replace to={`/login?returnTo=${encodeURIComponent(target)}`} />;
+    }
     return <Navigate to="/login" replace />;
   }
   return <>{children}</>;

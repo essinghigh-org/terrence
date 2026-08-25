@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useLocation, useOutletContext } from "react-router-dom";
+import { useLocation, useOutletContext, useSearchParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import type { LayoutOutletContext } from "../components/Layout";
 import { formatDateTime } from "../lib/utils";
@@ -43,6 +43,7 @@ function formatSessionDate(value: string): string {
 export function AccountSettings(): React.JSX.Element {
   type Account = { id: string; attributes: { username: string; email: string | null; "email-verified"?: boolean; "must-change-password"?: boolean; "avatar-url"?: string; theme?: string } };
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const layoutContext = useOutletContext<LayoutOutletContext | null>();
   const [account, setAccount] = useState<Account | null>(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
@@ -101,6 +102,27 @@ export function AccountSettings(): React.JSX.Element {
       element.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }, [loading, location.hash]);
+
+  // The email-verification click-through lands here with a result flag
+  // (backend 302). Surface it once, then strip the flag from the URL.
+  useEffect((): void => {
+    if (searchParams.get("email-verified") === "1") {
+      setSuccessMsg("Your email address is now verified.");
+      setSearchParams({}, { replace: true });
+      return;
+    }
+    const failed = searchParams.get("email-verification");
+    if (failed !== null) {
+      const reasons: Record<string, string> = {
+        missing: "This verification link was incomplete. Send a new one below.",
+        expired: "This verification link has expired or was already used. Send a new one below.",
+        changed: "Your email address changed since this link was sent. Request a new verification email.",
+        suspended: "Suspended accounts cannot verify their email address.",
+      };
+      setError(reasons[failed] ?? "The verification link was not accepted.");
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   async function loadAccount(): Promise<void> {
     setAccount(null);

@@ -121,19 +121,27 @@ export const emailVerificationRoutes = new Elysia({ name: "email-verification" }
     await auditLog("request", "email-verification", user.id, user.id, null, { email });
     return { data: { type: "email-verification", attributes: { verified: false, "expires-at": new Date(now + TOKEN_TTL_MS).toISOString() } } };
   })
-  .get("/api/v2/account/email/verify", async (ctx: Ctx): Promise<unknown> => {
+  .get("/api/v2/account/email/verify", async (ctx: Ctx): Promise<Response> => {
+    // This route is the href inside the verification email, so every outcome
+    // lands in the browser, not in an API client. Always answer with a
+    // redirect into the SPA (which carries the result via query flags) instead
+    // of a JSON error document; the SPA turns the flag into visible feedback.
+    const redirect = (query: string): Response => new Response(null, {
+      status: 302,
+      headers: { Location: `/app/account${query}`, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },
+    });
     const rawToken = tokenFromContext(ctx);
-    if (rawToken.trim() === "") return error(ctx.set, 422, "Verification token is required");
+    if (rawToken.trim() === "") return redirect("?email-verification=missing");
     const [tokenHash, legacyTokenHash] = tokenHashCandidates(rawToken);
     const tokenRows = await db.query.emailVerificationTokens.findMany({ where: inArray(emailVerificationTokens.tokenHash, [tokenHash, legacyTokenHash]), limit: 2 });
     const row = tokenRows.find((candidate) => candidate.tokenHash === tokenHash) ?? tokenRows[0];
-    if (row === undefined || row.usedAt !== null || row.expiresAt <= Date.now()) return error(ctx.set, 404, "Verification token is invalid or expired");
+    if (row === undefined || row.usedAt !== null || row.expiresAt <= Date.now()) return redirect("?email-verification=expired");
     if (row.tokenHash === legacyTokenHash) {
       await db.update(emailVerificationTokens).set({ tokenHash }).where(eq(emailVerificationTokens.id, row.id));
     }
     const target = await db.query.users.findFirst({ where: eq(users.id, row.userId) });
-    if (target === undefined || target.email === null || normalizeEmail(target.email) !== row.email) return error(ctx.set, 409, "The email address has changed; request a new verification email");
-    if (target.deletedAt !== null || target.isSuspended === true) return error(ctx.set, 403, "Suspended accounts cannot verify email");
+    if (target === undefined || target.email === null || normalizeEmail(target.email) !== row.email) return redirect("?email-verification=changed");
+    if (target.deletedAt !== null || target.isSuspended === true) return redirect("?email-verification=suspended");
     const now = Date.now();
     const claimed = await db.transaction(async (tx: unknown): Promise<boolean> => {
       const t = tx as typeof db;
@@ -142,7 +150,7 @@ export const emailVerificationRoutes = new Elysia({ name: "email-verification" }
       await t.update(users).set({ emailVerifiedAt: now }).where(eq(users.id, row.userId));
       return true;
     });
-    if (!claimed) return error(ctx.set, 404, "Verification token is invalid or expired");
+    if (!claimed) return redirect("?email-verification=expired");
     await auditLog("verify", "email-verification", row.userId, row.userId, null, { email: row.email });
-    return { data: { type: "email-verification", attributes: { verified: true } } };
+    return redirect("?email-verified=1");
   });

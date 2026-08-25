@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { toast } from "@/components/ui/toast";
 import { fetchApi, setAuthToken } from "@/lib/api";
 import { isString } from "../lib/type-guards";
 
@@ -31,10 +32,41 @@ export function Login(): React.JSX.Element {
   // returning to the backend, which issues the authorization code to Terraform.
   const oauthState = searchParams.get("oauth_state");
 
+  // Destination to restore after sign-in (set by ProtectedRoute when it
+  // bounces an unauthenticated deep link to /login). Only same-origin /app
+  // paths are honored so the flag can never act as an open redirect.
+  const returnTo = searchParams.get("returnTo");
+  const returnTarget = (): string => {
+    if (returnTo === null || !returnTo.startsWith("/app/") && returnTo !== "/app") return "/app";
+    if (returnTo.startsWith("//")) return "/app";
+    if (/[\r\n]/.test(returnTo) || returnTo.includes("/../")) return "/app";
+    return returnTo;
+  };
+
   const finishOauthHandshake = (): void => {
     if (oauthState === null || oauthState === "") return;
     window.location.href = `/oauth/authorization/complete?oauth_state=${encodeURIComponent(oauthState)}`;
   };
+
+  // Arriving from the email-verification redirect (backend 302s the click-through
+  // here when no browser session exists). Confirm the outcome, then keep the
+  // post-login destination pointing at Account so "Verified" is visible.
+  useEffect((): void => {
+    if (searchParams.get("email-verified") === "1") {
+      toast.add({ title: "Email verified", description: "Sign in to continue.", type: "success" });
+      return;
+    }
+    const failed = searchParams.get("email-verification");
+    if (failed !== null) {
+      const reasons: Record<string, string> = {
+        missing: "This verification link was incomplete.",
+        expired: "This verification link has expired or was already used. Send a new one from your account settings.",
+        changed: "Your email address changed since this link was sent. Request a new verification email.",
+        suspended: "Suspended accounts cannot verify their email address.",
+      };
+      toast.add({ title: "Email verification failed", description: reasons[failed] ?? "The verification link was not accepted.", type: "warning" });
+    }
+  }, [searchParams]);
 
   useEffect((): void => {
     fetchApi<{ "signup-enabled"?: boolean; "local-auth-enabled"?: boolean; sso?: { saml?: boolean; oidc?: boolean; ldap?: boolean } }>("/ping")
@@ -52,6 +84,18 @@ export function Login(): React.JSX.Element {
   const ssoEnabled = samlEnabled || oidcEnabled;
   const showLocalForm = localAuthEnabled || ldapEnabled;
 
+  const completeSignIn = async (attributes: { token?: string; "expired-at"?: string | null; "must-change-password"?: boolean }): Promise<void> => {
+    if (!isString(attributes.token)) throw new Error("Missing access token");
+    setAuthToken(attributes.token, attributes["expired-at"], true);
+    if (oauthState !== null && oauthState !== "") {
+      finishOauthHandshake();
+      return;
+    }
+    // A pending password change always wins over the stored destination;
+    // otherwise restore where the user was heading when sign-in interrupted.
+    await navigate(attributes["must-change-password"] === true ? "/app/account" : returnTarget());
+  };
+
   const handleLogin = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
     setError("");
@@ -68,10 +112,7 @@ export function Login(): React.JSX.Element {
         setMfaCode("");
         return;
       }
-      if (!isString(attributes.token)) throw new Error("Missing access token");
-      setAuthToken(attributes.token, attributes["expired-at"], true);
-      if (oauthState !== null && oauthState !== "") finishOauthHandshake();
-      else await navigate(attributes["must-change-password"] === true ? "/app/account" : "/app");
+      await completeSignIn(attributes);
     } catch (_error: unknown) {
       setError("Check your username and password, then try again.");
     } finally {
@@ -91,9 +132,7 @@ export function Login(): React.JSX.Element {
         body: JSON.stringify({ data: { attributes: { "challenge-token": mfaChallengeToken, code: mfaCode.trim(), "browser-session": true } } }),
       }) as { data: { attributes: { token: string; "expired-at"?: string | null; "must-change-password"?: boolean } } };
       const attributes = response.data.attributes;
-      setAuthToken(attributes.token, attributes["expired-at"], true);
-      if (oauthState !== null && oauthState !== "") finishOauthHandshake();
-      else await navigate(attributes["must-change-password"] === true ? "/app/account" : "/app");
+      await completeSignIn(attributes);
     } catch (_error: unknown) {
       setError("That authentication code was not accepted. Try again.");
     } finally {
