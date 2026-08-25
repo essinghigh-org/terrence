@@ -83,15 +83,22 @@ export const actionsRoutes = new Elysia({ name: "actions" })
       const where = actionType !== null ? and(eq(actions.orgId, org.id), eq(actions.actionType, actionType)) : eq(actions.orgId, org.id);
       rows = await db.query.actions.findMany({ where, orderBy: [desc(actions.createdAt)] });
     } else {
-      // Unscoped listing is restricted to the caller's own organizations.
+      // Unscoped listing is restricted to the caller's own organizations,
+      // and membership alone is not enough: each org must also grant the
+      // caller workspace-read (matching the org-scoped path above).
       const memberships = await db.query.organizationMemberships.findMany({
         where: eq(organizationMemberships.userId, user.id),
         columns: { orgId: true },
       });
-      const memberOrgIds = new Set(memberships.map((membership): string => membership.orgId));
-      const scoped = actionType !== null ? and(inArray(actions.orgId, [...memberOrgIds]), eq(actions.actionType, actionType)) : inArray(actions.orgId, [...memberOrgIds]);
+      const visibleOrgIds: string[] = [];
+      for (const membership of memberships) {
+        if (await checkOrganizationPermission(membership.orgId, user.id, null, null, "read-workspaces")) {
+          visibleOrgIds.push(membership.orgId);
+        }
+      }
+      const scoped = actionType !== null ? and(inArray(actions.orgId, visibleOrgIds), eq(actions.actionType, actionType)) : inArray(actions.orgId, visibleOrgIds);
       rows = await db.query.actions.findMany({
-        where: memberOrgIds.size > 0 ? scoped : sql`false`,
+        where: visibleOrgIds.length > 0 ? scoped : sql`false`,
         orderBy: [desc(actions.createdAt)],
         limit: 100,
       });
@@ -250,6 +257,11 @@ export const actionsRoutes = new Elysia({ name: "actions" })
     }
     const inv = await db.query.actionInvocations.findFirst({ where: eq(actionInvocations.id, id) });
     if (inv?.output !== null && inv?.output !== undefined) {
+      // Invocation-ID fallback: the invocation's own org governs access.
+      if (!(await checkOrganizationPermission(inv.orgId, user.id, null, null, "read-workspaces"))) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found", detail: `Action ${id} has no output` }] };
+      }
       return { data: { type: "action-output", id: inv.id, attributes: { output: inv.output, status: inv.status } } };
     }
     (set as { status: number }).status = 404;
@@ -262,7 +274,7 @@ export const actionsRoutes = new Elysia({ name: "actions" })
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const stack = await db.query.stacks.findFirst({ where: eq(stacks.id, stackId) });
-    if (stack !== undefined && !(await checkOrganizationPermission(stack.orgId, user.id, null, null, "read-workspaces"))) {
+    if (stack === undefined || !(await checkOrganizationPermission(stack.orgId, user.id, null, null, "read-workspaces"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
