@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -91,6 +91,44 @@ describe("run cgroups (kanban 8/9)", () => {
     expect(mem.size > 0 || true).toBe(true);
     destroyRunCgroup("run-cg-1", env);
     rmSync(join(root, "run-cg-1"), { recursive: true, force: true });
+  });
+
+  it("recreating a group for a run id replaces the stale group instead of reusing it", (): void => {
+    const root = makeFakeRoot();
+    created.push(root);
+    const env = envWith(root);
+    // Simulate a leftover group from a previous run of the same id: it exists
+    // with limits from an older policy (and, on a real kernel after
+    // cgroup.kill, may SIGKILL newly attached processes until removed).
+    const groupPath = join(root, "run-stale-1");
+    mkdirSync(groupPath);
+    writeFileSync(join(groupPath, "memory.max"), "123");
+    writeFileSync(join(groupPath, "cgroup.procs"), "");
+    const staleMarker = join(groupPath, "stale-artifact.txt");
+    writeFileSync(staleMarker, "leftover");
+
+    expect(createRunCgroup("run-stale-1", env)).not.toBeNull();
+    // The whole directory must have been replaced: the stale artifact is gone
+    // and the stale limit no longer reads back.
+    expect(existsSync(staleMarker)).toBeFalse();
+    expect(readFileSync(join(groupPath, "memory.max"), "utf8")).not.toBe("123");
+    destroyRunCgroup("run-stale-1", env);
+    rmSync(groupPath, { recursive: true, force: true });
+  });
+
+  it("creation fails closed when a stale group cannot be removed", (): void => {
+    const root = makeFakeRoot();
+    created.push(root);
+    const env = envWith(root);
+    const groupPath = join(root, "run-stuck-1");
+    mkdirSync(groupPath);
+    // A populated group cannot be rmdir'd — exactly what a live sibling run
+    // leaves behind. Creation must refuse to hand this path out again.
+    writeFileSync(join(groupPath, "cgroup.procs"), "999999\n");
+    expect(createRunCgroup("run-stuck-1", env)).toBeNull();
+    // The caller proceeds without a cgroup; the stuck group is untouched.
+    expect(existsSync(groupPath)).toBeTrue();
+    rmSync(groupPath, { recursive: true, force: true });
   });
 
   it("rejects unsafe or oversized group names instead of creating paths", (): void => {

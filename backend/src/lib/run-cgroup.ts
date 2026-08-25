@@ -16,7 +16,7 @@
  * termination. All writes are best-effort — a controller file that is
  * absent on a given kernel never fails the run.
  */
-import { accessSync, constants, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, constants, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** Ceiling for a single run's process count. Generous: tofu + providers +
@@ -116,19 +116,44 @@ function safeGroupName(runId: string): string | null {
 }
 
 /** Create the per-run cgroup and apply limits. Returns the group path, or
- * null when cgroups are unavailable (callers proceed without one). */
+ * null when cgroups are unavailable (callers proceed without one).
+ *
+ * A leftover group with the same name (a previous run of the same id that was
+ * killed but whose directory could not be removed yet) must not be reused: a
+ * group whose members were culled via cgroup.kill SIGKILLs freshly attached
+ * processes until it is deleted and recreated, and a still-populated group
+ * would couple two runs' cancellation. When the stale removal fails the
+ * creation fails closed (null) — runs proceed without a cgroup rather than
+ * sharing one. */
 export function createRunCgroup(runId: string, env: NodeJS.ProcessEnv = process.env): string | null {
   const root = probeCgroupRoot(env);
   if (root === null) return null;
   const name = safeGroupName(runId);
   if (name === null) return null;
   const path = join(root, name);
+  // Remove any leftover group from a previous run of this id. Only ENOENT
+  // counts as success; anything else leaves an unknown-state group behind.
+  if (!removeCgroupDir(path)) return null;
   try {
     mkdirSync(path, { recursive: true });
     const limits = resolveCgroupLimits(env);
-    writeIfPossible(join(path, "memory.max"), limits.memoryMax);
-    writeIfPossible(join(path, "pids.max"), String(limits.pidMax));
-    writeIfPossible(join(path, "cpu.weight"), limits.cpuWeight);
+    // On a real cgroup the controller files always exist and accept plain
+    // writes; cgroupfs serializes concurrent writers. There is deliberately
+    // no existence check: writeFileSync opens with O_CREAT|O_TRUNC, so a
+    // missing file is created and an existing virtual kernel file is simply
+    // rewritten. Any failure (read-only fs, absent controller) skips that
+    // limit exactly like the old best-effort behavior.
+    const limitsByFile: Readonly<Record<string, string>> = {
+      "memory.max": limits.memoryMax,
+      "pids.max": String(limits.pidMax),
+      "cpu.weight": limits.cpuWeight,
+    };
+    for (const [controller, value] of Object.entries(limitsByFile)) {
+      const file = join(path, controller);
+      try {
+        writeFileSync(file, value);
+      } catch { /* read-only or absent controller: skip */ }
+    }
     return path;
   } catch {
     // Partial creation is harmless: an empty cgroup consumes nothing.
@@ -230,10 +255,57 @@ export function runCgroupPath(runId: string, env: NodeJS.ProcessEnv = process.en
 export function destroyRunCgroup(runId: string, env: NodeJS.ProcessEnv = process.env): void {
   const path = runCgroupPath(runId, env);
   if (path === null) return;
+  removeCgroupDir(path);
+}
+
+/**
+ * Delete an empty cgroup directory. `rmdirSync` (not rmSync) is required:
+ * cgroup directories reject unlink(2) — only rmdir(2) works, and the kernel
+ * removes them lazily once the last process leaves and no files are held.
+ *
+ * On a real cgroup the kernel owns every file inside, so a group whose
+ * processes have drained is always rmdir-able. A non-kernel directory (fake
+ * roots in tests) may hold plain files; those are unlinked before retrying.
+ * Returns true when the directory is gone.
+ */
+function removeCgroupDir(path: string): boolean {
+  // A populated group must never be deleted out from under its processes.
   try {
-    rmSync(path, { recursive: false, force: false });
-  } catch {
-    /* non-empty or already gone — retried by sweep/cleanup paths */
+    const procs = readFileSync(join(path, "cgroup.procs"), "utf8").trim();
+    if (procs !== "") return false;
+  } catch (error: unknown) {
+    // ENOENT is fine (kernel removed it already, or a fake root without the
+    // file); any other read failure means we cannot prove it drained.
+    const code = error !== null && typeof error === "object" && "code" in error ? (error as { code?: string }).code : undefined;
+    if (code !== "ENOENT") return false;
+  }
+  try {
+    rmdirSync(path);
+    return true;
+  } catch (error: unknown) {
+    // ENOENT means it is already gone — success from the caller's viewpoint.
+    if (error !== null && typeof error === "object" && "code" in error && (error as { code?: string }).code === "ENOENT") {
+      return true;
+    }
+    if (error !== null && typeof error === "object" && "code" in error && (error as { code?: string }).code === "ENOTEMPTY") {
+      // Kernel cgroups never reach here: their files are virtual and rmdir
+      // succeeds once drained. Plain-file leftovers (fake/test roots) can be
+      // cleared by hand before a final rmdir.
+      try {
+        for (const entry of readdirSync(path)) {
+          const child = join(path, entry);
+          const stat = lstatSync(child);
+          if (!stat.isDirectory()) unlinkSync(child);
+        }
+        rmdirSync(path);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    /* EBUSY/EPERM: still populated or held open by a liveness watcher.
+     * Reported to the caller, which must not reuse the group. */
+    return false;
   }
 }
 
