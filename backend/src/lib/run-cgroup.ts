@@ -16,7 +16,7 @@
  * termination. All writes are best-effort — a controller file that is
  * absent on a given kernel never fails the run.
  */
-import { accessSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** Ceiling for a single run's process count. Generous: tofu + providers +
@@ -137,20 +137,19 @@ export function createRunCgroup(runId: string, env: NodeJS.ProcessEnv = process.
   try {
     mkdirSync(path, { recursive: true });
     const limits = resolveCgroupLimits(env);
-    // On a real cgroup the controller files always exist; on a freshly
-    // created directory (tests, or a kernel that materializes lazily) they
-    // may not — create them so the limit write below is not skipped. The
-    // open is O_APPEND-create: an existing kernel file is untouched, and a
-    // race with an external creator just means both sides write the same
-    // virtual file, which the cgroupfs serializes.
-    for (const controller of ["memory.max", "pids.max", "cpu.weight"]) {
+    // On a real cgroup the controller files always exist and accept plain
+    // writes; cgroupfs serializes concurrent writers. There is deliberately
+    // no existence check: writeFileSync opens with O_CREAT|O_TRUNC, so a
+    // missing file is created and an existing virtual kernel file is simply
+    // rewritten. Any failure (read-only fs, absent controller) skips that
+    // limit exactly like the old best-effort behavior.
+    const limitsByFile: Readonly<Record<string, string>> = {
+      "memory.max": limits.memoryMax,
+      "pids.max": String(limits.pidMax),
+      "cpu.weight": limits.cpuWeight,
+    };
+    for (const [controller, value] of Object.entries(limitsByFile)) {
       const file = join(path, controller);
-      if (!existsSync(file)) {
-        try { closeSync(openSync(file, "a")); } catch { /* read-only fs: skip */ }
-      }
-      const value = controller === "memory.max" ? limits.memoryMax
-        : controller === "pids.max" ? String(limits.pidMax)
-          : limits.cpuWeight;
       try {
         writeFileSync(file, value);
       } catch { /* read-only or absent controller: skip */ }
