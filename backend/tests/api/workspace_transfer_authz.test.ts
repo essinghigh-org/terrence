@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -83,8 +83,10 @@ describe("workspace transfer authorization", () => {
     await db.insert(projects).values({ id: projectId, orgId: dstOrgId, name: `wt-proj-${suffix}` });
   });
 
+  const createdTransferIds: string[] = [];
+
   afterAll(async () => {
-    await db.delete(workspaceTransfers);
+    await db.delete(workspaceTransfers).where(inArray(workspaceTransfers.id, createdTransferIds));
     await db.delete(workspaces).where(eq(workspaces.id, wsId));
     await db.delete(projects).where(eq(projects.id, projectId));
     await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, srcOrgId));
@@ -130,11 +132,14 @@ describe("workspace transfer authorization", () => {
     expect(res.status).toBe(201);
     const body = await res.json() as { data: { id: string } };
     expect(body.data.id.startsWith("wt-")).toBeTrue();
+    createdTransferIds.push(body.data.id);
   });
 
   it("allows creation for a site admin", async () => {
     const res = await request("/api/v2/workspace-transfers", "POST", createTransferBody(wsId, dstOrgId), adminToken);
     expect(res.status).toBe(201);
+    const adminBody = await res.json() as { data: { id: string } };
+    createdTransferIds.push(adminBody.data.id);
   });
 
   it("422s when the destination project belongs to another organization", async () => {
@@ -157,6 +162,7 @@ describe("workspace transfer authorization", () => {
     const createRes = await request("/api/v2/workspace-transfers", "POST", createTransferBody(wsId, dstOrgId), ownerToken);
     expect(createRes.status).toBe(201);
     const created = (await createRes.json() as { data: { id: string } }).data.id;
+    createdTransferIds.push(created);
 
     // Outsider: hidden everywhere.
     const outsiderList = await request("/api/v2/workspace-transfers", "GET", undefined, outsiderToken);
@@ -177,10 +183,12 @@ describe("workspace transfer authorization", () => {
     const createRes = await request("/api/v2/workspace-transfers", "POST", createTransferBody(wsId, dstOrgId), ownerToken);
     expect(createRes.status).toBe(201);
     const created = (await createRes.json() as { data: { id: string } }).data.id;
+    createdTransferIds.push(created);
 
     const paused = await request("/api/v2/workspace-transfers", "POST", createTransferBody(wsId, dstOrgId), ownerToken);
     expect(paused.status).toBe(201);
     const pausedId = (await paused.json() as { data: { id: string } }).data.id;
+    createdTransferIds.push(pausedId);
 
     const outsiderCancel = await request(`/api/v2/workspace-transfers/${created}/actions/cancel`, "POST", {}, outsiderToken);
     expect(outsiderCancel.status).toBe(404);
