@@ -93,6 +93,25 @@ describe("run cgroups (kanban 8/9)", () => {
     rmSync(join(root, "run-cg-1"), { recursive: true, force: true });
   });
 
+  it("recreating a group for a run id replaces the stale group instead of reusing it", (): void => {
+    const root = makeFakeRoot();
+    created.push(root);
+    const env = envWith(root);
+    // Simulate a leftover group from a previous run of the same id: it exists
+    // with limits from an older policy (and, on a real kernel after
+    // cgroup.kill, may SIGKILL newly attached processes until removed).
+    const groupPath = join(root, "run-stale-1");
+    mkdirSync(groupPath);
+    writeFileSync(join(groupPath, "memory.max"), "123");
+    writeFileSync(join(groupPath, "cgroup.procs"), "");
+
+    expect(createRunCgroup("run-stale-1", env)).not.toBeNull();
+    // The stale limit must be gone — the group was removed and recreated fresh.
+    expect(readFileSync(join(groupPath, "memory.max"), "utf8")).not.toBe("123");
+    destroyRunCgroup("run-stale-1", env);
+    rmSync(groupPath, { recursive: true, force: true });
+  });
+
   it("rejects unsafe or oversized group names instead of creating paths", (): void => {
     const root = makeFakeRoot();
     created.push(root);

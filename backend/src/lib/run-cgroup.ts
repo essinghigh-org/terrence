@@ -16,7 +16,7 @@
  * termination. All writes are best-effort — a controller file that is
  * absent on a given kernel never fails the run.
  */
-import { accessSync, constants, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, constants, mkdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** Ceiling for a single run's process count. Generous: tofu + providers +
@@ -116,13 +116,27 @@ function safeGroupName(runId: string): string | null {
 }
 
 /** Create the per-run cgroup and apply limits. Returns the group path, or
- * null when cgroups are unavailable (callers proceed without one). */
+ * null when cgroups are unavailable (callers proceed without one).
+ *
+ * A leftover group with the same name (a previous run of the same id that was
+ * killed but whose directory could not be removed yet) is removed before the
+ * group is created: reusing a stale group re-applies limits on top of an
+ * unknown state, and a group whose processes were culled via cgroup.kill can
+ * SIGKILL freshly attached processes until it is deleted and recreated. */
 export function createRunCgroup(runId: string, env: NodeJS.ProcessEnv = process.env): string | null {
   const root = probeCgroupRoot(env);
   if (root === null) return null;
   const name = safeGroupName(runId);
   if (name === null) return null;
   const path = join(root, name);
+  try {
+    // Best-effort removal of a leftover group from a previous run of this id.
+    removeCgroupDir(path);
+  } catch {
+    /* ENOENT is the normal path; EBUSY/ENOTEMPTY means processes still linger
+     * — proceeding to reuse the group is still correct for a live run of the
+     * same id, since the limits below are re-applied either way. */
+  }
   try {
     mkdirSync(path, { recursive: true });
     const limits = resolveCgroupLimits(env);
@@ -230,10 +244,20 @@ export function runCgroupPath(runId: string, env: NodeJS.ProcessEnv = process.en
 export function destroyRunCgroup(runId: string, env: NodeJS.ProcessEnv = process.env): void {
   const path = runCgroupPath(runId, env);
   if (path === null) return;
+  removeCgroupDir(path);
+}
+
+/**
+ * Delete an empty cgroup directory. `rmdirSync` (not rmSync) is required:
+ * cgroup directories reject unlink(2) — only rmdir(2) works, and the kernel
+ * removes them lazily once the last process leaves and no files are held.
+ */
+function removeCgroupDir(path: string): void {
   try {
-    rmSync(path, { recursive: false, force: false });
+    rmdirSync(path);
   } catch {
-    /* non-empty or already gone — retried by sweep/cleanup paths */
+    /* ENOENT: already gone. EBUSY/ENOTEMPTY/EPERM: still populated or held —
+     * retried by the next createRunCgroup for the same id. */
   }
 }
 
