@@ -2,7 +2,7 @@ import { Elysia } from "elysia";
 import { db } from "./db";
 import { apiTokens, runTokens, users, teams, systemApiTokens } from "./db/schema";
 import { eq, inArray } from "drizzle-orm";
-import { hashAuthenticationToken, tokenHashCandidates } from "./lib/token-service";
+import { tokenHashCandidates } from "./lib/token-service";
 import { setRequestSiteAdmin } from "./lib/request-scope";
 
 type AuthToken = {
@@ -44,55 +44,6 @@ export function rememberRateLimitPrincipal(request: object, token: Readonly<Auth
   if (principal !== undefined) rateLimitPrincipals.set(request, principal);
 }
 
-
-/** Count API tokens still stored as plaintext (pre-hash migration). Used by admin diagnostics (todo 332). */
-export async function countLegacyPlaintextTokens(): Promise<number> {
-  // Current and legacy digests are both 64 hex characters; anything else is
-  // legacy plaintext.
-  // Paginated scan keeps memory bounded even on a large token table; GLOB/~ dialect split
-  // would require backend branching, so a single portable path is kept.
-  let count = 0;
-  let offset = 0;
-  const pageSize = 500;
-  for (;;) {
-    const page = await db.select({ token: apiTokens.token }).from(apiTokens).orderBy(apiTokens.id).limit(pageSize).offset(offset);
-    if (page.length === 0) break;
-    for (const row of page) {
-      const v = row.token;
-      if (v.length !== 64 || !/^[0-9a-f]{64}$/i.test(v)) count += 1;
-    }
-    if (page.length < pageSize) break;
-    offset += pageSize;
-  }
-  return count;
-}
-
-
-/** Bulk-migrate any remaining plaintext api_tokens to keyed hashes (todo 333).
- * Idempotent: already-hashed rows are skipped. Returns the number migrated. */
-export async function migrateLegacyPlaintextTokens(): Promise<number> {
-  let migrated = 0;
-  let offset = 0;
-  const pageSize = 200;
-  for (;;) {
-    const page = await db.select({ id: apiTokens.id, token: apiTokens.token }).from(apiTokens).orderBy(apiTokens.id).limit(pageSize).offset(offset);
-    if (page.length === 0) break;
-    for (const row of page) {
-      const v = row.token;
-      if (v.length === 64 && /^[0-9a-f]{64}$/i.test(v)) continue;
-      const hashed = hashAuthenticationToken(v);
-      // Guard against accidental double-hash if two migrators race on the same row.
-      const current = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, row.id) });
-      if (current === undefined) continue;
-      if (current.token.length === 64 && /^[0-9a-f]{64}$/i.test(current.token)) continue;
-      await db.update(apiTokens).set({ token: hashed }).where(eq(apiTokens.id, row.id));
-      migrated += 1;
-    }
-    if (page.length < pageSize) break;
-    offset += pageSize;
-  }
-  return migrated;
-}
 
 export const authPlugin = new Elysia({ name: "auth" })
   .derive({ as: "global" }, async ({ request }: DeriveContext): Promise<{
@@ -149,22 +100,6 @@ export const authPlugin = new Elysia({ name: "auth" })
     let { token, user } = skipApiLookup ? { token: undefined, user: null } : await lookup();
 
 
-    // Legacy fallback: re-hash plaintext token on successful use (todo 331).
-    // Legacy plaintext rows are an explicit migration escape hatch, never the
-    // default authentication path.
-    const allowLegacyTokens = process.env.TERRENCE_ALLOW_LEGACY_TOKENS === "1";
-    if (allowLegacyTokens && token === undefined) {
-      const legacyToken = await db.query.apiTokens.findFirst({
-        where: eq(apiTokens.token, tokenString),
-      });
-      if (legacyToken !== undefined) {
-        await db.update(apiTokens)
-          .set({ token: tokenHash })
-          .where(eq(apiTokens.id, legacyToken.id));
-        token = { ...legacyToken, token: tokenHash };
-        user = null;
-      }
-    }
 
     // Run tokens: ephemeral worker credentials (the reference format run-token model). They do
     // not map to a user/team/org token row; the run row carries the scope.
@@ -252,8 +187,7 @@ export const authPlugin = new Elysia({ name: "auth" })
     rememberRateLimitPrincipal(request, token);
 
     if (token.userId !== null) {
-      // The joined lookup already resolves the user for hashed tokens. Only
-      // tokens found via the plaintext legacy fallback re-query (rare).
+      // The joined lookup already resolves the user.
       const resolvedUser = user ?? await db.query.users.findFirst({ where: eq(users.id, token.userId) });
       // A token whose owner row has been removed is no longer a valid user
       // credential.  Without this guard the token would survive a partial

@@ -1317,7 +1317,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     const authorized = await findAuthorizedRun(comment.runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const [enrichedSingle] = await enrichCommentsWithActors([comment]);
-    return { data: commentResource(enrichedSingle) };
+    return { data: commentResource(enrichedSingle ?? comment) };
   })
   // --- Plan JSON Output ---
   .get("/api/v2/plans/:plan_id/json-output", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
