@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX } from "react";
+import { useEffect, useId, useRef, useState, type JSX } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Box,
@@ -52,6 +52,14 @@ export function CommandPalette({
 }>): JSX.Element {
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
+  // Highlighted row of the flattened result list (visual order). Keyboard
+  // selection and aria-activedescendant both key off this single index so
+  // what screen readers announce always matches what is visually highlighted.
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const listboxId = useId();
+  const optionId = (index: number): string => `${listboxId}-option-${index}`;
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const [orgs, setOrgs] = useState<{ name: string }[]>([]);
   const [workspaces, setWorkspaces] = useState<{ name: string }[]>([]);
   const [docs, setDocs] = useState<{ slug: string; title: string; category: string }[]>([]);
@@ -68,6 +76,7 @@ export function CommandPalette({
   useEffect(() => {
     if (!open) return;
     setSearch("");
+    setHighlightedIndex(0);
     const controller = new AbortController();
 
     void fetchAllApiPages<{ attributes: { name: string } }>(
@@ -362,9 +371,61 @@ export function CommandPalette({
         item.category.toLowerCase().includes(query),
       );
 
+  // Keep the highlight pinned to a real row as the result set shrinks or grows.
+  const clampedIndex = filtered.length === 0 ? 0 : Math.min(highlightedIndex, filtered.length - 1);
+
+  const moveHighlight = (delta: number): void => {
+    if (filtered.length === 0) return;
+    // Base the move on the clamped index: the raw state can be stale when the
+    // result set shrinks while the palette is open (late fetch resolving).
+    const next = clampedIndex + delta;
+    // Wrap around so ↓ at the bottom returns to the top and vice versa.
+    if (next < 0) setHighlightedIndex(filtered.length - 1);
+    else if (next >= filtered.length) setHighlightedIndex(0);
+    else setHighlightedIndex(next);
+  };
+
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        moveHighlight(1);
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        moveHighlight(-1);
+        break;
+      case "Home":
+        e.preventDefault();
+        setHighlightedIndex(0);
+        break;
+      case "End":
+        e.preventDefault();
+        setHighlightedIndex(Math.max(0, filtered.length - 1));
+        break;
+      case "Enter": {
+        e.preventDefault();
+        const selected = filtered[clampedIndex];
+        if (selected !== undefined) selected.perform();
+        break;
+      }
+      default:
+        break;
+    }
+  };
+
+  // Follow the highlight with the scroll position. The highlight only moves
+  // via keyboard or result-set changes, so this never fights mouse users;
+  // block:nearest keeps jumps minimal.
+  useEffect((): void => {
+    if (!open) return;
+    const row = listRef.current?.querySelector(`[id="${listboxId}-option-${clampedIndex}"]`);
+    row?.scrollIntoView({ block: "nearest" });
+  }, [clampedIndex, open, listboxId]);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl p-0 gap-0 overflow-hidden shadow-2xl">
+      <DialogContent align="top" hideClose className="max-w-xl p-0 gap-0 overflow-hidden shadow-2xl">
         <DialogHeader className="sr-only">
           <DialogTitle>Quick Command Palette</DialogTitle>
         </DialogHeader>
@@ -375,19 +436,39 @@ export function CommandPalette({
             name="command-palette-search"
             type="search"
             autoComplete="off"
+            role="combobox"
+            aria-expanded
+            aria-controls={listboxId}
+            aria-activedescendant={
+              filtered.length > 0 ? optionId(clampedIndex) : undefined
+            }
             aria-label="Search commands and resources"
+            ref={inputRef}
             autoFocus
             className="border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 text-base"
             placeholder="Type a command or search organizations & workspaces…"
             value={search}
-            onChange={(e) => { setSearch(e.target.value); }}
+            // onInput rather than onChange mirrors the rest of the codebase
+            // (Login, forms): per-keystroke semantics, and it stays drivable
+            // from tests where Base UI portals swallow the change event.
+            onInput={(e: React.SyntheticEvent<HTMLInputElement>) => {
+              setSearch(e.currentTarget.value);
+              setHighlightedIndex(0);
+            }}
+            onKeyDown={handleInputKeyDown}
           />
           <kbd className="pointer-events-none hidden select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100 sm:flex">
             ESC
           </kbd>
         </div>
 
-        <div className="max-h-[350px] overflow-y-auto p-2">
+        <div
+          ref={listRef}
+          id={listboxId}
+          role="listbox"
+          aria-label="Command results"
+          className="max-h-[350px] overflow-y-auto p-2"
+        >
           {filtered.length === 0 ? (
             <div className="py-8 text-center text-sm text-muted-foreground">
               No matching commands or resources found.
@@ -403,9 +484,12 @@ export function CommandPalette({
                 }
                 const categoryOrder = ["Recent", "Actions", "Navigation", "Workspaces", "Organizations", "Documentation"];
                 const rows: React.JSX.Element[] = [];
+                let flatIndex = 0;
                 for (const category of categoryOrder) {
                   const list = grouped.get(category);
                   if (list === undefined) continue;
+                  const groupStart = flatIndex;
+                  flatIndex += list.length;
                   rows.push(
                     <div key={category} className="pt-1 first:pt-0">
                       {query === "" && (
@@ -413,13 +497,22 @@ export function CommandPalette({
                           {category}
                         </p>
                       )}
-                      {list.map((item) => {
+                      {list.map((item, indexInGroup): JSX.Element => {
                         const IconComponent = item.icon;
+                        const index = groupStart + indexInGroup;
+                        const highlighted = index === clampedIndex;
                         return (
                           <button
                             key={item.id}
+                            id={optionId(index)}
                             type="button"
-                            className="w-full flex items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:outline-none"
+                            role="option"
+                            aria-selected={highlighted}
+                            data-highlighted={highlighted || undefined}
+                            className="w-full flex items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none data-highlighted:bg-accent data-highlighted:text-accent-foreground"
+                            onMouseMove={(): void => {
+                              if (!highlighted) setHighlightedIndex(index);
+                            }}
                             onClick={item.perform}
                           >
                             <div className="flex items-center gap-3 min-w-0">
@@ -443,7 +536,29 @@ export function CommandPalette({
                 // Any category not in the fixed order (e.g. a future one).
                 for (const [category, list] of grouped) {
                   if (categoryOrder.includes(category)) continue;
-                  rows.push(<div key={category}>{list.map((item) => <button key={item.id} type="button" className="w-full flex items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:outline-none" onClick={item.perform}><span>{item.title}</span><span className="text-[10px] uppercase font-semibold text-muted-foreground/70">{item.category}</span></button>)}</div>);
+                  for (const item of list) {
+                    const index = flatIndex;
+                    flatIndex += 1;
+                    const highlighted = index === clampedIndex;
+                    rows.push(
+                      <button
+                        key={item.id}
+                        id={optionId(index)}
+                        type="button"
+                        role="option"
+                        aria-selected={highlighted}
+                        data-highlighted={highlighted || undefined}
+                        className="w-full flex items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none data-highlighted:bg-accent data-highlighted:text-accent-foreground"
+                        onMouseMove={(): void => {
+                          if (!highlighted) setHighlightedIndex(index);
+                        }}
+                        onClick={item.perform}
+                      >
+                        <span>{item.title}</span>
+                        <span className="text-[10px] uppercase font-semibold text-muted-foreground/70">{item.category}</span>
+                      </button>,
+                    );
+                  }
                 }
                 return rows;
               })()}

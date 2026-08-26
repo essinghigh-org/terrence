@@ -128,7 +128,7 @@ export function OperationFilterDropdown({
         <div
           role="menu"
           aria-orientation="vertical"
-          className="absolute right-0 top-full z-40 mt-1.5 w-60 rounded-lg border border-border bg-popover p-1.5 text-popover-foreground shadow-lg ring-1 ring-foreground/10 outline-none animate-in fade-in-0 zoom-in-95"
+          className="absolute right-0 top-full z-40 mt-1.5 w-60 rounded-lg border border-border bg-popover p-1.5 text-popover-foreground shadow-lg ring-1 ring-foreground/10 outline-none origin-top duration-150 animate-in fade-in-0 slide-in-from-top-1"
         >
           <div className="flex items-center justify-between border-b border-border/60 px-2 py-1.5 text-xs">
             <span className="font-semibold text-foreground">Filter by operation</span>

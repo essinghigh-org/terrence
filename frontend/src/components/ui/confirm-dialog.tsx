@@ -64,7 +64,7 @@ export function ConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[460px] animate-in fade-in-0 zoom-in-95 duration-200">
+      <DialogContent className="sm:max-w-[460px]">
         <form onSubmit={handleFormSubmit}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-lg font-semibold text-foreground">

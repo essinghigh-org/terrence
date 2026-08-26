@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX, type ReactNode } from "react";
+import { useEffect, useRef, useState, type JSX, type ReactNode } from "react";
 import {
   Link,
   matchPath,
@@ -59,9 +59,9 @@ import {
 
 import {
   Dialog,
-  DialogContent,
   DialogTitle,
   DialogTrigger,
+  DrawerContent,
 } from "./ui/dialog";
 import {
   DropdownMenu,
@@ -162,6 +162,9 @@ export function Layout({
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
   const [visitsRevision, setVisitsRevision] = useState(0);
+  // Tracks the pending "g" of a g-then-key sequence (gg / gh / gw). Cleared
+  // after 1500ms, on a non-matching key, or when an overlay is open.
+  const pendingGRef = useRef<number | null>(null);
   const docsIndex = useDocsIndex();
 
   useEffect(() => {
@@ -173,25 +176,18 @@ export function Layout({
     if (main instanceof HTMLElement) main.scrollTop = 0;
   }, [location.pathname]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent): void => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setCommandPaletteOpen((prev) => !prev);
-      } else if (
-        e.key === "?" &&
-        !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
-      ) {
-        e.preventDefault();
-        setShortcutsModalOpen((prev) => !prev);
-      }
-    };
+  useEffect((): void => {
+    if (!commandPaletteOpen && !shortcutsModalOpen && !mobileNavigationOpen) {
+      return;
+    }
+    // Any open overlay owns the keyboard; drop any half-typed sequence.
+    if (pendingGRef.current !== null) {
+      window.clearTimeout(pendingGRef.current);
+      pendingGRef.current = null;
+    }
+  }, [commandPaletteOpen, shortcutsModalOpen, mobileNavigationOpen]);
 
-    window.addEventListener("keydown", handleKeyDown);
-    return (): void => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, []);
+
 
   useEffect((): (() => void) => {
     const controller = new AbortController();
@@ -281,6 +277,88 @@ export function Layout({
     : undefined;
   const selectedDocsSlug = docsSlug ?? docsIndex.index?.[0]?.slug;
   const orgPath = hasOrg ? `/app/${encodeURIComponent(orgName)}` : "/app";
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      // Never intercept typing inside form controls or contenteditable.
+      const target = e.target;
+      const inTextField = target instanceof HTMLInputElement
+        || target instanceof HTMLTextAreaElement
+        || target instanceof HTMLSelectElement
+        || (target instanceof HTMLElement && target.isContentEditable);
+
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCommandPaletteOpen((prev) => !prev);
+        return;
+      }
+      if (e.key === "?" && !inTextField) {
+        e.preventDefault();
+        setShortcutsModalOpen((prev) => !prev);
+        return;
+      }
+      // Overlay-aware guard: while the palette, the shortcuts help, or the
+      // mobile drawer is open, they own the keyboard. Don't start sequences,
+      // and don't hijack Escape away from the dialog's own close handling.
+      const overlayOpen = commandPaletteOpen || shortcutsModalOpen || mobileNavigationOpen;
+      if (overlayOpen || inTextField || e.metaKey || e.ctrlKey || e.altKey) {
+        if (e.key === "g" && pendingGRef.current !== null) {
+          window.clearTimeout(pendingGRef.current);
+          pendingGRef.current = null;
+        }
+        return;
+      }
+      if (pendingGRef.current !== null && (e.key === "h" || e.key === "w")) {
+        window.clearTimeout(pendingGRef.current);
+        pendingGRef.current = null;
+        e.preventDefault();
+        if (e.key === "h") navigate("/app/account");
+        else navigate(hasOrg ? `${orgPath}/workspaces` : "/app");
+        return;
+      }
+
+      if (e.key === "g") {
+        pendingGRef.current = window.setTimeout((): void => {
+          pendingGRef.current = null;
+        }, 1500);
+        return;
+      }
+      if (pendingGRef.current !== null) {
+        // A sequence was pending but this key doesn't complete one.
+        window.clearTimeout(pendingGRef.current);
+        pendingGRef.current = null;
+        return;
+      }
+
+      switch (e.key.toLowerCase()) {
+        case "/":
+          e.preventDefault();
+          setCommandPaletteOpen(true);
+          break;
+        case "[":
+          toggleSidebar();
+          break;
+        case "escape": {
+          // Overlays are already closed here (the guard above returns while
+          // any is open, and Base UI owns dialog Escape); just drop a
+          // half-typed sequence.
+          if (pendingGRef.current !== null) {
+            window.clearTimeout(pendingGRef.current);
+            pendingGRef.current = null;
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return (): void => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+    // hasOrg/orgPath are stable per-route values used by the g-sequences.
+  }, [navigate, commandPaletteOpen, shortcutsModalOpen, mobileNavigationOpen, hasOrg, orgPath]);
 
   // Remember the last organization the operator worked in so a fresh page
   // load (or the next visit) can resume there instead of the org picker.
@@ -1143,16 +1221,16 @@ export function Layout({
                   <Menu data-icon="inline-start" />
                 </Button>
               } />
-              <DialogContent
+              <DrawerContent
                 id="mobile-app-sidebar"
                 aria-describedby={undefined}
-                className="bottom-0 left-0 top-[52px] h-[calc(100dvh-52px)] w-[280px] max-w-none translate-x-0 translate-y-0 gap-0 rounded-none border-y-0 border-l-0 p-0 data-closed:slide-out-to-left data-open:slide-in-from-left sm:rounded-none lg:hidden"
+                className="top-[52px] bottom-0 h-[calc(100dvh-52px)] max-w-none rounded-none border-y-0 p-0 gap-0 lg:hidden"
               >
                 <DialogTitle className="sr-only">Application navigation</DialogTitle>
                 <nav aria-label="Application navigation" className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-3 pt-12">
                   {renderNavigation()}
                 </nav>
-              </DialogContent>
+              </DrawerContent>
             </Dialog>
 
             <Link
@@ -1351,30 +1429,35 @@ export function Layout({
           id="app-sidebar"
           aria-label="Application navigation"
           className={cn(
-            "hidden w-[280px] shrink-0 flex-col border-r bg-muted/40 transition-[width] duration-200 lg:flex",
+            "hidden shrink-0 flex-col border-r bg-muted/40 transition-[width] duration-200 lg:flex",
             sidebarCollapsed ? "lg:w-16" : "lg:w-[280px]",
           )}
         >
-          <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-3">
+          {/* Width transitions on the aside would stretch the nav content
+              mid-animation; a fixed overlay decouples the button from the
+              animating box so it stays put and clickable throughout. */}
+          <div className="pointer-events-none fixed bottom-0 z-10 hidden lg:block" style={{ width: sidebarCollapsed ? "4rem" : "17.5rem" }}>
+            <div className="border-t p-3 pointer-events-auto">
+              <Button
+                variant="ghost"
+                size={sidebarCollapsed ? "icon" : "default"}
+                className={cn("w-full", !sidebarCollapsed && "justify-start")}
+                aria-controls="app-sidebar"
+                aria-expanded={!sidebarCollapsed}
+                aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                title={sidebarCollapsed ? undefined : "["}
+                onClick={toggleSidebar}
+              >
+                {sidebarCollapsed
+                  ? <PanelLeftOpen data-icon="inline-start" />
+                  : <PanelLeftClose data-icon="inline-start" />}
+                {!sidebarCollapsed && <span>Collapse sidebar</span>}
+              </Button>
+            </div>
+          </div>
+          <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-3 pb-16">
             {renderNavigation()}
           </nav>
-
-          <div className="hidden border-t p-3 lg:block">
-            <Button
-              variant="ghost"
-              size={sidebarCollapsed ? "icon" : "default"}
-              className={cn("w-full", !sidebarCollapsed && "justify-start")}
-              aria-controls="app-sidebar"
-              aria-expanded={!sidebarCollapsed}
-              aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-              onClick={toggleSidebar}
-            >
-              {sidebarCollapsed
-                ? <PanelLeftOpen data-icon="inline-start" />
-                : <PanelLeftClose data-icon="inline-start" />}
-              {!sidebarCollapsed && <span>Collapse sidebar</span>}
-            </Button>
-          </div>
         </aside>
 
         <main

@@ -28,6 +28,8 @@ export function SidebarNavLink({
       to={to}
       onClick={onNavigate}
       aria-current={active ? "page" : undefined}
+      // Native tooltip in collapsed icon mode; the label is visually hidden
+      // there, so hover/focus needs to reveal where the icon goes.
       title={collapsed ? label : undefined}
       className={cn(
         "group flex min-h-9 items-center gap-3 rounded-md border-l-2 px-3 py-2 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
@@ -38,7 +40,7 @@ export function SidebarNavLink({
     >
       {createElement(icon, {
         "aria-hidden": true,
-        className: "size-4 shrink-0",
+        className: cn("size-4 shrink-0", collapsed && "lg:mx-auto"),
       })}
       <span className={cn("truncate", collapsed && "lg:sr-only")}>{label}</span>
       {trailing && (
