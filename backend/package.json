@@ -6,7 +6,7 @@
   "scripts": {
     "start": "bun run index.ts",
     "dev": "bun run --watch index.ts",
-    "test": "TERRENCE_ALLOW_LEGACY_TOKENS=1 bun test --parallel",
+    "test": "bun test --parallel",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "coverage": "bun run scripts/coverage-report.ts",

@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import { authPlugin, countLegacyPlaintextTokens } from "../../auth";
+import { authPlugin } from "../../auth";
 import { db } from "../../db";
 import { databaseMetrics } from "../../db";
 import { agents } from "../../db/schema";
@@ -14,7 +14,6 @@ import { join } from "node:path";
 import type { ParamCtx } from "./types";
 import { envEnabled } from "../../lib/env";
 import { currentSamlSettings } from "./helpers";
-import { migrateLegacyPlaintextTokens } from "../../auth";
 import { TOKEN_FORMAT_VERSION } from "../../lib/token-service";
 export const systemRoutes = new Elysia({ name: "admin-system" })
   .use(authPlugin)
@@ -71,14 +70,8 @@ export const systemRoutes = new Elysia({ name: "admin-system" })
         agents: {
           total: agentRows.reduce((sum: number, row: { status: string; n: number }): number => sum + row.n, 0),
           "by-status": Object.fromEntries(agentRows.map((row: { status: string; n: number }): [string, number] => [row.status, row.n])),
-        },
-        "legacy-plaintext-tokens": await countLegacyPlaintextTokens().catch((): number => -1),
+        }
       },
       "token-format-version": TOKEN_FORMAT_VERSION,
     };
-  })
-  .post("/api/v2/admin/migrate-legacy-tokens", async ({ user, set }: ParamCtx): Promise<unknown> => {
-    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const migrated = await migrateLegacyPlaintextTokens();
-    return { data: { migrated, "token-format-version": TOKEN_FORMAT_VERSION } };
   });

@@ -17140,33 +17140,6 @@
         }
       }
     },
-    "/api/v2/admin/migrate-legacy-tokens": {
-      "post": {
-        "operationId": "post-api-v2-admin-migrate-legacy-tokens",
-        "tags": [
-          "admin"
-        ],
-        "summary": "POST /api/v2/admin/migrate-legacy-tokens",
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/vnd.api+json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not Found"
-          }
-        }
-      }
-    },
     "/api/v2/admin/db-export/test-connection": {
       "post": {
         "operationId": "post-api-v2-admin-db-export-test-connection",

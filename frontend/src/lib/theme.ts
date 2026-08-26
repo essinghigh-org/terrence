@@ -233,7 +233,6 @@ export const THEMES: readonly ThemeDefinition[] = [
 
 export const DEFAULT_THEME_ID = "original-light";
 const THEME_STORAGE_KEY = "terrence-theme";
-const LEGACY_THEME_STORAGE_KEY = "terrence-theme-mode";
 const themesById = new Map(THEMES.map((theme): [string, ThemeDefinition] => [theme.id, theme]));
 let themeRevision = 0;
 const defaultTheme = ((): ThemeDefinition => {
@@ -347,9 +346,7 @@ function getStoredThemeId(): ThemeId {
   try {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
     if (stored !== null) return getTheme(stored).id;
-    return window.localStorage.getItem(LEGACY_THEME_STORAGE_KEY) === "dark"
-      ? "original-dark"
-      : DEFAULT_THEME_ID;
+    return DEFAULT_THEME_ID;
   } catch {
     return DEFAULT_THEME_ID;
   }
@@ -380,7 +377,6 @@ export function applyTheme(themeId?: unknown): ThemeId {
 
   try {
     window.localStorage.setItem(THEME_STORAGE_KEY, theme.id);
-    window.localStorage.removeItem(LEGACY_THEME_STORAGE_KEY);
   } catch {
     // Themes still apply when storage is unavailable.
   }
