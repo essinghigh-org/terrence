@@ -126,20 +126,20 @@ export const THEMES: readonly ThemeDefinition[] = [
   createTheme("everforest-light", "Everforest Light", "light", {
     // Everforest "avante" light: warm paper background, soft green primaries.
     background: "40 23% 97%", foreground: "20 14% 27%", card: "40 30% 99%", popover: "40 30% 99%",
-    primary: "96 25% 38%", primaryForeground: "40 30% 99%",
+    primary: "96 25% 32%", primaryForeground: "40 30% 99%",
     secondary: "41 18% 90%", secondaryForeground: "20 14% 27%", muted: "41 18% 90%", mutedForeground: "25 10% 42%",
     accent: "96 30% 92%", accentForeground: "96 25% 30%", destructive: "2 65% 47%", destructiveForeground: "40 30% 99%",
-    border: "39 15% 85%", input: "39 13% 60%", ring: "96 25% 38%",
+    border: "39 15% 85%", input: "39 13% 60%", ring: "96 25% 32%",
     success: "93 31% 31%", warning: "33 68% 40%",
     codeBackground: "20 14% 20%", codeForeground: "40 23% 94%",
   }),
   createTheme("flexoki-light", "Flexoki Light", "light", {
     // Flexoki (Stephan Ango): high-contrast warm paper with near-black ink.
     background: "40 29% 97%", foreground: "0 6% 11%", card: "36 33% 94%", popover: "36 33% 94%",
-    primary: "190 100% 28%", primaryForeground: "40 29% 97%",
+    primary: "190 100% 26%", primaryForeground: "40 29% 97%",
     secondary: "38 22% 89%", secondaryForeground: "0 6% 11%", muted: "38 22% 89%", mutedForeground: "0 5% 32%",
     accent: "190 100% 92%", accentForeground: "190 100% 22%", destructive: "0 72% 44%", destructiveForeground: "40 29% 97%",
-    border: "38 18% 82%", input: "0 5% 45%", ring: "190 100% 28%",
+    border: "38 18% 82%", input: "0 5% 45%", ring: "190 100% 26%",
     success: "110 66% 28%", warning: "45 100% 34%",
     codeBackground: "0 6% 11%", codeForeground: "40 29% 94%",
   }),
