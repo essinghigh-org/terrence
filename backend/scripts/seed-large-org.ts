@@ -61,7 +61,7 @@ const projectCount = Math.max(1, num("projects", 5));
 const batchSize = Math.max(1, num("batch", 500));
 const userName = arg("user") ?? `perf-${Date.now()}`;
 
-const suffix = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+const suffix = `${Date.now()}-${crypto.randomUUID()}`;
 const orgId = `org-perf-${suffix}`;
 const userId = `user-perf-${suffix}`;
 

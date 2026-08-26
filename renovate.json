@@ -22,18 +22,18 @@
     {
       "matchCategories": ["javascript"],
       "matchUpdateTypes": ["minor", "patch"],
-      "matchFiles": ["backend/package.json"],
+      "matchFileNames": ["backend/package.json", "package.json"],
       "groupName": "backend minor+patch"
     },
     {
       "matchCategories": ["javascript"],
       "matchUpdateTypes": ["minor", "patch"],
-      "matchFiles": ["frontend/package.json"],
+      "matchFileNames": ["frontend/package.json"],
       "groupName": "frontend minor+patch"
     },
     {
       "matchManagers": ["github-actions"],
-      "matchUpdateTypes": ["minor", "patch", "digest", "pin"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin", "pinDigest"],
       "groupName": "github-actions minor+patch"
     },
     {

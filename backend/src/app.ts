@@ -120,13 +120,16 @@ const requestMeta = new WeakMap<Request, { startTime: number; method: string; pa
  * -> /api/v2/workspaces/:id/runs/:id. Trailing detail is preserved for
  * known low-cardinality verbs (healthz, metrics). */
 function pathnameBucket(path: string): string {
-  // A segment is "static" only when it is a short lowercase word with no
-  // digits (healthz, workspaces, runs). Anything else (uuids, names,
-  // numeric ids, hashes) collapses to ":id".
+  // A segment is "static" only when it is empty (leading slash), an API
+  // version (v1/v2), or a short lowercase word with no digits (healthz,
+  // workspaces, runs). Anything else (uuids, names, numeric ids, hashes)
+  // collapses to ":id".
   return path
     .split("/")
     .map((segment): string =>
-      /^[a-z][a-z-]{0,30}$/.test(segment) ? segment : ":id",
+      segment === "" || /^v\d{1,2}$/.test(segment) || /^[a-z][a-z-]{0,30}$/.test(segment)
+        ? segment
+        : ":id",
     )
     .join("/");
 }

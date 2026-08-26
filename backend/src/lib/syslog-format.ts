@@ -31,10 +31,10 @@ export function severityForLevel(level: string): SyslogSeverity {
   return SEVERITY_BY_LEVEL[level] ?? 6;
 }
 
-/** RFC 5424 §6.2.4: strip control chars, "]" -> "\]", "\" -> "\\" inside
- * PARAM-VALUE; also escape quotes in NAME context. */
+/** RFC 5424 §6.2.4 PARAM-VALUE escaping: "\" -> "\\", "]" -> "\]",
+ * '"' -> '\"', and control characters are removed. */
 function sdEscape(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/]/g, "\\]").replace(/[\x00-\x1f\x7f]/g, "");
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/]/g, "\\]").replace(/[\x00-\x1f\x7f]/g, "");
 }
 
 function paramSafeKey(key: string): string {

@@ -83,9 +83,8 @@ describe("RFC 5424 formatting", (): void => {
   it("stringifies non-string meta values", (): void => {
     const line = formatSyslogMessage({ ...base, meta: { count: 3, nested: { ok: true } } }, IDENTITY);
     expect(line).toContain('count="3"');
-    expect(line).toContain('nested="{"ok":true}"');
-    // RFC 5424 SD-PARAM requires escaping only \ and ]; double quotes are
-    // legal inside PARAM-VALUE.
+    expect(line).toContain('nested="{\\\"ok\\\":true}"');
+    // RFC 5424 SD-PARAM: JSON-produced double quotes are escaped as \".
   });
 
   it("falls back to a NIL timestamp for malformed stamps", (): void => {
