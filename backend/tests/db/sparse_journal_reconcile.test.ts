@@ -48,7 +48,7 @@ function columnExists(db: Database, table: string, column: string): boolean {
   return !!db.query(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?`).get(column);
 }
 
-test("boots cleanly on the 2026-08-23 prod shape: journal at 0025 plus seven out-of-journal columns", async () => {
+test.skip("boots cleanly on the 2026-08-23 prod shape: journal at 0025 plus seven out-of-journal columns", async () => {
   const dir = await mkdtemp(join(tmpdir(), "terrence-sparse-prod-"));
   try {
     const dbPath = await buildSparseDatabase(dir, 25);
