@@ -760,7 +760,7 @@ export function TokenScopeDialog({
                         <button
                           type="button"
                           aria-label="Select all projects"
-                          onClick={() => setSelectedProjects(new Set(projects.map((p) => p.id)))}
+                          onClick={(): void => { setSelectedProjects(new Set(projects.map((p) => p.id))); }}
                           className="text-primary hover:underline"
                         >
                           All
@@ -769,7 +769,7 @@ export function TokenScopeDialog({
                         <button
                           type="button"
                           aria-label="Clear selected projects"
-                          onClick={() => setSelectedProjects(new Set())}
+                          onClick={() => { setSelectedProjects(new Set()); }}
                           className="text-muted-foreground hover:underline"
                         >
                           Clear
@@ -784,8 +784,8 @@ export function TokenScopeDialog({
                       <Input
                         placeholder="Filter projects…"
                         value={projectSearch}
-                        onChange={(e) => setProjectSearch(e.target.value)}
-                        onInput={(e: React.SyntheticEvent<HTMLInputElement>) => setProjectSearch(e.currentTarget.value)}
+                        onChange={(e) => { setProjectSearch(e.target.value); }}
+                        onInput={(e: React.SyntheticEvent<HTMLInputElement>) => { setProjectSearch(e.currentTarget.value); }}
                         className="h-7 pl-7 text-xs"
                       />
                     </div>
@@ -831,7 +831,7 @@ export function TokenScopeDialog({
                         <button
                           type="button"
                           aria-label="Select all workspaces"
-                          onClick={() => setSelectedWorkspaces(new Set(workspaces.map((w) => w.id)))}
+                          onClick={() => { setSelectedWorkspaces(new Set(workspaces.map((w) => w.id))); }}
                           className="text-primary hover:underline"
                         >
                           All
@@ -840,7 +840,7 @@ export function TokenScopeDialog({
                         <button
                           type="button"
                           aria-label="Clear selected workspaces"
-                          onClick={() => setSelectedWorkspaces(new Set())}
+                          onClick={() => { setSelectedWorkspaces(new Set()); }}
                           className="text-muted-foreground hover:underline"
                         >
                           Clear
@@ -855,8 +855,8 @@ export function TokenScopeDialog({
                       <Input
                         placeholder="Filter workspaces…"
                         value={workspaceSearch}
-                        onChange={(e) => setWorkspaceSearch(e.target.value)}
-                        onInput={(e: React.SyntheticEvent<HTMLInputElement>) => setWorkspaceSearch(e.currentTarget.value)}
+                        onChange={(e) => { setWorkspaceSearch(e.target.value); }}
+                        onInput={(e: React.SyntheticEvent<HTMLInputElement>) => { setWorkspaceSearch(e.currentTarget.value); }}
                         className="h-7 pl-7 text-xs"
                       />
                     </div>
@@ -961,8 +961,8 @@ export function TokenScopeDialog({
                   <Input
                     placeholder="Search permissions by action or resource…"
                     value={permissionSearch}
-                    onChange={(e) => setPermissionSearch(e.target.value)}
-                    onInput={(e: React.SyntheticEvent<HTMLInputElement>) => setPermissionSearch(e.currentTarget.value)}
+                    onChange={(e) => { setPermissionSearch(e.target.value); }}
+                    onInput={(e: React.SyntheticEvent<HTMLInputElement>) => { setPermissionSearch(e.currentTarget.value); }}
                     className="h-8 pl-8 text-xs"
                   />
                 </div>
@@ -980,7 +980,7 @@ export function TokenScopeDialog({
                             </Badge>
                             <button
                               type="button"
-                              onClick={() => toggleGroupGrants(group.grants)}
+                              onClick={() => { toggleGroupGrants(group.grants); }}
                               className="text-[10px] text-primary hover:underline ml-1"
                             >
                               {activeInGroup === group.grants.length ? "none" : "all"}

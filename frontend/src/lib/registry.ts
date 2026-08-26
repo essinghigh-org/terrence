@@ -71,7 +71,7 @@ function asRecord(value: unknown): JsonObject {
   if (!isRecord(value)) return {};
   // SAFETY: the typeof-object guard is the boundary check; callers only read
   // string-typed fields and validate each with typeof afterwards.
-  return value as JsonObject;
+  return value;
 }
 
 function attributes(resource: unknown): JsonObject {

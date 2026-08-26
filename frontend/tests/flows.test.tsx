@@ -806,7 +806,7 @@ test("creates, verifies, edits, and deletes a workspace notification", async () 
 });
 
 test("shows effective policy sets and manages workspace VCS settings", async () => {
-  let workspace = {
+  const workspace = {
     id: "ws-1",
     attributes: {
       name: "production",

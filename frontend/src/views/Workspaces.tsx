@@ -362,7 +362,7 @@ export function Workspaces(): React.JSX.Element {
 
   const activeRunsCount = useMemo((): number => {
     let count = 0;
-    const runningStatuses = runStatusFilters["running"];
+    const runningStatuses = runStatusFilters.running;
     if (runningStatuses !== undefined) {
       for (const run of latestRuns.values()) {
         if (runningStatuses.includes(run.attributes.status)) {
@@ -375,7 +375,7 @@ export function Workspaces(): React.JSX.Element {
 
   const attentionNeededCount = useMemo((): number => {
     let count = 0;
-    const attentionStatuses = runStatusFilters["attention"];
+    const attentionStatuses = runStatusFilters.attention;
     if (attentionStatuses !== undefined) {
       for (const run of latestRuns.values()) {
         if (

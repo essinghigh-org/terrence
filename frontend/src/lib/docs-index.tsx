@@ -23,8 +23,8 @@ export function parseDocSummary(value: unknown): DocSummary | null {
   return { slug, title, category, order, description };
 }
 
-export function groupDocsByCategory(docs: DocSummary[]): Array<{ category: string; docs: DocSummary[] }> {
-  const groups: Array<{ category: string; docs: DocSummary[] }> = [];
+export function groupDocsByCategory(docs: DocSummary[]): { category: string; docs: DocSummary[] }[] {
+  const groups: { category: string; docs: DocSummary[] }[] = [];
   for (const doc of docs) {
     const existing = groups.find((group): boolean => group.category === doc.category);
     if (existing === undefined) groups.push({ category: doc.category, docs: [doc] });

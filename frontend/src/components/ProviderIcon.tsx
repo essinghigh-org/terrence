@@ -22,7 +22,7 @@ async function flushPending(): Promise<void> {
   try {
     const qs = batch.map((k): string => `provider-name=${encodeURIComponent(k)}`).join("&");
     const res = (await fetchApi(`/provider-icons?${qs}`)) as {
-      data?: Array<{ id: string; attributes: { "icon-url": string | null } }>;
+      data?: { id: string; attributes: { "icon-url": string | null } }[];
     };
     for (const item of res.data ?? []) {
       const key = String(item.id).toLowerCase();

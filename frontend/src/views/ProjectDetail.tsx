@@ -219,7 +219,7 @@ export function ProjectDetail({
   const canDestroy = project?.attributes.permissions?.["can-destroy"] === true;
   const agentPoolsState = useAgentPools(
     orgName,
-    canUpdate === true && executionModeOverridden && defaultExecutionMode === "agent",
+    canUpdate && executionModeOverridden && defaultExecutionMode === "agent",
   );
 
   const saveProject = async (event: React.SyntheticEvent): Promise<void> => {

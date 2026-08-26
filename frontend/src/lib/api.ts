@@ -328,10 +328,10 @@ export async function fetchAllApiPages<T>(endpoint: string, signal?: Readonly<Ab
     visited.add(pageEndpoint);
     // SAFETY: list endpoints return the JSON:API collection envelope; the
     // data array and pagination meta fields are checked below.
-    const response = await fetchApi(
+    const response = (await fetchApi(
       pageEndpoint,
       signal === undefined ? {} : { signal },
-    ) as {
+    )) as {
       data?: T[];
       meta?: { pagination?: JsonObject };
     };
@@ -360,7 +360,7 @@ function asRecordOrNull(value: unknown): JsonObject | null {
   if (!isRecord(value)) return null;
   // SAFETY: the typeof-object guard is the boundary check; callers validate
   // individual fields with typeof before use.
-  return value as JsonObject;
+  return value;
 }
 
 /** Narrow a backend reasoning-effort value to the known union, or null. */
@@ -406,21 +406,26 @@ export async function fetchExplanation(runId: string, kind: ExplainKind): Promis
   }
   const data = (resp as { data?: { attributes?: Record<string, unknown> } } | null)?.data?.attributes;
   if (data === undefined || data === null || typeof data !== "object") return null;
-  const d = data as Record<string, unknown>;
+  const d = data;
   if (typeof d["explanation"] === "string" && d["explanation"] !== "") {
-    return { explanation: d["explanation"] as string, model: typeof d["model"] === "string" ? d["model"] as string : "", reasoningEffort: reasoningEffortValue(d["reasoning-effort"]), generatedAt: typeof d["generated-at"] === "string" ? d["generated-at"] as string : new Date().toISOString(), cached: d["cached"] === true };
+    return { explanation: d["explanation"], model: typeof d["model"] === "string" ? d["model"] : "", reasoningEffort: reasoningEffortValue(d["reasoning-effort"]), generatedAt: typeof d["generated-at"] === "string" ? d["generated-at"] : new Date().toISOString(), cached: d["cached"] === true };
   }
   if (typeof d["status"] === "string") {
-    return { explanation: "", model: "", reasoningEffort: reasoningEffortValue(d["reasoning-effort"]), generatedAt: typeof d["updated-at"] === "string" ? d["updated-at"] as string : "", cached: false, status: d["status"] as string, jobId: typeof d["job-id"] === "string" ? d["job-id"] as string : undefined };
+    return { explanation: "", model: "", reasoningEffort: reasoningEffortValue(d["reasoning-effort"]), generatedAt: typeof d["updated-at"] === "string" ? d["updated-at"] : "", cached: false, status: d["status"], jobId: typeof d["job-id"] === "string" ? d["job-id"] : undefined };
   }
   return null;
 }
 
 /** Enqueue a durable explanation job (non-streaming). Returns the job envelope. */
 export async function enqueueExplanation(runId: string, kind: ExplainKind): Promise<{ status: string; jobId?: string | undefined }> {
-  const resp = (await fetchApi(`/runs/${encodeURIComponent(runId)}/explain`, { method: "POST", body: JSON.stringify({ data: { type: "plan-explanations", attributes: { kind } } }) })) as { data?: { attributes?: Record<string, unknown> } };
-  const attrs = resp?.data?.attributes as Record<string, unknown> | undefined;
-  if (attrs !== undefined && typeof attrs["status"] === "string") return { status: attrs["status"] as string, jobId: typeof attrs["job-id"] === "string" ? attrs["job-id"] as string : undefined };
+  // SAFETY: the endpoint contract returns this envelope; the autofix stripped
+  // a redundant cast that also carried the type for the narrowing below.
+  const resp = (await fetchApi(
+    `/runs/${encodeURIComponent(runId)}/explain`,
+    { method: "POST", body: JSON.stringify({ data: { type: "plan-explanations", attributes: { kind } } }) },
+  )) as { data?: { attributes?: Record<string, unknown> } };
+  const attrs = resp?.data?.attributes;
+  if (attrs !== undefined && typeof attrs["status"] === "string") return { status: attrs["status"], jobId: typeof attrs["job-id"] === "string" ? attrs["job-id"] : undefined };
   if (attrs !== undefined && typeof attrs["explanation"] === "string") return { status: "succeeded" };
   return { status: "queued" };
 }

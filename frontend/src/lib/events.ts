@@ -128,7 +128,7 @@ function parseEventFrame(frame: string): SseEvent | null {
     const parsed = JSON.parse(raw) as unknown;
     // SAFETY: the typeof-object guard is the boundary check; the data field
     // is consumed as a record of string-typed values by the event handlers.
-    const data = isRecord(parsed) ? parsed as JsonObject : {};
+    const data = isRecord(parsed) ? parsed : {};
     return {
       name,
       data,
