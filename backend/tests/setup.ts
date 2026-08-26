@@ -1,6 +1,6 @@
 // Test setup: redirect database to an isolated temp directory so tests
 // never touch the production database.
-import { afterAll } from "bun:test";
+import { afterAll, afterEach, mock } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -121,3 +121,9 @@ if (testDbUrl.startsWith("postgres")) {
     }
   }, 30_000);
 }
+
+// Bun mock auto-restore between files: any test using the bun:test mock API
+// gets spies restored for free instead of hand-rolled save/restore pairs.
+afterEach((): void => {
+  mock.restore();
+});

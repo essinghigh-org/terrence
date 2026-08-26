@@ -1,4 +1,4 @@
-import { stat, readFile, readdir } from "node:fs/promises";
+import { open, readdir, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import { scanTerraformModuleVariables } from "./terraform-variables";
 
@@ -122,9 +122,22 @@ async function readReadme(directory: string): Promise<string> {
   const entries = await readdir(directory, { withFileTypes: true });
   const entry = entries.find((candidate): boolean => candidate.isFile() && /^readme(?:\.[^.]+)?$/i.test(candidate.name));
   if (entry === undefined) return "";
+  // Open by handle, then stat the SAME handle: a stat(path)+readFile(path)
+  // pair lets the file be swapped between the size check and the read.
   const path = join(directory, entry.name);
-  if ((await stat(path)).size > MAX_README_BYTES) return "";
-  return readFile(path, "utf8");
+  let handle: FileHandle;
+  try {
+    handle = await open(path, "r");
+  } catch {
+    return "";
+  }
+  try {
+    const info = await handle.stat();
+    if (info.size > MAX_README_BYTES) return "";
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
 }
 
 function descriptionFromReadme(readme: string): string | null {

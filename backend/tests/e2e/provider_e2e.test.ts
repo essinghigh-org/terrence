@@ -1145,8 +1145,8 @@ describe("tfe provider e2e", () => {
         try {
           const auth = await signupAndToken(backend.port);
 
-          const cfgDir = join(workDir, "config");
-          await mkdir(cfgDir, { recursive: true });
+          // mkdtemp: unique per run, no check-then-create race (CodeQL).
+          const cfgDir = mkdtempSync(join(workDir, "config-"));
           await writeFile(join(cfgDir, "providers.tf"), providerTf(proxy.port!, auth.token));
           await writeFile(join(cfgDir, "main.tf"), mainTf(suffix, auth.username));
           await writeFile(join(cfgDir, "outputs.tf"), outputsTf());

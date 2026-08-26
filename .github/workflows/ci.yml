@@ -30,7 +30,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # Some historical fixtures still use plaintext tokens; scope the
         # migration compatibility flag to that test process only.
-        run: cd backend && TERRENCE_ALLOW_LEGACY_TOKENS=1 bun test
+        run: cd backend && TERRENCE_ALLOW_LEGACY_TOKENS=1 bun test --bail=5
       - name: Verify legacy tokens require explicit opt-in
         run: cd backend && bun test tests/api/auth_legacy_default.test.ts
 
@@ -68,7 +68,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # Some historical fixtures still use plaintext tokens; scope the
         # migration compatibility flag to that test process only.
-        run: cd backend && TERRENCE_ALLOW_LEGACY_TOKENS=1 bun test
+        run: cd backend && TERRENCE_ALLOW_LEGACY_TOKENS=1 bun test --bail=5
       - name: Verify legacy tokens require explicit opt-in
         env:
           DATABASE_URL: postgres://terrence:terrence@localhost:5432/terrence_test

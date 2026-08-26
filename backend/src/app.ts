@@ -115,6 +115,25 @@ import { availableVersions } from "./binaryManager";
 // Store request metadata without polluting the set object
 const requestMeta = new WeakMap<Request, { startTime: number; method: string; path: string; correlationId: string }>();
 
+/** Collapse high-cardinality path segments (uuids, names, numeric ids) into
+ * a stable bucket for aggregation, e.g. /api/v2/workspaces/ws-a-1/runs/run-9
+ * -> /api/v2/workspaces/:id/runs/:id. Trailing detail is preserved for
+ * known low-cardinality verbs (healthz, metrics). */
+function pathnameBucket(path: string): string {
+  // A segment is "static" only when it is empty (leading slash), an API
+  // version (v1/v2), or a short lowercase word with no digits (healthz,
+  // workspaces, runs). Anything else (uuids, names, numeric ids, hashes)
+  // collapses to ":id".
+  return path
+    .split("/")
+    .map((segment): string =>
+      segment === "" || /^v\d{1,2}$/.test(segment) || /^[a-z][a-z-]{0,30}$/.test(segment)
+        ? segment
+        : ":id",
+    )
+    .join("/");
+}
+
 type HeaderGetter = { readonly get: (name: string) => string | null };
 type CustomRequest = Readonly<{
   readonly url: string;
@@ -560,12 +579,27 @@ export const app = new Elysia()
       const method = meta.method;
       const path = meta.path;
       const status = set.status ?? 200;
-      requestFinished(typeof status === "number" ? status : Number.parseInt(String(status), 10) || 200);
+      const numericStatus = typeof status === "number" ? status : Number.parseInt(String(status), 10) || 200;
+      requestFinished(numericStatus);
       // Idempotent bookkeeping: the WeakMap entry is consumed here so an
       // error path (onError) can never double-count the same request.
       requestMeta.delete(request as unknown as Request);
       if (path.startsWith("/api/")) {
-        log.info(`[${new Date().toISOString()}] ${method} ${path} ${String(status)} ${duration}ms`, { requestId: meta.correlationId });
+        // Canonical log line (loggingsucks.com wide-event pattern): one
+        // context-rich record per request instead of scattered statements.
+        log.info("request completed", {
+          requestId: meta.correlationId,
+          http: {
+            method,
+            path,
+            status: numericStatus,
+            durationMs: duration,
+          },
+          // High-cardinality route bucket (no ids) so aggregations group
+          // cleanly while the raw path stays available for exact search.
+          routeBucket: method + " " + pathnameBucket(path),
+          outcome: numericStatus < 400 ? "success" : numericStatus < 500 ? "client-error" : "server-error",
+        });
       }
     }
     const isJsonDocument = response !== null

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -49,7 +50,7 @@ describe("No-code module API contract", () => {
   const moduleTeamToken = `module-team-token-${suffix}`;
   const workspaceTeamToken = `workspace-team-token-${suffix}`;
   const orgToken = `org-token-${suffix}`;
-  const testDir = join(tmpdir(), `terrence-no-code-${suffix}`);
+  const testDir = mkdtempSync(join(tmpdir(), "terrence-no-code-"));
   const moduleDir = join(testDir, "module");
   const moduleArchivePath = join(testDir, "module.tar.gz");
   const targetModuleArchivePath = join(testDir, "module-v3.tar.gz");

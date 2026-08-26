@@ -1,4 +1,4 @@
-import { afterEach } from "bun:test";
+import { afterEach, mock } from "bun:test";
 import { cleanup, configure } from "@testing-library/react";
 import { JSDOM } from "jsdom";
 import type { JsonObject } from "../src/lib/json";
@@ -214,6 +214,9 @@ if (win.document.body !== null && win.document.body !== undefined) {
 
 afterEach((): void => {
   cleanup();
+  // Bun >=1.0.9 mock.restore(): restores every mock/spy created with the
+  // bun:test mock API without per-file bookkeeping.
+  mock.restore();
   customLocation = undefined;
   if (localStorage !== undefined) localStorage.clear();
 });

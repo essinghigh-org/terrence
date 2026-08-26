@@ -1,4 +1,4 @@
-import { createHash, createHmac } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
@@ -14,6 +14,7 @@ import {
   users,
 } from "../../src/db/schema";
 import { decryptSecret, isEncryptedSecret } from "../../src/lib/secrets";
+import { legacyHashAuthenticationToken } from "../../src/lib/token-service";
 
 function oauthPercentEncode(value: string): string {
   return encodeURIComponent(value).replace(/[!'()*]/g, (character: string): string =>
@@ -172,12 +173,12 @@ describe("VCS OAuth handshakes", () => {
     await db.insert(apiTokens).values([
       {
         id: `api-oauth-handshake-${suffix}`,
-        token: createHash("sha256").update(apiToken).digest("hex"),
+        token: legacyHashAuthenticationToken(apiToken),
         userId,
       },
       {
         id: `api-oauth-handshake-other-${suffix}`,
-        token: createHash("sha256").update(otherApiToken).digest("hex"),
+        token: legacyHashAuthenticationToken(otherApiToken),
         userId: otherUserId,
       },
     ]);

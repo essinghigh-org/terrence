@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { eq } from "drizzle-orm";
@@ -134,10 +134,18 @@ async function repositoryRoot(extracted: string): Promise<string> {
 }
 
 async function readPolicyFile(path: string): Promise<string> {
-  const info = await stat(path);
-  if (!info.isFile()) throw new Error("Policy source must be a regular file");
-  if (info.size > MAX_POLICY_BYTES) throw new Error("Policy source exceeds the maximum size");
-  return readFile(path, "utf8");
+  // Open once and stat the SAME handle: a separate stat(path)+readFile(path)
+  // pair lets the file be swapped between the regular-file/size check and
+  // the read (CodeQL js/file-system-race).
+  const handle = await open(path, "r");
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw new Error("Policy source must be a regular file");
+    if (info.size > MAX_POLICY_BYTES) throw new Error("Policy source exceeds the maximum size");
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
 }
 
 function withoutHclComments(input: string): string {

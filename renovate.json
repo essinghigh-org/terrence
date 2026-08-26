@@ -1,0 +1,46 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":semanticCommitTypeAll(chore)",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true,
+    "automergeType": "pr",
+    "platformAutomerge": true,
+    "schedule": ["before 5am on monday"]
+  },
+  "schedule": ["before 5am on monday"],
+  "timezone": "UTC",
+  "prConcurrentLimit": 10,
+  "branchConcurrentLimit": 10,
+  "rangeStrategy": "bump",
+  "packageRules": [
+    {
+      "matchCategories": ["javascript"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchFileNames": ["backend/package.json", "package.json"],
+      "groupName": "backend minor+patch"
+    },
+    {
+      "matchCategories": ["javascript"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchFileNames": ["frontend/package.json"],
+      "groupName": "frontend minor+patch"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin", "pinDigest"],
+      "groupName": "github-actions minor+patch"
+    },
+    {
+      "description": "TypeScript majors have historically required code changes (6 -> 7 needed the lint-config refresh); keep them individually reviewed.",
+      "matchPackageNames": ["typescript"],
+      "matchUpdateTypes": ["major"],
+      "labels": ["needs-manual-verification"]
+    }
+  ]
+}
