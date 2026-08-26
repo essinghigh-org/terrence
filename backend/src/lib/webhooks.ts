@@ -1059,30 +1059,53 @@ export async function createConfigurationVersionFromVcs(
   return cvId;
 }
 
-function matchesConfiguredBranch(
-  vcsRepo: DeepReadonly<VcsRepo>,
+type MatchesCache = Map<string, string | undefined>;
+const defaultBranchCache: MatchesCache = new Map<string, string | undefined>();
+async function matchesConfiguredBranch(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
   details: DeepReadonly<WebhookDetails>,
-): boolean {
-  if (vcsRepo.branch === undefined || vcsRepo.branch === "") return true;
+): Promise<boolean> {
+  const vcsRepo = workspace.vcsRepo;
+  if (vcsRepo === null || vcsRepo === undefined) return false;
+  // Workspaces with no branch configured track the repository's default branch
+  // (TFE default: "default branch" = repository default). The previous
+  // `return true` made them fire on *every* branch push — that turned every
+  // feat/* push into a real applyable run (run-157ebcd9cff343). Resolve the
+  // default branch via the provider API and compare; fail closed if it
+  // cannot be determined so we never mis-route a push.
+  let expectedBranch = vcsRepo.branch;
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+  if (expectedBranch === undefined || expectedBranch === null || expectedBranch === "") {
+    const cacheKey = `${workspace.orgId}:${workspace.vcsRepo?.identifier ?? ""}`;
+    if (defaultBranchCache.has(cacheKey)) {
+      expectedBranch = defaultBranchCache.get(cacheKey);
+    } else {
+      expectedBranch = await fetchDefaultBranch(workspace);
+      defaultBranchCache.set(cacheKey, expectedBranch);
+    }
+    if (expectedBranch === undefined || expectedBranch === "") return false;
+  }
   // PR/MR events are matched against the target (base) branch: a workspace
   // pinned to `main` must trigger on PRs/MRs from feature branches that
   // target main, not on the source branch name (kanban 1.6).
   const eventBranch = details.pullRequestNumber !== undefined && details.targetBranch !== undefined
     ? details.targetBranch
     : details.branch;
-  return eventBranch !== undefined && eventBranch !== "" && vcsRepo.branch === eventBranch;
+  return eventBranch !== undefined && eventBranch !== "" && expectedBranch === eventBranch;
 }
 
-function matchesVcsTrigger(
-  vcsRepo: DeepReadonly<VcsRepo>,
+async function matchesVcsTrigger(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
   details: DeepReadonly<WebhookDetails>,
-): boolean {
+): Promise<boolean> {
+  const vcsRepo = workspace.vcsRepo;
+  if (vcsRepo === null || vcsRepo === undefined) return false;
   // TFE tag-triggered workspaces are tag-only: once tags-regex is configured,
   // ordinary branch pushes and pull requests must not queue a second run.
   if (typeof vcsRepo.tagsRegex === "string" && vcsRepo.tagsRegex !== "") {
     return details.tag !== undefined && matchesTag(vcsRepo, details.tag);
   }
-  return details.tag === undefined && matchesConfiguredBranch(vcsRepo, details);
+  return details.tag === undefined && await matchesConfiguredBranch(workspace, details);
 }
 
 async function handleOAuthProviderWebhook(
@@ -1095,11 +1118,11 @@ async function handleOAuthProviderWebhook(
   const candidates = await db.query.workspaces.findMany({
     where: sql`${jsonExtract(workspaces.vcsRepo, '$.identifier')} = ${details.repoFullName}`,
   });
-  const branchMatchedWorkspaces = candidates.filter((workspace: DeepReadonly<typeof workspaces.$inferSelect>): boolean => {
-    const vcsRepo = workspace.vcsRepo;
-    if (vcsRepo?.identifier !== details.repoFullName) return false;
-    return matchesVcsTrigger(vcsRepo, details);
-  });
+  const branchMatchedWorkspaces: typeof candidates = [];
+  for (const workspace of candidates) {
+    if (workspace.vcsRepo?.identifier !== details.repoFullName) continue;
+    if (await matchesVcsTrigger(workspace, details)) branchMatchedWorkspaces.push(workspace);
+  }
   // PR/MR payloads carry no changed-file list (kanban 1.6): fetch it from the
   // provider API once per event so file trigger patterns actually filter
   // speculative runs. Failures fall back to the empty set (trigger-all) so a
@@ -1239,11 +1262,11 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
   const candidates = await db.query.workspaces.findMany({
     where: sql`${jsonExtract(workspaces.vcsRepo, '$.identifier')} = ${details.repoFullName}`,
   });
-  const branchMatchedWorkspaces = candidates.filter((workspace: DeepReadonly<typeof workspaces.$inferSelect>): boolean => {
-    const vcsRepo = workspace.vcsRepo;
-    if (vcsRepo?.identifier !== details.repoFullName) return false;
-    return matchesVcsTrigger(vcsRepo, details);
-  });
+  const branchMatchedWorkspaces: typeof candidates = [];
+  for (const workspace of candidates) {
+    if (workspace.vcsRepo?.identifier !== details.repoFullName) continue;
+    if (await matchesVcsTrigger(workspace, details)) branchMatchedWorkspaces.push(workspace);
+  }
   let triggerDetails = details;
   if (eventName === "pull_request") {
     const filesChanged = await githubPullRequestFiles(branchMatchedWorkspaces[0], details);
