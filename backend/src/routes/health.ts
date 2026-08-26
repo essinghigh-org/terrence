@@ -6,7 +6,7 @@ import { envEnabled } from "../lib/env";
 import { log } from "../lib/log";
 import { ssoSettingsSnapshot } from "../lib/sso";
 import { isStorageDegraded } from "../lib/storage-health";
-import { currentSiteAdmin, currentTokenScopes } from "../lib/request-scope";
+import { currentTokenScopes } from "../lib/request-scope";
 import {
   collectLegacyMetrics,
   collectScopedMetrics,
@@ -16,7 +16,7 @@ import {
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { eq, desc, gte } from "drizzle-orm";
-import { controlPlaneNodes, refreshSessions } from "../db/schema";
+import { controlPlaneNodes } from "../db/schema";
 import { systemAuthError, systemRateLimited } from "../lib/system-api";
 import { maintenanceSnapshot } from "../lib/maintenance";
 import { COMPATIBILITY_VERSION, TFP_API_VERSION } from "../lib/constants";
@@ -53,7 +53,7 @@ type SetCtx = Readonly<{ set: Readonly<{ status?: number | string; headers: Read
 type MetricsCtx = Readonly<{
   request: Readonly<{ url: string }>;
   set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
-  user: Readonly<{ id: string }> | null;
+  user: Readonly<{ id: string; isSiteAdmin?: boolean | null }> | null;
   token: Readonly<{ id: string }> | null;
   orgId: string | null;
   teamId: string | null;
@@ -550,7 +550,7 @@ async function readinessResponse(
 type ReadinessResult = {
   node: string;
   status: string;
-  checks: Array<{ check: string; status: string }>;
+  checks: { check: string; status: string }[];
 };
 
 export async function markControlPlaneNodeDraining(): Promise<void> {
@@ -767,26 +767,31 @@ export const healthRoutes = new Elysia({ name: "health" })
     };
   })
   .get("/healthz", (): string => "ok")
-  .get("/metrics", async ({ request, set, user, token, orgId, teamId, systemToken }: MetricsCtx): Promise<unknown> => {
+  .get("/metrics", async ({ request, set, user, orgId, teamId, systemToken }: MetricsCtx): Promise<unknown> => {
     // Token-authenticated. Fine-grained tokens get only the org/workspace/
     // agent data their scope is eligible for. Instance-wide counters require
     // a dedicated System API token or an explicitly site-admin user.
     //
-    // Instance-wide metrics are reserved for verified legacy API tokens and
-    // site admins. A browser-session access token (issued by login, tracked
-    // in refresh_sessions) must not fall through to the legacy collector even
-    // though it carries no scopes: that would leak instance-wide counters to
-    // any logged-in UI user. Fail closed with 403 for session principals that
-    // are not site admins.
+    // Instance-wide metrics are reserved for verified legacy API tokens,
+    // System API tokens, and site admins. A browser-session access token
+    // (issued by login, tracked in refresh_sessions) must not fall through
+    // to the legacy collector even though it carries no scopes: that would
+    // leak instance-wide counters to any logged-in UI user. Site-admin
+    // session tokens ARE accepted (the admin UI has no other bearer to
+    // present); ordinary session principals fail closed with 403.
     const scopes = currentTokenScopes();
-    const isSiteAdmin = currentSiteAdmin(user?.id ?? null) === true;
-    const isSessionToken = token !== null && token !== undefined
-      ? (await db.query.refreshSessions.findFirst({
-          where: eq(refreshSessions.accessTokenId, token.id),
-          columns: { id: true },
-        })) !== undefined
-      : false;
-    const allowInstanceMetrics = scopes === null && (isSiteAdmin || systemToken !== null && systemToken !== undefined) && !isSessionToken;
+    // The auth derive is global, so `user` is the full users row here.
+    // currentSiteAdmin() can be unavailable on this plugin instance (the
+    // request-cache hook lives on the main app), so read the row directly.
+    const isSiteAdmin = (user as Readonly<{ isSiteAdmin?: boolean | null }> | null)?.isSiteAdmin === true;
+    // A site admin's browser-session access token is an accepted credential
+    // for instance-wide metrics: the UI cannot attach any other bearer to a
+    // fetch, and the session already grants full administrative reach.
+    // Ordinary (non-admin) session principals keep the fail-closed 403, as do
+    // ordinary legacy API tokens — instance counters were never available to
+    // them and the pinned test below keeps it that way.
+    const allowInstanceMetrics = scopes === null
+      && ((systemToken !== null && systemToken !== undefined) || (isSiteAdmin && user !== null && user !== undefined));
 
     const collection = scopes !== null
       ? await collectScopedMetrics(scopes, user?.id, orgId, teamId)

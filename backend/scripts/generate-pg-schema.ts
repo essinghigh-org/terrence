@@ -44,11 +44,11 @@ type Table = {
   [NAME]: string;
   [COLUMNS]: Record<string, Column>;
   [EXTRA]?: (table: Table) => unknown[];
-  [INLINE_FK]?: Array<{
+  [INLINE_FK]?: {
     onDelete?: string;
     onUpdate?: string;
     reference: () => { name?: string; columns: Column[]; foreignTable: Table; foreignColumns: Column[] };
-  }>;
+  }[];
 };
 
 const tables = new Map<string, Table>();

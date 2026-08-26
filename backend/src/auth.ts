@@ -1,8 +1,8 @@
 import { Elysia } from "elysia";
 import { db } from "./db";
 import { apiTokens, runTokens, users, teams, systemApiTokens } from "./db/schema";
-import { eq } from "drizzle-orm";
-import { hashAuthenticationToken } from "./lib/token-service";
+import { eq, inArray } from "drizzle-orm";
+import { hashAuthenticationToken, tokenHashCandidates } from "./lib/token-service";
 import { setRequestSiteAdmin } from "./lib/request-scope";
 
 type AuthToken = {
@@ -22,10 +22,6 @@ export type SystemAuthToken = Readonly<{
   expiresAt: number;
   lastUsedAt: number | null;
 }>;
-
-function hashToken(token: string): string {
-  return hashAuthenticationToken(token);
-}
 
 type HeaderGetter = { readonly get: (name: string) => string | null };
 type DeriveContext = { readonly request: { readonly headers: HeaderGetter } };
@@ -51,7 +47,8 @@ export function rememberRateLimitPrincipal(request: object, token: Readonly<Auth
 
 /** Count API tokens still stored as plaintext (pre-hash migration). Used by admin diagnostics (todo 332). */
 export async function countLegacyPlaintextTokens(): Promise<number> {
-  // Hashed tokens are exactly 64 hex chars (SHA-256 hex); anything else is legacy plaintext.
+  // Current and legacy digests are both 64 hex characters; anything else is
+  // legacy plaintext.
   // Paginated scan keeps memory bounded even on a large token table; GLOB/~ dialect split
   // would require backend branching, so a single portable path is kept.
   let count = 0;
@@ -71,7 +68,7 @@ export async function countLegacyPlaintextTokens(): Promise<number> {
 }
 
 
-/** Bulk-migrate any remaining plaintext api_tokens to SHA-256 hashes (todo 333).
+/** Bulk-migrate any remaining plaintext api_tokens to keyed hashes (todo 333).
  * Idempotent: already-hashed rows are skipped. Returns the number migrated. */
 export async function migrateLegacyPlaintextTokens(): Promise<number> {
   let migrated = 0;
@@ -111,12 +108,12 @@ export const authPlugin = new Elysia({ name: "auth" })
     const authHeader = request.headers.get("authorization");
     // Scheme is case-insensitive per RFC 7235 (todo 176); the credential that
     // follows is not.
-    const bearerMatch = typeof authHeader === "string" ? authHeader.match(/^bearer\s+/i) : null;
+    const bearerMatch = typeof authHeader === "string" ? (/^bearer\s+/i.exec(authHeader)) : null;
     if (bearerMatch === null) {
       return { user: null, token: null, orgId: null, teamId: null, tokenError: null , run: null };
     }
 
-    const tokenString = (authHeader as string).slice(bearerMatch[0].length).trim();
+    const tokenString = (authHeader!).slice(bearerMatch[0].length).trim();
     // Cheap rejection BEFORE any DB lookup (todo 175): a bearer token longer
     // than any legitimate credential format is garbage — hashing + querying
     // it only serves a denial-of-wallet on the database. 512 chars covers
@@ -124,7 +121,8 @@ export const authPlugin = new Elysia({ name: "auth" })
     if (tokenString.length === 0 || tokenString.length > 512) {
       return { user: null, token: null, orgId: null, teamId: null, tokenError: "invalid", run: null };
     }
-    const tokenHash = hashToken(tokenString);
+    const [tokenHash, legacyTokenHash] = tokenHashCandidates(tokenString);
+    const tokenHashes = [tokenHash, legacyTokenHash];
 
     // Lookup by hash. The user row is JOINed in so the common user-token path
     // costs ONE query instead of two (api_tokens + users). Portable across
@@ -136,9 +134,13 @@ export const authPlugin = new Elysia({ name: "auth" })
       const rows = await db.select({ token: apiTokens, user: users })
         .from(apiTokens)
         .leftJoin(users, eq(users.id, apiTokens.userId))
-        .where(eq(apiTokens.token, tokenHash))
-        .limit(1);
-      const row = rows[0];
+        .where(inArray(apiTokens.token, tokenHashes))
+        .limit(2);
+      const row = rows.find((candidate): boolean => candidate.token.token === tokenHash) ?? rows[0];
+      if (row?.token.token === legacyTokenHash) {
+        await db.update(apiTokens).set({ token: tokenHash }).where(eq(apiTokens.id, row.token.id));
+        return { token: { ...row.token, token: tokenHash }, user: row.user ?? null };
+      }
       return { token: row?.token, user: row?.user ?? null };
     };
     // Only run/system credentials have dedicated tables. Other prefixed
@@ -170,10 +172,13 @@ export const authPlugin = new Elysia({ name: "auth" })
     // for tokens whose prefix clearly indicates another credential class.
     if (token === undefined && (isRunPrefix || !isSystemPrefix)) {
       const runRows = await db.select().from(runTokens)
-        .where(eq(runTokens.tokenHash, tokenHash))
-        .limit(1);
-      const runToken = runRows[0];
+        .where(inArray(runTokens.tokenHash, tokenHashes))
+        .limit(2);
+      const runToken = runRows.find((candidate): boolean => candidate.tokenHash === tokenHash) ?? runRows[0];
       if (runToken !== undefined) {
+        if (runToken.tokenHash === legacyTokenHash) {
+          await db.update(runTokens).set({ tokenHash }).where(eq(runTokens.id, runToken.id));
+        }
         const now = Date.now();
         if (runToken.revokedAt !== null) {
           return { user: null, token: null, orgId: null, teamId: null, tokenError: "revoked", run: null };
@@ -199,9 +204,13 @@ export const authPlugin = new Elysia({ name: "auth" })
     // hot application path (api_tokens + users in one query) free of an
     // extra round trip for a rare credential class.
     if (token === undefined && (isSystemPrefix || !isRunPrefix)) {
-      const systemRow = (await db.select().from(systemApiTokens)
-        .where(eq(systemApiTokens.tokenHash, tokenHash)).limit(1))[0];
+      const systemRows = await db.select().from(systemApiTokens)
+        .where(inArray(systemApiTokens.tokenHash, tokenHashes)).limit(2);
+      const systemRow = systemRows.find((candidate): boolean => candidate.tokenHash === tokenHash) ?? systemRows[0];
       if (systemRow !== undefined) {
+        if (systemRow.tokenHash === legacyTokenHash) {
+          await db.update(systemApiTokens).set({ tokenHash }).where(eq(systemApiTokens.id, systemRow.id));
+        }
         const now = Date.now();
         if (systemRow.revokedAt !== null) {
           return { user: null, token: null, orgId: null, teamId: null, tokenError: "revoked", run: null, systemToken: null };
@@ -246,16 +255,20 @@ export const authPlugin = new Elysia({ name: "auth" })
       // The joined lookup already resolves the user for hashed tokens. Only
       // tokens found via the plaintext legacy fallback re-query (rare).
       const resolvedUser = user ?? await db.query.users.findFirst({ where: eq(users.id, token.userId) });
+      // A token whose owner row has been removed is no longer a valid user
+      // credential.  Without this guard the token would survive a partial
+      // cleanup and be returned as authenticated with a null user.
+      if (resolvedUser === undefined || resolvedUser === null) {
+        return { user: null, token: null, orgId: null, teamId: null, tokenError: "invalid", run: null };
+      }
       if ((resolvedUser as unknown as { deletedAt: number | null | undefined })?.deletedAt != null) {
         return { user: null, token: null, orgId: null, teamId: null, tokenError: "invalid" , run: null };
       }
       if (resolvedUser?.isSuspended === true) {
         return { user: null, token: null, orgId: null, teamId: null, tokenError: "suspended" , run: null };
       }
-      if (resolvedUser !== undefined) {
-        setRequestSiteAdmin(resolvedUser.id, resolvedUser.isSiteAdmin === true);
-      }
-      return { user: resolvedUser ?? null, token: usedToken, orgId: null, teamId: null, tokenError: null , run: null };
+      setRequestSiteAdmin(resolvedUser.id, resolvedUser.isSiteAdmin === true);
+      return { user: resolvedUser, token: usedToken, orgId: null, teamId: null, tokenError: null , run: null };
     }
 
     if (token.teamId !== null) {

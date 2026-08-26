@@ -196,7 +196,7 @@ describe("concurrency: queue claim races", () => {
     const attempts = await Promise.all(
       Array.from({ length: 16 }, (): Promise<{ ok: boolean }> => confirmRunForApply(CONFIRM_RUN)),
     );
-    const successes = attempts.filter((a) => a.ok === true);
+    const successes = attempts.filter((a) => a.ok);
     expect(successes.length).toBe(1);
     // Agent-mode confirmation: CAS to confirmed, then enqueueAgentApplyJob
     // moves the run to apply_queued and inserts exactly one agent job.
@@ -212,7 +212,7 @@ describe("concurrency: queue claim races", () => {
     const secondWave = await Promise.all(
       Array.from({ length: 8 }, (): Promise<{ ok: boolean }> => confirmRunForApply(CONFIRM_RUN)),
     );
-    expect(secondWave.every((a) => a.ok === false)).toBe(true);
+    expect(secondWave.every((a) => !a.ok)).toBe(true);
     expect(await runStatus(CONFIRM_RUN)).toBe("apply_queued");
     const jobsAfter = await db.query.agentJobs.findMany({
       where: eq(agentJobs.runId, CONFIRM_RUN),

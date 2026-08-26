@@ -145,7 +145,7 @@ describe("Email notification configurations (API + SMTP delivery)", () => {
       emailPayload({}),
     );
     expect(response.status).toBe(422);
-    const body = await response.json() as { errors: Array<{ source?: { pointer?: string } }> };
+    const body = await response.json() as { errors: { source?: { pointer?: string } }[] };
     expect(body.errors.some((error) => error.source?.pointer === "/data/attributes/email-addresses")).toBe(true);
   });
 

@@ -520,12 +520,16 @@ export function OrganizationSettings(): React.JSX.Element {
     if (email === "") return;
     setInviting(true);
     try {
+      // Omit status and let the backend decide: existing users become active
+      // immediately, unknown emails are provisioned as invited. Hardcoding
+      // "invited" here left existing users in a permanent no-access state
+      // because invited memberships have no activation path.
       await fetchApi(`/organizations/${encodeURIComponent(orgNameParam)}/organization-memberships`, {
         method: "POST",
         body: JSON.stringify({
           data: {
             type: "organization-memberships",
-            attributes: { email, status: "invited" },
+            attributes: { email },
             relationships: inviteTeamId === ""
               ? undefined
               : { teams: { data: [{ id: inviteTeamId, type: "teams" }] } },

@@ -46,13 +46,13 @@ describe("Notification rich destination adapters (kanban 7.11)", () => {
     expect(render.contentType).toBe("application/json");
     const slack = JSON.parse(render.body) as {
       text: string;
-      blocks: Array<Record<string, unknown>>;
+      blocks: Record<string, unknown>[];
     };
     expect(slack.text).toBe("Run Completed");
     // A header block plus an actions block with the run's link button.
     expect(slack.blocks[0]).toMatchObject({ type: "header" });
     const button = slack.blocks.find((block) => block.type === "actions") as
-      | { elements?: Array<Record<string, unknown>> }
+      | { elements?: Record<string, unknown>[] }
       | undefined;
     expect(button?.elements?.[0]).toMatchObject({ type: "button", url: runPayload.run_url as string });
     // Structured fields include workspace + org + actor.
@@ -70,8 +70,8 @@ describe("Notification rich destination adapters (kanban 7.11)", () => {
     const card = JSON.parse(render.body) as {
       "@type": string;
       title: string;
-      sections?: Array<{ facts?: Array<{ name: string; value: string }> }>;
-      potentialAction?: Array<{ name: string; targets: Array<{ uri: string }> }>;
+      sections?: { facts?: { name: string; value: string }[] }[];
+      potentialAction?: { name: string; targets: { uri: string }[] }[];
     };
     expect(card["@type"]).toBe("MessageCard");
     expect(card.title).toBe("Run Completed");
@@ -93,7 +93,7 @@ describe("Notification rich destination adapters (kanban 7.11)", () => {
       },
     };
 
-    const slack = JSON.parse(renderPayloadForDestination(config("slack"), assessmentPayload).body) as { text: string; blocks: Array<Record<string, unknown>> };
+    const slack = JSON.parse(renderPayloadForDestination(config("slack"), assessmentPayload).body) as { text: string; blocks: Record<string, unknown>[] };
     expect(slack.text).toBe("Drift Detected");
     const body = renderPayloadForDestination(config("slack"), assessmentPayload).body;
     expect(body).toContain("3");
@@ -101,7 +101,7 @@ describe("Notification rich destination adapters (kanban 7.11)", () => {
 
     const teams = JSON.parse(renderPayloadForDestination(config("microsoft-teams"), assessmentPayload).body) as {
       title: string;
-      sections?: Array<{ facts?: Array<{ name: string; value: string }> }>;
+      sections?: { facts?: { name: string; value: string }[] }[];
     };
     expect(teams.title).toBe("Drift Detected");
     expect(teams.sections?.[0]?.facts).toContainEqual({ name: "Resources drifted", value: "3" });

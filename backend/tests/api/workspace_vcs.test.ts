@@ -126,8 +126,8 @@ describe("Workspace VCS repo normalization (VCS-001/002/003)", () => {
     });
     expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body.data.attributes["vcs-repo"]["identifier"]).toBe("hashicorp/terraform");
+    expect(body.data.attributes["vcs-repo"].identifier).toBe("hashicorp/terraform");
     expect(body.data.attributes["vcs-repo"]["github-app-installation-id"]).toBe(ghInstallationId);
-    expect(body.data.attributes["vcs-repo"]["branch"]).toBe("main");
+    expect(body.data.attributes["vcs-repo"].branch).toBe("main");
   });
 });

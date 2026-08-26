@@ -13,9 +13,9 @@ export const RUN_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
  * Mint an ephemeral credential for a run (the reference format run-token model).
  *
  * The plaintext token is returned EXACTLY ONCE to the caller (the worker,
- * which writes it into the run's private CLI config file). Only the SHA-256
- * hash is stored, so the API layer can authenticate it later without being
- * able to recover the plaintext.
+ * which writes it into the run's private CLI config file). Only the keyed
+ * token hash is stored, so the API layer can authenticate it later without
+ * being able to recover the plaintext.
  */
 export async function mintRunToken(
   runId: string,

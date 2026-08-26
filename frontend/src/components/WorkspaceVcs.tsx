@@ -224,7 +224,7 @@ export function WorkspaceVcs({
       .then((loaded: VcsConnection[]): void => {
         if (!controller.signal.aborted) setConnections(loaded);
       })
-      .catch((caught): void => {
+      .catch((caught: unknown): void => {
         if (!controller.signal.aborted) {
           setConnectionsError(
             caught instanceof Error ? caught.message : "Registered VCS connections could not be loaded.",
@@ -444,7 +444,7 @@ export function WorkspaceVcs({
                 placeholder="^v\d+\.\d+\.\d+$"
                 disabled={!canUpdate}
               />
-              <FieldDescription>When set, matching tags trigger runs regardless of the branch.</FieldDescription>
+              <FieldDescription>When set, only matching tag pushes trigger runs; branch pushes and pull requests are ignored.</FieldDescription>
             </Field>
             <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
               <Field data-disabled={!canUpdate}>

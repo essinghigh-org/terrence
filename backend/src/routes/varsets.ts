@@ -405,9 +405,9 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       if (valueChanged || sensitiveChanged) {
         const stored = await variableValueForWrite(sensitiveNow, base.value as string);
         base.value = stored.value;
-        (base as Record<string, unknown>).valueEncrypted = stored.valueEncrypted;
+        (base).valueEncrypted = stored.valueEncrypted;
       } else {
-        (base as Record<string, unknown>).valueEncrypted = v.valueEncrypted;
+        (base).valueEncrypted = v.valueEncrypted;
       }
       return { variable: v, values: base };
     }));

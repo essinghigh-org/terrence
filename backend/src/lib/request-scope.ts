@@ -60,8 +60,8 @@ export function setRequestTokenScopes(scopes: TokenScopes | null): void {
  * isolated store; nothing leaks between invocations.
  */
 export async function withRequestScope<T>(fn: () => Promise<T>): Promise<T> {
-  return requestCacheStorage.run(new Map(), () =>
-    tokenScopesStorage.run(null, () => fn()),
+  return requestCacheStorage.run(new Map(), async () =>
+    tokenScopesStorage.run(null, async () => fn()),
   );
 }
 

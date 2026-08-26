@@ -36,7 +36,7 @@ export async function enqueueDurableJob(
       if (existing.status === "queued") {
         if (runAfter >= existing.runAfter) return existing;
         const earlier = await db.update(durableJobs).set({ runAfter, updatedAt: Date.now() }).where(and(eq(durableJobs.id, existing.id), eq(durableJobs.status, "queued"))).returning();
-        return (earlier[0] ?? existing) as DurableJob;
+        return (earlier[0] ?? existing);
       }
       const now = Date.now();
       const requeued = await db.update(durableJobs).set({
@@ -130,7 +130,7 @@ export async function claimDurableJob(
     eq(durableJobs.status, "queued"),
     lte(durableJobs.runAfter, now),
   )).returning();
-  return updated[0] as DurableJob | undefined;
+  return updated[0];
 }
 
 export async function heartbeatDurableJob(job: DurableJob, now = Date.now()): Promise<boolean> {
@@ -204,8 +204,8 @@ async function runJob(job: DurableJob, handler: DurableJobHandler): Promise<void
   }, LEASE_MS / 3);
   try {
     await handler(job, {
-      heartbeat: (): Promise<boolean> => heartbeatDurableJob(job),
-      canceled: (): Promise<boolean> => isDurableJobStopped(job),
+      heartbeat: async (): Promise<boolean> => heartbeatDurableJob(job),
+      canceled: async (): Promise<boolean> => isDurableJobStopped(job),
     });
     await finishDurableJob(job, "succeeded");
   } catch (error: unknown) {

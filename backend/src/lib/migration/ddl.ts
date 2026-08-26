@@ -170,10 +170,10 @@ function normalizeType(raw: string): string {
   if (cleaned === "BOOLEAN" || cleaned === "BOOL") return "BOOLEAN";
   if (/^(?:DATETIME|TIMESTAMP|DATE|TIME)(?:\(.*\))?$/.test(cleaned)) return "DATETIME";
   // SQLite affinity fallback for exotic declared types.
-  if (/INT/.test(cleaned)) return "INTEGER";
+  if (cleaned.includes('INT')) return "INTEGER";
   if (/CHAR|CLOB|TEXT/.test(cleaned)) return "TEXT";
   if (/REAL|FLOA|DOUB/.test(cleaned)) return "REAL";
-  if (/BLOB/.test(cleaned)) return "BLOB";
+  if (cleaned.includes('BLOB')) return "BLOB";
   return "NUMERIC";
 }
 
@@ -458,7 +458,7 @@ function parseTableLevelConstraint(segment: string): { kind: "pk" | "unique" | "
     }
     const ref = parseReferenceClause(segment, close + 1);
     if (ref === null) return { kind: "skip", data: null };
-    return { kind: "fk", data: { ...ref.fk, columns: cols } as ForeignKeyDef };
+    return { kind: "fk", data: { ...ref.fk, columns: cols } };
   }
   if (/^CHECK\s*\(/i.test(segment)) return { kind: "check", data: null };
   return { kind: "skip", data: null };
@@ -717,7 +717,7 @@ export function generateCreateIndexSql(index: IndexDef, booleanColumns?: Readonl
 export function inspectSourceSchema(client: { query: (sql: string) => { all: () => unknown[] } }): SourceSchema {
   const rows = client.query(
     "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type, name",
-  ).all() as ReadonlyArray<{ type: string; name: string; sql: string }>;
+  ).all() as readonly { type: string; name: string; sql: string }[];
   const tables: TableDef[] = [];
   const indexes: IndexDef[] = [];
   const triggers: { name: string; sql: string }[] = [];

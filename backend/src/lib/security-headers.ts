@@ -99,7 +99,7 @@ export function shouldSendHsts(request: Readonly<{ url: string; headers: Readonl
   // Import lazily to avoid circular deps at module load.
   try {
     const { requestIsHttps } = require("./client-ip") as { requestIsHttps: (r: unknown) => boolean };
-    return requestIsHttps(request as unknown as never);
+    return requestIsHttps(request);
   } catch {
     try {
       return new URL(request.url).protocol === "https:";

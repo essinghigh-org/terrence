@@ -23,6 +23,7 @@ import { outboundAllowlistAllows, privateHostReason } from "./url-safety";
 import { archiveRunLogs, deleteRunLogArchive } from "./run-logs";
 import { deletePlanJsonArtifact } from "./plan-json";
 import { currentSiteAdmin, currentTokenScopes, requestCacheGet, requestCacheSet } from "./request-scope";
+import { withDbLock } from "./db-lock";
 import {
   scopeGrants,
   scopeCoversOrg,
@@ -52,6 +53,25 @@ const PUBLIC_URL = typeof process.env.PUBLIC_URL === "string" && process.env.PUB
 export type ErrorSet = { status?: number | string };
 
 export type JsonApiErrorBody = { errors: { status: string; title: string; detail?: string }[] };
+
+/**
+ * Serialize lifecycle changes for every organization a user owns. Sorting the
+ * names gives concurrent multi-organization deletions a stable lock order;
+ * the callback's transaction then performs the owner check and deletion while
+ * all affected organization locks are held.
+ */
+export async function withOrganizationMembershipLocks<T>(
+  organizationIds: readonly string[],
+  operation: () => Promise<T>,
+): Promise<T> {
+  const ids = [...new Set(organizationIds)].sort();
+  const acquire = async (index: number): Promise<T> => {
+    const organizationId = ids[index];
+    if (organizationId === undefined) return operation();
+    return withDbLock(`organization-membership:${organizationId}`, async () => acquire(index + 1));
+  };
+  return acquire(0);
+}
 
 export function errorBody(status: number, title: string, detail?: string): JsonApiErrorBody {
   return { errors: [{ status: String(status), title, ...(detail === undefined ? {} : { detail }) }] };
@@ -139,6 +159,9 @@ export async function checkOrgPermission(
   }
   if (tokenTeamId !== null) {
     const team = await db.query.teams.findFirst({ where: eq(teams.id, tokenTeamId) });
+    // A team token is an authenticated member of its organization for
+    // resource-existence/read checks. Mutating organization authority still
+    // flows through checkOrganizationPermission and the team's grants.
     return team?.orgId === orgId && requiredRole === "member";
   }
   if (tokenOrgId !== null) return tokenOrgId === orgId;
@@ -1322,6 +1345,11 @@ const SIGNED_URL_SECRET = configuredSignedUrlSecret === undefined || configuredS
   : configuredSignedUrlSecret.length >= 32
     ? configuredSignedUrlSecret
     : (() => { throw new Error("SIGNED_URL_SECRET must be at least 32 characters"); })();
+
+/** Stable, non-reversible identifier fingerprint keyed by an installation secret. */
+export function sensitiveIdentifierHash(value: string): string {
+  return createHmac("sha256", SIGNED_URL_SECRET).update(value).digest("hex");
+}
 
 export function signedApiURL(request: RequestWithUrl, path: string, method = "GET", ttlSeconds?: number): string {
   const configuredTtl = ttlSeconds ?? Number(process.env.SIGNED_URL_TTL_SECONDS ?? 300);

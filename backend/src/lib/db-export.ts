@@ -60,7 +60,7 @@ export function defaultOutputName(now: Date = new Date()): string {
   return `terrence-export-${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}.db`;
 }
 
-export interface ExportFileInfo {
+export type ExportFileInfo = {
   readonly name: string;
   readonly sizeBytes: number;
   readonly modifiedAt: number;
@@ -111,7 +111,7 @@ export class DbExportError extends Error {
   }
 }
 
-export interface DbExportOptions {
+export type DbExportOptions = {
   /** postgres:// or postgresql:// connection URL of the source. */
   readonly pgUrl: string;
   /** Optional output file name (defaults to a timestamped name). */
@@ -123,12 +123,12 @@ export interface DbExportOptions {
   readonly storageDirOverride?: string;
 }
 
-export interface DbExportProgress {
+export type DbExportProgress = {
   readonly table: string;
   readonly rowsCopied: number;
 }
 
-export interface DbExportResult {
+export type DbExportResult = {
   readonly fileName: string;
   readonly filePath: string;
   readonly sizeBytes: number;
@@ -190,7 +190,7 @@ export async function runDbExport(
     const transfer = await transferDatabase(
       source,
       target,
-      { keepSnapshotOpen: true, ...(onProgress === undefined ? {} : { onProgress: (progress) => onProgress(progress) }) },
+      { keepSnapshotOpen: true, ...(onProgress === undefined ? {} : { onProgress: (progress) => { onProgress(progress); } }) },
     );
     const verification = await verifyTransfer(source, target);
     await source.endSnapshot();

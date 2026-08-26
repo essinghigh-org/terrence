@@ -545,7 +545,7 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     })();
     if (authorized === undefined || archivePath === null || !isStackStoragePath(archivePath) || !(await Bun.file(archivePath).exists())) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const location = signedApiURL(request, `/api/v2/stack-configurations/${authorized.record.id}/source-bundle/download`, "GET");
-    (set.headers as Record<string, string>) ["Location"] = location;
+    (set.headers as Record<string, string>) .Location = location;
     (set as { status: number }).status = 302;
     return {};
   })
@@ -726,7 +726,7 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     const path = (authorized?.record.payload ?? {}).descriptionPath;
     if (authorized === undefined || typeof path !== "string" || !isStackStoragePath(path) || !(await Bun.file(path).exists())) { (set as { status: number }).status = 204; return {}; }
     const location = signedApiURL(request, `/api/v2/stack-states/${authorized.record.id}/description/download`, "GET");
-    (set.headers as Record<string, string>)["Location"] = location;
+    (set.headers as Record<string, string>).Location = location;
     (set as { status: number }).status = 307;
     return {};
   })

@@ -80,9 +80,9 @@ for (const route of routes) {
 
   paths[openApiPath] ??= {};
   // If two handlers share the same path+method (overlapping plugins), keep the first.
-  if (paths[openApiPath]![m] !== undefined) continue;
+  if (paths[openApiPath][m] !== undefined) continue;
 
-  paths[openApiPath]![m] = {
+  const operation: Record<string, unknown> = {
     operationId,
     ...(tags.length > 0 ? { tags } : {}),
     ...(paramNames.length > 0
@@ -105,6 +105,39 @@ for (const route of routes) {
       "404": { description: "Not Found" },
     },
   };
+  if (m === "patch" && openApiPath === "/api/v2/organization-memberships/{id}") {
+    operation.requestBody = {
+      required: true,
+      content: {
+        "application/vnd.api+json": {
+          schema: {
+            type: "object",
+            required: ["data"],
+            properties: {
+              data: {
+                type: "object",
+                required: ["attributes"],
+                properties: {
+                  attributes: {
+                    type: "object",
+                    anyOf: [{ required: ["status"] }, { required: ["role"] }],
+                    properties: {
+                      status: { type: "string", enum: ["active", "invited"] },
+                      role: { type: "string", enum: ["owner", "member"] },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const responses = operation.responses as Record<string, unknown>;
+    delete responses["401"];
+    responses["422"] = { description: "Unprocessable Entity" };
+  }
+  paths[openApiPath][m] = operation;
 }
 
 const document = {

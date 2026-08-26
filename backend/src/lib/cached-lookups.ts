@@ -29,7 +29,7 @@ async function orgByIdUncached(id: string): Promise<OrgRow | undefined> {
   return db.query.organizations.findFirst({ where: eq(organizations.id, id) });
 }
 
-function memoize<T>(key: string, compute: () => Promise<T>): Promise<T> {
+async function memoize<T>(key: string, compute: () => Promise<T>): Promise<T> {
   const cached = requestCacheGet<Promise<T>>(key);
   if (cached !== undefined) return cached;
   const value = compute();
@@ -42,13 +42,13 @@ function memoize<T>(key: string, compute: () => Promise<T>): Promise<T> {
 }
 
 /** Organization row by exact name, memoized for the current request. */
-export function cachedOrgByName(name: string): Promise<OrgRow | undefined> {
-  return memoize(`org:name:${name}`, () => orgByNameUncached(name));
+export async function cachedOrgByName(name: string): Promise<OrgRow | undefined> {
+  return memoize(`org:name:${name}`, async () => orgByNameUncached(name));
 }
 
 /** Organization row by id, memoized for the current request. */
-export function cachedOrgById(id: string): Promise<OrgRow | undefined> {
-  return memoize(`org:id:${id}`, () => orgByIdUncached(id));
+export async function cachedOrgById(id: string): Promise<OrgRow | undefined> {
+  return memoize(`org:id:${id}`, async () => orgByIdUncached(id));
 }
 
 /**

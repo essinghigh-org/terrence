@@ -932,7 +932,7 @@ async function waitForDrain(ctx: JobContext): Promise<void> {
 // ---------------------------------------------------------------------------
 async function seedMigrationJournal(source: Database, target: Bun.SQL): Promise<void> {
   const rows = source.query(`SELECT hash, created_at FROM "__drizzle_migrations" ORDER BY id`).all() as
-    ReadonlyArray<{ hash: unknown; created_at: unknown }>;
+    readonly { hash: unknown; created_at: unknown }[];
   await target.unsafe("CREATE SCHEMA IF NOT EXISTS drizzle");
   await target.unsafe(
     `CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
@@ -960,7 +960,7 @@ async function seedMigrationJournal(source: Database, target: Bun.SQL): Promise<
 
 async function verifyJournal(source: Database, target: Bun.SQL): Promise<boolean> {
   const sourceRows = source.query(`SELECT hash, created_at FROM "__drizzle_migrations" ORDER BY id`).all() as
-    ReadonlyArray<{ hash: unknown; created_at: unknown }>;
+    readonly { hash: unknown; created_at: unknown }[];
   const targetRows = await target.unsafe(
     "SELECT hash, created_at::bigint AS created_at FROM drizzle.__drizzle_migrations ORDER BY id",
   );

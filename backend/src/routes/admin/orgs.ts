@@ -1,9 +1,11 @@
 import { Elysia } from "elysia";
 import { authPlugin } from "../../auth";
 import { db } from "../../db";
-import { organizations } from "../../db/schema";
+import { apiTokens, organizationMemberships, organizations, workspaces } from "../../db/schema";
 import { eq } from "drizzle-orm";
 import { cachedOrgByName, invalidateOrgLookup } from "../../lib/cached-lookups";
+import { publish } from "../../lib/event-bus";
+import { deleteWorkspaceData } from "../../lib/utils";
 import type { ParamCtx } from "./types";
 import { adminOrganizationResource, clearSpecificRegistrySharing } from "./helpers";
 export const orgsRoutes = new Elysia({ name: "admin-orgs" })
@@ -71,8 +73,24 @@ export const orgsRoutes = new Elysia({ name: "admin-orgs" })
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const org = await cachedOrgByName(orgName);
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(organizations).where(eq(organizations.id, org.id));
+    const [organizationWorkspaces, memberships] = await Promise.all([
+      db.query.workspaces.findMany({ where: eq(workspaces.orgId, org.id), columns: { id: true } }),
+      db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.orgId, org.id), columns: { userId: true } }),
+    ]);
+    for (const workspace of organizationWorkspaces) await deleteWorkspaceData(workspace.id);
+    // Keep the site-admin path equivalent to the normal organization delete:
+    // remove explicit organization-owned rows in one transaction instead of
+    // relying on a dialect's foreign-key cascade settings.
+    await db.transaction(async (tx: typeof db): Promise<void> => {
+      await tx.delete(workspaces).where(eq(workspaces.orgId, org.id));
+      await tx.delete(organizationMemberships).where(eq(organizationMemberships.orgId, org.id));
+      await tx.delete(apiTokens).where(eq(apiTokens.orgId, org.id));
+      await tx.delete(organizations).where(eq(organizations.id, org.id));
+    });
     invalidateOrgLookup(orgName, org.id);
+    for (const userId of new Set(memberships.map((membership): string => membership.userId))) {
+      publish("authz.changed", { "user-id": userId, "org-id": org.id });
+    }
     (set as { status: number }).status = 204;
     return {};
   });

@@ -31,7 +31,7 @@ const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../
 const dbUrl = process.env.DATABASE_URL ?? `file:${join(storageDir, "terrence.db")}`;
 const dbPath = dbUrl === ":memory:" ? ":memory:" : dbUrl.replace(/^file:/, "");
 
-interface CheckResult {
+type CheckResult = {
     database: string;
     mode: "quick_check" | "integrity_check";
     result: "ok" | "error";

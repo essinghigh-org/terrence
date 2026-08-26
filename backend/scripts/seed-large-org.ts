@@ -73,7 +73,7 @@ function chunked<T>(rows: readonly T[], size: number): T[][] {
 
 async function main(): Promise<void> {
   const start = performance.now();
-  const phases: Array<{ name: string; ms: number; count: number }> = [];
+  const phases: { name: string; ms: number; count: number }[] = [];
 
   // --- user + org + ownership ------------------------------------------------
   let t0 = performance.now();

@@ -181,7 +181,7 @@ export function _dedup(reset?: boolean): void {
 
 /** Only exported for tests: clear the replica-shared delivery state so a
  * test's breaker/dedup sequence starts from a clean slate. */
-export function _resetSharedDeliveryState(): Promise<void> {
+export async function _resetSharedDeliveryState(): Promise<void> {
   return resetSharedDeliveryState();
 }
 
@@ -231,7 +231,7 @@ export async function deliveryDedupRecord(scope: "run" | "assessment", key: stri
   });
 }
 
-export function postNotification(
+export async function postNotification(
   configuration: NotificationConfiguration,
   payload: Readonly<Record<string, unknown>>,
 ): Promise<NotificationDelivery> {
@@ -334,7 +334,17 @@ async function doPostNotification(
  * Build a human-readable subject/body for email notifications from the
  * generic payload shape shared by run and assessment notifications.
  */
-function emailContent(payload: Readonly<Record<string, unknown>>): Readonly<{ subject: string; text: string }> {
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character): string => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[character] ?? character);
+}
+
+function emailContent(payload: Readonly<Record<string, unknown>>): Readonly<{ subject: string; text: string; html: string }> {
   const notifications = Array.isArray(payload.notifications) ? payload.notifications : [];
   const first = (notifications[0] ?? {}) as Readonly<Record<string, unknown>>;
   const message = typeof first.message === "string" && first.message !== "" ? first.message : "Terrence notification";
@@ -349,7 +359,15 @@ function emailContent(payload: Readonly<Record<string, unknown>>): Readonly<{ su
   if (typeof first.run_status === "string") lines.push(`Status: ${first.run_status}`);
   if (typeof payload.run_message === "string" && payload.run_message !== "") lines.push(`Message: ${payload.run_message}`);
   if (typeof payload.run_url === "string") lines.push(`Details: ${payload.run_url}`);
-  return { subject, text: lines.join("\n") };
+  const text = lines.join("\n");
+  const htmlLines = lines.map((line): string => {
+    const separator = line.indexOf(": ");
+    if (separator === -1) return `<p>${escapeHtml(line)}</p>`;
+    const label = escapeHtml(line.slice(0, separator));
+    const value = escapeHtml(line.slice(separator + 2));
+    return `<p><strong>${label}:</strong> ${value}</p>`;
+  });
+  return { subject, text, html: `<html><body>${htmlLines.join("")}</body></html>` };
 }
 
 /**
@@ -403,17 +421,18 @@ async function deliverEmailNotification(
     };
   }
 
-  const { subject, text } = emailContent(payload);
+  const { subject, text, html } = emailContent(payload);
   try {
     await sendEmail(
       {
-        host: host as string,
+        host: host!,
         port: typeof smtp.port === "number" ? smtp.port : 25,
         username: typeof smtp.username === "string" && smtp.username !== "" ? smtp.username : null,
-        password: typeof smtp.password === "string" ? smtp.password : null,
-        senderEmail: senderEmail as string,
+        password: typeof smtp.password === "string" ? await decryptSecret(smtp.password) : null,
+        senderEmail: senderEmail!,
+        auth: smtp.auth === "none" || smtp.auth === "login" || smtp.auth === "plain" ? smtp.auth : "plain",
       },
-      { to: recipientList, subject, text },
+      { to: recipientList, subject, text, html },
     );
     recordBreakerSuccess(configuration.id);
     return {
@@ -465,10 +484,10 @@ function runNotificationMessage(trigger: string, status: string): string {
 // ---------------------------------------------------------------------------
 type DestinationRender = Readonly<{ body: string; contentType: string }>;
 
-interface NotificationSummary {
+type NotificationSummary = {
   title: string;
   subtext: string;
-  fields: ReadonlyArray<Readonly<{ label: string; value: string }>>;
+  fields: readonly Readonly<{ label: string; value: string }>[];
   linkLabel: string;
   linkUrl: string;
   status?: string;
@@ -506,7 +525,7 @@ function summarizePayload(payload: Readonly<Record<string, unknown>>): Notificat
       ? notification.message
       : (typeof payload.message === "string" ? payload.message : "Terrence notification");
 
-  const fields: Array<{ label: string; value: string }> = [];
+  const fields: { label: string; value: string }[] = [];
 
   const addField = (label: string, value: unknown): void => {
     const text = stringify(value);
@@ -546,7 +565,7 @@ function summarizePayload(payload: Readonly<Record<string, unknown>>): Notificat
 
 function renderSlack(payload: Readonly<Record<string, unknown>>): string {
   const summary = summarizePayload(payload);
-  const blocks: Array<Record<string, unknown>> = [{ type: "header", text: { type: "plain_text", text: summary.title.slice(0, 150) } }];
+  const blocks: Record<string, unknown>[] = [{ type: "header", text: { type: "plain_text", text: summary.title.slice(0, 150) } }];
   if (summary.subtext.length > 0) {
     blocks.push({ type: "section", text: { type: "mrkdwn", text: summary.subtext.slice(0, 2_900) } });
   }

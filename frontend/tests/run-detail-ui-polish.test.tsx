@@ -1,7 +1,7 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { RunDetail } from "../src/views/RunDetail";
+import { RunDetail, runExecutionDurationMilliseconds } from "../src/views/RunDetail";
 import { OperationFilterDropdown, type Operation } from "../src/components/OperationFilterDropdown";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
@@ -23,6 +23,25 @@ function requestUrl(input: string | URL | Request): string {
 afterEach((): void => {
   cleanup();
   globalThis.fetch = originalFetch;
+});
+
+test("run duration sums execution phases and ignores input-state metadata", () => {
+  expect(runExecutionDurationMilliseconds({
+    "planning-at": "2026-08-24T20:40:00.000Z",
+    "planned-at": "2026-08-24T20:46:26.000Z",
+    "input-state-serial": "1346",
+    "confirmed-at": "2026-08-24T20:54:00.000Z",
+    "applying-at": "2026-08-24T20:54:30.000Z",
+    "applied-at": "2026-08-24T20:55:32.000Z",
+  }, false, Date.parse("2026-08-24T20:55:32.000Z"))).toBe(6 * 60_000 + 26_000 + 62_000);
+});
+
+test("legacy applied runs with planning markers show the full duration", () => {
+  expect(runExecutionDurationMilliseconds({
+    "planning-at": "2026-08-24T20:40:00.000Z",
+    "planned-at": "2026-08-24T20:46:26.000Z",
+    "applied-at": "2026-08-24T20:55:32.000Z",
+  }, false, Date.parse("2026-08-24T20:55:32.000Z"))).toBe(15 * 60_000 + 32_000);
 });
 
 test("collapsible plan warnings appear at top of plan with diagnostic details", async () => {
@@ -48,7 +67,9 @@ test("collapsible plan warnings appear at top of plan with diagnostic details", 
             },
             "created-at": "2026-07-29T10:00:00.000Z",
             "status-timestamps": {
+              "planning-at": "2026-07-29T08:59:00.000Z",
               "planned-at": "2026-07-29T09:00:00.000Z",
+              "input-state-serial": "1346",
             },
           },
         },
@@ -117,6 +138,8 @@ test("collapsible plan warnings appear at top of plan with diagnostic details", 
   // Verify warning details are present in the collapsible banner
   expect(view.getAllByText("Argument is deprecated").length).toBeGreaterThan(0);
   expect(view.getAllByText(/Use new_param instead of old_param/).length).toBeGreaterThan(0);
+  expect(view.getByText("Input state serial")).toBeTruthy();
+  expect(view.getByText("#1346")).toBeTruthy();
 });
 
 test("when apply is running, apply disabled reasons are NOT shown", async () => {

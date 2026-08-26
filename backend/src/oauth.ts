@@ -42,7 +42,7 @@ type StoredPendingAuth = {
 };
 
 async function putPendingAuth(id: string, value: StoredPendingAuth): Promise<void> {
-  await putOAuthHandshakeState(PENDING_AUTH_PREFIX + id, value.expiresAt, value as unknown as Record<string, unknown>);
+  await putOAuthHandshakeState(PENDING_AUTH_PREFIX + id, value.expiresAt, value);
 }
 async function takePendingAuth(id: string): Promise<StoredPendingAuth | undefined> {
   return takeOAuthHandshakeState<StoredPendingAuth>(PENDING_AUTH_PREFIX + id);
@@ -52,7 +52,7 @@ async function peekPendingAuth(id: string): Promise<StoredPendingAuth | undefine
   return row?.payload as StoredPendingAuth | undefined;
 }
 async function putAuthCode(id: string, value: StoredAuthCode): Promise<void> {
-  await putOAuthHandshakeState(AUTH_CODE_PREFIX + id, value.expiresAt, value as unknown as Record<string, unknown>);
+  await putOAuthHandshakeState(AUTH_CODE_PREFIX + id, value.expiresAt, value);
 }
 async function takeAuthCode(id: string): Promise<StoredAuthCode | undefined> {
   return takeOAuthHandshakeState<StoredAuthCode>(AUTH_CODE_PREFIX + id);

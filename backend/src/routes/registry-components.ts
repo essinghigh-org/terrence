@@ -46,14 +46,14 @@ export const registryComponentsRoutes = new Elysia({ name: "registry-components"
     if (orgName === "") {
       const rows = await db.query.registryComponents.findMany({ orderBy: (t, { desc }) => [desc(t.createdAt)], limit: 50 });
       const h = (set as { headers: Record<string, string | number> }).headers;
-      (h as Record<string, string | number>)["TFP-API-Version"] = TFP_API_VERSION;
+      (h)["TFP-API-Version"] = TFP_API_VERSION;
       return { data: rows.map(componentResource), meta: { pagination: { "current-page": 1, "total-pages": 1, "total-count": rows.length } } };
     }
     const org = await cachedOrgByName(orgName);
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const rows = await db.query.registryComponents.findMany({ where: eq(registryComponents.orgId, org.id), orderBy: (t, { desc }) => [desc(t.createdAt)] });
     const h = (set as { headers: Record<string, string | number> }).headers;
-    (h as Record<string, string | number>)["TFP-API-Version"] = TFP_API_VERSION;
+    (h)["TFP-API-Version"] = TFP_API_VERSION;
     return { data: rows.map(componentResource), meta: { pagination: { "current-page": 1, "total-pages": 1, "total-count": rows.length } } };
   })
   .get("/api/registry/v1/components/:id", async ({ params, set }: Ctx): Promise<unknown> => {
@@ -69,7 +69,7 @@ export const registryComponentsRoutes = new Elysia({ name: "registry-components"
     const rels = data.relationships !== null && typeof data.relationships === "object" ? data.relationships as Record<string, unknown> : {};
     const orgRel = rels.organization !== null && typeof rels.organization === "object" ? rels.organization as Record<string, unknown> : {};
     const orgData = orgRel.data !== null && typeof orgRel.data === "object" ? orgRel.data as Record<string, unknown> : {};
-    const orgName = typeof orgData.id === "string" ? orgData.id : typeof attrs["organization"] === "string" ? String(attrs["organization"]) : "";
+    const orgName = typeof orgData.id === "string" ? orgData.id : typeof attrs.organization === "string" ? String(attrs.organization) : "";
     const name = typeof attrs.name === "string" ? attrs.name.trim() : typeof data.id === "string" ? String(data.id).trim() : "";
     if (orgName === "" || name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "organization and name are required" }] }; }
     const org = await cachedOrgByName(orgName);

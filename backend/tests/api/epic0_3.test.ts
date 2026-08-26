@@ -92,6 +92,20 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
   });
 
   it("updates user profile details and deletes user", async () => {
+    const survivingOwnerId = `usr-${crypto.randomUUID()}`;
+    await db.insert(users).values({
+      id: survivingOwnerId,
+      username: `surviving-${survivingOwnerId}`,
+      email: `${survivingOwnerId}@epic.local`,
+      passwordHash: "hashed",
+    });
+    await db.insert(organizationMemberships).values({
+      id: `orgmem-surviving-${crypto.randomUUID()}`,
+      orgId,
+      userId: survivingOwnerId,
+      role: "owner",
+      status: "active",
+    });
     const patchRes = await app.handle(
       new Request(`http://localhost/api/v2/users/${userId}`, {
         method: "PATCH",
@@ -126,6 +140,20 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
     // Deleted users must no longer authenticate / be fetchable
     const getAfterDelete = await app.handle(new Request(`http://localhost/api/v2/users/${userId}`, { headers: { Authorization: `Bearer ${userToken}` } }));
     expect([401, 404].includes(getAfterDelete.status)).toBeTrue();
+  });
+
+  it("refuses self-deletion when the account is the sole active organization owner", async () => {
+    const response = await app.handle(new Request(`http://localhost/api/v2/users/${userId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${userToken}` },
+    }));
+    expect(response.status).toBe(422);
+    const retained = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    expect(retained?.deletedAt).toBeNull();
+    const membership = await db.query.organizationMemberships.findFirst({
+      where: eq(organizationMemberships.userId, userId),
+    });
+    expect(membership?.role).toBe("owner");
   });
 
   it("supports organization membership creation, listing, showing with include=user, and deletion", async () => {

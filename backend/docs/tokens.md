@@ -21,7 +21,7 @@ Tokens authenticate every API request. The token is sent as `Authorization: Bear
 
 ## User tokens
 
-A user creates tokens in the account page or through the API. Each token has a description and an expiry. Token hashes are stored, never the plaintext.
+A user creates tokens in the account page or through the API. Each token has a description and an expiry. Installation-keyed token hashes are stored, never the plaintext. Set `TERRENCE_TOKEN_HASH_SECRET` consistently across replicas; single-node installs persist a generated secret in `STORAGE_DIR/.token-hash-secret`.
 
 Revoking a token invalidates it immediately.
 

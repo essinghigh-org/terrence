@@ -28,7 +28,7 @@ const failOnFinding = args.has("--fail");
 
 type Status = "ok" | "warn" | "fail";
 
-interface Check {
+type Check = {
     name: string;
     status: Status;
     detail: string;
@@ -110,10 +110,10 @@ async function checkDns(host: string): Promise<void> {
         const result = await Promise.race([
             dns.resolve4(host),
             new Promise<never>((_resolve, reject) => {
-                timer = setTimeout(() => reject(new Error("timeout")), 5000);
+                timer = setTimeout(() => { reject(new Error("timeout")); }, 5000);
             }),
         ]);
-        record(`dns:${host}`, "ok", `resolves to ${(result as string[]).join(", ")}`);
+        record(`dns:${host}`, "ok", `resolves to ${(result).join(", ")}`);
     } catch {
         record(`dns:${host}`, "fail", "could not resolve (network or DNS failure)");
     } finally {
@@ -122,7 +122,7 @@ async function checkDns(host: string): Promise<void> {
 }
 
 /** HTTPS GET to the VCS API: proves DNS + CA trust + TLS + reachability end to end. */
-function checkVcsReachability(): Promise<void> {
+async function checkVcsReachability(): Promise<void> {
     return new Promise((resolvePromise) => {
         const url = new URL("https://api.github.com/");
         const req = request(
@@ -182,7 +182,7 @@ function checkSandbox(): void {
 }
 
 function checkConfig(): void {
-    const known: Array<[string, "required" | "optional"]> = [
+    const known: [string, "required" | "optional"][] = [
         ["PORT", "optional"],
         ["STORAGE_DIR", "optional"],
         ["DATABASE_URL", "optional"],
@@ -191,6 +191,7 @@ function checkConfig(): void {
         ["GITHUB_APP_ID", "optional"],
         ["TERRENCE_DISABLE_WORKER", "optional"],
         ["AUDIT_STRICT", "optional"],
+        ["TERRENCE_TOKEN_HASH_SECRET", "optional"],
         ["TERRENCE_LANDLOCK_RUNNER", "optional"],
     ];
     const set = (name: string): boolean => {

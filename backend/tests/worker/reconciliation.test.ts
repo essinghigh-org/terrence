@@ -24,7 +24,7 @@ const agentWsId = `ws-recon-agent-${suffix}`;
 // queuing), error states with distinct messages (planning, applying,
 // apply_queued, pre_plan_running), resting states that must survive
 // (planned, confirmed), and agent-mode runs that recoverStaleAgentJobs owns.
-const RUNS: ReadonlyArray<{ id: string; ws: string; status: string }> = [
+const RUNS: readonly { id: string; ws: string; status: string }[] = [
   { id: `run-recon-fetching-${suffix}`, ws: localWsId, status: "fetching" },
   { id: `run-recon-queuing-${suffix}`, ws: localWsId, status: "queuing" },
   { id: `run-recon-preplan-${suffix}`, ws: localWsId, status: "pre_plan_running" },

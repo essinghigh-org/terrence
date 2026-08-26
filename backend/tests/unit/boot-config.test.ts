@@ -258,9 +258,9 @@ describe("writeBootDatabaseConfig", () => {
   });
 
   it("rejects an invalid driver on write", () => {
-    expect(() => writeBootDatabaseConfig(testDir, { driver: "sqlite", url: "file:/x.db" }))
+    expect(() => { writeBootDatabaseConfig(testDir, { driver: "sqlite", url: "file:/x.db" }); })
       .not.toThrow();
-    expect(() => writeBootDatabaseConfig(testDir, { driver: "mysql" as never, url: "x" }))
+    expect(() => { writeBootDatabaseConfig(testDir, { driver: "mysql" as never, url: "x" }); })
       .toThrow(BootConfigError);
   });
 

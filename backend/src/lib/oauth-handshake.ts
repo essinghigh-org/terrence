@@ -60,7 +60,7 @@ export async function peekOAuthHandshakeState(
     .from(oauthHandshakeStates)
     .where(and(eq(oauthHandshakeStates.id, id), gt(oauthHandshakeStates.expiresAt, now)))
     .limit(1);
-  return row === undefined ? undefined : { payload: row.payload as OAuthHandshakePayload, expiresAt: row.expiresAt };
+  return row === undefined ? undefined : { payload: row.payload, expiresAt: row.expiresAt };
 }
 
 /** Drop handshakes whose TTL has elapsed. Safe to call periodically. */

@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "scim_site_admin" boolean DEFAULT false NOT NULL;

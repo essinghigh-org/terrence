@@ -38,7 +38,7 @@ import { join } from "node:path";
 // ---------------------------------------------------------------------------
 
 /** A single target column's storage contract, derived from the Drizzle schema. */
-export interface TransferColumn {
+export type TransferColumn = {
   /** SQL column name (snake_case in Terrence). */
   readonly name: string;
   /** Drizzle dataType: "string" | "number" | "boolean" | "json" | "date" | "buffer". */
@@ -53,18 +53,18 @@ export interface TransferColumn {
   readonly mode: string | undefined;
 }
 
-export interface TransferTable {
+export type TransferTable = {
   readonly name: string;
   readonly columns: readonly TransferColumn[];
 }
 
 /** One foreign-key edge used for topological table ordering. */
-export interface ForeignKeyEdge {
+export type ForeignKeyEdge = {
   readonly child: string;
   readonly parent: string;
 }
 
-export interface UniqueIndex {
+export type UniqueIndex = {
   readonly name: string;
   readonly table: string;
   readonly columns: readonly string[];
@@ -74,7 +74,7 @@ export interface UniqueIndex {
  * Read side of a transfer. All methods are awaited; streamRows delivers
  * batches so large tables never materialize in memory at once.
  */
-export interface TransferSource {
+export type TransferSource = {
   /** Cheap connectivity probe (SELECT 1). */
   ping(): Promise<void>;
   /** True when the source exposes the given table. */
@@ -110,7 +110,7 @@ export interface TransferSource {
 }
 
 /** Write side of a transfer. */
-export interface TransferTarget {
+export type TransferTarget = {
   /** Table list + foreign keys + unique indexes of the target schema. */
   listForeignKeys(): Promise<readonly ForeignKeyEdge[]>;
   listUniqueIndexes(): Promise<readonly UniqueIndex[]>;
@@ -230,7 +230,7 @@ export function normalizeValue(value: unknown, column: TransferColumn): unknown 
 }
 
 /** Minimal read surface shared by sources and targets (digest verification). */
-interface Digestable {
+type Digestable = {
   count(name: string): Promise<number>;
   streamRows(
     name: string,
@@ -329,7 +329,7 @@ export function topologicalOrder(tables: readonly string[], edges: readonly Fore
   const ready = tables.filter((name) => (parentCount.get(name) ?? 0) === 0);
   const ordered: string[] = [];
   while (ready.length > 0) {
-    const name = ready.shift() as string;
+    const name = ready.shift()!;
     ordered.push(name);
     for (const child of childrenOf.get(name) ?? []) {
       const remaining = (parentCount.get(child) ?? 0) - 1;
@@ -345,7 +345,7 @@ export function topologicalOrder(tables: readonly string[], edges: readonly Fore
 // SQLite target
 // ---------------------------------------------------------------------------
 
-export interface SqliteTargetOptions {
+export type SqliteTargetOptions = {
   /** Run the Drizzle migrations to create the schema (default true). */
   readonly createSchema?: boolean;
 }
@@ -470,7 +470,7 @@ export class SqliteTransferTarget implements TransferTarget {
     this.#client.run("BEGIN");
     try {
       for (const row of rows) {
-        statement.run(...(row.map((value, i) => normalizeValue(value, columns[i] as TransferColumn)) as never[]));
+        statement.run(...(row.map((value, i) => normalizeValue(value, columns[i]!)) as never[]));
       }
       this.#client.run("COMMIT");
     } catch (error) {
@@ -590,7 +590,7 @@ async function streamSqliteRows(
       if (rows.length === 0) return;
       await onBatch(rows.map((row) => columns.map((c) => row[c.name])));
       started = true;
-      last = rows[rows.length - 1]?.[primaryKey[0] as string] ?? null;
+      last = rows[rows.length - 1]?.[primaryKey[0]!] ?? null;
     }
   }
   // No single-column PK: offset pagination (join tables are small).
@@ -681,14 +681,12 @@ export class SqliteTransferSource implements TransferSource {
 // ---------------------------------------------------------------------------
 
 /** Minimal structural typing for the Bun.SQL client (bun-types covers the module). */
-export interface BunSqlConnection {
+export type BunSqlConnection = {
   unsafe<T = unknown>(query: string, values?: readonly unknown[]): Promise<readonly T[]>;
   end(options?: { timeout?: number }): Promise<void>;
 }
 
-interface BunSqlClientConstructor {
-  new (options: { url: string; max?: number }): BunSqlConnection;
-}
+type BunSqlClientConstructor = new (options: { url: string; max?: number }) => BunSqlConnection
 
 const SqlClient = (Bun as unknown as { SQL: BunSqlClientConstructor }).SQL;
 
@@ -773,7 +771,7 @@ export class PgTransferSource implements TransferSource {
         if (rows.length === 0) return;
         await onBatch(rows.map((row) => columns.map((c) => row[c.name])));
         started = true;
-        last = rows[rows.length - 1]?.[primaryKey[0] as string] ?? null;
+        last = rows[rows.length - 1]?.[primaryKey[0]!] ?? null;
       }
     }
     let offset = 0;
@@ -827,22 +825,22 @@ export class PgTransferSource implements TransferSource {
 // Transfer + verification
 // ---------------------------------------------------------------------------
 
-export interface TransferProgress {
+export type TransferProgress = {
   readonly table: string;
   readonly rowsCopied: number;
 }
 
-export interface TransferTableReport {
+export type TransferTableReport = {
   readonly name: string;
   readonly rowsCopied: number;
 }
 
-export interface TransferReport {
+export type TransferReport = {
   readonly tables: readonly TransferTableReport[];
   readonly totalRows: number;
 }
 
-export interface TransferOptions {
+export type TransferOptions = {
   readonly batchSize?: number;
   readonly onProgress?: (progress: TransferProgress) => void;
   /**
@@ -911,7 +909,7 @@ export async function transferDatabase(
 // Verification (mirrors the forward path: counts, invariants, FKs, hashes)
 // ---------------------------------------------------------------------------
 
-export interface UniqueCheckResult {
+export type UniqueCheckResult = {
   readonly index: string;
   readonly columns: readonly string[];
   readonly source: number;
@@ -919,7 +917,7 @@ export interface UniqueCheckResult {
   readonly match: boolean;
 }
 
-export interface TableVerification {
+export type TableVerification = {
   readonly table: string;
   readonly sourceCount: number;
   readonly targetCount: number;
@@ -933,7 +931,7 @@ export interface TableVerification {
   };
 }
 
-export interface VerificationReport {
+export type VerificationReport = {
   readonly tables: readonly TableVerification[];
   readonly foreignKeyViolations: readonly { table: string; rowid: number | null; parent: string; fkid: number }[];
   readonly foreignKeysEnabled: boolean;
@@ -942,7 +940,7 @@ export interface VerificationReport {
   readonly totalRowsTarget: number;
 }
 
-export interface VerifyOptions {
+export type VerifyOptions = {
   /** Max rows hashed per table (sample hash). */
   readonly sampleLimit?: number;
 }
