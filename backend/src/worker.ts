@@ -2216,7 +2216,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
           runId,
           vcsCommitSha,
           vcsCommitUrl,
-          terraformVersion: run.terraformVersion ?? workspace.terraformVersion ?? null,
+          terraformVersion: resolved.version,
           status: "finalized",
           createdAt: Date.now(),
         });
