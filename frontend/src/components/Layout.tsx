@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX, type ReactNode } from "react";
+import { useEffect, useRef, useState, type JSX, type ReactNode } from "react";
 import {
   Link,
   matchPath,
@@ -162,6 +162,9 @@ export function Layout({
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
   const [visitsRevision, setVisitsRevision] = useState(0);
+  // Tracks the pending "g" of a g-then-key sequence (gg / gh / gw). Cleared
+  // after 1500ms, on a non-matching key, or when an overlay is open.
+  const pendingGRef = useRef<number | null>(null);
   const docsIndex = useDocsIndex();
 
   useEffect(() => {
@@ -173,25 +176,18 @@ export function Layout({
     if (main instanceof HTMLElement) main.scrollTop = 0;
   }, [location.pathname]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent): void => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setCommandPaletteOpen((prev) => !prev);
-      } else if (
-        e.key === "?" &&
-        !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
-      ) {
-        e.preventDefault();
-        setShortcutsModalOpen((prev) => !prev);
-      }
-    };
+  useEffect((): void => {
+    if (!commandPaletteOpen && !shortcutsModalOpen && !mobileNavigationOpen) {
+      return;
+    }
+    // Any open overlay owns the keyboard; drop any half-typed sequence.
+    if (pendingGRef.current !== null) {
+      window.clearTimeout(pendingGRef.current);
+      pendingGRef.current = null;
+    }
+  }, [commandPaletteOpen, shortcutsModalOpen, mobileNavigationOpen]);
 
-    window.addEventListener("keydown", handleKeyDown);
-    return (): void => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, []);
+
 
   useEffect((): (() => void) => {
     const controller = new AbortController();
@@ -281,6 +277,90 @@ export function Layout({
     : undefined;
   const selectedDocsSlug = docsSlug ?? docsIndex.index?.[0]?.slug;
   const orgPath = hasOrg ? `/app/${encodeURIComponent(orgName)}` : "/app";
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      // Never intercept typing inside form controls or contenteditable.
+      const target = e.target;
+      const inTextField = target instanceof HTMLInputElement
+        || target instanceof HTMLTextAreaElement
+        || target instanceof HTMLSelectElement
+        || (target instanceof HTMLElement && target.isContentEditable);
+
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCommandPaletteOpen((prev) => !prev);
+        return;
+      }
+      if (e.key === "?" && !inTextField) {
+        e.preventDefault();
+        setShortcutsModalOpen((prev) => !prev);
+        return;
+      }
+      // Overlay-aware guard: while the palette, the shortcuts help, or the
+      // mobile drawer is open, they own the keyboard. Don't start sequences,
+      // and don't hijack Escape away from the dialog's own close handling.
+      const overlayOpen = commandPaletteOpen || shortcutsModalOpen || mobileNavigationOpen;
+      if (overlayOpen || inTextField || e.metaKey || e.ctrlKey || e.altKey) {
+        if (e.key === "g" && pendingGRef.current !== null) {
+          window.clearTimeout(pendingGRef.current);
+          pendingGRef.current = null;
+        }
+        return;
+      }
+      if (pendingGRef.current !== null && (e.key === "h" || e.key === "w")) {
+        window.clearTimeout(pendingGRef.current);
+        pendingGRef.current = null;
+        e.preventDefault();
+        if (e.key === "h") navigate("/app/account");
+        else navigate(hasOrg ? `${orgPath}/workspaces` : "/app");
+        return;
+      }
+
+      if (e.key === "g") {
+        pendingGRef.current = window.setTimeout((): void => {
+          pendingGRef.current = null;
+        }, 1500);
+        return;
+      }
+      if (pendingGRef.current !== null) {
+        // A sequence was pending but this key doesn't complete one.
+        window.clearTimeout(pendingGRef.current);
+        pendingGRef.current = null;
+        return;
+      }
+
+      switch (e.key.toLowerCase()) {
+        case "/":
+          e.preventDefault();
+          setCommandPaletteOpen(true);
+          break;
+        case "[":
+          toggleSidebar();
+          break;
+        case "escape": {
+          // Close overlays first; Base UI handles dialog Esc natively, but
+          // the palette state lives here so it must be cleared explicitly.
+          if (commandPaletteOpen) setCommandPaletteOpen(false);
+          else if (shortcutsModalOpen) setShortcutsModalOpen(false);
+          else if (mobileNavigationOpen) setMobileNavigationOpen(false);
+          else if (pendingGRef.current !== null) {
+            window.clearTimeout(pendingGRef.current);
+            pendingGRef.current = null;
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return (): void => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+    // hasOrg/orgPath are stable per-route values used by the g-sequences.
+  }, [navigate, commandPaletteOpen, shortcutsModalOpen, mobileNavigationOpen, hasOrg, orgPath]);
 
   // Remember the last organization the operator worked in so a fresh page
   // load (or the next visit) can resume there instead of the org picker.
