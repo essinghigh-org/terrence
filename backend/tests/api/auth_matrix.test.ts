@@ -3,7 +3,7 @@ import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { hashAuthenticationToken, opaqueToken } from "../../src/lib/token-service";
 
 const AUTHED_ROUTE = "/api/v2/organizations";
@@ -41,7 +41,7 @@ describe("7.4 Authentication test matrix", () => {
     const res = await app.handle(new Request(`http://localhost${AUTHED_ROUTE}`, { headers: auth(legacyTokenPlain) as never }));
     expect(res.status).not.toBe(401);
     const row = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, legacyTokenId) });
-    expect(row?.token).toBe(createHash("sha256").update(legacyTokenPlain).digest("hex"));
+    expect(row?.token).toBe(hashAuthenticationToken(legacyTokenPlain));
   });
 
   it("482 new (hashed) token format authenticates", async () => {

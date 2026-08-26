@@ -103,6 +103,7 @@ import { explorerRoutes } from "./routes/explorer";
 import { teamProjectRoutes } from "./routes/team-projects";
 import { organizationRoleRoutes } from "./routes/organization-roles";
 import { organizationInvitationRoutes } from "./routes/organization-invitations";
+import { emailVerificationRoutes } from "./routes/email-verification";
 import { samlRoutes } from "./routes/saml";
 import { oidcRoutes } from "./routes/oidc";
 import { workloadIdentityRoutes } from "./routes/workload-identity";
@@ -271,7 +272,7 @@ const WORKSPACE_RUN_HISTORY_RATE_LIMIT = envPositiveInt("RATE_LIMIT_WORKSPACE_RU
 const WORKSPACE_RUN_HISTORY_DURATION_MS = envPositiveInt("RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS", 60_000);
 
 function distributedOrLocal(bucketPrefix: string): ReturnType<typeof fixedWindowContext> {
-  return isPostgres ? distributedFixedWindowContext(bucketPrefix) as unknown as ReturnType<typeof fixedWindowContext> : fixedWindowContext();
+  return isPostgres ? distributedFixedWindowContext(bucketPrefix) : fixedWindowContext();
 }
 
 function fixedWindowContext(): RateLimitContext {
@@ -580,7 +581,7 @@ export const app = new Elysia()
     // HSTS (137): only when Terrence knows it is behind HTTPS, so plain HTTP
     // dev/test deployments are not forced into HTTPS by a cached header.
     try {
-      if (shouldSendHsts(request as unknown as { url: string; headers: { get: (name: string) => string | null } })) {
+      if (shouldSendHsts(request)) {
         if (headers["Strict-Transport-Security"] === undefined) headers["Strict-Transport-Security"] = HSTS_VALUE;
       }
     } catch { /* HSTS is best-effort */ }
@@ -653,7 +654,7 @@ export const app = new Elysia()
           const inm = request.headers.get("if-none-match");
           if (inm !== null && (inm === etag || inm === "*")) {
             headers.ETag = etag;
-            return new Response(null, { status: 304, headers: headers as Record<string, string> }) as unknown as void;
+            return new Response(null, { status: 304, headers: headers as Record<string, string> });
           }
         }
       } catch (error: unknown) {
@@ -793,6 +794,7 @@ export const app = new Elysia()
   .use(teamProjectRoutes)
   .use(organizationRoleRoutes)
   .use(organizationInvitationRoutes)
+  .use(emailVerificationRoutes)
   .use(samlRoutes)
   .use(oidcRoutes)
   .use(workloadIdentityRoutes)
@@ -811,7 +813,7 @@ export const systemApiApp = new Elysia({ name: "system-api-listener" })
   // the System API exposes node inventory, diagnostics and support bundles,
   // so responses must carry the same hardening and error shapes.
   .onAfterHandle(({ set }): void => {
-    applySecurityHeaders(set.headers as Record<string, string | number>);
+    applySecurityHeaders(set.headers);
     if (set.headers["Cache-Control"] === undefined) {
       set.headers["Cache-Control"] = "no-store";
     }

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useLocation, useOutletContext } from "react-router-dom";
+import { useLocation, useOutletContext, useSearchParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import type { LayoutOutletContext } from "../components/Layout";
 import { formatDateTime } from "../lib/utils";
@@ -41,8 +41,9 @@ function formatSessionDate(value: string): string {
 }
 
 export function AccountSettings(): React.JSX.Element {
-  type Account = { id: string; attributes: { username: string; email: string | null; "must-change-password"?: boolean; "avatar-url"?: string; theme?: string } };
+  type Account = { id: string; attributes: { username: string; email: string | null; "email-verified"?: boolean; "must-change-password"?: boolean; "avatar-url"?: string; theme?: string } };
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const layoutContext = useOutletContext<LayoutOutletContext | null>();
   const [account, setAccount] = useState<Account | null>(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
@@ -50,6 +51,8 @@ export function AccountSettings(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+  const [verificationNotice, setVerificationNotice] = useState<"visited" | null>(null);
+  const [verificationLoading, setVerificationLoading] = useState(false);
 
   // Profile Form
   const [username, setUsername] = useState("");
@@ -100,6 +103,41 @@ export function AccountSettings(): React.JSX.Element {
       element.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }, [loading, location.hash]);
+
+  // The email-verification click-through lands here with a result flag
+  // (backend 302). Consume the flag immediately; the visible message is only
+  // emitted once the freshly loaded account record confirms the outcome, so
+  // a hand-crafted URL can never claim an unverified account got verified.
+  useEffect((): void => {
+    if (searchParams.get("email-verified") === "1") {
+      setVerificationNotice("visited");
+      setSearchParams({}, { replace: true });
+      return;
+    }
+    const failed = searchParams.get("email-verification");
+    if (failed !== null) {
+      const reasons: Record<string, string> = {
+        missing: "This verification link was incomplete. Send a new one below.",
+        expired: "This verification link has expired or was already used. Send a new one below.",
+        changed: "Your email address changed since this link was sent. Request a new verification email.",
+        suspended: "Suspended accounts cannot verify their email address.",
+      };
+      setError(reasons[failed] ?? "The verification link was not accepted.");
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
+  useEffect((): void => {
+    if (verificationNotice === null || loading) return;
+    if (verificationNotice === "visited" && account?.attributes["email-verified"] === true) {
+      setSuccessMsg("Your email address is now verified.");
+      return;
+    }
+    // Neutral completion: the link worked, but this session's account does
+    // not (yet) show verified — e.g. the token belonged to another account.
+    setSuccessMsg("Verification link processed. See the email verification section below for the current status.");
+    document.getElementById("email-verification")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [verificationNotice, loading, account]);
 
   async function loadAccount(): Promise<void> {
     setAccount(null);
@@ -256,6 +294,22 @@ export function AccountSettings(): React.JSX.Element {
       setError(message);
     } finally {
       setUpdatingProfile(false);
+    }
+  }
+
+  async function handleRequestEmailVerification(): Promise<void> {
+    if (updatingProfile) return;
+    if (account?.attributes.email === null || account?.attributes.email === undefined || account.attributes.email.trim() === "") return;
+    setVerificationLoading(true);
+    setError("");
+    setSuccessMsg("");
+    try {
+      await fetchApi("/account/email/verification", { method: "POST" });
+      setSuccessMsg("Verification email sent. Check your inbox to confirm this address.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not send a verification email");
+    } finally {
+      setVerificationLoading(false);
     }
   }
 
@@ -465,6 +519,29 @@ export function AccountSettings(): React.JSX.Element {
         </CardFooter>
       </Card>
 
+      {!mustChangePassword && account?.attributes.email !== null && account?.attributes.email !== undefined && account.attributes.email !== "" && (
+        <Card id="email-verification" className="scroll-mt-20">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg"><Check className="size-4" />Email verification</CardTitle>
+            <CardDescription>Verify your email address so organization invitations and account recovery can be trusted.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {account.attributes["email-verified"] === true ? (
+              <Badge variant="secondary">Verified</Badge>
+            ) : (
+              <p className="text-sm text-muted-foreground">{account.attributes.email} is not verified.</p>
+            )}
+          </CardContent>
+          {account.attributes["email-verified"] !== true && (
+            <CardFooter>
+              <Button type="button" variant="outline" disabled={verificationLoading || updatingProfile} onClick={(): void => { void handleRequestEmailVerification(); }}>
+                {verificationLoading ? "Sending…" : "Send verification email"}
+              </Button>
+            </CardFooter>
+          )}
+        </Card>
+      )}
+
       <Card id="appearance" className={mustChangePassword ? "hidden" : "scroll-mt-20"}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
@@ -606,7 +683,7 @@ export function AccountSettings(): React.JSX.Element {
                           disabled={revokingSessionId === session.id}
                           aria-label={`Revoke session ${session.id}`}
                           onClick={(): void => {
-                            const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
+                            const isTestEnv = window?.navigator.userAgent.includes("jsdom") ?? false;
                             if (isTestEnv) {
                               void handleRevokeSession(session);
                             } else {
@@ -852,7 +929,7 @@ export function AccountSettings(): React.JSX.Element {
                         aria-label={`Delete token ${token.id}`}
                         disabled={deletingTokenId === token.id}
                         onClick={(): void => {
-                          const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
+                          const isTestEnv = window?.navigator.userAgent.includes("jsdom") ?? false;
                           if (isTestEnv) {
                             void handleDeleteToken(token.id);
                           } else {

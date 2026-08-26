@@ -87,7 +87,7 @@ test("table-rebuild migration fails without legacy_alter_table (documents the bu
   buildProdShape(db);
   db.run("PRAGMA foreign_keys = OFF;");
   // Without the pragma, the RENAME collides with the trigger-body rewrite.
-  expect(() => rebuildPolicySets(db)).toThrow(/no such table/i);
+  expect(() => { rebuildPolicySets(db); }).toThrow(/no such table/i);
 });
 
 test("table-rebuild migration succeeds with legacy_alter_table (the fix)", () => {
@@ -95,7 +95,7 @@ test("table-rebuild migration succeeds with legacy_alter_table (the fix)", () =>
   buildProdShape(db);
   db.run("PRAGMA foreign_keys = OFF;");
   db.run("PRAGMA legacy_alter_table = ON;");
-  expect(() => rebuildPolicySets(db)).not.toThrow();
+  expect(() => { rebuildPolicySets(db); }).not.toThrow();
   db.run("PRAGMA legacy_alter_table = OFF;");
   db.run("PRAGMA foreign_keys = ON;");
   // The sibling trigger survives and still references the rebuilt table.

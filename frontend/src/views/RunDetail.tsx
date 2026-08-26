@@ -315,16 +315,85 @@ function formatDate(value: string | undefined): string {
   return formatDateTime(date);
 }
 
-function formatDuration(start: string | undefined, end: string | undefined): string {
-  if (start === undefined || end === undefined) return "Unavailable";
-  const milliseconds = Date.parse(end) - Date.parse(start);
-  if (!Number.isFinite(milliseconds) || milliseconds < 0) return "Unavailable";
+function timestampMilliseconds(key: string, value: string | undefined): number | undefined {
+  // status-timestamps also carries plan metadata (for example
+  // input-state-serial and saved-plan-sha256).  Numeric metadata is accepted
+  // by Date.parse and can otherwise turn a 9-minute run into millennia.
+  if (!key.endsWith("-at") || value === undefined) return undefined;
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) ? milliseconds : undefined;
+}
+
+function formatDurationMilliseconds(milliseconds: number | undefined): string {
+  if (milliseconds === undefined || !Number.isFinite(milliseconds) || milliseconds < 0) return "Unavailable";
   const minutes = Math.floor(milliseconds / 60_000);
   if (minutes < 1) return "Less than a minute";
   if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
   const hours = Math.floor(minutes / 60);
   const remainder = minutes % 60;
   return `${hours} hour${hours === 1 ? "" : "s"}${remainder === 0 ? "" : ` ${remainder} min`}`;
+}
+
+function formatDuration(start: string | undefined, end: string | undefined): string {
+  if (start === undefined || end === undefined) return "Unavailable";
+  return formatDurationMilliseconds(Date.parse(end) - Date.parse(start));
+}
+
+const PLAN_DURATION_END_KEYS = [
+  "planned-at",
+  "planned-and-finished-at",
+  "planned-and-saved-at",
+  "errored-at",
+  "unreachable-at",
+  "canceled-at",
+  "force-canceled-at",
+] as const;
+const APPLY_DURATION_END_KEYS = [
+  "applied-at",
+  "errored-at",
+  "unreachable-at",
+  "canceled-at",
+  "force-canceled-at",
+] as const;
+
+function firstTimestampMilliseconds(
+  timestamps: Readonly<Record<string, string>>,
+  keys: readonly string[],
+): number | undefined {
+  for (const key of keys) {
+    const value = timestampMilliseconds(key, timestamps[key]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+export function runExecutionDurationMilliseconds(
+  timestamps: Readonly<Record<string, string>>,
+  planOnly: boolean,
+  now = Date.now(),
+): number | undefined {
+  const planStart = timestampMilliseconds("planning-at", timestamps["planning-at"])
+    ?? timestampMilliseconds("pending-at", timestamps["pending-at"])
+    ?? timestampMilliseconds("planned-at", timestamps["planned-at"]);
+  const planEnd = firstTimestampMilliseconds(timestamps, PLAN_DURATION_END_KEYS);
+  if (planStart === undefined) return undefined;
+  const planDuration = planEnd === undefined
+    ? Math.max(0, now - planStart)
+    : Math.max(0, planEnd - planStart);
+  if (planOnly) return planDuration;
+
+  const applyStart = timestampMilliseconds("applying-at", timestamps["applying-at"]);
+  if (applyStart === undefined) {
+    const legacyEnd = timestampMilliseconds("applied-at", timestamps["applied-at"]);
+    if (legacyEnd !== undefined) {
+      return Math.max(0, legacyEnd - planStart);
+    }
+    return planDuration;
+  }
+  const applyEnd = firstTimestampMilliseconds(timestamps, APPLY_DURATION_END_KEYS);
+  return planDuration + (applyEnd === undefined
+    ? Math.max(0, now - applyStart)
+    : Math.max(0, applyEnd - applyStart));
 }
 
 /** Format a duration stored as seconds (e.g. "300" -> "5 minutes"). */
@@ -768,16 +837,16 @@ export function RunDetail({
   // used to refetch all nine endpoints).
   const reloadAuxiliaries = useCallback(async (kinds: readonly AuxKind[], signal: AbortSignal): Promise<void> => {
     const fetchers: Record<AuxKind, () => Promise<unknown>> = {
-      logs: (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/logs`, { signal }),
-      plan: (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/plan`, { signal }),
-      apply: (): Promise<unknown> => fetchApi(`/api/v2/applies/apply-${runId}`, { signal }),
-      cost: (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/cost-estimate`, { signal }),
-      policy: (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/policy-checks`, { signal }),
-      assessments: (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/check-results`, { signal }),
-      events: (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/run-events`, { signal }),
-      comments: (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/comments`, { signal }),
+      logs: async (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/logs`, { signal }),
+      plan: async (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/plan`, { signal }),
+      apply: async (): Promise<unknown> => fetchApi(`/api/v2/applies/apply-${runId}`, { signal }),
+      cost: async (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/cost-estimate`, { signal }),
+      policy: async (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/policy-checks`, { signal }),
+      assessments: async (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/check-results`, { signal }),
+      events: async (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/run-events`, { signal }),
+      comments: async (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/comments`, { signal }),
     };
-    const results = await Promise.allSettled(kinds.map((kind: AuxKind): Promise<unknown> => fetchers[kind]()));
+    const results = await Promise.allSettled(kinds.map(async (kind: AuxKind): Promise<unknown> => fetchers[kind]()));
     if (signal.aborted) return;
     let failed = false;
     for (let index = 0; index < kinds.length; index += 1) {
@@ -1318,19 +1387,17 @@ export function RunDetail({
       : backendPlanImportCount
     : artifactImportCount;
   const applyCounts = apply?.attributes;
-  const timestampEntries = Object.entries(timestamps);
-  const validTimestampValues = Object.values(timestamps)
-    .filter((value: string): boolean => Number.isFinite(Date.parse(value)))
-    .sort((left: string, right: string): number => Date.parse(left) - Date.parse(right));
-  const durationStart = validTimestampValues[0] ?? attributes["created-at"];
-  const durationEnd = TERMINAL_STATUSES.has(status)
-    ? validTimestampValues[validTimestampValues.length - 1]
-    : undefined;
-  const duration = TERMINAL_STATUSES.has(status)
-    ? formatDuration(durationStart, durationEnd)
-    : planStatus === "finished"
-      ? formatDuration(durationStart, validTimestampValues[validTimestampValues.length - 1] ?? durationStart)
-      : "In progress";
+  const timestampEntries = Object.entries(timestamps)
+    .filter(([key, value]): boolean => timestampMilliseconds(key, value) !== undefined);
+  const inputStateSerial = timestamps["input-state-serial"];
+  const durationMilliseconds = runExecutionDurationMilliseconds(
+    timestamps,
+    attributes["plan-only"] === true,
+  );
+  const duration = durationMilliseconds === undefined
+    ? planStatus === "finished" ? "Unavailable" : "In progress"
+    : formatDurationMilliseconds(durationMilliseconds);
+  const durationLabel = attributes["plan-only"] === true ? "Plan duration" : "Plan & apply duration";
   // When a phase completed but left no captured raw log (e.g. structured JSON
   // output exists), don't claim the phase never produced output.
   const planRawLogMessage = planStatus === "finished"
@@ -1495,7 +1562,7 @@ export function RunDetail({
             {attributes.message ?? "Manual run"}
           </h2>
           <p className="mt-2 text-[13px] text-muted-foreground">
-            {sourceLabel(attributes.source)} · {sourceLabel(attributes.source)} · Created {formatDate(attributes["created-at"])}
+            {sourceLabel(attributes.source)} · Created {formatDate(attributes["created-at"])}
           </p>
           {(attributes["trigger-reason"] === "vcs" || attributes.source === "github" || attributes.source === "gitlab" || attributes.source === "bitbucket") && (
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -1583,7 +1650,7 @@ export function RunDetail({
       <dl className="mb-5 grid overflow-hidden rounded-md border border-border bg-background shadow-sm sm:grid-cols-3">
         <div className="border-b border-border px-5 py-4 sm:border-b-0 sm:border-r">
           <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {attributes["plan-only"] === true ? "Plan duration" : "Plan & apply duration"}
+            {durationLabel}
           </dt>
           <dd className="mt-1 text-sm font-semibold text-foreground">{duration}</dd>
           {(() => {
@@ -1667,7 +1734,7 @@ export function RunDetail({
             <dd className="mt-1 text-foreground">{attributes["terraform-version"] ?? "Workspace default"}</dd>
           </div>
         </dl>
-        {timestampEntries.length > 0 && (
+        {(timestampEntries.length > 0 || inputStateSerial !== undefined) && (
           <div className="border-t border-border px-5 py-4">
             <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Run timeline</h3>
             <dl className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
@@ -1677,6 +1744,14 @@ export function RunDetail({
                   <dd className="mt-0.5 text-foreground">{formatDate(value)}</dd>
                 </div>
               ))}
+              {inputStateSerial !== undefined && /^\d+$/.test(inputStateSerial) && (
+                <div>
+                  <dt className="text-muted-foreground">Input state serial</dt>
+                  <dd className="mt-0.5 text-foreground" title="The workspace state snapshot used as this run's plan input.">
+                    #{inputStateSerial}
+                  </dd>
+                </div>
+              )}
             </dl>
           </div>
         )}

@@ -118,7 +118,7 @@ async function startSupervisor(input: SupervisorInput): Promise<number> {
   try {
     const child = spawn([process.execPath, join(import.meta.dir, "module-test-supervisor.ts"), inputPath], {
       detached: true,
-      env: process.env as Record<string, string | undefined>,
+      env: process.env,
       stdio: ["ignore", logFile.fd, logFile.fd],
     });
     child.unref();

@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { fetchApi } from "../../lib/api";
-import { CheckCircle2, Plus, Trash2, } from "lucide-react";
+import { CheckCircle2, Plus, ShieldOff, Trash2, } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
 import { toast } from "../../components/ui/toast";
+import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { type DataItem, } from "./types";
 export function UsersAdmin(props: Readonly<{
@@ -12,12 +14,14 @@ export function UsersAdmin(props: Readonly<{
   loadAdminData: () => Promise<void>;
 }>): React.JSX.Element {
   const { users, setCreateDialogOpen, setDeleteUserId, loadAdminData } = props;
+  const [mfaResetUser, setMfaResetUser] = useState<{ id: string; label: string } | null>(null);
   const runUserAction = (id: string, actionPath: string, successTitle: string, failureTitle: string): void => {
     void fetchApi(`/api/v2/admin/users/${id}/actions/${actionPath}`, { method: "POST" })
       .then((): void => { void loadAdminData(); toast.add({ title: successTitle, type: "success" }); })
-      .catch((err): void => { toast.add({ title: failureTitle, description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
+      .catch((err: unknown): void => { toast.add({ title: failureTitle, description: err instanceof Error ? err.message : "Unknown error", type: "error" }); });
   };
   return (
+    <>
             <Card>
               <CardHeader variant="section">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -121,6 +125,16 @@ export function UsersAdmin(props: Readonly<{
                                     Suspend
                                   </Button>
                                 )}
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 text-xs"
+                                  title="Reset MFA without the user's authenticator code"
+                                  onClick={(): void => { setMfaResetUser({ id: u.id, label: u.attributes.username ?? u.id }); }}
+                                >
+                                  <ShieldOff className="mr-1 h-3 w-3" aria-hidden="true" />
+                                  Reset MFA
+                                </Button>
                                 {/* Delete */}
                                 <Button
                                   size="sm"
@@ -141,5 +155,20 @@ export function UsersAdmin(props: Readonly<{
                 </div>
               </CardContent>
             </Card>
+      <ConfirmDialog
+        open={mfaResetUser !== null}
+        onOpenChange={(open): void => { if (!open) setMfaResetUser(null); }}
+        title="Reset multi-factor authentication?"
+        description={`This removes the authenticator for ${mfaResetUser?.label ?? "this user"}. They will need to enroll MFA again.`}
+        confirmText="Reset MFA"
+        confirmVariant="destructive"
+        onConfirm={(): void => {
+          if (mfaResetUser === null) return;
+          const target = mfaResetUser;
+          setMfaResetUser(null);
+          runUserAction(target.id, "disable_two_factor", "MFA disabled", "Failed to reset MFA");
+        }}
+      />
+    </>
   );
 };

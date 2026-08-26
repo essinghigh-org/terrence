@@ -742,7 +742,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const vcsError = await db.transaction(async (tx): Promise<string | null> => {
       let vcsRepo: typeof workspaces.$inferInsert.vcsRepo;
       if (rawVcsRepo !== undefined && rawVcsRepo !== null) {
-        const normalized = await normalizeVcsRepo(rawVcsRepo, org.id, undefined, tx as unknown as typeof db);
+        const normalized = await normalizeVcsRepo(rawVcsRepo, org.id, undefined, tx);
         if ("error" in normalized) return normalized.error;
         vcsRepo = normalized.value;
       }
@@ -759,8 +759,8 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         inheritsProjectAutoDestroy,
         settingOverwrites: workspaceSettingOverwrites,
         ownedByType: ownedByType === undefined || ownedByType === null ? null : ownedByType as "team" | "user" | "service",
-        ownedById: ownedById === undefined || ownedById === null ? null : ownedById as string,
-        contactEmail: contactEmail === undefined || contactEmail === null ? null : contactEmail as string,
+        ownedById: ownedById === undefined || ownedById === null ? null : ownedById,
+        contactEmail: contactEmail === undefined || contactEmail === null ? null : contactEmail,
         createdAt: Date.now(),
       });
       if (tagBindings !== undefined && tagBindings.length > 0) {
@@ -1316,7 +1316,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     ]);
     const totalCount = countRows[0]?.total ?? 0;
     return {
-      data: await Promise.all(sets.map((vs: typeof variableSets.$inferSelect): Promise<Record<string, unknown>> => variableSetResource(vs))),
+      data: await Promise.all(sets.map(async (vs: typeof variableSets.$inferSelect): Promise<Record<string, unknown>> => variableSetResource(vs))),
       ...pagination(request, number, size, totalCount),
     };
   })
@@ -1749,19 +1749,19 @@ async function updateWorkspaceResponse(
     source: source ?? workspace.source,
     iacBinary: typeof iacBinary === "string" ? iacBinary : (iacBinary === null ? null : workspace.iacBinary),
     ownedByType: typeof attributes["owned-by-type"] === "string"
-      ? attributes["owned-by-type"] as "team" | "user" | "service"
+      ? attributes["owned-by-type"]
       : (attributes["owned-by-type"] === null ? null : workspace.ownedByType),
     ownedById: typeof attributes["owned-by-id"] === "string"
-      ? attributes["owned-by-id"] as string
+      ? attributes["owned-by-id"]
       : (attributes["owned-by-id"] === null ? null : workspace.ownedById),
     contactEmail: typeof attributes["contact-email"] === "string"
-      ? attributes["contact-email"] as string
+      ? attributes["contact-email"]
       : (attributes["contact-email"] === null ? null : workspace.contactEmail),
   };
 
   const vcsError = await db.transaction(async (tx): Promise<string | null> => {
     if (rawVcsRepo !== undefined) {
-      const normalized = await normalizeVcsRepo(rawVcsRepo, workspace.orgId, workspace.vcsRepo ?? undefined, tx as unknown as typeof db);
+      const normalized = await normalizeVcsRepo(rawVcsRepo, workspace.orgId, workspace.vcsRepo ?? undefined, tx);
       if ("error" in normalized) return normalized.error;
       updated.vcsRepo = normalized.value;
     }

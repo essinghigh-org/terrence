@@ -11,7 +11,7 @@ const STORAGE_DIR = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "..
 // into each per-test tmpfs storage dir (which is charged to cgroup RAM).
 const BINARY_BASE_DIR = resolve(
   process.env.TERRENCE_BINARY_CACHE_DIR !== undefined && process.env.TERRENCE_BINARY_CACHE_DIR !== ""
-    ? process.env.TERRENCE_BINARY_CACHE_DIR!
+    ? process.env.TERRENCE_BINARY_CACHE_DIR
     : join(STORAGE_DIR, "binaries"),
 );
 
@@ -54,7 +54,7 @@ async function listZipEntries(zipPath: string): Promise<string[] | null> {
 // `revalidateInstalledBinaries` sweeps the whole cache at startup.
 // ---------------------------------------------------------------------------
 
-export interface BinaryIntegrity {
+export type BinaryIntegrity = {
   tool: "tofu" | "terraform";
   version: string;
   /** SHA-256 hex digest of the installed executable file, not the archive. */
@@ -521,19 +521,78 @@ async function verifySha256(tool: "tofu" | "terraform", version: string, filenam
   }
 }
 
+async function systemBinaryFallback(
+  tool: "tofu" | "terraform",
+  constraint: string,
+): Promise<{ binaryPath: string; tool: string; version: string } | null> {
+  try {
+    const which = spawn(["which", tool]);
+    if ((await which.exited) !== 0) return null;
+    const binaryPath = (await new Response(which.stdout).text()).trim();
+    if (binaryPath === "") return null;
+    const versionProcess = spawn([binaryPath, "version"]);
+    const configuredProbeTimeout = Number(process.env.TERRENCE_BINARY_PROBE_TIMEOUT_MS);
+    const probeTimeout = Number.isSafeInteger(configuredProbeTimeout) && configuredProbeTimeout > 0 ? configuredProbeTimeout : 10_000;
+    const output = await new Promise<string | null>((resolve): void => {
+      let settled = false;
+      const timer = setTimeout((): void => {
+        settled = true;
+        try { versionProcess.kill(); } catch {}
+        resolve(null);
+      }, probeTimeout);
+      versionProcess.exited.then(async (exitCode): Promise<void> => {
+        const stdout = await new Response(versionProcess.stdout).text();
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(exitCode === 0 ? stdout.trim() : null);
+      }, (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(null);
+      });
+    });
+    if (output === null) return null;
+    const match = /(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?)/.exec(output);
+    const version = match?.[1];
+    const normalizedConstraint = constraint.trim().replace(/^v/, "");
+    const exactConstraint = /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?$/.test(normalizedConstraint);
+    if (version === undefined || (exactConstraint ? version !== normalizedConstraint : !matchesConstraints(version, constraint))) return null;
+    return { binaryPath, tool, version };
+  } catch {
+    return null;
+  }
+}
+
 export async function ensureBinary(toolInput?: string | null, versionInput?: string | null): Promise<{ binaryPath: string; tool: string; version: string } | null> {
   const tool = (toolInput?.toLowerCase() === "terraform" ? "terraform" : "tofu");
   let version = (versionInput !== null && versionInput !== undefined && versionInput !== "" ? versionInput : "latest");
-  const allowSystemFallback = version === "latest" || envEnabled(process.env.ALLOW_TOOL_FALLBACK);
 
   if (!validateVersion(version)) {
     console.warn(`[terrence] Invalid version format requested: ${versionInput ?? ""}`);
     return null;
   }
 
-  // Resolve constraints to exact versions
-  version = await resolveVersionConstraint(tool, version);
+  // Resolve constraints to exact versions. If discovery is unavailable after
+  // a restart, a locally installed binary is still usable when its own
+  // version satisfies the requested constraint.
+  try {
+    version = await resolveVersionConstraint(tool, version);
+  } catch (error: unknown) {
+    const fallback = await systemBinaryFallback(tool, version);
+    if (fallback !== null) {
+      log.warn(`[terrence] Using system-installed ${tool} v${fallback.version}; version discovery failed`);
+      return fallback;
+    }
+    throw error;
+  }
   version = version.replace(/^v/, "");
+  // A system binary is only accepted after its reported version matches this
+  // resolved version exactly. Falling back is therefore safe for pending runs
+  // whose managed cache disappeared during a restart, including exact-version
+  // runs; ALLOW_TOOL_FALLBACK remains reserved for alternate-tool fallback.
+  const allowSystemFallback = true;
 
   const targetDir = join(BINARY_BASE_DIR, tool, version);
   const binaryPath = join(targetDir, tool);
@@ -683,28 +742,11 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
   }
 
   if (allowSystemFallback) {
-    try {
-      const sysProc = spawn(["which", tool]);
-      if ((await sysProc.exited) === 0) {
-        const sysPath = (await new Response(sysProc.stdout).text()).trim();
-        if (sysPath !== "") {
-          // Validate the system binary version before accepting fallback
-          const versionProc = spawn([sysPath, "version"]);
-          if ((await versionProc.exited) === 0) {
-            const versionOutput = (await new Response(versionProc.stdout).text()).trim();
-            const vMatch = /(\d+\.\d+\.\d+)/.exec(versionOutput);
-            if (vMatch !== null) {
-              const sysVersion = vMatch[1];
-              if (sysVersion !== undefined && matchesConstraints(sysVersion, version)) {
-                log.info(`System-installed ${tool} v${sysVersion} satisfies constraint "${version}" at ${sysPath}`);
-                return { binaryPath: sysPath, tool, version: sysVersion };
-              }
-            }
-          }
-          console.warn(`[terrence] System-installed ${tool} at ${sysPath} does not satisfy version constraint "${version}", skipping`);
-        }
-      }
-    } catch {}
+    const fallback = await systemBinaryFallback(tool, version);
+    if (fallback !== null) {
+      log.info(`System-installed ${tool} v${fallback.version} satisfies constraint "${version}" at ${fallback.binaryPath}`);
+      return fallback;
+    }
   }
 
   // Alternate-tool fallback ONLY if opt-in via environment flag

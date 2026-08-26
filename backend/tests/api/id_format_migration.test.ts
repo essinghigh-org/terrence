@@ -28,7 +28,7 @@ async function bootOnce(env: Record<string, string>, timeoutMs = 45_000): Promis
     const timedOut = await Promise.race([
       child.exited.then(() => false),
       new Promise<boolean>((resolve) => {
-        timer = setTimeout(() => resolve(true), timeoutMs);
+        timer = setTimeout(() => { resolve(true); }, timeoutMs);
       }),
     ]);
     expect(timedOut).toBe(false);

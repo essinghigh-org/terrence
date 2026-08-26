@@ -404,6 +404,21 @@ describe("GitHub Webhooks", () => {
     expect(tarballFetches).toBe(1);
   });
 
+  test("tag-triggered workspaces ignore ordinary branch pushes", async () => {
+    await db.update(workspaces).set({
+      vcsRepo: {
+        identifier: "hashicorp/terraform",
+        branch: "main",
+        githubAppInstallationId: installationId,
+        tagsRegex: "^v\\d+\\.\\d+\\.\\d+$",
+      },
+    }).where(eq(workspaces.id, workspaceId));
+    const deliveryId = crypto.randomUUID();
+    await sendWebhook("push", pushPayload, deliveryId);
+    await waitForDelivery(deliveryId);
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).toHaveLength(0);
+  });
+
   test("non-matching or invalid tag regex creates no run", async () => {
     for (const tagsRegex of ["^release-", "["]) {
       await db.update(workspaces).set({

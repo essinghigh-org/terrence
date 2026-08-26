@@ -23,7 +23,7 @@ import type { DbExportProgress, DbExportResult } from "../../lib/db-export";
 import type { TransferSource } from "../../lib/db-transfer";
 import type { ParamCtx } from "./types";
 
-export interface ExportJob {
+export type ExportJob = {
   readonly id: string;
   status: "running" | "done" | "failed";
   readonly startedAt: number;
@@ -82,7 +82,7 @@ function attrsOf(body: unknown): Readonly<Record<string, unknown>> {
   return attributes as Record<string, unknown>;
 }
 
-export interface DbExportRouteDeps {
+export type DbExportRouteDeps = {
   /** Override source construction (tests inject SQLite-backed sources). */
   readonly sourceFactory?: (url: string) => TransferSource;
 }
@@ -128,7 +128,7 @@ export function createDbExportRoutes(deps: DbExportRouteDeps = {}) {
       const outputName = typeof attrs["output-name"] === "string" && attrs["output-name"].trim() !== ""
         ? attrs["output-name"]
         : undefined;
-      const force = attrs["force"] === true;
+      const force = attrs.force === true;
 
       // Only one export may run at a time: concurrent jobs could both pass the
       // output-name existence check and write the same file. Completed and

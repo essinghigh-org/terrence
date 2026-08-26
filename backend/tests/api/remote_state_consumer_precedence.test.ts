@@ -65,12 +65,12 @@ describe("remote-state consumer precedence (STATE-005)", () => {
     await db.insert(apiTokens).values({ id: userTokenId, token: userToken, userId: `user-rscons-${suffix}` });
     await db.insert(projects).values({ id: projectId, name: projectId, orgId });
     await db.insert(workspaces).values([
-      { id: producer, name: `${producer}`, orgId, projectId, globalRemoteState: false, projectRemoteState: false },
-      { id: explicitConsumer, name: `${explicitConsumer}`, orgId, projectId: null },
-      { id: projectConsumer, name: `${projectConsumer}`, orgId, projectId },
-      { id: globalConsumer, name: `${globalConsumer}`, orgId, projectId: null },
-      { id: unrelatedConsumer, name: `${unrelatedConsumer}`, orgId, projectId: null },
-      { id: crossOrgConsumer, name: `${crossOrgConsumer}`, orgId: otherOrgId, projectId: null },
+      { id: producer, name: producer, orgId, projectId, globalRemoteState: false, projectRemoteState: false },
+      { id: explicitConsumer, name: explicitConsumer, orgId, projectId: null },
+      { id: projectConsumer, name: projectConsumer, orgId, projectId },
+      { id: globalConsumer, name: globalConsumer, orgId, projectId: null },
+      { id: unrelatedConsumer, name: unrelatedConsumer, orgId, projectId: null },
+      { id: crossOrgConsumer, name: crossOrgConsumer, orgId: otherOrgId, projectId: null },
     ]);
     await db.insert(runs).values([
       { id: runInConsumer, workspaceId: explicitConsumer, status: "planned", isDestroy: false, createdAt: Date.now() },

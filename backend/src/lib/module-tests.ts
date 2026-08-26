@@ -175,7 +175,7 @@ export async function runModuleTest(
         "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
         "SSL_CERT_FILE", "SSL_CERT_DIR", "TF_CLI_CONFIG_FILE", "TF_PLUGIN_CACHE_DIR",
       ]
-        .flatMap((key): [string, string][] => typeof process.env[key] === "string" ? [[key, process.env[key] as string]] : []),
+        .flatMap((key): [string, string][] => typeof process.env[key] === "string" ? [[key, process.env[key]]] : []),
     );
     const environment = { ...inherited, ...(await environmentFactory?.(staging) ?? {}) };
     const processHandle = Bun.spawn(args, { cwd: root, env: environment, stdout: "pipe", stderr: "pipe" });

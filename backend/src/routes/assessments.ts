@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { db } from "../db";
 import {
@@ -123,6 +123,18 @@ async function artifactResponse(
 
 export const assessmentRoutes = new Elysia({ name: "assessments" })
   .use(authPlugin)
+  .get("/api/v2/workspaces/:workspace_id/assessment-results", async (context: ParamContext): Promise<unknown> => {
+    const workspaceId = context.params.workspace_id ?? "";
+    if ((await findAuthorizedWorkspace(workspaceId, context.user?.id, context.orgId ?? null, context.teamId ?? null)) === undefined) {
+      return notFound(context.set);
+    }
+    const results = await db.query.assessmentResults.findMany({
+      where: eq(assessmentResults.workspaceId, workspaceId),
+      orderBy: [desc(assessmentResults.createdAt)],
+      limit: 20,
+    });
+    return { data: results.map((result: Assessment): Record<string, unknown> => assessmentResource(result)) };
+  })
   .get("/api/v2/assessment-results/:assessment_result_id", async (context: ParamContext): Promise<unknown> => {
     const id = context.params.assessment_result_id ?? "";
     const result = await findAuthorizedAssessment(id, context.user?.id, context.orgId ?? null, context.teamId ?? null);

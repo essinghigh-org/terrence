@@ -141,12 +141,12 @@ export async function sweepSharedDeliveryState(): Promise<void> {
 }
 
 /** Only exported for tests: full shared state dump. */
-export async function _sharedDeliveryStateRows(): Promise<ReadonlyArray<{
+export async function _sharedDeliveryStateRows(): Promise<readonly {
   kind: string;
   stateKey: string;
   value: number;
   windowStart: number | null;
-}>> {
+}[]> {
   return db
     .select({
       kind: notificationDeliveryState.kind,

@@ -16,7 +16,7 @@ import { vcsRepoResource } from "./vcs-repo";
 import { moduleTestTokenTtlBounds } from "./workload-identity";
 
 
-type UserParam = DeepReadonly<{ id: string; username: string; email?: string | null; isSiteAdmin?: boolean | null; mustChangePassword?: boolean; theme?: string | null; ssoProvider?: string | null }>;
+type UserParam = DeepReadonly<{ id: string; username: string; email?: string | null; emailVerifiedAt?: number | null; isSiteAdmin?: boolean | null; mustChangePassword?: boolean; theme?: string | null; ssoProvider?: string | null }>;
 type AuthenticatedResourceParam = DeepReadonly<{ id: string; type: string }>;
 
 // JSON:API convention (matching the reference format/Atlas): organizations are identified by their NAME,
@@ -52,6 +52,7 @@ export function userResource(
     attributes: {
       username: user.username,
       email: user.email ?? null,
+      "email-verified": user.emailVerifiedAt !== null && user.emailVerifiedAt !== undefined,
       "is-service-account": authenticatedResource.type !== "users",
       "auth-method": user.ssoProvider === "ldap"
         ? "ldap"
@@ -94,6 +95,7 @@ export async function orgMembershipResource(
     type: "organization-memberships",
     attributes: {
       status: typeof mem.status === "string" && mem.status !== "" ? mem.status : "active",
+      username: userObj?.username ?? null,
       email: userObj?.email ?? null,
       role: mem.role,
     },

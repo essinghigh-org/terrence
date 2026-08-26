@@ -73,7 +73,7 @@ const PUBLIC_HOSTS = [
 const PRIVATE_POOLS: readonly string[][] = [PRIVATE_V4, ODD_V4_PRIVATE, PRIVATE_V6, LOCALHOST];
 const PUBLIC_POOLS: readonly string[][] = [PUBLIC_V4, PUBLIC_V6, PUBLIC_HOSTS];
 
-interface GenUrl {
+type GenUrl = {
   url: string;
   /** Expected at the sync level (scheme + literal-host classification). */
   expectBlocked: boolean;

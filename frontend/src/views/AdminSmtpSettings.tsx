@@ -41,6 +41,7 @@ export function AdminSmtpSettings(): React.JSX.Element {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [testError, setTestError] = useState("");
   const [saved, setSaved] = useState(false);
 
   const mounted = useRef(true);
@@ -83,6 +84,7 @@ export function AdminSmtpSettings(): React.JSX.Element {
 
   const save = async (): Promise<void> => {
     setSaveError("");
+    setTestError("");
     setSaved(false);
     setSaving(true);
     try {
@@ -99,7 +101,6 @@ export function AdminSmtpSettings(): React.JSX.Element {
         auth,
         username: username.trim(),
         ...(password.trim() !== "" ? { password } : undefined),
-        ...(testEmail.trim() !== "" ? { "test-email-address": testEmail.trim() } : undefined),
       };
       await fetchApi("/admin/smtp-settings", {
         method: "PATCH",
@@ -110,9 +111,20 @@ export function AdminSmtpSettings(): React.JSX.Element {
           },
         }),
       });
-      setPassword("");
-      setTestEmail("");
       setSaved(true);
+      setPassword("");
+      const recipient = testEmail.trim();
+      setTestEmail("");
+      if (recipient !== "") {
+        try {
+          await fetchApi("/admin/smtp-settings/test", {
+            method: "POST",
+            body: JSON.stringify({ data: { type: "smtp-test", attributes: { email: recipient } } }),
+          });
+        } catch (reason) {
+          setTestError(reason instanceof Error ? reason.message : "SMTP settings were saved, but the test email failed.");
+        }
+      }
     } catch (reason) {
       setSaveError(reason instanceof Error ? reason.message : "Failed to save SMTP settings.");
     } finally {
@@ -197,6 +209,7 @@ export function AdminSmtpSettings(): React.JSX.Element {
               </div>
 
               {saveError !== "" && <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{saveError}</div>}
+              {testError !== "" && <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{testError}</div>}
               {saved && <div role="status" aria-live="polite" className="text-sm text-success">Saved</div>}
 
               <div className="flex justify-end">

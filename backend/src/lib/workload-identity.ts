@@ -297,7 +297,7 @@ async function issue(claims: TokenClaims, runId: string, audience: string, ttlSe
       runId,
       keyId: key.keyId,
       audience,
-      subject: String(tokenClaims["sub"]),
+      subject: String(tokenClaims.sub),
       issuedAt: generatedAt,
       expiresAt,
       revokedAt: null,
@@ -339,7 +339,7 @@ export async function verifyWorkloadIdentityToken(token: string, audience?: stri
   if (keyId === "") throw new Error("Workload identity token has no key id");
   const key = await db.query.workloadIdentityKeys.findFirst({ where: and(eq(workloadIdentityKeys.keyId, keyId), isNull(workloadIdentityKeys.revokedAt)) });
   if (key === undefined) throw new Error("Workload identity token key is unavailable");
-  const publicKey = createPublicKey({ key: key.publicJwk as JsonWebKey, format: "jwk" });
+  const publicKey = createPublicKey({ key: key.publicJwk, format: "jwk" });
   const verified = jwt.verify(token, publicKey, {
     algorithms: ["RS256"],
     issuer: workloadIdentityIssuer(),
@@ -348,7 +348,7 @@ export async function verifyWorkloadIdentityToken(token: string, audience?: stri
   if (typeof verified === "string" || typeof verified.jti !== "string") throw new Error("Invalid workload identity token claims");
   const record = await db.query.workloadIdentityTokens.findFirst({ where: eq(workloadIdentityTokens.jti, verified.jti) });
   if (record === undefined || record.revokedAt !== null || record.expiresAt <= Date.now()) throw new Error("Workload identity token has been revoked or expired");
-  return verified as Record<string, unknown>;
+  return verified;
 }
 
 export type CredentialProvider = "aws" | "gcp" | "azure" | "vault" | "hcp" | "kubernetes";

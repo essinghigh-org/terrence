@@ -110,7 +110,7 @@ export async function enqueueVcsWebhookJob(input: Readonly<{
   };
   await enqueueDurableJob(
     VCS_WEBHOOK_KIND,
-    body as Record<string, unknown>,
+    body,
     input.deliveryId !== null
       ? { dedupeKey: input.deliveryId, rescheduleRunning: input.rescheduleRunning === true }
       : {},

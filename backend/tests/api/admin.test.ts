@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
+import { eq } from "drizzle-orm";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
@@ -11,7 +12,9 @@ import {
   users,
   workspaces,
   adminSettings,
+  user2FA,
 } from "../../src/db/schema";
+import { invalidateSettingsCache } from "../../src/lib/settings";
 
 describe("Admin Operations API contract", () => {
   const suffix = crypto.randomUUID();
@@ -22,6 +25,11 @@ describe("Admin Operations API contract", () => {
   const workspaceId = `admin-ws-${suffix}`;
   const activeRunId = `admin-active-run-${suffix}`;
   const finishedRunId = `admin-finished-run-${suffix}`;
+  const unscopedAdminId = `unscoped-admin-${suffix}`;
+  const unscopedAdminToken = `unscoped-admin-token-${suffix}`;
+  const isolatedOrgId = `isolated-org-${suffix}`;
+  const isolatedOrgName = `isolated-org-${suffix}`;
+  const isolatedWorkspaceId = `isolated-workspace-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown, auth = token) =>
     app.handle(new Request(`http://terrence.test${path}`, {
@@ -34,15 +42,25 @@ describe("Admin Operations API contract", () => {
     }));
 
   beforeAll(async () => {
-    await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused", isSiteAdmin: true }]);
-    await db.insert(organizations).values([{ id: orgId, name: orgName }]);
+    await db.insert(users).values([
+      { id: userId, username: userId, passwordHash: "unused", isSiteAdmin: true },
+      { id: unscopedAdminId, username: unscopedAdminId, passwordHash: "unused", isSiteAdmin: true },
+    ]);
+    await db.insert(organizations).values([
+      { id: orgId, name: orgName },
+      { id: isolatedOrgId, name: isolatedOrgName },
+    ]);
     await db.insert(organizationMemberships).values([
       { id: crypto.randomUUID(), userId, orgId, role: "owner" },
     ]);
     // Token stored as hash
     const tokenHash = createHash("sha256").update(token).digest("hex");
-    await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: tokenHash, userId }]);
+    await db.insert(apiTokens).values([
+      { id: crypto.randomUUID(), token: tokenHash, userId },
+      { id: crypto.randomUUID(), token: createHash("sha256").update(unscopedAdminToken).digest("hex"), userId: unscopedAdminId },
+    ]);
     await db.insert(workspaces).values([{ id: workspaceId, name: `ws-${suffix}`, orgId }]);
+    await db.insert(workspaces).values([{ id: isolatedWorkspaceId, name: `isolated-ws-${suffix}`, orgId: isolatedOrgId }]);
     await db.insert(runs).values([
       {
         id: activeRunId,
@@ -64,11 +82,16 @@ describe("Admin Operations API contract", () => {
   afterAll(async () => {
     await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+    await db.delete(runs).where(eq(runs.workspaceId, isolatedWorkspaceId));
+    await db.delete(workspaces).where(eq(workspaces.id, isolatedWorkspaceId));
     const tokenHash = createHash("sha256").update(token).digest("hex");
     await db.delete(apiTokens).where(eq(apiTokens.token, tokenHash));
+    await db.delete(apiTokens).where(eq(apiTokens.token, createHash("sha256").update(unscopedAdminToken).digest("hex")));
     await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId));
     await db.delete(organizations).where(eq(organizations.id, orgId));
+    await db.delete(organizations).where(eq(organizations.id, isolatedOrgId));
     await db.delete(users).where(eq(users.username, userId));
+    await db.delete(users).where(eq(users.username, unscopedAdminId));
   });
 
   it("lists site admin resources and active runs", async () => {
@@ -200,6 +223,12 @@ describe("Admin Operations API contract", () => {
     expect(matched).toBeDefined();
     expect(matched.attributes["is-site-admin"]).toBeFalse();
 
+    // Site admins can recover an account when its authenticator is lost.
+    await db.insert(user2FA).values({ userId: createBody.data.id, secret: "test-secret", enabled: true });
+    const mfaResetRes = await request(`/api/v2/admin/users/${createBody.data.id}/actions/disable_two_factor`, "POST");
+    expect(mfaResetRes.status).toBe(200);
+    expect(await db.query.user2FA.findFirst({ where: eq(user2FA.userId, createBody.data.id) })).toBeUndefined();
+
     // 3. Promote to site admin
     const promoteRes = await request(`/api/v2/admin/users/${createBody.data.id}/actions/grant_admin`, "POST");
     expect(promoteRes.status).toBe(200);
@@ -241,11 +270,66 @@ describe("Admin Operations API contract", () => {
     const impersonate = await request(`/api/v2/admin/users/${targetId}/actions/impersonate`, "POST");
     expect(impersonate.status).toBe(200);
     const tokenValue = (await impersonate.json()).data.attributes.token as string;
-    const tokenHash = createHash("sha256").update(tokenValue).digest("hex");
+    const tokenHash = hashAuthenticationToken(tokenValue);
     const issued = await db.query.apiTokens.findFirst({ where: eq(apiTokens.token, tokenHash) });
     expect(issued?.userId).toBe(targetId);
     expect(issued?.expiresAt).toBeGreaterThan(Date.now());
     await db.delete(apiTokens).where(eq(apiTokens.token, tokenHash));
     await db.delete(users).where(eq(users.id, targetId));
+  });
+
+  it("never returns cost or Twilio credential material from admin settings", async () => {
+    const originalCost = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "cost") });
+    const originalTwilio = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "twilio") });
+    try {
+      const costPatch = await request("/api/v2/admin/cost-estimation-settings", "PATCH", {
+        data: { attributes: { "infracost-api-key": "secret-infracost", "aws-access-key-id": "AKIA-secret", "aws-secret-key": "secret-aws" } },
+      });
+      expect(costPatch.status).toBe(200);
+      const costGet = await request("/api/v2/admin/cost-estimation-settings");
+      const costAttributes = (await costGet.json()).data.attributes as Record<string, unknown>;
+      expect(costAttributes["infracost-api-key"]).toBeUndefined();
+      expect(costAttributes["aws-secret-key"]).toBeUndefined();
+      expect(costAttributes["infracost-api-key-set"]).toBeTrue();
+      expect(costAttributes["aws-access-key-id-set"]).toBeTrue();
+
+      const twilioPatch = await request("/api/v2/admin/twilio-settings", "PATCH", {
+        data: { attributes: { "auth-token": "secret-twilio" } },
+      });
+      expect(twilioPatch.status).toBe(200);
+      const twilioGet = await request("/api/v2/admin/twilio-settings");
+      const twilioAttributes = (await twilioGet.json()).data.attributes as Record<string, unknown>;
+      expect(twilioAttributes["auth-token"]).toBeUndefined();
+      expect(twilioAttributes["auth-token-set"]).toBeTrue();
+    } finally {
+      if (originalCost === undefined) await db.delete(adminSettings).where(eq(adminSettings.id, "cost"));
+      else await db.update(adminSettings).set({ values: originalCost.values, updatedAt: originalCost.updatedAt }).where(eq(adminSettings.id, "cost"));
+      if (originalTwilio === undefined) await db.delete(adminSettings).where(eq(adminSettings.id, "twilio"));
+      else await db.update(adminSettings).set({ values: originalTwilio.values, updatedAt: originalTwilio.updatedAt }).where(eq(adminSettings.id, "twilio"));
+      invalidateSettingsCache();
+    }
+  });
+
+  it("gives a site admin full access without an organization membership", async () => {
+    const list = await request("/api/v2/organizations", "GET", undefined, unscopedAdminToken);
+    expect(list.status).toBe(200);
+    expect((await list.json()).data.some((organization: { id: string }) => organization.id === isolatedOrgName)).toBeTrue();
+
+    const show = await request(`/api/v2/organizations/${isolatedOrgName}`, "GET", undefined, unscopedAdminToken);
+    expect(show.status).toBe(200);
+
+    const deleteWorkspace = await request(`/api/v2/organizations/${isolatedOrgName}/workspaces/isolated-ws-${suffix}`, "DELETE", undefined, unscopedAdminToken);
+    expect(deleteWorkspace.status).toBe(204);
+
+    const deleteOrganization = await request(`/api/v2/organizations/${isolatedOrgName}`, "DELETE", undefined, unscopedAdminToken);
+    expect(deleteOrganization.status).toBe(204);
+
+    const deleteAdminWorkspace = await request(`/api/v2/admin/workspaces/${workspaceId}`, "DELETE", undefined, unscopedAdminToken);
+    expect(deleteAdminWorkspace.status).toBe(204);
+    expect(await db.query.runs.findFirst({ where: eq(runs.id, activeRunId) })).toBeUndefined();
+
+    const deleteAdminOrganization = await request(`/api/v2/admin/organizations/${orgName}`, "DELETE", undefined, unscopedAdminToken);
+    expect(deleteAdminOrganization.status).toBe(204);
+    expect((await request(`/api/v2/admin/organizations/${orgName}`, "GET", undefined, unscopedAdminToken)).status).toBe(404);
   });
 });

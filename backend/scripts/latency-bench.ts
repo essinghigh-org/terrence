@@ -70,7 +70,7 @@ async function timeOnce(url: string, headers: Record<string, string>): Promise<n
   return performance.now() - start;
 }
 
-interface Result {
+type Result = {
   name: string;
   p50: number;
   p95: number;

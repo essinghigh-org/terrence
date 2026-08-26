@@ -355,7 +355,7 @@ function spawnRunProcess(
   }
   const spawnOpts: Record<string, unknown> = {
     cwd: options.cwd,
-    env: options.env ?? (process.env as Record<string, string>),
+    env: options.env ?? (process.env),
     stdout: options.stdout ?? "pipe",
     stderr: options.stderr ?? "pipe",
     detached: true,
@@ -1395,7 +1395,7 @@ async function waitForVcsConfigurationDownload(
 }
 
 /** Tracked wrapper: shutdown drain waits for in-flight run executions. */
-export function executeRun(runId: string): Promise<void> {
+export async function executeRun(runId: string): Promise<void> {
   prepareRunCgroup(runId);
   return trackLocalExecution(
     executeRunImpl(runId)
@@ -1449,10 +1449,10 @@ async function executeRunImpl(runId: string): Promise<void> {
   // admin enabling requireHardIsolation between claim and execution.
   if (workspace.executionMode !== "agent") {
     const pForExec = workspace.projectId
-      ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId as string) }).catch((): undefined => undefined)
+      ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) }).catch((): undefined => undefined)
       : undefined;
     const policyError = executorPolicyAllowsLocal(
-      workspace as unknown as { trustedExecution?: boolean | null },
+      workspace,
       pForExec !== undefined ? { allowedExecutionModes: (pForExec as unknown as { allowedExecutionModes?: string | null } | undefined)?.allowedExecutionModes ?? null } : null,
       org !== undefined ? { requireHardIsolation: (org as unknown as { requireHardIsolation?: boolean | null } | undefined)?.requireHardIsolation ?? null } : null,
     );
@@ -1472,6 +1472,7 @@ async function executeRunImpl(runId: string): Promise<void> {
 
   const workDir = runWorkDir(runId);
   let keepPlan = false;
+  let durablePlan: SavedPlanMetadata | undefined;
   let plannedAgainstState: { id: string | null; serial: number } = { id: null, serial: 0 };
 
   try {
@@ -1758,6 +1759,17 @@ async function executeRunImpl(runId: string): Promise<void> {
       planResourceImports: resourceCounts.imports,
     });
     await recordPlanInput(runId, plannedAgainstState, undefined);
+    const persistPlanForLater = async (): Promise<void> => {
+      if (durablePlan !== undefined) return;
+      durablePlan = await persistSavedPlan(
+        runId,
+        executionDir,
+        plannedAgainstState,
+        run.configurationVersionId,
+        isSimulatedAllowed,
+      );
+      await recordPlanInput(runId, plannedAgainstState, durablePlan);
+    };
     if (await runWasCanceled(runId)) return;
     await writeLog(runId, "plan", `[terrence] Plan completed successfully.`);
 
@@ -1777,6 +1789,9 @@ async function executeRunImpl(runId: string): Promise<void> {
       planJson,
     );
     if (!policyResult.proceed) {
+      // Persist before the terminal policy markers so metadata such as the
+      // plan hash cannot appear to be a later execution phase.
+      await persistPlanForLater();
       if (policyResult.hardFailed) {
         await updateRunStatus(runId, "errored");
         await writeLog(runId, "plan", `[terrence] Run blocked by hard-mandatory policy failure.`);
@@ -1812,27 +1827,21 @@ async function executeRunImpl(runId: string): Promise<void> {
         // the run through a path that requires apply permission (enforced
         // at create time, but the gate is defense-in-depth here too).
         if (await runWasCanceled(runId)) return;
-        const actionOnlyBlockReason = await import("./lib/operations").then((mod): Promise<string | null> =>
+        const actionOnlyBlockReason = await import("./lib/operations").then(async (mod): Promise<string | null> =>
           mod.applyGateBlockReason(new Date()),
         );
         if (actionOnlyBlockReason !== null) {
           await writeLog(runId, "plan", `[terrence] Action-only apply blocked: ${actionOnlyBlockReason}`);
           await updateRunStatus(runId, "planned");
           queueRunNotification(runId, "run:needs_attention", "planned");
+          await persistPlanForLater();
           keepPlan = true;
         } else {
           keepPlan = true;
           await executeApply(runId);
         }
       } else if (run.savePlan) {
-        const savedPlan = await persistSavedPlan(
-          runId,
-          executionDir,
-          plannedAgainstState,
-          run.configurationVersionId,
-          isSimulatedAllowed,
-        );
-        await recordPlanInput(runId, plannedAgainstState, savedPlan);
+        await persistPlanForLater();
         await updateRunStatus(runId, "planned_and_saved");
         keepPlan = true;
       } else if (run.planOnly) {
@@ -1842,13 +1851,14 @@ async function executeRunImpl(runId: string): Promise<void> {
         // Auto-apply must not bypass the site-wide apply gates: when an
         // approval workflow or a maintenance window blocks applies, fall
         // back to the needs-attention state instead of applying.
-        const autoApplyBlockReason = await import("./lib/operations").then((mod): Promise<string | null> =>
+        const autoApplyBlockReason = await import("./lib/operations").then(async (mod): Promise<string | null> =>
           mod.applyGateBlockReason(new Date()),
         );
         if (autoApplyBlockReason !== null) {
           await writeLog(runId, "plan", `[terrence] Auto-apply blocked: ${autoApplyBlockReason}`);
           await updateRunStatus(runId, "planned");
           queueRunNotification(runId, "run:needs_attention", "planned");
+          await persistPlanForLater();
           keepPlan = true;
         } else {
           await writeLog(
@@ -1867,6 +1877,7 @@ async function executeRunImpl(runId: string): Promise<void> {
       } else {
         await updateRunStatus(runId, "planned");
         queueRunNotification(runId, "run:needs_attention", "planned");
+        await persistPlanForLater();
         keepPlan = true;
       }
     }
@@ -1969,7 +1980,7 @@ async function finalizeNoCodeUpgrade(
 }
 
 /** Tracked wrapper: shutdown drain waits for in-flight apply executions. */
-export function executeApply(runId: string): Promise<void> {
+export async function executeApply(runId: string): Promise<void> {
   const ownsCgroup = getRunCgroup(runId) === null;
   if (ownsCgroup) prepareRunCgroup(runId);
   return trackLocalExecution(
@@ -2048,10 +2059,10 @@ async function executeApplyImpl(runId: string): Promise<void> {
   // Re-check executor policy at apply entry too (admin may have tightened policy between plan and apply).
   if (workspace.executionMode !== "agent") {
     const pForApply = workspace.projectId
-      ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId as string) }).catch((): undefined => undefined)
+      ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) }).catch((): undefined => undefined)
       : undefined;
     const policyErr = executorPolicyAllowsLocal(
-      workspace as unknown as { trustedExecution?: boolean | null },
+      workspace,
       pForApply !== undefined ? { allowedExecutionModes: (pForApply as unknown as { allowedExecutionModes?: string | null } | undefined)?.allowedExecutionModes ?? null } : null,
       org !== undefined ? { requireHardIsolation: (org as unknown as { requireHardIsolation?: boolean | null } | undefined)?.requireHardIsolation ?? null } : null,
     );
@@ -2099,8 +2110,8 @@ async function executeApplyImpl(runId: string): Promise<void> {
     const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
     await writeLog(runId, "apply", `[terrence] Starting apply phase for run ${runId}`);
 
-    const savedPlanRequired = run.savePlan === true;
-    const savedPlan = savedPlanRequired ? await restoreSavedPlan(runId, executionDir) : undefined;
+    const savedPlan = await restoreSavedPlan(runId, executionDir);
+    const savedPlanRequired = run.savePlan === true || savedPlan !== undefined;
     if (savedPlanRequired) {
       if (savedPlan === undefined) {
         throw new Error("Saved plan metadata or file is missing; the plan cannot be verified before apply.");
@@ -2258,7 +2269,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
     });
     applySuccess = true;
     await writeLog(runId, "apply", `[terrence] Run status updated to 'applied'.`);
-    if (run.savePlan) await cleanupSavedPlan(runId);
+    if (savedPlanRequired) await cleanupSavedPlan(runId);
   } catch (error: unknown) {
     if (await runWasCanceled(runId)) return;
     const errMsg = error instanceof Error ? error.message : String(error);
@@ -2345,7 +2356,7 @@ export async function runPolicyChecks(
       ? undefined
       : await readPlanJson(runId, executionDir, planBinaryPath)
   );
-  let planJsonPayload = generatedPlanJson === undefined ? null : JSON.stringify(generatedPlanJson);
+  const planJsonPayload = generatedPlanJson === undefined ? null : JSON.stringify(generatedPlanJson);
 
   let hardFailed = false;
   let softFailed = false;
@@ -2772,7 +2783,7 @@ export async function enqueueDueAssessments(now = Date.now()): Promise<string[]>
 }
 
 /** Tracked wrapper: shutdown drain waits for in-flight assessments. */
-function executeAssessment(assessmentResultId: string): Promise<void> {
+async function executeAssessment(assessmentResultId: string): Promise<void> {
   return trackLocalExecution(executeAssessmentImpl(assessmentResultId));
 }
 
@@ -3034,7 +3045,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
  */
 let assessmentPollGate: Promise<void> = Promise.resolve();
 let workerPollGate: Promise<void> = Promise.resolve();
-function withQueueGate<T>(gate: "assessment" | "worker", fn: () => Promise<T>): Promise<T> {
+async function withQueueGate<T>(gate: "assessment" | "worker", fn: () => Promise<T>): Promise<T> {
   const prior = gate === "assessment" ? assessmentPollGate : workerPollGate;
   const run = prior.then(fn);
   const next = run.then(
@@ -3301,7 +3312,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
         continue;
       }
       const policyError = executorPolicyAllowsLocal(
-        workspace as unknown as { trustedExecution?: boolean | null },
+        workspace,
         projectForPolicy,
         orgForPolicy,
       );
@@ -3523,7 +3534,7 @@ export function workerQueueDraining(): boolean {
  * graceMs elapses (returns false). Callers wait on this before checkpointing
  * the DB so no execution can write after the checkpoint.
  */
-export function waitForWorkerDrain(graceMs: number): Promise<boolean> {
+export async function waitForWorkerDrain(graceMs: number): Promise<boolean> {
   if (activeLocalExecutions === 0) return Promise.resolve(true);
   return new Promise((resolve): void => {
     const timer = setTimeout((): void => {
@@ -3538,7 +3549,7 @@ export function waitForWorkerDrain(graceMs: number): Promise<boolean> {
 }
 
 /** Count a local execution so shutdown can wait for it (drain mode). */
-function trackLocalExecution<T>(promise: Promise<T>): Promise<T> {
+async function trackLocalExecution<T>(promise: Promise<T>): Promise<T> {
   activeLocalExecutions += 1;
   const settle = (): void => {
     activeLocalExecutions -= 1;
@@ -3869,11 +3880,11 @@ export function startWorkerQueue(): void {
       // drift, transient DB error) must never reject the shared Promise.all
       // and starve the run queue alongside it. Outcome timings feed the
       // /metrics worker gauges.
-      const pollers: ReadonlyArray<readonly [string, Promise<unknown>]> = [
+      const pollers: readonly (readonly [string, Promise<unknown>])[] = [
         ["pollWorkerQueue", pollWorkerQueue()],
         ["applyDueScheduledRuns", applyDueScheduledRuns()],
       ];
-      await Promise.all(pollers.map(([name, poller]): Promise<unknown> => {
+      await Promise.all(pollers.map(async ([name, poller]): Promise<unknown> => {
         const started = Date.now();
         return poller
           .then((result: unknown): unknown => {
@@ -3915,7 +3926,7 @@ export function startWorkerQueue(): void {
   // the fast poll must not sweep full tables on every 1.5s tick.
   slowCycle(
     "enqueueDueAutoDestroyRuns",
-    (): Promise<unknown> => enqueueDueAutoDestroyRuns(),
+    async (): Promise<unknown> => enqueueDueAutoDestroyRuns(),
     AUTO_DESTROY_POLL_INTERVAL_MS,
   );
   slowCycle(
@@ -3937,7 +3948,7 @@ export function startWorkerQueue(): void {
   // pre-completion rows do not persist sensitive headers indefinitely.
   slowCycle(
     "purgeExpiredForwardedRequests",
-    (): Promise<unknown> => purgeExpiredForwardedRequests(),
+    async (): Promise<unknown> => purgeExpiredForwardedRequests(),
     60 * 60 * 1000,
   );
 }

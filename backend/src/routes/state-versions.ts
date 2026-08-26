@@ -94,7 +94,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    let candidateWorkspaces: Array<{ id: string; orgId: string }>;
+    let candidateWorkspaces: { id: string; orgId: string }[];
     if (workspaceFilter !== null) {
       candidateWorkspaces = await db.query.workspaces.findMany({ where: eq(workspaces.id, workspaceFilter), columns: { id: true, orgId: true } });
     } else {
@@ -238,7 +238,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const source = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, sourceId) });
     if (source === undefined || source.workspaceId !== workspaceId || source.status !== "finalized" || source.statePayload === null) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State version cannot be rolled back" }] }; }
     const id = crypto.randomUUID();
-    await withStateSerialRetry(() => db.transaction(async (tx): Promise<void> => {
+    await withStateSerialRetry(async () => db.transaction(async (tx): Promise<void> => {
       const latest = await tx.query.stateVersions.findFirst({ where: eq(stateVersions.workspaceId, workspaceId), orderBy: [desc(stateVersions.serial)] });
       await tx.insert(stateVersions).values({
         id,
@@ -510,7 +510,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State version cannot be rolled back" }] };
     }
     const newId = crypto.randomUUID();
-    await withStateSerialRetry(() => db.transaction(async (tx): Promise<void> => {
+    await withStateSerialRetry(async () => db.transaction(async (tx): Promise<void> => {
       const latest = await tx.query.stateVersions.findFirst({
         where: eq(stateVersions.workspaceId, sv.workspaceId),
         orderBy: [desc(stateVersions.serial)],
@@ -675,7 +675,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Recovered state lineage does not match the workspace history" }] };
       }
     }
-    const stateVersionId = await withStateSerialRetry(() => db.transaction(async (tx: unknown): Promise<string> => {
+    const stateVersionId = await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<string> => {
       const t = tx as typeof db;
       const current = await t.query.stateVersions.findFirst({
         where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized")),
@@ -863,7 +863,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Content-MD5 does not match the state payload" }] };
     }
 
-    const stateVersionId = await withStateSerialRetry(() => db.transaction(async (tx: unknown): Promise<string> => {
+    const stateVersionId = await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<string> => {
       const t = tx as typeof db;
       const latest = await t.query.stateVersions.findFirst({
         where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),

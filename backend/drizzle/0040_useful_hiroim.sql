@@ -1,0 +1,1 @@
+ALTER TABLE `users` ADD `scim_site_admin` integer DEFAULT false NOT NULL;

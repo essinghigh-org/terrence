@@ -29,6 +29,11 @@ export const users = sqliteTable("users", {
   // for dedup without keeping PII.
   deletedAt: integer("deleted_at"),
   deletedEmailHash: text("deleted_email_hash"),
+  emailVerifiedAt: integer("email_verified_at"),
+  // True when SCIM's configured site-admin group grants the account admin
+  // access. Kept separate from the SAML provenance flag so either provider
+  // can reconcile its own grant without revoking the other.
+  scimSiteAdmin: integer("scim_site_admin", { mode: "boolean" }).notNull().default(false),
 }, (table) => [
   uniqueIndex("users_sso_identity_idx").on(table.ssoProvider, table.ssoSubject),
 ]);
@@ -163,7 +168,9 @@ export const organizationMemberships = sqliteTable("organization_memberships", {
   // Provenance for SAML-managed memberships. NULL for memberships granted by
   // admins directly; 'saml' for memberships created by the SAML group mapper.
   ssoSource: text("sso_source"),
-});
+}, (table) => [
+  uniqueIndex("organization_memberships_org_user_idx").on(table.orgId, table.userId),
+]);
 
 // First-class invitations (todo.md #3, #4, #17): invite != user != membership.
 // An invitation is a pending intent to add an email address to an org. It
@@ -648,7 +655,7 @@ export const controlPlaneNodes = sqliteTable("control_plane_nodes", {
   address: text("address"),
   version: text("version"),
   status: text("status").notNull().default("active"), // active | draining | maintenance
-  readinessChecks: text("readiness_checks", { mode: "json" }).$type<Array<{ check: string; status: string }>>().notNull().default([]),
+  readinessChecks: text("readiness_checks", { mode: "json" }).$type<{ check: string; status: string }[]>().notNull().default([]),
   registeredAt: integer("registered_at").notNull().$defaultFn(() => Date.now()),
   lastHeartbeatAt: integer("last_heartbeat_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
@@ -1970,3 +1977,15 @@ export const user2FA = sqliteTable("user_2fa", {
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
+
+export const emailVerificationTokens = sqliteTable("email_verification_tokens", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  email: text("email").notNull(),
+  tokenHash: text("token_hash").notNull().unique(),
+  expiresAt: integer("expires_at").notNull(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  usedAt: integer("used_at"),
+}, (table) => [
+  index("email_verification_tokens_user_idx").on(table.userId),
+]);

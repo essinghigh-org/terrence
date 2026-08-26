@@ -565,7 +565,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "email-addresses must contain only valid email addresses", source: { pointer: "/data/attributes/email-addresses" } }] };
       }
-      updates.emailAddresses = [...attributes["email-addresses"] as readonly string[]];
+      updates.emailAddresses = [...attributes["email-addresses"]];
     }
     if (attributes.triggers !== undefined) {
       if (!Array.isArray(attributes.triggers) || !attributes.triggers.every(isNotificationTrigger)) {

@@ -1,4 +1,4 @@
-import { hashAuthenticationToken } from "./token-service";
+import { tokenHashCandidates } from "./token-service";
 import { and, asc, desc, eq, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
@@ -464,14 +464,19 @@ export async function authenticateAgent(
   if (authorization?.startsWith("Bearer agent-") !== true) return undefined;
   const agent = await db.query.agents.findFirst({ where: eq(agents.id, agentId) });
   if (agent === undefined) return undefined;
-  const tokenHash = hashAuthenticationToken(authorization.slice(7));
-  const token = await db.query.agentPoolTokens.findFirst({
+  const [tokenHash, legacyTokenHash] = tokenHashCandidates(authorization.slice(7));
+  const tokenRows = await db.query.agentPoolTokens.findMany({
     where: and(
       eq(agentPoolTokens.agentPoolId, agent.agentPoolId),
-      eq(agentPoolTokens.token, tokenHash),
+      inArray(agentPoolTokens.token, [tokenHash, legacyTokenHash]),
     ),
+    limit: 2,
   });
+  const token = tokenRows.find((candidate) => candidate.token === tokenHash) ?? tokenRows[0];
   if (token === undefined) return undefined;
+  if (token.token === legacyTokenHash) {
+    await db.update(agentPoolTokens).set({ token: tokenHash }).where(eq(agentPoolTokens.id, token.id));
+  }
   const now = Date.now();
   if (token.lastUsedAt === null || now - token.lastUsedAt >= AGENT_TOKEN_LAST_USED_INTERVAL_MS) {
     await db.update(agentPoolTokens).set({ lastUsedAt: now }).where(eq(agentPoolTokens.id, token.id));
@@ -489,7 +494,7 @@ export async function authenticateAgent(
       lastPingAt: now,
       status: sql<string>`CASE WHEN ${agents.status} = 'unknown' THEN 'idle' ELSE ${agents.status} END`,
     }).where(eq(agents.id, agent.id)).returning();
-    refreshedAgent = rows[0] as Agent | undefined;
+    refreshedAgent = rows[0];
   }
   return refreshedAgent ?? { ...agent, lastPingAt: now };
 }

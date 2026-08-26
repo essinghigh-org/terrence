@@ -26,7 +26,7 @@ const STORAGE_DIR = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "..
 // test worker and spawned backends via TERRENCE_BINARY_CACHE_DIR).
 const BINARY_BASE_DIR = resolve(
   process.env.TERRENCE_BINARY_CACHE_DIR !== undefined && process.env.TERRENCE_BINARY_CACHE_DIR !== ""
-    ? process.env.TERRENCE_BINARY_CACHE_DIR!
+    ? process.env.TERRENCE_BINARY_CACHE_DIR
     : join(STORAGE_DIR, "binaries"),
 );
 
@@ -34,7 +34,7 @@ const BINARY_BASE_DIR = resolve(
  * sync with releases; bump deliberately. */
 const DEFAULT_INFRACOST_VERSION = "0.10.45";
 
-export interface InfracostIntegrity {
+export type InfracostIntegrity = {
   tool: "infracost";
   version: string;
   binarySha256: string;
@@ -64,7 +64,7 @@ type IntegrityRead =
 async function readIntegrity(targetDir: string): Promise<IntegrityRead> {
   let raw: string;
   try {
-    raw = await (await Bun.file(integrityFilePath(targetDir))).text();
+    raw = await Bun.file(integrityFilePath(targetDir)).text();
   } catch {
     return { status: "missing" };
   }
@@ -87,7 +87,7 @@ async function readIntegrity(targetDir: string): Promise<IntegrityRead> {
 
 async function verifyBinary(targetPath: string, integrity: InfracostIntegrity): Promise<boolean> {
   try {
-    const buffer = await (await Bun.file(targetPath)).arrayBuffer();
+    const buffer = await Bun.file(targetPath).arrayBuffer();
     return (await calculateSha256(buffer)) === integrity.binarySha256.toLowerCase();
   } catch {
     return false;
@@ -306,7 +306,7 @@ export async function resolveInfracostBinary(): Promise<{ binaryPath: string; ve
     await downloadAndVerify(version, stagingDir);
     const installedPath = await extractVerified(stagingDir);
 
-    const digest = await calculateSha256(await (await Bun.file(installedPath)).arrayBuffer());
+    const digest = await calculateSha256(await Bun.file(installedPath).arrayBuffer());
     await writeIntegrity(stagingDir, { tool: "infracost", version, binarySha256: digest });
     await rename(stagingDir, targetDir);
     stagingDir = "";

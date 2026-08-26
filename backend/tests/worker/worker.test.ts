@@ -372,6 +372,50 @@ test("finishes plan-only runs without applying even when the workspace auto-appl
   });
 }, 30_000);
 
+test("keeps a pending plan durable so apply can recover after the work directory is gone", async () => {
+  const result = await runWorkerScript(`
+    const { exists, readFile } = await import("fs/promises");
+    const { join } = await import("path");
+    const { db } = await import("./src/db/index.ts");
+    const { organizations, runs, workspaces } = await import("./src/db/schema.ts");
+    const { executeApply, executeRun } = await import("./src/worker.ts");
+
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(workspaces).values({ id: "workspace", name: "workspace", orgId: "org", autoApply: false });
+    await db.insert(runs).values({ id: "run", workspaceId: "workspace", status: "pending", autoApply: false, createdAt: Date.now() });
+    await executeRun("run");
+
+    const savedPlanDir = join(process.env.STORAGE_DIR, "saved-plans", "run");
+    const planned = await db.query.runs.findFirst({ where: (row, { eq }) => eq(row.id, "run") });
+    const metadata = JSON.parse(await readFile(join(savedPlanDir, "metadata.json")));
+    const artifact = await readFile(join(savedPlanDir, "tfplan"), "utf8");
+    const hasSavedPlan = await exists(savedPlanDir);
+
+    // executeRun has already removed its temporary execution directory. The
+    // apply must reconstruct it from the durable artifact, exactly as a
+    // restarted worker would.
+    await executeApply("run");
+    const applied = await db.query.runs.findFirst({ where: (row, { eq }) => eq(row.id, "run") });
+    console.log(JSON.stringify({
+      plannedStatus: planned?.status,
+      hasSavedPlan,
+      artifactEncrypted: artifact.startsWith("enc:v1:"),
+      hashRecorded: planned?.statusTimestamps?.["saved-plan-sha256"] === metadata.sha256,
+      appliedStatus: applied?.status,
+      cleanedAfterApply: !(await exists(savedPlanDir)),
+    }));
+  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+
+  expect(result).toEqual({
+    plannedStatus: "planned",
+    hasSavedPlan: true,
+    artifactEncrypted: true,
+    hashRecorded: true,
+    appliedStatus: "applied",
+    cleanedAfterApply: true,
+  });
+}, 30_000);
+
 test("runs signed pre-plan and post-plan tasks around cost and policy stages", async () => {
   const result = await runWorkerScript(`\n    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
     const { createHmac } = await import("node:crypto");

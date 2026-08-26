@@ -89,7 +89,7 @@ describe("run status state machine", () => {
     const queue = ["pending"];
     const seen = new Set<string>(queue);
     while (queue.length > 0) {
-      const current = queue.shift() as string;
+      const current = queue.shift()!;
       for (const next of nextRunStatuses(current)) {
         if (!seen.has(next)) {
           seen.add(next);
@@ -122,7 +122,7 @@ describe("run status state machine", () => {
       "planned_and_saved", "confirmed", "apply_queued", "applying", "applied",
     ];
     for (let i = 0; i < chain.length - 1; i += 1) {
-      expect(canTransitionRunStatus(chain[i] as string, chain[i + 1] as string),
+      expect(canTransitionRunStatus(chain[i]!, chain[i + 1]!),
         `${chain[i]} -> ${chain[i + 1]}`).toBe(true);
     }
     // Auto-apply confirms directly from post-plan (planned_and_saved is for
@@ -146,7 +146,7 @@ describe("run status state machine", () => {
       while (steps < 40) {
         const targets = nextRunStatuses(current);
         if (targets.length === 0) break; // terminal
-        const next = targets[Math.floor(rand() * targets.length)] as string;
+        const next = targets[Math.floor(rand() * targets.length)]!;
         expect(canTransitionRunStatus(current, next), `walk ${w} step ${steps}: ${current} -> ${next}`)
           .toBe(true);
         current = next;
@@ -164,7 +164,7 @@ describe("run status state machine", () => {
       for (let i = 0; i < 20; i += 1) {
         const targets = nextRunStatuses(current);
         if (targets.length === 0) break;
-        current = targets[Math.floor(r() * targets.length)] as string;
+        current = targets[Math.floor(r() * targets.length)]!;
         seq.push(current);
       }
       return seq;

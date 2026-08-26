@@ -66,7 +66,7 @@ describe("Notification destination ownership verification API (kanban 7.7)", () 
         attributes: {
           name: `Own ${suffix}`,
           "destination-type": "generic",
-          url: (echoServer as ReturnType<typeof Bun.serve>).url.toString(),
+          url: (echoServer!).url.toString(),
           triggers: ["run:errored"],
           enabled: true,
         },

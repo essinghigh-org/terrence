@@ -12,7 +12,7 @@ import { authPlugin } from "../auth";
 import { lockFirstUserElection } from "../db/first-user";
 import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
 import { encryptSecret, decryptSecret, isEncryptedSecret } from "../lib/secrets";
-import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
+import { generateAuthenticationToken, hashAuthenticationToken, tokenHashCandidates } from "../lib/token-service";
 
 import { issueMfaChallenge, consumeMfaChallenge } from "../lib/mfa-challenge";
 import { withDbLock } from "../lib/db-lock";
@@ -21,6 +21,7 @@ import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, S
 import { resolveClientIp } from "../lib/client-ip";
 import { checkPasswordPolicy, loadPasswordPolicy } from "../lib/password-policy";
 import { secureRequest } from "../lib/secure-request";
+import { normalizeEmail, normalizeUsername } from "../lib/identity";
 
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -98,6 +99,25 @@ export function tokenHash(token: string): string {
   return hashAuthenticationToken(token);
 }
 
+async function refreshSessionForToken(rawToken: string): Promise<typeof refreshSessions.$inferSelect | undefined> {
+  const [currentHash, legacyHash] = tokenHashCandidates(rawToken);
+  const rows = await db.query.refreshSessions.findMany({
+    where: inArray(refreshSessions.tokenHash, [currentHash, legacyHash]),
+    limit: 2,
+  });
+  const row = rows.find((candidate) => candidate.tokenHash === currentHash) ?? rows[0];
+  if (row?.tokenHash === legacyHash) {
+    await db.update(refreshSessions).set({ tokenHash: currentHash }).where(eq(refreshSessions.id, row.id));
+    return { ...row, tokenHash: currentHash };
+  }
+  return row;
+}
+
+export function isUserLoginBlocked(user: Readonly<typeof users.$inferSelect>): boolean {
+  return user.isSuspended === true
+    || (user as unknown as { deletedAt?: number | null }).deletedAt != null;
+}
+
 function refreshCookieCandidates(request: RequestInfo | undefined): string[] {
   const candidates: string[] = [];
   for (const part of request?.headers.get("cookie")?.split(";") ?? []) {
@@ -156,9 +176,7 @@ export async function revokeBrowserSession(
   return withRefreshRotationLock(async (): Promise<boolean> => {
     let revoked = false;
     for (const token of candidates) {
-      const current = await db.query.refreshSessions.findFirst({
-        where: eq(refreshSessions.tokenHash, tokenHash(token)),
-      });
+      const current = await refreshSessionForToken(token);
       if (current === undefined) continue;
       if (await revokeRefreshFamily(current.familyId, current.userId)) revoked = true;
     }
@@ -171,12 +189,10 @@ export async function browserSessionDetails(
   request: RequestInfo | undefined,
 ): Promise<{ user: Readonly<typeof users.$inferSelect>; session: Readonly<typeof refreshSessions.$inferSelect> } | null> {
   for (const token of refreshCookieCandidates(request)) {
-    const current = await db.query.refreshSessions.findFirst({
-      where: eq(refreshSessions.tokenHash, tokenHash(token)),
-    });
+    const current = await refreshSessionForToken(token);
     if (current === undefined || current.rotatedAt !== null || current.revokedAt !== null || current.expiresAt <= Date.now()) continue;
     const user = await db.query.users.findFirst({ where: eq(users.id, current.userId) });
-    if (user === undefined) continue;
+    if (user === undefined || isUserLoginBlocked(user)) continue;
     return { user, session: current };
   }
   return null;
@@ -245,6 +261,24 @@ async function revokeRefreshFamily(
       ));
     }
     return true;
+  });
+}
+
+/** Revoke every browser session and its access token when an account is blocked. */
+async function revokeAllRefreshSessions(userId: string, revokedAt = Date.now()): Promise<void> {
+  await db.transaction(async (tx: unknown): Promise<void> => {
+    const t = tx as typeof db;
+    const sessions = await t.query.refreshSessions.findMany({
+      where: eq(refreshSessions.userId, userId),
+      columns: { accessTokenId: true },
+    });
+    await t.update(refreshSessions)
+      .set({ revokedAt })
+      .where(and(eq(refreshSessions.userId, userId), isNull(refreshSessions.revokedAt)));
+    const accessTokenIds = [...new Set(sessions.map((session): string => session.accessTokenId))];
+    if (accessTokenIds.length > 0) {
+      await t.delete(apiTokens).where(and(inArray(apiTokens.id, accessTokenIds), eq(apiTokens.userId, userId)));
+    }
   });
 }
 
@@ -407,8 +441,8 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { status: "error", error: "Not found" };
     }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const username = typeof payload.username === "string" ? payload.username.trim() : "";
-    const email = typeof payload.email === "string" ? payload.email.trim() : "";
+    const username = typeof payload.username === "string" ? normalizeUsername(payload.username) ?? "" : "";
+    const email = typeof payload.email === "string" ? normalizeEmail(payload.email) ?? "" : "";
     const password = typeof payload.password === "string" ? payload.password : "";
     if (username === "" || email === "" || password === "") {
       (set as { status: number }).status = 422;
@@ -554,8 +588,11 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         (set as { status: number }).status = 401;
         return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
       }
+      const loginEmail = normalizeEmail(username);
       const found = await db.query.users.findFirst({
-        where: or(eq(users.username, username), eq(users.email, username)),
+        where: loginEmail === null
+          ? eq(users.username, username)
+          : or(eq(users.username, username), eq(users.email, loginEmail)),
       });
       const passwordValid = await passwordMatches(password, found?.passwordHash);
       if (found === undefined || !passwordValid) {
@@ -565,6 +602,10 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       user = found;
     }
 
+    if (isUserLoginBlocked(user)) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
+    }
     if (user.isProvisional === true) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "This invitation has not been accepted yet" }] };
@@ -627,7 +668,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     }
 
     const user = await db.query.users.findFirst({ where: eq(users.id, challenge.userId) });
-    if (user === undefined) {
+    if (user === undefined || isUserLoginBlocked(user)) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Account not found" }] };
     }
@@ -647,15 +688,18 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         const key = tokenHash(presentedToken);
         let current = seen.get(key) ?? null;
         if (current === null) {
-          const row = await db.query.refreshSessions.findFirst({
-            where: eq(refreshSessions.tokenHash, key),
-          });
+          const row = await refreshSessionForToken(presentedToken);
           if (row === undefined) continue;
           seen.set(key, row);
           current = row;
         }
         if (current.revokedAt !== null || current.expiresAt <= now) {
           continue;
+        }
+        const currentUser = await db.query.users.findFirst({ where: eq(users.id, current.userId) });
+        if (currentUser === undefined || isUserLoginBlocked(currentUser)) {
+          await revokeAllRefreshSessions(current.userId, now);
+          return refreshUnauthorized(set, request, "Refresh session is invalid", server);
         }
         // Two-tab concurrency grace (todo 125-127): this request serialized
         // behind the winning tab (in-process rotation lock) and is presenting
@@ -675,7 +719,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
           const successorUser = successor !== undefined && successor.revokedAt === null && successor.expiresAt > now
             ? await db.query.users.findFirst({ where: eq(users.id, successor.userId) })
             : undefined;
-          if (successor !== undefined && successorUser !== undefined) {
+          if (successor !== undefined && successorUser !== undefined && !isUserLoginBlocked(successorUser)) {
             const graceAccess = opaqueToken("user");
             const graceAccessId = crypto.randomUUID();
             const graceExpiresAt = now + ACCESS_TOKEN_TTL_MS;
@@ -713,11 +757,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         // This is a live candidate — record its family so earlier rotated
         // ghosts from the same family can be forgiven (already skipped).
         liveFamilyId ??= current.familyId;
-        const user = await db.query.users.findFirst({ where: eq(users.id, current.userId) });
-        if (user === undefined) {
-          await revokeRefreshFamily(current.familyId, current.userId, now);
-          return refreshUnauthorized(set, request, "Refresh session is invalid", server);
-        }
+        const user = currentUser;
 
         const accessToken = opaqueToken("user");
         const accessTokenId = crypto.randomUUID();
@@ -786,7 +826,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
             const successorUser = successor !== undefined && successor.revokedAt === null && successor.expiresAt > now
               ? await db.query.users.findFirst({ where: eq(users.id, successor.userId) })
               : undefined;
-            if (successor !== undefined && successorUser !== undefined) {
+            if (successor !== undefined && successorUser !== undefined && !isUserLoginBlocked(successorUser)) {
               const graceAccess = opaqueToken("user");
               const graceAccessId = crypto.randomUUID();
               const graceExpiresAt = now + ACCESS_TOKEN_TTL_MS;
@@ -829,9 +869,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       for (const token of candidates) {
         const key = tokenHash(token);
         if (seen.has(key)) continue;
-        const row = await db.query.refreshSessions.findFirst({
-          where: eq(refreshSessions.tokenHash, key),
-        });
+        const row = await refreshSessionForToken(token);
         if (row === undefined) continue;
         seen.set(key, row);
         if (row.rotatedAt !== null) {
@@ -850,9 +888,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     if (candidates.length > 0) {
       await withRefreshRotationLock(async (): Promise<void> => {
         for (const token of candidates) {
-          const current = await db.query.refreshSessions.findFirst({
-            where: eq(refreshSessions.tokenHash, tokenHash(token)),
-          });
+          const current = await refreshSessionForToken(token);
           if (current !== undefined) await revokeRefreshFamily(current.familyId, current.userId);
         }
       });
@@ -867,7 +903,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "403", title: "Forbidden", detail: "Local signup is disabled on this instance. Set TERRENCE_ENABLE_LOCAL_SIGNUP=true or use ADMIN_PASSWORD bootstrap." }] };
     }
     const attrs = extractAttrs(body) ?? {};
-    const username = typeof attrs.username === "string" ? attrs.username : "";
+    const username = typeof attrs.username === "string" ? normalizeUsername(attrs.username) ?? "" : "";
     const password = typeof attrs.password === "string" ? attrs.password : "";
     const email = attrs.email;
 
@@ -886,7 +922,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     // pragmatic pattern scans in linear time and is sufficient for signup.
     const EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
-    const emailStr = typeof email === "string" && email.trim() !== "" ? email.trim() : `${username}@example.com`;
+    const emailStr = typeof email === "string" && email.trim() !== "" ? normalizeEmail(email) ?? "" : `${username}@example.com`;
     if (!EMAIL_REGEX.test(emailStr)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A valid email address is required" }] };
@@ -902,7 +938,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
 
     const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
     const id = crypto.randomUUID();
-    const normalizedEmail = typeof email === "string" && email.trim() !== "" ? email.trim() : null;
+    const normalizedEmail = emailStr;
 
     // Local signup NEVER elects a site admin. The first user on a fresh
     // instance must come from the ADMIN_PASSWORD (or installer IACT)
@@ -1027,13 +1063,18 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
 
-    const changes: { username?: string; email?: string | null; theme?: string } = {};
+    const changes: { username?: string; email?: string | null; emailVerifiedAt?: number | null; theme?: string } = {};
     if (Object.hasOwn(attrs, "username")) {
       if (typeof attrs.username !== "string" || attrs.username.trim() === "") {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username cannot be empty" }] };
       }
-      changes.username = attrs.username.trim();
+      const normalizedUsername = normalizeUsername(attrs.username);
+      if (normalizedUsername === null) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username contains invalid characters" }] };
+      }
+      changes.username = normalizedUsername;
     }
     if (Object.hasOwn(attrs, "email")) {
       const emailVal = attrs.email;
@@ -1041,7 +1082,13 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Email must be a string or null" }] };
       }
-      changes.email = emailVal === null ? null : emailVal.trim();
+      const normalizedEmail = emailVal === null ? null : normalizeEmail(emailVal.trim());
+      if (emailVal !== null && normalizedEmail === null) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A valid email address is required" }] };
+      }
+      changes.email = normalizedEmail;
+      if (normalizedEmail !== user.email) changes.emailVerifiedAt = null;
     }
     if (Object.hasOwn(attrs, "theme")) {
       if (typeof attrs.theme !== "string" || attrs.theme.length > 64 || !THEME_ID_PATTERN.test(attrs.theme)) {
@@ -1188,9 +1235,12 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     await auditLog("verify", "mfa", user.id, user.id, null, { userId: user.id });
     const token = refreshCookieCandidates(request)[0];
     if (token !== undefined && token !== "") {
-      await db.update(refreshSessions)
-        .set({ mfaVerified: true })
-        .where(eq(refreshSessions.tokenHash, tokenHash(token)));
+      const session = await refreshSessionForToken(token);
+      if (session !== undefined) {
+        await db.update(refreshSessions)
+          .set({ mfaVerified: true })
+          .where(eq(refreshSessions.id, session.id));
+      }
     }
     return { data: { type: "mfa", attributes: { enabled: true } } };
   })

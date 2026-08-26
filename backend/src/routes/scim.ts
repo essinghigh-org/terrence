@@ -1,10 +1,11 @@
 import { Elysia } from "elysia";
-import { hashAuthenticationToken } from "../lib/token-service";
+import { tokenHashCandidates } from "../lib/token-service";
 import { db } from "../db";
-import { identityLinks, organizationInvitations, scimGroups, scimGroupMemberships, scimTokens, scimUserIdentities, scimSettings,
-  users } from "../db/schema";
-import { and, eq, inArray } from "drizzle-orm";
+import { apiTokens, identityLinks, organizationInvitations, refreshSessions, scimGroups, scimGroupMemberships, scimTokens, scimUserIdentities, scimSettings,
+  teamMemberships, teamScimGroupMappings, teams, users } from "../db/schema";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { isUniqueConstraintError } from "../lib/validation";
+import { reconcileScimSiteAdmins, reconcileTeam } from "./scim-admin";
 
 type SetObj = Readonly<{ status?: number | string; headers: Record<string, string | number> }>;
 
@@ -18,12 +19,17 @@ type RequestCtx = Readonly<{
 
 async function validateScimToken(request: { headers: { get(name: string): string | null } }, set: SetObj): Promise<boolean> {
   const auth = request.headers.get("authorization");
-  if (!auth?.startsWith("Bearer ")) { (set as { status: number }).status = 401; return false; }
-  const rawToken = auth.slice(7);
-  const hash = hashAuthenticationToken(rawToken);
+  const match = auth === null ? null : /^Bearer\s+(.+)$/i.exec(auth.trim());
+  if (match === null) { (set as { status: number }).status = 401; return false; }
+  const rawToken = match[1] ?? "";
+  const [hash, legacyHash] = tokenHashCandidates(rawToken);
   const now = Date.now();
-  const token = await db.query.scimTokens.findFirst({ where: eq(scimTokens.tokenHash, hash) });
+  const tokenRows = await db.query.scimTokens.findMany({ where: inArray(scimTokens.tokenHash, [hash, legacyHash]), limit: 2 });
+  const token = tokenRows.find((candidate) => candidate.tokenHash === hash) ?? tokenRows[0];
   if (!token || token.expiresAt < now) { (set as { status: number }).status = 401; return false; }
+  if (token.tokenHash === legacyHash) {
+    await db.update(scimTokens).set({ tokenHash: hash }).where(eq(scimTokens.id, token.id));
+  }
   const settings = await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") });
   if (!settings?.enabled || settings.paused === true) { (set as { status: number }).status = 401; return false; }
   await db.update(scimTokens).set({ lastUsedAt: now }).where(eq(scimTokens.id, token.id));
@@ -82,7 +88,11 @@ function scimEmail(payload: ScimPayload): string | null {
   const primary = emails.find((email): boolean => email !== null && typeof email === "object" && (email as Record<string, unknown>).primary === true);
   const first = primary ?? emails[0];
   const value = first !== null && typeof first === "object" ? (first as Record<string, unknown>).value : undefined;
-  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+  // Lowercase to the canonical form used by every other identity path (SSO,
+  // invitations, membership add). Without this, a mixed-case SCIM email
+  // bypasses the exact-match lookups and provisions duplicate users.
+  if (typeof value !== "string" || value.trim() === "") return null;
+  return value.trim().toLowerCase();
 }
 
 function scimMemberIds(value: unknown): string[] | null {
@@ -95,8 +105,9 @@ function scimMemberIds(value: unknown): string[] | null {
   return ids.every((id): boolean => id !== "") ? [...new Set(ids)] : null;
 }
 
-async function replaceScimGroupMembers(groupId: string, ids: readonly string[]): Promise<boolean> {
-  return db.transaction(async (tx): Promise<boolean> => {
+async function replaceScimGroupMembers(groupId: string, ids: readonly string[], transaction?: unknown): Promise<boolean> {
+  const replace = async (transactionContext: unknown): Promise<boolean> => {
+    const tx = transactionContext as typeof db;
     const identities = ids.length === 0
       ? []
       : await tx.select({ id: scimUserIdentities.id }).from(scimUserIdentities).where(inArray(scimUserIdentities.id, [...ids]));
@@ -106,7 +117,32 @@ async function replaceScimGroupMembers(groupId: string, ids: readonly string[]):
       await tx.insert(scimGroupMemberships).values(ids.map((scimUserId): typeof scimGroupMemberships.$inferInsert => ({ id: `scimmember-${crypto.randomUUID()}`, groupId, scimUserId })));
     }
     return true;
-  });
+  };
+  return transaction === undefined ? db.transaction(replace) : replace(transaction);
+}
+
+async function reconcileMappedTeams(groupId: string, transaction?: unknown): Promise<void> {
+  const reconcile = async (transactionContext: unknown): Promise<void> => {
+    const tx = transactionContext as typeof db;
+    const mappings = await tx.query.teamScimGroupMappings.findMany({ where: eq(teamScimGroupMappings.scimGroupId, groupId) });
+    if (mappings.length === 0) return;
+    const mappedTeams = await tx.query.teams.findMany({ where: inArray(teams.id, mappings.map((mapping): string => mapping.teamId)), columns: { id: true, orgId: true } });
+    const teamsById = new Map(mappedTeams.map((team): [string, { id: string; orgId: string }] => [team.id, team]));
+    for (const mapping of mappings) {
+      if (mapping.syncPaused === true) continue;
+      const team = teamsById.get(mapping.teamId);
+      if (team !== undefined) await reconcileTeam(team, groupId, tx);
+    }
+  };
+  if (transaction !== undefined) return reconcile(transaction);
+  await db.transaction(reconcile);
+}
+
+async function removeMappedTeamRows(groupIds: readonly string[]): Promise<void> {
+  if (groupIds.length === 0) return;
+  const mappings = await db.query.teamScimGroupMappings.findMany({ where: inArray(teamScimGroupMappings.scimGroupId, [...groupIds]), columns: { teamId: true } });
+  if (mappings.length === 0) return;
+  await db.delete(teamMemberships).where(and(eq(teamMemberships.ssoSource, "scim"), inArray(teamMemberships.teamId, mappings.map((mapping): string => mapping.teamId))));
 }
 
 export const scimRoutes = new Elysia({ name: "scim" })
@@ -207,6 +243,10 @@ export const scimRoutes = new Elysia({ name: "scim" })
           });
         } else {
           await tx.update(users).set({ isSuspended: payload.active === false }).where(eq(users.id, existing.id));
+          if (payload.active === false) {
+            await tx.delete(apiTokens).where(eq(apiTokens.userId, existing.id));
+            await tx.update(refreshSessions).set({ revokedAt: Date.now() }).where(and(eq(refreshSessions.userId, existing.id), isNull(refreshSessions.revokedAt)));
+          }
         }
         await tx.insert(scimUserIdentities).values({
           id: scimIdentityId,
@@ -253,8 +293,20 @@ export const scimRoutes = new Elysia({ name: "scim" })
     if (!identity) return scimError(set, 404, "User not found");
 
     await db.transaction(async (tx): Promise<void> => {
+      const groupLinks = await tx.query.scimGroupMemberships.findMany({ where: eq(scimGroupMemberships.scimUserId, identity.id), columns: { groupId: true } });
+      const mappedTeams = groupLinks.length === 0 ? [] : await tx.query.teamScimGroupMappings.findMany({
+        where: inArray(teamScimGroupMappings.scimGroupId, groupLinks.map((link): string => link.groupId)),
+        columns: { teamId: true },
+      });
+      if (mappedTeams.length > 0) {
+        await tx.delete(teamMemberships).where(and(eq(teamMemberships.userId, identity.userId), eq(teamMemberships.ssoSource, "scim"), inArray(teamMemberships.teamId, mappedTeams.map((mapping): string => mapping.teamId))));
+      }
+      await tx.delete(scimGroupMemberships).where(eq(scimGroupMemberships.scimUserId, identity.id));
       await tx.delete(scimUserIdentities).where(eq(scimUserIdentities.id, identity.id));
       await tx.update(users).set({ isSuspended: true }).where(eq(users.id, identity.userId));
+      await tx.delete(apiTokens).where(eq(apiTokens.userId, identity.userId));
+      await tx.update(refreshSessions).set({ revokedAt: Date.now() }).where(and(eq(refreshSessions.userId, identity.userId), isNull(refreshSessions.revokedAt)));
+      await reconcileScimSiteAdmins(tx);
     });
 
     (set as { status: number }).status = 204;
@@ -269,11 +321,28 @@ export const scimRoutes = new Elysia({ name: "scim" })
     const userName = typeof payload.userName === "string" && payload.userName.trim() !== "" ? payload.userName.trim() : identity.username;
     const email = scimEmail(payload);
     if (email === null) return scimError(set, 400, "emails is required");
+    const currentUser = await db.query.users.findFirst({ where: eq(users.id, identity.userId) });
+    if (currentUser === undefined) return scimError(set, 404, "User not found");
     const updatedAt = Date.now();
     try {
       await db.transaction(async (tx): Promise<void> => {
-        await tx.update(users).set({ username: userName, email, ...(typeof payload.active === "boolean" ? { isSuspended: !payload.active } : {}) }).where(eq(users.id, identity.userId));
+        await tx.update(users).set({
+          username: userName,
+          email,
+          ...(email !== currentUser.email ? { emailVerifiedAt: null } : {}),
+          ...(typeof payload.active === "boolean" ? { isSuspended: !payload.active } : {}),
+        }).where(eq(users.id, identity.userId));
+        if (payload.active === false) {
+          await tx.delete(apiTokens).where(eq(apiTokens.userId, identity.userId));
+          await tx.update(refreshSessions).set({ revokedAt: Date.now() }).where(and(eq(refreshSessions.userId, identity.userId), isNull(refreshSessions.revokedAt)));
+        }
         await tx.update(scimUserIdentities).set({ username: userName, externalId: typeof payload.externalId === "string" ? payload.externalId : null, updatedAt }).where(eq(scimUserIdentities.id, identity.id));
+        await tx.update(identityLinks).set({ emailAtLinkTime: email }).where(and(
+          eq(identityLinks.userId, identity.userId),
+          eq(identityLinks.provider, "scim"),
+          eq(identityLinks.externalId, identity.id),
+        ));
+        await reconcileScimSiteAdmins(tx);
       });
     } catch (error: unknown) {
       if (!isUniqueConstraintError(error)) throw error;
@@ -319,8 +388,23 @@ export const scimRoutes = new Elysia({ name: "scim" })
     const updatedAt = Date.now();
     try {
       await db.transaction(async (tx): Promise<void> => {
-        await tx.update(users).set({ username: userName, email, ...(typeof updates.active === "boolean" ? { isSuspended: !updates.active } : {}) }).where(eq(users.id, currentUser.id));
+        await tx.update(users).set({
+          username: userName,
+          email,
+          ...(email !== currentUser.email ? { emailVerifiedAt: null } : {}),
+          ...(typeof updates.active === "boolean" ? { isSuspended: !updates.active } : {}),
+        }).where(eq(users.id, currentUser.id));
+        if (updates.active === false) {
+          await tx.delete(apiTokens).where(eq(apiTokens.userId, currentUser.id));
+          await tx.update(refreshSessions).set({ revokedAt: Date.now() }).where(and(eq(refreshSessions.userId, currentUser.id), isNull(refreshSessions.revokedAt)));
+        }
         await tx.update(scimUserIdentities).set({ username: userName, ...(updates.externalId !== undefined ? { externalId: typeof updates.externalId === "string" ? updates.externalId : null } : {}), updatedAt }).where(eq(scimUserIdentities.id, identity.id));
+        await tx.update(identityLinks).set({ emailAtLinkTime: email }).where(and(
+          eq(identityLinks.userId, currentUser.id),
+          eq(identityLinks.provider, "scim"),
+          eq(identityLinks.externalId, identity.id),
+        ));
+        await reconcileScimSiteAdmins(tx);
       });
     } catch (error: unknown) {
       if (!isUniqueConstraintError(error)) throw error;
@@ -336,7 +420,7 @@ export const scimRoutes = new Elysia({ name: "scim" })
     if (!(await validateScimToken(request, set))) return scimError(set, 401, "Unauthorized");
     set.headers["Content-Type"] = "application/scim+json";
     const groupsList = await db.query.scimGroups.findMany();
-    const resources = await Promise.all(groupsList.map((group): Promise<Record<string, unknown>> => scimGroupResource(group)));
+    const resources = await Promise.all(groupsList.map(async (group): Promise<Record<string, unknown>> => scimGroupResource(group)));
     return {
       schemas: ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
       totalResults: resources.length,
@@ -361,6 +445,7 @@ export const scimRoutes = new Elysia({ name: "scim" })
       await db.delete(scimGroups).where(eq(scimGroups.id, id));
       return scimError(set, 404, "Referenced SCIM user not found");
     }
+    await db.transaction(reconcileScimSiteAdmins);
 
     (set as { status: number }).status = 201;
     const group = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, id) });
@@ -381,7 +466,9 @@ export const scimRoutes = new Elysia({ name: "scim" })
     if (!g) { (set as { status: number }).status = 204; return {}; }
     const settings = await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") });
     if (settings?.siteAdminGroupScimId === g.id) await db.update(scimSettings).set({ siteAdminGroupScimId: null, updatedAt: Date.now() }).where(eq(scimSettings.id, "scim"));
+    await removeMappedTeamRows([g.id]);
     await db.delete(scimGroups).where(eq(scimGroups.id, g.id));
+    await db.transaction(reconcileScimSiteAdmins);
     (set as { status: number }).status = 204;
     return {};
   })
@@ -394,8 +481,17 @@ export const scimRoutes = new Elysia({ name: "scim" })
     const name = typeof payload.displayName === "string" && payload.displayName.trim() !== "" ? payload.displayName.trim() : group.name;
     const memberIds = payload.members === undefined ? undefined : scimMemberIds(payload.members);
     if (memberIds === null) return scimError(set, 400, "members must be an array of SCIM user identifiers");
-    if (memberIds !== undefined && !(await replaceScimGroupMembers(group.id, memberIds))) return scimError(set, 404, "Referenced SCIM user not found");
-    await db.update(scimGroups).set({ name, ...(payload.externalId !== undefined ? { externalId: typeof payload.externalId === "string" ? payload.externalId : null } : {}), updatedAt: Date.now() }).where(eq(scimGroups.id, group.id));
+    let missingMember = false;
+    await db.transaction(async (tx): Promise<void> => {
+      if (memberIds !== undefined && !(await replaceScimGroupMembers(group.id, memberIds, tx))) {
+        missingMember = true;
+        return;
+      }
+      if (memberIds !== undefined) await reconcileMappedTeams(group.id, tx);
+      await reconcileScimSiteAdmins(tx);
+      await tx.update(scimGroups).set({ name, ...(payload.externalId !== undefined ? { externalId: typeof payload.externalId === "string" ? payload.externalId : null } : {}), updatedAt: Date.now() }).where(eq(scimGroups.id, group.id));
+    });
+    if (missingMember) return scimError(set, 404, "Referenced SCIM user not found");
     const updated = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, group.id) });
     return updated === undefined ? scimError(set, 500, "Group was not updated") : scimGroupResource(updated);
   })
@@ -449,8 +545,17 @@ export const scimRoutes = new Elysia({ name: "scim" })
         else return scimError(set, 400, "Invalid member filter");
       } else return scimError(set, 400, "Unsupported PATCH path");
     }
-    if (membersChanged && !(await replaceScimGroupMembers(group.id, memberIds))) return scimError(set, 404, "Referenced SCIM user not found");
-    await db.update(scimGroups).set({ name, ...(externalId === undefined ? {} : { externalId }), updatedAt: Date.now() }).where(eq(scimGroups.id, group.id));
+    let missingMember = false;
+    await db.transaction(async (tx): Promise<void> => {
+      if (membersChanged && !(await replaceScimGroupMembers(group.id, memberIds, tx))) {
+        missingMember = true;
+        return;
+      }
+      if (membersChanged) await reconcileMappedTeams(group.id, tx);
+      await reconcileScimSiteAdmins(tx);
+      await tx.update(scimGroups).set({ name, ...(externalId === undefined ? {} : { externalId }), updatedAt: Date.now() }).where(eq(scimGroups.id, group.id));
+    });
+    if (missingMember) return scimError(set, 404, "Referenced SCIM user not found");
     const updated = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, group.id) });
     return updated === undefined ? scimError(set, 500, "Group was not updated") : scimGroupResource(updated);
   });
