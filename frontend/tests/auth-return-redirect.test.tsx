@@ -1,4 +1,4 @@
-import { afterEach, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
@@ -15,6 +15,15 @@ const json = (data: JsonValue): Response =>
   new Response(JSON.stringify(data), {
     headers: { "Content-Type": "application/vnd.api+json" },
   });
+
+// bun runs every test file in one process, so the module-level auth state in
+// lib/api.ts (accessToken/refreshableSession) leaks across files: api.test.ts
+// leaves a token behind and ProtectedRoute then treats the first test here as
+// signed-in. Reset to a known-unauthenticated state before each test instead
+// of relying on file ordering.
+beforeEach((): void => {
+  expireAuthSession();
+});
 
 afterEach((): void => {
   cleanup();
