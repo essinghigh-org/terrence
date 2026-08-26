@@ -84,7 +84,7 @@ export function OperationFilterDropdown({
         aria-haspopup="true"
         aria-expanded={open}
         aria-label="Filter operations"
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={() => { setOpen((prev) => !prev); }}
         className="inline-flex h-8 items-center gap-2 rounded-md border border-input bg-background px-3 text-xs font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
       >
         <Filter className="size-3.5 text-muted-foreground" aria-hidden="true" />
@@ -175,7 +175,7 @@ export function OperationFilterDropdown({
                     type="checkbox"
                     className="size-3.5 rounded border-input accent-primary"
                     checked={checked}
-                    onChange={() => toggleOp(op)}
+                    onChange={() => { toggleOp(op); }}
                   />
                   <span className={`inline-flex items-center justify-center font-semibold ${config.className}`}>
                     {"icon" in config ? (

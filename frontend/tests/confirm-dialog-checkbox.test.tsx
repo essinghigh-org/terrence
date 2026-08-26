@@ -44,7 +44,7 @@ test("checkbox requirement resets when the dialog closes and reopens (kanban 26.
     const [open, setOpen] = useState(true);
     return (
       <>
-        <button type="button" onClick={(): void => setOpen((v): boolean => !v)}>Toggle</button>
+        <button type="button" onClick={(): void => { setOpen((v): boolean => !v); }}>Toggle</button>
         <ConfirmDialog
           open={open}
           onOpenChange={setOpen}

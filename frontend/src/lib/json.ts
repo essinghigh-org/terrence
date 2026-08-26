@@ -16,7 +16,7 @@ export type JsonValue =
   | { readonly [key: string]: JsonValue };
 
 /** A JSON object (string-keyed, JSON values). */
-export type JsonObject = { readonly [key: string]: JsonValue };
+export type JsonObject = Readonly<Record<string, JsonValue>>;
 
 /** A JSON object that code may mutate while building a request body. */
-export type MutableJsonObject = { [key: string]: JsonValue };
+export type MutableJsonObject = Record<string, JsonValue>;

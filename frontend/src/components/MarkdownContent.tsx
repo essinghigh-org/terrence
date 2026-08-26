@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 type MarkdownBlock =
   | Readonly<{ kind: "heading"; level: 1 | 2 | 3 | 4 | 5 | 6; text: string }>
   | Readonly<{ kind: "paragraph" | "quote" | "code"; text: string }>
-  | Readonly<{ kind: "list"; ordered: boolean; items: ReadonlyArray<{ text: string; children: string[] }> }>
+  | Readonly<{ kind: "list"; ordered: boolean; items: readonly { text: string; children: string[] }[] }>
   | Readonly<{ kind: "table"; headers: string[]; rows: string[][] }>;
 
 export function inlineMarkdown(text: string): ReactNode {
@@ -85,7 +85,7 @@ function parseMarkdown(markdown: string): MarkdownBlock[] {
       const ordered = /^\s*\d+\.\s+/.test(line);
       const firstItem = /^(\s*)(?:[-*+]|\d+\.)\s+(.*)$/.exec(line);
       const baseIndent = (firstItem?.[1] ?? "").length;
-      const items: Array<{ text: string; children: string[] }> = [];
+      const items: { text: string; children: string[] }[] = [];
       while (index < lines.length) {
         const current = lines[index] ?? "";
         const itemMatch = /^(\s*)(?:[-*+]|\d+\.)\s+(.*)$/.exec(current);
@@ -135,7 +135,7 @@ function parseMarkdown(markdown: string): MarkdownBlock[] {
   return blocks;
 }
 
-function renderListItems(items: ReadonlyArray<{ text: string; children: string[] }>, ordered: boolean): JSX.Element[] {
+function renderListItems(items: readonly { text: string; children: string[] }[], ordered: boolean): JSX.Element[] {
   return items.map((item, itemIndex): JSX.Element => (
     <li key={itemIndex}>
       {inlineMarkdown(item.text)}
