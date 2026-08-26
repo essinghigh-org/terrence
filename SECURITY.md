@@ -11,7 +11,7 @@ Please report suspected security vulnerabilities privately rather than via publi
 You can report vulnerabilities through either of the following channels:
 
 - **GitHub Security Advisories (Recommended):** Submit a private report at [GitHub Advisory Submission](https://github.com/essinghigh-org/terrence/security/advisories/new).
-- **Email:** Contact the security team directly at [security@essinghigh.org](mailto:security@essinghigh.org).
+- **Email:** Contact the security team directly at [security@essinghigh.dev](mailto:security@essinghigh.dev).
 
 When reporting a vulnerability, please include:
 - A description of the issue and its potential security impact
