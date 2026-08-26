@@ -1431,30 +1431,35 @@ export function Layout({
           id="app-sidebar"
           aria-label="Application navigation"
           className={cn(
-            "hidden w-[280px] shrink-0 flex-col border-r bg-muted/40 transition-[width] duration-200 lg:flex",
+            "hidden shrink-0 flex-col border-r bg-muted/40 transition-[width] duration-200 lg:flex",
             sidebarCollapsed ? "lg:w-16" : "lg:w-[280px]",
           )}
         >
-          <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-3">
+          {/* Width transitions on the aside would stretch the nav content
+              mid-animation; a fixed overlay decouples the button from the
+              animating box so it stays put and clickable throughout. */}
+          <div className="pointer-events-none fixed bottom-0 z-10 hidden lg:block" style={{ width: sidebarCollapsed ? "4rem" : "17.5rem" }}>
+            <div className="border-t p-3 pointer-events-auto">
+              <Button
+                variant="ghost"
+                size={sidebarCollapsed ? "icon" : "default"}
+                className={cn("w-full", !sidebarCollapsed && "justify-start")}
+                aria-controls="app-sidebar"
+                aria-expanded={!sidebarCollapsed}
+                aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                title={sidebarCollapsed ? undefined : "["}
+                onClick={toggleSidebar}
+              >
+                {sidebarCollapsed
+                  ? <PanelLeftOpen data-icon="inline-start" />
+                  : <PanelLeftClose data-icon="inline-start" />}
+                {!sidebarCollapsed && <span>Collapse sidebar</span>}
+              </Button>
+            </div>
+          </div>
+          <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-3 pb-16">
             {renderNavigation()}
           </nav>
-
-          <div className="hidden border-t p-3 lg:block">
-            <Button
-              variant="ghost"
-              size={sidebarCollapsed ? "icon" : "default"}
-              className={cn("w-full", !sidebarCollapsed && "justify-start")}
-              aria-controls="app-sidebar"
-              aria-expanded={!sidebarCollapsed}
-              aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-              onClick={toggleSidebar}
-            >
-              {sidebarCollapsed
-                ? <PanelLeftOpen data-icon="inline-start" />
-                : <PanelLeftClose data-icon="inline-start" />}
-              {!sidebarCollapsed && <span>Collapse sidebar</span>}
-            </Button>
-          </div>
         </aside>
 
         <main
