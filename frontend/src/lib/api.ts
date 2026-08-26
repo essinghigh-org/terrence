@@ -284,7 +284,7 @@ export async function fetchApi<T = unknown>(endpoint: string, options: ReadonlyR
     && token !== null
     && token !== ""
     && isRefreshableSession()
-    && /\/api\/v2\/workspaces\/[^/]+\/(runs|state-versions|vars|varsets|resources|dependency-graph|current-state-version-outputs|readme)$/.test(url.split("?")[0])
+    && /\/api\/v2\/workspaces\/[^/]+\/(runs|state-versions|vars|varsets|resources|dependency-graph|current-state-version-outputs|readme)$/.test(url.split("?")[0] ?? url)
     && !url.endsWith("/users/login")
     && !url.endsWith("/users/refresh")
     && !url.endsWith("/users/logout");
