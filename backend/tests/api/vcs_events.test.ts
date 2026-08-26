@@ -1,6 +1,7 @@
 import { describe, expect, test, beforeAll } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
+import { createHash } from "node:crypto";
 import { users, apiTokens, organizations, organizationMemberships } from "../../src/db/schema";
 
 describe("VCS Events API", () => {
@@ -21,7 +22,7 @@ describe("VCS Events API", () => {
 
     await db.insert(apiTokens).values({
       id: `tok-${crypto.randomUUID()}`,
-      token: tokenVal,
+      token: createHash("sha256").update(tokenVal).digest("hex"),
       userId,
       createdAt: Date.now(),
     });

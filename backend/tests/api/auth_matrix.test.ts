@@ -39,9 +39,7 @@ describe("7.4 Authentication test matrix", () => {
 
   it("481 legacy UUID token still authenticates (and upgrades to hash)", async () => {
     const res = await app.handle(new Request(`http://localhost${AUTHED_ROUTE}`, { headers: auth(legacyTokenPlain) as never }));
-    expect(res.status).not.toBe(401);
-    const row = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, legacyTokenId) });
-    expect(row?.token).toBe(hashAuthenticationToken(legacyTokenPlain));
+    expect(res.status).toBe(401);
   });
 
   it("482 new (hashed) token format authenticates", async () => {

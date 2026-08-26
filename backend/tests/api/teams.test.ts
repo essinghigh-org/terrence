@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -39,13 +40,13 @@ describe("teams and team access API contract", () => {
       { id: crypto.randomUUID(), userId, orgId, role: "owner" },
       { id: crypto.randomUUID(), userId: memberUserId, orgId, role: "member" },
     ]);
-    await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token, userId }]);
+    await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: createHash("sha256").update(token).digest("hex"), userId }]);
     await db.insert(workspaces).values([{ id: workspaceId, name: `ws-${suffix}`, orgId }]);
   });
 
   afterAll(async () => {
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
-    await db.delete(apiTokens).where(eq(apiTokens.token, token));
+    await db.delete(apiTokens).where(eq(apiTokens.token, createHash("sha256").update(token).digest("hex")));
     await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId));
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.delete(users).where(eq(users.username, userId));

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 
 import { app } from "../../src/app";
@@ -36,7 +37,7 @@ describe("Cost estimate API persistence", () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgId });
     await db.insert(organizationMemberships).values({ id: `membership-${suffix}`, userId, orgId, role: "owner" });
-    await db.insert(apiTokens).values({ id: `token-${suffix}`, token, userId });
+    await db.insert(apiTokens).values({ id: `token-${suffix}`, token: createHash("sha256").update(token).digest("hex"), userId });
     await db.insert(workspaces).values({ id: workspaceId, name: workspaceId, orgId });
     await db.insert(runs).values({
       id: runId,
@@ -81,7 +82,7 @@ describe("Cost estimate API persistence", () => {
     await deleteCostEstimateArtifact(runId);
     await db.delete(runs).where(eq(runs.id, runId));
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
-    await db.delete(apiTokens).where(eq(apiTokens.token, token));
+    await db.delete(apiTokens).where(eq(apiTokens.token, createHash("sha256").update(token).digest("hex")));
     await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId));
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.delete(users).where(eq(users.id, userId));
