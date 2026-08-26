@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 import { AccountSettings } from "../src/views/AccountSettings";
-import { applyTheme, applyThemeIfUnchanged, getThemeRevision } from "../src/lib/theme";
+import { applyTheme, applyThemeIfUnchanged, getThemeRevision, THEMES } from "../src/lib/theme";
 import { setDisplayTimezone } from "../src/lib/display-timezone";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
@@ -116,4 +116,53 @@ test("applies the locally stored theme without an account request", (): void => 
 
   expect(document.documentElement.dataset.theme).toBe("nord-dark");
   expect(document.documentElement.classList.contains("dark")).toBeTrue();
+});
+
+test("expanded catalog ships balanced light and dark families", (): void => {
+  const ids = THEMES.map((theme): string => theme.id);
+  for (const id of ["everforest-light", "flexoki-light", "everforest-dark", "kanagawa-wave", "flexoki-dark"]) {
+    expect(ids).toContain(id);
+  }
+  // IDs must satisfy the backend's account-update validation so every
+  // catalog entry can be persisted through PATCH /account/update.
+  for (const id of ids) {
+    expect(id).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+    expect(id.length).toBeLessThanOrEqual(64);
+  }
+});
+
+test("selects and applies a newly added dark theme end to end", async () => {
+  let updatedTheme = "";
+// SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = requestUrl(input);
+    if (url === "/api/v2/account/details") return account();
+    if (url === "/api/v2/users/user-1/authentication-tokens") return json({ data: [] });
+    if (url === "/api/v2/account/sessions") return json({ data: [] });
+    if (url === "/api/v2/account/mfa") return json({ data: { attributes: { enabled: false } } });
+    if (url === "/api/v2/account/update" && init?.method === "PATCH") {
+      const body = isString(init.body) ? init.body : "";
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      updatedTheme = JSON.parse(body).data.attributes.theme as string;
+      return account(updatedTheme);
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const view = render(<MemoryRouter><AccountSettings /></MemoryRouter>);
+// SAFETY: the component renders this element type for the queried role/label.
+  const select = await view.findByLabelText("Theme") as HTMLSelectElement;
+
+  expect(view.getByRole("option", { name: "Kanagawa Wave" })).toBeTruthy();
+  expect(view.getByRole("option", { name: "Everforest Light" })).toBeTruthy();
+
+  fireEvent.change(select, { target: { value: "kanagawa-wave" } });
+  await waitFor((): void => {
+    expect(view.getByText("Theme updated")).toBeTruthy();
+  });
+  expect(updatedTheme).toBe("kanagawa-wave");
+  expect(localStorage.getItem("terrence-theme")).toBe("kanagawa-wave");
+  expect(document.documentElement.dataset.theme).toBe("kanagawa-wave");
+  expect(document.documentElement.classList.contains("dark")).toBeTrue();
+  expect(document.documentElement.style.getPropertyValue("--primary")).toBe("167 46% 62%");
 });

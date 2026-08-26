@@ -123,6 +123,26 @@ export const THEMES: readonly ThemeDefinition[] = [
     border: "44 37% 80%", input: "194 14% 45%", success: "68 100% 24%", warning: "18 80% 44%",
     codeBackground: "192 81% 14%", codeForeground: "44 80% 94%",
   }),
+  createTheme("everforest-light", "Everforest Light", "light", {
+    // Everforest "avante" light: warm paper background, soft green primaries.
+    background: "40 23% 97%", foreground: "20 14% 27%", card: "40 30% 99%", popover: "40 30% 99%",
+    primary: "96 25% 38%", primaryForeground: "40 30% 99%",
+    secondary: "41 18% 90%", secondaryForeground: "20 14% 27%", muted: "41 18% 90%", mutedForeground: "25 10% 42%",
+    accent: "96 30% 92%", accentForeground: "96 25% 30%", destructive: "2 65% 47%", destructiveForeground: "40 30% 99%",
+    border: "39 15% 85%", input: "39 13% 60%", ring: "96 25% 38%",
+    success: "93 31% 31%", warning: "33 68% 40%",
+    codeBackground: "20 14% 20%", codeForeground: "40 23% 94%",
+  }),
+  createTheme("flexoki-light", "Flexoki Light", "light", {
+    // Flexoki (Stephan Ango): high-contrast warm paper with near-black ink.
+    background: "40 29% 97%", foreground: "0 6% 11%", card: "36 33% 94%", popover: "36 33% 94%",
+    primary: "190 100% 28%", primaryForeground: "40 29% 97%",
+    secondary: "38 22% 89%", secondaryForeground: "0 6% 11%", muted: "38 22% 89%", mutedForeground: "0 5% 32%",
+    accent: "190 100% 92%", accentForeground: "190 100% 22%", destructive: "0 72% 44%", destructiveForeground: "40 29% 97%",
+    border: "38 18% 82%", input: "0 5% 45%", ring: "190 100% 28%",
+    success: "110 66% 28%", warning: "45 100% 34%",
+    codeBackground: "0 6% 11%", codeForeground: "40 29% 94%",
+  }),
   createTheme("original-dark", "Original", "dark", {
     background: "222 15% 11%", foreground: "210 20% 96%", card: "222 15% 14%", popover: "222 15% 16%", primary: "217 100% 65%", primaryForeground: "222 30% 10%",
     secondary: "220 14% 22%", secondaryForeground: "210 20% 96%", muted: "220 13% 20%", mutedForeground: "220 10% 68%",
@@ -178,6 +198,36 @@ export const THEMES: readonly ThemeDefinition[] = [
     accent: "45 100% 35%", accentForeground: "44 80% 94%", destructive: "1 71% 52%", destructiveForeground: "44 80% 94%",
     border: "194 14% 35%", input: "194 14% 45%", success: "68 100% 30%", warning: "18 80% 44%",
     codeBackground: "192 100% 8%", codeForeground: "44 80% 94%",
+  }),
+  createTheme("everforest-dark", "Everforest Dark", "dark", {
+    // Everforest "medium": warm dark grey-green, muted forest palette.
+    background: "180 9% 12%", foreground: "36 26% 84%", card: "180 9% 15%", popover: "180 10% 18%",
+    primary: "77 33% 63%", primaryForeground: "180 9% 12%",
+    secondary: "180 9% 19%", secondaryForeground: "36 26% 84%", muted: "180 9% 17%", mutedForeground: "35 18% 62%",
+    accent: "77 20% 26%", accentForeground: "77 40% 72%", destructive: "1 51% 62%", destructiveForeground: "180 9% 12%",
+    border: "180 9% 24%", input: "180 8% 38%", ring: "77 33% 63%",
+    success: "79 37% 55%", warning: "36 53% 59%",
+    codeBackground: "180 10% 8%", codeForeground: "36 26% 84%",
+  }),
+  createTheme("kanagawa-wave", "Kanagawa Wave", "dark", {
+    // Kanagawa "wave": sumi-e ink blues with soft sakura and autumn accents.
+    background: "220 15% 12%", foreground: "40 24% 82%", card: "219 16% 15%", popover: "219 15% 18%",
+    primary: "167 46% 62%", primaryForeground: "220 15% 12%",
+    secondary: "218 14% 20%", secondaryForeground: "40 24% 82%", muted: "218 15% 18%", mutedForeground: "35 16% 62%",
+    accent: "168 30% 26%", accentForeground: "167 46% 72%", destructive: "0 55% 60%", destructiveForeground: "220 15% 12%",
+    border: "217 14% 26%", input: "215 13% 42%", ring: "167 46% 62%",
+    success: "88 32% 58%", warning: "31 55% 58%",
+    codeBackground: "220 17% 8%", codeForeground: "40 24% 82%",
+  }),
+  createTheme("flexoki-dark", "Flexoki Dark", "dark", {
+    // Flexoki dark: paper-black base with warm ink tones and vivid accents.
+    background: "0 0% 8%", foreground: "40 24% 87%", card: "0 0% 11%", popover: "0 0% 14%",
+    primary: "190 100% 42%", primaryForeground: "0 0% 8%",
+    secondary: "0 0% 17%", secondaryForeground: "40 24% 87%", muted: "0 0% 14%", mutedForeground: "40 12% 64%",
+    accent: "190 100% 20%", accentForeground: "190 100% 55%", destructive: "0 80% 58%", destructiveForeground: "0 0% 8%",
+    border: "0 0% 24%", input: "40 10% 48%", ring: "190 100% 42%",
+    success: "110 45% 52%", warning: "45 100% 48%",
+    codeBackground: "0 0% 5%", codeForeground: "40 24% 87%",
   }),
 ];
 
