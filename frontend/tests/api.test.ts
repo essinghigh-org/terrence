@@ -277,7 +277,7 @@ test("bootstrapAuth recovers a browser session through the refresh cookie", asyn
   }
 });
 
-test("bootstrapAuth adopts and deletes a legacy localStorage token exactly once", async () => {
+test("bootstrapAuth purges legacy localStorage token and does not adopt it", async () => {
   const originalFetch = globalThis.fetch;
   let refreshed = 0;
 // SAFETY: the mock's handling mirrors the backend contract for this test.
@@ -297,18 +297,20 @@ test("bootstrapAuth adopts and deletes a legacy localStorage token exactly once"
     expireAuthSession();
     localStorage.setItem("tfe_token", "legacy-token");
     localStorage.setItem("tfe_refreshable_session", "true");
-    expect(await bootstrapAuth()).toBe("legacy-token");
-    expect(getAuthToken()).toBe("legacy-token");
-    // The sensitive value is gone from storage after adoption.
+    localStorage.setItem("tfe_token_expires_at", String(Date.now() + 60_000));
+    // Legacy tokens are no longer adopted; bootstrap goes to the refresh
+    // cookie and the stale tfe_token keys are purged without being used.
+    expect(await bootstrapAuth()).toBeNull();
+    expect(getAuthToken()).toBeNull();
     expect(localStorage.getItem("tfe_token")).toBeNull();
+    expect(localStorage.getItem("tfe_token_expires_at")).toBeNull();
     expect(localStorage.getItem("tfe_refreshable_session")).toBeNull();
-    // A second bootstrap sees no token in storage and reuses memory.
-    expect(await bootstrapAuth()).toBe("legacy-token");
-    expect(refreshed).toBe(0);
+    expect(refreshed).toBe(1);
   } finally {
     globalThis.fetch = originalFetch;
     expireAuthSession();
     localStorage.removeItem("tfe_token");
+    localStorage.removeItem("tfe_token_expires_at");
     localStorage.removeItem("tfe_refreshable_session");
   }
 });
