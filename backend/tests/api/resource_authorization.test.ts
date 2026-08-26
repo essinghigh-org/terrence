@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { writeFile, rm } from "fs/promises";
 import { join } from "path";
 import { mkdtempSync } from "node:fs";
@@ -64,9 +65,9 @@ describe("direct resource authorization", () => {
       { id: crypto.randomUUID(), userId: unrelatedId, orgId: otherOrgId, role: "owner" },
     ]);
     await db.insert(apiTokens).values([
-      { id: crypto.randomUUID(), token: ownerToken, userId: ownerId },
-      { id: crypto.randomUUID(), token: unrelatedToken, userId: unrelatedId },
-      { id: crypto.randomUUID(), token: orgToken, orgId },
+      { id: crypto.randomUUID(), token: hashAuthenticationToken(ownerToken), userId: ownerId },
+      { id: crypto.randomUUID(), token: hashAuthenticationToken(unrelatedToken), userId: unrelatedId },
+      { id: crypto.randomUUID(), token: hashAuthenticationToken(orgToken), orgId },
     ]);
     await db.insert(workspaces).values([
       { id: workspaceId, name: `workspace-a-${suffix}`, orgId },

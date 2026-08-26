@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 
 import { app } from "../../src/app";
@@ -49,8 +50,8 @@ describe("actions api authorization", () => {
       { id: `act-mem2-${suffix}`, userId: otherUserId, orgId: otherOrgId, role: "owner" },
     ]);
     await db.insert(apiTokens).values([
-      { id: `act-t1-${suffix}`, token: userToken, userId },
-      { id: `act-t2-${suffix}`, token: outsiderToken, userId: otherUserId },
+      { id: `act-t1-${suffix}`, token: hashAuthenticationToken(userToken), userId },
+      { id: `act-t2-${suffix}`, token: hashAuthenticationToken(outsiderToken), userId: otherUserId },
     ]);
     await db.insert(workspaces).values({ id: workspaceId, name: `act-ws-${suffix}`, orgId });
     await db.insert(actions).values({

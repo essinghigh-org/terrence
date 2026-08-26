@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -41,7 +42,7 @@ describe("Default Project assignment (RBAC-008)", () => {
     await db.insert(organizationMemberships).values({
       id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active",
     });
-    await db.insert(apiTokens).values({ id: `tok-${suffix}`, token, userId });
+    await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
     explicitProjectId = `prj-${crypto.randomUUID()}`;
     await db.insert(projects).values({
       id: explicitProjectId, orgId, name: "explicit-project", isDefault: false,

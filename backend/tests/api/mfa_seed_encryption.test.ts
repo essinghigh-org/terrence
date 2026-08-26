@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { createHmac } from "node:crypto";
 import { app } from "../../src/app";
@@ -40,7 +41,7 @@ describe("TOTP seed encryption at rest", () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({ id: crypto.randomUUID(), userId, orgId, role: "owner" });
-    await db.insert(apiTokens).values({ id: crypto.randomUUID(), token: auth, userId });
+    await db.insert(apiTokens).values({ id: crypto.randomUUID(), token: hashAuthenticationToken(auth), userId });
   });
 
   afterAll(async () => {

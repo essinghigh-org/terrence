@@ -1,4 +1,5 @@
 import { describe, expect, test, beforeAll } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { users, apiTokens, organizations, organizationMemberships, projects, workspaces } from "../../src/db/schema";
@@ -23,7 +24,7 @@ describe("Explorer API (the reference format Parity)", () => {
 
     await db.insert(apiTokens).values({
       id: `tok-${crypto.randomUUID()}`,
-      token: tokenVal,
+      token: hashAuthenticationToken(tokenVal),
       userId,
       createdAt: Date.now(),
     });

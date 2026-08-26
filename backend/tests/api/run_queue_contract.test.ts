@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -44,7 +45,7 @@ describe("native Terraform organization run queue", () => {
     });
     await db.insert(apiTokens).values({
       id: `token-${suffix}`,
-      token,
+      token: hashAuthenticationToken(token),
       userId,
       description: "run queue contract",
     });

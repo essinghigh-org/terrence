@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -27,7 +28,7 @@ describe("Organization create/update defaults (ORG-010)", () => {
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: user, passwordHash: "unused" });
-    await db.insert(apiTokens).values({ id: `tok-${suffix}`, token, userId });
+    await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
   });
 
   const prefix = `${user}-`;

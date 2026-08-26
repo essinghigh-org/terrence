@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -51,9 +52,9 @@ describe("organization variable set API contract", () => {
       { id: crypto.randomUUID(), userId: unrelatedUserId, orgId: unrelatedOrgId, role: "owner" },
     ]);
     await db.insert(apiTokens).values([
-      { id: crypto.randomUUID(), token, userId },
-      { id: crypto.randomUUID(), token: unrelatedToken, userId: unrelatedUserId },
-      { id: crypto.randomUUID(), token: orgToken, orgId },
+      { id: crypto.randomUUID(), token: hashAuthenticationToken(token), userId },
+      { id: crypto.randomUUID(), token: hashAuthenticationToken(unrelatedToken), userId: unrelatedUserId },
+      { id: crypto.randomUUID(), token: hashAuthenticationToken(orgToken), orgId },
     ]);
     await db.insert(workspaces).values([
       { id: workspaceIds[0]!, name: `alpha-${suffix}`, orgId },

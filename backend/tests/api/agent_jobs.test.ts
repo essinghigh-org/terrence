@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -71,7 +72,7 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       userId: "user",
       role: "owner",
     });
-    await db.insert(apiTokens).values({ id: "user-token-id", token: userToken, userId: "user" });
+    await db.insert(apiTokens).values({ id: "user-token-id", token: hashAuthenticationToken(userToken), userId: "user" });
     await db.insert(projects).values({ id: "project", orgId: "org", name: "project" });
     await db.insert(agentPools).values([
       { id: "pool", orgId: "org", name: "pool", organizationScoped: true },

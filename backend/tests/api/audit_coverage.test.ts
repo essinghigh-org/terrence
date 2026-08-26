@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { and, eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -50,7 +51,7 @@ beforeAll(async () => {
   });
   await db.insert(apiTokens).values({
     id: `audit-token-id-${suffix}`,
-    token,
+    token: hashAuthenticationToken(token),
     userId,
   });
 

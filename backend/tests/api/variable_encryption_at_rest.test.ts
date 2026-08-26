@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq, like } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -43,7 +44,7 @@ describe("sensitive variable encryption at rest", () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({ id: crypto.randomUUID(), userId, orgId, role: "owner" });
-    await db.insert(apiTokens).values({ id: crypto.randomUUID(), token: auth, userId });
+    await db.insert(apiTokens).values({ id: crypto.randomUUID(), token: hashAuthenticationToken(auth), userId });
     await db.insert(workspaces).values({ id: workspaceId, name: `varenc-${suffix}`, orgId });
     const setRes = await request(`/api/v2/organizations/${orgName}/varsets`, "POST", {
       data: { type: "varsets", attributes: { name: "varenc-set", global: false } },

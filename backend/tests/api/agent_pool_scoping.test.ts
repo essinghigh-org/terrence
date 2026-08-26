@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -47,7 +48,7 @@ describe("agent pool workspace and project scoping", () => {
       orgId,
       role: "owner",
     });
-    await db.insert(apiTokens).values({ id: `api-token-${suffix}`, token, userId });
+    await db.insert(apiTokens).values({ id: `api-token-${suffix}`, token: hashAuthenticationToken(token), userId });
     await db.insert(projects).values([
       { id: allowedProjectId, orgId, name: "Allowed project" },
       { id: otherProjectId, orgId, name: "Other project" },

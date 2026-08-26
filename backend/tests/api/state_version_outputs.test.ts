@@ -1,4 +1,5 @@
 import { describe, expect, test, beforeAll } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { users, apiTokens, organizations, organizationMemberships, workspaces, stateVersions } from "../../src/db/schema";
@@ -22,7 +23,7 @@ describe("State Version Outputs & Temporal Upload API", () => {
 
     await db.insert(apiTokens).values({
       id: `tok-${crypto.randomUUID()}`,
-      token: tokenVal,
+      token: hashAuthenticationToken(tokenVal),
       userId,
       createdAt: Date.now(),
     });

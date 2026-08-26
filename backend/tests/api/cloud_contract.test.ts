@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { rm } from "fs/promises";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
@@ -50,7 +51,7 @@ describe("Terraform cloud protocol contract", () => {
       orgId,
       role: "owner",
     });
-    await db.insert(apiTokens).values({ id: tokenId, token, userId });
+    await db.insert(apiTokens).values({ id: tokenId, token: hashAuthenticationToken(token), userId });
     await db.insert(workspaces).values({
       id: workspaceId,
       name: "cloud-contract",

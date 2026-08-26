@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -36,7 +37,7 @@ describe("project defaults and workspace inheritance", () => {
       orgId,
       role: "owner",
     });
-    await db.insert(apiTokens).values({ id: `token-${suffix}`, token, userId });
+    await db.insert(apiTokens).values({ id: `token-${suffix}`, token: hashAuthenticationToken(token), userId });
     await db.insert(agentPools).values({
       id: poolId,
       orgId,
@@ -200,7 +201,7 @@ describe("workspace agent-pool validation gates (RUN-021)", () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({ id: `mem-${suffix}`, userId, orgId, role: "owner" });
-    await db.insert(apiTokens).values({ id: `tok-${suffix}`, token, userId });
+    await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
     // Default Project execution-mode defaults to "remote" (no agent pool).
     const workspaceRes = await request("POST", `/api/v2/organizations/${orgName}/workspaces`, {
       data: { type: "workspaces", attributes: { name: "pool-validation-ws" } },

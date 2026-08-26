@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -56,14 +57,14 @@ describe("account, token, and variable schema contracts", () => {
     await db.insert(apiTokens).values([
       {
         id: authTokenId,
-        token: authToken,
+        token: hashAuthenticationToken(authToken),
         userId,
         description: "test auth",
         createdAt: Date.now() - 10_000,
       },
       {
         id: expiredTokenId,
-        token: expiredToken,
+        token: hashAuthenticationToken(expiredToken),
         userId,
         description: "expired",
         createdAt: Date.now() - 10_000,

@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { users, organizations, organizationMemberships, projects, workspaces, workspaceVariables, variableSets, variableSetProjects, stateVersions, configurationVersions, runs, apiTokens } from "../../src/db/schema";
@@ -42,7 +43,7 @@ describe("Epics 6, 7 & 8 API Features: Global Vars, Variable Sets, State & CV En
 
     await db.insert(apiTokens).values({
       id: `tok-${crypto.randomUUID()}`,
-      token: userToken,
+      token: hashAuthenticationToken(userToken),
       userId,
       createdAt: Date.now(),
     });
