@@ -1,11 +1,8 @@
-import { encryptSecret, decryptSecret, isEncryptedSecret } from "./secrets";
+import { encryptSecret, decryptSecret } from "./secrets";
 
-// Sensitive-variable value encryption (todo 167-169): `sensitive=true` rows
-// store their value ONLY in value_encrypted (enc:v1); the plaintext column
-// keeps "". Non-sensitive rows keep plaintext in `value` with a null
-// encrypted column. Plaintext sensitive rows written before this shipped
-// are migrated on next write (see migrateSensitiveVariableValue).
-
+// Sensitive-variable value encryption: `sensitive=true` rows store their
+// value ONLY in value_encrypted (enc:v1); the plaintext column keeps "".
+// Non-sensitive rows keep plaintext in `value` with a null encrypted column.
 export type EncryptedVariableWrite = {
   value: string;
   valueEncrypted: string | null;
@@ -21,8 +18,8 @@ export async function variableValueForWrite(
 }
 
 /**
- * Resolve the effective plaintext of a variable row: the encrypted column
- * when present, else the legacy plaintext column.
+ * Resolve the effective plaintext of a variable row: decrypt the encrypted
+ * column for sensitive rows; non-sensitive rows are stored plaintext.
  */
 export async function variableValueForRead(row: {
   readonly value: string;
@@ -32,17 +29,4 @@ export async function variableValueForRead(row: {
     return decryptSecret(row.valueEncrypted);
   }
   return row.value;
-}
-
-/**
- * True when a row still stores its sensitive value in the legacy plaintext
- * column (needs migration on next write).
- */
-/** @public Intentional surface: benchmark/test hook or cross-module API. */
-export function sensitiveValueNeedsMigration(row: {
-  readonly value: string;
-  readonly valueEncrypted?: string | null;
-  readonly sensitive?: boolean | null;
-}): boolean {
-  return row.sensitive === true && !isEncryptedSecret(row.valueEncrypted ?? "") && row.value !== "";
 }

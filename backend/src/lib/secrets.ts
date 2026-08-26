@@ -14,10 +14,6 @@ const KEY_FILE_NAME = ".encryption-key";
 const SALT_FILE_NAME = ".encryption-salt";
 const KEY_LENGTH = 32;
 const SALT_LENGTH = 16;
-// Salt used by installations created before per-installation KDF salts
-// existed. Kept only to decrypt secrets written under the old scheme;
-// new encryptions always use the per-installation random salt.
-const LEGACY_KDF_SALT = "terrence:secrets:v1";
 
 let cachedKey: Buffer | undefined;
 let cachedStorageDir: string | undefined;
@@ -31,8 +27,6 @@ let cachedKeyInFlight: Promise<Buffer> | undefined;
 let cachedKeyInFlightDir: string | undefined;
 let cachedKdfSalt: Buffer | undefined;
 let cachedKdfSaltStorageDir: string | undefined;
-let cachedLegacyKey: Buffer | undefined;
-let cachedLegacyPassword: string | undefined;
 
 /** Equal to true after loadKdfSalt() had to create a new salt (no prior salt on disk). */
 let saltWasRecreatedOnLoad = false;
@@ -140,17 +134,6 @@ async function readExistingSaltWithRetry(saltPath: string): Promise<Buffer> {
   // Give up: the file is persistently absent or below the valid length. Callers
   // surface the "Invalid KDF salt" error; failing closed is correct here.
   throw new Error(`Invalid KDF salt in ${saltPath} (concurrent write never completed)`);
-}
-
-function legacyEncryptionKey(password: string): Buffer {
-  // Key is cached per password so a process that re-reads ENCRYPTION_PASSWORD
-  // after a config change derives a fresh key instead of returning the stale
-  // cached one (the decrypt fallback calls this with the current password).
-  if (cachedLegacyPassword !== password || cachedLegacyKey === undefined) {
-    cachedLegacyKey = scryptSync(password, LEGACY_KDF_SALT, KEY_LENGTH);
-    cachedLegacyPassword = password;
-  }
-  return cachedLegacyKey;
 }
 
 async function loadEncryptionKey(): Promise<Buffer> {
@@ -275,22 +258,7 @@ export async function decryptSecret(value: string): Promise<string> {
     ]).toString("utf8");
   };
 
-  try {
-    return decrypt(await loadEncryptionKey());
-  } catch (error) {
-    // Secrets written before per-installation KDF salts derived the key
-    // from a static salt. GCM authentication makes a wrong key fail here,
-    // so retry with the legacy derivation before surfacing the error.
-    const password = process.env.ENCRYPTION_PASSWORD;
-    if (password !== undefined && password !== "") {
-      try {
-        return decrypt(legacyEncryptionKey(password));
-      } catch {
-        // fall through to the primary error
-      }
-    }
-    throw error;
-  }
+  return decrypt(await loadEncryptionKey());
 }
 
 /**
@@ -325,19 +293,7 @@ export function decryptSecretSync(value: string, storageDir: string): string {
     ]).toString("utf8");
   };
 
-  try {
-    return decrypt(loadEncryptionKeySync(storageDir));
-  } catch (error) {
-    const password = process.env.ENCRYPTION_PASSWORD;
-    if (password !== undefined && password !== "") {
-      try {
-        return decrypt(legacyEncryptionKey(password));
-      } catch {
-        // fall through to the primary error
-      }
-    }
-    throw error;
-  }
+  return decrypt(loadEncryptionKeySync(storageDir));
 }
 
 function loadEncryptionKeySync(storageDir: string): Buffer {
