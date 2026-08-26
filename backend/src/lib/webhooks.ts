@@ -117,11 +117,6 @@ function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetail
     const headCommit = asRecord(payload.head_commit);
     const commitMessage = requiredString(headCommit?.message);
     const commitUrl = requiredString(headCommit?.url);
-    const author = asRecord(headCommit?.author);
-    const committer = asRecord(headCommit?.committer);
-    const commitUsername = requiredString(committer?.username)
-      ?? requiredString(author?.username)
-      ?? senderUsername;
     const filesChanged = changedFiles(payload);
     if (ref === undefined || commitSha === undefined || commitMessage === undefined || commitUrl === undefined || filesChanged === undefined) return undefined;
     const branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : undefined;
@@ -140,7 +135,7 @@ function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetail
       commitUrl,
       filesChanged,
       repoFullName,
-      senderUsername: commitUsername,
+      senderUsername,
       ...(senderAvatarUrl === undefined ? {} : { senderAvatarUrl }),
       ...(tag === undefined ? {} : { tag }),
     };
@@ -746,8 +741,22 @@ export async function reportRunVcsStatus(runId: string, runStatus: string): Prom
           ? []
           : await db.query.configurationVersions.findMany({ where: inArray(configurationVersions.id, configurationIds) });
         const configurationsById = new Map(relatedConfigurations.map((item): [string, typeof item] => [item.id, item]));
-        const relatedStates = relatedRuns
-          .filter((relatedRun): boolean => configurationsById.get(relatedRun.configurationVersionId ?? "")?.ingressAttributes?.commitSha === commitSha)
+        // For the aggregated status, consider only the latest run per workspace
+        // for this commit (multiple queued/retried runs share the same SHA, e.g.
+        // a branch run superseded by master). Picking the newest createdAt
+        // avoids the "4 workspace runs: failure" false positive when a discarded
+        // intermediate run exists alongside a later successful one.
+        const runsForCommit = relatedRuns.filter(
+          (relatedRun): boolean => configurationsById.get(relatedRun.configurationVersionId ?? "")?.ingressAttributes?.commitSha === commitSha,
+        );
+        const latestPerWorkspace = new Map<string, typeof runsForCommit[number]>();
+        for (const candidate of [...runsForCommit].sort((a, b): number => b.createdAt - a.createdAt)) {
+          if (!latestPerWorkspace.has(candidate.workspaceId)) {
+            latestPerWorkspace.set(candidate.workspaceId, candidate);
+          }
+        }
+        const relatedStates = [...latestPerWorkspace.values()]
+          .filter((relatedRun): boolean => !(["discarded", "canceled", "force_canceled"] as readonly string[]).includes(relatedRun.status))
           .map((relatedRun): "pending" | "success" | "failure" | undefined => vcsStatus(relatedRun.status))
           .filter((value): value is "pending" | "success" | "failure" => value !== undefined);
         const aggregateState = relatedStates.some((value): boolean => value === "failure")
