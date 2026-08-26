@@ -5,6 +5,7 @@ import { refreshTrustedClientIpHeaders } from "./src/lib/client-ip";
 import { applyPgMigrations, isPostgres } from "./src/db";
 import { log } from "./src/lib/log";
 import { reconcileInterruptedLocalRuns, stopWorkerQueue, waitForWorkerDrain } from "./src/worker";
+import { shutdownLogging } from "./src/lib/log";
 import { markControlPlaneNodeDraining, startControlPlaneHeartbeat } from "./src/routes/health";
 
 const rawPort = process.env.PORT;
@@ -128,6 +129,9 @@ import { checkpointWal } from "./src/db";
 async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
   console.log(`[terrence] ${signal} received; draining worker, stopping server, checkpointing WAL before shutdown`);
   stopWorkerQueue();
+  // Flush/close the remote syslog transport so in-flight frames drain
+  // before process exit (no-op when TERRENCE_SYSLOG_TARGET is unset).
+  shutdownLogging();
   // Bound the draining write: markControlPlaneNodeDraining performs a DB
   // write with no deadline. If the database is unreachable or slow at
   // shutdown, awaiting it here would stall before the worker drain and the
