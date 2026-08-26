@@ -304,7 +304,7 @@ describe("GitHub Webhooks", () => {
       data: { attributes: Record<string, unknown> };
     };
     expect(runDocument.data.attributes).toMatchObject({
-      "triggered-by": "essinghigh",
+      "triggered-by": "octocat",
       "triggered-by-avatar-url": expect.stringMatching(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/),
     });
     const eventResponse = await app.handle(new Request(`http://127.0.0.1/api/v2/runs/${run.id}/run-events`, {
@@ -314,11 +314,36 @@ describe("GitHub Webhooks", () => {
       data: { attributes: Record<string, unknown> }[];
     };
     expect(eventDocument.data[0]?.attributes).toMatchObject({
-      "actor-username": "essinghigh",
+      "actor-username": "octocat",
       "actor-avatar-url": expect.stringMatching(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/),
     });
     expect(tarballFetches).toBe(1);
     expect(await waitForCommitStatus()).toMatchObject({ state: "pending" });
+  });
+
+  test("push attributed to sender not web-flow committer (GH squash-merge regression)", async () => {
+    const webFlowPayload = {
+      ...pushPayload,
+      head_commit: {
+        message: "Squash merge",
+        url: "https://github.com/hashicorp/terraform/commit/aaaaaaaa",
+        author: { username: "henry" },
+        committer: { username: "web-flow" },
+      },
+      sender: { login: "henry", avatar_url: "https://avatars.githubusercontent.com/u/123" },
+    };
+    const deliveryId = crypto.randomUUID();
+    expect((await sendWebhook("push", webFlowPayload, deliveryId)).status).toBe(200);
+    const runList = await waitForRuns((items): boolean => items.some((run): boolean => !run.planOnly));
+    await waitForDelivery(deliveryId);
+    const run = runList.find((item): boolean => item.workspaceId === workspaceId && !item.planOnly);
+    expect(run).toBeDefined();
+    if (run === undefined) return;
+    const runResponse = await app.handle(new Request(`http://127.0.0.1/api/v2/runs/${run.id}`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    }));
+    const runDocument = await runResponse.json() as { data: { attributes: Record<string, unknown> } };
+    expect(runDocument.data.attributes["triggered-by"]).toBe("henry");
   });
 
   test("supports aggregated and per-workspace commit statuses", async () => {

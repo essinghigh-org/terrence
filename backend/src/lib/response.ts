@@ -614,13 +614,17 @@ export function runResource(
             : run.planOnly
               ? "plan_only"
               : "plan_and_apply";
-  // Provider names belong in ingress metadata. the reference format's run source is the
-  // transport taxonomy consumed by clients.
-  const normalizedSource = origin?.source === "tfe-ui" || origin?.source === "tfe-api" || origin?.source === "tfe-configuration-version"
+  // Preserve VCS provider sources (github/gitlab/bitbucket) for UI display
+  // ("via GitHub" etc). The reference format also surfaces them through this
+  // field and the TFE compatibility layer expects them; collapsing to
+  // tfe-configuration-version broke the run list's "via ..." label.
+  const normalizedSource = origin?.source === "tfe-ui" || origin?.source === "tfe-api" || origin?.source === "tfe-configuration-version" || origin?.source === "github" || origin?.source === "gitlab" || origin?.source === "bitbucket"
     ? origin.source
     : origin?.source === undefined || origin?.source === null || origin.source === ""
       ? "tfe-api"
-      : "tfe-configuration-version";
+      : origin.source === "github" || origin.source === "gitlab" || origin.source === "bitbucket"
+        ? origin.source
+        : "tfe-configuration-version";
 
   return {
     id: run.id,

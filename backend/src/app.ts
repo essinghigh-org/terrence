@@ -260,7 +260,7 @@ function envPositiveInt(name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-const RATE_LIMIT_MAX = envPositiveInt("RATE_LIMIT_MAX", 30);
+const RATE_LIMIT_MAX = envPositiveInt("RATE_LIMIT_MAX", 60);
 const SENSITIVE_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SENSITIVE_MAX", 5);
 const SENSITIVE_RATE_DURATION_MS = 60_000;
 // SSO initiation and IdP-initiated logout arrive from browsers/IdPs (shared
@@ -287,7 +287,7 @@ const SCIM_MAPPING_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SCIM_MAPPING_MAX", 10
  *  - scim-mapping (RATE_LIMIT_SCIM_MAPPING_MAX / 60s): SCIM team mappings
  * Exposed via GET /api/v2/capabilities rate-limit docs block; see that route.
  */
-const WORKSPACE_RUN_HISTORY_RATE_LIMIT = envPositiveInt("RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX", 30);
+const WORKSPACE_RUN_HISTORY_RATE_LIMIT = envPositiveInt("RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX", 120);
 const WORKSPACE_RUN_HISTORY_DURATION_MS = envPositiveInt("RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS", 60_000);
 
 function distributedOrLocal(bucketPrefix: string): ReturnType<typeof fixedWindowContext> {
@@ -420,7 +420,10 @@ export const app = new Elysia()
     // a page load fetches 30-40 chunks in parallel and would trip the bucket
     // on every cold cache. Only server endpoints are counted; login and other
     // credential-bearing paths get their own tighter limiters below.
-    skip: (request: CustomRequest): boolean => serverEndpointPath(request) === undefined,
+    // Workspace run history has its own dedicated bucket (120/min) so it is
+    // excluded here to avoid double-counting the same request against the
+    // global 60/sec bucket.
+    skip: (request: CustomRequest): boolean => serverEndpointPath(request) === undefined || workspaceRunHistoryPath(request) !== undefined,
   }))
   .use(rateLimit({
     context: distributedOrLocal("workspace-run-history"),

@@ -510,21 +510,29 @@ export function RunList({
                 const creatorUser = creatorId !== undefined ? usersMap.get(creatorId) : undefined;
                 const username = creatorUser?.attributes.username ?? run.attributes["triggered-by"] ?? "System";
                 const avatarUrl = creatorUser?.attributes["avatar-url"] ?? run.attributes["triggered-by-avatar-url"] ?? "";
+                // tfe-configuration-version is the historical VCS source emitted by
+                // older backends (see response.ts normalizedSource); treat it as
+                // external VCS so existing runs still render as GitHub/VCS instead
+                // of falling through to "UI".
+                const isVcsSource = (["github", "gitlab", "bitbucket"] as readonly (string | undefined)[]).includes(run.attributes.source)
+                  || (run.attributes.source === "tfe-configuration-version" && ["push", "pull_request", "tag"].includes(run.attributes["trigger-reason"] ?? ""));
                 const sourceLabel = run.attributes.source === "github"
                   ? "GitHub"
                   : run.attributes.source === "gitlab"
                     ? "GitLab"
                     : run.attributes.source === "bitbucket"
                       ? "Bitbucket"
-                      : run.attributes.source === "tfe-cli"
-                        ? "CLI"
-                        : run.attributes.source === "tfe-ui" || run.attributes["trigger-reason"] === "manual"
-                          ? "UI"
-                          : run.attributes.source === "tfe-api" || run.attributes.source === undefined
-                            ? "API"
-                            : "UI";
+                      : isVcsSource
+                        ? "GitHub"
+                        : run.attributes.source === "tfe-cli"
+                          ? "CLI"
+                          : run.attributes.source === "tfe-ui" || run.attributes["trigger-reason"] === "manual"
+                            ? "UI"
+                            : run.attributes.source === "tfe-api" || run.attributes.source === undefined
+                              ? "API"
+                              : "UI";
 // SAFETY: the fixed source list matches the VCS source union the UI renders.
-                const externalSource = (["github", "gitlab", "bitbucket"] as readonly (string | undefined)[]).includes(run.attributes.source);
+                const externalSource = isVcsSource;
                 return (
                   <article
                     key={run.id}

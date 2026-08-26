@@ -172,14 +172,20 @@ function gravatarUrl(email: string | null | undefined): string | null {
 }
 
 function commentResource(
-  comment: CommentItem | Readonly<{ id: string; runId: string; body: string; userId: string | null; createdAt: number }>,
+  comment: CommentItem | Readonly<{ id: string; runId: string; body: string; userId: string | null; createdAt: number }> & Readonly<{ username?: string | null; avatarUrl?: string | null }>,
 ): Record<string, unknown> {
   const runEventId = `re-${comment.id}`;
+  const username = (comment as Record<string, unknown>).username;
+  const avatarUrl = (comment as Record<string, unknown>).avatarUrl;
   return {
     id: comment.id,
     type: "comments",
     attributes: {
       body: comment.body,
+      // Expose actor for the UI's Comments section; fall back is "System" in the
+      // frontend. Older clients ignore these extra fields.
+      ...(typeof username === "string" && username !== "" ? { "actor-username": username } : {}),
+      ...(typeof avatarUrl === "string" && avatarUrl !== "" ? { "actor-avatar-url": avatarUrl } : {}),
     },
     relationships: {
       "run-event": {
@@ -189,6 +195,26 @@ function commentResource(
     },
     links: { self: `/api/v2/comments/${comment.id}` },
   };
+}
+
+async function enrichCommentsWithActors(
+  comments: readonly (CommentItem | Readonly<{ id: string; runId: string; body: string; userId: string | null; createdAt: number }>)[],
+): Promise<ReadonlyArray<CommentItem & { username?: string | null; avatarUrl?: string | null }>> {
+  const userIds = [...new Set(comments.map((c): string | null => c.userId).filter((v): v is string => v !== null && v !== ""))];
+  if (userIds.length === 0) return comments as never;
+  const userList = await db.query.users.findMany({
+    where: inArray(users.id, userIds),
+    columns: { id: true, username: true, email: true },
+  });
+  const byId = new Map(userList.map((u): [string, typeof u] => [u.id, u]));
+  return comments.map((c): CommentItem & { username?: string | null; avatarUrl?: string | null } => {
+    const u = c.userId !== null ? byId.get(c.userId) : undefined;
+    return {
+      ...(c as CommentItem),
+      username: u?.username ?? null,
+      avatarUrl: u !== undefined ? gravatarUrl(u.email) : null,
+    };
+  });
 }
 
 const RUN_VARIABLE_KEY_PATTERN = /^[A-Za-z0-9_.-]+$/;
@@ -1250,8 +1276,9 @@ export const runRoutes = new Elysia({ name: "runs" })
       where: eq(runComments.runId, runId),
       orderBy: [asc(runComments.createdAt), asc(runComments.id)],
     });
+    const enriched = await enrichCommentsWithActors(commentsList);
     return {
-      data: commentsList.map((comment: CommentItem): Record<string, unknown> => commentResource(comment)),
+      data: enriched.map((comment): Record<string, unknown> => commentResource(comment)),
     };
   })
   .post("/api/v2/runs/:run_id/comments", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -1267,7 +1294,11 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (text === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
     const { id, createdAt } = await createRunComment({ runId, userId: user?.id ?? null, body: text, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
     (set as { status: number }).status = 201;
-    return { data: commentResource({ id, runId, body: text, userId: user?.id ?? null, createdAt }) };
+    let actor: { username?: string | null; avatarUrl?: string | null } = {};
+    if (user !== undefined && user !== null) {
+      actor = { username: user.username, avatarUrl: gravatarUrl(user.email) };
+    }
+    return { data: commentResource({ id, runId, body: text, userId: user?.id ?? null, createdAt, ...actor }) };
   })
   .delete("/api/v2/comments/:comment_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const commentId = params.comment_id ?? "";
@@ -1285,7 +1316,8 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (comment === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const authorized = await findAuthorizedRun(comment.runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: commentResource(comment) };
+    const [enrichedSingle] = await enrichCommentsWithActors([comment]);
+    return { data: commentResource(enrichedSingle) };
   })
   // --- Plan JSON Output ---
   .get("/api/v2/plans/:plan_id/json-output", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {

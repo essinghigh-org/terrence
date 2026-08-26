@@ -302,6 +302,7 @@ function sourceLabel(source: string | undefined): string {
     gitlab: "GitLab",
     "tfe-api": "API",
     "tfe-cli": "CLI",
+    "tfe-configuration-version": "VCS",
     "tfe-no-code": "No-code provisioning",
     "tfe-ui": "UI",
   };
