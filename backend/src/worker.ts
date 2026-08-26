@@ -2403,14 +2403,16 @@ export async function runPolicyChecks(
 
       if (isOpa && typeof policySource === "string" && policySource !== "" && planJsonPayload !== null && planJsonPayload !== "") {
         // Try to evaluate with OPA
-        const workDir = join(tmpdir(), "terrence", "opa", runId);
+        // Unpredictable per-invocation directory: a guessable tmp path under
+        // /tmp invites symlink attacks and cross-run tampering.
+        const workDir = join(tmpdir(), "terrence", "opa", `${runId}-${crypto.randomUUID()}`);
         try {
-          await mkdir(workDir, { recursive: true });
+          await mkdir(workDir, { recursive: true, mode: 0o700 });
         } catch {}
         const policyPath = join(workDir, "policy.rego");
         const dataPath = join(workDir, "input.json");
-        await writeFile(policyPath, policySource);
-        await writeFile(dataPath, planJsonPayload);
+        await writeFile(policyPath, policySource, { mode: 0o600 });
+        await writeFile(dataPath, planJsonPayload, { mode: 0o600 });
         const opaQuery = typeof policy.source === "string" && typeof policy.query === "string" && policy.query !== ""
           ? policy.query
           : "data";
@@ -2450,8 +2452,8 @@ export async function runPolicyChecks(
           await rm(workDir, { recursive: true, force: true });
         } catch {}
       } else if (isSentinel && typeof policySource === "string" && policySource !== "") {
-        const workDir = join(tmpdir(), "terrence", "sentinel", runId, policy.id);
-        await mkdir(workDir, { recursive: true });
+        const workDir = join(tmpdir(), "terrence", "sentinel", `${runId}-${crypto.randomUUID()}`, policy.id);
+        await mkdir(workDir, { recursive: true, mode: 0o700 });
         const policyPath = join(workDir, "policy.sentinel");
         await writeFile(policyPath, policySource, { mode: 0o600 });
         const args = [

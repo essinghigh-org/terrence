@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { generateKeyPairSync } from "node:crypto";
 import jwt, { type JwtPayload } from "jsonwebtoken";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { and, eq } from "drizzle-orm";
@@ -15,6 +15,7 @@ import {
   users,
   workspaces,
 } from "../../src/db/schema";
+import { legacyHashAuthenticationToken } from "../../src/lib/token-service";
 
 const suffix = crypto.randomUUID();
 const orgId = `org-github-app-${suffix}`;
@@ -140,12 +141,12 @@ beforeAll(async () => {
   await db.insert(apiTokens).values([
     {
       id: apiTokenId,
-      token: createHash("sha256").update(apiToken).digest("hex"),
+      token: legacyHashAuthenticationToken(apiToken),
       userId,
     },
     {
       id: outsiderTokenId,
-      token: createHash("sha256").update(outsiderToken).digest("hex"),
+      token: legacyHashAuthenticationToken(outsiderToken),
       userId: outsiderId,
     },
   ]);
@@ -165,12 +166,12 @@ beforeEach(async () => {
   await db.insert(apiTokens).values([
     {
       id: apiTokenId,
-      token: createHash("sha256").update(apiToken).digest("hex"),
+      token: legacyHashAuthenticationToken(apiToken),
       userId,
     },
     {
       id: outsiderTokenId,
-      token: createHash("sha256").update(outsiderToken).digest("hex"),
+      token: legacyHashAuthenticationToken(outsiderToken),
       userId: outsiderId,
     },
   ]).onConflictDoNothing();

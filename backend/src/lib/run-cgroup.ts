@@ -310,8 +310,10 @@ function removeCgroupDir(path: string): boolean {
 }
 
 function writeIfPossible(file: string, value: string): void {
+  // No W_OK pre-check on purpose: check-then-write races the file away. The
+  // write's own errno (ENOENT/EACCES/EROFS) carries the same information
+  // without the TOCTOU window.
   try {
-    accessSync(file, constants.W_OK);
     writeFileSync(file, value);
   } catch {
     /* controller not exposed on this kernel — skip */

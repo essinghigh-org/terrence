@@ -1,3 +1,4 @@
+import { mkdtempSync } from "node:fs";
 import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { rmSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -55,7 +56,7 @@ describe("isEncryptedSecret", () => {
 });
 
 describe("per-installation KDF salt (4.10)", () => {
-  const dirA = join(tmpdir(), "terrence-salt-a-" + Date.now());
+  const dirA = mkdtempSync(join(tmpdir(), "terrence-salt-a-"));
   const dirB = join(tmpdir(), "terrence-salt-b-" + Date.now());
 
   beforeEach(() => {

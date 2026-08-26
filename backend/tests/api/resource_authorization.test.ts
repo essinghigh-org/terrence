@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { writeFile, rm } from "fs/promises";
 import { join } from "path";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "os";
 import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
@@ -35,7 +36,8 @@ describe("direct resource authorization", () => {
   const otherConfigurationVersionId = `cv-b-${suffix}`;
   const runId = `run-a-${suffix}`;
   const appliedRunId = `run-applied-${suffix}`;
-  const archivePath = join(tmpdir(), `terrence-cv-${suffix}.tar.gz`);
+  const testDir = mkdtempSync(join(tmpdir(), "terrence-cv-"));
+  const archivePath = join(testDir, "module-archive.tar.gz");
 
   const request = (path: string, token: string, method = "GET", body?: unknown) =>
     app.handle(new Request(`http://terrence.test${path}`, {
@@ -116,7 +118,7 @@ describe("direct resource authorization", () => {
   afterAll(async () => {
     await db.delete(organizations).where(inArray(organizations.id, [orgId, otherOrgId]));
     await db.delete(users).where(inArray(users.id, [ownerId, unrelatedId]));
-    await rm(archivePath, { force: true });
+    await rm(testDir, { recursive: true, force: true });
   });
 
   it("hides cross-org resources and rejects principals that cannot plan or apply", async () => {

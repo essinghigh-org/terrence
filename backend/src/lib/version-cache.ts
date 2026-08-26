@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 
 // Persistent version-discovery cache (kanban 6.10). Kept in its own tiny
 // module so the file-format helpers can be unit-tested without network or
@@ -61,7 +61,12 @@ export function saveVersionCacheFile(
   try {
     const existing = loadVersionCacheFile(filePath);
     existing[tool] = entry;
-    writeFileSync(filePath, JSON.stringify(existing));
+    // Atomic write: unique temp name + rename, so a concurrent reader never
+    // sees a torn file and the unpredictable suffix keeps the window closed
+    // against symlink pre-creation in shared directories.
+    const tmpPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    writeFileSync(tmpPath, JSON.stringify(existing), { mode: 0o600 });
+    renameSync(tmpPath, filePath);
   } catch {
     // Swallow: persistence is best-effort.
   }
