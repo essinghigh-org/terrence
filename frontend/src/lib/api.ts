@@ -177,48 +177,26 @@ let refreshRequest: Promise<string | null> | null = null;
  * Bootstrap the access token for a fresh page load. Browser sessions have
  * no token in memory yet; their only credential is the HttpOnly refresh
  * cookie, so the first refresh is attempted unconditionally (`force`).
- * Sessions stored by pre-memory builds (legacy localStorage tokens) are
- * adopted exactly once and deleted, so no sensitive value persists after
- * this page load. Returns null when there is no session, which leaves the
+ * Browser sessions bootstrap via the HttpOnly refresh cookie.
+ * Returns null when there is no session, which leaves the
  * app at the login screen.
  */
 export async function bootstrapAuth(): Promise<string | null> {
   if (accessToken !== null) return accessToken;
-  const legacy = adoptLegacyStoredToken();
-  if (legacy !== null) return legacy;
+  // One-time purge of pre-memory legacy tokens that may still be present
+  // in localStorage from older builds. They are no longer read, but
+  // removing them avoids confusion and frees the slot.
+  try {
+    localStorage.removeItem("tfe_token");
+    localStorage.removeItem("tfe_token_expires_at");
+    localStorage.removeItem("tfe_refreshable_session");
+  } catch {
+    // storage unavailable — ignore
+  }
+  // All browser sessions now bootstrap exclusively via the HttpOnly refresh
+  // cookie, so a stale personal token can no longer shadow the correct
+  // session principal and 404 workspace runs.
   return refreshAccessToken(true).catch((): null => null);
-}
-
-/** Read a pre-memory-build token from localStorage once, then delete it. */
-function adoptLegacyStoredToken(): string | null {
-  let legacyToken: string | null = null;
-  let legacyExpiry: string | null = null;
-  let legacyRefreshable = false;
-  try {
-    legacyToken = storageGet("tfe_token");
-    legacyExpiry = storageGet("tfe_token_expires_at");
-    legacyRefreshable = storageGet("tfe_refreshable_session") === "true";
-  } catch {
-    return null;
-  }
-  if (legacyToken === null || legacyToken === "") return null;
-  try {
-    storageRemove("tfe_token");
-    storageRemove("tfe_token_expires_at");
-    storageRemove("tfe_refreshable_session");
-  } catch {
-    // The token was already read; the session still works for this page load.
-  }
-  const expiry = legacyExpiry === null ? null : Number(legacyExpiry);
-  // An expired non-refreshable legacy token is dead: adopting it would
-  // immediately fail every request. Expired refreshable sessions are still
-  // adopted so the refresh path can rotate through the cookie.
-  if (Number.isFinite(expiry) && expiry !== null && expiry <= Date.now() && !legacyRefreshable) {
-    storageSet(SESSION_EXPIRED_KEY, "true");
-    return null;
-  }
-  setAuthToken(legacyToken, Number.isFinite(expiry) ? expiry : null, legacyRefreshable);
-  return legacyToken;
 }
 
 async function refreshAccessToken(force = false): Promise<string | null> {
@@ -293,6 +271,26 @@ export async function fetchApi<T = unknown>(endpoint: string, options: ReadonlyR
   if (canRefresh) {
     const refreshedToken = await refreshAccessToken().catch((): null => null);
     if (refreshedToken !== null) {
+      response = await send(refreshedToken);
+    }
+  }
+  // A stale in-memory token can yield 404 on workspace-scoped reads
+  // when the principal lacks that workspace. Har review showed 5 rapid
+  // 404s for /workspaces/ws-…/runs with Bearer VvQ… while the same URL
+  // succeeded with HrTW… after a refresh. Retry a single 404 via the
+  // refresh cookie when in a refreshable session so the correct principal
+  // is picked up without surfacing "Run history may be out of date".
+  const canRefreshOnWorkspace404 = response.status === 404
+    && token !== null
+    && token !== ""
+    && isRefreshableSession()
+    && /\/api\/v2\/workspaces\/[^/]+\/(runs|state-versions|vars|varsets|resources|dependency-graph|current-state-version-outputs|readme)$/.test(url.split("?")[0])
+    && !url.endsWith("/users/login")
+    && !url.endsWith("/users/refresh")
+    && !url.endsWith("/users/logout");
+  if (canRefreshOnWorkspace404) {
+    const refreshedToken = await refreshAccessToken().catch((): null => null);
+    if (refreshedToken !== null && refreshedToken !== token) {
       response = await send(refreshedToken);
     }
   }
