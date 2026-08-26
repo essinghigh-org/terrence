@@ -376,13 +376,13 @@ export function CommandPalette({
 
   const moveHighlight = (delta: number): void => {
     if (filtered.length === 0) return;
-    setHighlightedIndex((current: number): number => {
-      const next = current + delta;
-      // Wrap around so ↓ at the bottom returns to the top and vice versa.
-      if (next < 0) return filtered.length - 1;
-      if (next >= filtered.length) return 0;
-      return next;
-    });
+    // Base the move on the clamped index: the raw state can be stale when the
+    // result set shrinks while the palette is open (late fetch resolving).
+    const next = clampedIndex + delta;
+    // Wrap around so ↓ at the bottom returns to the top and vice versa.
+    if (next < 0) setHighlightedIndex(filtered.length - 1);
+    else if (next >= filtered.length) setHighlightedIndex(0);
+    else setHighlightedIndex(next);
   };
 
   const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
@@ -401,7 +401,7 @@ export function CommandPalette({
         break;
       case "End":
         e.preventDefault();
-        setHighlightedIndex(filtered.length - 1);
+        setHighlightedIndex(Math.max(0, filtered.length - 1));
         break;
       case "Enter": {
         e.preventDefault();

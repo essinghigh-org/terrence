@@ -94,6 +94,9 @@ test("arrow keys move the highlight and Enter activates the selection", async ()
   const view = renderPalette({ onOpenChange });
 
   const input = await waitFor((): HTMLElement => view.getByRole("combobox"));
+  // Wait for the async organization row too, so the result set is complete
+  // before keyboard events are dispatched.
+  await waitFor((): void => { expect(view.getAllByRole("option")).toHaveLength(3); });
   const listboxId = input.getAttribute("aria-controls") ?? "";
 
   fireEvent.keyDown(input, { key: "ArrowDown" });
@@ -113,6 +116,7 @@ test("the highlight wraps around at both ends of the list", async () => {
   const view = renderPalette();
 
   const input = await waitFor((): HTMLElement => view.getByRole("combobox"));
+  await waitFor((): void => { expect(view.getAllByRole("option")).toHaveLength(3); });
   const listboxId = input.getAttribute("aria-controls") ?? "";
 
   // Up from the first row lands on the last one.

@@ -31,6 +31,9 @@ function installFetch(): void {
       return json({ data: { attributes: { username: "alice", "is-site-admin": true } } });
     }
     if (url === "/api/v2/organizations?page[size]=100") return json({ data: [] });
+    if (url === "/api/v2/organizations/acme") {
+      return json({ data: { attributes: { permissions: {}, capabilities: {} } } });
+    }
     if (url === "/api/v2/docs") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   }) as typeof fetch;

@@ -339,12 +339,10 @@ export function Layout({
           toggleSidebar();
           break;
         case "escape": {
-          // Close overlays first; Base UI handles dialog Esc natively, but
-          // the palette state lives here so it must be cleared explicitly.
-          if (commandPaletteOpen) setCommandPaletteOpen(false);
-          else if (shortcutsModalOpen) setShortcutsModalOpen(false);
-          else if (mobileNavigationOpen) setMobileNavigationOpen(false);
-          else if (pendingGRef.current !== null) {
+          // Overlays are already closed here (the guard above returns while
+          // any is open, and Base UI owns dialog Escape); just drop a
+          // half-typed sequence.
+          if (pendingGRef.current !== null) {
             window.clearTimeout(pendingGRef.current);
             pendingGRef.current = null;
           }
