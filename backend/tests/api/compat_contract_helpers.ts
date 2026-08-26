@@ -1,4 +1,5 @@
 import { expect } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -43,7 +44,7 @@ export async function persistSeed(seed: OrgSeed): Promise<void> {
     orgId: seed.orgId,
     role: "owner",
   });
-  await db.insert(apiTokens).values({ id: seed.tokenId, token: seed.token, userId: seed.userId });
+  await db.insert(apiTokens).values({ id: seed.tokenId, token: hashAuthenticationToken(seed.token), userId: seed.userId });
   await db.insert(systemApiTokens).values({
     id: seed.systemTokenId,
     tokenHash: hashSystemApiToken(seed.systemToken),

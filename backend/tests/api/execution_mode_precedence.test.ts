@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -42,7 +43,7 @@ describe("Execution-mode setting precedence (ORG-011)", () => {
     await db.insert(organizationMemberships).values({
       id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active",
     });
-    await db.insert(apiTokens).values({ id: `tok-${suffix}`, token, userId });
+    await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
     // Project with a non-default execution mode so inheritance is observable.
     // Use "local" (no agent pool required) so the project can be created without
     // standing up an agent pool; the workspace must still inherit it.

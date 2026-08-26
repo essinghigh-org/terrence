@@ -15,6 +15,7 @@ import {
   users,
   workspaces,
 } from "../../src/db/schema";
+import { createHash } from "node:crypto";
 import { inArray } from "drizzle-orm";
 import { hashSystemApiToken } from "../../src/lib/system-api";
 
@@ -124,16 +125,16 @@ describe("instance metrics", () => {
     monitoringToken = `tfe-system-metrics-${suffix}`;
     await db.insert(apiTokens).values([
       // Legacy: no scopes = full permissions.
-      { id: `metrics-tok-legacy-${suffix}`, token: legacyToken, userId },
+      { id: `metrics-tok-legacy-${suffix}`, token: createHash("sha256").update(legacyToken).digest("hex"), userId },
       // Browser session access token: no scopes, but tracked in
       // refresh_sessions. Must NOT see instance-wide metrics.
-      { id: sessionTokenId, token: sessionToken, userId, description: "Browser session access token" },
+      { id: sessionTokenId, token: createHash("sha256").update(sessionToken).digest("hex"), userId, description: "Browser session access token" },
       // Site admin's browser session access token: accepted for instance-wide metrics.
-      { id: adminSessionTokenId, token: adminSessionToken, userId: `metrics-admin-${suffix}`, description: "Browser session access token" },
+      { id: adminSessionTokenId, token: createHash("sha256").update(adminSessionToken).digest("hex"), userId: `metrics-admin-${suffix}`, description: "Browser session access token" },
       // Fine-grained: full org A coverage, both grants.
       {
         id: `metrics-tok-scoped-${suffix}`,
-        token: scopedToken,
+        token: createHash("sha256").update(scopedToken).digest("hex"),
         userId,
         scopes: JSON.stringify({
           version: 1,
@@ -144,7 +145,7 @@ describe("instance metrics", () => {
       // Fine-grained: org A but workspace-restricted to wsA1 only.
       {
         id: `metrics-tok-ws-${suffix}`,
-        token: workspaceRestrictedToken,
+        token: createHash("sha256").update(workspaceRestrictedToken).digest("hex"),
         userId,
         scopes: JSON.stringify({
           version: 1,
@@ -156,7 +157,7 @@ describe("instance metrics", () => {
       // Fine-grained: org A but no agent-pools grant.
       {
         id: `metrics-tok-noagent-${suffix}`,
-        token: noAgentGrantToken,
+        token: createHash("sha256").update(noAgentGrantToken).digest("hex"),
         userId,
         scopes: JSON.stringify({
           version: 1,
@@ -167,7 +168,7 @@ describe("instance metrics", () => {
       // Fine-grained: bound to a user who owns org B, scoped to org B.
       {
         id: `metrics-tok-other-${suffix}`,
-        token: otherOrgToken,
+        token: createHash("sha256").update(otherOrgToken).digest("hex"),
         userId: otherUserId,
         scopes: JSON.stringify({
           version: 1,

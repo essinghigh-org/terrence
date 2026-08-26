@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -38,7 +39,7 @@ describe("Notification configuration defaults (NOT-003 / NOT-004)", () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "x" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({ id: `m-${suffix}`, userId, orgId, role: "owner" });
-    await db.insert(apiTokens).values({ id: `tok-${suffix}`, token, userId });
+    await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
     await db.insert(workspaces).values({ id: workspaceId, name: workspaceId, orgId });
   });
 

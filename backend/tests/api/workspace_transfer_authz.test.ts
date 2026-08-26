@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq, inArray } from "drizzle-orm";
 
 import { app } from "../../src/app";
@@ -74,10 +75,10 @@ describe("workspace transfer authorization", () => {
       { id: `wt-mem-d2-${suffix}`, userId: memberOnlyId, orgId: dstOrgId, role: "member" },
     ]);
     await db.insert(apiTokens).values([
-      { id: `wt-id-a-${suffix}`, token: adminToken, userId: adminId },
-      { id: `wt-id-o-${suffix}`, token: ownerToken, userId: ownerId },
-      { id: `wt-id-x-${suffix}`, token: outsiderToken, userId: outsiderId },
-      { id: `wt-id-m-${suffix}`, token: memberToken, userId: memberOnlyId },
+      { id: `wt-id-a-${suffix}`, token: hashAuthenticationToken(adminToken), userId: adminId },
+      { id: `wt-id-o-${suffix}`, token: hashAuthenticationToken(ownerToken), userId: ownerId },
+      { id: `wt-id-x-${suffix}`, token: hashAuthenticationToken(outsiderToken), userId: outsiderId },
+      { id: `wt-id-m-${suffix}`, token: hashAuthenticationToken(memberToken), userId: memberOnlyId },
     ]);
     await db.insert(workspaces).values({ id: wsId, name: `wt-ws-${suffix}`, orgId: srcOrgId });
     await db.insert(projects).values({ id: projectId, orgId: dstOrgId, name: `wt-proj-${suffix}` });

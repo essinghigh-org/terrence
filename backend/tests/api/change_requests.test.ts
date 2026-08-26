@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -41,8 +42,8 @@ describe("change request API", () => {
     await db.insert(organizations).values({ id: orgId, name: orgId });
     await db.insert(organizationMemberships).values({ id: crypto.randomUUID(), userId: ownerId, orgId, role: "owner" });
     await db.insert(apiTokens).values([
-      { id: crypto.randomUUID(), token: ownerToken, userId: ownerId },
-      { id: crypto.randomUUID(), token: outsiderToken, userId: outsiderId },
+      { id: crypto.randomUUID(), token: hashAuthenticationToken(ownerToken), userId: ownerId },
+      { id: crypto.randomUUID(), token: hashAuthenticationToken(outsiderToken), userId: outsiderId },
     ]);
     await db.insert(workspaces).values([
       { id: workspaceId, name: workspaceName, orgId },

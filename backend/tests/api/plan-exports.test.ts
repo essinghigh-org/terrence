@@ -5,6 +5,7 @@ import {
   users, organizations, organizationMemberships, teams,
   workspaces, runs, planExports, apiTokens,
 } from "../../src/db/schema";
+import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { writePlanJsonArtifact, deletePlanJsonArtifact } from "../../src/lib/plan-json";
 
@@ -48,7 +49,7 @@ describe("the reference format API v2 - Plan Exports Download", () => {
     // Create API token for auth
     await db.insert(apiTokens).values({
       id: `tok-${crypto.randomUUID()}`,
-      token: userToken,
+      token: createHash("sha256").update(userToken).digest("hex"),
       userId,
       createdAt: Date.now(),
     });
@@ -128,7 +129,7 @@ describe("the reference format API v2 - Plan Exports Download", () => {
 
       await db.insert(apiTokens).values({
         id: `tok-${crypto.randomUUID()}`,
-        token: otherToken,
+        token: createHash("sha256").update(otherToken).digest("hex"),
         userId: otherUserId,
         createdAt: Date.now(),
       });
@@ -183,7 +184,7 @@ describe("the reference format API v2 - Plan Exports Download", () => {
       await db.delete(workspaces).where(eq(workspaces.id, otherWorkspaceId));
       await db.delete(organizationMemberships).where(eq(organizationMemberships.userId, otherUserId));
       await db.delete(organizations).where(eq(organizations.id, otherOrgId));
-      await db.delete(apiTokens).where(eq(apiTokens.token, otherToken));
+      await db.delete(apiTokens).where(eq(apiTokens.token, createHash("sha256").update(otherToken).digest("hex")));
       await db.delete(users).where(eq(users.username, "other-user"));
       await deletePlanJsonArtifact(otherRunId);
     });

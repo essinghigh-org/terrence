@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq, inArray } from "drizzle-orm";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -46,7 +47,7 @@ describe("Private Module & Provider Registries API contract", () => {
     await db.insert(organizationMemberships).values([
       { id: crypto.randomUUID(), userId, orgId, role: "owner" },
     ]);
-    await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token, userId }]);
+    await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: hashAuthenticationToken(token), userId }]);
   });
 
   afterAll(async () => {

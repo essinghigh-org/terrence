@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
@@ -62,7 +63,7 @@ describe("remote-state consumer precedence (STATE-005)", () => {
       { id: `mem-rscons-${suffix}`, userId: `user-rscons-${suffix}`, orgId, role: "owner" },
       { id: `mem-rscons-other-${suffix}`, userId: `user-rscons-${suffix}`, orgId: otherOrgId, role: "owner" },
     ]);
-    await db.insert(apiTokens).values({ id: userTokenId, token: userToken, userId: `user-rscons-${suffix}` });
+    await db.insert(apiTokens).values({ id: userTokenId, token: hashAuthenticationToken(userToken), userId: `user-rscons-${suffix}` });
     await db.insert(projects).values({ id: projectId, name: projectId, orgId });
     await db.insert(workspaces).values([
       { id: producer, name: producer, orgId, projectId, globalRemoteState: false, projectRemoteState: false },

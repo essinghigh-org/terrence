@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -35,7 +36,7 @@ beforeAll(async () => {
   await db.insert(users).values({ id: userId, username: `sm-user-${suffix}`, passwordHash: "unused" });
   await db.insert(organizations).values({ id: orgId, name: orgName });
   await db.insert(organizationMemberships).values({ id: `sm-m-${suffix}`, userId, orgId, role: "owner" });
-  await db.insert(apiTokens).values({ id: `sm-t-${suffix}`, token, userId });
+  await db.insert(apiTokens).values({ id: `sm-t-${suffix}`, token: hashAuthenticationToken(token), userId });
   await db.insert(workspaces).values({ id: workspaceId, name: "sm-workspace", orgId });
 });
 

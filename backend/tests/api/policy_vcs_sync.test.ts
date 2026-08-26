@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -212,7 +213,7 @@ describe("VCS-backed policy set synchronization", () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({ id: crypto.randomUUID(), userId, orgId, role: "owner" });
-    await db.insert(apiTokens).values({ id: crypto.randomUUID(), token: apiToken, userId });
+    await db.insert(apiTokens).values({ id: crypto.randomUUID(), token: hashAuthenticationToken(apiToken), userId });
     await db.insert(oauthClients).values([
       {
         id: `oc-policy-github-${suffix}`,

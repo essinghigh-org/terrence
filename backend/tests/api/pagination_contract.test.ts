@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -45,7 +46,7 @@ describe("JSON:API pagination", () => {
     });
     await db.insert(apiTokens).values({
       id: `token-${suffix}`,
-      token,
+      token: hashAuthenticationToken(token),
       userId,
       description: "pagination contract",
     });

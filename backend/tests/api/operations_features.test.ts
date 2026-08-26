@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -130,8 +131,8 @@ beforeAll(async () => {
     },
   ]);
   await db.insert(apiTokens).values([
-    { id: `ops-token-id-${suffix}`, token, userId },
-    { id: `ops-admin-token-id-${suffix}`, token: adminToken, userId: adminUserId },
+    { id: `ops-token-id-${suffix}`, token: createHash("sha256").update(token).digest("hex"), userId },
+    { id: `ops-admin-token-id-${suffix}`, token: createHash("sha256").update(adminToken).digest("hex"), userId: adminUserId },
   ]);
   // Dedicated principal for the calendar tests (own rate-limit bucket; see
   // the calendarToken declaration comment above).
@@ -143,7 +144,7 @@ beforeAll(async () => {
   });
   await db.insert(apiTokens).values({
     id: `ops-calendar-token-id-${suffix}`,
-    token: calendarToken,
+    token: createHash("sha256").update(calendarToken).digest("hex"),
     userId: calendarUserId,
   });
 
@@ -216,9 +217,9 @@ afterAll(async () => {
   await deletePlanJsonArtifact(explainerRunId).catch((): void => {});
   await db.delete(organizationMemberships).where(eq(organizationMemberships.userId, calendarUserId));
   if (orgId !== "") await db.delete(organizations).where(eq(organizations.id, orgId));
-  await db.delete(apiTokens).where(eq(apiTokens.token, token));
-  await db.delete(apiTokens).where(eq(apiTokens.token, adminToken));
-  await db.delete(apiTokens).where(eq(apiTokens.token, calendarToken));
+  await db.delete(apiTokens).where(eq(apiTokens.token, createHash("sha256").update(token).digest("hex")));
+  await db.delete(apiTokens).where(eq(apiTokens.token, createHash("sha256").update(adminToken).digest("hex")));
+  await db.delete(apiTokens).where(eq(apiTokens.token, createHash("sha256").update(calendarToken).digest("hex")));
   await db.delete(users).where(eq(users.id, userId));
   await db.delete(users).where(eq(users.id, adminUserId));
   await db.delete(users).where(eq(users.id, calendarUserId));

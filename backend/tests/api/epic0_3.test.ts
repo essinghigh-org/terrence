@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { users, organizations, organizationMemberships, teams, apiTokens, teamMemberships } from "../../src/db/schema";
@@ -33,7 +34,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
 
     await db.insert(apiTokens).values({
       id: `tok-${crypto.randomUUID()}`,
-      token: userToken,
+      token: hashAuthenticationToken(userToken),
       userId,
       createdAt: Date.now(),
     });
@@ -307,7 +308,7 @@ describe("Epic 0-3 API Infrastructure, Authentication, Organizations, Users & Te
     });
     await db.insert(apiTokens).values({
       id: `tok-stranger-${crypto.randomUUID()}`,
-      token: strangerToken,
+      token: hashAuthenticationToken(strangerToken),
       userId: strangerId,
       createdAt: Date.now(),
     });

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { createHmac } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
@@ -43,7 +44,7 @@ describe("SSH Keys & Notification Configurations API contract", () => {
     await db.insert(organizationMemberships).values([
       { id: crypto.randomUUID(), userId, orgId, role: "owner" },
     ]);
-    await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token, userId }]);
+    await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: hashAuthenticationToken(token), userId }]);
     await db.insert(projects).values([{ id: projectId, orgId, name: `project-${suffix}` }]);
     await db.insert(workspaces).values([{ id: workspaceId, name: `ws-${suffix}`, orgId, projectId }]);
   });

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq, like } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -34,7 +35,7 @@ describe("organization API contract", () => {
     ]);
     await db.insert(apiTokens).values({
       id: crypto.randomUUID(),
-      token,
+      token: hashAuthenticationToken(token),
       userId,
       description: "organization contract",
     });
@@ -130,7 +131,7 @@ describe("organization API contract", () => {
     ]);
     await db.insert(apiTokens).values({
       id: crypto.randomUUID(),
-      token: orgToken,
+      token: hashAuthenticationToken(orgToken),
       orgId: betaId,
       description: "organization principal",
     });

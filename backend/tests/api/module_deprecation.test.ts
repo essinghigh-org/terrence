@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,7 +42,7 @@ describe("Module Deprecation, Revocation & Tests API", () => {
 
     await db.insert(apiTokens).values({
       id: `tok-${crypto.randomUUID()}`,
-      token: tokenVal,
+      token: hashAuthenticationToken(tokenVal),
       userId,
       createdAt: Date.now(),
     });

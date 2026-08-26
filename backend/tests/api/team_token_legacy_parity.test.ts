@@ -60,9 +60,9 @@ describe("team token legacy/plural separation (TFE parity)", () => {
       { id: crypto.randomUUID(), userId: ownerCId, orgId, role: "owner" },
     ]);
     await db.insert(apiTokens).values([
-      { id: crypto.randomUUID(), token: authA, userId: ownerAId },
-      { id: crypto.randomUUID(), token: authB, userId: ownerBId },
-      { id: crypto.randomUUID(), token: authC, userId: ownerCId },
+      { id: crypto.randomUUID(), token: hashAuthenticationToken(authA), userId: ownerAId },
+      { id: crypto.randomUUID(), token: hashAuthenticationToken(authB), userId: ownerBId },
+      { id: crypto.randomUUID(), token: hashAuthenticationToken(authC), userId: ownerCId },
     ]);
     const teamRes = await request(`/api/v2/organizations/${orgName}/teams`, "POST", {
       data: { attributes: { name: "tokpar-team" } },

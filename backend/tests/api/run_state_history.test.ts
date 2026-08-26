@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
@@ -82,7 +83,7 @@ describe("workspace run history and state metadata", () => {
     });
     await db.insert(apiTokens).values({
       id: `token-${suffix}`,
-      token,
+      token: hashAuthenticationToken(token),
       userId,
       description: "run and state contract",
     });
@@ -276,7 +277,7 @@ describe("workspace run history and state metadata", () => {
     });
     await db.insert(apiTokens).values({
       id: `token-outside-${suffix}`,
-      token: outsideToken,
+      token: hashAuthenticationToken(outsideToken),
       userId: outsideUserId,
     });
     expect((await app.handle(new Request(

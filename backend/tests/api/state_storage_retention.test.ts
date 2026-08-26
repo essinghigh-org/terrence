@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,7 +53,7 @@ describe("State storage and retention", () => {
       orgId,
       role: "owner",
     });
-    await db.insert(apiTokens).values({ id: tokenId, token, userId });
+    await db.insert(apiTokens).values({ id: tokenId, token: hashAuthenticationToken(token), userId });
     await db.insert(workspaces).values({ id: workspaceId, name: workspaceId, orgId, locked: false });
   });
 

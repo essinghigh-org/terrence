@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { gzipSync } from "node:zlib";
+import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -33,7 +34,7 @@ describe("policy set version uploads", () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({ id: crypto.randomUUID(), userId, orgId, role: "owner" });
-    await db.insert(apiTokens).values({ id: crypto.randomUUID(), token, userId });
+    await db.insert(apiTokens).values({ id: crypto.randomUUID(), token: createHash("sha256").update(token).digest("hex"), userId });
     policySetId = `polset-${crypto.randomUUID()}`;
     await db.insert(policySets).values({ id: policySetId, orgId, name: "Uploaded policies", kind: "opa" });
   });

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { eq } from "drizzle-orm";
@@ -64,12 +65,12 @@ describe("System administration API contract", () => {
     await db.insert(apiTokens).values([
       {
         id: crypto.randomUUID(),
-        token: adminToken,
+        token: hashAuthenticationToken(adminToken),
         userId: adminId,
       },
       {
         id: crypto.randomUUID(),
-        token: memberToken,
+        token: hashAuthenticationToken(memberToken),
         userId: memberId,
       },
     ]);

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
@@ -48,8 +49,8 @@ describe("reserved tag keys", () => {
       { id: memberId, username: `reserved-member-${prefix}`, passwordHash: "unused" },
     ]);
     await db.insert(apiTokens).values([
-      { id: crypto.randomUUID(), token: ownerToken, userId: ownerId },
-      { id: crypto.randomUUID(), token: memberToken, userId: memberId },
+      { id: crypto.randomUUID(), token: hashAuthenticationToken(ownerToken), userId: ownerId },
+      { id: crypto.randomUUID(), token: hashAuthenticationToken(memberToken), userId: memberId },
     ]);
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values([

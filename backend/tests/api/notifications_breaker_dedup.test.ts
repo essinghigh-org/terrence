@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
 import {
@@ -30,7 +31,7 @@ describe("Notification circuit breaker & dedup (kanban 7.8 / 7.9)", () => {
     await db.insert(organizationMemberships).values([
       { id: crypto.randomUUID(), userId, orgId, role: "owner" },
     ]);
-    await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: authToken, userId }]);
+    await db.insert(apiTokens).values([{ id: crypto.randomUUID(), token: hashAuthenticationToken(authToken), userId }]);
     await db.insert(workspaces).values([{ id: workspaceId, name: `ws-${suffix}`, orgId }]);
     _dedup(true);
     await _resetSharedDeliveryState();

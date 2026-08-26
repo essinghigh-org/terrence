@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,7 +28,7 @@ describe("route param fuzzing (470-475)", () => {
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: `org-${suffix}`, name: orgName }]);
     await db.insert(organizationMemberships).values([{ id: crypto.randomUUID(), userId, orgId: `org-${suffix}`, role: "owner" }]);
-    await db.insert(apiTokens).values([{ id: crypto.randomUUID() as string, token, userId }]);
+    await db.insert(apiTokens).values([{ id: crypto.randomUUID() as string, token: hashAuthenticationToken(token), userId }]);
   });
 
   async function fuzzPath(path: string, method = "GET"): Promise<number | null> {
