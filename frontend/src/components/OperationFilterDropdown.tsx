@@ -84,7 +84,7 @@ export function OperationFilterDropdown({
         aria-haspopup="true"
         aria-expanded={open}
         aria-label="Filter operations"
-        onClick={() => { setOpen((prev) => !prev); }}
+        onClick={(): void => { setOpen((prev) => !prev); }}
         className="inline-flex h-8 items-center gap-2 rounded-md border border-input bg-background px-3 text-xs font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
       >
         <Filter className="size-3.5 text-muted-foreground" aria-hidden="true" />

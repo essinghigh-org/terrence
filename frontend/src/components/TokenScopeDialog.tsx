@@ -760,7 +760,7 @@ export function TokenScopeDialog({
                         <button
                           type="button"
                           aria-label="Select all projects"
-                          onClick={() => { setSelectedProjects(new Set(projects.map((p) => p.id))); }}
+                          onClick={(): void => { setSelectedProjects(new Set(projects.map((p) => p.id))); }}
                           className="text-primary hover:underline"
                         >
                           All
