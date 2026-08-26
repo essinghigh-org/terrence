@@ -2193,6 +2193,20 @@ async function executeApplyImpl(runId: string): Promise<void> {
           jsonState = null;
         }
 
+        // Pull VCS commit metadata from the run's configuration version so the state
+        // version's `vcs-commit-sha` matches TFE's definition ("commit used by the run
+        // that produced that state, if applicable" — null for CLI pushes).
+        let vcsCommitSha: string | null = null;
+        let vcsCommitUrl: string | null = null;
+        if (run.configurationVersionId !== null) {
+          const cfg = await db.query.configurationVersions.findFirst({
+            where: eq(configurationVersions.id, run.configurationVersionId),
+            columns: { ingressAttributes: true },
+          });
+          const ingress = cfg?.ingressAttributes as Record<string, unknown> | null | undefined;
+          if (typeof ingress?.commitSha === "string" && ingress.commitSha !== "") vcsCommitSha = ingress.commitSha;
+          if (typeof ingress?.commitUrl === "string" && ingress.commitUrl !== "") vcsCommitUrl = ingress.commitUrl;
+        }
         const nextSerial = await insertStateVersionWithSerialRetry({
           id: crypto.randomUUID(),
           workspaceId: workspace.id,
@@ -2200,6 +2214,9 @@ async function executeApplyImpl(runId: string): Promise<void> {
           jsonState: await encryptStatePayload(jsonState),
           jsonStateOutputs: await encryptStatePayload(jsonStateOutputs),
           runId,
+          vcsCommitSha,
+          vcsCommitUrl,
+          terraformVersion: run.terraformVersion ?? workspace.terraformVersion ?? null,
           status: "finalized",
           createdAt: Date.now(),
         });
