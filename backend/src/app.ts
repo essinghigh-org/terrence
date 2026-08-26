@@ -576,14 +576,14 @@ export const app = new Elysia()
       const method = meta.method;
       const path = meta.path;
       const status = set.status ?? 200;
-      requestFinished(typeof status === "number" ? status : Number.parseInt(String(status), 10) || 200);
+      const numericStatus = typeof status === "number" ? status : Number.parseInt(String(status), 10) || 200;
+      requestFinished(numericStatus);
       // Idempotent bookkeeping: the WeakMap entry is consumed here so an
       // error path (onError) can never double-count the same request.
       requestMeta.delete(request as unknown as Request);
       if (path.startsWith("/api/")) {
         // Canonical log line (loggingsucks.com wide-event pattern): one
         // context-rich record per request instead of scattered statements.
-        const numericStatus = typeof status === "number" ? status : Number.parseInt(String(status), 10) || 200;
         log.info("request completed", {
           requestId: meta.correlationId,
           http: {

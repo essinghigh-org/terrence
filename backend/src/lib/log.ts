@@ -33,8 +33,9 @@ const LOG_LEVEL = resolveLogLevel(process.env.LOG_LEVEL);
 //   TERRENCE_SYSLOG_APP      app name field (default "terrence").
 
 const SYSLOG_TARGET: SyslogTarget | null = (() => {
-  const target = parseSyslogTarget(process.env.TERRENCE_SYSLOG_TARGET);
-  if (target === null && process.env.TERRENCE_SYSLOG_TARGET?.trim() !== "" && process.env.TERRENCE_SYSLOG_TARGET !== undefined) {
+  const rawTarget = process.env.TERRENCE_SYSLOG_TARGET;
+  const target = parseSyslogTarget(rawTarget);
+  if (target === null && rawTarget !== undefined && rawTarget.trim() !== "") {
     console.warn(
       `[terrence] Invalid TERRENCE_SYSLOG_TARGET ${JSON.stringify(process.env.TERRENCE_SYSLOG_TARGET)}; ` +
         `expected udp://host:port or tcp://host:port. Remote syslog disabled.`,
@@ -46,7 +47,7 @@ const SYSLOG_TARGET: SyslogTarget | null = (() => {
 const SYSLOG_LEVEL: LogLevel = SYSLOG_TARGET === null ? LOG_LEVEL : resolveLogLevel(process.env.TERRENCE_SYSLOG_LEVEL ?? process.env.LOG_LEVEL);
 const SYSLOG_IDENTITY = {
   hostname: resolveHostname(),
-  appName: process.env.TERRENCE_SYSLOG_APP?.trim() || "terrence",
+  appName: process.env.TERRENCE_SYSLOG_APP?.trim() ?? "terrence",
   procId: String(process.pid),
 };
 
