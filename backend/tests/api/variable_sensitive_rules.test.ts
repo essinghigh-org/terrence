@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
@@ -46,7 +47,7 @@ describe("workspace variable sensitive rules (VAR-006)", () => {
     await db.insert(users).values({ id: `user-varsec-${suffix}`, username, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({ id: `mem-varsec-${suffix}`, userId: `user-varsec-${suffix}`, orgId, role: "owner" });
-    await db.insert(apiTokens).values({ id: tokenId, token: `varsec-token-${suffix}`, userId: `user-varsec-${suffix}` });
+    await db.insert(apiTokens).values({ id: tokenId, token: hashAuthenticationToken(`varsec-token-${suffix}`), userId: `user-varsec-${suffix}` });
     userToken = `varsec-token-${suffix}`;
     await db.insert(workspaces).values({ id: wsId, name: `varsec-ws-${suffix}`, orgId });
   });

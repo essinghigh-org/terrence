@@ -44,7 +44,7 @@ export async function persistSeed(seed: OrgSeed): Promise<void> {
     orgId: seed.orgId,
     role: "owner",
   });
-  await db.insert(apiTokens).values({ id: seed.tokenId, token: seed.token: hashAuthenticationToken(token), userId: seed.userId });
+  await db.insert(apiTokens).values({ id: seed.tokenId, token: hashAuthenticationToken(seed.token), userId: seed.userId });
   await db.insert(systemApiTokens).values({
     id: seed.systemTokenId,
     tokenHash: hashSystemApiToken(seed.systemToken),
