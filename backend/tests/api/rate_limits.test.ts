@@ -85,13 +85,13 @@ describe("rate limiting", () => {
     expect((await app.handle(client("/api/v1/ping"))).status).not.toBe(429);
   });
 
-  it("shares the 30 requests/second bucket across a user's tokens", async () => {
+  it("shares the 60 requests/second bucket across a user's tokens", async () => {
     const user = seededUsers[0];
     expect(user).toBeDefined();
-    for (let index = 0; index < 30; index += 1) {
+    for (let index = 0; index < 60; index += 1) {
       const response = await app.handle(authenticatedRequest("/api/v2/account/details", user!.tokens[index % 2]!));
       expect(response.status).toBe(200);
-      expect(response.headers.get("x-ratelimit-limit")).toBe("30");
+      expect(response.headers.get("x-ratelimit-limit")).toBe("60");
     }
 
     const throttled = await app.handle(authenticatedRequest("/api/v2/account/details", user!.tokens[0]!));

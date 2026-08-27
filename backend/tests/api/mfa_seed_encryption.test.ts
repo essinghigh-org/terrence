@@ -78,7 +78,7 @@ describe("TOTP seed encryption at rest", () => {
   it("legacy plaintext seed migrates on first successful verify without double-encrypting", async () => {
     const userId2 = `user-legacy-${suffix}`;
     await db.insert(users).values({ id: userId2, username: userId2, passwordHash: "unused" });
-    await db.insert(apiTokens).values({ id: crypto.randomUUID(), token: `legacy-token-${suffix}`, userId: userId2 });
+    await db.insert(apiTokens).values({ id: crypto.randomUUID(), token: hashAuthenticationToken(`legacy-token-${suffix}`), userId: userId2 });
     const legacySecret = base32(`legacy-${suffix}`);
     await db.insert(user2FA).values({ userId: userId2, secret: legacySecret, enabled: false });
 

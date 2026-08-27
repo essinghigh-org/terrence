@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -57,6 +56,7 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
     } = await import("./src/db/schema.ts");
     const { pollWorkerQueue } = await import("./src/worker.ts");
     const { decodeStatePayload } = await import("./src/lib/validation.ts");
+    const { hashAuthenticationToken } = await import("./src/lib/token-service.ts");
 
     const poolToken = "agent-primary-token";
     const otherPoolToken = "agent-other-token";

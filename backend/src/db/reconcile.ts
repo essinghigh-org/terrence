@@ -90,6 +90,14 @@ export function sparseJournalReconcilePlan(
   if (entries.length === 0 || facts.appliedRows.length === 0) return [];
   const newestAppliedAt = Math.max(...facts.appliedRows.map((row: { readonly createdAt: number }): number => row.createdAt));
   const appliedHashes = new Set(facts.appliedRows.map((row: { readonly hash: string }): string => row.hash));
+  const bundledMaxWhen = entries.reduce((max, entry): number => (entry.when > max ? entry.when : max), 0);
+  // A journal whose newest row is NEWER than every bundled migration is
+  // corrupted/forward-dated (the 2026-08-23 prod incident reproduced by the
+  // migration tests). Drizzle would treat all bundled migrations as already
+  // applied and replay nothing, so the timestamp guard below cannot fire.
+  // Treat the journal as unreliable and reconcile EVERY bundled entry; the
+  // per-statement `skip` checks still protect objects that already exist.
+  const journalForwardDated = newestAppliedAt > bundledMaxWhen;
   const plan: SparseJournalPlanEntry[] = [];
 
   for (const entry of entries) {
@@ -99,7 +107,7 @@ export function sparseJournalReconcilePlan(
     const migrationSql = readFileSync(sqlPath, "utf8");
     // Drizzle journals sha256(migration file text); compute it identically.
     const hash = createHash("sha256").update(migrationSql).digest("hex");
-    if (entry.when <= newestAppliedAt || appliedHashes.has(hash)) continue;
+    if (!journalForwardDated && (entry.when <= newestAppliedAt || appliedHashes.has(hash))) continue;
 
     const statements = migrationSql
       .split("--> statement-breakpoint")
@@ -143,8 +151,10 @@ export function sparseJournalReconcilePlan(
     // its batch transactionality. STOP the scan here: drizzle replays by
     // max(created_at) comparison, so stamping any later entry would make it
     // consider this earlier one applied and skip it forever. Journal rows may
-    // only advance contiguously.
-    if (!anyPresent) break;
+    // only advance contiguously. When the journal is forward-dated we are
+    // already ignoring the timestamp guard, so continue scanning every entry
+    // to reconcile all missing objects rather than stopping at the first gap.
+    if (!anyPresent && !journalForwardDated) break;
     plan.push({ tag: entry.tag, hash, when: entry.when, statements: planned });
   }
   return plan;
