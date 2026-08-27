@@ -19,7 +19,7 @@
     "drizzle-kit": "^0.31.10"
   },
   "peerDependencies": {
-    "typescript": "~6.0.3"
+    "typescript": "~7.0.2"
   },
   "dependencies": {
     "@elysiajs/static": "^1.4.10",
