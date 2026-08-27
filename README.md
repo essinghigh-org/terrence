@@ -39,6 +39,20 @@ docker run -d --name terrence -p 3000:3000 \
   ghcr.io/essinghigh-org/terrence:latest
 ```
 
+For dogfooding the current `master` build, use the rolling nightly image instead:
+
+```bash
+docker pull ghcr.io/essinghigh-org/terrence:nightly
+docker run -d --name terrence -p 3000:3000 \
+  -e ADMIN_PASSWORD="pick-a-long-password" \
+  -v ./storage:/app/backend/storage \
+  ghcr.io/essinghigh-org/terrence:nightly
+```
+
+The `:nightly` tag is rebuilt after every successful commit to `master`. It is
+intended for testing current changes and can change independently of versioned
+releases.
+
 Open `http://localhost:3000` and sign in as `admin` using the password you configured.
 
 ### Docker Compose
