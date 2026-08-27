@@ -2,6 +2,8 @@ name: Publish Docker Image
 
 on:
   push:
+    branches:
+      - master
     tags:
       - "v*.*.*"
   workflow_dispatch:
@@ -28,19 +30,22 @@ jobs:
           bun-version: 1.4.0
           no-cache: true
 
-      - name: Determine version from tag
+      - name: Determine build version and channel
         id: version
         run: |
-          # Tag pushes (v1.2.3) carry the version directly; workflow_dispatch
-          # reuses package.json as fallback so manual publishes still version
-          # correctly without requiring a tag.
+          # Version tags publish the production image; master pushes publish the
+          # rolling dogfood image. Manual dispatch retains the latest fallback.
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
             echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           else
             pkg_version=$(bun -e "console.log(String(require('./package.json').version ?? '0.0.0'))" 2>/dev/null || echo "0.0.0")
             echo "version=${pkg_version}" >> "$GITHUB_OUTPUT"
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
+            if [[ "${GITHUB_REF}" == refs/heads/master && "${GITHUB_EVENT_NAME}" == push ]]; then
+              echo "tag=nightly" >> "$GITHUB_OUTPUT"
+            else
+              echo "tag=latest" >> "$GITHUB_OUTPUT"
+            fi
           fi
           echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
@@ -60,8 +65,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=${{ steps.version.outputs.tag }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
+            type=raw,value=nightly,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+            type=raw,value=${{ steps.version.outputs.tag }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=sha,format=short
 
       - name: Build and push Docker image
