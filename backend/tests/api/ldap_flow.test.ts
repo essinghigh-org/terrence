@@ -2,8 +2,7 @@ import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Elysia } from "elysia";
 import { eq, inArray } from "drizzle-orm";
-import * as ldap from "ldapjs";
-import type { Server } from "ldapjs";
+import { startLdapFixture, stopLdapFixture, type LdapFixture } from "./ldap-fixture";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { adminSettings, apiTokens, users } from "../../src/db/schema";
@@ -16,81 +15,6 @@ const USER_DN = (username: string): string => `uid=${username},dc=example,dc=com
 const SERVICE_PASSWORD = "service-secret";
 const VALID_USER_PASSWORD = "ldap-pass";
 
-function startLdapMock(): Promise<{ server: Server; port: number }> {
-  return new Promise((resolve, reject): void => {
-    const server = ldap.createServer();
-    server.bind("dc=example,dc=com", (req: ldap.BindRequest, res: ldap.Response, next: ldap.NextCallback): void => {
-      const dn = req.dn.toString();
-      if ((dn === SERVICE_DN && req.credentials === SERVICE_PASSWORD)
-        || (dn !== SERVICE_DN && req.credentials === VALID_USER_PASSWORD)) {
-        res.end();
-        next();
-        return;
-      }
-      next(new ldap.InvalidCredentialsError());
-    });
-    // The mock directory knows exactly two users, plus an ambiguous multi-entry
-    // case used to exercise the unique-match rule: "duplicate" has two entries.
-    server.search("dc=example,dc=com", (req, res, next): void => {
-      const value = req.filter.value ?? req.filter.attributeValue;
-      const username = typeof value === "string" ? value : "";
-      if (username === "") {
-        res.end();
-        next();
-        return;
-      }
-      const dn = USER_DN(username);
-      if (username === "carol") {
-        res.end();
-        next();
-        return;
-      }
-      if (username === "duplicate") {
-        // Two distinct entries share the same uid: the search filter matches
-        // both, so no single entry may be bound.
-        res.send({
-          dn: USER_DN("duplicate"),
-          attributes: { uid: "duplicate", mail: "duplicate@example.com", cn: "Duplicate" },
-        });
-        res.send({
-          dn: USER_DN("duplicate2"),
-          attributes: { uid: "duplicate", mail: "duplicate-2@example.com", cn: "Duplicate 2" },
-        });
-        res.end();
-        next();
-        return;
-      }
-      res.send({
-        dn,
-        attributes: {
-          uid: username,
-          mail: `${username}@example.com`,
-          cn: username.charAt(0).toUpperCase() + username.slice(1),
-        },
-      });
-      res.end();
-      next();
-    });
-
-    let started = false;
-    server.on("error", (error: unknown): void => {
-      if (started) return;
-      started = true;
-      reject(error instanceof Error ? error : new Error("ldap mock failed to start"));
-    });
-    server.listen(0, "127.0.0.1", (): void => {
-      if (started) return;
-      started = true;
-      const address = server.address();
-      if (address === null || typeof address === "string") {
-        reject(new Error("ldap mock failed to bind"));
-        return;
-      }
-      resolve({ server, port: address.port });
-    });
-  });
-}
-
 describe("LDAP authentication", () => {
   const suffix = crypto.randomUUID();
   const adminId = `usr-ldap-admin-${suffix}`;
@@ -100,7 +24,7 @@ describe("LDAP authentication", () => {
   const localUsername = `bob-${suffix}`;
   const oauthApp = new Elysia().use(oauthPlugin);
   let ldapPort = 0;
-  let ldapServer: Server | undefined;
+  let ldapFixture: LdapFixture | undefined;
   let originalGeneral: typeof adminSettings.$inferSelect | undefined;
   let originalLdap: typeof adminSettings.$inferSelect | undefined;
 
@@ -153,9 +77,8 @@ describe("LDAP authentication", () => {
   beforeAll(async () => {
     originalGeneral = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "general") });
     originalLdap = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "ldap") });
-    const started = await startLdapMock();
-    ldapServer = started.server;
-    ldapPort = started.port;
+    ldapFixture = await startLdapFixture([ldapUsername, localUsername]);
+    ldapPort = ldapFixture.port;
 
     await db.insert(users).values([
       { id: adminId, username: adminId, passwordHash: "unused", isSiteAdmin: true },
@@ -168,21 +91,14 @@ describe("LDAP authentication", () => {
     });
     await setLdapSettings(true);
     await setLocalAuth(true);
-  });
+  }, 180_000);
 
   afterAll(async () => {
-    const server = ldapServer;
+    const fixture = ldapFixture;
     try {
-      if (server !== undefined) {
-        await new Promise<void>((resolve, reject): void => {
-          server.close((error?: Error): void => {
-            if (error === undefined) resolve();
-            else reject(error);
-          });
-        });
-      }
+      if (fixture !== undefined) await stopLdapFixture(fixture.containerName);
     } finally {
-      // Database restoration must run even if server.close rejects.
+      // Database restoration must run even if container cleanup rejects.
       if (originalLdap === undefined) {
         await db.delete(adminSettings).where(eq(adminSettings.id, "ldap"));
       } else {
