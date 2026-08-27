@@ -20,7 +20,7 @@
     "ldapjs": "3.0.7"
   },
   "peerDependencies": {
-    "typescript": "~6.0.2"
+    "typescript": "~6.0.3"
   },
   "dependencies": {
     "@elysiajs/static": "^1.4.10",
