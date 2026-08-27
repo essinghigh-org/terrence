@@ -779,6 +779,9 @@ async function reportUntriggeredSpeculativeStatus(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   details: Readonly<WebhookDetails>,
+  // The cache is intentionally mutated while processing one webhook event.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  installationTokens?: Map<string, string | null>,
 ): Promise<void> {
   try {
     const organization = await db.query.organizations.findFirst({
@@ -787,7 +790,7 @@ async function reportUntriggeredSpeculativeStatus(
     });
     if (organization?.aggregatedCommitStatusEnabled !== false || organization.sendPassingStatusesForUntriggeredSpeculativePlans !== true) return;
     if (!validRepository(details.repoFullName, "github") || !COMMIT_SHA_PATTERN.test(details.commitSha)) return;
-    const credentials = await githubCredentials(workspace);
+    const credentials = await githubCredentials(workspace, installationTokens);
     if (credentials === undefined) return;
     const response = await fetch(
       `${credentials.apiUrl}/repos/${details.repoFullName.split("/").map(encodeURIComponent).join("/")}/statuses/${encodeURIComponent(details.commitSha)}`,
@@ -1449,10 +1452,11 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
   if (eventName === "pull_request") {
     await Promise.all(branchMatchedWorkspaces
       .filter((workspace): boolean => !matchesFileTriggers(workspace, triggerDetails.filesChanged))
-      .map(async (workspace): Promise<void> => { await reportUntriggeredSpeculativeStatus(workspace, triggerDetails); }));
+      .map(async (workspace): Promise<void> => {
+        await reportUntriggeredSpeculativeStatus(workspace, triggerDetails, installationTokens);
+      }));
   }
 
-  const configurationVersionIds: string[] = [];
   const missingCredentialConfigurationVersionIds: string[] = [];
   const downloads = new Map<string, { credentials: ProviderCredentials; configurationVersionIds: string[] }>();
   for (const workspace of matchedWorkspaces) {
@@ -1509,13 +1513,11 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
         actorProviderId: credentials?.oauthClientId === undefined ? "github-app" : `vcs:${credentials.oauthClientId}`,
       }),
     });
-    void reportRunVcsStatus(runId, "pending");
-    configurationVersionIds.push(configurationVersionId);
-
     if (credentials === undefined) {
       missingCredentialConfigurationVersionIds.push(configurationVersionId);
       continue;
     }
+    void reportRunVcsStatus(runId, "pending");
     const downloadKey = `${credentials.apiUrl}\u0000${credentials.token}`;
     const group = downloads.get(downloadKey);
     if (group === undefined) {
