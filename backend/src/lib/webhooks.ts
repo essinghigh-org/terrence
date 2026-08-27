@@ -656,6 +656,39 @@ async function gitlabMergeRequestFiles(
   }
 }
 
+type BitbucketCloudDiffstatResult = Readonly<{
+  files: ReadonlySet<string> | undefined;
+  receivedPage: boolean;
+}>;
+
+async function bitbucketCloudDiffstatFiles(
+  initialUrl: string,
+  auth: Readonly<Record<string, string>>,
+): Promise<BitbucketCloudDiffstatResult> {
+  const files = new Set<string>();
+  let cloudUrl: string | null = initialUrl;
+  let receivedPage = false;
+  const MAX_PAGES = 10;
+  for (let page = 1; cloudUrl !== null && page <= MAX_PAGES; page += 1) {
+    const response = await fetch(cloudUrl, { headers: auth, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+    if (!response.ok) return { files: undefined, receivedPage };
+    receivedPage = true;
+    const body = await response.json() as unknown;
+    const values = asRecord(body)?.values;
+    if (!Array.isArray(values)) return { files: undefined, receivedPage };
+    for (const item of values) {
+      const entry = asRecord(item);
+      const path = asRecord(entry?.new)?.path ?? asRecord(entry?.old)?.path;
+      if (typeof path !== "string" || path === "") return { files: undefined, receivedPage };
+      files.add(path);
+    }
+    const next = asRecord(body)?.next;
+    cloudUrl = typeof next === "string" && next !== "" ? next : null;
+    if (cloudUrl === null) return { files, receivedPage };
+  }
+  return { files: undefined, receivedPage };
+}
+
 async function bitbucketCommitFiles(
   workspace: DeepReadonly<typeof workspaces.$inferSelect> | undefined,
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
@@ -667,35 +700,8 @@ async function bitbucketCommitFiles(
     if (credentials === undefined) return undefined;
     const [owner, repo] = details.repoFullName.split("/");
     const auth = { Authorization: `Bearer ${credentials.token}`, Accept: "application/json" };
-    const files = new Set<string>();
-    const MAX_PAGES = 10;
-    let cloudUrl: string | null = `${credentials.apiUrl}/repositories/${encodeURIComponent(owner ?? "")}/${encodeURIComponent(repo ?? "")}/diffstat/${encodeURIComponent(details.commitSha)}?pagelen=100`;
-    let receivedCloudPage = false;
-    for (let page = 1; cloudUrl !== null && page <= MAX_PAGES; page += 1) {
-      const response = await fetch(cloudUrl, { headers: auth, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
-      if (!response.ok) {
-        // A provider failure means the changed-file set is unknown. Returning
-        // undefined intentionally falls back to trigger-all rather than
-        // suppressing a workspace that may contain a matching file.
-        return undefined;
-      }
-      receivedCloudPage = true;
-      const body = await response.json() as unknown;
-      const values = asRecord(body)?.values;
-      if (!Array.isArray(values)) return undefined;
-      for (const item of values) {
-        const entry = asRecord(item);
-        const path = asRecord(entry?.new)?.path ?? asRecord(entry?.old)?.path;
-        if (typeof path !== "string" || path === "") return undefined;
-        files.add(path);
-      }
-      const next = asRecord(body)?.next;
-      cloudUrl = typeof next === "string" && next !== "" ? next : null;
-      if (cloudUrl === null) return files;
-    }
-    // Do not use a partial diffstat after the hard page cap.
-    if (receivedCloudPage && cloudUrl !== null) return undefined;
-    return undefined;
+    const cloudUrl = `${credentials.apiUrl}/repositories/${encodeURIComponent(owner ?? "")}/${encodeURIComponent(repo ?? "")}/diffstat/${encodeURIComponent(details.commitSha)}?pagelen=100`;
+    return (await bitbucketCloudDiffstatFiles(cloudUrl, auth)).files;
   } catch {
     return undefined;
   }
@@ -717,32 +723,12 @@ async function bitbucketPullRequestFiles(
 
     // Bitbucket Cloud diffstat: values[].new.path (new.path absent for
     // deleted files; fall back to old.path so deletions still filter).
-    let cloudUrl: string | null = `${credentials.apiUrl}/repositories/${encodeURIComponent(owner ?? "")}/${encodeURIComponent(repo ?? "")}/pullrequests/${String(details.pullRequestNumber)}/diffstat?pagelen=100`;
-    let receivedCloudPage = false;
-    for (let page = 1; cloudUrl !== null && page <= MAX_PAGES; page += 1) {
-      const cloudResponse = await fetch(cloudUrl, { headers: auth, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
-      if (!cloudResponse.ok) {
-        // A failure after receiving part of the diffstat must not be treated
-        // as complete. An unknown set intentionally falls back to trigger-all.
-        if (receivedCloudPage) return undefined;
-        break;
-      }
-      receivedCloudPage = true;
-      const body = await cloudResponse.json() as unknown;
-      const values = asRecord(body)?.values;
-      if (!Array.isArray(values)) return undefined;
-      for (const item of values) {
-        const entry = asRecord(item);
-        const path = asRecord(entry?.new)?.path ?? asRecord(entry?.old)?.path;
-        if (typeof path !== "string" || path === "") return undefined;
-        files.add(path);
-      }
-      const next = asRecord(body)?.next;
-      cloudUrl = typeof next === "string" && next !== "" ? next : null;
-      if (cloudUrl === null) return files;
-    }
-    // Do not use a partial diffstat after the hard page cap.
-    if (receivedCloudPage && cloudUrl !== null) return undefined;
+    const cloudUrl = `${credentials.apiUrl}/repositories/${encodeURIComponent(owner ?? "")}/${encodeURIComponent(repo ?? "")}/pullrequests/${String(details.pullRequestNumber)}/diffstat?pagelen=100`;
+    const cloudResult = await bitbucketCloudDiffstatFiles(cloudUrl, auth);
+    if (cloudResult.files !== undefined) return cloudResult.files;
+    // A first-page Cloud failure falls through to the Data Center endpoint;
+    // partial or capped Cloud results remain unknown and fail open.
+    if (cloudResult.receivedPage) return undefined;
 
     // Bitbucket Data Center: changes endpoint with path.toString entries.
     let dcUrl: string | null = `${credentials.apiUrl}/rest/api/1.0/projects/${encodeURIComponent(owner ?? "")}/repos/${encodeURIComponent(repo ?? "")}/pull-requests/${String(details.pullRequestNumber)}/changes?limit=100`;
@@ -1351,12 +1337,11 @@ async function handleOAuthProviderWebhook(
         actorProviderId: credentials?.oauthClientId === undefined ? "vcs" : `vcs:${credentials.oauthClientId}`,
       }),
     });
-    void reportRunVcsStatus(runId, "pending");
-
     if (credentials === undefined) {
       missingCredentialConfigurationVersionIds.push(configurationVersionId);
       continue;
     }
+    void reportRunVcsStatus(runId, "pending");
     const downloadKey = `${credentials.apiUrl}\u0000${credentials.token}`;
     const group = downloads.get(downloadKey);
     if (group === undefined) {

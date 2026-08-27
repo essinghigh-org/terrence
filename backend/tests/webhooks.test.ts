@@ -204,6 +204,8 @@ describe("GitHub Webhooks", () => {
     tarballRequests.length = 0;
     commitStatuses.length = 0;
     await db.delete(githubWebhookDeliveries);
+    await db.delete(runs).where(eq(runs.id, crossProviderRunId));
+    await db.delete(configurationVersions).where(eq(configurationVersions.id, crossProviderConfigurationId));
     await db.delete(workspaces).where(eq(workspaces.id, secondWorkspaceId));
     await db.delete(workspaces).where(eq(workspaces.id, crossProviderWorkspaceId));
     await db.delete(oauthTokens).where(eq(oauthTokens.id, crossProviderTokenId));
