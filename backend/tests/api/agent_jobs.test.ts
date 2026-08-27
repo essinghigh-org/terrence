@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
