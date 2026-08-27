@@ -8,6 +8,11 @@ on:
       - "v*.*.*"
   workflow_dispatch:
 
+# A moving nightly tag must not be overwritten by an older master run.
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions: read-all
 
 jobs:
