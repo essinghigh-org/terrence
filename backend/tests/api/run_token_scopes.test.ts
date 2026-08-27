@@ -14,6 +14,7 @@ import {
 import { eq } from "drizzle-orm";
 import { createHash, randomBytes } from "node:crypto";
 import { hashRunToken, mintRunToken, revokeRunTokens } from "../../src/lib/run-token";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 
 // RUN-022: run-scoped token scopes / lifetime / revocation differential.
 //
@@ -48,7 +49,7 @@ describe("run-scoped token scope/lifetime/revocation (RUN-022)", () => {
     await db.insert(users).values({ id: `user-rtok-${suffix}`, username, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({ id: `mem-rtok-${suffix}`, userId: `user-rtok-${suffix}`, orgId, role: "owner" });
-    await db.insert(apiTokens).values({ id: userTokenId, token: `rtok-user-${suffix}`, userId: `user-rtok-${suffix}` });
+    await db.insert(apiTokens).values({ id: userTokenId, token: hashAuthenticationToken(`rtok-user-${suffix}`), userId: `user-rtok-${suffix}` });
     userToken = `rtok-user-${suffix}`;
     await db.insert(workspaces).values([
       { id: wsA, name: `rtok-a-${suffix}`, orgId },

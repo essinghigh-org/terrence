@@ -3,7 +3,7 @@ import { drizzle as sqliteDrizzle, SQLiteBunTransaction, type BunSQLiteDatabase 
 import type { SQLiteBunSession } from 'drizzle-orm/bun-sqlite';
 import type { SQLiteSession, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { migrate as sqliteMigrate } from 'drizzle-orm/bun-sqlite/migrator';
-import { reconcileSparseMigrationJournal } from './reconcile';
+import { reconcileSparseMigrationJournal, sparseJournalReconcilePlan, readBundledMigrationJournal } from './reconcile';
 import { SQL as BunSQL } from 'bun';
 import { drizzle as pgDrizzle } from 'drizzle-orm/bun-sql';
 import { type SQL } from 'drizzle-orm';
@@ -294,6 +294,45 @@ if (!isPostgres) {
   } finally {
     client.run("PRAGMA legacy_alter_table = OFF;");
     client.run("PRAGMA foreign_keys = ON;");
+  }
+
+  // Reconcile a sparse/forward-dated journal before the app serves traffic
+  // (2026-08-23 prod incident, sqlite parity with applyPgMigrations): stamp
+  // journal rows and run any missing statements for migrations whose objects
+  // already exist or were skipped. A journal whose newest row is newer than
+  // every bundled migration (a corrupted/forward-dated journal) is treated as
+  // unreliable so every bundled entry is reconsidered. The boot path is
+  // synchronous, so drive sparseJournalReconcilePlan() directly with the
+  // native client (the postgres path uses the async adapter instead).
+  try {
+    const bundledFolder = join(import.meta.dir, '../../drizzle');
+    const entries = readBundledMigrationJournal(bundledFolder);
+    const appliedRows = (client.query("SELECT hash, created_at FROM __drizzle_migrations").all() as Array<{ hash: string; created_at: number }>).map(
+      (row): { readonly hash: string; readonly createdAt: number } => ({ hash: row.hash, createdAt: row.created_at }),
+    );
+    const tables = new Set(
+      (client.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((row): string => row.name),
+    );
+    const indexes = new Set(
+      (client.query("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>).map((row): string => row.name),
+    );
+    const columns = new Set(
+      (client.query("PRAGMA table_info").all() as Array<{ tbl_name: string; name: string }>).map(
+        (row): string => `${row.tbl_name}.${row.name}`,
+      ),
+    );
+    const plan = sparseJournalReconcilePlan(bundledFolder, entries, { appliedRows, tables, indexes, columns });
+    for (const entry of plan) {
+      for (const statement of entry.statements) {
+        if (!statement.skip) client.run(statement.sql);
+      }
+      client.run("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)", [entry.hash, entry.when]);
+    }
+    if (plan.length > 0) console.warn(`[terrence] sparse migration journal reconciled (sqlite): reconciled ${plan.length} migration(s) outside the migrator`);
+  } catch (err) {
+    // Reconciliation is a best-effort repair; a failure here must not abort
+    // boot (the migrator already ran). Surface it for operators.
+    console.error("[terrence] sqlite journal reconciliation failed:", err);
   }
 }
 

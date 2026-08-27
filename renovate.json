@@ -11,9 +11,9 @@
     "automerge": true,
     "automergeType": "pr",
     "platformAutomerge": true,
-    "schedule": ["before 5am on monday"]
+    "schedule": ["before 5am"]
   },
-  "schedule": ["before 5am on monday"],
+  "schedule": ["before 5am"],
   "timezone": "UTC",
   "prConcurrentLimit": 10,
   "branchConcurrentLimit": 10,

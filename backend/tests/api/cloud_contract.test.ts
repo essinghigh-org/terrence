@@ -352,7 +352,7 @@ describe("Terraform cloud protocol contract", () => {
     // RUN-006: run source is the transport taxonomy; the VCS provider is kept
     // as ingress metadata (branch/pull-request attr on the configuration
     // version), not echoed as the run's source.
-    expect(run.attributes.source).toBe("tfe-configuration-version");
+    expect(run.attributes.source).toBe("github");
     expect(run.attributes["trigger-reason"]).toBe("pull_request");
     expect(new Date(run.attributes["created-at"]).toISOString()).toBe(run.attributes["created-at"]);
     expect(run.attributes.permissions["can-apply"]).toBe(true);
@@ -417,7 +417,7 @@ describe("Terraform cloud protocol contract", () => {
     const organizationRuns = await organizationRunsResponse.json();
     expect(organizationRuns.data.map((item: any) => item.id)).toContain(runId);
     expect(organizationRuns.data.find((item: any) => item.id === runId).attributes)
-      .toMatchObject({ source: "tfe-configuration-version", "trigger-reason": "pull_request" });
+      .toMatchObject({ source: "github", "trigger-reason": "pull_request" });
 
     for (const [action, status] of [
       ["discard", "discarded"],

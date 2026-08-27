@@ -14,6 +14,7 @@ import {
 } from "../../src/db/schema";
 import { eq, inArray } from "drizzle-orm";
 import { hashRunToken, mintRunToken } from "../../src/lib/run-token";
+import { hashAuthenticationToken } from "../../src/lib/token-service";
 
 // STATE-003: sensitive output authorization + masking.
 //
@@ -66,8 +67,8 @@ describe("sensitive state output authorization (STATE-003)", () => {
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({ id: `mem-out-${suffix}`, userId: `user-out-${suffix}`, orgId, role: "owner" });
     await db.insert(apiTokens).values([
-      { id: userTokenId, token: `out-user-token-${suffix}`, userId: `user-out-${suffix}` },
-      { id: otherUserTokenId, token: `out-other-token-${suffix}`, userId: otherUserId },
+      { id: userTokenId, token: hashAuthenticationToken(`out-user-token-${suffix}`), userId: `user-out-${suffix}` },
+      { id: otherUserTokenId, token: hashAuthenticationToken(`out-other-token-${suffix}`), userId: otherUserId },
     ]);
     userToken = `out-user-token-${suffix}`;
     otherUserToken = `out-other-token-${suffix}`;

@@ -141,6 +141,16 @@ export default tseslint.config(
         { allowNumber: true, allowBoolean: true, allowNullish: false, allowAny: false },
       ],
 
+      // ── Cyclomatic complexity guard ────────────────────────────────────
+      // Gate request handlers and view components against accumulating branch
+      // points. The repo was onboarded without this, so the current threshold
+      // (15) intentionally fails on the many pre-existing hot spots; those are
+      // flagged for incremental splitting. Going forward this blocks NEW
+      // functions that exceed the limit. Tighten (toward 10) as hot spots are
+      // refactored. Known monoliths (RunDetail, worker impls, workspace route
+      // handlers) carry targeted `off` overrides until they are split.
+      complexity: ['error', { max: 15 }],
+
       // ── No deprecated / legacy ──────────────────────────────────────────
       '@typescript-eslint/no-deprecated': 'error',
 
@@ -198,6 +208,9 @@ export default tseslint.config(
       '@typescript-eslint/no-floating-promises': 'off',
       '@typescript-eslint/no-empty-function': 'off',
       '@typescript-eslint/no-unnecessary-condition': 'off',
+      // Known monolith (complexity 239); exempt until it is split into
+      // focused subcomponents. Tracked for the complexity rollout.
+      complexity: 'off',
     },
   },
   {
@@ -292,6 +305,9 @@ export default tseslint.config(
       '@typescript-eslint/restrict-plus-operands': 'off',
       '@typescript-eslint/no-unnecessary-type-assertion': 'off',
       '@typescript-eslint/prefer-const': 'off',
+      // Test bodies are intentionally dense (setup/act/assert in one scope);
+      // complexity is not a concern for specs, only for shipping code.
+      complexity: 'off',
     },
   },
 
