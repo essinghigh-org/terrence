@@ -108,6 +108,7 @@ describe("GitLab and Bitbucket webhooks", () => {
     };
     globalThis.fetch = Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
 
+    await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.insert(organizations).values({ id: orgId, name: "provider-webhooks" });
     await db.insert(oauthClients).values([
       {

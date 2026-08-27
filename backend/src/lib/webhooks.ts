@@ -30,6 +30,7 @@ type WebhookDetails = Readonly<{
   readonly commitSha: string;
   readonly commitUrl: string;
   readonly filesChanged: ReadonlySet<string>;
+  readonly githubInstallationId?: number;
   readonly pullRequestNumber?: number;
   readonly repoFullName: string;
   readonly senderUsername: string;
@@ -105,6 +106,12 @@ function changedFiles(payload: WebhookPayload): ReadonlySet<string> | undefined 
 function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetails | undefined {
   const repository = asRecord(payload.repository);
   const sender = asRecord(payload.sender);
+  const installation = asRecord(payload.installation);
+  const deliveryInstallationId = typeof installation?.id === "number"
+    && Number.isSafeInteger(installation.id)
+    && installation.id > 0
+    ? installation.id
+    : undefined;
   const repoFullName = requiredString(repository?.full_name);
   const cloneUrl = requiredString(repository?.clone_url);
   const senderUsername = requiredString(sender?.login);
@@ -134,6 +141,7 @@ function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetail
       commitSha,
       commitUrl,
       filesChanged,
+      ...(deliveryInstallationId === undefined ? {} : { githubInstallationId: deliveryInstallationId }),
       repoFullName,
       senderUsername,
       ...(senderAvatarUrl === undefined ? {} : { senderAvatarUrl }),
@@ -161,6 +169,7 @@ function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetail
       commitUrl,
       filesChanged: new Set<string>(),
       pullRequestNumber,
+      ...(deliveryInstallationId === undefined ? {} : { githubInstallationId: deliveryInstallationId }),
       repoFullName,
       senderUsername,
       ...(senderAvatarUrl === undefined ? {} : { senderAvatarUrl }),
@@ -407,7 +416,12 @@ export async function getGitHubAppAccessToken(installationId: number): Promise<s
       exp: Math.floor(Date.now() / 1000) + (10 * 60),
       iss: appId,
     }, key, { algorithm: "RS256" });
-    const response = await fetch(`https://api.github.com/app/installations/${String(installationId)}/access_tokens`, {
+    const apiUrl = providerApiUrl(
+      process.env.GITHUB_APP_API_URL ?? process.env.GITHUB_API_URL ?? null,
+      "https://api.github.com",
+    );
+    if (apiUrl === undefined) return null;
+    const response = await fetch(`${apiUrl}/app/installations/${String(installationId)}/access_tokens`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json" },
       signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
@@ -429,6 +443,44 @@ function providerForOAuthClient(serviceProvider: string): "github" | OAuthProvid
   if (serviceProvider === "gitlab" || serviceProvider === "gitlab_ce" || serviceProvider === "gitlab_ee") return "gitlab";
   if (serviceProvider === "bitbucket") return "bitbucket";
   return undefined;
+}
+
+/**
+ * Resolve the provider configured for a workspace without decrypting its
+ * token. An unresolved reference deliberately returns undefined so stale
+ * configurations still reach the normal missing-credentials error path.
+ */
+async function configuredVcsProvider(
+  workspace: DeepReadonly<VcsCredentialSubject>,
+): Promise<VcsProvider | undefined> {
+  const vcs = workspace.vcsRepo;
+  if (vcs?.githubAppInstallationId !== undefined && vcs.githubAppInstallationId !== "") return "github";
+  const tokenId = vcs?.oauthTokenId;
+  if (tokenId === undefined || tokenId === "") return undefined;
+  const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, tokenId) });
+  if (token === undefined) return undefined;
+  const client = await db.query.oauthClients.findFirst({
+    where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
+    columns: { serviceProvider: true },
+  });
+  return client === undefined ? undefined : providerForOAuthClient(client.serviceProvider);
+}
+
+async function matchesGithubAppInstallation(
+  workspace: DeepReadonly<VcsCredentialSubject>,
+  deliveryInstallationId: number,
+): Promise<boolean> {
+  const installationReference = workspace.vcsRepo?.githubAppInstallationId;
+  if (installationReference === undefined || installationReference === "") return true;
+  const installation = await db.query.githubAppInstallations.findFirst({
+    where: and(
+      eq(githubAppInstallations.id, installationReference),
+      eq(githubAppInstallations.orgId, workspace.orgId),
+      eq(githubAppInstallations.installationId, deliveryInstallationId),
+    ),
+    columns: { id: true },
+  });
+  return installation !== undefined;
 }
 
 function providerApiUrl(value: string | null, fallback: string): string | undefined {
@@ -471,6 +523,9 @@ async function oauthProviderCredentials(
 
 async function githubCredentials(
   workspace: DeepReadonly<VcsCredentialSubject>,
+  // The cache is intentionally mutated while processing one webhook event.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  installationTokens?: Map<string, string | null>,
 ): Promise<ProviderCredentials | undefined> {
   const installationReference = workspace.vcsRepo?.githubAppInstallationId;
   if (installationReference !== undefined && installationReference !== "") {
@@ -481,8 +536,15 @@ async function githubCredentials(
       ),
     });
     if (installation !== undefined) {
-      const token = await getGitHubAppAccessToken(installation.installationId);
-      const apiUrl = providerApiUrl(process.env.GITHUB_API_URL ?? null, "https://api.github.com");
+      const installationKey = `${workspace.orgId}:${installationReference}`;
+      let token: string | null;
+      if (installationTokens?.has(installationKey) === true) {
+        token = installationTokens.get(installationKey) ?? null;
+      } else {
+        token = await getGitHubAppAccessToken(installation.installationId);
+        installationTokens?.set(installationKey, token);
+      }
+      const apiUrl = providerApiUrl(process.env.GITHUB_APP_API_URL ?? process.env.GITHUB_API_URL ?? null, "https://api.github.com");
       if (token !== null && apiUrl !== undefined) return { apiUrl, provider: "github", token };
     }
   }
@@ -508,34 +570,44 @@ function validRepository(repoFullName: string, provider: VcsProvider): boolean {
 }
 
 async function githubPullRequestFiles(
-  workspace: DeepReadonly<typeof workspaces.$inferSelect> | undefined,
+  candidates: readonly DeepReadonly<typeof workspaces.$inferSelect>[],
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   details: Readonly<WebhookDetails>,
+  // The cache is intentionally mutated while processing one webhook event.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  installationTokens?: Map<string, string | null>,
 ): Promise<ReadonlySet<string> | undefined> {
-  if (workspace === undefined || details.pullRequestNumber === undefined || !validRepository(details.repoFullName, "github")) return undefined;
-  try {
-    const credentials = await githubCredentials(workspace);
-    if (credentials === undefined) return undefined;
-    const response = await fetch(
-      `${credentials.apiUrl}/repos/${details.repoFullName.split("/").map(encodeURIComponent).join("/")}/pulls/${String(details.pullRequestNumber)}/files?per_page=100`,
-      {
-        headers: { Authorization: `Bearer ${credentials.token}`, Accept: "application/vnd.github+json" },
-        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-      },
-    );
-    if (!response.ok || response.headers.get("link")?.includes('rel="next"') === true) return undefined;
-    const body = await response.json() as unknown;
-    if (!Array.isArray(body)) return undefined;
-    const files = new Set<string>();
-    for (const item of body) {
-      const filename = asRecord(item)?.filename;
-      if (typeof filename !== "string" || filename === "") return undefined;
-      files.add(filename);
+  if (candidates.length === 0 || details.pullRequestNumber === undefined || !validRepository(details.repoFullName, "github")) return undefined;
+  for (const workspace of candidates) {
+    try {
+      const credentials = await githubCredentials(workspace, installationTokens);
+      if (credentials === undefined) continue;
+      const response = await fetch(
+        `${credentials.apiUrl}/repos/${details.repoFullName.split("/").map(encodeURIComponent).join("/")}/pulls/${String(details.pullRequestNumber)}/files?per_page=100`,
+        {
+          headers: { Authorization: `Bearer ${credentials.token}`, Accept: "application/vnd.github+json" },
+          signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+        },
+      );
+      if (!response.ok || response.headers.get("link")?.includes('rel="next"') === true) continue;
+      const body = await response.json() as unknown;
+      if (!Array.isArray(body)) continue;
+      const files = new Set<string>();
+      let valid = true;
+      for (const item of body) {
+        const filename = asRecord(item)?.filename;
+        if (typeof filename !== "string" || filename === "") {
+          valid = false;
+          break;
+        }
+        files.add(filename);
+      }
+      if (valid) return files;
+    } catch {
+      // Try the next matching workspace's credentials before failing open.
     }
-    return files;
-  } catch {
-    return undefined;
   }
+  return undefined;
 }
 
 async function gitlabMergeRequestFiles(
@@ -572,9 +644,58 @@ async function gitlabMergeRequestFiles(
         files.add(newPath);
       }
       nextPage = response.headers.get("x-next-page");
+      if (nextPage !== null && nextPage.trim() === "") nextPage = null;
       page += 1;
     }
+    // A hard page cap must fail open. Returning a partial set would make a
+    // matching file beyond the cap silently suppress a required run.
+    if (nextPage !== null) return undefined;
     return files;
+  } catch {
+    return undefined;
+  }
+}
+
+async function bitbucketCommitFiles(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect> | undefined,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: Readonly<WebhookDetails>,
+): Promise<ReadonlySet<string> | undefined> {
+  if (workspace === undefined || !validRepository(details.repoFullName, "bitbucket") || !COMMIT_SHA_PATTERN.test(details.commitSha)) return undefined;
+  try {
+    const credentials = await oauthProviderCredentials(workspace, "bitbucket");
+    if (credentials === undefined) return undefined;
+    const [owner, repo] = details.repoFullName.split("/");
+    const auth = { Authorization: `Bearer ${credentials.token}`, Accept: "application/json" };
+    const files = new Set<string>();
+    const MAX_PAGES = 10;
+    let cloudUrl: string | null = `${credentials.apiUrl}/repositories/${encodeURIComponent(owner ?? "")}/${encodeURIComponent(repo ?? "")}/diffstat/${encodeURIComponent(details.commitSha)}?pagelen=100`;
+    let receivedCloudPage = false;
+    for (let page = 1; cloudUrl !== null && page <= MAX_PAGES; page += 1) {
+      const response = await fetch(cloudUrl, { headers: auth, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+      if (!response.ok) {
+        // A provider failure means the changed-file set is unknown. Returning
+        // undefined intentionally falls back to trigger-all rather than
+        // suppressing a workspace that may contain a matching file.
+        return undefined;
+      }
+      receivedCloudPage = true;
+      const body = await response.json() as unknown;
+      const values = asRecord(body)?.values;
+      if (!Array.isArray(values)) return undefined;
+      for (const item of values) {
+        const entry = asRecord(item);
+        const path = asRecord(entry?.new)?.path ?? asRecord(entry?.old)?.path;
+        if (typeof path !== "string" || path === "") return undefined;
+        files.add(path);
+      }
+      const next = asRecord(body)?.next;
+      cloudUrl = typeof next === "string" && next !== "" ? next : null;
+      if (cloudUrl === null) return files;
+    }
+    // Do not use a partial diffstat after the hard page cap.
+    if (receivedCloudPage && cloudUrl !== null) return undefined;
+    return undefined;
   } catch {
     return undefined;
   }
@@ -597,9 +718,16 @@ async function bitbucketPullRequestFiles(
     // Bitbucket Cloud diffstat: values[].new.path (new.path absent for
     // deleted files; fall back to old.path so deletions still filter).
     let cloudUrl: string | null = `${credentials.apiUrl}/repositories/${encodeURIComponent(owner ?? "")}/${encodeURIComponent(repo ?? "")}/pullrequests/${String(details.pullRequestNumber)}/diffstat?pagelen=100`;
+    let receivedCloudPage = false;
     for (let page = 1; cloudUrl !== null && page <= MAX_PAGES; page += 1) {
       const cloudResponse = await fetch(cloudUrl, { headers: auth, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
-      if (!cloudResponse.ok) break;
+      if (!cloudResponse.ok) {
+        // A failure after receiving part of the diffstat must not be treated
+        // as complete. An unknown set intentionally falls back to trigger-all.
+        if (receivedCloudPage) return undefined;
+        break;
+      }
+      receivedCloudPage = true;
       const body = await cloudResponse.json() as unknown;
       const values = asRecord(body)?.values;
       if (!Array.isArray(values)) return undefined;
@@ -613,7 +741,8 @@ async function bitbucketPullRequestFiles(
       cloudUrl = typeof next === "string" && next !== "" ? next : null;
       if (cloudUrl === null) return files;
     }
-    if (files.size > 0) return files;
+    // Do not use a partial diffstat after the hard page cap.
+    if (receivedCloudPage && cloudUrl !== null) return undefined;
 
     // Bitbucket Data Center: changes endpoint with path.toString entries.
     let dcUrl: string | null = `${credentials.apiUrl}/rest/api/1.0/projects/${encodeURIComponent(owner ?? "")}/repos/${encodeURIComponent(repo ?? "")}/pull-requests/${String(details.pullRequestNumber)}/changes?limit=100`;
@@ -625,7 +754,11 @@ async function bitbucketPullRequestFiles(
       if (!Array.isArray(dcValues)) return undefined;
       for (const item of dcValues) {
         const path = asRecord(item)?.path;
-        const pathName = asRecord(path)?.toString ?? (typeof path === "string" ? path : undefined);
+        const pathRecord = asRecord(path);
+        const pathValue = pathRecord === undefined ? undefined : Reflect.get(pathRecord, "toString");
+        const pathName = typeof pathValue === "string"
+          ? pathValue
+          : typeof path === "string" ? path : undefined;
         if (typeof pathName !== "string" || pathName === "") return undefined;
         files.add(pathName);
       }
@@ -634,6 +767,8 @@ async function bitbucketPullRequestFiles(
         ? `${credentials.apiUrl}/rest/api/1.0/projects/${encodeURIComponent(owner ?? "")}/repos/${encodeURIComponent(repo ?? "")}/pull-requests/${String(details.pullRequestNumber)}/changes?limit=100&start=${nextStart}`
         : null;
     }
+    // A partial Data Center response is unsafe for file triggers.
+    if (dcUrl !== null) return undefined;
     return files;
   } catch {
     return undefined;
@@ -719,16 +854,11 @@ export async function reportRunVcsStatus(runId: string, runStatus: string): Prom
       let githubContext = context;
       let githubDescription = description;
       if (organization?.aggregatedCommitStatusEnabled !== false) {
-        const relatedWorkspaces = (await db.query.workspaces.findMany({
+        const relatedWorkspaces = await db.query.workspaces.findMany({
           where: and(
             eq(workspaces.orgId, workspace.orgId),
             sql`${jsonExtract(workspaces.vcsRepo, '$.identifier')} = ${repoFullName}`,
           ),
-        })).filter((candidate): boolean => {
-          const candidateVcs = candidate.vcsRepo;
-          const currentVcs = workspace.vcsRepo;
-          return candidateVcs?.githubAppInstallationId === currentVcs?.githubAppInstallationId
-            && candidateVcs?.oauthTokenId === currentVcs?.oauthTokenId;
         });
         const relatedWorkspaceIds = relatedWorkspaces.map((candidate): string => candidate.id);
         const relatedRuns = relatedWorkspaceIds.length === 0
@@ -747,7 +877,11 @@ export async function reportRunVcsStatus(runId: string, runStatus: string): Prom
         // avoids the "4 workspace runs: failure" false positive when a discarded
         // intermediate run exists alongside a later successful one.
         const runsForCommit = relatedRuns.filter(
-          (relatedRun): boolean => configurationsById.get(relatedRun.configurationVersionId ?? "")?.ingressAttributes?.commitSha === commitSha,
+          (relatedRun): boolean => {
+            const configuration = configurationsById.get(relatedRun.configurationVersionId ?? "");
+            return configuration?.source === "github"
+              && configuration.ingressAttributes?.commitSha === commitSha;
+          },
         );
         const latestPerWorkspace = new Map<string, typeof runsForCommit[number]>();
         for (const candidate of [...runsForCommit].sort((a, b): number => b.createdAt - a.createdAt)) {
@@ -877,7 +1011,7 @@ async function fetchDefaultBranch(workspace: DeepReadonly<typeof workspaces.$inf
     if (installation !== undefined) {
       const token = await getGitHubAppAccessToken(installation.installationId);
       if (token !== null) {
-        const apiUrl = providerApiUrl(process.env.GITHUB_API_URL ?? null, "https://api.github.com");
+        const apiUrl = providerApiUrl(process.env.GITHUB_APP_API_URL ?? process.env.GITHUB_API_URL ?? null, "https://api.github.com");
         if (apiUrl !== undefined) {
           const url = `${apiUrl}/repos/${encodedPath}`;
           const response = await fetch(url, {
@@ -949,7 +1083,7 @@ async function latestCommitSha(workspace: DeepReadonly<typeof workspaces.$inferS
     if (installation !== undefined) {
       const token = await getGitHubAppAccessToken(installation.installationId);
       if (token !== null) {
-        const apiUrl = providerApiUrl(process.env.GITHUB_API_URL ?? null, "https://api.github.com");
+        const apiUrl = providerApiUrl(process.env.GITHUB_APP_API_URL ?? process.env.GITHUB_API_URL ?? null, "https://api.github.com");
         if (apiUrl !== undefined) {
           const url = `${apiUrl}/repos/${encodedPath}/commits?sha=${encodeURIComponent(branch)}&per_page=1`;
           const response = await fetch(url, {
@@ -1063,6 +1197,7 @@ type MatchesCache = Map<string, string | undefined>;
 const defaultBranchCache: MatchesCache = new Map<string, string | undefined>();
 async function matchesConfiguredBranch(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   details: DeepReadonly<WebhookDetails>,
 ): Promise<boolean> {
   const vcsRepo = workspace.vcsRepo;
@@ -1074,8 +1209,7 @@ async function matchesConfiguredBranch(
   // default branch via the provider API and compare; fail closed if it
   // cannot be determined so we never mis-route a push.
   let expectedBranch = vcsRepo.branch;
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-  if (expectedBranch === undefined || expectedBranch === null || expectedBranch === "") {
+  if (expectedBranch === undefined || expectedBranch === "") {
     const cacheKey = `${workspace.orgId}:${workspace.vcsRepo?.identifier ?? ""}`;
     if (defaultBranchCache.has(cacheKey)) {
       expectedBranch = defaultBranchCache.get(cacheKey);
@@ -1096,6 +1230,7 @@ async function matchesConfiguredBranch(
 
 async function matchesVcsTrigger(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   details: DeepReadonly<WebhookDetails>,
 ): Promise<boolean> {
   const vcsRepo = workspace.vcsRepo;
@@ -1106,6 +1241,28 @@ async function matchesVcsTrigger(
     return details.tag !== undefined && matchesTag(vcsRepo, details.tag);
   }
   return details.tag === undefined && await matchesConfiguredBranch(workspace, details);
+}
+
+async function providerChangedFiles(
+  provider: OAuthProvider,
+  kind: "push" | "pull_request",
+  candidates: readonly DeepReadonly<typeof workspaces.$inferSelect>[],
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: Readonly<WebhookDetails>,
+): Promise<ReadonlySet<string> | undefined> {
+  const needsLookup = kind === "pull_request" || (provider === "bitbucket" && details.tag === undefined);
+  if (!needsLookup) return undefined;
+  for (const workspace of candidates) {
+    const files = kind === "pull_request"
+      ? provider === "gitlab"
+        ? await gitlabMergeRequestFiles(workspace, details)
+        : await bitbucketPullRequestFiles(workspace, details)
+      : await bitbucketCommitFiles(workspace, details);
+    // A workspace with no usable credential must not prevent another matching
+    // workspace from supplying the repository-wide file list.
+    if (files !== undefined) return files;
+  }
+  return undefined;
 }
 
 async function handleOAuthProviderWebhook(
@@ -1121,29 +1278,27 @@ async function handleOAuthProviderWebhook(
   const branchMatchedWorkspaces: typeof candidates = [];
   for (const workspace of candidates) {
     if (workspace.vcsRepo?.identifier !== details.repoFullName) continue;
+    const configuredProvider = await configuredVcsProvider(workspace);
+    if (configuredProvider !== undefined && configuredProvider !== provider) continue;
     if (await matchesVcsTrigger(workspace, details)) branchMatchedWorkspaces.push(workspace);
   }
-  // PR/MR payloads carry no changed-file list (kanban 1.6): fetch it from the
-  // provider API once per event so file trigger patterns actually filter
-  // speculative runs. Failures fall back to the empty set (trigger-all) so a
-  // VCS API outage can never silently drop a run.
+  // PR/MR payloads carry no changed-file list (kanban 1.6). Bitbucket push
+  // payloads do not carry one either, so both paths fetch a complete list.
+  // Failures fall back to the empty set (trigger-all) so a VCS API outage can
+  // never silently drop a run.
   let triggerDetails = details;
-  if (kind === "pull_request") {
-    const filesChanged = provider === "gitlab"
-      ? await gitlabMergeRequestFiles(branchMatchedWorkspaces[0], details)
-      : await bitbucketPullRequestFiles(branchMatchedWorkspaces[0], details);
-    if (filesChanged !== undefined) triggerDetails = { ...details, filesChanged };
-  }
+  const filesChanged = await providerChangedFiles(provider, kind, branchMatchedWorkspaces, details);
+  if (filesChanged !== undefined) triggerDetails = { ...details, filesChanged };
   const matchedWorkspaces = branchMatchedWorkspaces.filter((workspace: DeepReadonly<typeof workspaces.$inferSelect>): boolean =>
     details.tag !== undefined || matchesFileTriggers(workspace, triggerDetails.filesChanged));
 
-  const downloads: Promise<void>[] = [];
+  const downloads = new Map<string, { credentials: ProviderCredentials; configurationVersionIds: string[] }>();
+  const missingCredentialConfigurationVersionIds: string[] = [];
   for (const workspace of matchedWorkspaces) {
     const isSpeculative = kind === "pull_request";
     if (isSpeculative && workspace.speculativeEnabled === false) continue;
     if (!isSpeculative && workspace.autoApplyRunTrigger !== true && workspace.queueAllRuns !== true) continue;
     const credentials = await oauthProviderCredentials(workspace, provider);
-    if (credentials === undefined) continue;
 
     const configurationVersionId = `cv-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
     const runId = `run-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
@@ -1162,7 +1317,7 @@ async function handleOAuthProviderWebhook(
         senderUsername: details.senderUsername,
         ...(details.senderAvatarUrl === undefined ? {} : {
           senderAvatarUrl: details.senderAvatarUrl,
-          senderProviderId: credentials.oauthClientId === undefined ? "vcs" : `vcs:${credentials.oauthClientId}`,
+          senderProviderId: credentials?.oauthClientId === undefined ? "vcs" : `vcs:${credentials.oauthClientId}`,
         }),
         cloneUrl: details.cloneUrl,
         ...(details.pullRequestNumber === undefined ? {} : { pullRequestNumber: details.pullRequestNumber }),
@@ -1190,20 +1345,33 @@ async function handleOAuthProviderWebhook(
       actorUsername: details.senderUsername,
       ...(details.senderAvatarUrl === undefined ? {} : {
         actorAvatarUrl: details.senderAvatarUrl,
-        actorProviderId: credentials.oauthClientId === undefined ? "vcs" : `vcs:${credentials.oauthClientId}`,
+        actorProviderId: credentials?.oauthClientId === undefined ? "vcs" : `vcs:${credentials.oauthClientId}`,
       }),
     });
     void reportRunVcsStatus(runId, "pending");
 
-    downloads.push(fetchAndSaveProviderTarball(
-      [configurationVersionId],
-      credentials,
-      details.repoFullName,
-      details.commitSha,
-    ));
+    if (credentials === undefined) {
+      missingCredentialConfigurationVersionIds.push(configurationVersionId);
+      continue;
+    }
+    const downloadKey = `${credentials.apiUrl}\u0000${credentials.token}`;
+    const group = downloads.get(downloadKey);
+    if (group === undefined) {
+      downloads.set(downloadKey, { credentials, configurationVersionIds: [configurationVersionId] });
+    } else {
+      group.configurationVersionIds.push(configurationVersionId);
+    }
+  }
+  if (missingCredentialConfigurationVersionIds.length > 0) {
+    await markConfigurationVersionsErrored(
+      missingCredentialConfigurationVersionIds,
+      `${provider} credentials are unavailable`,
+    );
   }
   await Promise.all([
-    Promise.all(downloads),
+    Promise.all([...downloads.values()].map(async ({ credentials, configurationVersionIds }): Promise<void> => {
+      await fetchAndSaveProviderTarball(configurationVersionIds, credentials, details.repoFullName, details.commitSha);
+    })),
     synchronizeVcsPolicySets(provider, kind, details),
   ]);
   return true;
@@ -1265,11 +1433,15 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
   const branchMatchedWorkspaces: typeof candidates = [];
   for (const workspace of candidates) {
     if (workspace.vcsRepo?.identifier !== details.repoFullName) continue;
+    const configuredProvider = await configuredVcsProvider(workspace);
+    if (configuredProvider !== undefined && configuredProvider !== "github") continue;
+    if (details.githubInstallationId !== undefined && !await matchesGithubAppInstallation(workspace, details.githubInstallationId)) continue;
     if (await matchesVcsTrigger(workspace, details)) branchMatchedWorkspaces.push(workspace);
   }
+  const installationTokens = new Map<string, string | null>();
   let triggerDetails = details;
   if (eventName === "pull_request") {
-    const filesChanged = await githubPullRequestFiles(branchMatchedWorkspaces[0], details);
+    const filesChanged = await githubPullRequestFiles(branchMatchedWorkspaces, details, installationTokens);
     if (filesChanged !== undefined) triggerDetails = { ...details, filesChanged };
   }
   const matchedWorkspaces = branchMatchedWorkspaces.filter((workspace): boolean =>
@@ -1281,33 +1453,14 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
   }
 
   const configurationVersionIds: string[] = [];
-  const downloadableConfigurationVersionIds: string[] = [];
-  let token: string | null = null;
-  const installationTokens = new Map<string, string | null>();
+  const missingCredentialConfigurationVersionIds: string[] = [];
+  const downloads = new Map<string, { credentials: ProviderCredentials; configurationVersionIds: string[] }>();
   for (const workspace of matchedWorkspaces) {
     const isSpeculative = eventName === "pull_request";
     if (isSpeculative && workspace.speculativeEnabled === false) continue;
     if (!isSpeculative && workspace.autoApplyRunTrigger !== true && workspace.queueAllRuns !== true) continue;
 
-    if (workspace.vcsRepo === null) continue;
-    const vcsRepo: VcsRepo = workspace.vcsRepo;
-    const installationReference = vcsRepo.githubAppInstallationId;
-    let workspaceToken: string | null = null;
-    if (installationReference !== undefined && installationReference !== "") {
-      const installationKey = `${workspace.orgId}:${installationReference}`;
-      const cachedToken = installationTokens.get(installationKey);
-      if (cachedToken !== undefined) {
-        workspaceToken = cachedToken;
-      } else {
-        const installation = await db.query.githubAppInstallations.findFirst({
-          where: and(eq(githubAppInstallations.id, installationReference), eq(githubAppInstallations.orgId, workspace.orgId)),
-        });
-        workspaceToken = installation === undefined ? null : await getGitHubAppAccessToken(installation.installationId);
-        installationTokens.set(installationKey, workspaceToken);
-      }
-    }
-    token ??= workspaceToken;
-
+    const credentials = await githubCredentials(workspace, installationTokens);
     const configurationVersionId = `cv-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
     const runId = `run-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
     await db.insert(configurationVersions).values({
@@ -1323,7 +1476,10 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
         ...(details.branch === undefined ? {} : { branch: details.branch }),
         ...(details.tag === undefined ? {} : { tag: details.tag }),
         senderUsername: details.senderUsername,
-        ...(details.senderAvatarUrl === undefined ? {} : { senderAvatarUrl: details.senderAvatarUrl, senderProviderId: "github-app" }),
+        ...(details.senderAvatarUrl === undefined ? {} : {
+          senderAvatarUrl: details.senderAvatarUrl,
+          senderProviderId: credentials?.oauthClientId === undefined ? "github-app" : `vcs:${credentials.oauthClientId}`,
+        }),
         cloneUrl: details.cloneUrl,
         ...(details.pullRequestNumber === undefined ? {} : { pullRequestNumber: details.pullRequestNumber }),
       },
@@ -1348,43 +1504,68 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
       source: "github",
       triggerReason: isSpeculative ? "pull_request" : "push",
       actorUsername: details.senderUsername,
-      ...(details.senderAvatarUrl === undefined ? {} : { actorAvatarUrl: details.senderAvatarUrl, actorProviderId: "github-app" }),
+      ...(details.senderAvatarUrl === undefined ? {} : {
+        actorAvatarUrl: details.senderAvatarUrl,
+        actorProviderId: credentials?.oauthClientId === undefined ? "github-app" : `vcs:${credentials.oauthClientId}`,
+      }),
     });
     void reportRunVcsStatus(runId, "pending");
     configurationVersionIds.push(configurationVersionId);
-    if (workspaceToken !== null) downloadableConfigurationVersionIds.push(configurationVersionId);
+
+    if (credentials === undefined) {
+      missingCredentialConfigurationVersionIds.push(configurationVersionId);
+      continue;
+    }
+    const downloadKey = `${credentials.apiUrl}\u0000${credentials.token}`;
+    const group = downloads.get(downloadKey);
+    if (group === undefined) {
+      downloads.set(downloadKey, { credentials, configurationVersionIds: [configurationVersionId] });
+    } else {
+      group.configurationVersionIds.push(configurationVersionId);
+    }
   }
 
-  if (configurationVersionIds.length === 0) {
-    await synchronizeVcsPolicySets("github", eventName === "pull_request" ? "pull_request" : "push", details);
-    return;
+  if (missingCredentialConfigurationVersionIds.length > 0) {
+    console.error(`[terrence] Could not obtain GitHub credentials for ${details.repoFullName}`);
+    await markConfigurationVersionsErrored(
+      missingCredentialConfigurationVersionIds,
+      "GitHub credentials are unavailable",
+    );
   }
-  const missingTokenConfigurationVersionIds = configurationVersionIds.filter((id: string): boolean => !downloadableConfigurationVersionIds.includes(id));
-  if (missingTokenConfigurationVersionIds.length > 0) {
-    console.error(`[terrence] Could not obtain a GitHub token for ${details.repoFullName}`);
-    await markConfigurationVersionsErrored(missingTokenConfigurationVersionIds, "GitHub App access token is unavailable");
-  }
-  if (token !== null && downloadableConfigurationVersionIds.length > 0) {
-    await fetchAndSaveTarball(downloadableConfigurationVersionIds, token, details.repoFullName, details.commitSha);
-  }
-  await synchronizeVcsPolicySets("github", eventName === "pull_request" ? "pull_request" : "push", details);
+  await Promise.all([
+    Promise.all([...downloads.values()].map(async ({ credentials, configurationVersionIds }): Promise<void> => {
+      await fetchAndSaveTarball(configurationVersionIds, credentials, details.repoFullName, details.commitSha);
+    })),
+    synchronizeVcsPolicySets("github", eventName === "pull_request" ? "pull_request" : "push", details),
+  ]);
 }
 
-async function fetchAndSaveTarball(configurationVersionIds: readonly string[], token: string, repoFullName: string, commitSha: string): Promise<void> {
+async function fetchAndSaveTarball(
+  configurationVersionIds: readonly string[],
+  credentials: ProviderCredentials,
+  repoFullName: string,
+  commitSha: string,
+): Promise<void> {
   const repositoryParts = repoFullName.split("/");
   const owner = repositoryParts[0] ?? "";
   const repository = repositoryParts[1] ?? "";
-  if (repositoryParts.length !== 2 || !OWNER_PATTERN.test(owner) || !REPOSITORY_PATTERN.test(repository) || !COMMIT_SHA_PATTERN.test(commitSha)) {
+  if (
+    credentials.provider !== "github"
+    || repositoryParts.length !== 2
+    || !OWNER_PATTERN.test(owner)
+    || !REPOSITORY_PATTERN.test(repository)
+    || !COMMIT_SHA_PATTERN.test(commitSha)
+  ) {
     await markConfigurationVersionsErrored(configurationVersionIds, "Invalid repository or commit SHA");
     return;
   }
 
-  const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/tarball/${encodeURIComponent(commitSha)}`;
+  const url = `${credentials.apiUrl}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/tarball/${encodeURIComponent(commitSha)}`;
   await downloadAndSaveTarball(
     configurationVersionIds,
     "github",
     url,
-    { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json" },
+    { Authorization: `Bearer ${credentials.token}`, Accept: "application/vnd.github.v3+json" },
   );
 }
 
