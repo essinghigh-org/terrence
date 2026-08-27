@@ -1,6 +1,6 @@
 {
   "name": "terrence",
-  "version": "1.1.11",
+  "version": "1.1.12",
   "packageManager": "bun@1.4.0",
   "description": "Self-hosted platform for OpenTofu and Terraform remote workflows",
   "license": "MIT",
