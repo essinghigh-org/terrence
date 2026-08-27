@@ -622,13 +622,19 @@ test("opens failed applies and presents their diagnostics", async () => {
   const applyHeading = await view.findByRole("heading", { name: "Apply errored" });
   // SAFETY: the heading lives inside a details element; closest() resolves it.
   const applySection = applyHeading.closest("details") as HTMLDetailsElement;
-  // Apply errors now surface through the same DiagnosticsBanner that warnings
+  // Apply errors surface through the same DiagnosticsBanner that warnings
   // use (severity="error"), so the structured error text is rendered by that
-  // banner rather than only a raw <pre> block. The error appears in the banner
-  // and (separately) in the raw log, so assert it is present at least once.
+  // banner. The banner is the only place errors appear: the raw-log block is
+  // gated on there being no structured diagnostics.
   expect(applySection.open).toBeTrue();
   expect(within(applySection).getByText(/Diagnostics/)).toBeTruthy();
-  expect(within(applySection).getAllByText(/resource name already exists/).length).toBeGreaterThan(0);
+  // The DiagnosticsBanner is collapsible and starts closed; expand it so the
+  // structured error is visible, then assert it is rendered inside the banner's
+  // list (structured diagnostics) rather than leaking only through a raw log.
+  const diagnosticsSummary = within(applySection).getByText(/Diagnostics/).closest("summary") as HTMLElement;
+  fireEvent.click(diagnosticsSummary);
+  const diagnosticList = within(applySection).getByRole("list");
+  expect(within(diagnosticList).getByText(/resource name already exists/)).toBeTruthy();
 });
 
 test("clears stale activity immediately when navigating to another run", async () => {
