@@ -9,6 +9,8 @@ import {
   configurationVersions,
   githubAppInstallations,
   githubWebhookDeliveries,
+  oauthClients,
+  oauthTokens,
   organizationMemberships,
   organizations,
   runs,
@@ -20,15 +22,23 @@ const orgId = "org-webhook-test";
 const orgName = "webhook-org-test";
 const workspaceId = "ws-webhook-test";
 const secondWorkspaceId = "ws-webhook-test-2";
+const crossProviderWorkspaceId = "ws-webhook-cross-provider";
+const crossProviderClientId = "oauthc-webhook-cross-provider";
+const crossProviderTokenId = "oautht-webhook-cross-provider";
+const crossProviderConfigurationId = "cv-webhook-cross-provider";
+const crossProviderRunId = "run-webhook-cross-provider";
 const crossOrgId = "org-webhook-cross-tenant";
 const userId = "usr-webhook-test";
 const authToken = "webhook-test-token";
 const installationId = "ghain-webhook-test";
+const secondaryInstallationId = "ghain-webhook-test-2";
 const originalSecret = process.env.GITHUB_WEBHOOK_SECRET;
 const originalAppId = process.env.GITHUB_APP_ID;
 const originalPrivateKey = process.env.GITHUB_APP_PRIVATE_KEY;
+const originalAppApiUrl = process.env.GITHUB_APP_API_URL;
 const originalFetch = globalThis.fetch;
 let tarballFetches = 0;
+const tarballRequests: { url: string; authorization: string | null }[] = [];
 const commitStatuses: Record<string, unknown>[] = [];
 
 const pushPayload = {
@@ -138,10 +148,13 @@ describe("GitHub Webhooks", () => {
     }).privateKey;
     const mockFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const url = input instanceof Request ? input.url : input.toString();
-      if (url.includes("/access_tokens")) return Response.json({ token: "test-token" });
+      if (url.includes("/access_tokens")) {
+        return Response.json({ token: url.includes("/67891/") ? "secondary-token" : "test-token" });
+      }
       if (url.includes("/pulls/42/files")) return Response.json([{ filename: "src/main.tf" }]);
       if (url.includes("/tarball/")) {
         tarballFetches += 1;
+        tarballRequests.push({ url, authorization: new Headers(init?.headers).get("authorization") });
         return new Response(new Uint8Array([1, 2, 3]));
       }
       if (url.includes("/statuses/")) {
@@ -188,9 +201,16 @@ describe("GitHub Webhooks", () => {
 
   beforeEach(async () => {
     tarballFetches = 0;
+    tarballRequests.length = 0;
     commitStatuses.length = 0;
     await db.delete(githubWebhookDeliveries);
+    await db.delete(runs).where(eq(runs.id, crossProviderRunId));
+    await db.delete(configurationVersions).where(eq(configurationVersions.id, crossProviderConfigurationId));
     await db.delete(workspaces).where(eq(workspaces.id, secondWorkspaceId));
+    await db.delete(workspaces).where(eq(workspaces.id, crossProviderWorkspaceId));
+    await db.delete(oauthTokens).where(eq(oauthTokens.id, crossProviderTokenId));
+    await db.delete(oauthClients).where(eq(oauthClients.id, crossProviderClientId));
+    await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, secondaryInstallationId));
     await db.delete(organizations).where(eq(organizations.id, crossOrgId));
     await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
     await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, workspaceId));
@@ -214,10 +234,15 @@ describe("GitHub Webhooks", () => {
     process.env.GITHUB_WEBHOOK_SECRET = originalSecret;
     process.env.GITHUB_APP_ID = originalAppId;
     process.env.GITHUB_APP_PRIVATE_KEY = originalPrivateKey;
+    process.env.GITHUB_APP_API_URL = originalAppApiUrl;
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
     await db.delete(workspaces).where(eq(workspaces.id, secondWorkspaceId));
+    await db.delete(workspaces).where(eq(workspaces.id, crossProviderWorkspaceId));
+    await db.delete(oauthTokens).where(eq(oauthTokens.id, crossProviderTokenId));
+    await db.delete(oauthClients).where(eq(oauthClients.id, crossProviderClientId));
     await db.delete(organizations).where(eq(organizations.id, crossOrgId));
     await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, installationId));
+    await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, secondaryInstallationId));
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.delete(users).where(eq(users.id, userId));
   });
@@ -554,6 +579,152 @@ describe("GitHub Webhooks", () => {
     expect(tarballFetches).toBe(1);
   });
 
+  test("aggregates same-commit runs across distinct GitHub installations", async () => {
+    await db.insert(githubAppInstallations).values({
+      id: secondaryInstallationId,
+      orgId,
+      name: "webhook-install-2",
+      installationId: 67891,
+    });
+    await db.insert(workspaces).values({
+      id: secondWorkspaceId,
+      orgId,
+      name: "webhook-ws-2",
+      vcsRepo: { identifier: "hashicorp/terraform", branch: "main", githubAppInstallationId: secondaryInstallationId },
+      fileTriggersEnabled: true,
+      triggerPrefixes: ["src/"],
+      queueAllRuns: true,
+    });
+
+    const deliveryId = crypto.randomUUID();
+    await sendWebhook("push", pushPayload, deliveryId);
+    await waitForDelivery(deliveryId);
+    const matchingRuns = (await db.query.runs.findMany()).filter(
+      (run): boolean => run.workspaceId === workspaceId || run.workspaceId === secondWorkspaceId,
+    );
+    expect(matchingRuns).toHaveLength(2);
+    const primaryRun = matchingRuns.find((run): boolean => run.workspaceId === workspaceId);
+    const secondaryRun = matchingRuns.find((run): boolean => run.workspaceId === secondWorkspaceId);
+    expect(primaryRun).toBeDefined();
+    expect(secondaryRun).toBeDefined();
+    if (primaryRun === undefined || secondaryRun === undefined) return;
+
+    await db.update(runs).set({ status: "errored" }).where(eq(runs.id, primaryRun.id));
+    await db.update(runs).set({ status: "applied" }).where(eq(runs.id, secondaryRun.id));
+    commitStatuses.length = 0;
+    await reportRunVcsStatus(secondaryRun.id, "applied");
+
+    expect(commitStatuses.at(-1)).toMatchObject({
+      state: "failure",
+      context: "terrence",
+      description: "2 workspace runs: failure",
+    });
+  });
+
+  test("does not route a GitHub event to a non-GitHub workspace with the same identifier", async () => {
+    await db.insert(oauthClients).values({
+      id: crossProviderClientId,
+      orgId,
+      name: "cross-provider-gitlab",
+      serviceProvider: "gitlab",
+      apiUrl: "https://gitlab.example/api/v4",
+      httpUrl: "https://gitlab.example",
+      key: "test-key",
+      secret: "test-secret",
+    });
+    await db.insert(oauthTokens).values({
+      id: crossProviderTokenId,
+      oauthClientId: crossProviderClientId,
+      token: "cross-provider-token",
+      createdAt: Date.now(),
+    });
+    await db.insert(workspaces).values({
+      id: crossProviderWorkspaceId,
+      orgId,
+      name: "cross-provider-workspace",
+      vcsRepo: { identifier: "hashicorp/terraform", branch: "main", oauthTokenId: crossProviderTokenId },
+      fileTriggersEnabled: true,
+      triggerPrefixes: ["src/"],
+      queueAllRuns: true,
+    });
+
+    const deliveryId = crypto.randomUUID();
+    await sendWebhook("push", pushPayload, deliveryId);
+    await waitForDelivery(deliveryId);
+    const githubRun = await db.query.runs.findFirst({ where: eq(runs.workspaceId, workspaceId) });
+    expect(githubRun).toBeDefined();
+    if (githubRun === undefined) return;
+    await db.insert(configurationVersions).values({
+      id: crossProviderConfigurationId,
+      workspaceId: crossProviderWorkspaceId,
+      status: "uploaded",
+      source: "gitlab",
+      ingressAttributes: { commitSha: pushPayload.after },
+    });
+    await db.insert(runs).values({
+      id: crossProviderRunId,
+      workspaceId: crossProviderWorkspaceId,
+      configurationVersionId: crossProviderConfigurationId,
+      status: "applied",
+      createdAt: Date.now(),
+    });
+    await db.update(runs).set({ status: "applied" }).where(eq(runs.id, githubRun.id));
+    commitStatuses.length = 0;
+    await reportRunVcsStatus(githubRun.id, "applied");
+
+    expect(commitStatuses.at(-1)).toMatchObject({
+      state: "success",
+      context: "terrence",
+      description: "1 workspace run: success",
+    });
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, crossProviderWorkspaceId) })).toHaveLength(1);
+    expect(tarballFetches).toBe(1);
+  });
+
+  test("uses each matching workspace's GitHub installation credentials", async () => {
+    await db.insert(githubAppInstallations).values({
+      id: secondaryInstallationId,
+      orgId,
+      name: "webhook-install-2",
+      installationId: 67891,
+    });
+    await db.insert(workspaces).values({
+      id: secondWorkspaceId,
+      orgId,
+      name: "webhook-ws-2",
+      vcsRepo: { identifier: "hashicorp/terraform", branch: "main", githubAppInstallationId: secondaryInstallationId },
+      fileTriggersEnabled: true,
+      triggerPrefixes: ["src/"],
+      queueAllRuns: true,
+    });
+    const deliveryId = crypto.randomUUID();
+    await sendWebhook("push", pushPayload, deliveryId);
+    await waitForDelivery(deliveryId);
+    const runList = await db.query.runs.findMany();
+    expect(runList.filter((run): boolean => run.workspaceId === workspaceId || run.workspaceId === secondWorkspaceId)).toHaveLength(2);
+    expect(tarballFetches).toBe(2);
+    expect(tarballRequests.map((request): string | null => request.authorization).sort()).toEqual([
+      "Bearer secondary-token",
+      "Bearer test-token",
+    ]);
+  });
+
+  test("uses the configured GitHub Enterprise API URL", async () => {
+    const enterpriseApiUrl = "https://github-enterprise.example/api/v3";
+    const previousApiUrl = process.env.GITHUB_APP_API_URL;
+    process.env.GITHUB_APP_API_URL = enterpriseApiUrl;
+    try {
+      const deliveryId = crypto.randomUUID();
+      await sendWebhook("push", pushPayload, deliveryId);
+      await waitForDelivery(deliveryId);
+      expect(tarballRequests).toHaveLength(1);
+      expect(tarballRequests[0]?.url).toBe(`${enterpriseApiUrl}/repos/hashicorp/terraform/tarball/${pushPayload.after}`);
+      expect(tarballRequests[0]?.authorization).toBe("Bearer test-token");
+    } finally {
+      process.env.GITHUB_APP_API_URL = previousApiUrl;
+    }
+  });
+
   test("missing token leaves the run and marks its configuration version errored", async () => {
     const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
     process.env.GITHUB_APP_PRIVATE_KEY = "";
@@ -571,6 +742,25 @@ describe("GitHub Webhooks", () => {
     } finally {
       process.env.GITHUB_APP_PRIVATE_KEY = privateKey;
     }
+  });
+
+  test("scopes a GitHub App delivery to its installation organization", async () => {
+    await db.insert(organizations).values({ id: crossOrgId, name: `cross-org-scoped-${Date.now()}` });
+    await db.insert(workspaces).values({
+      id: secondWorkspaceId,
+      orgId: crossOrgId,
+      name: "cross-org-scoped-workspace",
+      vcsRepo: { identifier: "hashicorp/terraform", branch: "main", githubAppInstallationId: installationId },
+      fileTriggersEnabled: true,
+      triggerPrefixes: ["src/"],
+      queueAllRuns: true,
+    });
+    const deliveryId = crypto.randomUUID();
+    await sendWebhook("push", { ...pushPayload, installation: { id: 12345 } }, deliveryId);
+    await waitForDelivery(deliveryId);
+
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).toHaveLength(1);
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, secondWorkspaceId) })).toHaveLength(0);
   });
 
   test("an installation from another organization is not resolved", async () => {
