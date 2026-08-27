@@ -622,12 +622,19 @@ test("opens failed applies and presents their diagnostics", async () => {
   const applyHeading = await view.findByRole("heading", { name: "Apply errored" });
   // SAFETY: the heading lives inside a details element; closest() resolves it.
   const applySection = applyHeading.closest("details") as HTMLDetailsElement;
-  const diagnostics = within(applySection).getByRole("heading", { name: "Diagnostics" }).closest("section");
+  // Apply errors surface through the same DiagnosticsBanner that warnings
+  // use (severity="error"), so the structured error text is rendered by that
+  // banner. The banner is the only place errors appear: the raw-log block is
+  // gated on there being no structured diagnostics.
   expect(applySection.open).toBeTrue();
-  expect(diagnostics).not.toBeNull();
-// SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
-  expect(within(diagnostics as HTMLElement).getByText(/resource name already exists/)).toBeTruthy();
-  expect(within(applySection).getByText(/Errored/)).toBeTruthy();
+  expect(within(applySection).getByText(/Diagnostics/)).toBeTruthy();
+  // The DiagnosticsBanner is collapsible and starts closed; expand it so the
+  // structured error is visible, then assert it is rendered inside the banner's
+  // list (structured diagnostics) rather than leaking only through a raw log.
+  const diagnosticsSummary = within(applySection).getByText(/Diagnostics/).closest("summary") as HTMLElement;
+  fireEvent.click(diagnosticsSummary);
+  const diagnosticList = within(applySection).getByRole("list");
+  expect(within(diagnosticList).getByText(/resource name already exists/)).toBeTruthy();
 });
 
 test("clears stale activity immediately when navigating to another run", async () => {

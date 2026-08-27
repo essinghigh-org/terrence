@@ -1271,15 +1271,23 @@ export function RunDetail({
     "You have an unsaved comment draft. Are you sure you want to leave this page?",
   );
 
-  // Terraform warnings embedded in the phase logs surface as amber bubbles;
-  // they do not affect run or phase status. Declared before the early
-  // returns so the hook count stays stable across loading states.
+  // Terraform warnings and errors embedded in the phase logs surface as
+  // colored bubbles; they do not affect run or phase status. Declared before
+  // the early returns so the hook count stays stable across loading states.
   const planWarnings = useMemo(
     (): TerraformDiagnostic[] => extractDiagnostics(planLogs).filter((diag) => diag.severity === "warning"),
     [planLogs],
   );
+  const planErrors = useMemo(
+    (): TerraformDiagnostic[] => extractDiagnostics(planLogs).filter((diag) => diag.severity === "error"),
+    [planLogs],
+  );
   const applyWarnings = useMemo(
     (): TerraformDiagnostic[] => extractDiagnostics(applyLogs).filter((diag) => diag.severity === "warning"),
+    [applyLogs],
+  );
+  const applyErrors = useMemo(
+    (): TerraformDiagnostic[] => extractDiagnostics(applyLogs).filter((diag) => diag.severity === "error"),
     [applyLogs],
   );
 
@@ -1817,6 +1825,10 @@ export function RunDetail({
               <DiagnosticsBanner severity="warning" diagnostics={planWarnings} collapsible />
             )}
 
+            {planErrors.length > 0 && (
+              <DiagnosticsBanner severity="error" diagnostics={planErrors} collapsible />
+            )}
+
             <PlanOutput
               runId={runId}
               status={status}
@@ -2070,34 +2082,40 @@ export function RunDetail({
               <DiagnosticsBanner severity="warning" diagnostics={applyWarnings} collapsible />
             )}
 
-            {["errored", "unreachable"].includes(applyStatus) && (
-              <section aria-labelledby="apply-diagnostics-heading" className="border-t border-destructive/30 bg-destructive/10 px-5 py-4">
-                <h4 id="apply-diagnostics-heading" className="text-sm font-semibold text-destructive">Diagnostics</h4>
-                <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap rounded-md border border-destructive/30 bg-background p-4 font-mono text-xs leading-5 text-destructive">
-                  {applyLogs !== "" ? applyLogs : "The apply failed before diagnostic output became available."}
-                </pre>
-              </section>
+            {applyErrors.length > 0 ? (
+              <DiagnosticsBanner severity="error" diagnostics={applyErrors} collapsible />
+            ) : (
+              applyWarnings.length === 0 && ["errored", "unreachable"].includes(applyStatus) && (
+                <section aria-labelledby="apply-diagnostics-heading" className="border-t border-destructive/30 bg-destructive/10 px-5 py-4">
+                  <h4 id="apply-diagnostics-heading" className="text-sm font-semibold text-destructive">Diagnostics</h4>
+                  <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap rounded-md border border-destructive/30 bg-background p-4 font-mono text-xs leading-5 text-destructive">
+                    The apply failed before diagnostic output became available.
+                  </pre>
+                </section>
+              )
             )}
-            <div className="relative">
-              <details className="group">
-              <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 pr-16 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-                <span>Raw apply log</span>
-              </summary>
-              <pre className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
-                {applyLogs !== "" ? applyLogs : applyRawLogMessage}
-              </pre>
-              </details>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="absolute right-5 top-1.5"
-                onClick={(): void => { setFullscreenLog("apply"); }}
-                aria-label="Open raw apply log fullscreen"
-              >
-                <Maximize2 className="size-4" aria-hidden="true" />
-              </Button>
-            </div>
+            {applyWarnings.length === 0 && applyErrors.length === 0 && (
+              <div className="relative">
+                <details className="group">
+                <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 pr-16 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+                  <span>Raw apply log</span>
+                </summary>
+                <pre className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
+                  {applyLogs !== "" ? applyLogs : applyRawLogMessage}
+                </pre>
+                </details>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="absolute right-5 top-1.5"
+                  onClick={(): void => { setFullscreenLog("apply"); }}
+                  aria-label="Open raw apply log fullscreen"
+                >
+                  <Maximize2 className="size-4" aria-hidden="true" />
+                </Button>
+              </div>
+            )}
           </details>
           )}
 
