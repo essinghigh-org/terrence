@@ -12,7 +12,7 @@
   },
   "overrides": {
     "brace-expansion": "5.0.9",
-    "esbuild": "0.28.1"
+    "esbuild": "0.28.2"
   },
   "scripts": {
     "dev:backend": "bun run --cwd backend dev",
