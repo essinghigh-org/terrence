@@ -93,8 +93,14 @@ export class BrowserPage {
 
   constructor(options: BrowserOptions = {}) {
     this.backend = options.backend ?? (process.platform === "darwin" ? "webkit" : "chrome");
+    // GitHub-hosted Linux runners expose a small /dev/shm. Without this
+    // switch Chrome can leave the first navigation pending, which then poisons
+    // every later WebView operation with "already pending" errors.
+    const backend = this.backend === "chrome" && process.env.CI === "true"
+      ? { type: "chrome" as const, url: false as const, argv: ["--disable-dev-shm-usage"] }
+      : this.backend;
     this.webview = new Bun.WebView({
-      backend: this.backend,
+      backend,
       width: options.width ?? 1440,
       height: options.height ?? 1000,
       console: (type: string, ...args: unknown[]): void => {
