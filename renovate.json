@@ -10,11 +10,8 @@
     "enabled": true,
     "automerge": true,
     "automergeType": "pr",
-    "platformAutomerge": true,
-    "schedule": ["before 5am"]
+    "platformAutomerge": true
   },
-  "schedule": ["before 5am"],
-  "timezone": "UTC",
   "prConcurrentLimit": 10,
   "branchConcurrentLimit": 10,
   "rangeStrategy": "bump",
