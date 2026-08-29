@@ -100,9 +100,20 @@ function membershipRows(row: ExplorerInventoryCatalogRow): typeof explorerCatalo
   }));
 }
 
-export async function refreshExplorerWorkspace(workspaceId: string, rebuild = true): Promise<void> {
+type ExplorerWorkspaceData = Readonly<{
+  workspace: Readonly<typeof workspaces.$inferSelect>;
+  organization: Readonly<typeof organizations.$inferSelect> | undefined;
+  project: Readonly<typeof projects.$inferSelect> | undefined;
+  state: Readonly<typeof stateVersions.$inferSelect> | undefined;
+  run: Readonly<typeof runs.$inferSelect> | undefined;
+  assessment: Readonly<typeof assessmentResults.$inferSelect> | undefined;
+  tags: readonly Readonly<{ key: string }>[];
+  noCode: Readonly<typeof noCodeWorkspaceConfigurations.$inferSelect> | undefined;
+}>;
+
+async function loadExplorerWorkspaceData(workspaceId: string): Promise<ExplorerWorkspaceData | undefined> {
   const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
-  if (workspace === undefined) return;
+  if (workspace === undefined) return undefined;
   const [organization, project, state, run, assessment, tags, noCode] = await Promise.all([
     db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) }),
     workspace.projectId === null ? Promise.resolve(undefined) : db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) }),
@@ -112,10 +123,13 @@ export async function refreshExplorerWorkspace(workspaceId: string, rebuild = tr
     db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspace.id), columns: { key: true } }),
     db.query.noCodeWorkspaceConfigurations.findFirst({ where: eq(noCodeWorkspaceConfigurations.workspaceId, workspace.id) }),
   ]);
-  const items = stateItems(state?.jsonState ?? null);
+  return { workspace, organization, project, state, run, assessment, tags, noCode };
+}
+
+function explorerWorkspaceFields(data: ExplorerWorkspaceData, now: number): Readonly<Record<string, unknown>> {
+  const { workspace } = data;
   const repo = typeof workspace.vcsRepo === "object" && workspace.vcsRepo !== null ? workspace.vcsRepo as Record<string, unknown> : {};
-  const now = Date.now();
-  const row: typeof explorerWorkspaceInventory.$inferInsert = {
+  return {
     workspaceId: workspace.id,
     orgId: workspace.orgId,
     workspaceName: workspace.name,
@@ -124,42 +138,98 @@ export async function refreshExplorerWorkspace(workspaceId: string, rebuild = tr
     terraformVersion: workspace.terraformVersion,
     executionMode: workspace.executionMode,
     vcsRepoIdentifier: typeof repo.identifier === "string" ? repo.identifier : null,
-    sourceModuleId: noCode?.noCodeModuleId ?? null,
     projectId: workspace.projectId,
-    projectName: project?.name ?? "Default Project",
-    currentRunStatus: run?.status ?? null,
-    currentRunAppliedAt: run?.appliedAt ?? null,
-    currentRunExternalId: run?.id ?? null,
+    projectName: data.project?.name ?? "Default Project",
+  };
+}
+
+function explorerRunFields(data: ExplorerWorkspaceData): Readonly<Record<string, unknown>> {
+  return {
+    currentRunStatus: data.run?.status ?? null,
+    currentRunAppliedAt: data.run?.appliedAt ?? null,
+    currentRunExternalId: data.run?.id ?? null,
+  };
+}
+
+function explorerAssessmentDriftFields(data: ExplorerWorkspaceData): Readonly<Record<string, unknown>> {
+  return {
+    drifted: data.assessment?.drifted ?? null,
+    resourcesDrifted: data.assessment?.resourcesDrifted ?? 0,
+    resourcesUndrifted: data.assessment?.resourcesUndrifted ?? 0,
+    allChecksSucceeded: data.assessment?.allChecksSucceeded ?? null,
+  };
+}
+
+function explorerAssessmentCheckFields(data: ExplorerWorkspaceData): Readonly<Record<string, unknown>> {
+  return {
+    checksPassed: data.assessment?.checksPassed ?? 0,
+    checksFailed: data.assessment?.checksFailed ?? 0,
+    checksErrored: data.assessment?.checksErrored ?? 0,
+    checksUnknown: data.assessment?.checksUnknown ?? 0,
+  };
+}
+
+function explorerAssessmentFields(data: ExplorerWorkspaceData): Readonly<Record<string, unknown>> {
+  return { ...explorerAssessmentDriftFields(data), ...explorerAssessmentCheckFields(data) };
+}
+
+function explorerStateFields(data: ExplorerWorkspaceData, items: ReturnType<typeof stateItems>): Readonly<Record<string, unknown>> {
+  return {
     currentResourceCount: items.resources,
-    drifted: assessment?.drifted ?? null,
-    resourcesDrifted: assessment?.resourcesDrifted ?? 0,
-    resourcesUndrifted: assessment?.resourcesUndrifted ?? 0,
-    allChecksSucceeded: assessment?.allChecksSucceeded ?? null,
-    checksPassed: assessment?.checksPassed ?? 0,
-    checksFailed: assessment?.checksFailed ?? 0,
-    checksErrored: assessment?.checksErrored ?? 0,
-    checksUnknown: assessment?.checksUnknown ?? 0,
-    tags: tags.map((tag) => tag.key).sort().join(", "),
+    stateVersionTerraformVersion: data.state?.terraformVersion ?? data.workspace.terraformVersion,
+    stateSerial: data.state?.serial ?? null,
+  };
+}
+
+function explorerCatalogFields(data: ExplorerWorkspaceData, items: ReturnType<typeof stateItems>): Readonly<Record<string, unknown>> {
+  return {
+    tags: data.tags.map((tag) => tag.key).sort().join(", "),
     providers: items.providers.join(", "),
     modules: items.modules.join(", "),
     providerItems: JSON.stringify(items.providerItems),
     moduleItems: JSON.stringify(items.moduleItems),
     providerCount: items.providerItems.length,
     moduleCount: items.moduleItems.length,
-    stateVersionTerraformVersion: state?.terraformVersion ?? workspace.terraformVersion,
-    stateSerial: state?.serial ?? null,
-    updatedAt: now,
   };
+}
+
+function explorerInventoryRow(
+  data: ExplorerWorkspaceData,
+  items: ReturnType<typeof stateItems>,
+  now: number,
+): typeof explorerWorkspaceInventory.$inferInsert {
+  return {
+    ...explorerWorkspaceFields(data, now),
+    ...explorerRunFields(data),
+    ...explorerAssessmentFields(data),
+    ...explorerStateFields(data, items),
+    ...explorerCatalogFields(data, items),
+    sourceModuleId: data.noCode?.noCodeModuleId ?? null,
+    updatedAt: now,
+  } as typeof explorerWorkspaceInventory.$inferInsert;
+}
+
+async function persistExplorerInventory(
+  row: typeof explorerWorkspaceInventory.$inferInsert,
+): Promise<void> {
   await db.transaction(async (tx): Promise<void> => {
     await tx.insert(explorerWorkspaceInventory).values(row).onConflictDoUpdate({
       target: explorerWorkspaceInventory.workspaceId,
       set: row,
     });
     await tx.delete(explorerCatalogMemberships).where(eq(explorerCatalogMemberships.workspaceId, row.workspaceId));
-    const memberships = membershipRows(row);
-    await insertMemberships(tx, memberships);
+    await insertMemberships(tx, membershipRows(row));
   });
-  if (organization !== undefined && rebuild) scheduleExplorerCatalog(organization.id);
+}
+
+export async function refreshExplorerWorkspace(workspaceId: string, rebuild = true): Promise<void> {
+  const data = await loadExplorerWorkspaceData(workspaceId);
+  if (data === undefined) return;
+  const items = stateItems(data.state?.jsonState ?? null);
+  const now = Date.now();
+  const row = explorerInventoryRow(data, items, now);
+  await persistExplorerInventory(row);
+  if (data.organization !== undefined && rebuild) scheduleExplorerCatalog(data.organization.id);
 }
 
 export async function rebuildExplorerCatalog(orgId: string, context?: DurableJobContext): Promise<void> {
