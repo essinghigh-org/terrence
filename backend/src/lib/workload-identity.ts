@@ -442,6 +442,48 @@ async function environmentFor(
   return { environment, token: firstToken };
 }
 
+function workspaceProviderValues(
+  provider: CredentialProvider,
+  tag: string,
+  // ReadonlyMap exposes only the lookup surface needed by this helper.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  values: ReadonlyMap<string, string>,
+  phase: WorkspaceIdentityInput["phase"],
+): Record<string, unknown> {
+  const valueFor = (key: string): string | undefined => {
+    const prefix = `TFC_${provider.toUpperCase()}_${key}`;
+    return values.get(`${prefix}${tag === "" ? "" : `_${tag}`}`)
+      ?? values.get(`TFC_DEFAULT_${provider.toUpperCase()}_${key}`)
+      ?? (tag === "" ? undefined : values.get(prefix));
+  };
+  const providerValues: Record<string, unknown> = { audience: valueFor("WORKLOAD_IDENTITY_AUDIENCE") };
+  if (provider === "aws") providerValues["role-arn"] = valueFor("RUN_ROLE_ARN");
+  if (provider === "gcp") {
+    providerValues["service-account-email"] = valueFor("RUN_SERVICE_ACCOUNT_EMAIL");
+    providerValues["workload-provider-name"] = valueFor("WORKLOAD_PROVIDER_NAME");
+  }
+  if (provider === "azure") {
+    providerValues["client-id"] = valueFor("RUN_CLIENT_ID");
+    providerValues["tenant-id"] = valueFor("RUN_TENANT_ID");
+    providerValues["subscription-id"] = valueFor("RUN_SUBSCRIPTION_ID");
+  }
+  if (provider === "vault") {
+    providerValues.url = valueFor("ADDR");
+    providerValues["role-name"] = valueFor("RUN_ROLE");
+    providerValues.namespace = valueFor("NAMESPACE");
+    providerValues["auth-path"] = valueFor("AUTH_PATH");
+  }
+  if (provider === "hcp") {
+    const phaseResourceKey = phase === "plan" ? "PLAN_PROVIDER_RESOURCE_NAME" : "APPLY_PROVIDER_RESOURCE_NAME";
+    providerValues["provider-resource-name"] = valueFor(phaseResourceKey) ?? valueFor("RUN_PROVIDER_RESOURCE_NAME");
+    providerValues["plan-provider-resource-name"] = valueFor("PLAN_PROVIDER_RESOURCE_NAME");
+    providerValues["apply-provider-resource-name"] = valueFor("APPLY_PROVIDER_RESOURCE_NAME");
+    providerValues["run-provider-resource-name"] = valueFor("RUN_PROVIDER_RESOURCE_NAME");
+    providerValues.audience = providerValues.audience ?? providerValues["provider-resource-name"];
+  }
+  return providerValues;
+}
+
 export async function moduleTestIdentityEnvironment(
   input: Omit<ModuleTestIdentityInput, "audience">,
   configuration: CredentialConfiguration,
@@ -466,39 +508,9 @@ export async function workspaceIdentityEnvironment(
       .map(([key]) => key === prefix ? "" : key.slice(prefix.length + 1))
       .filter((tag, index, tags) => tags.indexOf(tag) === index);
   };
-  const valueFor = (provider: CredentialProvider, key: string, tag: string): string | undefined => {
-    const prefix = `TFC_${provider.toUpperCase()}_${key}`;
-    return values.get(`${prefix}${tag === "" ? "" : `_${tag}`}`)
-      ?? values.get(`TFC_DEFAULT_${provider.toUpperCase()}_${key}`)
-      ?? (tag === "" ? undefined : values.get(prefix));
-  };
   for (const provider of ["aws", "gcp", "azure", "vault", "hcp", "kubernetes"] as const) {
     for (const tag of providerTags(provider)) {
-      const providerValues: Record<string, unknown> = { audience: valueFor(provider, "WORKLOAD_IDENTITY_AUDIENCE", tag) };
-      if (provider === "aws") providerValues["role-arn"] = valueFor(provider, "RUN_ROLE_ARN", tag);
-      if (provider === "gcp") {
-        providerValues["service-account-email"] = valueFor(provider, "RUN_SERVICE_ACCOUNT_EMAIL", tag);
-        providerValues["workload-provider-name"] = valueFor(provider, "WORKLOAD_PROVIDER_NAME", tag);
-      }
-      if (provider === "azure") {
-        providerValues["client-id"] = valueFor(provider, "RUN_CLIENT_ID", tag);
-        providerValues["tenant-id"] = valueFor(provider, "RUN_TENANT_ID", tag);
-        providerValues["subscription-id"] = valueFor(provider, "RUN_SUBSCRIPTION_ID", tag);
-      }
-      if (provider === "vault") {
-        providerValues.url = valueFor(provider, "ADDR", tag);
-        providerValues["role-name"] = valueFor(provider, "RUN_ROLE", tag);
-        providerValues.namespace = valueFor(provider, "NAMESPACE", tag);
-        providerValues["auth-path"] = valueFor(provider, "AUTH_PATH", tag);
-      }
-      if (provider === "hcp") {
-        const phaseResourceKey = input.phase === "plan" ? "PLAN_PROVIDER_RESOURCE_NAME" : "APPLY_PROVIDER_RESOURCE_NAME";
-        providerValues["provider-resource-name"] = valueFor(provider, phaseResourceKey, tag) ?? valueFor(provider, "RUN_PROVIDER_RESOURCE_NAME", tag);
-        providerValues["plan-provider-resource-name"] = valueFor(provider, "PLAN_PROVIDER_RESOURCE_NAME", tag);
-        providerValues["apply-provider-resource-name"] = valueFor(provider, "APPLY_PROVIDER_RESOURCE_NAME", tag);
-        providerValues["run-provider-resource-name"] = valueFor(provider, "RUN_PROVIDER_RESOURCE_NAME", tag);
-        providerValues.audience = providerValues.audience ?? providerValues["provider-resource-name"];
-      }
+      const providerValues = workspaceProviderValues(provider, tag, values, input.phase);
       providers.push({ provider, tag, values: providerValues });
     }
   }
