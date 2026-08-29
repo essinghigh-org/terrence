@@ -25,7 +25,7 @@
     "test:browser": "bun run --cwd frontend test:browser",
     "test:browser:axe": "bun run --cwd frontend test:browser:axe",
     "test": "bun run test:backend && bun run test:frontend",
-    "test:changed": "bun test --changed=master --max-concurrency=1",
+    "test:changed": "bun test --changed=master --max-concurrency=1 --no-orphans",
     "lint": "eslint .",
     "lint:budget": "bun scripts/lint-budget.ts",
     "lint:fix": "eslint . --fix",
