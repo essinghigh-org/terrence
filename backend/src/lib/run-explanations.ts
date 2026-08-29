@@ -185,23 +185,25 @@ export function upstreamRequest(settings: Readonly<Record<string, unknown>>, pro
   });
 }
 
+function reasoningFromMessage(message: Readonly<Record<string, unknown>> | undefined): string {
+  const reasoningContent = message?.reasoning_content;
+  const reasoning = message?.reasoning;
+  if (typeof reasoningContent === "string" && reasoningContent !== "") return reasoningContent;
+  if (typeof reasoning === "string" && reasoning !== "") return reasoning;
+  if (typeof reasoning === "object" && reasoning !== null) {
+    const raw = JSON.stringify(reasoning);
+    if (raw !== undefined && raw !== "") return raw;
+  }
+  return "";
+}
+
 /** Non-streaming completion parse: answer content plus transient reasoning. */
 export function parseCompletionBody(parsed: unknown): CompletionParts {
   const choices = (parsed as Readonly<{ choices?: readonly Readonly<{ message?: Readonly<Record<string, unknown>> }>[] }>)?.choices;
   const message = choices?.[0]?.message;
   const contentValue = message?.content;
   let content = typeof contentValue === "string" ? contentValue : "";
-  let thinking = "";
-  const reasoningContent = message?.reasoning_content;
-  const reasoning = message?.reasoning;
-  if (typeof reasoningContent === "string" && reasoningContent !== "") {
-    thinking = reasoningContent;
-  } else if (typeof reasoning === "string" && reasoning !== "") {
-    thinking = reasoning;
-  } else if (typeof reasoning === "object" && reasoning !== null) {
-    const raw = JSON.stringify(reasoning);
-    if (raw !== undefined && raw !== "") thinking = raw;
-  }
+  let thinking = reasoningFromMessage(message);
   const split = splitInlineThinking(content);
   content = split.content;
   if (split.thinking !== "") thinking = thinking === "" ? split.thinking : `${thinking}\n${split.thinking}`;
