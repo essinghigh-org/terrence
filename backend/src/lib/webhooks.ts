@@ -941,146 +941,222 @@ async function reportUntriggeredSpeculativeStatus(
   }
 }
 
-export async function reportRunVcsStatus(runId: string, runStatus: string): Promise<void> {
-  let state = vcsStatus(runStatus);
-  if (state === undefined) return;
-  try {
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-    if (run?.configurationVersionId === null || run?.configurationVersionId === undefined) return;
-    const [workspace, configuration] = await Promise.all([
-      db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) }),
-      db.query.configurationVersions.findFirst({
-        where: eq(configurationVersions.id, run.configurationVersionId),
+type VcsCommitState = "pending" | "success" | "failure";
+
+type RunVcsStatusContext = Readonly<{
+  runId: string;
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>;
+  repoFullName: string;
+  commitSha: string;
+  provider: VcsProvider;
+  credentials: ProviderCredentials;
+  baseContext: string;
+  organization: Readonly<{ name: string; aggregatedCommitStatusEnabled: boolean | null }> | undefined;
+  targetUrl: string | undefined;
+}>;
+
+type GithubStatusDetails = Readonly<{
+  state: VcsCommitState;
+  context: string;
+  description: string;
+}>;
+
+function vcsProviderFromSource(source: string | null): VcsProvider | undefined {
+  if (source === "github" || source === "gitlab" || source === "bitbucket") return source;
+  return undefined;
+}
+
+type RunVcsStatusRecords = Readonly<{
+  workspace: DeepReadonly<typeof workspaces.$inferSelect> | undefined;
+  configuration: Readonly<typeof configurationVersions.$inferSelect> | undefined;
+}>;
+
+type RunVcsStatusTarget = Readonly<{
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>;
+  repoFullName: string;
+  commitSha: string;
+  provider: VcsProvider;
+}>;
+
+async function loadRunVcsStatusRecords(runId: string): Promise<RunVcsStatusRecords | undefined> {
+  const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+  if (run?.configurationVersionId === null || run?.configurationVersionId === undefined) return undefined;
+  const [workspace, configuration] = await Promise.all([
+    db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) }),
+    db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, run.configurationVersionId) }),
+  ]);
+  return { workspace, configuration };
+}
+
+function runVcsStatusTarget(records: RunVcsStatusRecords): RunVcsStatusTarget | undefined {
+  const repoFullName = records.workspace?.vcsRepo?.identifier;
+  const commitSha = records.configuration?.ingressAttributes?.commitSha;
+  if (records.workspace === undefined || records.configuration === undefined || typeof repoFullName !== "string" || typeof commitSha !== "string") return undefined;
+  const provider = vcsProviderFromSource(records.configuration.source);
+  if (provider === undefined || !validRepository(repoFullName, provider) || !COMMIT_SHA_PATTERN.test(commitSha)) return undefined;
+  return { workspace: records.workspace, repoFullName, commitSha, provider };
+}
+
+async function runVcsStatusCredentials(target: RunVcsStatusTarget): Promise<ProviderCredentials | undefined> {
+  return target.provider === "github"
+    ? githubCredentials(target.workspace)
+    : oauthProviderCredentials(target.workspace, target.provider);
+}
+
+function runVcsStatusTargetUrl(
+  runId: string,
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  organization: Readonly<{ name: string }> | undefined,
+): string | undefined {
+  const publicUrl = process.env.PUBLIC_URL?.replace(/\/$/, "");
+  return publicUrl === undefined || organization === undefined
+    ? undefined
+    : `${publicUrl}/app/${encodeURIComponent(organization.name)}/workspaces/${encodeURIComponent(workspace.name)}/runs/${encodeURIComponent(runId)}`;
+}
+
+async function loadRunVcsStatusContext(runId: string): Promise<RunVcsStatusContext | undefined> {
+  const records = await loadRunVcsStatusRecords(runId);
+  if (records === undefined) return undefined;
+  const target = runVcsStatusTarget(records);
+  if (target === undefined) return undefined;
+  const credentials = await runVcsStatusCredentials(target);
+  if (credentials === undefined) return undefined;
+  const organization = await db.query.organizations.findFirst({
+    where: eq(organizations.id, target.workspace.orgId),
+    columns: { name: true, aggregatedCommitStatusEnabled: true },
+  });
+  const baseContext = `terrence/${target.workspace.name}`.slice(0, 100);
+  const targetUrl = runVcsStatusTargetUrl(runId, target.workspace, organization);
+  return { runId, ...target, credentials, baseContext, organization, targetUrl };
+}
+
+async function githubRunsForCommit(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  repoFullName: string,
+  commitSha: string,
+): Promise<readonly (typeof runs.$inferSelect)[]> {
+  const relatedWorkspaces = await db.query.workspaces.findMany({
+    where: and(
+      eq(workspaces.orgId, workspace.orgId),
+      sql`${jsonExtract(workspaces.vcsRepo, '$.identifier')} = ${repoFullName}`,
+    ),
+  });
+  const relatedWorkspaceIds = relatedWorkspaces.map((candidate): string => candidate.id);
+  if (relatedWorkspaceIds.length === 0) return [];
+  const relatedRuns = await db.query.runs.findMany({ where: inArray(runs.workspaceId, relatedWorkspaceIds) });
+  const configurationIds = relatedRuns
+    .map((relatedRun): string | null => relatedRun.configurationVersionId)
+    .filter((id): id is string => id !== null);
+  if (configurationIds.length === 0) return [];
+  const relatedConfigurations = await db.query.configurationVersions.findMany({ where: inArray(configurationVersions.id, configurationIds) });
+  const configurationsById = new Map(relatedConfigurations.map((item): [string, typeof item] => [item.id, item]));
+  return relatedRuns.filter((relatedRun): boolean => {
+    const configuration = configurationsById.get(relatedRun.configurationVersionId ?? "");
+    return configuration?.source === "github" && configuration.ingressAttributes?.commitSha === commitSha;
+  });
+}
+
+function latestGithubRunsByWorkspace(
+  relatedRuns: readonly (typeof runs.$inferSelect)[],
+): readonly (typeof runs.$inferSelect)[] {
+  const latestPerWorkspace = new Map<string, typeof runs.$inferSelect>();
+  for (const candidate of [...relatedRuns].sort((a, b): number => b.createdAt - a.createdAt)) {
+    if (!latestPerWorkspace.has(candidate.workspaceId)) latestPerWorkspace.set(candidate.workspaceId, candidate);
+  }
+  return [...latestPerWorkspace.values()];
+}
+
+async function aggregatedGithubStatus(context: RunVcsStatusContext, initialState: VcsCommitState, runStatus: string): Promise<GithubStatusDetails> {
+  const base = { state: initialState, context: context.baseContext, description: `Terraform run ${runStatus}` };
+  if (context.organization?.aggregatedCommitStatusEnabled === false) return base;
+  const relatedRuns = latestGithubRunsByWorkspace(await githubRunsForCommit(context.workspace, context.repoFullName, context.commitSha));
+  const relatedStates = relatedRuns
+    .filter((relatedRun): boolean => !(["discarded", "canceled", "force_canceled"] as readonly string[]).includes(relatedRun.status))
+    .map((relatedRun): VcsCommitState | undefined => vcsStatus(relatedRun.status))
+    .filter((value): value is VcsCommitState => value !== undefined);
+  const aggregateState: VcsCommitState = relatedStates.some((value): boolean => value === "failure")
+    ? "failure"
+    : relatedStates.length > 0 && relatedStates.every((value): boolean => value === "success")
+      ? "success"
+      : "pending";
+  return {
+    state: aggregateState,
+    context: "terrence",
+    description: `${relatedStates.length} workspace run${relatedStates.length === 1 ? "" : "s"}: ${aggregateState}`,
+  };
+}
+
+async function postGithubStatus(context: RunVcsStatusContext, status: GithubStatusDetails): Promise<Response> {
+  const url = `${context.credentials.apiUrl}/repos/${context.repoFullName.split("/").map(encodeURIComponent).join("/")}/statuses/${encodeURIComponent(context.commitSha)}`;
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: "Bearer " + context.credentials.token,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ state: status.state, context: status.context, description: status.description, ...(context.targetUrl === undefined ? {} : { target_url: context.targetUrl }) }),
+    signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+  });
+}
+
+async function postGitlabStatus(context: RunVcsStatusContext, state: VcsCommitState): Promise<Response> {
+  return fetch(
+    `${context.credentials.apiUrl}/projects/${encodeURIComponent(context.repoFullName)}/statuses/${encodeURIComponent(context.commitSha)}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + context.credentials.token,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        state: state === "failure" ? "failed" : state,
+        name: context.baseContext,
       }),
-    ]);
-    const repoFullName = workspace?.vcsRepo?.identifier;
-    const commitSha = configuration?.ingressAttributes?.commitSha;
-    if (workspace === undefined || configuration === undefined || repoFullName === undefined || commitSha === undefined) return;
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    },
+  );
+}
 
-    const source = configuration.source;
-    const provider: VcsProvider | undefined = source === "github" || source === "gitlab" || source === "bitbucket"
-      ? source
-      : undefined;
-    if (provider === undefined || !validRepository(repoFullName, provider) || !COMMIT_SHA_PATTERN.test(commitSha)) return;
-    const credentials = provider === "github"
-      ? await githubCredentials(workspace)
-      : await oauthProviderCredentials(workspace, provider);
-    if (credentials === undefined) return;
+async function postBitbucketStatus(context: RunVcsStatusContext, state: VcsCommitState, runStatus: string): Promise<Response> {
+  const bitbucketState = state === "pending" ? "INPROGRESS" : state === "success" ? "SUCCESSFUL" : "FAILED";
+  return fetch(
+    `${context.credentials.apiUrl}/repositories/${context.repoFullName.split("/").map(encodeURIComponent).join("/")}/commit/${encodeURIComponent(context.commitSha)}/statuses/build`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + context.credentials.token,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        state: bitbucketState,
+        key: `terrence-${context.runId}`.slice(0, 40),
+        name: context.baseContext,
+        description: `Terraform run ${runStatus}`,
+      }),
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    },
+  );
+}
 
-    const context = `terrence/${workspace.name}`.slice(0, 100);
-    const organization = await db.query.organizations.findFirst({
-      where: eq(organizations.id, workspace.orgId),
-      columns: { name: true, aggregatedCommitStatusEnabled: true },
-    });
-    const publicUrl = process.env.PUBLIC_URL?.replace(/\/$/, "");
-    const targetUrl = publicUrl === undefined || organization === undefined
-      ? undefined
-      : `${publicUrl}/app/${encodeURIComponent(organization.name)}/workspaces/${encodeURIComponent(workspace.name)}/runs/${encodeURIComponent(runId)}`;
-    const description = `Terraform run ${runStatus}`;
-    let response: Response;
-    if (provider === "github") {
-      let githubContext = context;
-      let githubDescription = description;
-      if (organization?.aggregatedCommitStatusEnabled !== false) {
-        const relatedWorkspaces = await db.query.workspaces.findMany({
-          where: and(
-            eq(workspaces.orgId, workspace.orgId),
-            sql`${jsonExtract(workspaces.vcsRepo, '$.identifier')} = ${repoFullName}`,
-          ),
-        });
-        const relatedWorkspaceIds = relatedWorkspaces.map((candidate): string => candidate.id);
-        const relatedRuns = relatedWorkspaceIds.length === 0
-          ? []
-          : await db.query.runs.findMany({ where: inArray(runs.workspaceId, relatedWorkspaceIds) });
-        const configurationIds = relatedRuns
-          .map((relatedRun): string | null => relatedRun.configurationVersionId)
-          .filter((id): id is string => id !== null);
-        const relatedConfigurations = configurationIds.length === 0
-          ? []
-          : await db.query.configurationVersions.findMany({ where: inArray(configurationVersions.id, configurationIds) });
-        const configurationsById = new Map(relatedConfigurations.map((item): [string, typeof item] => [item.id, item]));
-        // For the aggregated status, consider only the latest run per workspace
-        // for this commit (multiple queued/retried runs share the same SHA, e.g.
-        // a branch run superseded by master). Picking the newest createdAt
-        // avoids the "4 workspace runs: failure" false positive when a discarded
-        // intermediate run exists alongside a later successful one.
-        const runsForCommit = relatedRuns.filter(
-          (relatedRun): boolean => {
-            const configuration = configurationsById.get(relatedRun.configurationVersionId ?? "");
-            return configuration?.source === "github"
-              && configuration.ingressAttributes?.commitSha === commitSha;
-          },
-        );
-        const latestPerWorkspace = new Map<string, typeof runsForCommit[number]>();
-        for (const candidate of [...runsForCommit].sort((a, b): number => b.createdAt - a.createdAt)) {
-          if (!latestPerWorkspace.has(candidate.workspaceId)) {
-            latestPerWorkspace.set(candidate.workspaceId, candidate);
-          }
-        }
-        const relatedStates = [...latestPerWorkspace.values()]
-          .filter((relatedRun): boolean => !(["discarded", "canceled", "force_canceled"] as readonly string[]).includes(relatedRun.status))
-          .map((relatedRun): "pending" | "success" | "failure" | undefined => vcsStatus(relatedRun.status))
-          .filter((value): value is "pending" | "success" | "failure" => value !== undefined);
-        const aggregateState = relatedStates.some((value): boolean => value === "failure")
-          ? "failure"
-          : relatedStates.length > 0 && relatedStates.every((value): boolean => value === "success")
-            ? "success"
-            : "pending";
-        state = aggregateState;
-        githubContext = "terrence";
-        githubDescription = `${relatedStates.length} workspace run${relatedStates.length === 1 ? "" : "s"}: ${aggregateState}`;
-      }
-      response = await fetch(
-        `${credentials.apiUrl}/repos/${repoFullName.split("/").map(encodeURIComponent).join("/")}/statuses/${encodeURIComponent(commitSha)}`,
-        {
-          method: "POST",
-          headers: {
-            Accept: "application/vnd.github+json",
-            Authorization: `Bearer ${credentials.token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ state, context: githubContext, description: githubDescription, ...(targetUrl === undefined ? {} : { target_url: targetUrl }) }),
-          signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-        },
-      );
-    } else if (provider === "gitlab") {
-      response = await fetch(
-        `${credentials.apiUrl}/projects/${encodeURIComponent(repoFullName)}/statuses/${encodeURIComponent(commitSha)}`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${credentials.token}`,
-            "Content-Type": "application/x-www-form-urlencoded",
-          },
-          body: new URLSearchParams({
-            state: state === "failure" ? "failed" : state,
-            name: context,
-          }),
-          signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-        },
-      );
-    } else {
-      const bitbucketState = state === "pending" ? "INPROGRESS" : state === "success" ? "SUCCESSFUL" : "FAILED";
-      response = await fetch(
-        `${credentials.apiUrl}/repositories/${repoFullName.split("/").map(encodeURIComponent).join("/")}/commit/${encodeURIComponent(commitSha)}/statuses/build`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${credentials.token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            state: bitbucketState,
-            key: `terrence-${runId}`.slice(0, 40),
-            name: context,
-            description: `Terraform run ${runStatus}`,
-          }),
-          signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-        },
-      );
-    }
+async function postVcsStatus(context: RunVcsStatusContext, status: GithubStatusDetails, runStatus: string): Promise<Response> {
+  if (context.provider === "github") return postGithubStatus(context, status);
+  if (context.provider === "gitlab") return postGitlabStatus(context, status.state);
+  return postBitbucketStatus(context, status.state, runStatus);
+}
+
+export async function reportRunVcsStatus(runId: string, runStatus: string): Promise<void> {
+  const initialState = vcsStatus(runStatus);
+  if (initialState === undefined) return;
+  try {
+    const context = await loadRunVcsStatusContext(runId);
+    if (context === undefined) return;
+    const status = context.provider === "github"
+      ? await aggregatedGithubStatus(context, initialState, runStatus)
+      : { state: initialState, context: context.baseContext, description: `Terraform run ${runStatus}` };
+    const response = await postVcsStatus(context, status, runStatus);
     if (!response.ok) {
-      console.error(`[terrence] Failed to report ${provider} commit status for run ${runId}: ${String(response.status)}`);
+      console.error(`[terrence] Failed to report ${context.provider} commit status for run ${runId}: ${String(response.status)}`);
     }
   } catch (error) {
     console.error(`[terrence] Failed to report VCS commit status for run ${runId}:`, error);
