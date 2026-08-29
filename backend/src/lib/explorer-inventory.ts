@@ -250,6 +250,11 @@ export async function runExplorerCatalogJob(job: Job, context: DurableJobContext
   else await rebuildExplorerCatalog(orgId, context);
 }
 
+async function rebuildOrQueueExplorerCatalog(orgId: string, workspaceTotal: number): Promise<void> {
+  if (workspaceTotal <= 1000) await rebuildExplorerCatalog(orgId);
+  else await enqueueDurableJob("explorer-catalog", { orgId }, { dedupeKey: `catalog:${orgId}` });
+}
+
 export async function ensureExplorerInventory(orgId: string): Promise<void> {
   const [workspaceCount, inventoryCount, membershipCount] = await Promise.all([
     db.select({ total: count() }).from(workspaces).where(eq(workspaces.orgId, orgId)),
@@ -259,8 +264,7 @@ export async function ensureExplorerInventory(orgId: string): Promise<void> {
   const workspaceTotal = workspaceCount[0]?.total ?? 0;
   if (workspaceTotal === (inventoryCount[0]?.total ?? 0) && (workspaceTotal === 0 || (membershipCount[0]?.total ?? 0) > 0)) return;
   if (workspaceTotal === (inventoryCount[0]?.total ?? 0)) {
-    if (workspaceTotal <= 1000) await rebuildExplorerCatalog(orgId);
-    else await enqueueDurableJob("explorer-catalog", { orgId }, { dedupeKey: `catalog:${orgId}` });
+    await rebuildOrQueueExplorerCatalog(orgId, workspaceTotal);
     return;
   }
   if (workspaceTotal <= 1000) {
