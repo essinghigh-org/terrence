@@ -155,58 +155,155 @@ const CONSTRAINT_WORDS = new Set([
   "CONSTRAINT", "AUTOINCREMENT", "GENERATED", "ON", "DEFERRABLE", "MATCH",
 ]);
 
-function normalizeType(raw: string): string {
-  const cleaned = raw.toUpperCase().replace(/\s+/g, " ").trim().replace(/\(\d+(?:,\s*\d+)?\)/, "");
-  if (cleaned === "SERIAL" || cleaned === "BIGSERIAL") return "SERIAL";
-  if (/^(?:UNSIGNED\s+)?(?:BIG\s+)?INT(?:EGER)?$/.test(cleaned) || cleaned === "SMALLINT" || cleaned === "TINYINT" || cleaned === "MEDIUMINT") {
-    return "INTEGER";
-  }
-  if (cleaned === "TEXT" || cleaned === "CLOB" || /^CHAR(?:ACTER)?(?: VARYING)?$/.test(cleaned) || cleaned === "JSON" || cleaned === "JSONB" || cleaned === "UUID" || cleaned === "STRING") {
-    return "TEXT";
-  }
-  if (cleaned === "REAL" || cleaned === "FLOAT" || cleaned === "DOUBLE" || cleaned === "DOUBLE PRECISION") return "REAL";
-  if (cleaned === "NUMERIC" || cleaned === "DECIMAL" || cleaned === "DEC") return "NUMERIC";
-  if (cleaned === "BLOB" || cleaned === "") return "BLOB";
-  if (cleaned === "BOOLEAN" || cleaned === "BOOL") return "BOOLEAN";
-  if (/^(?:DATETIME|TIMESTAMP|DATE|TIME)(?:\(.*\))?$/.test(cleaned)) return "DATETIME";
-  // SQLite affinity fallback for exotic declared types.
+function isSerialType(cleaned: string): boolean {
+  return cleaned === "SERIAL" || cleaned === "BIGSERIAL";
+}
+
+function isIntegerDeclaredType(cleaned: string): boolean {
+  if (/^(?:UNSIGNED\s+)?(?:BIG\s+)?INT(?:EGER)?$/.test(cleaned)) return true;
+  return cleaned === "SMALLINT" || cleaned === "TINYINT" || cleaned === "MEDIUMINT";
+}
+
+function isTextDeclaredType(cleaned: string): boolean {
+  if (cleaned === "TEXT" || cleaned === "CLOB") return true;
+  if (cleaned === "JSON" || cleaned === "JSONB") return true;
+  if (cleaned === "UUID" || cleaned === "STRING") return true;
+  return /^CHAR(?:ACTER)?(?: VARYING)?$/.test(cleaned);
+}
+
+function isRealDeclaredType(cleaned: string): boolean {
+  return cleaned === "REAL" || cleaned === "FLOAT" || cleaned === "DOUBLE" || cleaned === "DOUBLE PRECISION";
+}
+
+function isNumericDeclaredType(cleaned: string): boolean {
+  return cleaned === "NUMERIC" || cleaned === "DECIMAL" || cleaned === "DEC";
+}
+
+function isBlobDeclaredType(cleaned: string): boolean {
+  return cleaned === "BLOB" || cleaned === "";
+}
+
+function isBooleanDeclaredType(cleaned: string): boolean {
+  return cleaned === "BOOLEAN" || cleaned === "BOOL";
+}
+
+function isDateTimeDeclaredType(cleaned: string): boolean {
+  return /^(?:DATETIME|TIMESTAMP|DATE|TIME)(?:\(.*\))?$/.test(cleaned);
+}
+
+function affinityFallback(cleaned: string): string | null {
   if (cleaned.includes('INT')) return "INTEGER";
   if (/CHAR|CLOB|TEXT/.test(cleaned)) return "TEXT";
   if (/REAL|FLOA|DOUB/.test(cleaned)) return "REAL";
   if (cleaned.includes('BLOB')) return "BLOB";
+  return null;
+}
+
+function normalizeType(raw: string): string {
+  const cleaned = raw.toUpperCase().replace(/\s+/g, " ").trim().replace(/\(\d+(?:,\s*\d+)?\)/, "");
+  if (isSerialType(cleaned)) return "SERIAL";
+  if (isIntegerDeclaredType(cleaned)) return "INTEGER";
+  if (isTextDeclaredType(cleaned)) return "TEXT";
+  if (isRealDeclaredType(cleaned)) return "REAL";
+  if (isNumericDeclaredType(cleaned)) return "NUMERIC";
+  if (isBlobDeclaredType(cleaned)) return "BLOB";
+  if (isBooleanDeclaredType(cleaned)) return "BOOLEAN";
+  if (isDateTimeDeclaredType(cleaned)) return "DATETIME";
+  const affinity = affinityFallback(cleaned);
+  if (affinity !== null) return affinity;
   return "NUMERIC";
 }
 
-/** Translate a SQLite DEFAULT expression to PostgreSQL, or null when unsupported. */
-export function translateDefault(raw: string): { sql: string | null; dropped: boolean } {
-  const expr = raw.trim();
+function isValidSingleQuotedLiteral(expr: string): boolean {
+  let quote = false;
+  for (let i = 0; i < expr.length; i += 1) {
+    const ch = expr[i] ?? "";
+    if (ch === "'") {
+      if (expr[i + 1] === "'") {
+        i += 1;
+        quote = false;
+        continue;
+      }
+      quote = !quote;
+    }
+  }
+  return !quote;
+}
+
+function translateDefaultLiteral(expr: string, upper: string): { sql: string | null; dropped: boolean } | null {
   if (expr === "") return { sql: null, dropped: false };
-  const upper = expr.toUpperCase();
   if (upper === "NULL") return { sql: "NULL", dropped: false };
   if (upper === "CURRENT_TIMESTAMP" || upper === "CURRENT_DATE" || upper === "CURRENT_TIME") {
     return { sql: upper, dropped: false };
   }
   if (upper === "TRUE" || upper === "FALSE") return { sql: upper, dropped: false };
   if (/^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(expr)) return { sql: expr, dropped: false };
+  return null;
+}
+
+/** Translate a SQLite DEFAULT expression to PostgreSQL, or null when unsupported. */
+export function translateDefault(raw: string): { sql: string | null; dropped: boolean } {
+  const expr = raw.trim();
+  const upper = expr.toUpperCase();
+  const literal = translateDefaultLiteral(expr, upper);
+  if (literal !== null) return literal;
   if (expr.startsWith("'")) {
-    // Single-quoted literal: validate balanced quotes; both dialects escape with ''.
-    let quote = false;
-    for (let i = 0; i < expr.length; i += 1) {
-      const ch = expr[i] ?? "";
-      if (ch === "'") {
-        if (expr[i + 1] === "'") {
-          i += 1;
-          quote = false;
-          continue;
-        }
-        quote = !quote;
-      }
-    }
-    if (!quote) return { sql: expr, dropped: false };
+    if (isValidSingleQuotedLiteral(expr)) return { sql: expr, dropped: false };
     return { sql: null, dropped: true };
   }
   if (/^x'[0-9a-fA-F]*'$/.test(expr)) return { sql: expr, dropped: false };
   return { sql: null, dropped: true };
+}
+
+function parseReferenceColumns(sql: string, open: number, close: number): string[] | null {
+  const cols: string[] = [];
+  for (const raw of sql.slice(open + 1, close).split(",")) {
+    const trimmed = raw.trim();
+    if (trimmed === "") continue;
+    const parsed = parseIdentifier(trimmed, 0);
+    if (parsed === null || parsed.end !== trimmed.length) return null;
+    cols.push(parsed.name);
+  }
+  return cols;
+}
+
+function buildReferenceColumns(cols: string[]): string[] | null {
+  const refColumns: string[] = [];
+  for (const col of cols) {
+    const parsed = parseIdentifier(col, 0);
+    if (parsed === null || parsed.end !== col.length) return null;
+    refColumns.push(parsed.name);
+  }
+  return refColumns;
+}
+
+function mapReferenceActionValue(value: string): string | null {
+  if (value === "no action") return null;
+  if (value === "cascade") return "CASCADE";
+  if (value === "set null") return "SET NULL";
+  if (value === "set default") return "SET DEFAULT";
+  return "RESTRICT";
+}
+
+function parseReferenceActions(sql: string, start: number): { onUpdate: string | null; onDelete: string | null; end: number } {
+  let pos = start;
+  let onUpdate: string | null = null;
+  let onDelete: string | null = null;
+  for (;;) {
+    const action = /^ON\s+(UPDATE|DELETE)\s+(NO\s+ACTION|CASCADE|SET\s+NULL|SET\s+DEFAULT|RESTRICT)/i.exec(sql.slice(pos));
+    if (action === null) break;
+    const kind = action[1]?.toLowerCase() ?? "";
+    const value = action[2]?.toLowerCase().replace(/\s+/g, " ") ?? "";
+    const mapped = mapReferenceActionValue(value);
+    if (kind === "update") onUpdate = mapped;
+    else onDelete = mapped;
+    pos += action[0].length;
+    const matchClause = /^MATCH\s+\w+/i.exec(sql.slice(pos));
+    if (matchClause !== null) pos += matchClause[0].length;
+    const deferrable = /^(?:NOT\s+)?DEFERRABLE(?:\s+INITIALLY\s+(?:DEFERRED|IMMEDIATE))?/i.exec(sql.slice(pos));
+    if (deferrable !== null) pos += deferrable[0].length;
+  }
+  return { onUpdate, onDelete, end: pos };
 }
 
 function parseReferenceClause(sql: string, start: number): { fk: ForeignKeyDef; end: number } | null {
@@ -222,39 +319,107 @@ function parseReferenceClause(sql: string, start: number): { fk: ForeignKeyDef; 
   if ((sql[pos] ?? "") !== "(") return null;
   const close = scanBalanced(sql, pos);
   if (close < 0) return null;
-  const cols: string[] = [];
-  for (const raw of sql.slice(pos + 1, close).split(",")) {
-    const trimmed = raw.trim();
-    if (trimmed === "") continue;
-    const parsed = parseIdentifier(trimmed, 0);
-    if (parsed === null || parsed.end !== trimmed.length) return null;
-    cols.push(parsed.name);
+  const cols = parseReferenceColumns(sql, pos, close);
+  if (cols === null) return null;
+  const refColumns = buildReferenceColumns(cols);
+  if (refColumns === null) return null;
+  const actions = parseReferenceActions(sql, close + 1);
+  return { fk: { columns: cols.map((c): string => c.trim()), table: table.name, refColumns, onUpdate: actions.onUpdate, onDelete: actions.onDelete }, end: actions.end };
+}
+
+function scanDefaultExprEnd(sql: string, start: number): number {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = start; i < sql.length; i += 1) {
+    const ch = sql[i] ?? "";
+    if (quote !== null) {
+      if (ch === quote) {
+        if (sql[i + 1] === quote) i += 1;
+        else quote = null;
+      }
+      continue;
+    }
+    if (ch === "'") { quote = ch; continue; }
+    if (ch === "(") { depth += 1; continue; }
+    if (ch === ")") {
+      depth -= 1;
+      if (depth < 0) return i;
+      continue;
+    }
+    if (depth === 0 && /[A-Za-z_]/.test(ch)) {
+      const wordMatch = /^[A-Za-z_][A-Za-z0-9_]*/.exec(sql.slice(i));
+      const word = wordMatch?.[0] ?? "";
+      if (CONSTRAINT_WORDS.has(word.toUpperCase())) return i;
+    }
   }
-  const refColumns: string[] = [];
-  for (const col of cols) {
-    const parsed = parseIdentifier(col, 0);
-    if (parsed === null || parsed.end !== col.length) return null;
-    refColumns.push(parsed.name);
+  return sql.length;
+}
+
+function tryParsePrimaryKey(rest: string, result: { primaryKey: boolean }): boolean {
+  const primary = /^PRIMARY\s+KEY(?:\s+(?:ASC|DESC))?/i.exec(rest);
+  if (primary === null) return false;
+  result.primaryKey = true;
+  return true;
+}
+
+function tryParseNotNull(rest: string, result: { notNull: boolean }): boolean {
+  if (/^NOT\s+NULL/i.exec(rest) === null) return false;
+  result.notNull = true;
+  return true;
+}
+
+function tryParseUnique(rest: string, result: { unique: boolean }): boolean {
+  if (/^UNIQUE/i.exec(rest) === null) return false;
+  result.unique = true;
+  return true;
+}
+
+function tryParseAutoincrement(rest: string): boolean {
+  return /^AUTOINCREMENT/i.exec(rest) !== null;
+}
+
+function tryParseCollate(sql: string, pos: number, result: { collate: string | null }): number | null {
+  const collate = /^COLLATE\s+/i.exec(sql.slice(pos));
+  if (collate === null) return null;
+  const ident = parseIdentifier(sql, pos + collate[0].length);
+  if (ident !== null) {
+    result.collate = ident.name;
+    return ident.end;
   }
-  pos = close + 1;
-  let onUpdate: string | null = null;
-  let onDelete: string | null = null;
-  for (;;) {
-    const action = /^ON\s+(UPDATE|DELETE)\s+(NO\s+ACTION|CASCADE|SET\s+NULL|SET\s+DEFAULT|RESTRICT)/i.exec(sql.slice(pos));
-    if (action === null) break;
-    const kind = action[1]?.toLowerCase() ?? "";
-    const value = action[2]?.toLowerCase().replace(/\s+/g, " ") ?? "";
-    const mapped = value === "no action" ? null : value === "cascade" ? "CASCADE" : value === "set null" ? "SET NULL" : value === "set default" ? "SET DEFAULT" : "RESTRICT";
-    if (kind === "update") onUpdate = mapped;
-    else onDelete = mapped;
-    pos += action[0].length;
-    // Skip MATCH / DEFERRABLE trailing clauses.
-    const matchClause = /^MATCH\s+\w+/i.exec(sql.slice(pos));
-    if (matchClause !== null) pos += matchClause[0].length;
-    const deferrable = /^(?:NOT\s+)?DEFERRABLE(?:\s+INITIALLY\s+(?:DEFERRED|IMMEDIATE))?/i.exec(sql.slice(pos));
-    if (deferrable !== null) pos += deferrable[0].length;
-  }
-  return { fk: { columns: cols.map((c): string => c.trim()), table: table.name, refColumns, onUpdate, onDelete }, end: pos };
+  return pos + collate[0].length;
+}
+
+function tryParseCheck(sql: string, pos: number, rest: string, result: { checksSkipped: number }): number | null {
+  if (/^CHECK\s*\(/i.exec(rest) === null) return null;
+  const close = scanBalanced(sql, pos + (/^CHECK\s*\(/i.exec(rest)?.[0].length ?? 0) - 1);
+  if (close < 0) return null;
+  result.checksSkipped += 1;
+  return close + 1;
+}
+
+function tryParseGenerated(rest: string, result: { checksSkipped: number }): boolean {
+  if (/^GENERATED\s+ALWAYS\s+AS/i.exec(rest) === null) return false;
+  result.checksSkipped += 1;
+  return true;
+}
+
+function tryParseDefault(sql: string, pos: number, result: { defaultExpr: string | null; defaultDropped: boolean }): number | null {
+  if (/^DEFAULT\b/i.exec(sql.slice(pos)) === null) return null;
+  const defLen = /^DEFAULT\b/i.exec(sql.slice(pos))?.[0].length ?? 0;
+  const exprStart = pos + defLen;
+  const exprEnd = scanDefaultExprEnd(sql, exprStart);
+  const rawExpr = sql.slice(exprStart, exprEnd).trim();
+  const translated = translateDefault(rawExpr);
+  result.defaultExpr = translated.sql;
+  result.defaultDropped = translated.dropped;
+  return exprEnd;
+}
+
+function tryParseReferences(sql: string, pos: number, result: { references: ForeignKeyDef | null }): number | null {
+  const references = parseReferenceClause(sql, pos);
+  if (references === null) return null;
+  result.references = references.fk;
+  return references.end;
 }
 
 function parseConstraintTail(sql: string, start: number): {
@@ -282,129 +447,24 @@ function parseConstraintTail(sql: string, start: number): {
     while (pos < sql.length && /\s/.test(sql[pos] ?? "")) pos += 1;
     if (pos >= sql.length) break;
     const rest = sql.slice(pos);
-    const primary = /^PRIMARY\s+KEY(?:\s+(?:ASC|DESC))?/i.exec(rest);
-    if (primary !== null) {
-      result.primaryKey = true;
-      pos += primary[0].length;
-      continue;
+    if (tryParsePrimaryKey(rest, result)) { pos += /^PRIMARY\s+KEY(?:\s+(?:ASC|DESC))?/i.exec(rest)?.[0].length ?? 0; continue; }
+    if (tryParseNotNull(rest, result)) { pos += /^NOT\s+NULL/i.exec(rest)?.[0].length ?? 0; continue; }
+    if (tryParseUnique(rest, result)) { pos += /^UNIQUE/i.exec(rest)?.[0].length ?? 0; continue; }
+    if (tryParseAutoincrement(rest)) { pos += /^AUTOINCREMENT/i.exec(rest)?.[0].length ?? 0; continue; }
+    const collateEnd = tryParseCollate(sql, pos, result);
+    if (collateEnd !== null) { pos = collateEnd; continue; }
+    const checkEnd = tryParseCheck(sql, pos, rest, result);
+    if (checkEnd !== null) { pos = checkEnd; continue; }
+    if (tryParseGenerated(rest, result)) break;
+    const defEnd = tryParseDefault(sql, pos, result);
+    if (defEnd !== null) { pos = defEnd; continue; }
+    const refEnd = tryParseReferences(sql, pos, result);
+    if (refEnd !== null) { pos = refEnd; continue; }
+    if (/^ON\s+CONFLICT/i.exec(rest) !== null) { pos += /^ON\s+CONFLICT/i.exec(rest)?.[0].length ?? 0; continue; }
+    if (/^CONSTRAINT\s+/i.exec(rest) !== null) {
+      const ident = parseIdentifier(sql, pos + /^CONSTRAINT\s+/i.exec(rest)?.[0].length!);
+      if (ident !== null) { pos = ident.end; continue; }
     }
-    const notNull = /^NOT\s+NULL/i.exec(rest);
-    if (notNull !== null) {
-      result.notNull = true;
-      pos += notNull[0].length;
-      continue;
-    }
-    const unique = /^UNIQUE/i.exec(rest);
-    if (unique !== null) {
-      result.unique = true;
-      pos += unique[0].length;
-      continue;
-    }
-    const autoincrement = /^AUTOINCREMENT/i.exec(rest);
-    if (autoincrement !== null) {
-      pos += autoincrement[0].length;
-      continue;
-    }
-    const collate = /^COLLATE\s+/i.exec(rest);
-    if (collate !== null) {
-      const ident = parseIdentifier(sql, pos + collate[0].length);
-      if (ident !== null) {
-        result.collate = ident.name;
-        pos = ident.end;
-        continue;
-      }
-      pos += collate[0].length;
-      continue;
-    }
-    const check = /^CHECK\s*\(/i.exec(rest);
-    if (check !== null) {
-      const close = scanBalanced(sql, pos + check[0].length - 1);
-      if (close >= 0) {
-        result.checksSkipped += 1;
-        pos = close + 1;
-        continue;
-      }
-    }
-    const generated = /^GENERATED\s+ALWAYS\s+AS/i.exec(rest);
-    if (generated !== null) {
-      // Generated columns are skipped (reported via checksSkipped so the
-      // migration report notes the difference).
-      result.checksSkipped += 1;
-      break;
-    }
-    const defaultMatch = /^DEFAULT\b/i.exec(rest);
-    if (defaultMatch !== null) {
-      pos += defaultMatch[0].length;
-      // Consume the expression until a top-level constraint keyword.
-      let depth = 0;
-      let quote: string | null = null;
-      let exprEnd = -1;
-      for (let i = pos; i < sql.length; i += 1) {
-        const ch = sql[i] ?? "";
-        if (quote !== null) {
-          if (ch === quote) {
-            if (sql[i + 1] === quote) {
-              i += 1;
-            } else {
-              quote = null;
-            }
-          }
-          continue;
-        }
-        if (ch === "'") {
-          quote = ch;
-          continue;
-        }
-        if (ch === "(") {
-          depth += 1;
-          continue;
-        }
-        if (ch === ")") {
-          depth -= 1;
-          if (depth < 0) {
-            exprEnd = i;
-            break;
-          }
-          continue;
-        }
-        if (depth === 0 && /[A-Za-z_]/.test(ch)) {
-          const wordMatch = /^[A-Za-z_][A-Za-z0-9_]*/.exec(sql.slice(i));
-          const word = wordMatch?.[0] ?? "";
-          if (CONSTRAINT_WORDS.has(word.toUpperCase())) {
-            exprEnd = i;
-            break;
-          }
-        }
-      }
-      if (exprEnd < 0) exprEnd = sql.length;
-      const rawExpr = sql.slice(pos, exprEnd).trim();
-      const translated = translateDefault(rawExpr);
-      result.defaultExpr = translated.sql;
-      result.defaultDropped = translated.dropped;
-      pos = exprEnd;
-      continue;
-    }
-    const references = parseReferenceClause(sql, pos);
-    if (references !== null) {
-      result.references = references.fk;
-      pos = references.end;
-      continue;
-    }
-    const onConflict = /^ON\s+CONFLICT/i.exec(rest);
-    if (onConflict !== null) {
-      pos += onConflict[0].length;
-      continue;
-    }
-    const constraintName = /^CONSTRAINT\s+/i.exec(rest);
-    if (constraintName !== null) {
-      const ident = parseIdentifier(sql, pos + constraintName[0].length);
-      if (ident !== null) {
-        pos = ident.end;
-        continue;
-      }
-    }
-    // Unknown trailing clause: stop (the rest of the segment is not a
-    // constraint we can interpret).
     break;
   }
   return result;
