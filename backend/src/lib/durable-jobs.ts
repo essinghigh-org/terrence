@@ -11,49 +11,71 @@ export type DurableJobContext = Readonly<{
   canceled: () => Promise<boolean>;
 }>;
 export type DurableJobHandler = (job: DurableJob, context: DurableJobContext) => Promise<void>;
+type EnqueueDurableJobOptions = Readonly<{
+  dedupeKey?: string;
+  runAfter?: number;
+  rescheduleRunning?: boolean;
+}>;
 
 const LEASE_MS = 30_000;
 const POLL_MS = 500;
 /** Attempts before a durable job dead-letters (todo 186); shared with the webhook delivery mirror. */
 export const DURABLE_MAX_ATTEMPTS = 3;
 let workerRunning = false;
+const NO_EXISTING_DURABLE_JOB = Symbol("no-existing-durable-job");
+
+async function requeueExistingDurableJob(
+  existing: DurableJob,
+  payload: Readonly<Record<string, unknown>>,
+  options: EnqueueDurableJobOptions,
+  runAfter: number,
+): Promise<DurableJob> {
+  const now = Date.now();
+  const requeued = await db.update(durableJobs).set({
+    status: "queued",
+    payload,
+    attempts: 0,
+    runAfter,
+    lockedBy: null,
+    lockToken: null,
+    leaseExpiresAt: null,
+    heartbeatAt: null,
+    lastError: null,
+    updatedAt: now,
+  }).where(and(eq(durableJobs.id, existing.id), options.rescheduleRunning ? inArray(durableJobs.status, ["running", "succeeded", "failed", "canceled"]) : inArray(durableJobs.status, ["succeeded", "failed", "canceled"]))).returning();
+  return (requeued[0] ?? await db.query.durableJobs.findFirst({ where: eq(durableJobs.id, existing.id) })) as DurableJob;
+}
+
+async function enqueueExistingDurableJob(
+  kind: DurableJobKind,
+  payload: Readonly<Record<string, unknown>>,
+  options: EnqueueDurableJobOptions,
+): Promise<DurableJob | typeof NO_EXISTING_DURABLE_JOB> {
+  if (options.dedupeKey === undefined) return NO_EXISTING_DURABLE_JOB;
+  const existing = await db.query.durableJobs.findFirst({
+    where: and(
+      eq(durableJobs.kind, kind),
+      eq(durableJobs.dedupeKey, options.dedupeKey),
+    ),
+  });
+  if (existing === undefined) return NO_EXISTING_DURABLE_JOB;
+  const runAfter = options.runAfter ?? Date.now();
+  if (existing.status === "running" && !options.rescheduleRunning) return existing;
+  if (existing.status === "queued") {
+    if (runAfter >= existing.runAfter) return existing;
+    const earlier = await db.update(durableJobs).set({ runAfter, updatedAt: Date.now() }).where(and(eq(durableJobs.id, existing.id), eq(durableJobs.status, "queued"))).returning();
+    return (earlier[0] ?? existing);
+  }
+  return requeueExistingDurableJob(existing, payload, options, runAfter);
+}
 
 export async function enqueueDurableJob(
   kind: DurableJobKind,
   payload: Record<string, unknown>,
-  options: Readonly<{ dedupeKey?: string; runAfter?: number; rescheduleRunning?: boolean }> = {},
+  options: EnqueueDurableJobOptions = {},
 ): Promise<DurableJob> {
-  if (options.dedupeKey !== undefined) {
-    const existing = await db.query.durableJobs.findFirst({
-      where: and(
-        eq(durableJobs.kind, kind),
-        eq(durableJobs.dedupeKey, options.dedupeKey),
-      ),
-    });
-    if (existing !== undefined) {
-      const runAfter = options.runAfter ?? Date.now();
-      if (existing.status === "running" && !options.rescheduleRunning) return existing;
-      if (existing.status === "queued") {
-        if (runAfter >= existing.runAfter) return existing;
-        const earlier = await db.update(durableJobs).set({ runAfter, updatedAt: Date.now() }).where(and(eq(durableJobs.id, existing.id), eq(durableJobs.status, "queued"))).returning();
-        return (earlier[0] ?? existing);
-      }
-      const now = Date.now();
-      const requeued = await db.update(durableJobs).set({
-        status: "queued",
-        payload,
-        attempts: 0,
-        runAfter,
-        lockedBy: null,
-        lockToken: null,
-        leaseExpiresAt: null,
-        heartbeatAt: null,
-        lastError: null,
-        updatedAt: now,
-      }).where(and(eq(durableJobs.id, existing.id), options.rescheduleRunning ? inArray(durableJobs.status, ["running", "succeeded", "failed", "canceled"]) : inArray(durableJobs.status, ["succeeded", "failed", "canceled"]))).returning();
-      return (requeued[0] ?? await db.query.durableJobs.findFirst({ where: eq(durableJobs.id, existing.id) })) as DurableJob;
-    }
-  }
+  const existing = await enqueueExistingDurableJob(kind, payload, options);
+  if (existing !== NO_EXISTING_DURABLE_JOB) return existing;
   const now = Date.now();
   const row: typeof durableJobs.$inferInsert = {
     id: `job-${crypto.randomUUID()}`,

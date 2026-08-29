@@ -95,6 +95,24 @@ export function discoverModuleVersions(
   return [...candidates.values()].slice(0, 100);
 }
 
+async function branchCandidateFor(
+  mod: RegistryModule,
+  credentials: Credentials,
+  encodedRepository: string,
+  branchVersion: string | undefined,
+): Promise<Candidate[]> {
+  if (mod.branch === null || mod.branch === "") throw new Error("Branch-based publication requires a branch");
+  if (branchVersion === undefined || !SEMVER_PATTERN.test(branchVersion)) {
+    throw new Error("Branch-based publication requires a semantic module version");
+  }
+  const branch = await githubJson<{ commit?: { sha?: unknown } }>(
+    credentials,
+    `/repos/${encodedRepository}/branches/${encodeURIComponent(mod.branch)}`,
+  );
+  if (typeof branch.commit?.sha !== "string" || branch.commit.sha === "") throw new Error("The selected branch has no resolvable commit");
+  return [{ version: branchVersion, ref: mod.branch, sha: branch.commit.sha, branch: mod.branch }];
+}
+
 async function candidatesFor(
   mod: RegistryModule,
   credentials: Credentials,
@@ -103,18 +121,7 @@ async function candidatesFor(
   const repository = mod.repositoryIdentifier ?? "";
   if (!REPOSITORY_PATTERN.test(repository)) throw new Error("Repository identifier must use owner/repository format");
   const encodedRepository = repository.split("/").map(encodeURIComponent).join("/");
-  if (mod.publishingWorkflow === "branch") {
-    if (mod.branch === null || mod.branch === "") throw new Error("Branch-based publication requires a branch");
-    if (branchVersion === undefined || !SEMVER_PATTERN.test(branchVersion)) {
-      throw new Error("Branch-based publication requires a semantic module version");
-    }
-    const branch = await githubJson<{ commit?: { sha?: unknown } }>(
-      credentials,
-      `/repos/${encodedRepository}/branches/${encodeURIComponent(mod.branch)}`,
-    );
-    if (typeof branch.commit?.sha !== "string" || branch.commit.sha === "") throw new Error("The selected branch has no resolvable commit");
-    return [{ version: branchVersion, ref: mod.branch, sha: branch.commit.sha, branch: mod.branch }];
-  }
+  if (mod.publishingWorkflow === "branch") return branchCandidateFor(mod, credentials, encodedRepository, branchVersion);
   const tags: { name: string; sha: string }[] = [];
   for (let page = 1; page <= 10; page += 1) {
     const response = await githubJson<readonly Readonly<{ name?: unknown; commit?: { sha?: unknown } }>[]>(

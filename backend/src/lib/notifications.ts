@@ -370,6 +370,65 @@ function emailContent(payload: Readonly<Record<string, unknown>>): Readonly<{ su
   return { subject, text, html: `<html><body>${htmlLines.join("")}</body></html>` };
 }
 
+async function emailMemberIds(configuration: NotificationConfiguration): Promise<readonly string[]> {
+  if ((configuration.teamId === null && configuration.projectId === null)
+    || (configuration.emailAllMembers !== true && (configuration.emailUserIds ?? []).length === 0)) return [];
+  if (configuration.emailAllMembers === true) {
+    if (configuration.teamId !== null) {
+      return (await db.query.teamMemberships.findMany({ where: eq(teamMemberships.teamId, configuration.teamId), columns: { userId: true } }))
+        .map((member): string => member.userId);
+    }
+    if (configuration.projectId !== null) {
+      const project = await db.query.projects.findFirst({ where: eq(projects.id, configuration.projectId), columns: { orgId: true } });
+      if (project === undefined) return [];
+      return (await db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.orgId, project.orgId), columns: { userId: true } }))
+        .map((member): string => member.userId);
+    }
+    return [];
+  }
+  return configuration.emailUserIds ?? [];
+}
+
+async function emailRecipientList(configuration: NotificationConfiguration): Promise<readonly string[]> {
+  const recipients = new Set(configuration.emailAddresses ?? []);
+  const memberIds = await emailMemberIds(configuration);
+  if (memberIds.length > 0) {
+    const memberRows = await db.query.users.findMany({ where: inArray(users.id, [...new Set(memberIds)]), columns: { email: true } });
+    for (const member of memberRows) if (typeof member.email === "string" && member.email !== "") recipients.add(member.email);
+  }
+  return [...recipients];
+}
+
+type CompleteEmailConfiguration = Readonly<{ host: string; senderEmail: string }>;
+
+function emailConfigurationOrMissing(
+  enabled: boolean,
+  host: string | null,
+  senderEmail: string | null,
+  recipientCount: number,
+): string | CompleteEmailConfiguration {
+  if (!enabled) return "SMTP is disabled";
+  if (host === null) return "SMTP host is not configured";
+  if (senderEmail === null) return "SMTP sender email is not configured";
+  if (recipientCount === 0) return "no email recipients";
+  return { host, senderEmail };
+}
+
+async function smtpNotificationSettings(
+  smtp: Readonly<Record<string, unknown>>,
+  host: string,
+  senderEmail: string,
+): Promise<Parameters<typeof sendEmail>[0]> {
+  return {
+    host,
+    port: typeof smtp.port === "number" ? smtp.port : 25,
+    username: typeof smtp.username === "string" && smtp.username !== "" ? smtp.username : null,
+    password: typeof smtp.password === "string" ? await decryptSecret(smtp.password) : null,
+    senderEmail,
+    auth: smtp.auth === "none" || smtp.auth === "login" || smtp.auth === "plain" ? smtp.auth : "plain",
+  };
+}
+
 /**
  * Deliver an email notification through the organization's SMTP settings.
  * Without configured SMTP the delivery is recorded as unsuccessful, so
@@ -383,35 +442,13 @@ async function deliverEmailNotification(
   const enabled = smtp.enabled === true;
   const host = typeof smtp.host === "string" && smtp.host !== "" ? smtp.host : null;
   const senderEmail = typeof smtp["sender-email"] === "string" && smtp["sender-email"] !== "" ? smtp["sender-email"] : null;
-  const recipients = new Set(configuration.emailAddresses ?? []);
-  if ((configuration.teamId !== null || configuration.projectId !== null) && (configuration.emailAllMembers === true || (configuration.emailUserIds ?? []).length > 0)) {
-    const memberIds = configuration.emailAllMembers
-      ? configuration.teamId !== null
-        ? (await db.query.teamMemberships.findMany({ where: eq(teamMemberships.teamId, configuration.teamId), columns: { userId: true } })).map((member): string => member.userId)
-        : configuration.projectId !== null
-          ? (await db.query.projects.findFirst({ where: eq(projects.id, configuration.projectId), columns: { orgId: true } }).then(async (project) => project === undefined ? [] : (await db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.orgId, project.orgId), columns: { userId: true } })).map((member): string => member.userId)))
-          : []
-      : configuration.emailUserIds ?? [];
-    if (memberIds.length > 0) {
-      const memberRows = await db.query.users.findMany({ where: inArray(users.id, [...new Set(memberIds)]), columns: { email: true } });
-      for (const member of memberRows) if (typeof member.email === "string" && member.email !== "") recipients.add(member.email);
-    }
-  }
-  const recipientList = [...recipients];
+  const recipientList = await emailRecipientList(configuration);
   const now = new Date().toISOString();
 
-  const missing = !enabled
-    ? "SMTP is disabled"
-    : host === null
-      ? "SMTP host is not configured"
-      : senderEmail === null
-        ? "SMTP sender email is not configured"
-          : recipientList.length === 0
-          ? "no email recipients"
-          : null;
-  if (missing !== null) {
+  const emailConfiguration = emailConfigurationOrMissing(enabled, host, senderEmail, recipientList.length);
+  if (typeof emailConfiguration === "string") {
     return {
-      body: `Email delivery skipped: ${missing}`,
+      body: `Email delivery skipped: ${emailConfiguration}`,
       code: "0",
       headers: {},
       sentAt: now,
@@ -424,14 +461,7 @@ async function deliverEmailNotification(
   const { subject, text, html } = emailContent(payload);
   try {
     await sendEmail(
-      {
-        host: host!,
-        port: typeof smtp.port === "number" ? smtp.port : 25,
-        username: typeof smtp.username === "string" && smtp.username !== "" ? smtp.username : null,
-        password: typeof smtp.password === "string" ? await decryptSecret(smtp.password) : null,
-        senderEmail: senderEmail!,
-        auth: smtp.auth === "none" || smtp.auth === "login" || smtp.auth === "plain" ? smtp.auth : "plain",
-      },
+      await smtpNotificationSettings(smtp, emailConfiguration.host, emailConfiguration.senderEmail),
       { to: recipientList, subject, text, html },
     );
     recordBreakerSuccess(configuration.id);
@@ -515,15 +545,37 @@ function firstUrl(payload: Readonly<Record<string, unknown>>): string {
   return "";
 }
 
+type NotificationRecord = Readonly<Record<string, unknown>>;
+
+function notificationMessage(payload: NotificationRecord, notification: NotificationRecord | undefined): string {
+  return typeof notification?.message === "string" && notification.message.length > 0
+    ? notification.message
+    : (typeof payload.message === "string" ? payload.message : "Terrence notification");
+}
+
+function addAssessmentFields(
+  payload: NotificationRecord,
+  addField: (label: string, value: unknown) => void,
+): void {
+  const details = payload.details as NotificationRecord | null | undefined;
+  if (details === undefined || details === null) return;
+  const result = details.new_assessment_result as NotificationRecord | undefined;
+  const drifted = result?.resources_drifted;
+  if (typeof drifted === "number") addField("Resources drifted", drifted);
+  const checksFailed = result?.checks_failed as number | undefined;
+  if (typeof checksFailed === "number") addField("Failed checks", checksFailed);
+}
+
+function notificationStatus(payload: NotificationRecord, notification: NotificationRecord | undefined): unknown {
+  return typeof payload.run_status === "string"
+    ? payload.run_status
+    : (typeof payload.change_request_status === "string" ? payload.change_request_status : notification?.run_status);
+}
+
 function summarizePayload(payload: Readonly<Record<string, unknown>>): NotificationSummary {
   const notifications = payload.notifications;
-  const notification = (Array.isArray(notifications) ? notifications[0] : notifications) as
-    | Readonly<Record<string, unknown>>
-    | undefined;
-  const message =
-    typeof notification?.message === "string" && notification.message.length > 0
-      ? notification.message
-      : (typeof payload.message === "string" ? payload.message : "Terrence notification");
+  const notification = (Array.isArray(notifications) ? notifications[0] : notifications) as NotificationRecord | undefined;
+  const message = notificationMessage(payload, notification);
 
   const fields: { label: string; value: string }[] = [];
 
@@ -539,20 +591,11 @@ function summarizePayload(payload: Readonly<Record<string, unknown>>): Notificat
   addField("Triggered by", payload.run_created_by ?? payload.run_updated_by);
   addField("Status", payload.run_status ?? payload.change_request_status ?? notification?.run_status);
 
-  const details = payload.details as Readonly<Record<string, unknown>> | undefined;
-  if (details !== undefined) {
-    const result = details.new_assessment_result as Readonly<Record<string, unknown>> | undefined;
-    const drifted = result?.resources_drifted;
-    if (typeof drifted === "number") addField("Resources drifted", drifted);
-    const checksFailed = result?.checks_failed as number | undefined;
-    if (typeof checksFailed === "number") addField("Failed checks", checksFailed);
-  }
+  addAssessmentFields(payload, addField);
 
   const linkUrl = firstUrl(payload);
   const linkLabel = typeof payload.run_id === "string" ? "Open run" : "Open workspace";
-  const status = typeof payload.run_status === "string"
-    ? payload.run_status
-    : (typeof payload.change_request_status === "string" ? payload.change_request_status : notification?.run_status);
+  const status = notificationStatus(payload, notification);
   return {
     title: message,
     subtext: stringify(payload.run_message ?? payload.change_request_message),

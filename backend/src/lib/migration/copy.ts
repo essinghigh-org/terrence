@@ -85,6 +85,28 @@ function rowidColumn(columns: readonly CopyColumn[]): string | null {
   return null;
 }
 
+function readCopyBatch(
+  source: SqliteQueryable,
+  table: CopyTable,
+  rowid: string | null,
+  batchSize: number,
+  total: number,
+  cursor: number,
+): readonly Readonly<Record<string, unknown>>[] {
+  const sql = rowid === null
+    ? `SELECT * FROM ${quoted(table.name)} LIMIT ? OFFSET ?`
+    : `SELECT ${rowid} AS "_terrence_rowid", * FROM ${quoted(table.name)} WHERE ${rowid} > ? ORDER BY ${rowid} LIMIT ?`;
+  try {
+    const rows = rowid === null
+      ? source.query(sql).all(batchSize, total)
+      : source.query(sql).all(cursor, batchSize);
+    return rows as readonly Readonly<Record<string, unknown>>[];
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Copy source read failed on table "${table.name}" (${sql}): ${message}`);
+  }
+}
+
 /**
  * Copy one table from source to target. Idempotent: rows already present in
  * the target are skipped via ON CONFLICT DO NOTHING. Returns rows copied.
@@ -105,19 +127,7 @@ export async function copyTable(
   let cursor = 0;
   for (;;) {
     if (options.isCancelled?.() === true) break;
-    let rows: readonly Readonly<Record<string, unknown>>[];
-    try {
-      rows = (rowid === null
-        ? source.query(`SELECT * FROM ${quoted(table.name)} LIMIT ? OFFSET ?`).all(batchSize, total)
-        : source.query(`SELECT ${rowid} AS "_terrence_rowid", * FROM ${quoted(table.name)} WHERE ${rowid} > ? ORDER BY ${rowid} LIMIT ?`).all(cursor, batchSize)) as
-        readonly Readonly<Record<string, unknown>>[];
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      const sql = rowid === null
-        ? `SELECT * FROM ${quoted(table.name)} LIMIT ? OFFSET ?`
-        : `SELECT ${rowid} AS "_terrence_rowid", * FROM ${quoted(table.name)} WHERE ${rowid} > ? ORDER BY ${rowid} LIMIT ?`;
-      throw new Error(`Copy source read failed on table "${table.name}" (${sql}): ${message}`);
-    }
+    const rows = readCopyBatch(source, table, rowid, batchSize, total, cursor);
     if (rows.length === 0) break;
 
     const params: unknown[] = [];
@@ -154,6 +164,44 @@ export function canonicalJson(value: unknown): string {
   return `{${keys.map((key): string => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`).join(",")}}`;
 }
 
+function canonicalBooleanCell(value: unknown): string {
+  const truthy = value === true || value === 1 || value === "1" || value === "t" || value === "true";
+  return truthy ? "b1" : "b0";
+}
+
+function canonicalJsonCell(value: unknown): string {
+  if (typeof value === "string") {
+    try {
+      return `j${canonicalJson(JSON.parse(value))}`;
+    } catch {
+      return `s${value}`;
+    }
+  }
+  if (typeof value === "object") return `j${canonicalJson(value)}`;
+  return `s${String(value)}`;
+}
+
+function canonicalIntegerCell(value: unknown): string {
+  if (typeof value === "bigint") return `i${value.toString()}`;
+  if (typeof value === "number") return Number.isInteger(value) ? `i${value.toString()}` : `f${value.toString()}`;
+  if (typeof value === "string") return /^-?\d+$/.test(value) ? `i${value}` : `s${value}`;
+  return `s${String(value)}`;
+}
+
+function canonicalNumericCell(value: unknown): string {
+  if (typeof value === "number" || typeof value === "bigint") return `n${value.toString()}`;
+  return `n${String(value)}`;
+}
+
+function canonicalRealCell(value: unknown): string {
+  return typeof value === "number" ? `f${value.toString()}` : `f${String(value)}`;
+}
+
+function canonicalBlobCell(value: unknown): string {
+  if (value instanceof Uint8Array) return `x${Buffer.from(value).toString("hex")}`;
+  return `x${Buffer.from(String(value), "binary").toString("hex")}`;
+}
+
 /**
  * Canonical cell rendering for digest comparison. Both sides (SQLite row
  * values and PostgreSQL row values) render through the same function so type
@@ -163,38 +211,12 @@ export function canonicalJson(value: unknown): string {
 export function canonicalCell(value: unknown, mode: ColumnMode): string {
   if (value === null || value === undefined) return "n";
   switch (mode) {
-    case "boolean": {
-      const truthy = value === true || value === 1 || value === "1" || value === "t" || value === "true";
-      return truthy ? "b1" : "b0";
-    }
-    case "json": {
-      if (typeof value === "string") {
-        try {
-          return `j${canonicalJson(JSON.parse(value))}`;
-        } catch {
-          return `s${value}`;
-        }
-      }
-      if (typeof value === "object") return `j${canonicalJson(value)}`;
-      return `s${String(value)}`;
-    }
-    case "integer": {
-      if (typeof value === "bigint") return `i${value.toString()}`;
-      if (typeof value === "number") return Number.isInteger(value) ? `i${value.toString()}` : `f${value.toString()}`;
-      if (typeof value === "string") return /^-?\d+$/.test(value) ? `i${value}` : `s${value}`;
-      return `s${String(value)}`;
-    }
-    case "numeric": {
-      if (typeof value === "number" || typeof value === "bigint") return `n${value.toString()}`;
-      return `n${String(value)}`;
-    }
-    case "real": {
-      return typeof value === "number" ? `f${value.toString()}` : `f${String(value)}`;
-    }
-    case "blob": {
-      if (value instanceof Uint8Array) return `x${Buffer.from(value).toString("hex")}`;
-      return `x${Buffer.from(String(value), "binary").toString("hex")}`;
-    }
+    case "boolean": return canonicalBooleanCell(value);
+    case "json": return canonicalJsonCell(value);
+    case "integer": return canonicalIntegerCell(value);
+    case "numeric": return canonicalNumericCell(value);
+    case "real": return canonicalRealCell(value);
+    case "blob": return canonicalBlobCell(value);
     default:
       return `s${String(value)}`;
   }

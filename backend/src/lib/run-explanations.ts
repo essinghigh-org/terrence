@@ -185,23 +185,25 @@ export function upstreamRequest(settings: Readonly<Record<string, unknown>>, pro
   });
 }
 
+function reasoningFromMessage(message: Readonly<Record<string, unknown>> | undefined): string {
+  const reasoningContent = message?.reasoning_content;
+  const reasoning = message?.reasoning;
+  if (typeof reasoningContent === "string" && reasoningContent !== "") return reasoningContent;
+  if (typeof reasoning === "string" && reasoning !== "") return reasoning;
+  if (typeof reasoning === "object" && reasoning !== null) {
+    const raw = JSON.stringify(reasoning);
+    if (raw !== undefined && raw !== "") return raw;
+  }
+  return "";
+}
+
 /** Non-streaming completion parse: answer content plus transient reasoning. */
 export function parseCompletionBody(parsed: unknown): CompletionParts {
   const choices = (parsed as Readonly<{ choices?: readonly Readonly<{ message?: Readonly<Record<string, unknown>> }>[] }>)?.choices;
   const message = choices?.[0]?.message;
   const contentValue = message?.content;
   let content = typeof contentValue === "string" ? contentValue : "";
-  let thinking = "";
-  const reasoningContent = message?.reasoning_content;
-  const reasoning = message?.reasoning;
-  if (typeof reasoningContent === "string" && reasoningContent !== "") {
-    thinking = reasoningContent;
-  } else if (typeof reasoning === "string" && reasoning !== "") {
-    thinking = reasoning;
-  } else if (typeof reasoning === "object" && reasoning !== null) {
-    const raw = JSON.stringify(reasoning);
-    if (raw !== undefined && raw !== "") thinking = raw;
-  }
+  let thinking = reasoningFromMessage(message);
   const split = splitInlineThinking(content);
   content = split.content;
   if (split.thinking !== "") thinking = thinking === "" ? split.thinking : `${thinking}\n${split.thinking}`;
@@ -216,35 +218,74 @@ export function parseCompletionBody(parsed: unknown): CompletionParts {
  * Inline <think> tags inside delta.content are split into the thinking
  * channel while the stream is read, including tags split across chunks.
  */
+type InlineDeltaState = { buffer: string; thinking: boolean };
+
+type DeltaHandler = (channel: "thinking" | "content", text: string) => void | Promise<void>;
+
+async function emitInlineContent(
+  state: InlineDeltaState,
+  onDelta: DeltaHandler,
+  text: string,
+): Promise<void> {
+  state.buffer += text;
+  for (;;) {
+    const tag = (state.thinking ? /<\/(think|thinking|reasoning)>/i : /<(think|thinking|reasoning)>/i).exec(state.buffer);
+    if (tag === null) {
+      const safeLength = Math.max(0, state.buffer.length - "</reasoning>".length);
+      if (safeLength === 0) return;
+      const safe = state.buffer.slice(0, safeLength);
+      state.buffer = state.buffer.slice(safeLength);
+      await onDelta(state.thinking ? "thinking" : "content", safe);
+      continue;
+    }
+    const before = state.buffer.slice(0, tag.index);
+    if (before !== "") await onDelta(state.thinking ? "thinking" : "content", before);
+    state.buffer = state.buffer.slice(tag.index + tag[0].length);
+    state.thinking = !state.thinking;
+  }
+}
+
+function reasoningDelta(delta: Readonly<Record<string, unknown>>): string {
+  const reasoningContent = delta.reasoning_content;
+  const reasoning = delta.reasoning;
+  if (typeof reasoningContent === "string" && reasoningContent !== "") return reasoningContent;
+  if (typeof reasoning === "string" && reasoning !== "") return reasoning;
+  return "";
+}
+
+async function processUpstreamLine(
+  line: string,
+  state: InlineDeltaState,
+  onDelta: DeltaHandler,
+): Promise<void> {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("data:")) return;
+  const payload = trimmed.slice(5).trim();
+  if (payload === "" || payload === "[DONE]") return;
+  let chunk: unknown;
+  try {
+    chunk = JSON.parse(payload);
+  } catch {
+    return;
+  }
+  const delta = (chunk as Readonly<{ choices?: readonly Readonly<{ delta?: Readonly<Record<string, unknown>> }>[] }>)?.choices?.[0]?.delta;
+  if (delta === undefined) return;
+  const content = delta.content;
+  if (typeof content === "string" && content !== "") await emitInlineContent(state, onDelta, content);
+  const thinkingPart = reasoningDelta(delta);
+  if (thinkingPart !== "") await onDelta("thinking", thinkingPart);
+}
+
 export async function forEachUpstreamDelta(
   upstream: Readonly<Response>,
-  onDelta: (channel: "thinking" | "content", text: string) => void | Promise<void>,
+  onDelta: DeltaHandler,
   onChunk?: () => void,
 ): Promise<void> {
   if (upstream.body === null) return;
   const reader = upstream.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let inlineContentBuffer = "";
-  let inlineThinking = false;
-  const emitInlineContent = async (text: string): Promise<void> => {
-    inlineContentBuffer += text;
-    for (;;) {
-      const tag = (inlineThinking ? /<\/(think|thinking|reasoning)>/i : /<(think|thinking|reasoning)>/i).exec(inlineContentBuffer);
-      if (tag === null) {
-        const safeLength = Math.max(0, inlineContentBuffer.length - "</reasoning>".length);
-        if (safeLength === 0) return;
-        const safe = inlineContentBuffer.slice(0, safeLength);
-        inlineContentBuffer = inlineContentBuffer.slice(safeLength);
-        await onDelta(inlineThinking ? "thinking" : "content", safe);
-        continue;
-      }
-      const before = inlineContentBuffer.slice(0, tag.index);
-      if (before !== "") await onDelta(inlineThinking ? "thinking" : "content", before);
-      inlineContentBuffer = inlineContentBuffer.slice(tag.index + tag[0].length);
-      inlineThinking = !inlineThinking;
-    }
-  };
+  const inlineState: InlineDeltaState = { buffer: "", thinking: false };
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -252,33 +293,10 @@ export async function forEachUpstreamDelta(
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) continue;
-      const payload = trimmed.slice(5).trim();
-      if (payload === "" || payload === "[DONE]") continue;
-      let chunk: unknown;
-      try {
-        chunk = JSON.parse(payload);
-      } catch {
-        continue;
-      }
-      const delta = (chunk as Readonly<{ choices?: readonly Readonly<{ delta?: Readonly<Record<string, unknown>> }>[] }>)?.choices?.[0]?.delta;
-      if (delta === undefined) continue;
-      const content = delta.content;
-      if (typeof content === "string" && content !== "") await emitInlineContent(content);
-      const reasoningContent = delta.reasoning_content;
-      const reasoning = delta.reasoning;
-      const thinkingPart = typeof reasoningContent === "string" && reasoningContent !== ""
-        ? reasoningContent
-        : typeof reasoning === "string" && reasoning !== ""
-          ? reasoning
-          : "";
-      if (thinkingPart !== "") await onDelta("thinking", thinkingPart);
-    }
+    for (const line of lines) await processUpstreamLine(line, inlineState, onDelta);
   }
-  if (inlineContentBuffer !== "") {
-    await onDelta(inlineThinking ? "thinking" : "content", inlineContentBuffer);
+  if (inlineState.buffer !== "") {
+    await onDelta(inlineState.thinking ? "thinking" : "content", inlineState.buffer);
   }
 }
 

@@ -234,6 +234,23 @@ async function releaseVersionLock(lockDir: string): Promise<void> {
   await rm(lockDir, { recursive: true, force: true });
 }
 
+async function validCachedInfracostBinary(binaryPath: string, targetDir: string, invalidMessage: string): Promise<boolean> {
+  if (!(await exists(binaryPath))) return false;
+  const integrity = await readIntegrity(targetDir);
+  if (integrity.status === "ok" && (await verifyBinary(binaryPath, integrity.integrity))) return true;
+  log.warn(invalidMessage);
+  return false;
+}
+
+async function cleanupFailedInfracostInstall(stagingDir: string): Promise<void> {
+  if (stagingDir === "") return;
+  try {
+    await rm(stagingDir, { recursive: true, force: true });
+  } catch {
+    // Cleanup failure is secondary.
+  }
+}
+
 /** Resolve the Infracost binary for a cost-estimate run.
  *
  * Priority:
@@ -270,13 +287,7 @@ export async function resolveInfracostBinary(): Promise<{ binaryPath: string; ve
   const binaryPath = join(targetDir, `infracost-${process.platform === "darwin" ? "darwin" : "linux"}-${process.arch === "arm64" ? "arm64" : "amd64"}`);
 
   // Fast path: a valid, fully-published install already exists. Read-only.
-  if (await exists(binaryPath)) {
-    const integrity = await readIntegrity(targetDir);
-    if (integrity.status === "ok" && (await verifyBinary(binaryPath, integrity.integrity))) {
-      return { binaryPath, version };
-    }
-    log.warn(`[terrence] Cached Infracost v${version} failed integrity check; reinstalling`);
-  }
+  if (await validCachedInfracostBinary(binaryPath, targetDir, `[terrence] Cached Infracost v${version} failed integrity check; reinstalling`)) return { binaryPath, version };
 
   // Slow path: serialize installs per version so concurrent workers never
   // download into / delete each other's directories.
@@ -288,14 +299,8 @@ export async function resolveInfracostBinary(): Promise<{ binaryPath: string; ve
   try {
     // Recheck after acquiring the lock: a worker that finished while we were
     // waiting has already published a valid install we can reuse.
-    if (await exists(binaryPath)) {
-      const integrity = await readIntegrity(targetDir);
-      if (integrity.status === "ok" && (await verifyBinary(binaryPath, integrity.integrity))) {
-        return { binaryPath, version };
-      }
-      log.warn(`[terrence] Cached Infracost v${version} failed integrity check under lock; reinstalling`);
-      await rm(targetDir, { recursive: true, force: true });
-    } else if (await exists(targetDir)) {
+    if (await validCachedInfracostBinary(binaryPath, targetDir, `[terrence] Cached Infracost v${version} failed integrity check under lock; reinstalling`)) return { binaryPath, version };
+    if (await exists(targetDir)) {
       // targetDir exists without a binary (legacy/partial state). We hold the
       // lock, so it cannot be another worker's in-progress install; clear it
       // so the atomic rename below can publish into a clean path.
@@ -316,13 +321,7 @@ export async function resolveInfracostBinary(): Promise<{ binaryPath: string; ve
     // A partial install is never trusted; remove only this worker's staging
     // directory. The published targetDir is never touched here — it may be
     // another worker's valid install.
-    if (stagingDir !== "") {
-      try {
-        await rm(stagingDir, { recursive: true, force: true });
-      } catch {
-        // Cleanup failure is secondary.
-      }
-    }
+    await cleanupFailedInfracostInstall(stagingDir);
     const message = error instanceof Error ? error.message : String(error);
     log.warn(`[terrence] Could not install Infracost v${version}: ${message}`);
     return null;

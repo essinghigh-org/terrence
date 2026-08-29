@@ -24,6 +24,112 @@ import { validVariableAttributes } from "../validation";
 import { toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
 import { cachedOrgByName } from "../cached-lookups";
 
+async function exactWorkspaceResult(
+  orgId: string,
+  orgName: string,
+  exactName: string,
+  userId: string | null,
+  sessionOrgId: string | null,
+  teamId: string | null,
+): Promise<unknown> {
+  const ws = await db.query.workspaces.findFirst({
+    where: and(eq(workspaces.orgId, orgId), eq(workspaces.name, exactName)),
+    columns: { id: true, name: true, orgId: true, locked: true, createdAt: true },
+  });
+  if (ws === undefined) return toolBadRequest(`Workspace "${exactName}" not found in org "${orgName}"`);
+  const authorized = await findAuthorizedWorkspace(ws.id, userId ?? undefined, sessionOrgId, teamId, "read");
+  if (authorized === undefined) return toolError("Not authorized to access this workspace");
+  return { ...ws, id: authorized.id, name: authorized.name };
+}
+
+type WorkspaceCreationOptions = Readonly<{
+  name: string;
+  description: string | null;
+  autoApply: boolean;
+  executionMode: string | undefined;
+  terraformVersion: string | undefined;
+}>;
+
+function workspaceCreationOptions(args: Readonly<Record<string, unknown>>): WorkspaceCreationOptions {
+  return {
+    name: (typeof args.name === "string" ? args.name : "").trim(),
+    description: typeof args.description === "string" && args.description !== "" ? args.description.trim() : null,
+    autoApply: typeof args["auto-apply"] === "boolean" ? args["auto-apply"] : false,
+    executionMode: typeof args["execution-mode"] === "string" ? args["execution-mode"] : undefined,
+    terraformVersion: typeof args["terraform-version"] === "string" ? args["terraform-version"] : undefined,
+  };
+}
+
+async function workspaceCreationOptionError(options: WorkspaceCreationOptions, orgId: string): Promise<string | undefined> {
+  if (options.name === "" || !/^[A-Za-z0-9_-]+$/.test(options.name)) return "Invalid workspace name";
+  if ((await findWorkspaceByName(orgId, options.name)) !== undefined) return "Workspace name already exists in this organization";
+  if (options.terraformVersion !== undefined && !validateVersion(options.terraformVersion)) return "Invalid terraformVersion format";
+  if (options.executionMode !== undefined && !isExecutionMode(options.executionMode)) return "execution-mode must be remote, local, or agent";
+  return undefined;
+}
+
+type WorkspaceProjectResult = typeof projects.$inferSelect | Readonly<{ error: string }>;
+
+async function resolveWorkspaceProject(args: Readonly<Record<string, unknown>>, orgId: string): Promise<WorkspaceProjectResult> {
+  if (typeof args.project_id === "string" && args.project_id !== "") {
+    const project = await db.query.projects.findFirst({ where: and(eq(projects.id, args.project_id), eq(projects.orgId, orgId)) });
+    return project ?? { error: "Project must belong to the workspace organization" };
+  }
+  return ensureDefaultProject(orgId);
+}
+
+function workspaceTagBindings(args: Readonly<Record<string, unknown>>): readonly { key: string; value: string }[] {
+  const rawTags = Array.isArray(args.tags) ? args.tags : [];
+  const tagBindings = rawTags.filter((tag): boolean =>
+    tag !== null && typeof tag === "object" && typeof (tag as Record<string, unknown>).key === "string" && typeof (tag as Record<string, unknown>).value === "string");
+  return tagBindings.map((tag): { key: string; value: string } => {
+    const binding = tag as Record<string, unknown>;
+    return { key: binding.key as string, value: binding.value as string };
+  });
+}
+
+type WorkspaceVariableUpdate = Readonly<{
+  key: string;
+  value: string;
+  category: string;
+  sensitive: boolean;
+  hcl: boolean;
+  description: string | null;
+}>;
+
+function workspaceVariableUpdate(
+  variable: typeof workspaceVariables.$inferSelect,
+  args: Readonly<Record<string, unknown>>,
+): WorkspaceVariableUpdate | Readonly<{ error: string }> {
+  const key = typeof args.key === "string" ? args.key : variable.key;
+  const value = typeof args.value === "string" ? args.value : variable.value;
+  const category = typeof args.category === "string" ? args.category : variable.category;
+  let sensitive = typeof args.sensitive === "boolean" ? args.sensitive : (variable.sensitive ?? false);
+  if ((variable.sensitive ?? false) && !sensitive && args.value === undefined) sensitive = true;
+  const hcl = typeof args.hcl === "boolean" ? args.hcl : (variable.hcl ?? false);
+  const description = typeof args.description === "string" ? args.description : variable.description;
+  if (!validVariableAttributes({ key, value, category, sensitive, hcl, description }, true)) {
+    return { error: "Invalid variable attributes" };
+  }
+  return { key, value, category, sensitive, hcl, description };
+}
+
+async function persistWorkspaceVariableUpdate(
+  variableId: string,
+  updated: WorkspaceVariableUpdate,
+): Promise<string | undefined> {
+  try {
+    await db.update(workspaceVariables).set(updated).where(eq(workspaceVariables.id, variableId));
+  } catch (error: unknown) {
+    if (error !== null && typeof error === "object" && "message" in error
+      && typeof error.message === "string" && error.message.includes("UNIQUE")) {
+      return "Variable key already exists in this workspace";
+    }
+    throw error;
+  }
+  return undefined;
+}
+
 /**
  * Workspace tools. Read/list operations require `workspaces:read`, mutations
  * require `workspaces:write`, and lock/unlock require `workspaces:lock` —
@@ -60,48 +166,32 @@ export const workspaceTools: readonly McpTool[] = [
     requires: ["workspaces:write"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
       const orgName = typeof args.org === "string" ? args.org : "";
-      const name = (typeof args.name === "string" ? args.name : "").trim();
       const org = await cachedOrgByName(orgName);
       if (org === undefined) return toolBadRequest(`Organization "${orgName}" not found`);
       if (!(await checkOrganizationPermission(org.id, session.userId ?? undefined, session.orgId, session.teamId, "manage-workspaces"))) {
         return toolError("Not authorized to manage workspaces in this organization");
       }
-      const description = typeof args.description === "string" && args.description !== "" ? args.description.trim() : null;
-      const autoApply = typeof args["auto-apply"] === "boolean" ? args["auto-apply"] : false;
-      const executionMode = typeof args["execution-mode"] === "string" ? args["execution-mode"] : undefined;
-      const terraformVersion = typeof args["terraform-version"] === "string" ? args["terraform-version"] : undefined;
-      if (name === "" || !/^[A-Za-z0-9_-]+$/.test(name)) return toolBadRequest("Invalid workspace name");
-      if ((await findWorkspaceByName(org.id, name)) !== undefined) return toolBadRequest("Workspace name already exists in this organization");
-      if (terraformVersion !== undefined && !validateVersion(terraformVersion)) return toolBadRequest("Invalid terraformVersion format");
-      if (executionMode !== undefined && !isExecutionMode(executionMode)) return toolBadRequest("execution-mode must be remote, local, or agent");
-      let project: typeof projects.$inferSelect | undefined;
-      if (typeof args.project_id === "string" && args.project_id !== "") {
-        project = await db.query.projects.findFirst({ where: and(eq(projects.id, args.project_id), eq(projects.orgId, org.id)) });
-        if (project === undefined) return toolBadRequest("Project must belong to the workspace organization");
-      } else {
-        project = await ensureDefaultProject(org.id);
-      }
+      const options = workspaceCreationOptions(args);
+      const optionError = await workspaceCreationOptionError(options, org.id);
+      if (optionError !== undefined) return toolBadRequest(optionError);
+      const projectResult = await resolveWorkspaceProject(args, org.id);
+      if ("error" in projectResult) return toolBadRequest(projectResult.error);
+      const project = projectResult;
       const id = `ws-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
-      const finalTfVer = terraformVersion ?? "latest";
+      const finalTfVer = options.terraformVersion ?? "latest";
       await db.insert(workspaces).values({
-        id, name, orgId: org.id, description, projectId: project.id,
-        autoApply, terraformVersion: finalTfVer,
-        executionMode: executionMode ?? project.defaultExecutionMode ?? "remote",
+        id, name: options.name, orgId: org.id, description: options.description, projectId: project.id,
+        autoApply: options.autoApply, terraformVersion: finalTfVer,
+        executionMode: options.executionMode ?? project.defaultExecutionMode ?? "remote",
         createdAt: Date.now(),
       });
-      const rawTags = Array.isArray(args.tags) ? args.tags : [];
-      const tagBindings = rawTags.filter((t): boolean =>
-        t !== null && typeof t === "object" && typeof (t as Record<string, unknown>).key === "string" && typeof (t as Record<string, unknown>).value === "string");
-      const bindings = tagBindings.map((t): { key: string; value: string } => {
-        const b = t as Record<string, unknown>;
-        return { key: b.key as string, value: b.value as string };
-      });
+      const bindings = workspaceTagBindings(args);
       if (bindings.length > 0) {
         await db.insert(workspaceTags).values(bindings.map((binding): typeof workspaceTags.$inferInsert => ({
           id: crypto.randomUUID(), workspaceId: id, key: binding.key, value: binding.value,
         })));
       }
-      return { id, name, orgId: org.id, projectId: project.id, autoApply, executionMode: executionMode ?? project.defaultExecutionMode ?? "remote" };
+      return { id, name: options.name, orgId: org.id, projectId: project.id, autoApply: options.autoApply, executionMode: options.executionMode ?? project.defaultExecutionMode ?? "remote" };
     },
   },
   {
@@ -130,16 +220,7 @@ export const workspaceTools: readonly McpTool[] = [
       const search = typeof args.search === "string" ? args.search : undefined;
       const limit = Math.min(Math.max(Number(args.limit ?? 50), 1), 200);
       const offset = Math.max(Number(args.offset ?? 0), 0);
-      if (exactName !== undefined) {
-        const ws = await db.query.workspaces.findFirst({
-          where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, exactName)),
-          columns: { id: true, name: true, orgId: true, locked: true, createdAt: true },
-        });
-        if (ws === undefined) return toolBadRequest(`Workspace "${exactName}" not found in org "${orgName}"`);
-        const authorized = await findAuthorizedWorkspace(ws.id, session.userId ?? undefined, session.orgId, session.teamId, "read");
-        if (authorized === undefined) return toolError("Not authorized to access this workspace");
-        return { ...ws, id: authorized.id, name: authorized.name };
-      }
+      if (exactName !== undefined) return exactWorkspaceResult(org.id, orgName, exactName, session.userId, session.orgId, session.teamId);
       const authorizedIds = await workspaceIdsForPermission(org.id, session.userId ?? undefined, session.orgId, session.teamId, "read");
       if (authorizedIds === null || authorizedIds.length === 0) return [];
       const pattern = search === undefined ? undefined : `%${search.replace(/[\\%_]/g, "\\$&")}%`;
@@ -251,27 +332,11 @@ export const workspaceTools: readonly McpTool[] = [
         where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, wsId)),
       });
       if (variable === undefined) return toolBadRequest(`Variable "${varId}" not found in workspace`);
-      const key = typeof args.key === "string" ? args.key : variable.key;
-      const value = typeof args.value === "string" ? args.value : variable.value;
-      const category = typeof args.category === "string" ? args.category : variable.category;
-      let sensitive = typeof args.sensitive === "boolean" ? args.sensitive : (variable.sensitive ?? false);
-      if ((variable.sensitive ?? false) && !sensitive && args.value === undefined) sensitive = true;
-      const hcl = typeof args.hcl === "boolean" ? args.hcl : (variable.hcl ?? false);
-      const description = typeof args.description === "string" ? args.description : variable.description;
-      if (!validVariableAttributes({ key, value, category, sensitive, hcl, description }, true)) {
-        return toolBadRequest("Invalid variable attributes");
-      }
-      const updated = { key, value, category, sensitive, hcl, description };
-      try {
-        await db.update(workspaceVariables).set(updated).where(eq(workspaceVariables.id, varId));
-      } catch (error: unknown) {
-        if (error !== null && typeof error === "object" && "message" in error
-          && typeof error.message === "string" && error.message.includes("UNIQUE")) {
-          return toolBadRequest("Variable key already exists in this workspace");
-        }
-        throw error;
-      }
-      return { ...variable, ...updated, value: sensitive === true ? null : value };
+      const updated = workspaceVariableUpdate(variable, args);
+      if ("error" in updated) return toolBadRequest(updated.error);
+      const updateError = await persistWorkspaceVariableUpdate(varId, updated);
+      if (updateError !== undefined) return toolBadRequest(updateError);
+      return { ...variable, ...updated, value: updated.sensitive === true ? null : updated.value };
     },
   },
   {

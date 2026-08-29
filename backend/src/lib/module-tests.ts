@@ -38,32 +38,16 @@ function safeRelativePath(value: string): boolean {
     && !normalized.split("/").includes("..");
 }
 
-export function moduleTestConfiguration(input: unknown): ModuleTestConfiguration | Readonly<{ error: string }> {
-  const payload = input !== null && typeof input === "object" ? input as Record<string, unknown> : {};
-  const rawData = payload.data;
-  const data = rawData !== null && typeof rawData === "object" ? rawData as Record<string, unknown> : {};
-  if (data.type !== undefined && data.type !== "module-tests" && data.type !== "test-runs") {
-    return { error: "data.type must be module-tests or test-runs" };
-  }
-  const rawAttributes = data.attributes;
-  const attributes = rawAttributes !== null && typeof rawAttributes === "object"
-    ? rawAttributes as Record<string, unknown>
-    : {};
-  const verbose = attributes.verbose ?? false;
-  const rawFilters = attributes.filters ?? [];
-  const testDirectory = attributes["test-directory"] ?? "tests";
-  const rawVariables = attributes.variables ?? [];
-  if (typeof verbose !== "boolean") return { error: "verbose must be a boolean" };
-  if (
-    !Array.isArray(rawFilters)
-    || rawFilters.length > 100
-    || rawFilters.some((filter: unknown): boolean => typeof filter !== "string" || !safeRelativePath(filter))
-  ) {
-    return { error: "filters must contain at most 100 safe relative paths" };
-  }
-  if (typeof testDirectory !== "string" || !safeRelativePath(testDirectory)) {
-    return { error: "test-directory must be a safe relative path" };
-  }
+type ParsedModuleTestVariables = Readonly<{ key: string; value: string }>[] | Readonly<{ error: string }>;
+
+type ModuleTestInputFields = Readonly<{
+  verbose: unknown;
+  rawFilters: unknown;
+  testDirectory: unknown;
+  rawVariables: unknown;
+}> | Readonly<{ error: string }>;
+
+function parseModuleTestVariables(rawVariables: unknown): ParsedModuleTestVariables {
   if (!Array.isArray(rawVariables)) return { error: "variables must be an array" };
   const variables: { key: string; value: string }[] = [];
   for (const rawVariable of rawVariables) {
@@ -82,6 +66,45 @@ export function moduleTestConfiguration(input: unknown): ModuleTestConfiguration
     if (value === undefined) return { error: `variable ${key} must have a string, number, or boolean value` };
     variables.push({ key, value });
   }
+  return variables;
+}
+
+function moduleTestInputFields(input: unknown): ModuleTestInputFields {
+  const payload = input !== null && typeof input === "object" ? input as Record<string, unknown> : {};
+  const rawData = payload.data;
+  const data = rawData !== null && typeof rawData === "object" ? rawData as Record<string, unknown> : {};
+  if (data.type !== undefined && data.type !== "module-tests" && data.type !== "test-runs") {
+    return { error: "data.type must be module-tests or test-runs" };
+  }
+  const rawAttributes = data.attributes;
+  const attributes = rawAttributes !== null && typeof rawAttributes === "object"
+    ? rawAttributes as Record<string, unknown>
+    : {};
+  return {
+    verbose: attributes.verbose ?? false,
+    rawFilters: attributes.filters ?? [],
+    testDirectory: attributes["test-directory"] ?? "tests",
+    rawVariables: attributes.variables ?? [],
+  };
+}
+
+export function moduleTestConfiguration(input: unknown): ModuleTestConfiguration | Readonly<{ error: string }> {
+  const fields = moduleTestInputFields(input);
+  if ("error" in fields) return fields;
+  const { verbose, rawFilters, testDirectory, rawVariables } = fields;
+  if (typeof verbose !== "boolean") return { error: "verbose must be a boolean" };
+  if (
+    !Array.isArray(rawFilters)
+    || rawFilters.length > 100
+    || rawFilters.some((filter: unknown): boolean => typeof filter !== "string" || !safeRelativePath(filter))
+  ) {
+    return { error: "filters must contain at most 100 safe relative paths" };
+  }
+  if (typeof testDirectory !== "string" || !safeRelativePath(testDirectory)) {
+    return { error: "test-directory must be a safe relative path" };
+  }
+  const variables = parseModuleTestVariables(rawVariables);
+  if (!Array.isArray(variables)) return variables;
   return {
     verbose,
     filters: rawFilters as string[],
@@ -138,6 +161,48 @@ async function writeResult(versionId: string, result: ModuleTestResult): Promise
   await writeModuleTestResultFile(resultPath(versionId), result);
 }
 
+function inheritedTestEnvironment(): Record<string, string> {
+  return Object.fromEntries(
+    [
+      "PATH", "HOME", "TMPDIR", "USER", "LANG", "LC_ALL", "SHELL",
+      "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+      "SSL_CERT_FILE", "SSL_CERT_DIR", "TF_CLI_CONFIG_FILE", "TF_PLUGIN_CACHE_DIR",
+    ]
+      .flatMap((key): [string, string][] => typeof process.env[key] === "string" ? [[key, process.env[key]]] : []),
+  );
+}
+
+type TerraformTestProcessResult = Readonly<{ exitCode: number; stdout: string; stderr: string }>;
+
+async function executeTerraformTest(
+  // Bun's spawn API requires a mutable command array.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  args: string[],
+  root: string,
+  environment: Readonly<Record<string, string>>,
+  // AbortSignal exposes mutable event-listener operations by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  signal?: AbortSignal,
+): Promise<TerraformTestProcessResult> {
+  const processHandle = Bun.spawn(args, { cwd: root, env: environment, stdout: "pipe", stderr: "pipe" });
+  const abort = (): void => { processHandle.kill(); };
+  if (signal !== undefined) signal.addEventListener("abort", abort, { once: true });
+  let exitCode: number;
+  let stdout: string;
+  let stderr: string;
+  try {
+    [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+  } finally {
+    if (processHandle.exitCode === null) processHandle.kill();
+    signal?.removeEventListener("abort", abort);
+  }
+  return { exitCode, stdout, stderr };
+}
+
 export async function writeModuleTestResultFile(path: string, result: ModuleTestResult): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.${crypto.randomUUID()}.tmp`;
@@ -169,31 +234,9 @@ export async function runModuleTest(
       ...configuration.variables.map((variable): string => `-var=${variable.key}=${variable.value}`),
     ];
     if (signal?.aborted) throw new Error("Module test canceled");
-    const inherited = Object.fromEntries(
-      [
-        "PATH", "HOME", "TMPDIR", "USER", "LANG", "LC_ALL", "SHELL",
-        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
-        "SSL_CERT_FILE", "SSL_CERT_DIR", "TF_CLI_CONFIG_FILE", "TF_PLUGIN_CACHE_DIR",
-      ]
-        .flatMap((key): [string, string][] => typeof process.env[key] === "string" ? [[key, process.env[key]]] : []),
-    );
+    const inherited = inheritedTestEnvironment();
     const environment = { ...inherited, ...(await environmentFactory?.(staging) ?? {}) };
-    const processHandle = Bun.spawn(args, { cwd: root, env: environment, stdout: "pipe", stderr: "pipe" });
-    const abort = (): void => { processHandle.kill(); };
-    if (signal !== undefined) signal.addEventListener("abort", abort, { once: true });
-    let exitCode: number;
-    let stdout: string;
-    let stderr: string;
-    try {
-      [exitCode, stdout, stderr] = await Promise.all([
-        processHandle.exited,
-        new Response(processHandle.stdout).text(),
-        new Response(processHandle.stderr).text(),
-      ]);
-    } finally {
-      if (processHandle.exitCode === null) processHandle.kill();
-      signal?.removeEventListener("abort", abort);
-    }
+    const { exitCode, stdout, stderr } = await executeTerraformTest(args, root, environment, signal);
     if (signal?.aborted === true) throw new Error("Module test canceled");
     const output = [stdout.trim(), stderr.trim()]
       .filter((entry): boolean => entry !== "")

@@ -73,40 +73,37 @@ async function readBodyCapped(init: BodyInit, capBytes: number): Promise<Buffer>
   return Buffer.concat(chunks);
 }
 
-export async function forwardFetch(
-  agentPoolId: string,
-  input: string | URL,
-  init: RequestInit = {},
-): Promise<Response> {
+function validateForwardUrl(input: string | Readonly<URL>): URL {
   const url = new URL(input);
-  if (!/^https?:$/.test(url.protocol) || url.username !== "" || url.password !== "") {
-    throw new Error("Forwarded requests require an HTTP(S) URL without embedded credentials");
-  }
+  if (!/^https?:$/.test(url.protocol) || url.username !== "" || url.password !== "") throw new Error("Forwarded requests require an HTTP(S) URL without embedded credentials");
+  return url;
+}
+
+function validateForwardMethod(init: Readonly<RequestInit>): string {
   const method = (init.method ?? "GET").toUpperCase();
-  if (!/^[A-Z]+$/.test(method) || method === "CONNECT" || method === "TRACE") {
-    throw new Error("Forwarded request method is not supported");
-  }
-  const requestHeaders: Record<string, string[]> = {};
-  new Headers(init.headers).forEach((value, name): void => { requestHeaders[name] = [value]; });
-  const bodyBytes = init.body === undefined || init.body === null
-    ? null
-    : await readBodyCapped(init.body, MAX_FORWARD_BODY_BYTES);
+  if (!/^[A-Z]+$/.test(method) || method === "CONNECT" || method === "TRACE") throw new Error("Forwarded request method is not supported");
+  return method;
+}
+
+function buildForwardHeaders(init: Readonly<RequestInit>): Record<string, string[]> {
+  const headers: Record<string, string[]> = {};
+  new Headers(init.headers).forEach((value, name): void => { headers[name] = [value]; });
+  return headers;
+}
+
+async function readForwardBody(init: Readonly<RequestInit>): Promise<Buffer | null> {
+  if (init.body === undefined || init.body === null) return null;
+  const bodyBytes = await readBodyCapped(init.body, MAX_FORWARD_BODY_BYTES);
   if ((bodyBytes?.byteLength ?? 0) > MAX_FORWARD_BODY_BYTES) throw new Error("Forwarded request body exceeds 10 MiB");
+  return bodyBytes;
+}
 
-  const id = `afwd-${crypto.randomUUID()}`;
-  await db.insert(agentForwardedRequests).values({
-    id,
-    agentPoolId,
-    method,
-    url: url.toString(),
-    headers: requestHeaders,
-    body: bodyBytes === null ? null : bodyBytes.toString("base64"),
-    status: "queued",
-    createdAt: Date.now(),
-  });
-
+function forwardDeadline(): number {
   const timeoutMs = Number(process.env.TERRENCE_AGENT_FORWARD_TIMEOUT_MS ?? DEFAULT_FORWARD_TIMEOUT_MS);
-  const deadline = Date.now() + (Number.isFinite(timeoutMs) ? Math.max(1_000, Math.min(timeoutMs, 300_000)) : DEFAULT_FORWARD_TIMEOUT_MS);
+  return Date.now() + (Number.isFinite(timeoutMs) ? Math.max(1_000, Math.min(timeoutMs, 300_000)) : DEFAULT_FORWARD_TIMEOUT_MS);
+}
+
+async function pollForwardResponse(id: string, deadline: number): Promise<Response | null> {
   while (Date.now() < deadline) {
     const request = await db.query.agentForwardedRequests.findFirst({ where: eq(agentForwardedRequests.id, id) });
     if (request?.status === "completed" && request.responseStatus !== null) {
@@ -118,13 +115,26 @@ export async function forwardFetch(
     if (request?.status === "errored") throw new Error(request.errorMessage ?? "Agent request forwarding failed");
     await Bun.sleep(100);
   }
-  await db.update(agentForwardedRequests).set({
-    status: "errored",
-    errorMessage: "Forwarded request timed out",
-    completedAt: Date.now(),
-  }).where(and(
-    eq(agentForwardedRequests.id, id),
-    inArray(agentForwardedRequests.status, ["queued", "claimed"]),
-  ));
+  return null;
+}
+
+export async function forwardFetch(
+  agentPoolId: string,
+  input: string | Readonly<URL>,
+  init: Readonly<RequestInit> = {},
+): Promise<Response> {
+  const url = validateForwardUrl(input);
+  const method = validateForwardMethod(init);
+  const requestHeaders = buildForwardHeaders(init);
+  const bodyBytes = await readForwardBody(init);
+  const id = `afwd-${crypto.randomUUID()}`;
+  await db.insert(agentForwardedRequests).values({
+    id, agentPoolId, method, url: url.toString(), headers: requestHeaders,
+    body: bodyBytes === null ? null : bodyBytes.toString("base64"), status: "queued", createdAt: Date.now(),
+  });
+  const deadline = forwardDeadline();
+  const response = await pollForwardResponse(id, deadline);
+  if (response !== null) return response;
+  await db.update(agentForwardedRequests).set({ status: "errored", errorMessage: "Forwarded request timed out", completedAt: Date.now() }).where(and(eq(agentForwardedRequests.id, id), inArray(agentForwardedRequests.status, ["queued", "claimed"])));
   throw new Error("Forwarded request timed out");
 }

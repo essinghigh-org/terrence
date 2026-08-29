@@ -111,36 +111,47 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+function parseVersionParts(version: string): number[] {
+  return version.replace(/^v/, "").split(".").map((n: string): number => Number.parseInt(n, 10) || 0);
+}
+
+function compareVersionParts(parts: readonly number[], target: readonly number[]): number {
+  for (let i = 0; i < Math.max(parts.length, target.length); i += 1) {
+    const diff = (parts[i] ?? 0) - (target[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function satisfiesOperator(cmp: number, op: string, parts: readonly number[], target: readonly number[]): boolean {
+  if (op === ">=") return cmp >= 0;
+  if (op === "<=") return cmp <= 0;
+  if (op === ">") return cmp > 0;
+  if (op === "<") return cmp < 0;
+  if (op === "!=") return cmp !== 0;
+  if (op === "==") return cmp === 0;
+  if (op === "~>") {
+    if (cmp < 0 || parts[0] !== target[0]) return false;
+    if (target.length >= 3 && (parts[1] ?? 0) !== (target[1] ?? 0)) return false;
+    return true;
+  }
+  return false;
+}
+
+function satisfiesSingleClause(parts: readonly number[], clause: string): boolean {
+  const trimmed = clause.trim();
+  const match = /^(>=|<=|>|<|!=|~>|==)?\s*(.+)$/.exec(trimmed);
+  if (match === null) return false;
+  const op = match[1] ?? "==";
+  const target = parseVersionParts(match[2] ?? "0");
+  const cmp = compareVersionParts(parts, target);
+  return satisfiesOperator(cmp, op, parts, target);
+}
+
 function satisfiesConstraint(version: string, constraint: string): boolean {
-  const v = version.replace(/^v/, "");
-  const parts = v.split(".").map((n: string): number => Number.parseInt(n, 10) || 0);
+  const parts = parseVersionParts(version);
   for (const clause of constraint.split(",")) {
-    const trimmed = clause.trim();
-    const match = /^(>=|<=|>|<|!=|~>|==)?\s*(.+)$/.exec(trimmed);
-    if (match === null) return false;
-    const op = match[1] ?? "==";
-    const target = (match[2] ?? "0").replace(/^v/, "").split(".").map((n: string): number => Number.parseInt(n, 10) || 0);
-    // Numeric comparison for the parsed arrays (compareVersions takes strings).
-    let cmp = 0;
-    for (let i = 0; i < Math.max(parts.length, target.length); i += 1) {
-      const diff = (parts[i] ?? 0) - (target[i] ?? 0);
-      if (diff !== 0) {
-        cmp = diff;
-        break;
-      }
-    }
-    if (op === ">=" && cmp < 0) return false;
-    if (op === "<=" && cmp > 0) return false;
-    if (op === ">" && cmp <= 0) return false;
-    if (op === "<" && cmp >= 0) return false;
-    if (op === "!=" && cmp === 0) return false;
-    if (op === "~>") {
-      if (cmp < 0 || parts[0] !== target[0]) return false;
-      // Terraform's two-component pessimistic constraint (`~> 1.2`) allows
-      // every 1.x release; a fully-qualified `~> 1.2.3` is limited to 1.2.x.
-      if (target.length >= 3 && (parts[1] ?? 0) !== (target[1] ?? 0)) return false;
-    }
-    if (op === "==" && cmp !== 0) return false;
+    if (!satisfiesSingleClause(parts, clause)) return false;
   }
   return true;
 }
@@ -164,9 +175,9 @@ export async function buildAgentJobPayload(
   details: AgentJobDetails,
   baseUrl: string,
   runToken: string,
-  terraformInfo: { version: string; url: string; checksum: string },
-  terraformVariables: Record<string, string>,
-  environment: Record<string, string>,
+  terraformInfo: Readonly<{ version: string; url: string; checksum: string }>,
+  terraformVariables: Readonly<Record<string, string>>,
+  environment: Readonly<Record<string, string>>,
 ): Promise<Record<string, unknown>> {
   const { job, run, workspace, organizationName } = details;
   const phase = job.phase;

@@ -7,6 +7,7 @@ import { readdirSync, readFileSync } from "fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "os";
 import { join } from "path";
+import { generateForeignKeySql, parseCreateTableSql, translateDefault } from "../../src/lib/migration/ddl";
 
 /**
  * DB migration fixtures (review item 22.10), post-squash.
@@ -247,4 +248,40 @@ test("journal when timestamps are strictly ascending (no upgrade-skip islands)",
   // those migrations on upgrade and later migrations then fail. This pins the
   // ordering so the landmine cannot regress when the history grows again.
   expect(journalOrderViolations()).toEqual([]);
+});
+
+test("preserves SQLite defaults containing escaped single quotes", () => {
+  expect(translateDefault("'a''b'")).toEqual({ sql: "'a''b'", dropped: false });
+});
+
+test("preserves inline foreign-key local and referenced columns", () => {
+  const table = parseCreateTableSql(
+    'CREATE TABLE "child" ("parent_id" INTEGER REFERENCES "parent" ("id"))',
+  );
+  if (table === null) throw new Error("expected child table to parse");
+  expect(table.columns[0]?.references).toEqual({
+    columns: ["parent_id"],
+    table: "parent",
+    refColumns: ["id"],
+    onUpdate: null,
+    onDelete: null,
+  });
+  expect(generateForeignKeySql(table)).toContain(
+    'ALTER TABLE "child" ADD CONSTRAINT "fk_child_0" FOREIGN KEY ("parent_id") REFERENCES "parent" ("id") NOT VALID;',
+  );
+});
+
+test("preserves quoted referenced identifiers in generated foreign-key DDL", () => {
+  const table = parseCreateTableSql(
+    'CREATE TABLE "child" ("space_id" INTEGER REFERENCES "parent" ("parent id"), "quote_id" INTEGER REFERENCES "parent" ("parent""id"))',
+  );
+  if (table === null) throw new Error("expected child table to parse");
+  expect(table.columns.map((column) => column.references?.refColumns)).toEqual([["parent id"], ['parent"id']]);
+  const foreignKeys = generateForeignKeySql(table);
+  expect(foreignKeys).toContain(
+    'ALTER TABLE "child" ADD CONSTRAINT "fk_child_0" FOREIGN KEY ("space_id") REFERENCES "parent" ("parent id") NOT VALID;',
+  );
+  expect(foreignKeys).toContain(
+    'ALTER TABLE "child" ADD CONSTRAINT "fk_child_1" FOREIGN KEY ("quote_id") REFERENCES "parent" ("parent""id") NOT VALID;',
+  );
 });

@@ -37,6 +37,21 @@ type LdapEntry = Readonly<{
   [attribute: string]: string | readonly string[] | Buffer | readonly Buffer[] | undefined;
 }>;
 
+type LdapLoginInput = Readonly<{
+  host: string;
+  baseDn: string;
+  bindDn: string | null;
+  bindPassword: string | null;
+}>;
+
+function trimmedOrNull(value: string | null): string | null {
+  return value === null || value.trim() === "" ? null : value.trim();
+}
+
+function originalOrNull(value: string | null): string | null {
+  return value === null || value.trim() === "" ? null : value;
+}
+
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ldapts Entry buffers are mutable by contract
 function attributeValue(entry: LdapEntry, name: string): string | null {
   const key = Object.keys(entry).find((candidate): boolean => candidate.toLowerCase() === name.toLowerCase());
@@ -50,6 +65,81 @@ function attributeValue(entry: LdapEntry, name: string): string | null {
   }
   if (raw instanceof Buffer) return raw.toString("utf8");
   return null;
+}
+
+function normalizedLdapLoginInput(settings: LdapSettings, username: string, password: string): LdapLoginInput | undefined {
+  const host = trimmedOrNull(settings.host);
+  const baseDn = trimmedOrNull(settings.baseDn);
+  const bindDn = trimmedOrNull(settings.bindDn);
+  const bindPassword = bindDn === null
+    ? null
+    : originalOrNull(settings.bindPassword);
+  if (!settings.enabled || host === null || baseDn === null) return undefined;
+  if (username === "" || password === "") return undefined;
+  if (bindDn !== null && (bindPassword === null || bindPassword === "")) return undefined;
+  return { host, baseDn, bindDn, bindPassword };
+}
+
+async function initializeLdapClient(
+  client: Client,
+  settings: LdapSettings,
+  bindDn: string | null,
+  bindPassword: string | null,
+  tlsOptions: Readonly<{ minVersion: "TLSv1.2" }>,
+): Promise<void> {
+  if (settings.encryption === "starttls") await client.startTLS(tlsOptions);
+  if (bindDn !== null) await client.bind(bindDn, bindPassword ?? "");
+}
+
+async function findUniqueLdapEntry(
+  client: Client,
+  baseDn: string,
+  settings: LdapSettings,
+  username: string,
+): Promise<Entry | undefined> {
+  const filter = settings.userFilter.replaceAll("{{username}}", escapeFilterValue(username));
+  const result = await client.search(baseDn, {
+    scope: "sub",
+    filter,
+    attributes: [settings.attrUsername, settings.attrEmail, settings.attrDisplayName],
+    sizeLimit: LDAP_SEARCH_SIZE_LIMIT,
+  });
+  // ldapts returns partial entries when the client-side size limit is hit;
+  // do not authenticate against a truncated result set.
+  if (result.searchEntries.length >= LDAP_SEARCH_SIZE_LIMIT) return undefined;
+
+  const wanted = username.trim().toLowerCase();
+  const byAttr = result.searchEntries.filter(
+    // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ldapts rows are mutable
+    (candidate: Entry): boolean =>
+      attributeValue(candidate as LdapEntry, settings.attrUsername)?.trim().toLowerCase() === wanted,
+  );
+  // Require a unique match: binding an arbitrary entry would authenticate a
+  // different identity than the one presented. Extra entries mean the filter
+  // was ambiguous; refuse rather than guess.
+  return byAttr.length === 1 ? byAttr[0] : undefined;
+}
+
+function ldapFailureResult(
+  error: unknown,
+  activeBind: "service" | "user" | null,
+  scheme: string,
+  settings: LdapSettings,
+): { user: null; unavailable: boolean } {
+  // A rejected bind (result code 49 / InvalidCredentialsError) is a normal
+  // auth outcome — the directory is fine, the credentials are not. Anything
+  // else (connect, TLS, startTLS, timeout) means the directory is
+  // unavailable. Never log the password or bind password.
+  const message = error instanceof Error ? error.message : String(error);
+  const credentialRejection = activeBind === "user" && error instanceof InvalidCredentialsError;
+  const ambiguousSearch = error instanceof SizeLimitExceededError;
+  if (!credentialRejection && !ambiguousSearch) {
+    log.error("LDAP directory unavailable", {
+      url: `${scheme}://${settings.host}:${settings.port}`,
+      error: message,
+    });
+  }
+  return { user: null, unavailable: !credentialRejection && !ambiguousSearch };
 }
 
 /**
@@ -70,27 +160,13 @@ export async function authenticateLdap(
   // Blank values mean "absent": normalize once so every guard and bind below
   // treats them uniformly, and a blank bind DN is "no service account" even
   // when a password was persisted next to it.
-  const host = settings.host !== null && settings.host.trim() !== "" ? settings.host.trim() : null;
-  const baseDn = settings.baseDn !== null && settings.baseDn.trim() !== "" ? settings.baseDn.trim() : null;
-  const bindDn = settings.bindDn !== null && settings.bindDn.trim() !== "" ? settings.bindDn.trim() : null;
-  const bindPassword = bindDn === null
-    ? null
-    : settings.bindPassword !== null && settings.bindPassword.trim() !== "" ? settings.bindPassword : null;
-  if (!settings.enabled || host === null || baseDn === null) {
-    return { user: null, unavailable: false };
-  }
-  if (username === "" || password === "") return { user: null, unavailable: false };
-  if (bindDn !== null && (bindPassword === null || bindPassword === "")) {
-    // A zero-length password performs an *unauthenticated bind* per
-    // RFC 4511 §4.2 — fail closed, and flag it as a config problem that
-    // should degrade to local auth immediately rather than retry the wire.
-    return { user: null, unavailable: false };
-  }
+  const loginInput = normalizedLdapLoginInput(settings, username, password);
+  if (loginInput === undefined) return { user: null, unavailable: false };
 
   const scheme = settings.encryption === "ldaps" ? "ldaps" : "ldap";
   const tlsOptions = { minVersion: "TLSv1.2" as const };
   const clientOptions = {
-    url: `${scheme}://${host}:${settings.port}`,
+    url: `${scheme}://${loginInput.host}:${settings.port}`,
     timeout: 10_000,
     connectTimeout: 10_000,
     ...(settings.encryption === "plain" ? {} : { tlsOptions }),
@@ -101,36 +177,8 @@ export async function authenticateLdap(
   let activeBind: "service" | "user" | null = null;
 
   try {
-    if (settings.encryption === "starttls") {
-      await client.startTLS(tlsOptions);
-    }
-    if (bindDn !== null) {
-      activeBind = "service";
-      await client.bind(bindDn, bindPassword ?? "");
-      activeBind = null;
-    }
-
-    const filter = settings.userFilter.replaceAll("{{username}}", escapeFilterValue(username));
-    const result = await client.search(baseDn, {
-      scope: "sub",
-      filter,
-      attributes: [settings.attrUsername, settings.attrEmail, settings.attrDisplayName],
-      sizeLimit: LDAP_SEARCH_SIZE_LIMIT,
-    });
-    // ldapts returns partial entries when the client-side size limit is hit;
-    // do not authenticate against a truncated result set.
-    if (result.searchEntries.length >= LDAP_SEARCH_SIZE_LIMIT) return { user: null, unavailable: false };
-
-    const wanted = username.trim().toLowerCase();
-    const byAttr = result.searchEntries.filter(
-      // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- ldapts rows are mutable
-      (candidate: Entry): boolean =>
-        attributeValue(candidate as LdapEntry, settings.attrUsername)?.trim().toLowerCase() === wanted,
-    );
-    // Require a unique match: binding an arbitrary entry would authenticate a
-    // different identity than the one presented. Extra entries mean the filter
-    // was ambiguous; refuse rather than guess.
-    const entry: Entry | undefined = byAttr.length === 1 ? byAttr[0] : undefined;
+    await initializeLdapClient(client, settings, loginInput.bindDn, loginInput.bindPassword, tlsOptions);
+    const entry = await findUniqueLdapEntry(client, loginInput.baseDn, settings, username);
     if (entry === undefined) return { user: null, unavailable: false };
 
     // Validate the presented password by binding as the found user.
@@ -147,20 +195,7 @@ export async function authenticateLdap(
       unavailable: false,
     };
   } catch (error: unknown) {
-    // A rejected bind (result code 49 / InvalidCredentialsError) is a normal
-    // auth outcome — the directory is fine, the credentials are not. Anything
-    // else (connect, TLS, startTLS, timeout) means the directory is
-    // unavailable. Never log the password or bind password.
-    const message = error instanceof Error ? error.message : String(error);
-    const credentialRejection = activeBind === "user" && error instanceof InvalidCredentialsError;
-    const ambiguousSearch = error instanceof SizeLimitExceededError;
-    if (!credentialRejection && !ambiguousSearch) {
-      log.error("LDAP directory unavailable", {
-        url: `${scheme}://${settings.host}:${settings.port}`,
-        error: message,
-      });
-    }
-    return { user: null, unavailable: !credentialRejection && !ambiguousSearch };
+    return ldapFailureResult(error, activeBind, scheme, settings);
   } finally {
     await client.unbind().catch((): void => undefined);
   }

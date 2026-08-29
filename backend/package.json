@@ -6,7 +6,7 @@
   "scripts": {
     "start": "bun run index.ts",
     "dev": "bun run --watch index.ts",
-    "test": "bun test --parallel",
+    "test": "bun test --bail=5 --max-concurrency=1 --no-orphans",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "coverage": "bun run scripts/coverage-report.ts",

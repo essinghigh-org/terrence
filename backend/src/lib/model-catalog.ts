@@ -86,6 +86,43 @@ function canOutputText(model: Readonly<Record<string, unknown>>): boolean {
   return Array.isArray(output) && output.includes("text");
 }
 
+type CatalogModel = { id: string; name: string; reasoning: boolean; context: number | null };
+
+function parseCatalogModel(modelId: string, rawModel: unknown): CatalogModel | undefined {
+  const model = asObject(rawModel);
+  if (model === undefined) return undefined;
+  if (!canOutputText(model)) return undefined;
+  const contextRaw = asObject(model.limit)?.context;
+  return {
+    id: modelId,
+    name: typeof model.name === "string" && model.name !== "" ? model.name : modelId,
+    reasoning: model.reasoning === true,
+    context: typeof contextRaw === "number" && Number.isFinite(contextRaw) && contextRaw > 0 ? contextRaw : null,
+  };
+}
+
+function parseCatalogProvider(id: string, rawProvider: unknown): CatalogProvider | undefined {
+  const provider = asObject(rawProvider);
+  if (provider === undefined) return undefined;
+  const rawModels = asObject(provider.models);
+  if (rawModels === undefined) return undefined;
+  const models: CatalogModel[] = [];
+  for (const [modelId, rawModel] of Object.entries(rawModels)) {
+    const model = parseCatalogModel(modelId, rawModel);
+    if (model !== undefined) models.push(model);
+  }
+  if (models.length === 0) return undefined;
+  const baseUrl = typeof provider.api === "string" && provider.api !== ""
+    ? provider.api
+    : (CURATED_BASE_URLS[id] ?? null);
+  return {
+    id,
+    name: typeof provider.name === "string" && provider.name !== "" ? provider.name : id,
+    baseUrl,
+    models: models.sort((a, b) => a.name.localeCompare(b.name)),
+  };
+}
+
 /** Parse the raw models.dev catalog JSON into the trimmed shape. Unknown or
  * malformed entries are skipped; the whole parse degrades to [] on structural
  * corruption rather than throwing (cold start, never crash the API). */
@@ -100,34 +137,8 @@ export function parseModelCatalog(raw: string): CatalogProvider[] {
   if (root === undefined) return [];
   const providers: CatalogProvider[] = [];
   for (const [id, rawProvider] of Object.entries(root)) {
-    const provider = asObject(rawProvider);
-    if (provider === undefined) continue;
-    const rawModels = asObject(provider.models);
-    if (rawModels === undefined) continue;
-    type ModelEntry = { id: string; name: string; reasoning: boolean; context: number | null };
-    const models: ModelEntry[] = [];
-    for (const [modelId, rawModel] of Object.entries(rawModels)) {
-      const model = asObject(rawModel);
-      if (model === undefined) continue;
-      if (!canOutputText(model)) continue;
-      const contextRaw = asObject(model.limit)?.context;
-      models.push({
-        id: modelId,
-        name: typeof model.name === "string" && model.name !== "" ? model.name : modelId,
-        reasoning: model.reasoning === true,
-        context: typeof contextRaw === "number" && Number.isFinite(contextRaw) && contextRaw > 0 ? contextRaw : null,
-      });
-    }
-    if (models.length === 0) continue;
-    const baseUrl = typeof provider.api === "string" && provider.api !== ""
-      ? provider.api
-      : (CURATED_BASE_URLS[id] ?? null);
-    providers.push({
-      id,
-      name: typeof provider.name === "string" && provider.name !== "" ? provider.name : id,
-      baseUrl,
-      models: models.sort((a, b) => a.name.localeCompare(b.name)),
-    });
+    const provider = parseCatalogProvider(id, rawProvider);
+    if (provider !== undefined) providers.push(provider);
   }
   return providers.sort((a, b) => a.name.localeCompare(b.name));
 }

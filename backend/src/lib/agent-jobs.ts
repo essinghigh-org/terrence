@@ -34,27 +34,36 @@ export const MAX_AGENT_RESULT_BYTES = 64 * 1024;
 export const MAX_AGENT_RESULT_DEPTH = 8;
 export const MAX_AGENT_RESULT_KEYS = 500;
 
-function isResultValueTooLarge(value: unknown, depth: number, keyCount: { count: number }): boolean {
-  if (depth > MAX_AGENT_RESULT_DEPTH) return true;
-  if (typeof value === "string" && value.length > 16_384) return true;
-  if (typeof value !== "object" || value === null) return false;
-  if (Array.isArray(value)) {
-    if (value.length > 1000) return true;
-    keyCount.count += value.length;
-    if (keyCount.count > MAX_AGENT_RESULT_KEYS) return true;
-    for (const item of value) if (isResultValueTooLarge(item, depth + 1, keyCount)) return true;
-    return false;
-  }
-  const entries = Object.entries(value as Record<string, unknown>);
+function isLargeString(value: unknown): boolean {
+  return typeof value === "string" && value.length > 16_384;
+}
+
+function isArrayTooLarge(value: readonly unknown[], keyCount: { count: number }, depth: number): boolean {
+  if (value.length > 1000) return true;
+  keyCount.count += value.length;
+  if (keyCount.count > MAX_AGENT_RESULT_KEYS) return true;
+  for (const item of value) if (isResultValueTooLarge(item, depth + 1, keyCount)) return true;
+  return false;
+}
+
+function isObjectTooLarge(entries: readonly [string, unknown][], keyCount: { count: number }, depth: number): boolean {
   if (entries.length > 200) return true;
   keyCount.count += entries.length;
   if (keyCount.count > MAX_AGENT_RESULT_KEYS) return true;
   for (const [k, v] of entries) {
     if (k.length > 1024) return true;
-    if (typeof v === "string" && v.length > 16_384) return true;
+    if (isLargeString(v)) return true;
     if (isResultValueTooLarge(v, depth + 1, keyCount)) return true;
   }
   return false;
+}
+
+function isResultValueTooLarge(value: unknown, depth: number, keyCount: { count: number }): boolean {
+  if (depth > MAX_AGENT_RESULT_DEPTH) return true;
+  if (isLargeString(value)) return true;
+  if (typeof value !== "object" || value === null) return false;
+  if (Array.isArray(value)) return isArrayTooLarge(value, keyCount, depth);
+  return isObjectTooLarge(Object.entries(value as Record<string, unknown>), keyCount, depth);
 }
 
 export function isAgentResultValid(result: unknown): boolean {
@@ -538,113 +547,97 @@ async function claimedJobDetails(job: AgentJob): Promise<ClaimedAgentJob | undef
   };
 }
 
+async function findExistingClaim(agent: Agent): Promise<ClaimedAgentJob | undefined> {
+  const existing = await db.query.agentJobs.findFirst({
+    where: and(eq(agentJobs.agentId, agent.id), eq(agentJobs.status, "claimed")),
+    orderBy: [asc(agentJobs.claimedAt)],
+  });
+  if (existing === undefined) return undefined;
+  return claimedJobDetails(existing);
+}
+
+function resolveAgentBinaries(agent: Agent): readonly string[] {
+  return agent.iacBinaries !== null && agent.iacBinaries.length > 0 ? agent.iacBinaries : ["terraform"];
+}
+
+async function findCandidateJob(agent: Agent, acceptedPhases: readonly string[], agentBinaries: readonly string[], skippedIds: ReadonlySet<string>): Promise<AgentJobRow | undefined> {
+  return db.query.agentJobs.findFirst({
+    where: and(
+      eq(agentJobs.agentPoolId, agent.agentPoolId),
+      eq(agentJobs.status, "queued"),
+      inArray(agentJobs.phase, [...acceptedPhases]),
+      inArray(agentJobs.iacBinary, agentBinaries),
+      ...(skippedIds.size > 0 ? [notInArray(agentJobs.id, [...skippedIds])] : []),
+    ),
+    orderBy: [asc(agentJobs.createdAt)],
+  });
+}
+
+async function tryClaimCandidate(candidate: AgentJobRow, agent: Agent): Promise<AgentJobRow | undefined> {
+  const now = Date.now();
+  const claimed = await db.update(agentJobs).set({ agentId: agent.id, status: "claimed", claimedAt: now }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "queued"))).returning();
+  const claimedJob = claimed[0];
+  if (claimedJob !== undefined) return claimedJob;
+  return undefined;
+}
+
+async function validateCandidateRun(candidate: AgentJobRow): Promise<{ run: AgentRunRow; expectedRunStatus: string; nextRunStatus: string } | null> {
+  const expectedRunStatus = candidate.phase === "plan" ? "plan_queued" : "apply_queued";
+  const nextRunStatus = candidate.phase === "plan" ? "planning" : "applying";
+  const run = await db.query.runs.findFirst({ where: eq(runs.id, candidate.runId) });
+  if (run === undefined || run.status !== expectedRunStatus) {
+    await db.update(agentJobs).set({ status: "canceled", completedAt: Date.now(), errorMessage: "Run is no longer waiting for this job" }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
+    return null;
+  }
+  return { run, expectedRunStatus, nextRunStatus };
+}
+
+
+async function tryLockWorkspaceForApply(candidate: AgentJobRow, run: AgentRunRow, skippedApplyJobIds: Set<string>): Promise<"locked" | "skipped" | "no-lock"> {
+  if (candidate.phase !== "apply") return "no-lock";
+  const locked = await db.update(workspaces).set({ locked: true, lockedReason: `Run ${candidate.runId} is applying`, lockOwnerType: "agent-run", lockOwnerId: candidate.runId }).where(and(eq(workspaces.id, run.workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
+  if (locked.length > 0) return "locked";
+  skippedApplyJobIds.add(candidate.id);
+  await db.update(agentJobs).set({ agentId: null, status: "queued", claimedAt: null }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
+  return "skipped";
+}
+
+async function tryAssociateRun(candidate: AgentJobRow, run: AgentRunRow, agent: Agent, expectedRunStatus: string, nextRunStatus: string): Promise<{ id: string } | null> {
+  const associated = await db.update(runs).set({ agentPoolId: agent.agentPoolId, agentId: agent.id, status: nextRunStatus, statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus) }).where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus))).returning({ id: runs.id });
+  if (associated.length > 0) return associated[0] as { id: string };
+  if (candidate.phase === "apply") {
+    await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(eq(workspaces.id, run.workspaceId), eq(workspaces.locked, true), eq(workspaces.lockOwnerType, "agent-run"), eq(workspaces.lockOwnerId, run.id)));
+  }
+  await db.update(agentJobs).set({ status: "canceled", completedAt: Date.now(), errorMessage: "Run is no longer waiting for this job" }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
+  return null;
+}
+
 export async function claimAgentJob(
   agent: Agent,
   acceptedPhases: readonly string[] = ["plan", "apply"],
 ): Promise<ClaimedAgentJob | undefined> {
-  const existing = await db.query.agentJobs.findFirst({
-    where: and(
-      eq(agentJobs.agentId, agent.id),
-      eq(agentJobs.status, "claimed"),
-    ),
-    orderBy: [asc(agentJobs.claimedAt)],
-  });
-  if (existing !== undefined) return claimedJobDetails(existing);
+  const existingClaim = await findExistingClaim(agent);
+  if (existingClaim !== undefined) return existingClaim;
   if (acceptedPhases.length === 0) return undefined;
-
-  // Capability routing: only jobs whose resolved IaC binary the agent
-  // declared at registration are claimable. A plain tfc-agent (default
-  // ["terraform"]) can never claim a tofu job; it waits for an agent that
-  // declared tofu. Fall back to terraform-only for rows predating the
-  // column default (defensive; the DDL default covers new rows).
-  const agentBinaries = agent.iacBinaries !== null && agent.iacBinaries.length > 0
-    ? agent.iacBinaries
-    : ["terraform"];
+  const agentBinaries = resolveAgentBinaries(agent);
   const skippedApplyJobIds = new Set<string>();
-
   for (let attempts = 0; attempts < 10; attempts += 1) {
-    const candidate = await db.query.agentJobs.findFirst({
-      where: and(
-        eq(agentJobs.agentPoolId, agent.agentPoolId),
-        eq(agentJobs.status, "queued"),
-        inArray(agentJobs.phase, [...acceptedPhases]),
-        inArray(agentJobs.iacBinary, agentBinaries),
-        ...(skippedApplyJobIds.size > 0 ? [notInArray(agentJobs.id, [...skippedApplyJobIds])] : []),
-      ),
-      orderBy: [asc(agentJobs.createdAt)],
-    });
+    const candidate = await findCandidateJob(agent, acceptedPhases, agentBinaries, skippedApplyJobIds);
     if (candidate === undefined) return undefined;
-
-    const now = Date.now();
-    const claimed = await db.update(agentJobs).set({
-      agentId: agent.id,
-      status: "claimed",
-      claimedAt: now,
-    }).where(and(
-      eq(agentJobs.id, candidate.id),
-      eq(agentJobs.status, "queued"),
-    )).returning();
-    const claimedJob = claimed[0];
+    const claimedJob = await tryClaimCandidate(candidate, agent);
     if (claimedJob === undefined) {
-      const raced = await db.query.agentJobs.findFirst({
-        where: and(eq(agentJobs.agentId, agent.id), eq(agentJobs.status, "claimed")),
-      });
+      const raced = await db.query.agentJobs.findFirst({ where: and(eq(agentJobs.agentId, agent.id), eq(agentJobs.status, "claimed")) });
       return raced === undefined ? undefined : await claimedJobDetails(raced);
     }
-
-    const expectedRunStatus = candidate.phase === "plan" ? "plan_queued" : "apply_queued";
-    const nextRunStatus = candidate.phase === "plan" ? "planning" : "applying";
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, candidate.runId) });
-    if (run?.status !== expectedRunStatus) {
-      await db.update(agentJobs).set({
-        status: "canceled",
-        completedAt: Date.now(),
-        errorMessage: "Run is no longer waiting for this job",
-      }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
-      continue;
-    }
-    if (candidate.phase === "apply") {
-      const locked = await db.update(workspaces).set({
-        locked: true,
-        lockedReason: `Run ${candidate.runId} is applying`,
-        lockOwnerType: "agent-run",
-        lockOwnerId: candidate.runId,
-      }).where(and(eq(workspaces.id, run.workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
-      if (locked.length === 0) {
-        skippedApplyJobIds.add(candidate.id);
-        await db.update(agentJobs).set({ agentId: null, status: "queued", claimedAt: null }).where(and(
-          eq(agentJobs.id, candidate.id),
-          eq(agentJobs.status, "claimed"),
-        ));
-        continue;
-      }
-    }
-    const associated = await db.update(runs).set({
-      agentPoolId: agent.agentPoolId,
-      agentId: agent.id,
-      status: nextRunStatus,
-      statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus),
-    }).where(and(
-      eq(runs.id, run.id),
-      eq(runs.status, expectedRunStatus),
-    )).returning({ id: runs.id });
-    if (associated.length === 0) {
-      if (candidate.phase === "apply") {
-        await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
-          eq(workspaces.id, run.workspaceId),
-          eq(workspaces.locked, true),
-          eq(workspaces.lockOwnerType, "agent-run"),
-          eq(workspaces.lockOwnerId, run.id),
-        ));
-      }
-      await db.update(agentJobs).set({
-        status: "canceled",
-        completedAt: Date.now(),
-        errorMessage: "Run is no longer waiting for this job",
-      }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
-      continue;
-    }
-    await db.update(agents).set({ status: "busy", lastPingAt: now }).where(eq(agents.id, agent.id));
+    const validation = await validateCandidateRun(candidate);
+    if (validation === null) continue;
+    const { run, expectedRunStatus, nextRunStatus } = validation;
+    const claimedAt = Date.now();
+    const lockResult = await tryLockWorkspaceForApply(candidate, run, skippedApplyJobIds);
+    if (lockResult === "skipped") continue;
+    const associated = await tryAssociateRun(candidate, run, agent, expectedRunStatus, nextRunStatus);
+    if (associated === null) continue;
+    await db.update(agents).set({ status: "busy", lastPingAt: claimedAt }).where(eq(agents.id, agent.id));
     notifyRunStatus(claimedJob.runId, claimedJob.phase === "plan" ? "planning" : "applying");
     return await claimedJobDetails(claimedJob);
   }
@@ -782,205 +775,348 @@ export async function enqueueAgentApplyJob(
   return queued;
 }
 
+type AgentJobRow = DeepReadonly<typeof agentJobs.$inferSelect>;
+type AgentRunRow = DeepReadonly<typeof runs.$inferSelect>;
+type CompletionResult = Readonly<{ job: AgentJob; runStatus: string }>;
+type CompletionPreparation = Readonly<{
+  structuredPlanCounts: ReturnType<typeof planJsonResourceCounts>;
+  now: number;
+}>;
+type CompletionOutcome = Readonly<{
+  policyOutcome: AgentPolicyOutcome;
+  runStatus: string;
+}>;
+
+const UNEVALUATED_POLICY_OUTCOME: AgentPolicyOutcome = {
+  evaluated: false,
+  hardFailed: false,
+  softFailed: false,
+};
+
+async function requeueInvalidCompletion(
+  // Drizzle's transaction/query client is stateful by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  database: Database,
+  agentId: string,
+  job: AgentJobRow,
+  run: AgentRunRow | undefined,
+  expectedRunStatus: string,
+  reason: string,
+): Promise<void> {
+  const requeueAttempts = job.requeueAttempts + 1;
+  const terminal = requeueAttempts >= MAX_INVALID_COMPLETION_REQUEUES;
+  const updatedJobs = await database.update(agentJobs).set({
+    status: terminal ? "canceled" : "queued",
+    agentId: null,
+    claimedAt: null,
+    completedAt: terminal ? Date.now() : null,
+    errorMessage: reason,
+    requeueAttempts,
+  }).where(and(
+    eq(agentJobs.id, job.id),
+    eq(agentJobs.agentId, agentId),
+    eq(agentJobs.status, "claimed"),
+  )).returning({ id: agentJobs.id });
+  if (updatedJobs.length === 0) return;
+  const nextRunStatus = terminal ? "errored" : job.phase === "plan" ? "plan_queued" : "apply_queued";
+  if (run !== undefined) {
+    await database.update(runs).set({
+      agentId: null,
+      status: nextRunStatus,
+      statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus),
+    }).where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus)));
+  }
+  if (job.phase === "apply" && run !== undefined) {
+    await database.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
+      eq(workspaces.id, run.workspaceId),
+      eq(workspaces.locked, true),
+      eq(workspaces.lockOwnerType, "agent-run"),
+      eq(workspaces.lockOwnerId, run.id),
+    ));
+  }
+  await database.update(agents).set({ status: "idle", lastPingAt: Date.now() }).where(eq(agents.id, agentId));
+}
+
+function invalidCompletionReason(
+  job: AgentJobRow,
+  run: AgentRunRow | undefined,
+  completion: AgentJobCompletion,
+  expectedRunStatus: string,
+): string | undefined {
+  if (run?.status !== expectedRunStatus) return "Run changed before agent completion";
+  if (!isAgentResultValid(completion.result)) return "Invalid agent completion result";
+  if (completion.planJson !== null && (completion.status !== "completed" || job.phase !== "plan")) {
+    return "plan-json is only valid for completed plan jobs";
+  }
+  if (job.phase === "apply" && completion.status === "completed" && (completion.statePayload === null || completion.statePayload === undefined)) {
+    return "Completed apply job must return non-null statePayload";
+  }
+  return undefined;
+}
+
+async function validateAgentCompletion(
+  // Drizzle's transaction/query client is stateful by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  database: Database,
+  agentId: string,
+  job: AgentJobRow,
+  run: AgentRunRow | undefined,
+  completion: AgentJobCompletion,
+  expectedRunStatus: string,
+): Promise<boolean> {
+  const reason = invalidCompletionReason(job, run, completion, expectedRunStatus);
+  if (reason === undefined) return true;
+  await requeueInvalidCompletion(database, agentId, job, run, expectedRunStatus, reason);
+  return false;
+}
+
+async function prepareAgentCompletion(
+  job: AgentJobRow,
+  run: AgentRunRow,
+  completion: AgentJobCompletion,
+): Promise<CompletionPreparation> {
+  if (completion.planJson !== null) await writePlanJsonArtifact(run.id, completion.planJson);
+  // Modern agent protocol uploads the plan JSON separately (PUT to the job's
+  // plan-json URL) before completing; fall back to the stored artifact so
+  // resource counts are still derived from the real plan.
+  const effectivePlanJson = completion.planJson ?? await readPlanJsonArtifact(run.id);
+  const structuredPlanCounts = job.phase === "plan" && effectivePlanJson !== undefined
+    ? planJsonResourceCounts(effectivePlanJson)
+    : undefined;
+  return { structuredPlanCounts, now: Date.now() };
+}
+
+async function persistAgentJobCompletion(
+  // Drizzle's transaction/query client is stateful by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  database: Database,
+  agentId: string,
+  job: AgentJobRow,
+  completion: AgentJobCompletion,
+  now: number,
+): Promise<AgentJobRow | undefined> {
+  if (completion.status === "errored" && completion.errorMessage !== null && completion.errorMessage !== "") {
+    await insertAgentJobLog(database, job, `[agent error] ${completion.errorMessage}`, now);
+  }
+  const jobStatus = completion.status === "completed" ? "completed" : "errored";
+  const updatedJobs = await database.update(agentJobs).set({
+    status: jobStatus,
+    result: { ...completion.result },
+    errorMessage: completion.errorMessage,
+    completedAt: now,
+  }).where(and(
+    eq(agentJobs.id, job.id),
+    eq(agentJobs.agentId, agentId),
+    eq(agentJobs.status, "claimed"),
+  )).returning();
+  return updatedJobs[0];
+}
+
+function resolvePlanStatus(policyOutcome: AgentPolicyOutcome, run: AgentRunRow): string {
+  if (policyOutcome.hardFailed) return "errored";
+  if (policyOutcome.softFailed) return "policy_soft_failed";
+  if (run.savePlan) return "planned_and_saved";
+  if (run.planOnly) return "planned_and_finished";
+  if (run.autoApply || run.allowEmptyApply) return "apply_queued";
+  return "planned";
+}
+
+async function determineCompletionOutcome(
+  // Drizzle's transaction/query client is stateful by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  database: Database,
+  job: AgentJobRow,
+  run: AgentRunRow,
+  completion: AgentJobCompletion,
+  now: number,
+): Promise<CompletionOutcome> {
+  if (completion.status !== "completed") {
+    return { policyOutcome: UNEVALUATED_POLICY_OUTCOME, runStatus: "errored" };
+  }
+  if (job.phase !== "plan") {
+    return { policyOutcome: UNEVALUATED_POLICY_OUTCOME, runStatus: "applied" };
+  }
+  const workspace = await database.query.workspaces.findFirst({
+    where: eq(workspaces.id, run.workspaceId),
+  });
+  if (workspace === undefined) throw new Error("Agent workspace disappeared during completion");
+  const policyOutcome = await recordAgentPolicyChecks(
+    database,
+    workspace,
+    run.id,
+    completion.result,
+    now,
+  );
+  return { policyOutcome, runStatus: resolvePlanStatus(policyOutcome, run) };
+}
+
+function completionStatusTimestamps(
+  run: AgentRunRow,
+  job: AgentJobRow,
+  completion: AgentJobCompletion,
+  policyOutcome: AgentPolicyOutcome,
+): Readonly<Record<string, string>> | null {
+  let statusTimestamps = run.statusTimestamps;
+  if (completion.status === "completed" && job.phase === "plan") {
+    statusTimestamps = timestampsWithStatus(statusTimestamps, "planned");
+  }
+  if (!policyOutcome.evaluated) return statusTimestamps;
+  statusTimestamps = timestampsWithStatus(statusTimestamps, "policy_checking");
+  if (policyOutcome.softFailed && !policyOutcome.hardFailed) {
+    statusTimestamps = timestampsWithStatus(statusTimestamps, "policy_override");
+  } else if (!policyOutcome.hardFailed) {
+    statusTimestamps = timestampsWithStatus(statusTimestamps, "policy_checked");
+  }
+  return statusTimestamps;
+}
+
+async function persistRunCompletion(
+  // Drizzle's transaction/query client is stateful by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  database: Database,
+  job: AgentJobRow,
+  run: AgentRunRow,
+  completion: AgentJobCompletion,
+  expectedRunStatus: string,
+  structuredPlanCounts: ReturnType<typeof planJsonResourceCounts>,
+  policyOutcome: AgentPolicyOutcome,
+  runStatus: string,
+  now: number,
+): Promise<void> {
+  const statusTimestamps = completionStatusTimestamps(run, job, completion, policyOutcome);
+  const resourceValues = job.phase === "plan"
+    ? {
+        planResourceAdditions: structuredPlanCounts?.additions ?? completion.resourceAdditions,
+        planResourceChanges: structuredPlanCounts?.changes ?? completion.resourceChanges,
+        planResourceDestructions: structuredPlanCounts?.destructions ?? completion.resourceDestructions,
+        planResourceImports: structuredPlanCounts?.imports ?? completion.resourceImports,
+      }
+    : {
+        applyResourceAdditions: completion.resourceAdditions,
+        applyResourceChanges: completion.resourceChanges,
+        applyResourceDestructions: completion.resourceDestructions,
+        applyResourceImports: completion.resourceImports,
+      };
+  const updatedRuns = await database.update(runs).set({
+    status: runStatus,
+    statusTimestamps: timestampsWithStatus(statusTimestamps, runStatus),
+    ...(job.phase === "apply" && completion.status === "completed" ? { appliedAt: now } : {}),
+    ...resourceValues,
+  }).where(and(
+    eq(runs.id, run.id),
+    eq(runs.status, expectedRunStatus),
+  )).returning({ id: runs.id });
+  if (updatedRuns.length === 0) throw new Error("Run changed while its agent job was completing");
+}
+
+async function persistApplyStateVersion(
+  // Drizzle's transaction/query client is stateful by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  database: Database,
+  job: AgentJobRow,
+  run: AgentRunRow,
+  completion: AgentJobCompletion,
+  now: number,
+): Promise<void> {
+  if (completion.status !== "completed" || job.phase !== "apply" || completion.statePayload === null) return;
+  await insertStateVersionWithSerialTx(database, {
+    id: crypto.randomUUID(),
+    workspaceId: run.workspaceId,
+    statePayload: await encryptStatePayload(completion.statePayload),
+    jsonState: await encryptStatePayload(completion.jsonState ?? completion.statePayload),
+    jsonStateOutputs: await encryptStatePayload(completion.jsonStateOutputs),
+    runId: run.id,
+    status: "finalized",
+    createdAt: now,
+  });
+}
+
+async function releaseApplyWorkspaceLock(
+  // Drizzle's transaction/query client is stateful by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  database: Database,
+  job: AgentJobRow,
+  run: AgentRunRow,
+): Promise<void> {
+  if (job.phase !== "apply") return;
+  await database.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
+    eq(workspaces.id, run.workspaceId),
+    eq(workspaces.locked, true),
+    eq(workspaces.lockOwnerType, "agent-run"),
+    eq(workspaces.lockOwnerId, run.id),
+  ));
+}
+
+async function enqueueApplyAfterPlan(
+  // Drizzle's transaction/query client is stateful by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  database: Database,
+  job: AgentJobRow,
+  run: AgentRunRow,
+  completion: AgentJobCompletion,
+  runStatus: string,
+  now: number,
+): Promise<void> {
+  if (completion.status !== "completed" || job.phase !== "plan" || runStatus !== "apply_queued") return;
+  await database.insert(agentJobs).values({
+    id: `ajob-${crypto.randomUUID()}`,
+    runId: run.id,
+    agentPoolId: job.agentPoolId,
+    phase: "apply",
+    status: "queued",
+    createdAt: now,
+  });
+}
+
+async function completeAgentJobInTransaction(
+  // Drizzle's transaction/query client is stateful by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  database: Database,
+  agentId: string,
+  jobId: string,
+  completion: AgentJobCompletion,
+): Promise<CompletionResult | undefined> {
+  const job = await database.query.agentJobs.findFirst({
+    where: and(
+      eq(agentJobs.id, jobId),
+      eq(agentJobs.agentId, agentId),
+      eq(agentJobs.status, "claimed"),
+    ),
+  });
+  if (job === undefined) return undefined;
+  const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
+  const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
+  if (!await validateAgentCompletion(database, agentId, job, run, completion, expectedRunStatus)) return undefined;
+  if (run === undefined) return undefined;
+  const preparation = await prepareAgentCompletion(job, run, completion);
+  const updatedJob = await persistAgentJobCompletion(database, agentId, job, completion, preparation.now);
+  if (updatedJob === undefined) return undefined;
+  const outcome = await determineCompletionOutcome(database, job, run, completion, preparation.now);
+  await persistRunCompletion(
+    database,
+    job,
+    run,
+    completion,
+    expectedRunStatus,
+    preparation.structuredPlanCounts,
+    outcome.policyOutcome,
+    outcome.runStatus,
+    preparation.now,
+  );
+  await persistApplyStateVersion(database, job, run, completion, preparation.now);
+  await releaseApplyWorkspaceLock(database, job, run);
+  await enqueueApplyAfterPlan(database, job, run, completion, outcome.runStatus, preparation.now);
+  await database.update(agents).set({ status: "idle", lastPingAt: preparation.now }).where(eq(agents.id, agentId));
+  return { job: updatedJob, runStatus: outcome.runStatus };
+}
+
 export async function completeAgentJob(
   agentId: string,
   jobId: string,
   completion: AgentJobCompletion,
 ): Promise<Readonly<{ job: AgentJob; runStatus: string }> | undefined> {
-  const outcome = await db.transaction(async (transaction): Promise<Readonly<{ job: AgentJob; runStatus: string }> | undefined> => {
-    const tx = transaction as unknown as typeof db;
-    const job = await tx.query.agentJobs.findFirst({
-      where: and(
-        eq(agentJobs.id, jobId),
-        eq(agentJobs.agentId, agentId),
-        eq(agentJobs.status, "claimed"),
-      ),
-    });
-    if (job === undefined) return undefined;
-    const run = await tx.query.runs.findFirst({ where: eq(runs.id, job.runId) });
-    const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
-    const requeueInvalidCompletion = async (reason: string): Promise<void> => {
-      const requeueAttempts = job.requeueAttempts + 1;
-      const terminal = requeueAttempts >= MAX_INVALID_COMPLETION_REQUEUES;
-      const updatedJobs = await tx.update(agentJobs).set({
-        status: terminal ? "canceled" : "queued",
-        agentId: null,
-        claimedAt: null,
-        completedAt: terminal ? Date.now() : null,
-        errorMessage: reason,
-        requeueAttempts,
-      }).where(and(eq(agentJobs.id, job.id), eq(agentJobs.agentId, agentId), eq(agentJobs.status, "claimed"))).returning({ id: agentJobs.id });
-      if (updatedJobs.length === 0) return;
-      const nextRunStatus = terminal ? "errored" : job.phase === "plan" ? "plan_queued" : "apply_queued";
-      if (run !== undefined) {
-        await tx.update(runs).set({
-          agentId: null,
-          status: nextRunStatus,
-          statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus),
-        }).where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus)));
-      }
-      if (job.phase === "apply" && run !== undefined) {
-        await tx.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
-          eq(workspaces.id, run.workspaceId),
-          eq(workspaces.locked, true),
-          eq(workspaces.lockOwnerType, "agent-run"),
-          eq(workspaces.lockOwnerId, run.id),
-        ));
-      }
-      await tx.update(agents).set({ status: "idle", lastPingAt: Date.now() }).where(eq(agents.id, agentId));
-    };
-    if (run?.status !== expectedRunStatus) {
-      await requeueInvalidCompletion("Run changed before agent completion");
-      return undefined;
-    }
-    if (!isAgentResultValid(completion.result)) {
-      await requeueInvalidCompletion("Invalid agent completion result");
-      return undefined;
-    }
-    if (completion.planJson !== null && (completion.status !== "completed" || job.phase !== "plan")) {
-      await requeueInvalidCompletion("plan-json is only valid for completed plan jobs");
-      return undefined;
-    }
-    if (job.phase === "apply" && completion.status === "completed" && (completion.statePayload === null || completion.statePayload === undefined)) {
-      await requeueInvalidCompletion("Completed apply job must return non-null statePayload");
-      return undefined;
-    }
-    if (completion.planJson !== null) {
-      await writePlanJsonArtifact(run.id, completion.planJson);
-    }
-    // Modern agent protocol uploads the plan JSON separately (PUT to the job's
-    // plan-json URL) before completing; fall back to the stored artifact so
-    // resource counts are still derived from the real plan.
-    const effectivePlanJson = completion.planJson ?? await readPlanJsonArtifact(run.id);
-    const structuredPlanCounts = job.phase === "plan" && effectivePlanJson !== undefined
-      ? planJsonResourceCounts(effectivePlanJson)
-      : undefined;
-
-    const now = Date.now();
-    if (completion.status === "errored" && completion.errorMessage !== null && completion.errorMessage !== "") {
-      await insertAgentJobLog(tx, job, `[agent error] ${completion.errorMessage}`, now);
-    }
-    const jobStatus = completion.status === "completed" ? "completed" : "errored";
-    const updatedJobs = await tx.update(agentJobs).set({
-      status: jobStatus,
-      result: { ...completion.result },
-      errorMessage: completion.errorMessage,
-      completedAt: now,
-    }).where(and(
-      eq(agentJobs.id, job.id),
-      eq(agentJobs.agentId, agentId),
-      eq(agentJobs.status, "claimed"),
-    )).returning();
-    const updatedJob = updatedJobs[0];
-    if (updatedJob === undefined) return undefined;
-
-    let policyOutcome: AgentPolicyOutcome = {
-      evaluated: false,
-      hardFailed: false,
-      softFailed: false,
-    };
-    let runStatus = "errored";
-    if (completion.status === "completed" && job.phase === "plan") {
-      const workspace = await tx.query.workspaces.findFirst({
-        where: eq(workspaces.id, run.workspaceId),
-      });
-      if (workspace === undefined) throw new Error("Agent workspace disappeared during completion");
-      policyOutcome = await recordAgentPolicyChecks(
-        tx,
-        workspace,
-        run.id,
-        completion.result,
-        now,
-      );
-      runStatus = policyOutcome.hardFailed
-        ? "errored"
-        : policyOutcome.softFailed
-          ? "policy_soft_failed"
-          : run.savePlan
-              ? "planned_and_saved"
-              : run.planOnly
-                ? "planned_and_finished"
-              : run.autoApply || run.allowEmptyApply
-                ? "apply_queued"
-                : "planned";
-    } else if (completion.status === "completed") {
-      runStatus = "applied";
-    }
-
-    let statusTimestamps = run.statusTimestamps;
-    if (completion.status === "completed" && job.phase === "plan") {
-      statusTimestamps = timestampsWithStatus(statusTimestamps, "planned");
-    }
-    if (policyOutcome.evaluated) {
-      statusTimestamps = timestampsWithStatus(statusTimestamps, "policy_checking");
-      if (policyOutcome.softFailed && !policyOutcome.hardFailed) {
-        statusTimestamps = timestampsWithStatus(statusTimestamps, "policy_override");
-      } else if (!policyOutcome.hardFailed) {
-        statusTimestamps = timestampsWithStatus(statusTimestamps, "policy_checked");
-      }
-    }
-    const updatedRuns = await tx.update(runs).set({
-      status: runStatus,
-      statusTimestamps: timestampsWithStatus(statusTimestamps, runStatus),
-      ...(job.phase === "apply" && completion.status === "completed" ? { appliedAt: now } : {}),
-      ...(job.phase === "plan"
-        ? {
-            planResourceAdditions: structuredPlanCounts?.additions ?? completion.resourceAdditions,
-            planResourceChanges: structuredPlanCounts?.changes ?? completion.resourceChanges,
-            planResourceDestructions: structuredPlanCounts?.destructions ?? completion.resourceDestructions,
-            planResourceImports: structuredPlanCounts?.imports ?? completion.resourceImports,
-          }
-        : {
-            applyResourceAdditions: completion.resourceAdditions,
-            applyResourceChanges: completion.resourceChanges,
-            applyResourceDestructions: completion.resourceDestructions,
-            applyResourceImports: completion.resourceImports,
-          }),
-    }).where(and(
-      eq(runs.id, run.id),
-      eq(runs.status, expectedRunStatus),
-    )).returning({ id: runs.id });
-    if (updatedRuns.length === 0) throw new Error("Run changed while its agent job was completing");
-
-    // Apply completion and the resulting state version commit together. A
-    // successful provider apply must never be acknowledged while its state
-    // insert is still a separate, failure-prone operation.
-    if (completion.status === "completed" && job.phase === "apply" && completion.statePayload !== null) {
-      await insertStateVersionWithSerialTx(tx, {
-        id: crypto.randomUUID(),
-        workspaceId: run.workspaceId,
-        statePayload: await encryptStatePayload(completion.statePayload),
-        jsonState: await encryptStatePayload(completion.jsonState ?? completion.statePayload),
-        jsonStateOutputs: await encryptStatePayload(completion.jsonStateOutputs),
-        runId: run.id,
-        status: "finalized",
-        createdAt: now,
-      });
-    }
-
-    if (job.phase === "apply") {
-      await tx.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
-        eq(workspaces.id, run.workspaceId),
-        eq(workspaces.locked, true),
-        eq(workspaces.lockOwnerType, "agent-run"),
-        eq(workspaces.lockOwnerId, run.id),
-      ));
-    }
-
-    if (completion.status === "completed" && job.phase === "plan" && runStatus === "apply_queued") {
-      await tx.insert(agentJobs).values({
-        id: `ajob-${crypto.randomUUID()}`,
-        runId: run.id,
-        agentPoolId: job.agentPoolId,
-        phase: "apply",
-        status: "queued",
-        createdAt: now,
-      });
-    }
-
-    await tx.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agentId));
-    return { job: updatedJob, runStatus };
-  });
+  const outcome = await db.transaction(async (transaction): Promise<CompletionResult | undefined> =>
+    completeAgentJobInTransaction(transaction as unknown as Database, agentId, jobId, completion));
   if (outcome !== undefined) notifyRunStatus(outcome.job.runId, outcome.runStatus);
   return outcome;
 }

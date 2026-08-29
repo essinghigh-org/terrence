@@ -14,52 +14,99 @@ function decryptStatePayload(payload: string): string {
   return isEncryptedSecret(payload) ? decryptSecretSync(payload, stateStorageDir()) : payload;
 }
 
+function hasOnlyAllowedFields(fields: readonly string[], allowed: readonly string[]): boolean {
+  return fields.every((field: string): boolean => allowed.includes(field));
+}
+
+function isValidKeyField(key: unknown, partial: boolean): boolean {
+  if (partial && key === undefined) return true;
+  return typeof key === "string" && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(key);
+}
+
+function isValidOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
+function isValidCategoryField(category: unknown): boolean {
+  if (category === undefined) return true;
+  return category === "terraform" || category === "env";
+}
+
+function isValidOptionalBoolean(value: unknown): boolean {
+  return value === undefined || typeof value === "boolean";
+}
+
+function isValidDescriptionField(value: unknown): boolean {
+  return value === undefined || value === null || typeof value === "string";
+}
+
+function isValidVariableName(name: unknown, partial: boolean): boolean {
+  if (partial && name === undefined) return true;
+  return typeof name === "string" && name.trim() !== "";
+}
+
+function isValidParentProjectId(value: unknown): boolean {
+  return value === undefined || value === null || typeof value === "string";
+}
+
+function isRecordObject(value: unknown): boolean {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isInvalidPartialEmpty(partial: boolean, fields: readonly string[]): boolean {
+  return partial && fields.length === 0;
+}
+
+function isMissingRequiredValue(partial: boolean, value: unknown): boolean {
+  return !partial && value === undefined;
+}
+
 export function validVariableAttributes(attributes: unknown, partial = false): boolean {
-  if (attributes === null || typeof attributes !== "object" || Array.isArray(attributes)) return false;
-  const allowedFields = ["key", "value", "category", "sensitive", "hcl", "description"];
-  const fields = Object.keys(attributes);
+  if (!isRecordObject(attributes)) return false;
   const attrs = attributes as Record<string, unknown>;
-  const { key, value, category, sensitive, hcl, description } = attrs;
-  return fields.every((field: string): boolean => allowedFields.includes(field))
-    && (!partial || fields.length > 0)
-    && (partial || value !== undefined)
-    && ((partial && key === undefined) || (typeof key === "string" && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(key)))
-    && (value === undefined || typeof value === "string")
-    && (category === undefined || category === "terraform" || category === "env")
-    && (sensitive === undefined || typeof sensitive === "boolean")
-    && (hcl === undefined || typeof hcl === "boolean")
-    && (description === undefined || description === null || typeof description === "string");
+  const fields = Object.keys(attrs);
+  const allowedFields = ["key", "value", "category", "sensitive", "hcl", "description"] as const;
+  if (!hasOnlyAllowedFields(fields, allowedFields)) return false;
+  if (isInvalidPartialEmpty(partial, fields)) return false;
+  if (isMissingRequiredValue(partial, attrs.value)) return false;
+  if (!isValidKeyField(attrs.key, partial)) return false;
+  if (!isValidOptionalString(attrs.value)) return false;
+  if (!isValidCategoryField(attrs.category)) return false;
+  if (!isValidOptionalBoolean(attrs.sensitive)) return false;
+  if (!isValidOptionalBoolean(attrs.hcl)) return false;
+  if (!isValidDescriptionField(attrs.description)) return false;
+  return true;
 }
 
 export function validVariableSetVariableAttributes(attributes: unknown, partial = false): boolean {
-  if (attributes === null || typeof attributes !== "object" || Array.isArray(attributes)) return false;
+  if (!isRecordObject(attributes)) return false;
   const attrs = attributes as Record<string, unknown>;
-  const { key, value, category, sensitive, hcl, description } = attrs;
-  const allowedFields = ["key", "value", "category", "sensitive", "hcl", "description"];
   const fields = Object.keys(attrs);
-  return fields.every((field: string): boolean => allowedFields.includes(field))
-    && (!partial || fields.length > 0)
-    && ((partial && key === undefined) || (typeof key === "string" && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(key)))
-    && (value === undefined || typeof value === "string")
-    && (category === undefined || category === "terraform" || category === "env")
-    && (sensitive === undefined || typeof sensitive === "boolean")
-    && (hcl === undefined || typeof hcl === "boolean")
-    && (description === undefined || description === null || typeof description === "string");
+  const allowedFields = ["key", "value", "category", "sensitive", "hcl", "description"] as const;
+  if (!hasOnlyAllowedFields(fields, allowedFields)) return false;
+  if (isInvalidPartialEmpty(partial, fields)) return false;
+  if (!isValidKeyField(attrs.key, partial)) return false;
+  if (!isValidOptionalString(attrs.value)) return false;
+  if (!isValidCategoryField(attrs.category)) return false;
+  if (!isValidOptionalBoolean(attrs.sensitive)) return false;
+  if (!isValidOptionalBoolean(attrs.hcl)) return false;
+  if (!isValidDescriptionField(attrs.description)) return false;
+  return true;
 }
 
 export function validVariableSetAttributes(attributes: unknown, partial = false): boolean {
-  if (attributes === null || typeof attributes !== "object" || Array.isArray(attributes)) return false;
+  if (!isRecordObject(attributes)) return false;
   const attrs = attributes as Record<string, unknown>;
-  const { name, description, global, priority, "parent-project-id": parentProjectId } = attrs;
   const fields = Object.keys(attrs);
-  return fields.length > 0
-    && fields.every((field: string): boolean =>
-      ["name", "description", "global", "priority", "parent-project-id"].includes(field))
-    && ((partial && name === undefined) || (typeof name === "string" && name.trim() !== ""))
-    && (description === undefined || description === null || typeof description === "string")
-    && (global === undefined || typeof global === "boolean")
-    && (priority === undefined || typeof priority === "boolean")
-    && (parentProjectId === undefined || parentProjectId === null || typeof parentProjectId === "string");
+  if (fields.length === 0) return false;
+  const allowed = ["name", "description", "global", "priority", "parent-project-id"] as const;
+  if (!hasOnlyAllowedFields(fields, allowed)) return false;
+  if (!isValidVariableName(attrs.name, partial)) return false;
+  if (!isValidDescriptionField(attrs.description)) return false;
+  if (!isValidOptionalBoolean(attrs.global)) return false;
+  if (!isValidOptionalBoolean(attrs.priority)) return false;
+  if (!isValidParentProjectId(attrs["parent-project-id"])) return false;
+  return true;
 }
 
 export function isUniqueConstraintError(error: unknown): boolean {

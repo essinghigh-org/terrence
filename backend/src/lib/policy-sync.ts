@@ -148,6 +148,47 @@ async function readPolicyFile(path: string): Promise<string> {
   }
 }
 
+function consumeQuotedChar(input: string, index: number, output: string): { nextIndex: number; output: string; quoted: boolean } {
+  const char = input[index] ?? "";
+  if (char === "\\") return { nextIndex: index + 1, output: output + char + (input[index + 1] ?? ""), quoted: true };
+  if (char === "\"") return { nextIndex: index, output: output + char, quoted: false };
+  return { nextIndex: index, output: output + char, quoted: true };
+}
+
+function consumeUnquotedQuote(output: string, char: string): string {
+  return output + char;
+}
+
+function consumeLineComment(input: string, index: number, output: string, char: string): { nextIndex: number; output: string } {
+  let nextOutput = output;
+  let nextIndex = index;
+  if (char === "/") {
+    nextOutput += "  ";
+    nextIndex += 1;
+  } else {
+    nextOutput += " ";
+  }
+  while (nextIndex + 1 < input.length && input[nextIndex + 1] !== "\n") {
+    nextIndex += 1;
+    nextOutput += " ";
+  }
+  return { nextIndex, output: nextOutput };
+}
+
+function consumeBlockComment(input: string, index: number, output: string): { nextIndex: number; output: string } {
+  let nextOutput = output + "  ";
+  let nextIndex = index + 1;
+  while (nextIndex + 1 < input.length && !(input[nextIndex] === "*" && input[nextIndex + 1] === "/")) {
+    nextIndex += 1;
+    nextOutput += input[nextIndex] === "\n" ? "\n" : " ";
+  }
+  if (nextIndex + 1 < input.length) {
+    nextOutput += " ";
+    nextIndex += 1;
+  }
+  return { nextIndex, output: nextOutput };
+}
+
 function withoutHclComments(input: string): string {
   let output = "";
   let quoted = false;
@@ -155,44 +196,27 @@ function withoutHclComments(input: string): string {
     const char = input[index] ?? "";
     const next = input[index + 1] ?? "";
     if (quoted) {
-      output += char;
-      if (char === "\\") {
-        index += 1;
-        output += input[index] ?? "";
-      } else if (char === "\"") {
-        quoted = false;
-      }
+      const res = consumeQuotedChar(input, index, output);
+      output = res.output;
+      quoted = res.quoted;
+      index = res.nextIndex;
       continue;
     }
     if (char === "\"") {
       quoted = true;
-      output += char;
+      output = consumeUnquotedQuote(output, char);
       continue;
     }
     if (char === "#" || (char === "/" && next === "/")) {
-      if (char === "/") {
-        output += "  ";
-        index += 1;
-      } else {
-        output += " ";
-      }
-      while (index + 1 < input.length && input[index + 1] !== "\n") {
-        index += 1;
-        output += " ";
-      }
+      const res = consumeLineComment(input, index, output, char);
+      output = res.output;
+      index = res.nextIndex;
       continue;
     }
     if (char === "/" && next === "*") {
-      output += "  ";
-      index += 1;
-      while (index + 1 < input.length && !(input[index] === "*" && input[index + 1] === "/")) {
-        index += 1;
-        output += input[index] === "\n" ? "\n" : " ";
-      }
-      if (index + 1 < input.length) {
-        output += " ";
-        index += 1;
-      }
+      const res = consumeBlockComment(input, index, output);
+      output = res.output;
+      index = res.nextIndex;
       continue;
     }
     output += char;

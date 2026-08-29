@@ -38,6 +38,7 @@ import http from "node:http";
 import https from "node:https";
 import { lookup } from "node:dns/promises";
 import { db } from "../db";
+import type { DeepReadonly } from "./utils";
 
 export const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 6_000;
@@ -206,55 +207,113 @@ export function isLiteralIpv6(host: string): boolean {
   }
 }
 
+function isCgnatRange(a: number, b: number): boolean {
+  return a === 100 && b >= 64 && b <= 127;
+}
+
+function isLinkLocalCloudMetadata(a: number, b: number): boolean {
+  return a === 169 && b === 254;
+}
+
+function isRfc1918Private172(a: number, b: number): boolean {
+  return a === 172 && b >= 16 && b <= 31;
+}
+
+function isIetfReserved(a: number, b: number, c: number): boolean {
+  return a === 192 && b === 0 && c === 0;
+}
+
+function isTestNet1(a: number, b: number, c: number): boolean {
+  return a === 192 && b === 0 && c === 2;
+}
+
+function isBenchmarkRange(a: number, b: number): boolean {
+  return a === 198 && b === 18;
+}
+
+function isTestNet2(a: number, b: number, c: number): boolean {
+  return a === 198 && b === 51 && c === 100;
+}
+
+function isTestNet3(a: number, b: number, c: number): boolean {
+  return a === 203 && b === 0 && c === 113;
+}
+
+function isMulticastRange(a: number): boolean {
+  return a >= 224 && a <= 239;
+}
+
+function isReservedOrBroadcast(a: number): boolean {
+  return a >= 240;
+}
+
+function isNonPublicRange(a: number, b: number, c: number): boolean {
+  if (isCgnatRange(a, b)) return true;
+  if (isLinkLocalCloudMetadata(a, b)) return true;
+  if (isRfc1918Private172(a, b)) return true;
+  if (a === 192 && b === 168) return true;
+  if (isIetfReserved(a, b, c)) return true;
+  if (isTestNet1(a, b, c)) return true;
+  if (isBenchmarkRange(a, b)) return true;
+  if (isTestNet2(a, b, c)) return true;
+  if (isTestNet3(a, b, c)) return true;
+  if (isMulticastRange(a)) return true;
+  if (isReservedOrBroadcast(a)) return true;
+  return false;
+}
+
 /** True when an IPv4 address must never be a fetch destination (non-global). */
 export function isNonPublicIpv4(ip: string): boolean {
   const m = IPV4_RE.exec(ip);
   if (m === null) return true;
   const a = Number(m[1]); const b = Number(m[2]); const c = Number(m[3]); const d = Number(m[4]);
   if (a > 255 || b > 255 || c > 255 || d > 255) return true;
-  return (
-    a === 0 || a === 10 || a === 127                       // unspecified, RFC1918, loopback
-    || (a === 100 && b >= 64 && b <= 127)                  // CGNAT
-    || (a === 169 && b === 254)                            // link-local / cloud metadata
-    || (a === 172 && b >= 16 && b <= 31)                   // RFC1918
-    || (a === 192 && b === 168)                            // RFC1918
-    || (a === 192 && b === 0 && c === 0)                   // IETF protocol assignments
-    || (a === 192 && b === 0 && c === 2)                   // TEST-NET-1
-    || (a === 198 && b === 18)                             // benchmark
-    || (a === 198 && b === 51 && c === 100)                // TEST-NET-2
-    || (a === 203 && b === 0 && c === 113)                 // TEST-NET-3
-    || (a >= 224 && a <= 239)                              // multicast 224.0.0.0/4
-    || a >= 240                                            // reserved / broadcast
-  );
+  if (a === 0) return true;
+  if (a === 10) return true;
+  if (a === 127) return true;
+  return isNonPublicRange(a, b, c);
+}
+
+function expandEmbeddedIpv4(addr: string): string {
+  const embedded = /^(.*):(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(addr);
+  if (embedded === null || embedded[2] === undefined) return addr;
+  const v4 = embedded[2].split(".").map(Number);
+  if (v4.some((o: number): boolean => o > 255)) throw new Error("bad v4 tail");
+  const [v4a, v4b, v4c, v4d] = v4;
+  if (v4a === undefined || v4b === undefined || v4c === undefined || v4d === undefined) throw new Error("bad v4 tail");
+  const hi = ((v4a << 8) | v4b) & 0xffff;
+  const lo = ((v4c << 8) | v4d) & 0xffff;
+  return `${embedded[1]}:${hi.toString(16)}:${lo.toString(16)}`;
+}
+
+function buildHextetsWithCompression(addr: string): string[] {
+  const hextets: string[] = [];
+  const split = addr.split("::");
+  const leftRaw = split[0] ?? "";
+  const rightRaw = split[1] ?? "";
+  const left = leftRaw === "" ? [] : leftRaw.split(":");
+  const right = rightRaw === "" ? [] : rightRaw.split(":");
+  if (left.length + right.length >= 8) throw new Error("bad length");
+  for (const part of left) hextets.push(part.padStart(4, "0"));
+  while (hextets.length < 8 - right.length) hextets.push("0000");
+  for (const part of right) hextets.push(part.padStart(4, "0"));
+  return hextets;
+}
+
+function buildHextetsWithoutCompression(addr: string): string[] {
+  const parts = addr.split(":");
+  if (parts.length !== 8) throw new Error("bad length");
+  const hextets: string[] = [];
+  for (const part of parts) hextets.push(part.padStart(4, "0"));
+  return hextets;
 }
 
 /** Parse an IPv6 literal into a 128-bit bigint (throws on invalid). */
 function parseV6(host: string): bigint {
-  let addr = host;
-  const embedded = /^(.*):(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(addr);
-  if (embedded !== null && embedded[2] !== undefined) {
-    const v4 = embedded[2].split(".").map(Number);
-    if (v4.some((o: number): boolean => o > 255)) throw new Error("bad v4 tail");
-    const hi = ((v4[0]! << 8) | v4[1]!) & 0xffff;
-    const lo = ((v4[2]! << 8) | v4[3]!) & 0xffff;
-    addr = `${embedded[1]}:${hi.toString(16)}:${lo.toString(16)}`;
-  }
-  const hextets: string[] = [];
-  if (addr.includes("::")) {
-    const split = addr.split("::");
-    const leftRaw = split[0] ?? "";
-    const rightRaw = split[1] ?? "";
-    const left = leftRaw === "" ? [] : leftRaw.split(":");
-    const right = rightRaw === "" ? [] : rightRaw.split(":");
-    if (left.length + right.length >= 8) throw new Error("bad length");
-    for (const part of left) hextets.push(part.padStart(4, "0"));
-    while (hextets.length < 8 - right.length) hextets.push("0000");
-    for (const part of right) hextets.push(part.padStart(4, "0"));
-  } else {
-    const parts = addr.split(":");
-    if (parts.length !== 8) throw new Error("bad length");
-    for (const part of parts) hextets.push(part.padStart(4, "0"));
-  }
+  const addr = expandEmbeddedIpv4(host);
+  const hextets = addr.includes("::")
+    ? buildHextetsWithCompression(addr)
+    : buildHextetsWithoutCompression(addr);
   if (hextets.some((h: string): boolean => !/^[0-9a-fA-F]{4}$/.test(h))) throw new Error("bad hextet");
   return BigInt(`0x${hextets.join("")}`);
 }
@@ -415,7 +474,7 @@ type RawResponse = Readonly<{
   truncated: boolean;
 }>;
 
-async function requestPinned(target: {
+async function requestPinned(target: DeepReadonly<{
   scheme: "http" | "https";
   address: string;  // validated IP / literal host to connect to
   hostname: string; // original hostname (no port) for Host + TLS SNI
@@ -424,7 +483,7 @@ async function requestPinned(target: {
   headers: Record<string, string>;
   timeoutMs: number;
   maxBytes: number;
-}): Promise<RawResponse> {
+}>): Promise<RawResponse> {
   return new Promise((resolvePromise, rejectPromise): void => {
     const { scheme, address, hostname, port, path, headers, timeoutMs, maxBytes } = target;
     const mod = scheme === "https" ? https : http;
@@ -479,19 +538,37 @@ async function requestPinned(target: {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Fetch + cache (revalidation-aware, content-hashed ETag)
-// ---------------------------------------------------------------------------
-function sniffImageKind(bytes: Uint8Array): string | null {
+function isSvgHead(head: string): boolean {
+  return head.startsWith("<svg") || head.startsWith("<?xml");
+}
+
+function isPngMagic(bytes: Readonly<Uint8Array>): boolean {
+  return bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+}
+
+function isJpegMagic(bytes: Readonly<Uint8Array>): boolean {
+  return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+}
+
+function isGifMagic(bytes: Readonly<Uint8Array>): boolean {
+  if (bytes.length < 6) return false;
+  const head = Buffer.from(bytes.subarray(0, 6)).toString("latin1");
+  return head === "GIF87a" || head === "GIF89a";
+}
+
+function isWebpMagic(bytes: Readonly<Uint8Array>): boolean {
+  return bytes.length >= 12 && Buffer.from(bytes.subarray(0, 4)).toString("latin1") === "RIFF"
+    && Buffer.from(bytes.subarray(8, 12)).toString("latin1") === "WEBP";
+}
+
+function sniffImageKind(bytes: Readonly<Uint8Array>): string | null {
   const b = Buffer.from(bytes);
   const head = b.slice(0, 512).toString("utf8").trimStart();
-  if (head.startsWith("<svg") || head.startsWith("<?xml")) return "svg";
-  if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "png";
-  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "jpeg";
-  if (b.length >= 6 && b.slice(0, 6).toString("latin1") === "GIF87a") return "gif";
-  if (b.length >= 6 && b.slice(0, 6).toString("latin1") === "GIF89a") return "gif";
-  if (b.length >= 12 && b.slice(0, 4).toString("latin1") === "RIFF"
-    && b.slice(8, 12).toString("latin1") === "WEBP") return "webp";
+  if (isSvgHead(head)) return "svg";
+  if (isPngMagic(b)) return "png";
+  if (isJpegMagic(b)) return "jpeg";
+  if (isGifMagic(b)) return "gif";
+  if (isWebpMagic(b)) return "webp";
   return null;
 }
 
@@ -502,77 +579,53 @@ export type AvatarFetchResult = Readonly<{
   meta: AvatarMeta;
 }>;
 
-/** Fetch/revalidate the upstream and refresh the local cache. Never throws. */
-async function doRefreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
-  const decision = await assertSafeAvatarDestination(meta.url, meta.providerId);
-  if ("error" in decision) {
-    return { ok: false, status: 422, message: decision.error, meta };
-  }
-  const pinned = decision.pinned;
-  const parsed = new URL(meta.url);
+function buildRevalidationHeaders(meta: AvatarMeta, hasCached: boolean): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (!hasCached) return headers;
+  if (meta.etag !== null) headers["If-None-Match"] = meta.etag;
+  if (meta.lastModified !== null) headers["If-Modified-Since"] = meta.lastModified;
+  return headers;
+}
+
+function parseAvatarUrl(urlStr: string): { scheme: "http" | "https"; hostname: string; port: number; path: string } {
+  const parsed = new URL(urlStr);
   const scheme = parsed.protocol === "https:" ? "https" : "http";
   const hostname = unbracketHostname(parsed.hostname);
   const port = parsed.port !== "" ? Number(parsed.port) : (scheme === "https" ? 443 : 80);
+  return { scheme, hostname, port, path: `${parsed.pathname}${parsed.search}` };
+}
 
-  // Only revalidate when a cached image exists; otherwise the upstream would
-  // answer 304 forever with no body to (re)store.
-  const cached = hasCachedImage(meta.key);
-  const headers: Record<string, string> = {};
-  if (cached && meta.etag !== null) headers["If-None-Match"] = meta.etag;
-  if (cached && meta.lastModified !== null) headers["If-Modified-Since"] = meta.lastModified;
-  // Incoming cookies/Authorization are deliberately never forwarded.
+function validateAvatarStatus(raw: DeepReadonly<RawResponse>): string | null {
+  if (raw.truncated) return "avatar exceeds the 2 MiB limit";
+  if (raw.status < 200 || raw.status >= 300) return `upstream returned ${raw.status}`;
+  if (raw.bytes.length === 0) return "upstream returned an empty body";
+  return null;
+}
 
-  let raw: RawResponse;
-  try {
-    raw = await requestPinned({
-      scheme,
-      address: pinned,
-      hostname,
-      port,
-      path: `${parsed.pathname}${parsed.search}`,
-      headers,
-      timeoutMs: FETCH_TIMEOUT_MS,
-      maxBytes: MAX_AVATAR_BYTES,
-    });
-  } catch (error) {
-    return { ok: false, status: 0, message: error instanceof Error ? error.message : "fetch failed", meta };
-  }
-
-  const now = Date.now();
-  if (raw.status === 304 && hasCachedImage(meta.key)) {
-    // Retain the cached content hash — the representation did not change.
-    const refreshed: AvatarMeta = { ...meta, state: "fetched", fetchedAt: now, expiresAt: now + AVATAR_REVALIDATE_MS };
-    await writeMeta(refreshed);
-    return { ok: true, status: 304, message: null, meta: refreshed };
-  }
-  if (raw.status < 200 || raw.status >= 300) {
-    return { ok: false, status: raw.status, message: `upstream returned ${raw.status}`, meta };
-  }
-  if (raw.truncated) {
-    return { ok: false, status: 413, message: "avatar exceeds the 2 MiB limit", meta };
-  }
+function validateAvatarContentType(raw: DeepReadonly<RawResponse>): string | null {
   const contentType = typeof raw.headers["content-type"] === "string"
     ? (raw.headers["content-type"]).toLowerCase()
     : "";
-  if (!contentType.startsWith("image/")) {
-    return { ok: false, status: 415, message: "upstream returned a non-image content type", meta };
-  }
-  if (raw.bytes.length === 0) {
-    return { ok: false, status: 0, message: "upstream returned an empty body", meta };
-  }
+  if (!contentType.startsWith("image/")) return "upstream returned a non-image content type";
+  return null;
+}
+
+function resolveAvatarMime(raw: DeepReadonly<RawResponse>): { mime: string; kind: string } | { error: string } {
   const kind = sniffImageKind(new Uint8Array(raw.bytes));
-  if (kind === null) {
-    return { ok: false, status: 415, message: "upstream bytes are not a recognized image", meta };
-  }
+  if (kind === null) return { error: "upstream bytes are not a recognized image" };
   const mime = IMAGE_KIND_TO_MIME[kind] ?? "image/png";
-  // New content => new content hash => new browser ETag (fixes stale-avatar 304).
-  const contentHash = createHash("sha256").update(raw.bytes).digest("hex");
-  await mkdir(join(avatarDir(), meta.key.slice(0, 2)), { recursive: true, mode: 0o700 });
-  // Atomic write (temp + rename) so a concurrent reader never sees a partial file.
-  const tmpImg = `${imgPath(meta.key)}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(tmpImg, raw.bytes, { mode: 0o600 });
-  await rename(tmpImg, imgPath(meta.key));
-  const refreshed: AvatarMeta = {
+  return { mime, kind };
+}
+
+async function storeAvatarImage(key: string, bytes: Readonly<Uint8Array>): Promise<void> {
+  await mkdir(join(avatarDir(), key.slice(0, 2)), { recursive: true, mode: 0o700 });
+  const tmpImg = `${imgPath(key)}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tmpImg, bytes, { mode: 0o600 });
+  await rename(tmpImg, imgPath(key));
+}
+
+function buildFetchedAvatarMeta(meta: DeepReadonly<AvatarMeta>, raw: DeepReadonly<RawResponse>, mime: string, contentHash: string, now: number): AvatarMeta {
+  return {
     ...meta,
     state: "fetched",
     contentType: mime,
@@ -583,9 +636,62 @@ async function doRefreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
     bytes: raw.bytes.length,
     contentHash,
   };
+}
+
+async function handleAvatarNotModified(meta: AvatarMeta, now: number): Promise<AvatarFetchResult> {
+  const refreshed: AvatarMeta = { ...meta, state: "fetched", fetchedAt: now, expiresAt: now + AVATAR_REVALIDATE_MS };
   await writeMeta(refreshed);
-  maybeSweepCache(); // throttled: bounded cache, never append-only
+  return { ok: true, status: 304, message: null, meta: refreshed };
+}
+
+async function handleAvatarSuccess(meta: DeepReadonly<AvatarMeta>, raw: DeepReadonly<RawResponse>, now: number): Promise<AvatarFetchResult> {
+  const statusError = validateAvatarStatus(raw);
+  if (statusError !== null) {
+    const status = raw.truncated ? 413 : (raw.status < 200 || raw.status >= 300 ? raw.status : 0);
+    return { ok: false, status, message: statusError, meta };
+  }
+  const ctError = validateAvatarContentType(raw);
+  if (ctError !== null) return { ok: false, status: 415, message: ctError, meta };
+  // body empty already handled in statusError
+  const resolved = resolveAvatarMime(raw);
+  if ("error" in resolved) return { ok: false, status: 415, message: resolved.error, meta };
+  const contentHash = createHash("sha256").update(raw.bytes).digest("hex");
+  await storeAvatarImage(meta.key, raw.bytes);
+  const refreshed = buildFetchedAvatarMeta(meta, raw, resolved.mime, contentHash, now);
+  await writeMeta(refreshed);
+  maybeSweepCache();
   return { ok: true, status: raw.status, message: null, meta: refreshed };
+}
+
+/** Fetch/revalidate the upstream and refresh the local cache. Never throws. */
+async function doRefreshAvatar(meta: AvatarMeta): Promise<AvatarFetchResult> {
+  const decision = await assertSafeAvatarDestination(meta.url, meta.providerId);
+  if ("error" in decision) {
+    return { ok: false, status: 422, message: decision.error, meta };
+  }
+  const { scheme, hostname, port, path } = parseAvatarUrl(meta.url);
+  const hasCached = hasCachedImage(meta.key);
+  const headers = buildRevalidationHeaders(meta, hasCached);
+  let raw: RawResponse;
+  try {
+    raw = await requestPinned({
+      scheme,
+      address: decision.pinned,
+      hostname,
+      port,
+      path,
+      headers,
+      timeoutMs: FETCH_TIMEOUT_MS,
+      maxBytes: MAX_AVATAR_BYTES,
+    });
+  } catch (error) {
+    return { ok: false, status: 0, message: error instanceof Error ? error.message : "fetch failed", meta };
+  }
+  const now = Date.now();
+  if (raw.status === 304 && hasCachedImage(meta.key)) {
+    return handleAvatarNotModified(meta, now);
+  }
+  return handleAvatarSuccess(meta, raw, now);
 }
 
 // One upstream refresh per key at a time: concurrent requests for the same
@@ -620,31 +726,17 @@ function positiveEnv(name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-/**
- * Bounded sweep: drops untouched entries past the max age and evicts the
- * least-recently-fetched entries when the cache exceeds the byte/entry budget.
- * Metadata-only records (recorded but never fetched) older than an hour are
- * orphans and are removed too — a future serializer call re-records them.
- * Best-effort: never throws.
- */
-async function sweepAvatarCache(): Promise<{ removed: number }> {
-  const dir = avatarDir();
-  const maxBytes = positiveEnv("AVATAR_CACHE_MAX_BYTES", DEFAULT_CACHE_BYTES);
-  const maxEntries = positiveEnv("AVATAR_CACHE_MAX_ENTRIES", DEFAULT_CACHE_ENTRIES);
-  const maxAgeMs = positiveEnv("AVATAR_CACHE_MAX_AGE_MS", DEFAULT_CACHE_AGE_MS);
-  const now = Date.now();
-  let removed = 0;
-
-  let shardNames: string[] = [];
+async function collectAvatarShardNames(dir: string): Promise<string[] | null> {
   try {
-    shardNames = (await readdir(dir, { withFileTypes: true }))
+    return (await readdir(dir, { withFileTypes: true }))
       .filter((entry): boolean => entry.isDirectory())
       .map((entry): string => entry.name);
   } catch {
-    return { removed };
+    return null;
   }
+}
 
-  // key -> { imgPath, size (img+json), last (fetchedAt ?? mtime), orphan }
+async function collectAvatarEntries(dir: string, shardNames: readonly string[]): Promise<Map<string, { img?: string; json?: string; size: number; last: number }>> {
   const entries = new Map<string, { img?: string; json?: string; size: number; last: number }>();
   for (const shard of shardNames) {
     const shardPath = join(dir, shard);
@@ -664,42 +756,53 @@ async function sweepAvatarCache(): Promise<{ removed: number }> {
       entries.set(key, record);
     }
   }
+  return entries;
+}
 
-  for (const [key, record] of entries) {
-    let size = 0;
-    let last = 0;
-    if (record.img !== undefined) {
-      try {
-        const imageStat = await stat(record.img);
-        size += imageStat.size;
-        last = imageStat.mtimeMs;
-      } catch {
-        delete record.img; // image vanished; treat the record as an orphan
-      }
+async function hydrateAvatarEntry(record: { img?: string; json?: string; size: number; last: number }, key: string): Promise<void> {
+  let size = 0;
+  let last = 0;
+  if (record.img !== undefined) {
+    try {
+      const imageStat = await stat(record.img);
+      size += imageStat.size;
+      last = imageStat.mtimeMs;
+    } catch {
+      delete record.img;
     }
-    if (record.json !== undefined) {
-      try {
-        const jsonStat = await stat(record.json);
-        size += jsonStat.size;
-        if (last === 0) last = jsonStat.mtimeMs;
-      } catch {
-        // ignore missing json
-      }
-      const meta = await readAvatarMeta(key);
-      if (meta?.fetchedAt !== null && typeof meta?.fetchedAt === "number") last = Math.max(last, meta.fetchedAt);
-    }
-    record.size = size;
-    record.last = last;
   }
+  if (record.json !== undefined) {
+    try {
+      const jsonStat = await stat(record.json);
+      size += jsonStat.size;
+      if (last === 0) last = jsonStat.mtimeMs;
+    } catch {
+      // ignore missing json
+    }
+    const meta = await readAvatarMeta(key);
+    if (meta?.fetchedAt !== null && typeof meta?.fetchedAt === "number") last = Math.max(last, meta.fetchedAt);
+  }
+  record.size = size;
+  record.last = last;
+}
 
+async function hydrateAvatarEntries(entries: ReadonlyMap<string, { img?: string; json?: string; size: number; last: number }>): Promise<void> {
+  for (const [key, record] of entries) {
+    await hydrateAvatarEntry(record, key);
+  }
+}
+
+function selectAgeBasedRemovals(entries: ReadonlyMap<string, { img?: string; json?: string; size: number; last: number }>, now: number, maxAgeMs: number): Set<string> {
   const removals = new Set<string>();
-  // 1) Age-based: untouched past the max age (and metadata-only orphans).
   for (const [key, record] of entries) {
     const orphan = record.img === undefined;
     if (record.last > 0 && now - record.last > maxAgeMs) removals.add(key);
     else if (orphan && now - record.last > 60 * 60 * 1000) removals.add(key);
   }
-  // 2) Budget-based: evict least-recently-fetched until within limits.
+  return removals;
+}
+
+function selectBudgetRemovals(entries: ReadonlyMap<string, { img?: string; json?: string; size: number; last: number }>, removals: Set<string>, maxBytes: number, maxEntries: number): void {
   let totalBytes = 0;
   const live: { key: string; last: number; size: number }[] = [];
   for (const [key, record] of entries) {
@@ -708,7 +811,6 @@ async function sweepAvatarCache(): Promise<{ removed: number }> {
     live.push({ key, last: record.last, size: record.size });
   }
   live.sort((a, b): number => a.last - b.last);
-  // Evict enough oldest entries to reach the entry/byte budgets.
   const mustRemoveForCount = Math.max(0, live.length - maxEntries);
   for (let index = 0; index < live.length && (index < mustRemoveForCount || totalBytes > maxBytes); index += 1) {
     const candidate = live[index];
@@ -716,7 +818,10 @@ async function sweepAvatarCache(): Promise<{ removed: number }> {
     totalBytes -= candidate.size;
     removals.add(candidate.key);
   }
+}
 
+async function removeAvatarEntries(entries: ReadonlyMap<string, { img?: string; json?: string; size: number; last: number }>, removals: ReadonlySet<string>): Promise<number> {
+  let removed = 0;
   for (const key of removals) {
     const record = entries.get(key);
     if (record === undefined) continue;
@@ -730,6 +835,29 @@ async function sweepAvatarCache(): Promise<{ removed: number }> {
       }
     }
   }
+  return removed;
+}
+
+/**
+ * Bounded sweep: drops untouched entries past the max age and evicts the
+ * least-recently-fetched entries when the cache exceeds the byte/entry budget.
+ * Metadata-only records (recorded but never fetched) older than an hour are
+ * orphans and are removed too — a future serializer call re-records them.
+ * Best-effort: never throws.
+ */
+async function sweepAvatarCache(): Promise<{ removed: number }> {
+  const dir = avatarDir();
+  const maxBytes = positiveEnv("AVATAR_CACHE_MAX_BYTES", DEFAULT_CACHE_BYTES);
+  const maxEntries = positiveEnv("AVATAR_CACHE_MAX_ENTRIES", DEFAULT_CACHE_ENTRIES);
+  const maxAgeMs = positiveEnv("AVATAR_CACHE_MAX_AGE_MS", DEFAULT_CACHE_AGE_MS);
+  const now = Date.now();
+  const shardNames = await collectAvatarShardNames(dir);
+  if (shardNames === null) return { removed: 0 };
+  const entries = await collectAvatarEntries(dir, shardNames);
+  await hydrateAvatarEntries(entries);
+  const removals = selectAgeBasedRemovals(entries, now, maxAgeMs);
+  selectBudgetRemovals(entries, removals, maxBytes, maxEntries);
+  const removed = await removeAvatarEntries(entries, removals);
   return { removed };
 }
 

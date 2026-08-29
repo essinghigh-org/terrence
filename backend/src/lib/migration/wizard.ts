@@ -302,9 +302,55 @@ function parsePostgresVersion(version: string): number {
   return Number(match[1]);
 }
 
+type CompatibilityCheck = { name: string; ok: boolean; detail: string };
+
+async function checkTemporaryTableWritable(sql: Bun.SQL): Promise<CompatibilityCheck> {
+  try {
+    await sql.unsafe("CREATE TEMP TABLE _terrence_probe (id integer)");
+    await sql.unsafe("DROP TABLE _terrence_probe");
+    return { name: "temp-writable", ok: true, detail: "Temporary tables can be created" };
+  } catch (error: unknown) {
+    return {
+      name: "temp-writable",
+      ok: false,
+      detail: `Cannot create temporary tables: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+async function checkSchemaWritable(sql: Bun.SQL): Promise<CompatibilityCheck> {
+  try {
+    await sql.unsafe("BEGIN; CREATE TABLE _terrence_schema_probe (id integer); ROLLBACK");
+    return { name: "schema-writable", ok: true, detail: "Schema creation works in this database" };
+  } catch (error: unknown) {
+    return {
+      name: "schema-writable",
+      ok: false,
+      detail: `Cannot create tables in this database: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+async function checkReplicaRoleWritable(sql: Bun.SQL): Promise<CompatibilityCheck> {
+  try {
+    // The copy disables FK enforcement with session_replication_role, which
+    // requires superuser (or the SET privilege); the check mirrors the copy
+    // so the operator learns about it before the migration starts.
+    await sql.unsafe("SET session_replication_role = replica");
+    await sql.unsafe("SET session_replication_role = origin");
+    return { name: "replica-role", ok: true, detail: "FK enforcement can be suspended during the copy" };
+  } catch (error: unknown) {
+    return {
+      name: "replica-role",
+      ok: false,
+      detail: `Cannot suspend FK enforcement: ${error instanceof Error ? error.message : String(error)}. The target role needs superuser or SET privileges.`,
+    };
+  }
+}
+
 /** Check the target is empty, recent enough, and writable. */
 export async function checkCompatibility(url: string): Promise<CompatibilityResult> {
-  const checks: { name: string; ok: boolean; detail: string }[] = [];
+  const checks: CompatibilityCheck[] = [];
   let sql: Bun.SQL | null = null;
   try {
     sql = await openPostgres(url);
@@ -337,41 +383,9 @@ export async function checkCompatibility(url: string): Promise<CompatibilityResu
         : `Target database already has ${tableCount} table(s) in public and ${journalTables} in drizzle; refusing to migrate into a non-empty database`,
     });
 
-    try {
-      await sql.unsafe("CREATE TEMP TABLE _terrence_probe (id integer)");
-      await sql.unsafe("DROP TABLE _terrence_probe");
-      checks.push({ name: "temp-writable", ok: true, detail: "Temporary tables can be created" });
-    } catch (error: unknown) {
-      checks.push({
-        name: "temp-writable",
-        ok: false,
-        detail: `Cannot create temporary tables: ${error instanceof Error ? error.message : String(error)}`,
-      });
-    }
-    try {
-      await sql.unsafe("BEGIN; CREATE TABLE _terrence_schema_probe (id integer); ROLLBACK");
-      checks.push({ name: "schema-writable", ok: true, detail: "Schema creation works in this database" });
-    } catch (error: unknown) {
-      checks.push({
-        name: "schema-writable",
-        ok: false,
-        detail: `Cannot create tables in this database: ${error instanceof Error ? error.message : String(error)}`,
-      });
-    }
-    try {
-      // The copy disables FK enforcement with session_replication_role, which
-      // requires superuser (or the SET privilege); the check mirrors the copy
-      // so the operator learns about it before the migration starts.
-      await sql.unsafe("SET session_replication_role = replica");
-      await sql.unsafe("SET session_replication_role = origin");
-      checks.push({ name: "replica-role", ok: true, detail: "FK enforcement can be suspended during the copy" });
-    } catch (error: unknown) {
-      checks.push({
-        name: "replica-role",
-        ok: false,
-        detail: `Cannot suspend FK enforcement: ${error instanceof Error ? error.message : String(error)}. The target role needs superuser or SET privileges.`,
-      });
-    }
+    checks.push(await checkTemporaryTableWritable(sql));
+    checks.push(await checkSchemaWritable(sql));
+    checks.push(await checkReplicaRoleWritable(sql));
     return {
       ok: checks.every((check): boolean => check.ok),
       version,

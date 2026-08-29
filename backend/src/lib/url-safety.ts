@@ -92,52 +92,50 @@ export function outboundAllowlistAllows(hostname: string, addresses: readonly st
   return allowlistAllows(hostname, addresses, readOutboundAllowlist());
 }
 
-function isPrivateV6(host: string): boolean {
-  const lower = host.toLowerCase();
-  // Normalize into the full 8-hextet sequence so embedded-IPv4 detection
-  // inspects the final two hextets regardless of "::" compression. Raw DNS
-  // AAAA answers arrive uncompressed ("0:0:0:0:0:ffff:127.0.0.1"), so the
-  // compressed-only tail inspection would otherwise fail open.
-  const parts = lower.split("::");
-  let hextets: string[];
+function expandHextets(parts: readonly string[]): string[] | null {
   if (parts.length === 2) {
     const headPart = parts[0] ?? "";
     const tailPart = parts[1] ?? "";
     const head = headPart === "" ? [] : headPart.split(":");
     const tail = tailPart === "" ? [] : tailPart.split(":");
     const missing = 8 - head.length - tail.length;
-    if (missing < 1) return true; // too many hextets → malformed → fail closed
-    hextets = [...head, ...Array<string>(missing).fill("0"), ...tail];
-  } else {
-    const body = parts[0] ?? "";
-    hextets = body === "" ? [] : body.split(":");
-    if (hextets.length !== 8) return true; // no compression and wrong width → fail closed
+    if (missing < 1) return null;
+    return [...head, ...Array<string>(missing).fill("0"), ...tail];
   }
+  const body = parts[0] ?? "";
+  const hextets = body === "" ? [] : body.split(":");
+  if (hextets.length !== 8) return null;
+  return hextets;
+}
 
-  // An embedded dotted quad occupies the last hextet; validate the rest as
-  // hextets and classify the quad itself. Any malformed piece → fail closed.
+function isEmbeddedIpv4Private(hextets: readonly string[]): boolean | null {
   const tail = hextets.slice(-2);
   const last = tail[1] ?? "";
-  if (last.includes(".")) {
-    if (!hextets.slice(0, -1).every((h): boolean => V6_HEXTET.test(h))) return true;
-    const n = v4ToNumber(last.split("."));
-    if (n === null) return true;
-    return isPrivateV4(n);
-  }
-  if (!hextets.every((h): boolean => V6_HEXTET.test(h))) return true;
+  if (!last.includes(".")) return null;
+  if (!hextets.slice(0, -1).every((h): boolean => V6_HEXTET.test(h))) return true;
+  const n = v4ToNumber(last.split("."));
+  if (n === null) return true;
+  return isPrivateV4(n);
+}
 
-  // "::" (unspecified) and "::1" (loopback).
+function isSpecialV6Private(hextets: readonly string[]): boolean {
   if (hextets.every((h): boolean => h === "0")) return true;
   if (hextets.slice(0, 7).every((h): boolean => h === "0") && (hextets[7] ?? "") === "1") return true;
-
   const firstHextet = Number.parseInt(hextets[0] ?? "0", 16);
-  if ((firstHextet & 0xfe00) === 0xfc00) return true; // fc00::/7 ULA
-  if ((firstHextet & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
-  if ((firstHextet & 0xff00) === 0xff00) return true; // ff00::/8 multicast
+  if ((firstHextet & 0xfe00) === 0xfc00) return true;
+  if ((firstHextet & 0xffc0) === 0xfe80) return true;
+  if ((firstHextet & 0xff00) === 0xff00) return true;
+  return false;
+}
 
-  // Embedded IPv4 (IPv4-mapped ::ffff:a.b.c.d / ::ffff:xxxx, and the
-  // deprecated IPv4-compatible ::a.b.c.d): the final two hextets hold the
-  // address, already validated as hex above.
+function isPrivateV6(host: string): boolean {
+  const hextets = expandHextets(host.toLowerCase().split("::"));
+  if (hextets === null) return true;
+  const embedded = isEmbeddedIpv4Private(hextets);
+  if (embedded !== null) return embedded;
+  if (!hextets.every((h): boolean => V6_HEXTET.test(h))) return true;
+  if (isSpecialV6Private(hextets)) return true;
+  const tail = hextets.slice(-2);
   const hi = Number.parseInt(tail[0] ?? "0", 16);
   const lo = Number.parseInt(tail[1] ?? "0", 16);
   const n = ((hi << 16) | lo) >>> 0;
@@ -151,29 +149,33 @@ function isPrivateV6(host: string): boolean {
  * wrapper domains) return null — they need resolution, see
  * validateExternalUrlResolved().
  */
-export function privateHostReason(hostname: string): string | null {
+function normalizeHost(hostname: string): string {
   let host = hostname;
-  if (host === "") return null;
   if (host.endsWith(".")) host = host.slice(0, -1);
   if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+  return host;
+}
 
-  if (host.includes(":")) {
-    return isPrivateV6(host) ? PRIVATE_MSG : null;
-  }
-  if (host.toLowerCase() === "localhost") return PRIVATE_MSG;
+function isBareNumericPrivate(host: string): boolean {
+  if (!/^\d+$/.test(host)) return false;
+  const n = Number(host);
+  return Number.isSafeInteger(n) && n > 0 && n <= 0xffffffff && isPrivateV4(n >>> 0);
+}
 
+function isQuadPrivate(host: string): boolean {
   const quad = host.split(".");
-  if (quad.length === 4) {
-    const n = v4ToNumber(quad);
-    if (n !== null && isPrivateV4(n)) return PRIVATE_MSG;
-  }
-  // WHATWG normalizes odd IPv4 forms to quads, but a bare numeric host
-  // (non-special parsing edge) is checked defensively across the full
-  // unsigned 32-bit range: 2130706433 is 127.0.0.1, not a hostname.
-  if (quad.length === 1 && /^\d+$/.test(host)) {
-    const n = Number(host);
-    if (Number.isSafeInteger(n) && n > 0 && n <= 0xffffffff && isPrivateV4(n >>> 0)) return PRIVATE_MSG;
-  }
+  if (quad.length !== 4) return false;
+  const n = v4ToNumber(quad);
+  return n !== null && isPrivateV4(n);
+}
+
+export function privateHostReason(hostname: string): string | null {
+  if (hostname === "") return null;
+  const host = normalizeHost(hostname);
+  if (host.includes(":")) return isPrivateV6(host) ? PRIVATE_MSG : null;
+  if (host.toLowerCase() === "localhost") return PRIVATE_MSG;
+  if (isQuadPrivate(host)) return PRIVATE_MSG;
+  if (host.split(".").length === 1 && isBareNumericPrivate(host)) return PRIVATE_MSG;
   return null;
 }
 
@@ -250,43 +252,63 @@ export async function validateExternalUrlResolved(
 export type ResolvedExternalUrl = Readonly<{ address: string; url: string }>;
 
 /** Resolve once, validate every answer, then return the address callers must connect to. */
+function parseExternalUrl(url: string): URL | string {
+  try {
+    return new URL(url);
+  } catch {
+    return "Invalid URL";
+  }
+}
+
+function validateExternalProtocol(parsed: Readonly<URL>): string | null {
+  if (!["http:", "https:"].includes(parsed.protocol)) return "Only http and https URLs are allowed";
+  if (parsed.username !== "" || parsed.password !== "") return "URLs with embedded credentials (user:password@host) are not allowed";
+  return null;
+}
+
+async function resolveExternalAddresses(hostname: string, resolve: HostResolver): Promise<readonly string[] | string> {
+  try {
+    return isIP(hostname) === 0 ? await resolveWithTimeout(hostname, resolve) : [hostname];
+  } catch {
+    return "URL could not be resolved safely";
+  }
+}
+
+function checkLiteralPrivate(hostname: string, allowPrivate: boolean, allowlist: ReturnType<typeof readOutboundAllowlist>): string | null {
+  const literalReason = privateHostReason(hostname);
+  const cleanHostname = hostname.replace(/^\[|\]$/g, "");
+  if (!allowPrivate && literalReason !== null && !allowlistAllows(cleanHostname, [cleanHostname], allowlist)) return literalReason;
+  return null;
+}
+
+function checkResolvedPrivate(hostname: string, addresses: readonly string[], allowPrivate: boolean, allowlist: ReturnType<typeof readOutboundAllowlist>): string | null {
+  if (allowPrivate) return null;
+  const hasPrivate = addresses.some((candidate): boolean => privateAddress(candidate) && !allowlistAllows(hostname, [candidate], allowlist));
+  return hasPrivate ? PRIVATE_MSG : null;
+}
+
 export async function resolveExternalUrl(
   url: string,
   allowPrivate = false,
   resolve: HostResolver = async (hostname): Promise<readonly string[]> =>
     (await lookup(hostname, { all: true, verbatim: true })).map((entry): string => entry.address),
 ): Promise<{ error: string } | { target: ResolvedExternalUrl }> {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return { error: "Invalid URL" };
-  }
-  if (!["http:", "https:"].includes(parsed.protocol)) return { error: "Only http and https URLs are allowed" };
-  // Reject userinfo credentials (kanban 18): configured integration secrets
-  // belong in structured secret fields, not embedded in URLs where they land
-  // in logs, audit records, and error messages. `user@host` without a
-  // password is rejected too — it is ambiguous and never intentional.
-  if (parsed.username !== "" || parsed.password !== "") {
-    return { error: "URLs with embedded credentials (user:password@host) are not allowed" };
-  }
+  const parsedOrError = parseExternalUrl(url);
+  if (typeof parsedOrError === "string") return { error: parsedOrError };
+  const parsed = parsedOrError;
+  const protocolError = validateExternalProtocol(parsed);
+  if (protocolError !== null) return { error: protocolError };
   const allowlist = readOutboundAllowlist();
-
-  const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
-  const literalReason = privateHostReason(parsed.hostname);
-  if (!allowPrivate && literalReason !== null && !allowlistAllows(hostname, [hostname], allowlist)) return { error: literalReason };
-  let addresses: readonly string[];
-  try {
-    addresses = isIP(hostname) === 0 ? await resolveWithTimeout(hostname, resolve) : [hostname];
-  } catch {
-    return { error: "URL could not be resolved safely" };
-  }
+  const cleanHostname = parsed.hostname.replace(/^\[|\]$/g, "");
+  const literalError = checkLiteralPrivate(parsed.hostname, allowPrivate, allowlist);
+  if (literalError !== null) return { error: literalError };
+  const addressesOrError = await resolveExternalAddresses(cleanHostname, resolve);
+  if (typeof addressesOrError === "string") return { error: addressesOrError };
+  const addresses = addressesOrError;
   const addressError = resolvedAddressesError(addresses, true);
   if (addressError !== null) return { error: addressError };
-  if (!allowPrivate && addresses.some((candidate): boolean =>
-    privateAddress(candidate) && !allowlistAllows(hostname, [candidate], allowlist))) {
-    return { error: PRIVATE_MSG };
-  }
+  const privateError = checkResolvedPrivate(cleanHostname, addresses, allowPrivate, allowlist);
+  if (privateError !== null) return { error: privateError };
   const address = addresses[0];
   if (address === undefined) return { error: "URL could not be resolved safely" };
   return { target: { address, url: parsed.toString() } };

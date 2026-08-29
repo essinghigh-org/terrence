@@ -87,53 +87,48 @@ export function validateSecretName(name: string, source: string): void {
 
 /** Parse and validate a raw boot configuration object. Unknown top-level
  * keys are preserved (the wizard writes only the database section). */
-export function parseBootConfig(raw: unknown, source: string): BootConfig {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new BootConfigError(`Invalid boot configuration in ${source}: expected a JSON object`);
+function assertBootObject(raw: unknown, source: string): Record<string, unknown> {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new BootConfigError(`Invalid boot configuration in ${source}: expected a JSON object`);
+  return raw as Record<string, unknown>;
+}
+
+function assertDatabaseObject(db: unknown, source: string): Record<string, unknown> {
+  if (db === null || typeof db !== "object" || Array.isArray(db)) throw new BootConfigError(`Invalid boot configuration in ${source}: "database" must be an object`);
+  return db as Record<string, unknown>;
+}
+
+function parseDatabaseDriver(db: Readonly<Record<string, unknown>>, source: string): DatabaseDriver {
+  const driver = db.driver;
+  if (driver !== "sqlite" && driver !== "postgres") throw new BootConfigError(`Invalid boot configuration in ${source}: "database.driver" must be "sqlite" or "postgres", got ${String(driver)}`);
+  return driver;
+}
+
+function validateDatabaseUrlFields(url: string | undefined, urlSecret: string | undefined, source: string): void {
+  if (url !== undefined && urlSecret !== undefined) throw new BootConfigError(`Invalid boot configuration in ${source}: "database.url" and "database.urlSecret" are mutually exclusive`);
+  if (urlSecret !== undefined) validateSecretName(urlSecret, source);
+}
+
+function validateDriverSpecificFields(driver: DatabaseDriver, url: string | undefined, urlSecret: string | undefined, source: string): void {
+  if (driver === "postgres") {
+    if (url === undefined && urlSecret === undefined) throw new BootConfigError(`Invalid boot configuration in ${source}: postgres driver requires "database.url" or "database.urlSecret"`);
+    if (url !== undefined) validatePostgresUrl(url, source);
+    return;
   }
-  const record = raw as Record<string, unknown>;
+  if (urlSecret !== undefined) throw new BootConfigError(`Invalid boot configuration in ${source}: "database.urlSecret" is only valid for the postgres driver`);
+  if (url !== undefined) validateSqliteUrl(url, source);
+}
+
+export function parseBootConfig(raw: unknown, source: string): BootConfig {
+  const record = assertBootObject(raw, source);
   const result: Record<string, unknown> = { ...record };
   if (record.database === undefined) return result;
-  const db = record.database as Record<string, unknown> | null;
-  if (db === null || typeof db !== "object" || Array.isArray(db)) {
-    throw new BootConfigError(`Invalid boot configuration in ${source}: "database" must be an object`);
-  }
-  const driver = db.driver;
-  if (driver !== "sqlite" && driver !== "postgres") {
-    throw new BootConfigError(
-      `Invalid boot configuration in ${source}: "database.driver" must be "sqlite" or "postgres", got ${String(driver)}`,
-    );
-  }
+  const db = assertDatabaseObject(record.database, source);
+  const driver = parseDatabaseDriver(db, source);
   const url = typeof db.url === "string" ? db.url : undefined;
   const urlSecret = typeof db.urlSecret === "string" ? db.urlSecret : undefined;
-  if (url !== undefined && urlSecret !== undefined) {
-    throw new BootConfigError(
-      `Invalid boot configuration in ${source}: "database.url" and "database.urlSecret" are mutually exclusive`,
-    );
-  }
-  if (urlSecret !== undefined) validateSecretName(urlSecret, source);
-  if (driver === "postgres") {
-    if (url === undefined && urlSecret === undefined) {
-      throw new BootConfigError(
-        `Invalid boot configuration in ${source}: postgres driver requires "database.url" or "database.urlSecret"`,
-      );
-    }
-    if (url !== undefined) validatePostgresUrl(url, source);
-  } else {
-    // sqlite URLs never carry credentials; a secret reference here is a
-    // configuration mistake that must fail fast instead of being ignored.
-    if (urlSecret !== undefined) {
-      throw new BootConfigError(
-        `Invalid boot configuration in ${source}: "database.urlSecret" is only valid for the postgres driver`,
-      );
-    }
-    if (url !== undefined) validateSqliteUrl(url, source);
-  }
-  result.database = {
-    driver,
-    ...(url !== undefined ? { url } : {}),
-    ...(urlSecret !== undefined ? { urlSecret } : {}),
-  };
+  validateDatabaseUrlFields(url, urlSecret, source);
+  validateDriverSpecificFields(driver, url, urlSecret, source);
+  result.database = { driver, ...(url !== undefined ? { url } : {}), ...(urlSecret !== undefined ? { urlSecret } : {}) };
   return result;
 }
 

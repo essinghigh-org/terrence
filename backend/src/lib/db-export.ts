@@ -145,21 +145,40 @@ export type DbExportResult = {
  * failures (bad URL, active runs without force, schema mismatch); any other
  * error is a real failure and the partial output file is removed.
  */
+function validateExportUrl(url: string): void {
+  if (!/^postgres(ql)?:\/\//i.test(url)) throw new DbExportError("invalid-url", "Source URL must be a postgres:// or postgresql:// connection URL");
+}
+
+function assertExportNotExists(storage: string, fileName: string): void {
+  if (listExportFiles(storage).some((f) => f.name === fileName)) throw new DbExportError("exists", `An export file named "${fileName}" already exists; choose a different name`);
+}
+
+function formatFailedTables(verification: Readonly<VerificationReport>): string[] {
+  return verification.tables.filter((table): boolean => !table.countMatch || table.uniqueChecks.some((check): boolean => !check.match) || !table.sampleHash.match)
+    .map((table): string => {
+      const uniques = table.uniqueChecks.filter((check): boolean => !check.match).map((check): string => `${check.index}(${check.source}/${check.target})`).join(", ");
+      return `${table.table}${table.countMatch ? "" : " count"}${!table.sampleHash.match ? " hash" : ""}${uniques === "" ? "" : ` unique[${uniques}]`}`;
+    });
+}
+
+async function assertNoActiveRuns(source: Readonly<TransferSource>, force: boolean | undefined): Promise<number> {
+  const placeholders = TERMINAL_RUN_STATUSES.map(() => "?").join(",");
+  const activeRuns = await source.countWhere("runs", `status NOT IN (${placeholders})`, TERMINAL_RUN_STATUSES);
+  if (activeRuns > 0 && force !== true) throw new DbExportError("active-runs", `${activeRuns} run(s) are still active in the source database; wait for them to finish or force the export`);
+  return activeRuns;
+}
+
 export async function runDbExport(
   options: DbExportOptions,
   onProgress?: (progress: DbExportProgress) => void,
 ): Promise<DbExportResult> {
   const url = options.pgUrl.trim();
-  if (!/^postgres(ql)?:\/\//i.test(url)) {
-    throw new DbExportError("invalid-url", "Source URL must be a postgres:// or postgresql:// connection URL");
-  }
+  validateExportUrl(url);
   const sourceFactory = options.sourceFactory ?? createPgSource;
   const storage = options.storageDirOverride ?? storageDir;
   const fileName = options.outputName !== undefined ? sanitizeOutputName(options.outputName) : defaultOutputName();
   const filePath = join(exportsDirectory(storage), fileName);
-  if (listExportFiles(storage).some((f) => f.name === fileName)) {
-    throw new DbExportError("exists", `An export file named "${fileName}" already exists; choose a different name`);
-  }
+  assertExportNotExists(storage, fileName);
 
   const source = sourceFactory(url);
   const startedAt = Date.now();
@@ -170,18 +189,7 @@ export async function runDbExport(
     // Drain-mode guard rail: refuse while runs are active in the source
     // database (the source is a live deployment being converted). The admin
     // can force an export; the read-only snapshot still makes it consistent.
-    const placeholders = TERMINAL_RUN_STATUSES.map(() => "?").join(",");
-    const activeRuns = await source.countWhere(
-      "runs",
-      `status NOT IN (${placeholders})`,
-      TERMINAL_RUN_STATUSES,
-    );
-    if (activeRuns > 0 && options.force !== true) {
-      throw new DbExportError(
-        "active-runs",
-        `${activeRuns} run(s) are still active in the source database; wait for them to finish or force the export`,
-      );
-    }
+    const activeRuns = await assertNoActiveRuns(source, options.force);
 
     target = createSqliteTarget(filePath);
     // Keep the source snapshot open through verification so the row counts,
@@ -197,15 +205,7 @@ export async function runDbExport(
     if (!verification.allPassed) {
       // Integrity gate: a failed verification must not ship as a successful
       // export. The partial file is removed like any other failed export.
-      const failedTables = verification.tables.filter((table): boolean =>
-        !table.countMatch
-        || table.uniqueChecks.some((check): boolean => !check.match)
-        || !table.sampleHash.match)
-        .map((table): string => {
-          const uniques = table.uniqueChecks.filter((check): boolean => !check.match)
-            .map((check): string => `${check.index}(${check.source}/${check.target})`).join(", ");
-          return `${table.table}${table.countMatch ? "" : " count"}${!table.sampleHash.match ? " hash" : ""}${uniques === "" ? "" : ` unique[${uniques}]`}`;
-        });
+      const failedTables = formatFailedTables(verification);
       await target.finishAndClose();
       target = null;
       rmSync(filePath, { force: true });

@@ -16,15 +16,26 @@ import {
 import { enqueueDurableJob, type DurableJobContext } from "./durable-jobs";
 import { log } from "./log";
 import { decodeStatePayload } from "./validation";
+import type { DeepReadonly } from "./utils";
 
 export type ExplorerCatalogItem = Readonly<{ name: string; source: string; version: string }>;
-type Job = Readonly<typeof durableJobs.$inferSelect>;
+type Job = DeepReadonly<typeof durableJobs.$inferSelect>;
 const MEMBERSHIP_BATCH_SIZE = 100;
 
-async function insertMemberships(tx: Parameters<Parameters<typeof db.transaction>[0]>[0], memberships: readonly (typeof explorerCatalogMemberships.$inferInsert)[]): Promise<void> {
+async function insertMemberships(tx: DeepReadonly<Parameters<Parameters<typeof db.transaction>[0]>[0]>, memberships: readonly DeepReadonly<typeof explorerCatalogMemberships.$inferInsert>[]): Promise<void> {
   for (let index = 0; index < memberships.length; index += MEMBERSHIP_BATCH_SIZE) {
     const batch = memberships.slice(index, index + MEMBERSHIP_BATCH_SIZE);
     if (batch.length > 0) await tx.insert(explorerCatalogMemberships).values(batch);
+  }
+}
+
+function parseStateResources(jsonState: string | null): unknown[] | undefined {
+  try {
+    const parsed = jsonState === null ? undefined : JSON.parse(decodeStatePayload(jsonState)) as Record<string, unknown>;
+    const rawResources = parsed?.resources;
+    return Array.isArray(rawResources) ? rawResources : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -32,25 +43,20 @@ function stateItems(jsonState: string | null): Readonly<{ resources: number; pro
   const providers = new Map<string, ExplorerCatalogItem>();
   const modules = new Map<string, ExplorerCatalogItem>();
   let resources = 0;
-  try {
-    const parsed = jsonState === null ? undefined : JSON.parse(decodeStatePayload(jsonState)) as Record<string, unknown>;
-    const rawResources = parsed?.resources;
-    if (!Array.isArray(rawResources)) return { resources, providers: [], modules: [], providerItems: [], moduleItems: [] };
-    for (const raw of rawResources) {
-      if (raw === null || typeof raw !== "object") continue;
-      const resource = raw as Record<string, unknown>;
-      resources += Array.isArray(resource.instances) ? resource.instances.length : 0;
-      const provider = typeof resource.provider === "string" ? resource.provider.replace(/^provider\[\"|\"\]$/g, "") : "";
-      if (provider !== "") {
-        const name = provider.split("/").at(-1) ?? provider;
-        const version = typeof resource.provider_version === "string" ? resource.provider_version : "";
-        providers.set(`${name}|${provider}|${version}`, { name, source: provider, version });
-      }
-      const module = typeof resource.module === "string" ? resource.module : "";
-      if (module !== "" && module !== "root") modules.set(`${module}|${module}`, { name: module, source: module, version: "" });
+  const rawResources = parseStateResources(jsonState);
+  if (rawResources === undefined) return { resources, providers: [], modules: [], providerItems: [], moduleItems: [] };
+  for (const raw of rawResources) {
+    if (raw === null || typeof raw !== "object") continue;
+    const resource = raw as Record<string, unknown>;
+    resources += Array.isArray(resource.instances) ? resource.instances.length : 0;
+    const provider = typeof resource.provider === "string" ? resource.provider.replace(/^provider\[\"|\"\]$/g, "") : "";
+    if (provider !== "") {
+      const name = provider.split("/").at(-1) ?? provider;
+      const version = typeof resource.provider_version === "string" ? resource.provider_version : "";
+      providers.set(`${name}|${provider}|${version}`, { name, source: provider, version });
     }
-  } catch {
-    return { resources: 0, providers: [], modules: [], providerItems: [], moduleItems: [] };
+    const module = typeof resource.module === "string" ? resource.module : "";
+    if (module !== "" && module !== "root") modules.set(`${module}|${module}`, { name: module, source: module, version: "" });
   }
   const providerItems = [...providers.values()].sort((a, b) => a.source.localeCompare(b.source));
   const moduleItems = [...modules.values()].sort((a, b) => a.source.localeCompare(b.source));
@@ -95,9 +101,20 @@ function membershipRows(row: ExplorerInventoryCatalogRow): typeof explorerCatalo
   }));
 }
 
-export async function refreshExplorerWorkspace(workspaceId: string, rebuild = true): Promise<void> {
+type ExplorerWorkspaceData = DeepReadonly<{
+  workspace: typeof workspaces.$inferSelect;
+  organization: typeof organizations.$inferSelect | undefined;
+  project: typeof projects.$inferSelect | undefined;
+  state: typeof stateVersions.$inferSelect | undefined;
+  run: typeof runs.$inferSelect | undefined;
+  assessment: typeof assessmentResults.$inferSelect | undefined;
+  tags: { key: string }[];
+  noCode: typeof noCodeWorkspaceConfigurations.$inferSelect | undefined;
+}>;
+
+async function loadExplorerWorkspaceData(workspaceId: string): Promise<ExplorerWorkspaceData | undefined> {
   const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
-  if (workspace === undefined) return;
+  if (workspace === undefined) return undefined;
   const [organization, project, state, run, assessment, tags, noCode] = await Promise.all([
     db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) }),
     workspace.projectId === null ? Promise.resolve(undefined) : db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) }),
@@ -107,10 +124,13 @@ export async function refreshExplorerWorkspace(workspaceId: string, rebuild = tr
     db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspace.id), columns: { key: true } }),
     db.query.noCodeWorkspaceConfigurations.findFirst({ where: eq(noCodeWorkspaceConfigurations.workspaceId, workspace.id) }),
   ]);
-  const items = stateItems(state?.jsonState ?? null);
+  return { workspace, organization, project, state, run, assessment, tags, noCode };
+}
+
+function explorerWorkspaceFields(data: DeepReadonly<ExplorerWorkspaceData>, now: number): Readonly<Record<string, unknown>> {
+  const { workspace } = data;
   const repo = typeof workspace.vcsRepo === "object" && workspace.vcsRepo !== null ? workspace.vcsRepo as Record<string, unknown> : {};
-  const now = Date.now();
-  const row: typeof explorerWorkspaceInventory.$inferInsert = {
+  return {
     workspaceId: workspace.id,
     orgId: workspace.orgId,
     workspaceName: workspace.name,
@@ -119,42 +139,98 @@ export async function refreshExplorerWorkspace(workspaceId: string, rebuild = tr
     terraformVersion: workspace.terraformVersion,
     executionMode: workspace.executionMode,
     vcsRepoIdentifier: typeof repo.identifier === "string" ? repo.identifier : null,
-    sourceModuleId: noCode?.noCodeModuleId ?? null,
     projectId: workspace.projectId,
-    projectName: project?.name ?? "Default Project",
-    currentRunStatus: run?.status ?? null,
-    currentRunAppliedAt: run?.appliedAt ?? null,
-    currentRunExternalId: run?.id ?? null,
+    projectName: data.project?.name ?? "Default Project",
+  };
+}
+
+function explorerRunFields(data: DeepReadonly<ExplorerWorkspaceData>): Readonly<Record<string, unknown>> {
+  return {
+    currentRunStatus: data.run?.status ?? null,
+    currentRunAppliedAt: data.run?.appliedAt ?? null,
+    currentRunExternalId: data.run?.id ?? null,
+  };
+}
+
+function explorerAssessmentDriftFields(data: DeepReadonly<ExplorerWorkspaceData>): Readonly<Record<string, unknown>> {
+  return {
+    drifted: data.assessment?.drifted ?? null,
+    resourcesDrifted: data.assessment?.resourcesDrifted ?? 0,
+    resourcesUndrifted: data.assessment?.resourcesUndrifted ?? 0,
+    allChecksSucceeded: data.assessment?.allChecksSucceeded ?? null,
+  };
+}
+
+function explorerAssessmentCheckFields(data: DeepReadonly<ExplorerWorkspaceData>): Readonly<Record<string, unknown>> {
+  return {
+    checksPassed: data.assessment?.checksPassed ?? 0,
+    checksFailed: data.assessment?.checksFailed ?? 0,
+    checksErrored: data.assessment?.checksErrored ?? 0,
+    checksUnknown: data.assessment?.checksUnknown ?? 0,
+  };
+}
+
+function explorerAssessmentFields(data: DeepReadonly<ExplorerWorkspaceData>): Readonly<Record<string, unknown>> {
+  return { ...explorerAssessmentDriftFields(data), ...explorerAssessmentCheckFields(data) };
+}
+
+function explorerStateFields(data: DeepReadonly<ExplorerWorkspaceData>, items: DeepReadonly<ReturnType<typeof stateItems>>): Readonly<Record<string, unknown>> {
+  return {
     currentResourceCount: items.resources,
-    drifted: assessment?.drifted ?? null,
-    resourcesDrifted: assessment?.resourcesDrifted ?? 0,
-    resourcesUndrifted: assessment?.resourcesUndrifted ?? 0,
-    allChecksSucceeded: assessment?.allChecksSucceeded ?? null,
-    checksPassed: assessment?.checksPassed ?? 0,
-    checksFailed: assessment?.checksFailed ?? 0,
-    checksErrored: assessment?.checksErrored ?? 0,
-    checksUnknown: assessment?.checksUnknown ?? 0,
-    tags: tags.map((tag) => tag.key).sort().join(", "),
+    stateVersionTerraformVersion: data.state?.terraformVersion ?? data.workspace.terraformVersion,
+    stateSerial: data.state?.serial ?? null,
+  };
+}
+
+function explorerCatalogFields(data: DeepReadonly<ExplorerWorkspaceData>, items: DeepReadonly<ReturnType<typeof stateItems>>): Readonly<Record<string, unknown>> {
+  return {
+    tags: data.tags.map((tag) => tag.key).sort().join(", "),
     providers: items.providers.join(", "),
     modules: items.modules.join(", "),
     providerItems: JSON.stringify(items.providerItems),
     moduleItems: JSON.stringify(items.moduleItems),
     providerCount: items.providerItems.length,
     moduleCount: items.moduleItems.length,
-    stateVersionTerraformVersion: state?.terraformVersion ?? workspace.terraformVersion,
-    stateSerial: state?.serial ?? null,
-    updatedAt: now,
   };
+}
+
+function explorerInventoryRow(
+  data: DeepReadonly<ExplorerWorkspaceData>,
+  items: DeepReadonly<ReturnType<typeof stateItems>>,
+  now: number,
+): typeof explorerWorkspaceInventory.$inferInsert {
+  return {
+    ...explorerWorkspaceFields(data, now),
+    ...explorerRunFields(data),
+    ...explorerAssessmentFields(data),
+    ...explorerStateFields(data, items),
+    ...explorerCatalogFields(data, items),
+    sourceModuleId: data.noCode?.noCodeModuleId ?? null,
+    updatedAt: now,
+  } as typeof explorerWorkspaceInventory.$inferInsert;
+}
+
+async function persistExplorerInventory(
+  row: DeepReadonly<typeof explorerWorkspaceInventory.$inferInsert>,
+): Promise<void> {
   await db.transaction(async (tx): Promise<void> => {
     await tx.insert(explorerWorkspaceInventory).values(row).onConflictDoUpdate({
       target: explorerWorkspaceInventory.workspaceId,
       set: row,
     });
     await tx.delete(explorerCatalogMemberships).where(eq(explorerCatalogMemberships.workspaceId, row.workspaceId));
-    const memberships = membershipRows(row);
-    await insertMemberships(tx, memberships);
+    await insertMemberships(tx, membershipRows(row));
   });
-  if (organization !== undefined && rebuild) scheduleExplorerCatalog(organization.id);
+}
+
+export async function refreshExplorerWorkspace(workspaceId: string, rebuild = true): Promise<void> {
+  const data = await loadExplorerWorkspaceData(workspaceId);
+  if (data === undefined) return;
+  const items = stateItems(data.state?.jsonState ?? null);
+  const now = Date.now();
+  const row = explorerInventoryRow(data, items, now);
+  await persistExplorerInventory(row);
+  if (data.organization !== undefined && rebuild) scheduleExplorerCatalog(data.organization.id);
 }
 
 export async function rebuildExplorerCatalog(orgId: string, context?: DurableJobContext): Promise<void> {
@@ -245,6 +321,11 @@ export async function runExplorerCatalogJob(job: Job, context: DurableJobContext
   else await rebuildExplorerCatalog(orgId, context);
 }
 
+async function rebuildOrQueueExplorerCatalog(orgId: string, workspaceTotal: number): Promise<void> {
+  if (workspaceTotal <= 1000) await rebuildExplorerCatalog(orgId);
+  else await enqueueDurableJob("explorer-catalog", { orgId }, { dedupeKey: `catalog:${orgId}` });
+}
+
 export async function ensureExplorerInventory(orgId: string): Promise<void> {
   const [workspaceCount, inventoryCount, membershipCount] = await Promise.all([
     db.select({ total: count() }).from(workspaces).where(eq(workspaces.orgId, orgId)),
@@ -254,8 +335,7 @@ export async function ensureExplorerInventory(orgId: string): Promise<void> {
   const workspaceTotal = workspaceCount[0]?.total ?? 0;
   if (workspaceTotal === (inventoryCount[0]?.total ?? 0) && (workspaceTotal === 0 || (membershipCount[0]?.total ?? 0) > 0)) return;
   if (workspaceTotal === (inventoryCount[0]?.total ?? 0)) {
-    if (workspaceTotal <= 1000) await rebuildExplorerCatalog(orgId);
-    else await enqueueDurableJob("explorer-catalog", { orgId }, { dedupeKey: `catalog:${orgId}` });
+    await rebuildOrQueueExplorerCatalog(orgId, workspaceTotal);
     return;
   }
   if (workspaceTotal <= 1000) {

@@ -334,6 +334,16 @@ export class RunSandbox {
 
 let cachedResolvDir: string | null | undefined;
 
+function storageProtectionPrefix(allowStorage: boolean): string | null {
+  if (allowStorage) return null;
+  try {
+    const { storageDir } = require("../db/driver") as { storageDir: string };
+    const resolvedStorageDir = resolve(storageDir);
+    return resolvedStorageDir.endsWith("/") ? resolvedStorageDir : resolvedStorageDir + "/";
+  } catch { /* best-effort */ }
+  return null;
+}
+
 /**
  * Extra read-write paths for the sandbox allow-list, from
  * TERRENCE_SANDBOX_EXTRA_RW_PATHS (colon-separated). TEST-ONLY: lets the
@@ -349,14 +359,7 @@ function extraRwArgs(): string[] {
   const raw = process.env.TERRENCE_SANDBOX_EXTRA_RW_PATHS;
   if (raw === undefined || raw === "") return [];
   const allowStorage = envEnabled(process.env.TERRENCE_SANDBOX_EXTRA_RW_ALLOW_STORAGE);
-  let storagePrefix: string | null = null;
-  if (!allowStorage) {
-    try {
-      const { storageDir } = require("../db/driver") as { storageDir: string };
-      const sd = resolve(storageDir);
-      storagePrefix = sd.endsWith("/") ? sd : sd + "/";
-    } catch { /* best-effort */ }
-  }
+  const storagePrefix = storageProtectionPrefix(allowStorage);
   const out: string[] = [];
   for (const p of raw.split(":")) {
     if (p === "") continue;

@@ -137,6 +137,27 @@ export function strictAuditEnabled(): boolean {
   return v === "1" || v === "true";
 }
 
+function scopeAllowsOrgPermission(
+  scopes: TokenScopes,
+  orgId: string,
+  requiredRole: "owner" | "member",
+  requiredGrant: WorkspacePermissionGrant | null,
+): boolean {
+  if (!scopeCoversOrg(scopes, orgId)) return false;
+  if (requiredGrant !== null) return scopeGrants(scopes, requiredGrant);
+  if (requiredRole === "owner") return scopeGrants(scopes, "settings:write");
+  return true;
+}
+
+async function checkTeamTokenOrgPermission(
+  tokenTeamId: string,
+  orgId: string,
+  requiredRole: "owner" | "member",
+): Promise<boolean> {
+  const team = await db.query.teams.findFirst({ where: eq(teams.id, tokenTeamId) });
+  return team?.orgId === orgId && requiredRole === "member";
+}
+
 export async function checkOrgPermission(
   userId: string | undefined,
   orgId: string,
@@ -146,24 +167,8 @@ export async function checkOrgPermission(
   requiredGrant: WorkspacePermissionGrant | null = null,
 ): Promise<boolean> {
   const scopes = currentTokenScopes();
-  if (scopes !== null) {
-    // Fine-grained token: the org MUST be inside the scope, org-level
-    // owner actions additionally require the settings:write grant, and a
-    // caller-specified grant (e.g. settings:read for org-settings reads)
-    // must be present too.  The user's own membership is still verified
-    // below, so a fine-grained token can never exceed the user's
-    // underlying access.
-    if (!scopeCoversOrg(scopes, orgId)) return false;
-    if (requiredRole === "owner" && requiredGrant === null && !scopeGrants(scopes, "settings:write")) return false;
-    if (requiredGrant !== null && !scopeGrants(scopes, requiredGrant)) return false;
-  }
-  if (tokenTeamId !== null) {
-    const team = await db.query.teams.findFirst({ where: eq(teams.id, tokenTeamId) });
-    // A team token is an authenticated member of its organization for
-    // resource-existence/read checks. Mutating organization authority still
-    // flows through checkOrganizationPermission and the team's grants.
-    return team?.orgId === orgId && requiredRole === "member";
-  }
+  if (scopes !== null && !scopeAllowsOrgPermission(scopes, orgId, requiredRole, requiredGrant)) return false;
+  if (tokenTeamId !== null) return checkTeamTokenOrgPermission(tokenTeamId, orgId, requiredRole);
   if (tokenOrgId !== null) return tokenOrgId === orgId;
   if (userId === undefined) return false;
   const facts = await loadMembershipFacts(userId, orgId);
@@ -195,87 +200,62 @@ export type OrganizationPermission =
   | "manage-varsets"
   | "read-varsets";
 
+const TEAM_ORG_FALLBACK_MAP: Readonly<Record<string, readonly string[]>> = {
+  "read-workspaces": ["manage-workspaces", "read-projects", "manage-projects", "manage-agent-pools", "manage-policy-overrides"],
+  "manage-workspaces": ["manage-projects"],
+  "read-projects": ["manage-projects", "manage-agent-pools"],
+  "manage-membership": ["manage-teams", "manage-organization-access"],
+  "manage-teams": ["manage-organization-access"],
+  "read-policies": ["manage-policies"],
+  "read-vcs-settings": ["manage-vcs-settings"],
+  "read-agent-pools": ["manage-agent-pools"],
+  "manage-varsets": ["manage-workspaces", "manage-projects"],
+};
+
+function hasAnyFallback(access: Readonly<Record<string, boolean>>, keys: readonly string[]): boolean {
+  return keys.some((key): boolean => access[key] === true);
+}
+
 function teamOrganizationAllows(
   access: Readonly<Record<string, boolean>>,
   required: OrganizationPermission,
 ): boolean {
   if (access[required] === true) return true;
-  if (required === "read-workspaces") {
-    return access["manage-workspaces"] === true
-      || access["read-projects"] === true
-      || access["manage-projects"] === true
-      || access["manage-agent-pools"] === true
-      || access["manage-policy-overrides"] === true;
-  }
-  if (required === "manage-workspaces") return access["manage-projects"] === true;
-  if (required === "read-projects") {
-    return access["manage-projects"] === true || access["manage-agent-pools"] === true;
-  }
-  if (required === "manage-membership") {
-    return access["manage-teams"] === true || access["manage-organization-access"] === true;
-  }
-  if (required === "manage-teams") return access["manage-organization-access"] === true;
-  // Team-level `organization-access` records predate the fine-grained read
-  // split; their existing manage keys satisfy the matching read requirement.
-  if (required === "read-policies") return access["manage-policies"] === true;
-  if (required === "read-vcs-settings") return access["manage-vcs-settings"] === true;
-  if (required === "read-agent-pools") return access["manage-agent-pools"] === true;
   if (required === "read-varsets") {
-    // Reuse the read-workspaces cascade (manage-workspaces, read-projects,
-    // manage-projects, manage-agent-pools, manage-policy-overrides) instead
-    // of duplicating a partial copy of it.
-    return teamOrganizationAllows(access, "read-workspaces") || access["manage-varsets"] === true;
+    if (access["manage-varsets"] === true) return true;
+    return teamOrganizationAllows(access, "read-workspaces");
   }
-  // manage-projects cascades to workspace management, which covers varsets.
-  if (required === "manage-varsets") {
-    return access["manage-workspaces"] === true || access["manage-projects"] === true;
-  }
-  return false;
+  const fallbacks = TEAM_ORG_FALLBACK_MAP[required];
+  if (fallbacks === undefined) return false;
+  return hasAnyFallback(access, fallbacks);
 }
+
+const ORGANIZATION_PERMISSION_GRANT_MAP: Readonly<Record<OrganizationPermission, WorkspacePermissionGrant | null>> = {
+  "manage-policies": "policies:write",
+  "read-policies": "policies:read",
+  "manage-policy-overrides": "runs:policy-override",
+  "delegate-policy-overrides": "runs:policy-override",
+  "manage-run-tasks": "run-tasks:write",
+  "manage-vcs-settings": "vcs:write",
+  "read-vcs-settings": "vcs:read",
+  "manage-agent-pools": "agent-pools:write",
+  "read-agent-pools": "agent-pools:read",
+  "manage-providers": "registry:write",
+  "manage-modules": "registry:write",
+  "manage-projects": "projects:write",
+  "read-projects": "projects:read",
+  "read-workspaces": "workspaces:read",
+  "manage-workspaces": "workspaces:write",
+  "manage-membership": "members:write",
+  "manage-teams": "teams:write",
+  "manage-organization-access": "teams:write",
+  "manage-varsets": "varsets:write",
+  "read-varsets": "varsets:read",
+};
 
 /** Map an OrganizationPermission to the fine-grained grant it requires. */
 function organizationPermissionGrant(required: OrganizationPermission): WorkspacePermissionGrant | null {
-  switch (required) {
-    case "manage-policies":
-      return "policies:write";
-    case "read-policies":
-      return "policies:read";
-    case "manage-policy-overrides":
-    case "delegate-policy-overrides":
-      return "runs:policy-override";
-    case "manage-run-tasks":
-      return "run-tasks:write";
-    case "manage-vcs-settings":
-      return "vcs:write";
-    case "read-vcs-settings":
-      return "vcs:read";
-    case "manage-agent-pools":
-      return "agent-pools:write";
-    case "read-agent-pools":
-      return "agent-pools:read";
-    case "manage-providers":
-    case "manage-modules":
-      return "registry:write";
-    case "manage-projects":
-      return "projects:write";
-    case "read-projects":
-      return "projects:read";
-    case "read-workspaces":
-      return "workspaces:read";
-    case "manage-workspaces":
-      return "workspaces:write";
-    case "manage-membership":
-      return "members:write";
-    case "manage-teams":
-    case "manage-organization-access":
-      return "teams:write";
-    case "manage-varsets":
-      return "varsets:write";
-    case "read-varsets":
-      return "varsets:read";
-    default:
-      return null;
-  }
+  return ORGANIZATION_PERMISSION_GRANT_MAP[required] ?? null;
 }
 
 /**
@@ -589,6 +569,61 @@ export function ifMatchSatisfied(request: Readonly<{ headers: Readonly<{ get(nam
   return ifMatch.split(",").map((tag): string => tag.trim()).some((tag): boolean => tag === expected);
 }
 
+const NON_CUSTOM_ALLOWS: Readonly<Record<string, readonly WorkspacePermission[]>> = {
+  admin: ["read", "run-read", "plan", "apply", "discard", "cancel", "lock", "variables-read", "variables-write", "state-outputs", "state-read", "state-write"],
+  write: ["read", "run-read", "plan", "apply", "discard", "cancel", "lock", "variables-read", "variables-write", "state-outputs", "state-read", "state-write"],
+  plan: ["read", "run-read", "plan", "variables-read", "state-outputs", "state-read"],
+  read: ["read", "run-read", "variables-read", "state-outputs", "state-read"],
+};
+
+function allowsNonCustomLevel(accessLevel: string, required: WorkspacePermission): boolean {
+  if (accessLevel === "admin") return true;
+  const allowed = NON_CUSTOM_ALLOWS[accessLevel];
+  if (allowed === undefined) return false;
+  return (allowed as readonly string[]).includes(required);
+}
+
+function allowsCustomRuns(runs: string, required: WorkspacePermission): boolean | null {
+  if (required === "read" || required === "run-read") return ["read", "plan", "apply"].includes(runs);
+  if (required === "plan") return runs === "plan" || runs === "apply";
+  if (required === "apply" || required === "discard" || required === "cancel") return runs === "apply";
+  return null;
+}
+
+function allowsCustomTaskOrLock(permissions: Readonly<Record<string, unknown>>, required: WorkspacePermission): boolean | null {
+  if (required === "run-tasks" || required === "run-tasks-read") return permissions["run-tasks"] === true;
+  if (required === "lock") return permissions["workspace-locking"] === true;
+  return null;
+}
+
+function allowsCustomVariables(permissions: Readonly<Record<string, unknown>>, required: WorkspacePermission): boolean | null {
+  const variableAccess = typeof permissions.variables === "string" ? permissions.variables : "none";
+  if (required === "variables-read") return variableAccess === "read" || variableAccess === "write";
+  if (required === "variables-write") return variableAccess === "write";
+  return null;
+}
+
+function allowsCustomState(permissions: Readonly<Record<string, unknown>>, required: WorkspacePermission): boolean | null {
+  const stateAccess = typeof permissions["state-versions"] === "string" ? permissions["state-versions"] : "none";
+  if (required === "state-outputs") return ["read-outputs", "read", "write"].includes(stateAccess);
+  if (required === "state-read") return stateAccess === "read" || stateAccess === "write";
+  if (required === "state-write") return stateAccess === "write";
+  return null;
+}
+
+function allowsCustomLevel(permissions: Readonly<Record<string, unknown>>, required: WorkspacePermission): boolean {
+  const runs = typeof permissions.runs === "string" ? permissions.runs : "read";
+  const runResult = allowsCustomRuns(runs, required);
+  if (runResult !== null) return runResult;
+  const taskResult = allowsCustomTaskOrLock(permissions, required);
+  if (taskResult !== null) return taskResult;
+  const varResult = allowsCustomVariables(permissions, required);
+  if (varResult !== null) return varResult;
+  const stateResult = allowsCustomState(permissions, required);
+  if (stateResult !== null) return stateResult;
+  return false;
+}
+
 function teamWorkspaceAllows(
   accessLevel: string,
   rawPermissions: Readonly<Record<string, unknown>> | null,
@@ -596,26 +631,8 @@ function teamWorkspaceAllows(
 ): boolean {
   const permissions = rawPermissions ?? {};
   if (required === "policy-override") return accessLevel === "custom" && permissions["policy-overrides"] === true;
-  if (accessLevel === "admin") return true;
-  if (accessLevel === "write") return ["read", "run-read", "plan", "apply", "discard", "cancel", "lock", "variables-read", "variables-write", "state-outputs", "state-read", "state-write"].includes(required);
-  if (accessLevel === "plan") return ["read", "run-read", "plan", "variables-read", "state-outputs", "state-read"].includes(required);
-  if (accessLevel === "read") return ["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required);
-  if (accessLevel !== "custom") return false;
-
-  const runs = typeof permissions.runs === "string" ? permissions.runs : "read";
-  if (required === "read" || required === "run-read") return ["read", "plan", "apply"].includes(runs);
-  if (required === "plan") return runs === "plan" || runs === "apply";
-  if (required === "apply" || required === "discard" || required === "cancel") return runs === "apply";
-  if (required === "run-tasks" || required === "run-tasks-read") return permissions["run-tasks"] === true;
-  if (required === "lock") return permissions["workspace-locking"] === true;
-  const variableAccess = typeof permissions.variables === "string" ? permissions.variables : "none";
-  if (required === "variables-read") return variableAccess === "read" || variableAccess === "write";
-  if (required === "variables-write") return variableAccess === "write";
-  const stateAccess = typeof permissions["state-versions"] === "string" ? permissions["state-versions"] : "none";
-  if (required === "state-outputs") return ["read-outputs", "read", "write"].includes(stateAccess);
-  if (required === "state-read") return stateAccess === "read" || stateAccess === "write";
-  if (required === "state-write") return stateAccess === "write";
-  return false;
+  if (accessLevel !== "custom") return allowsNonCustomLevel(accessLevel, required);
+  return allowsCustomLevel(permissions, required);
 }
 
 /**
@@ -624,87 +641,97 @@ function teamWorkspaceAllows(
  * workspace/project/tag restriction). Returns [] when the scope cannot reach
  * any workspace in the org.
  */
-export async function scopeWorkspaceIdsForOrg(scope: TokenScopes, orgId: string): Promise<readonly string[] | null> {
-  if (!scopeCoversOrg(scope, orgId)) return [];
+async function collectProjectScopedIds(scope: TokenScopes, orgId: string): Promise<readonly string[]> {
+  if (scope.projects === null || scope.projects.length === 0) return [];
+  const rows = await db.query.workspaces.findMany({
+    where: and(eq(workspaces.orgId, orgId), inArray(workspaces.projectId, scope.projects as string[])),
+    columns: { id: true },
+  });
+  return rows.map((row): string => row.id);
+}
 
-  const projectRestriction = scope.projects !== null;
-  const workspaceRestriction = scope.workspaces !== null;
-  const tagRestriction = scope.tags !== null && scope.tags.rules.length > 0;
-  if (!projectRestriction && !workspaceRestriction && !tagRestriction) return null;
+async function collectWorkspaceScopedIds(scope: TokenScopes, orgId: string): Promise<readonly string[]> {
+  if (scope.workspaces === null || scope.workspaces.length === 0) return [];
+  const rows = await db.query.workspaces.findMany({
+    where: and(eq(workspaces.orgId, orgId), inArray(workspaces.id, scope.workspaces as string[])),
+    columns: { id: true },
+  });
+  return rows.map((row): string => row.id);
+}
 
-  // Gather matching workspace IDs.
-  const matching = new Set<string>();
-
-  if (projectRestriction && scope.projects.length > 0) {
-    const rows = await db.query.workspaces.findMany({
-      where: and(
-        eq(workspaces.orgId, orgId),
-        inArray(workspaces.projectId, scope.projects as string[]),
-      ),
-      columns: { id: true },
-    });
-    for (const row of rows) matching.add(row.id);
-  }
-
-  if (workspaceRestriction && scope.workspaces.length > 0) {
-    const rows = await db.query.workspaces.findMany({
-      where: and(eq(workspaces.orgId, orgId), inArray(workspaces.id, scope.workspaces as string[])),
-      columns: { id: true },
-    });
-    for (const row of rows) matching.add(row.id);
-  }
-
-  if (tagRestriction) {
-    // Evaluate the tag expression in memory per workspace: AND/OR nesting
-    // across multiple tags is hard to express with a single join.
-    const orgWorkspaceIds = (await db.query.workspaces.findMany({
-      where: eq(workspaces.orgId, orgId),
-      columns: { id: true },
-    })).map((row): string => row.id);
-    if (orgWorkspaceIds.length > 0) {
-      const tagRows = await db.query.workspaceTags.findMany({
-        where: inArray(workspaceTags.workspaceId, orgWorkspaceIds),
-        columns: { workspaceId: true, key: true, value: true },
-      });
-      const tagsByWorkspace = new Map<string, Set<string>>();
-      for (const row of tagRows) {
-        const tags = tagsByWorkspace.get(row.workspaceId) ?? new Set<string>();
-        tags.add(`${row.key}=${row.value ?? ""}`);
-        tagsByWorkspace.set(row.workspaceId, tags);
-      }
-      // Evaluate every org workspace, including tagless ones (empty tag set).
-      for (const workspaceId of orgWorkspaceIds) {
-        if (evaluateTagExpression(scope.tags, tagsByWorkspace.get(workspaceId) ?? new Set<string>())) {
-          matching.add(workspaceId);
-        }
-      }
+async function collectTagScopedIds(scope: TokenScopes, orgId: string): Promise<readonly string[]> {
+  if (scope.tags === null || scope.tags.rules.length === 0) return [];
+  const orgWorkspaceIds = (await db.query.workspaces.findMany({
+    where: eq(workspaces.orgId, orgId),
+    columns: { id: true },
+  })).map((row): string => row.id);
+  if (orgWorkspaceIds.length === 0) return [];
+  const tagRows = await db.query.workspaceTags.findMany({
+    where: inArray(workspaceTags.workspaceId, orgWorkspaceIds),
+    columns: { workspaceId: true, key: true, value: true },
+  });
+  const tagsByWorkspace = buildTagsByWorkspace(tagRows);
+  const matching: string[] = [];
+  for (const workspaceId of orgWorkspaceIds) {
+    if (evaluateTagExpression(scope.tags, tagsByWorkspace.get(workspaceId) ?? new Set<string>())) {
+      matching.push(workspaceId);
     }
   }
+  return matching;
+}
 
+function buildTagsByWorkspace(tagRows: readonly DeepReadonly<{ workspaceId: string; key: string; value: string | null }>[]): Map<string, Set<string>> {
+  const tagsByWorkspace = new Map<string, Set<string>>();
+  for (const row of tagRows) {
+    const tags = tagsByWorkspace.get(row.workspaceId) ?? new Set<string>();
+    tags.add(`${row.key}=${row.value ?? ""}`);
+    tagsByWorkspace.set(row.workspaceId, tags);
+  }
+  return tagsByWorkspace;
+}
+
+function hasNoWorkspaceRestriction(scope: TokenScopes): boolean {
+  const hasProject = scope.projects !== null;
+  const hasWorkspace = scope.workspaces !== null;
+  const hasTag = scope.tags !== null && scope.tags.rules.length > 0;
+  return !hasProject && !hasWorkspace && !hasTag;
+}
+
+export async function scopeWorkspaceIdsForOrg(scope: TokenScopes, orgId: string): Promise<readonly string[] | null> {
+  if (!scopeCoversOrg(scope, orgId)) return [];
+  if (hasNoWorkspaceRestriction(scope)) return null;
+  const matching = new Set<string>();
+  const scopedIds = await Promise.all([
+    collectProjectScopedIds(scope, orgId),
+    collectWorkspaceScopedIds(scope, orgId),
+    collectTagScopedIds(scope, orgId),
+  ]);
+  for (const ids of scopedIds) for (const id of ids) matching.add(id);
   return [...matching];
 }
 
+const WORKSPACE_PERMISSION_GRANT_MAP: Readonly<Record<WorkspacePermission, readonly WorkspacePermissionGrant[]>> = {
+  read: ["workspaces:read"],
+  "run-read": ["runs:read"],
+  admin: ["workspaces:write"],
+  plan: ["runs:plan"],
+  apply: ["runs:apply"],
+  discard: ["runs:discard"],
+  cancel: ["runs:cancel"],
+  lock: ["workspaces:lock"],
+  "run-tasks": ["run-tasks:write"],
+  "run-tasks-read": ["run-tasks:read"],
+  "policy-override": ["runs:policy-override"],
+  "variables-read": ["variables:read"],
+  "variables-write": ["variables:write"],
+  "state-outputs": ["state:read"],
+  "state-read": ["state:read"],
+  "state-write": ["state:write"],
+};
+
 /** Map a WorkspacePermission to the fine-grained grant(s) it requires. */
 function workspacePermissionGrant(required: WorkspacePermission): readonly WorkspacePermissionGrant[] {
-  switch (required) {
-    case "read": return ["workspaces:read"];
-    case "run-read": return ["runs:read"];
-    case "admin": return ["workspaces:write"];
-    case "plan": return ["runs:plan"];
-    case "apply": return ["runs:apply"];
-    case "discard": return ["runs:discard"];
-    case "cancel": return ["runs:cancel"];
-    case "lock": return ["workspaces:lock"];
-    case "run-tasks": return ["run-tasks:write"];
-    case "run-tasks-read": return ["run-tasks:read"];
-    case "policy-override": return ["runs:policy-override"];
-    case "variables-read": return ["variables:read"];
-    case "variables-write": return ["variables:write"];
-    case "state-outputs": return ["state:read"];
-    case "state-read": return ["state:read"];
-    case "state-write": return ["state:write"];
-    default: return [];
-  }
+  return WORKSPACE_PERMISSION_GRANT_MAP[required] ?? [];
 }
 
 /**
@@ -713,21 +740,21 @@ function workspacePermissionGrant(required: WorkspacePermission): readonly Works
  * 10-permission-level workspace handlers into one set of DB reads plus
  * in-memory derivations.
  */
-type WorkspaceAccessBase = {
-  readonly orgId: string;
-  readonly userId: string | undefined;
-  readonly tokenOrgId: string | null;
-  readonly tokenTeamId: string | null;
-  readonly tokenTeam: (typeof teams.$inferSelect) | null;
-  readonly tokenTeamWorkspaces: readonly (typeof teamWorkspaces.$inferSelect)[];
-  readonly isOwner: boolean;
-  readonly isMember: boolean;
-  readonly userTeamData: {
-    readonly teamIds: readonly string[];
-    readonly teamWorkspaces: readonly (typeof teamWorkspaces.$inferSelect)[];
-    readonly userTeams: readonly (typeof teams.$inferSelect)[];
+type WorkspaceAccessBase = DeepReadonly<{
+  orgId: string;
+  userId: string | undefined;
+  tokenOrgId: string | null;
+  tokenTeamId: string | null;
+  tokenTeam: (typeof teams.$inferSelect) | null;
+  tokenTeamWorkspaces: (typeof teamWorkspaces.$inferSelect)[];
+  isOwner: boolean;
+  isMember: boolean;
+  userTeamData: {
+    teamIds: string[];
+    teamWorkspaces: (typeof teamWorkspaces.$inferSelect)[];
+    userTeams: (typeof teams.$inferSelect)[];
   } | null;
-}
+}>;
 
 async function loadWorkspaceAccessBase(
   orgId: string,
@@ -819,52 +846,76 @@ async function loadWorkspaceAccessBaseUncached(
  * Pure in-memory; mirrors the exact early-return semantics of the original
  * single-level implementation so behavior is unchanged.
  */
-function deriveWorkspaceIdsForRequired(
-  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- access-base type carries mutable element types but is treated as read-only here.
-  base: WorkspaceAccessBase,
-  required: WorkspacePermission,
-): readonly string[] | null {
-  if (base.tokenTeamId !== null) {
-    const team = base.tokenTeam;
-    if (team === null || team.orgId !== base.orgId) return [];
-    if (teamOrganizationAllows(team.organizationAccess, "manage-workspaces")) return null;
-    if (required === "read" && team.organizationAccess["manage-policies"] === true) return null;
-    if (required === "policy-override" && team.organizationAccess["manage-policy-overrides"] === true) return null;
-    if (["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required)
-      && teamOrganizationAllows(team.organizationAccess, "read-workspaces")) return null;
-    const delegateTeamIds = required === "policy-override"
-      ? new Set(teamOverrideDelegationActive(team) ? [team.id] : [])
-      : null;
-    return [...new Set(base.tokenTeamWorkspaces
-      .filter((entry): boolean =>
-        teamWorkspaceAllows(entry.access, entry.permissions, required)
-        && (delegateTeamIds === null || delegateTeamIds.has(entry.teamId)))
-      .map((entry): string => entry.workspaceId))];
-  }
-  if (base.tokenOrgId !== null) {
-    if (base.tokenOrgId !== base.orgId || ["plan", "apply", "policy-override"].includes(required)) return [];
-    return null;
-  }
-  if (base.userId === undefined) return [];
-  if (base.isOwner) return null;
-  if (!base.isMember) return [];
+function derivesFromTeamToken(base: WorkspaceAccessBase, required: WorkspacePermission): readonly string[] | null | undefined {
+  if (base.tokenTeamId === null) return undefined;
+  const team = base.tokenTeam;
+  if (team === null || team.orgId !== base.orgId) return [];
+  if (teamOrganizationAllows(team.organizationAccess, "manage-workspaces")) return null;
+  if (grantsTeamOrgWide(team, required)) return null;
+  const delegateTeamIds = required === "policy-override"
+    ? new Set(teamOverrideDelegationActive(team) ? [team.id] : [])
+    : null;
+  return [...new Set(base.tokenTeamWorkspaces
+    .filter((entry): boolean =>
+      teamWorkspaceAllows(entry.access, entry.permissions, required)
+      && (delegateTeamIds === null || delegateTeamIds.has(entry.teamId)))
+    .map((entry): string => entry.workspaceId))];
+}
+
+function grantsTeamOrgWide(team: DeepReadonly<typeof teams.$inferSelect>, required: WorkspacePermission): boolean {
+  if (required === "read" && team.organizationAccess["manage-policies"] === true) return true;
+  if (required === "policy-override" && team.organizationAccess["manage-policy-overrides"] === true) return true;
+  if (["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required)
+    && teamOrganizationAllows(team.organizationAccess, "read-workspaces")) return true;
+  return false;
+}
+
+function derivesFromOrgToken(base: WorkspaceAccessBase, required: WorkspacePermission): readonly string[] | null | undefined {
+  if (base.tokenOrgId === null) return undefined;
+  if (base.tokenOrgId !== base.orgId || ["plan", "apply", "policy-override"].includes(required)) return [];
+  return null;
+}
+
+function grantsUserOrgWide(userTeams: readonly DeepReadonly<typeof teams.$inferSelect>[], required: WorkspacePermission): boolean {
+  if (userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, "manage-workspaces"))) return true;
+  if (required === "read" && userTeams.some((team): boolean => team.organizationAccess["manage-policies"] === true)) return true;
+  if (required === "policy-override" && userTeams.some((team): boolean => team.organizationAccess["manage-policy-overrides"] === true)) return true;
+  if (["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required)
+    && userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, "read-workspaces"))) return true;
+  return false;
+}
+
+function deriveForUserTeams(base: WorkspaceAccessBase, required: WorkspacePermission): readonly string[] | null {
   const teamData = base.userTeamData;
   if (teamData === null || teamData.teamIds.length === 0) return [];
-  if (teamData.userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, "manage-workspaces"))) return null;
-  if (required === "read" && teamData.userTeams.some((team): boolean => team.organizationAccess["manage-policies"] === true)) return null;
-  if (required === "policy-override" && teamData.userTeams.some((team): boolean => team.organizationAccess["manage-policy-overrides"] === true)) return null;
-  if (["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required)
-    && teamData.userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, "read-workspaces"))) return null;
-  const delegateTeamIds = required === "policy-override"
-    ? new Set(teamData.userTeams
-      .filter((t: DeepReadonly<typeof teams.$inferSelect>): boolean => teamOverrideDelegationActive(t))
-      .map((t: DeepReadonly<typeof teams.$inferSelect>): string => t.id))
-    : null;
+  if (grantsUserOrgWide(teamData.userTeams, required)) return null;
+  const delegateTeamIds = buildDelegateTeamIds(teamData.userTeams, required);
   return [...new Set(teamData.teamWorkspaces
     .filter((entry): boolean =>
       teamWorkspaceAllows(entry.access, entry.permissions, required)
       && (delegateTeamIds === null || delegateTeamIds.has(entry.teamId)))
     .map((entry): string => entry.workspaceId))];
+}
+
+function buildDelegateTeamIds(userTeams: readonly DeepReadonly<typeof teams.$inferSelect>[], required: WorkspacePermission): ReadonlySet<string> | null {
+  if (required !== "policy-override") return null;
+  return new Set(userTeams
+    .filter((t: DeepReadonly<typeof teams.$inferSelect>): boolean => teamOverrideDelegationActive(t))
+    .map((t: DeepReadonly<typeof teams.$inferSelect>): string => t.id));
+}
+
+function deriveWorkspaceIdsForRequired(
+  base: WorkspaceAccessBase,
+  required: WorkspacePermission,
+): readonly string[] | null {
+  const teamResult = derivesFromTeamToken(base, required);
+  if (teamResult !== undefined) return teamResult;
+  const orgResult = derivesFromOrgToken(base, required);
+  if (orgResult !== undefined) return orgResult;
+  if (base.userId === undefined) return [];
+  if (base.isOwner) return null;
+  if (!base.isMember) return [];
+  return deriveForUserTeams(base, required);
 }
 
 /**
@@ -1460,82 +1511,94 @@ export async function findLockedInheritedTagKey(
   return matches[0]?.key;
 }
 
+type RunWhereCondition = DeepReadonly<ReturnType<typeof eq> | ReturnType<typeof or>>;
+type RunWhereConditions = readonly RunWhereCondition[];
+
+function addStatusFilter(conditions: readonly RunWhereCondition[], csv: (name: string) => string[] | undefined): RunWhereConditions {
+  const statuses = csv("filter[status]");
+  return statuses !== undefined && statuses.length > 0 ? [...conditions, inArray(runs.status, statuses)] : conditions;
+}
+
+function addOperationFilter(conditions: readonly RunWhereCondition[], csv: (name: string) => string[] | undefined): RunWhereConditions {
+  const operations = csv("filter[operation]");
+  return operations !== undefined && operations.length > 0 ? [...conditions, inArray(runs.operation, operations)] : conditions;
+}
+
+function addSourceFilter(conditions: readonly RunWhereCondition[], csv: (name: string) => string[] | undefined): RunWhereConditions {
+  const sources = csv("filter[source]");
+  if (sources === undefined || sources.length === 0) return conditions;
+  const wantsApi = sources.includes("tfe-api");
+  const wantsVcs = sources.includes("tfe-vcs");
+  if (!wantsApi && !wantsVcs) {
+    return [...conditions, sql`false`];
+  }
+  if (wantsApi === wantsVcs) return conditions;
+  const vcsSources = ["github", "gitlab", "bitbucket"];
+  const vcsRuns = exists(db.select({ id: configurationVersions.id })
+    .from(configurationVersions)
+    .where(and(eq(configurationVersions.id, runs.configurationVersionId), inArray(configurationVersions.source, vcsSources))));
+  return [...conditions, wantsVcs ? vcsRuns : or(isNull(runs.configurationVersionId), sql`NOT ${vcsRuns}`)];
+}
+
+function addStatusGroupFilter(conditions: readonly RunWhereCondition[], statusGroup: string | null): RunWhereConditions {
+  if (statusGroup === null || statusGroup === "") return conditions;
+  if (statusGroup === "final") return [...conditions, inArray(runs.status, FINAL_RUN_STATUSES)];
+  if (statusGroup === "non_final") return [...conditions, notInArray(runs.status, FINAL_RUN_STATUSES)];
+  if (statusGroup === "discardable") return [...conditions, inArray(runs.status, DISCARDABLE_RUN_STATUSES)];
+  return [...conditions, sql`false`];
+}
+
+function addTimeframeFilter(conditions: readonly RunWhereCondition[], timeframe: string | null): RunWhereConditions {
+  if (timeframe === null || timeframe === "") return conditions;
+  if (timeframe === "year") {
+    return [...conditions, gte(runs.createdAt, Date.now() - 365 * 24 * 60 * 60 * 1000)];
+  }
+  if (/^\d{4}$/.test(timeframe)) {
+    const year = Number(timeframe);
+    return [...conditions, gte(runs.createdAt, Date.UTC(year, 0, 1)), lt(runs.createdAt, Date.UTC(year + 1, 0, 1))];
+  }
+  return [...conditions, sql`false`];
+}
+
+function addBasicSearchFilter(conditions: readonly RunWhereCondition[], basic: string | undefined): RunWhereConditions {
+  if (basic === undefined || basic === "") return conditions;
+  return [...conditions, or(like(runs.id, `%${basic}%`), like(runs.message, `%${basic}%`))];
+}
+
+function addUserSearchFilter(conditions: readonly RunWhereCondition[], userSearch: string | undefined): RunWhereConditions {
+  if (userSearch === undefined || userSearch === "") return conditions;
+  const userMatches = db.select({ id: users.id }).from(users).where(like(users.username, `%${userSearch}%`));
+  return [...conditions, inArray(runs.createdBy, userMatches)];
+}
+
+function addAgentPoolFilter(conditions: readonly RunWhereCondition[], csv: (name: string) => string[] | undefined): RunWhereConditions {
+  const agentPoolNames = csv("filter[agent_pool_names]");
+  if (agentPoolNames === undefined || agentPoolNames.length === 0) return conditions;
+  const matchingPools = db.select({ id: agentPools.id }).from(agentPools).where(inArray(agentPools.name, agentPoolNames));
+  const matchingWorkspaces = db.select({ id: workspaces.id }).from(workspaces).where(inArray(workspaces.agentPoolId, matchingPools));
+  return [...conditions, inArray(runs.workspaceId, matchingWorkspaces)];
+}
+
+function addCommitSearchFilter(conditions: readonly RunWhereCondition[], commitSearch: string | undefined): RunWhereConditions {
+  if (commitSearch === undefined || commitSearch === "") return conditions;
+  return [...conditions, inArray(runs.id, db.select({ id: runs.id }).from(runs)
+    .innerJoin(configurationVersions, eq(runs.configurationVersionId, configurationVersions.id))
+    .where(sql`COALESCE(${jsonExtract(configurationVersions.ingressAttributes, '$.commitSha')}, '') LIKE ${`%${commitSearch}%`}`))];
+}
+
 export function workspaceRunHistoryWhere(request: RequestWithUrl, workspaceId: string): ReturnType<typeof and> {
   const params = new URL(request.url).searchParams;
   const csv = (name: string): string[] | undefined => params.get(name)?.split(",").map((value: string): string => value.trim()).filter((s: string): boolean => s !== "");
-  const conditions: (ReturnType<typeof eq>         | ReturnType<typeof or>)[] = [eq(runs.workspaceId, workspaceId)];
-  const statuses = csv("filter[status]");
-  if (statuses !== undefined && statuses.length > 0) conditions.push(inArray(runs.status, statuses));
-
-  const operations = csv("filter[operation]");
-  if (operations !== undefined && operations.length > 0) {
-    conditions.push(inArray(runs.operation, operations));
-  }
-  // No operation filter means "all runs", including speculative/plan-only runs.
-  // TFE shows speculative plans in the workspace run list, so we surface them by
-  // default. Callers that want to exclude them pass an explicit operation filter.
-
-  const sources = csv("filter[source]");
-  if (sources !== undefined && sources.length > 0) {
-    const wantsApi = sources.includes("tfe-api");
-    const wantsVcs = sources.includes("tfe-vcs");
-    if (!wantsApi && !wantsVcs) conditions.push(sql`false`);
-    else if (wantsApi !== wantsVcs) {
-      const vcsSources = ["github", "gitlab", "bitbucket"];
-      const vcsRuns = exists(db.select({ id: configurationVersions.id })
-        .from(configurationVersions)
-        .where(and(eq(configurationVersions.id, runs.configurationVersionId), inArray(configurationVersions.source, vcsSources))));
-      conditions.push(wantsVcs ? vcsRuns : or(isNull(runs.configurationVersionId), sql`NOT ${vcsRuns}`));
-    }
-  }
-
-  const statusGroup = params.get("filter[status_group]");
-  if (statusGroup === "final") conditions.push(inArray(runs.status, FINAL_RUN_STATUSES));
-  else if (statusGroup === "non_final") conditions.push(notInArray(runs.status, FINAL_RUN_STATUSES));
-  else if (statusGroup === "discardable") conditions.push(inArray(runs.status, DISCARDABLE_RUN_STATUSES));
-  else if (statusGroup !== null && statusGroup !== "") conditions.push(sql`false`);
-
-  const timeframe = params.get("filter[timeframe]");
-  if (timeframe === "year") {
-    conditions.push(gte(runs.createdAt, Date.now() - 365 * 24 * 60 * 60 * 1000));
-  } else if (timeframe !== null && /^\d{4}$/.test(timeframe)) {
-    const year = Number(timeframe);
-    conditions.push(gte(runs.createdAt, Date.UTC(year, 0, 1)));
-    conditions.push(lt(runs.createdAt, Date.UTC(year + 1, 0, 1)));
-  } else if (timeframe !== null && timeframe !== "") {
-    conditions.push(sql`false`);
-  }
-
-  const basic = params.get("search[basic]")?.trim();
-  if (basic !== undefined && basic !== "") conditions.push(or(like(runs.id, `%${basic}%`), like(runs.message, `%${basic}%`)));
-
-  const userSearch = params.get("search[user]")?.trim();
-  if (userSearch !== undefined && userSearch !== "") {
-    const userMatches = db.select({ id: users.id }).from(users)
-      .where(like(users.username, `%${userSearch}%`));
-    conditions.push(inArray(runs.createdBy, userMatches));
-  }
-
-  const agentPoolNames = csv("filter[agent_pool_names]");
-  if (agentPoolNames !== undefined && agentPoolNames.length > 0) {
-    const matchingPools = db.select({ id: agentPools.id }).from(agentPools)
-      .where(inArray(agentPools.name, agentPoolNames));
-    const matchingWorkspaces = db.select({ id: workspaces.id }).from(workspaces)
-      .where(inArray(workspaces.agentPoolId, matchingPools));
-    conditions.push(inArray(runs.workspaceId, matchingWorkspaces));
-  }
-
-  const commitSearch = params.get("search[commit]")?.trim();
-  if (commitSearch !== undefined && commitSearch !== "") {
-    conditions.push(
-      inArray(runs.id,
-        db.select({ id: runs.id }).from(runs)
-          .innerJoin(configurationVersions, eq(runs.configurationVersionId, configurationVersions.id))
-          .where(sql`COALESCE(${jsonExtract(configurationVersions.ingressAttributes, '$.commitSha')}, '') LIKE ${`%${commitSearch}%`}`)
-      )
-    );
-  }
-
+  let conditions: RunWhereConditions = [eq(runs.workspaceId, workspaceId)];
+  conditions = addStatusFilter(conditions, csv);
+  conditions = addOperationFilter(conditions, csv);
+  conditions = addSourceFilter(conditions, csv);
+  conditions = addStatusGroupFilter(conditions, params.get("filter[status_group]"));
+  conditions = addTimeframeFilter(conditions, params.get("filter[timeframe]"));
+  conditions = addBasicSearchFilter(conditions, params.get("search[basic]")?.trim());
+  conditions = addUserSearchFilter(conditions, params.get("search[user]")?.trim());
+  conditions = addAgentPoolFilter(conditions, csv);
+  conditions = addCommitSearchFilter(conditions, params.get("search[commit]")?.trim());
   return and(...conditions);
 }
 
@@ -1668,17 +1731,21 @@ async function removeConfigurationArchive(archivePath: string | null): Promise<b
  *   1. Eligible backing data → backing_data_soft_deleted
  *   2. Backing data whose grace period elapsed → permanently deleted
  */
-export async function applyDataRetentionGarbageCollection(
-  workspaceId: string,
-  options: Readonly<{ now?: number; gracePeriodMs?: number }> = {},
-): Promise<Record<string, unknown>> {
-  const now = options.now ?? Date.now();
+function getGraceCutoff(now: number, gracePeriodMs: number | undefined): number {
   const configuredGraceDays = Number(process.env.GC_GRACE_PERIOD_DAYS ?? 7);
   const defaultGracePeriodMs = Number.isFinite(configuredGraceDays) && configuredGraceDays >= 0
     ? configuredGraceDays * 86_400_000
     : 7 * 86_400_000;
-  const graceCutoff = now - (options.gracePeriodMs ?? defaultGracePeriodMs);
+  return now - (gracePeriodMs ?? defaultGracePeriodMs);
+}
 
+function getRetentionCutoff(policy: Readonly<{ deleteOlderThanNDays?: number | null }> | undefined, now: number): number | null {
+  if (policy === undefined) return null;
+  if (typeof policy.deleteOlderThanNDays !== "number" || policy.deleteOlderThanNDays <= 0) return null;
+  return now - policy.deleteOlderThanNDays * 86_400_000;
+}
+
+async function loadRetentionPolicy(workspaceId: string): Promise<{ policy: typeof dataRetentionPolicies.$inferSelect | typeof organizationDataRetentionPolicies.$inferSelect | undefined; policySource: string | null }> {
   const [workspacePolicy, workspace] = await Promise.all([
     db.query.dataRetentionPolicies.findFirst({ where: eq(dataRetentionPolicies.workspaceId, workspaceId) }),
     db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId), columns: { orgId: true } }),
@@ -1689,12 +1756,19 @@ export async function applyDataRetentionGarbageCollection(
     })
     : undefined;
   const policy = workspacePolicy ?? organizationPolicy;
-  const policySource = workspacePolicy !== undefined
-    ? "workspace"
-    : organizationPolicy !== undefined
-      ? "organization"
-      : null;
+  const policySource = workspacePolicy !== undefined ? "workspace" : organizationPolicy !== undefined ? "organization" : null;
+  return { policy, policySource };
+}
 
+type GcCollections = DeepReadonly<{
+  finalizedVersions: { id: string; createdAt: number; intermediate: boolean }[];
+  softDeletedVersions: { id: string; softDeletedAt: number | null }[];
+  retainedConfigurationVersions: { id: string; createdAt: number }[];
+  softDeletedConfigurationVersions: { id: string; archivePath: string | null; softDeletedAt: number | null }[];
+  workspaceRuns: { id: string; status: string; createdAt: number; configurationVersionId: string | null; softDeletedAt: number | null }[];
+}>;
+
+async function fetchGcCollections(workspaceId: string): Promise<GcCollections> {
   const [finalizedVersions, softDeletedVersions, retainedConfigurationVersions, softDeletedConfigurationVersions, workspaceRuns] = await Promise.all([
     db.query.stateVersions.findMany({
       where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
@@ -1706,10 +1780,7 @@ export async function applyDataRetentionGarbageCollection(
       columns: { id: true, softDeletedAt: true },
     }),
     db.query.configurationVersions.findMany({
-      where: and(
-        eq(configurationVersions.workspaceId, workspaceId),
-        inArray(configurationVersions.status, ["uploaded", "archived"]),
-      ),
+      where: and(eq(configurationVersions.workspaceId, workspaceId), inArray(configurationVersions.status, ["uploaded", "archived"])),
       orderBy: [desc(configurationVersions.createdAt)],
       columns: { id: true, createdAt: true },
     }),
@@ -1723,162 +1794,159 @@ export async function applyDataRetentionGarbageCollection(
       columns: { id: true, status: true, createdAt: true, configurationVersionId: true, softDeletedAt: true },
     }),
   ]);
+  return { finalizedVersions, softDeletedVersions, retainedConfigurationVersions, softDeletedConfigurationVersions, workspaceRuns };
+}
 
-  const staleStateVersions = softDeletedVersions.filter(({ softDeletedAt }): boolean =>
-    typeof softDeletedAt === "number" && softDeletedAt <= graceCutoff
-  );
-  if (staleStateVersions.length > 0) {
-    await db.delete(stateVersions).where(inArray(stateVersions.id, staleStateVersions.map((v): string => v.id)));
-  }
-  const softDeletedStateVersionIds = softDeletedVersions
-    .filter(({ softDeletedAt }): boolean => softDeletedAt === null)
-    .map((v): string => v.id);
-  if (softDeletedStateVersionIds.length > 0) {
-    await db.update(stateVersions).set({ softDeletedAt: now }).where(inArray(stateVersions.id, softDeletedStateVersionIds));
-  }
+async function purgeStaleStateVersions(softDeletedVersions: GcCollections["softDeletedVersions"], graceCutoff: number): Promise<number> {
+  const stale = softDeletedVersions.filter(({ softDeletedAt }): boolean => typeof softDeletedAt === "number" && softDeletedAt <= graceCutoff);
+  if (stale.length > 0) await db.delete(stateVersions).where(inArray(stateVersions.id, stale.map((v): string => v.id)));
+  return stale.length;
+}
 
-  const staleConfigurationVersions = softDeletedConfigurationVersions.filter(({ softDeletedAt }): boolean =>
-    typeof softDeletedAt === "number" && softDeletedAt <= graceCutoff
-  );
+async function stampPendingSoftDeletedStateVersions(softDeletedVersions: GcCollections["softDeletedVersions"], now: number): Promise<void> {
+  const ids = softDeletedVersions.filter(({ softDeletedAt }): boolean => softDeletedAt === null).map((v): string => v.id);
+  if (ids.length > 0) await db.update(stateVersions).set({ softDeletedAt: now }).where(inArray(stateVersions.id, ids));
+}
+
+async function purgeStaleConfigurationVersions(softDeletedConfigurationVersions: GcCollections["softDeletedConfigurationVersions"], graceCutoff: number): Promise<{ count: number; archivesDeleted: number }> {
+  const stale = softDeletedConfigurationVersions.filter(({ softDeletedAt }): boolean => typeof softDeletedAt === "number" && softDeletedAt <= graceCutoff);
   let archivesDeleted = 0;
-  const staleConfigVersionIds: string[] = [];
-  for (const configurationVersion of staleConfigurationVersions) {
-    if (await removeConfigurationArchive(configurationVersion.archivePath)) archivesDeleted += 1;
-    staleConfigVersionIds.push(configurationVersion.id);
+  const ids: string[] = [];
+  for (const cv of stale) {
+    if (await removeConfigurationArchive(cv.archivePath)) archivesDeleted += 1;
+    ids.push(cv.id);
   }
-  if (staleConfigVersionIds.length > 0) {
-    await db.update(configurationVersions).set({
-      archivePath: null,
-      status: "backing_data_permanently_deleted",
-    }).where(inArray(configurationVersions.id, staleConfigVersionIds));
-  }
-  const softDeletedConfigVersionIds = softDeletedConfigurationVersions
-    .filter(({ softDeletedAt }): boolean => softDeletedAt === null)
-    .map((v): string => v.id);
-  if (softDeletedConfigVersionIds.length > 0) {
-    await db.update(configurationVersions).set({ softDeletedAt: now }).where(inArray(configurationVersions.id, softDeletedConfigVersionIds));
-  }
+  if (ids.length > 0) await db.update(configurationVersions).set({ archivePath: null, status: "backing_data_permanently_deleted" }).where(inArray(configurationVersions.id, ids));
+  return { count: stale.length, archivesDeleted };
+}
 
-  const staleRuns = workspaceRuns.filter(({ status, softDeletedAt }): boolean =>
-    FINAL_RUN_STATUSES.includes(status)
-    && typeof softDeletedAt === "number"
-    && softDeletedAt <= graceCutoff
-  );
-  let runArchivesDeleted = 0;
-  const staleRunIds: string[] = [];
+async function stampPendingSoftDeletedConfigurationVersions(softDeletedConfigurationVersions: GcCollections["softDeletedConfigurationVersions"], now: number): Promise<void> {
+  const ids = softDeletedConfigurationVersions.filter(({ softDeletedAt }): boolean => softDeletedAt === null).map((v): string => v.id);
+  if (ids.length > 0) await db.update(configurationVersions).set({ softDeletedAt: now }).where(inArray(configurationVersions.id, ids));
+}
+
+async function purgeStaleRuns(workspaceRuns: GcCollections["workspaceRuns"], graceCutoff: number): Promise<{ count: number; archivesDeleted: number; retainedRuns: GcCollections["workspaceRuns"] }> {
+  const staleRuns = workspaceRuns.filter(({ status, softDeletedAt }): boolean => FINAL_RUN_STATUSES.includes(status) && typeof softDeletedAt === "number" && softDeletedAt <= graceCutoff);
+  let archivesDeleted = 0;
+  const ids: string[] = [];
   for (const run of staleRuns) {
-    const [logsDeleted] = await Promise.all([
-      deleteRunLogArchive(run.id),
-      deletePlanJsonArtifact(run.id),
-    ]);
-    if (logsDeleted) runArchivesDeleted += 1;
-    staleRunIds.push(run.id);
+    const [deleted] = await Promise.all([deleteRunLogArchive(run.id), deletePlanJsonArtifact(run.id)]);
+    if (deleted) archivesDeleted += 1;
+    ids.push(run.id);
   }
-  if (staleRunIds.length > 0) await db.delete(runs).where(inArray(runs.id, staleRunIds));
-  const retainedRuns = workspaceRuns.filter(({ id }): boolean =>
-    !staleRuns.some((staleRun): boolean => staleRun.id === id)
-  );
+  if (ids.length > 0) await db.delete(runs).where(inArray(runs.id, ids));
+  const staleIds = new Set(ids);
+  const retainedRuns = workspaceRuns.filter(({ id }): boolean => !staleIds.has(id));
+  return { count: staleRuns.length, archivesDeleted, retainedRuns };
+}
 
+function collectStateVersionIdsToSoftDelete(finalizedVersions: GcCollections["finalizedVersions"], policy: Readonly<{ stateVersionsCount?: number | null }>, currentStateVersionId: string | undefined, retentionCutoff: number | null): Set<string> {
+  return new Set([
+    ...addCountBasedStateVersions(finalizedVersions, policy, currentStateVersionId),
+    ...addCutoffBasedStateVersions(finalizedVersions, currentStateVersionId, retentionCutoff),
+  ]);
+}
+
+function addCountBasedStateVersions(finalizedVersions: GcCollections["finalizedVersions"], policy: Readonly<{ stateVersionsCount?: number | null }>, currentStateVersionId: string | undefined): readonly string[] {
+  if (typeof policy.stateVersionsCount !== "number" || policy.stateVersionsCount <= 0) return [];
+  return finalizedVersions.slice(policy.stateVersionsCount)
+    .filter((sv): boolean => sv.id !== currentStateVersionId)
+    .map((sv): string => sv.id);
+}
+
+function addCutoffBasedStateVersions(finalizedVersions: GcCollections["finalizedVersions"], currentStateVersionId: string | undefined, retentionCutoff: number | null): readonly string[] {
+  if (retentionCutoff === null) return [];
+  return finalizedVersions
+    .filter((sv): boolean => sv.id !== currentStateVersionId && sv.createdAt <= retentionCutoff)
+    .map((sv): string => sv.id);
+}
+
+async function softDeleteStateVersions(ids: Readonly<ReadonlySet<string>>, now: number): Promise<void> {
+  if (ids.size === 0) return;
+  await db.update(stateVersions).set({ status: "backing_data_soft_deleted", softDeletedAt: now }).where(inArray(stateVersions.id, [...ids]));
+}
+
+function collectConfigurationVersionIds(retainedConfigurationVersions: GcCollections["retainedConfigurationVersions"], retainedRuns: GcCollections["workspaceRuns"], retentionCutoff: number | null): string[] {
+  if (retentionCutoff === null) return [];
+  const protectedIds = buildProtectedConfigurationIds(retainedConfigurationVersions, retainedRuns);
+  return retainedConfigurationVersions.filter(({ id, createdAt }): boolean => !protectedIds.has(id) && createdAt <= retentionCutoff).map(({ id }): string => id);
+}
+
+function buildProtectedConfigurationIds(retainedConfigurationVersions: GcCollections["retainedConfigurationVersions"], retainedRuns: GcCollections["workspaceRuns"]): Set<string> {
+  const currentId = retainedConfigurationVersions[0]?.id;
+  const ids = new Set<string>(currentId === undefined ? [] : [currentId]);
+  for (const run of retainedRuns) {
+    if (run.configurationVersionId !== null && !FINAL_RUN_STATUSES.includes(run.status)) ids.add(run.configurationVersionId);
+  }
+  return ids;
+}
+
+async function softDeleteConfigurationVersions(ids: readonly string[], now: number): Promise<void> {
+  if (ids.length === 0) return;
+  await db.update(configurationVersions).set({ status: "backing_data_soft_deleted", softDeletedAt: now }).where(inArray(configurationVersions.id, ids));
+}
+
+function collectExpiredRunIds(retainedRuns: GcCollections["workspaceRuns"], retentionCutoff: number | null): readonly string[] {
+  if (retentionCutoff === null) return [];
+  return retainedRuns.filter(({ status, createdAt, softDeletedAt }): boolean => FINAL_RUN_STATUSES.includes(status) && softDeletedAt === null && createdAt <= retentionCutoff).map(({ id }): string => id);
+}
+
+async function archiveAndDeleteExpiredRuns(expiredRunIds: readonly string[], now: number): Promise<{ logsDeletedCount: number; logsArchived: number }> {
+  if (expiredRunIds.length === 0) return { logsDeletedCount: 0, logsArchived: 0 };
+  const expiredLogs = await db.query.logs.findMany({ where: inArray(logs.runId, expiredRunIds), columns: { id: true } });
+  const logsArchived = (await Promise.all(expiredRunIds.map(archiveRunLogs))).filter(Boolean).length;
+  await db.delete(logs).where(inArray(logs.runId, expiredRunIds));
+  await db.update(runs).set({ softDeletedAt: now }).where(inArray(runs.id, expiredRunIds));
+  return { logsDeletedCount: expiredLogs.length, logsArchived };
+}
+
+async function applyRetentionPolicy(collections: GcCollections, policy: Readonly<{ stateVersionsCount?: number | null; deleteOlderThanNDays?: number | null }>, now: number, retainedRuns: GcCollections["workspaceRuns"]): Promise<{ stateVersionIds: Set<string>; configurationVersionIds: readonly string[]; expiredRunIds: readonly string[]; logsDeleted: number; logsArchived: number }> {
+  const retentionCutoff = getRetentionCutoff(policy, now);
+  const currentStateVersionId = collections.finalizedVersions.find(({ intermediate }): boolean => !intermediate)?.id;
+  const stateVersionIds = collectStateVersionIdsToSoftDelete(collections.finalizedVersions, policy, currentStateVersionId, retentionCutoff);
+  await softDeleteStateVersions(stateVersionIds, now);
+  const configurationVersionIds = collectConfigurationVersionIds(collections.retainedConfigurationVersions, retainedRuns, retentionCutoff);
+  await softDeleteConfigurationVersions(configurationVersionIds, now);
+  const expiredRunIds = collectExpiredRunIds(retainedRuns, retentionCutoff);
+  const { logsDeletedCount, logsArchived } = await archiveAndDeleteExpiredRuns(expiredRunIds, now);
+  return { stateVersionIds, configurationVersionIds, expiredRunIds, logsDeleted: logsDeletedCount, logsArchived };
+}
+
+export async function applyDataRetentionGarbageCollection(
+  workspaceId: string,
+  options: Readonly<{ now?: number; gracePeriodMs?: number }> = {},
+): Promise<Record<string, unknown>> {
+  const now = options.now ?? Date.now();
+  const graceCutoff = getGraceCutoff(now, options.gracePeriodMs);
+  const { policy, policySource } = await loadRetentionPolicy(workspaceId);
+  const collections = await fetchGcCollections(workspaceId);
+  const staleStateCount = await purgeStaleStateVersions(collections.softDeletedVersions, graceCutoff);
+  await stampPendingSoftDeletedStateVersions(collections.softDeletedVersions, now);
+  const { count: staleConfigCount, archivesDeleted } = await purgeStaleConfigurationVersions(collections.softDeletedConfigurationVersions, graceCutoff);
+  await stampPendingSoftDeletedConfigurationVersions(collections.softDeletedConfigurationVersions, now);
+  const { count: staleRunCount, archivesDeleted: runArchivesDeleted, retainedRuns } = await purgeStaleRuns(collections.workspaceRuns, graceCutoff);
   const summary = {
     softDeleted: 0,
-    permanentlyDeleted: staleStateVersions.length,
-    configurationVersions: {
-      softDeleted: 0,
-      permanentlyDeleted: staleConfigurationVersions.length,
-      archivesDeleted,
-    },
-    runs: {
-      softDeleted: 0,
-      permanentlyDeleted: staleRuns.length,
-      archivesDeleted: runArchivesDeleted,
-    },
+    permanentlyDeleted: staleStateCount,
+    configurationVersions: { softDeleted: 0, permanentlyDeleted: staleConfigCount, archivesDeleted },
+    runs: { softDeleted: 0, permanentlyDeleted: staleRunCount, archivesDeleted: runArchivesDeleted },
     logsDeleted: 0,
     reason: policy === undefined ? "no-policy" : "retention-applied",
     policySource,
   };
   if (policy === undefined) {
-    return {
-      ...summary,
-      reason: staleStateVersions.length + staleConfigurationVersions.length + staleRuns.length > 0 ? "cleanup" : "no-policy",
-    };
+    const hasCleanup = staleStateCount + staleConfigCount + staleRunCount > 0;
+    return { ...summary, reason: hasCleanup ? "cleanup" : "no-policy" };
   }
-
-  const currentStateVersionId = finalizedVersions.find(({ intermediate }): boolean => !intermediate)?.id;
-  const stateVersionIds = new Set<string>();
-  if (typeof policy.stateVersionsCount === "number" && policy.stateVersionsCount > 0) {
-    for (const stateVersion of finalizedVersions.slice(policy.stateVersionsCount)) {
-      if (stateVersion.id !== currentStateVersionId) stateVersionIds.add(stateVersion.id);
-    }
-  }
-
-  const retentionCutoff = typeof policy.deleteOlderThanNDays === "number" && policy.deleteOlderThanNDays > 0
-    ? now - policy.deleteOlderThanNDays * 86_400_000
-    : null;
-  if (retentionCutoff !== null) {
-    for (const stateVersion of finalizedVersions) {
-      if (stateVersion.id !== currentStateVersionId && stateVersion.createdAt <= retentionCutoff) {
-        stateVersionIds.add(stateVersion.id);
-      }
-    }
-  }
-  if (stateVersionIds.size > 0) {
-    await db.update(stateVersions).set({
-      status: "backing_data_soft_deleted",
-      softDeletedAt: now,
-    }).where(inArray(stateVersions.id, [...stateVersionIds]));
-  }
-
-  const currentConfigurationVersionId = retainedConfigurationVersions[0]?.id;
-  const protectedConfigurationVersionIds = new Set<string>([
-    ...(currentConfigurationVersionId === undefined ? [] : [currentConfigurationVersionId]),
-    ...retainedRuns.flatMap(({ status, configurationVersionId }): string[] =>
-      configurationVersionId !== null && !FINAL_RUN_STATUSES.includes(status)
-        ? [configurationVersionId]
-        : []
-    ),
-  ]);
-  const configurationVersionIds = retentionCutoff === null
-    ? []
-    : retainedConfigurationVersions
-      .filter(({ id, createdAt }): boolean => !protectedConfigurationVersionIds.has(id) && createdAt <= retentionCutoff)
-      .map(({ id }): string => id);
-  if (configurationVersionIds.length > 0) {
-    await db.update(configurationVersions).set({
-      status: "backing_data_soft_deleted",
-      softDeletedAt: now,
-    }).where(inArray(configurationVersions.id, configurationVersionIds));
-  }
-
-  const expiredRunIds = retentionCutoff === null
-    ? []
-    : retainedRuns
-      .filter(({ status, createdAt, softDeletedAt }): boolean =>
-        FINAL_RUN_STATUSES.includes(status) && softDeletedAt === null && createdAt <= retentionCutoff
-      )
-      .map(({ id }): string => id);
-  const expiredLogs = expiredRunIds.length === 0
-    ? []
-    : await db.query.logs.findMany({ where: inArray(logs.runId, expiredRunIds), columns: { id: true } });
-  const logsArchived = (await Promise.all(expiredRunIds.map(archiveRunLogs))).filter(Boolean).length;
-  if (expiredRunIds.length > 0) await db.delete(logs).where(inArray(logs.runId, expiredRunIds));
-  if (expiredRunIds.length > 0) {
-    await db.update(runs).set({ softDeletedAt: now }).where(inArray(runs.id, expiredRunIds));
-  }
-
+  const { stateVersionIds, configurationVersionIds, expiredRunIds, logsDeleted, logsArchived } = await applyRetentionPolicy(collections, policy, now, retainedRuns);
   return {
     ...summary,
     softDeleted: stateVersionIds.size,
-    configurationVersions: {
-      ...summary.configurationVersions,
-      softDeleted: configurationVersionIds.length,
-    },
-    runs: {
-      ...summary.runs,
-      softDeleted: expiredRunIds.length,
-    },
-    logsDeleted: expiredLogs.length,
+    configurationVersions: { ...summary.configurationVersions, softDeleted: configurationVersionIds.length },
+    runs: { ...summary.runs, softDeleted: expiredRunIds.length },
+    logsDeleted,
     logsArchived,
-    count: finalizedVersions.length,
+    count: collections.finalizedVersions.length,
     limit: policy.stateVersionsCount,
     "delete-older-than-n-days": policy.deleteOlderThanNDays,
   };
