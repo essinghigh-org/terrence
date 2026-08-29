@@ -70,6 +70,12 @@ export type StackAgentJobCompletion = Readonly<{
   result: Readonly<Record<string, unknown>>;
 }>;
 
+type StackAgentCompletionOutcome = Readonly<{
+  job: StackAgentJob;
+  runStatus: string;
+  fencingToken?: number;
+}>;
+
 export type ClaimedStackAgentJob = Readonly<{
   job: StackAgentJob;
   stack: Readonly<typeof stacks.$inferSelect>;
@@ -180,12 +186,46 @@ function boolResult(result: Readonly<Record<string, unknown>>, key: string): boo
   return result[key] === true;
 }
 
+function stackStatePayload(result: Readonly<Record<string, unknown>> | null | undefined): string | null {
+  const state = result?.state ?? result?.json_state;
+  if (typeof state === "string") return state;
+  if (state !== null && typeof state === "object") return JSON.stringify(state);
+  return null;
+}
+
+async function persistCompletedApplyState(outcome: StackAgentCompletionOutcome): Promise<void> {
+  if (outcome.job.phase !== "apply") return;
+  const run = await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, outcome.job.deploymentRunId), eq(stackRecords.recordType, "stack-deployment-runs")) });
+  if (run === undefined) return;
+  const statePayload = stackStatePayload(outcome.job.result);
+  try {
+    if (run.payload?.destroy === true) await removeStackState(outcome.job.stackId, run.name ?? "default", run.id, outcome.fencingToken);
+    else {
+      if (statePayload === null) throw new Error("Stack agent apply completion must include the resulting state");
+      await saveStackState(outcome.job.stackId, run.name ?? "default", run.id, statePayload, outcome.fencingToken);
+    }
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const now = Date.now();
+    await db.transaction(async (tx): Promise<void> => {
+      await tx.update(stackRecords).set({ status: "failed", payload: { ...(outcome.job.result ?? {}), error: detail }, updatedAt: now }).where(eq(stackRecords.id, outcome.job.stepId));
+      await tx.update(stackRecords).set({ status: "failed", payload: { error: detail }, updatedAt: now }).where(eq(stackRecords.id, run.id));
+      await tx.update(stackStateLocks).set({ runId: null, leaseExpiresAt: null, releasedAt: now, updatedAt: now }).where(and(
+        eq(stackStateLocks.runId, run.id),
+        eq(stackStateLocks.stackId, outcome.job.stackId),
+        ...(outcome.fencingToken === undefined ? [] : [eq(stackStateLocks.fencingToken, outcome.fencingToken)]),
+      ));
+    });
+    throw error;
+  }
+}
+
 export async function completeStackAgentJob(
   agentId: string,
   jobId: string,
   completion: StackAgentJobCompletion,
-): Promise<Readonly<{ job: StackAgentJob; runStatus: string; fencingToken?: number }> | undefined> {
-  const outcome = await db.transaction(async (tx): Promise<Readonly<{ job: StackAgentJob; runStatus: string; fencingToken?: number }> | undefined> => {
+): Promise<StackAgentCompletionOutcome | undefined> {
+  const outcome = await db.transaction(async (tx): Promise<StackAgentCompletionOutcome | undefined> => {
     // Terraform state can be arbitrarily large — validate the metadata envelope
     // without the state payload so a valid apply with a large state is not
     // rejected. State is persisted as a file artifact via saveStackState.
@@ -237,33 +277,7 @@ export async function completeStackAgentJob(
     return { job: completed, runStatus, ...(fencingToken === undefined ? {} : { fencingToken }) };
   });
   if (outcome !== undefined && outcome.runStatus === "step_completed") {
-    if (outcome.job.phase === "apply") {
-      const run = await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, outcome.job.deploymentRunId), eq(stackRecords.recordType, "stack-deployment-runs")) });
-      if (run !== undefined) {
-        const state = outcome.job.result?.state ?? outcome.job.result?.json_state;
-        const statePayload = typeof state === "string" ? state : state !== null && typeof state === "object" ? JSON.stringify(state) : null;
-        try {
-          if (run.payload?.destroy === true) await removeStackState(outcome.job.stackId, run.name ?? "default", run.id, outcome.fencingToken);
-          else {
-            if (statePayload === null) throw new Error("Stack agent apply completion must include the resulting state");
-            await saveStackState(outcome.job.stackId, run.name ?? "default", run.id, statePayload, outcome.fencingToken);
-          }
-        } catch (error: unknown) {
-          const detail = error instanceof Error ? error.message : String(error);
-          const now = Date.now();
-          await db.transaction(async (tx): Promise<void> => {
-            await tx.update(stackRecords).set({ status: "failed", payload: { ...(outcome.job.result ?? {}), error: detail }, updatedAt: now }).where(eq(stackRecords.id, outcome.job.stepId));
-            await tx.update(stackRecords).set({ status: "failed", payload: { error: detail }, updatedAt: now }).where(eq(stackRecords.id, run.id));
-            await tx.update(stackStateLocks).set({ runId: null, leaseExpiresAt: null, releasedAt: now, updatedAt: now }).where(and(
-              eq(stackStateLocks.runId, run.id),
-              eq(stackStateLocks.stackId, outcome.job.stackId),
-              ...(outcome.fencingToken === undefined ? [] : [eq(stackStateLocks.fencingToken, outcome.fencingToken)]),
-            ));
-          });
-          throw error;
-        }
-      }
-    }
+    await persistCompletedApplyState(outcome);
     await enqueueDurableJob("stack-deployment", { runId: outcome.job.deploymentRunId }, { dedupeKey: `stack-run:${outcome.job.deploymentRunId}`, rescheduleRunning: true });
   }
   return outcome;
