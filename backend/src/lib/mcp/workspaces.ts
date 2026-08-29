@@ -24,6 +24,24 @@ import { validVariableAttributes } from "../validation";
 import { toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
 import { cachedOrgByName } from "../cached-lookups";
 
+async function exactWorkspaceResult(
+  orgId: string,
+  orgName: string,
+  exactName: string,
+  userId: string | null,
+  sessionOrgId: string | null,
+  teamId: string | null,
+): Promise<unknown> {
+  const ws = await db.query.workspaces.findFirst({
+    where: and(eq(workspaces.orgId, orgId), eq(workspaces.name, exactName)),
+    columns: { id: true, name: true, orgId: true, locked: true, createdAt: true },
+  });
+  if (ws === undefined) return toolBadRequest(`Workspace "${exactName}" not found in org "${orgName}"`);
+  const authorized = await findAuthorizedWorkspace(ws.id, userId ?? undefined, sessionOrgId, teamId, "read");
+  if (authorized === undefined) return toolError("Not authorized to access this workspace");
+  return { ...ws, id: authorized.id, name: authorized.name };
+}
+
 /**
  * Workspace tools. Read/list operations require `workspaces:read`, mutations
  * require `workspaces:write`, and lock/unlock require `workspaces:lock` —
@@ -130,16 +148,7 @@ export const workspaceTools: readonly McpTool[] = [
       const search = typeof args.search === "string" ? args.search : undefined;
       const limit = Math.min(Math.max(Number(args.limit ?? 50), 1), 200);
       const offset = Math.max(Number(args.offset ?? 0), 0);
-      if (exactName !== undefined) {
-        const ws = await db.query.workspaces.findFirst({
-          where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, exactName)),
-          columns: { id: true, name: true, orgId: true, locked: true, createdAt: true },
-        });
-        if (ws === undefined) return toolBadRequest(`Workspace "${exactName}" not found in org "${orgName}"`);
-        const authorized = await findAuthorizedWorkspace(ws.id, session.userId ?? undefined, session.orgId, session.teamId, "read");
-        if (authorized === undefined) return toolError("Not authorized to access this workspace");
-        return { ...ws, id: authorized.id, name: authorized.name };
-      }
+      if (exactName !== undefined) return exactWorkspaceResult(org.id, orgName, exactName, session.userId, session.orgId, session.teamId);
       const authorizedIds = await workspaceIdsForPermission(org.id, session.userId ?? undefined, session.orgId, session.teamId, "read");
       if (authorizedIds === null || authorizedIds.length === 0) return [];
       const pattern = search === undefined ? undefined : `%${search.replace(/[\\%_]/g, "\\$&")}%`;
