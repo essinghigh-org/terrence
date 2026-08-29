@@ -99,6 +99,67 @@ function matchingBrace(input: string, openingBrace: number): number | undefined 
   return undefined;
 }
 
+type AttributeNesting = Readonly<{ round: number; square: number; curly: number }>;
+
+type AttributeTokenStep = Readonly<{ nextIndex: number; endsExpression: boolean }>;
+
+function attributeTokenStep(block: string, index: number, nesting: AttributeNesting): AttributeTokenStep | undefined {
+  if (block.startsWith("//", index) || block[index] === "#") {
+    if (nesting.round === 0 && nesting.square === 0 && nesting.curly === 0) {
+      return { nextIndex: index, endsExpression: true };
+    }
+    return { nextIndex: skipLineComment(block, index), endsExpression: false };
+  }
+  if (block.startsWith("/*", index)) {
+    return { nextIndex: skipBlockComment(block, index), endsExpression: false };
+  }
+  if (block.startsWith("<<", index)) {
+    return { nextIndex: skipHeredoc(block, index), endsExpression: false };
+  }
+  if (block[index] === "\"") {
+    return { nextIndex: skipQuoted(block, index), endsExpression: false };
+  }
+  return undefined;
+}
+
+function advanceAttributeNesting(nesting: AttributeNesting, char: string | undefined): AttributeNesting {
+  switch (char) {
+    case "(": return { ...nesting, round: nesting.round + 1 };
+    case ")": return { ...nesting, round: nesting.round - 1 };
+    case "[": return { ...nesting, square: nesting.square + 1 };
+    case "]": return { ...nesting, square: nesting.square - 1 };
+    case "{": return { ...nesting, curly: nesting.curly + 1 };
+    case "}": return { ...nesting, curly: nesting.curly - 1 };
+    case undefined:
+    default: return nesting;
+  }
+}
+
+function isTopLevelAttributeTerminator(char: string | undefined, nesting: AttributeNesting): boolean {
+  return (char === "\n" || char === ";")
+    && nesting.round === 0
+    && nesting.square === 0
+    && nesting.curly === 0;
+}
+
+function scanAttributeExpression(block: string, start: number): string | undefined {
+  let nesting: AttributeNesting = { round: 0, square: 0, curly: 0 };
+  for (let index = start; index < block.length;) {
+    const token = attributeTokenStep(block, index, nesting);
+    if (token !== undefined) {
+      if (token.endsExpression) return block.slice(start, index).trim();
+      index = token.nextIndex;
+      continue;
+    }
+    const char = block[index];
+    nesting = advanceAttributeNesting(nesting, char);
+    if (isTopLevelAttributeTerminator(char, nesting)) return block.slice(start, index).trim();
+    index += 1;
+  }
+  const value = block.slice(start).trim();
+  return value === "" ? undefined : value;
+}
+
 function attributeExpression(block: string, attribute: string): string | undefined {
   const match = new RegExp(`(?:^|\\n)\\s*${attribute.replaceAll("-", "\\-")}\\s*=`, "m").exec(block);
   if (match === null) return undefined;
@@ -109,42 +170,7 @@ function attributeExpression(block: string, attribute: string): string | undefin
     const end = skipHeredoc(block, start);
     return block.slice(start, end).trim();
   }
-
-  let round = 0;
-  let square = 0;
-  let curly = 0;
-  for (let index = start; index < block.length;) {
-    if (block.startsWith("//", index) || block[index] === "#") {
-      if (round === 0 && square === 0 && curly === 0) return block.slice(start, index).trim();
-      index = skipLineComment(block, index);
-      continue;
-    }
-    if (block.startsWith("/*", index)) {
-      index = skipBlockComment(block, index);
-      continue;
-    }
-    if (block.startsWith("<<", index)) {
-      index = skipHeredoc(block, index);
-      continue;
-    }
-    if (block[index] === "\"") {
-      index = skipQuoted(block, index);
-      continue;
-    }
-    const char = block[index];
-    if (char === "(") round += 1;
-    if (char === ")") round -= 1;
-    if (char === "[") square += 1;
-    if (char === "]") square -= 1;
-    if (char === "{") curly += 1;
-    if (char === "}") curly -= 1;
-    if ((char === "\n" || char === ";") && round === 0 && square === 0 && curly === 0) {
-      return block.slice(start, index).trim();
-    }
-    index += 1;
-  }
-  const value = block.slice(start).trim();
-  return value === "" ? undefined : value;
+  return scanAttributeExpression(block, start);
 }
 
 export function parseTerraformVariables(source: string): readonly TerraformVariableMetadata[] {
