@@ -485,20 +485,37 @@ async function runTerraformComponentOperation(
   return command([binaryPath, "apply", "-no-color", "-input=false", planPath], executionDirectory, sandbox, heartbeat);
 }
 
-async function startTerraformComponentExecution(
-  component: StackComponent,
-  runId: string,
-  stackId: string,
-  deployment: string,
-  operation: "plan" | "apply",
-  planArtifactPath: string | null,
-  destroy: boolean,
-  fencingToken: number | null,
-  context: DurableJobContext,
-  workDirectory: string,
-  sandbox: RunSandbox | null,
-  statePath: string,
-): Promise<ComponentExecutionStart | StackExecutionResult> {
+type ComponentExecutionRequest = Readonly<{
+  component: StackComponent;
+  stepId: string;
+  runId: string;
+  stackId: string;
+  deployment: string;
+  operation: "plan" | "apply";
+  planArtifactPath: string | null;
+  destroy: boolean;
+  fencingToken: number | null;
+  context: DurableJobContext;
+  workDirectory: string;
+  sandbox: RunSandbox | null;
+  statePath: string;
+}>;
+
+async function startTerraformComponentExecution(request: ComponentExecutionRequest): Promise<ComponentExecutionStart | StackExecutionResult> {
+  const {
+    component,
+    runId,
+    stackId,
+    deployment,
+    operation,
+    planArtifactPath,
+    destroy,
+    fencingToken,
+    context,
+    workDirectory,
+    sandbox,
+    statePath,
+  } = request;
   const executionDirectory = join(workDirectory, "source");
   await cp(component.directory, executionDirectory, { recursive: true });
   await mkdir(STACK_STORAGE_DIR, { recursive: true, mode: 0o700 });
@@ -545,14 +562,9 @@ async function persistTerraformComponentArtifacts(
 
 async function finalizeTerraformComponentState(
   start: ComponentExecutionStart,
-  operation: "plan" | "apply",
-  destroy: boolean,
-  stackId: string,
-  deployment: string,
-  runId: string,
-  fencingToken: number | null,
-  sandbox: RunSandbox | null,
+  request: ComponentExecutionRequest,
 ): Promise<string> {
+  const { operation, destroy, stackId, deployment, runId, fencingToken, sandbox } = request;
   const { executionDirectory, planPath, binaryPath, init, commandResult, heartbeat } = start;
   if (init.code !== 0 || (operation === "plan" ? ![0, 2].includes(commandResult.code) : commandResult.code !== 0)) throw new Error(commandResult.output || init.output || `Terraform ${operation} failed`);
   if (operation === "plan") {
@@ -569,39 +581,18 @@ async function finalizeTerraformComponentState(
 
 async function finalizeTerraformComponentExecution(
   start: ComponentExecutionStart,
-  stepId: string,
-  stackId: string,
-  deployment: string,
-  runId: string,
-  operation: "plan" | "apply",
-  destroy: boolean,
-  fencingToken: number | null,
-  statePath: string,
-  sandbox: RunSandbox | null,
+  request: ComponentExecutionRequest,
 ): Promise<StackExecutionResult> {
+  const { stepId, stackId, operation } = request;
   await persistTerraformComponentArtifacts(start, stepId, stackId, operation);
-  const show = await finalizeTerraformComponentState(start, operation, destroy, stackId, deployment, runId, fencingToken, sandbox);
-  return { hasChanges: operation === "plan" && (start.commandResult.code === 2 || planHasChanges(show)), deferredChanges: operation === "plan" && /\bdeferred\b/i.test(start.commandResult.output), output: start.commandResult.output || start.init.output, statePath: operation === "apply" ? statePath : null };
+  const show = await finalizeTerraformComponentState(start, request);
+  return { hasChanges: operation === "plan" && (start.commandResult.code === 2 || planHasChanges(show)), deferredChanges: operation === "plan" && /\bdeferred\b/i.test(start.commandResult.output), output: start.commandResult.output || start.init.output, statePath: operation === "apply" ? request.statePath : null };
 }
 
-async function executeRealTerraformComponent(
-  component: StackComponent,
-  stepId: string,
-  runId: string,
-  stackId: string,
-  deployment: string,
-  operation: "plan" | "apply",
-  planArtifactPath: string | null,
-  destroy: boolean,
-  fencingToken: number | null,
-  context: DurableJobContext,
-  workDirectory: string,
-  sandbox: RunSandbox | null,
-  statePath: string,
-): Promise<StackExecutionResult> {
-  const start = await startTerraformComponentExecution(component, runId, stackId, deployment, operation, planArtifactPath, destroy, fencingToken, context, workDirectory, sandbox, statePath);
+async function executeRealTerraformComponent(request: ComponentExecutionRequest): Promise<StackExecutionResult> {
+  const start = await startTerraformComponentExecution(request);
   if ("hasChanges" in start) return start;
-  return finalizeTerraformComponentExecution(start, stepId, stackId, deployment, runId, operation, destroy, fencingToken, statePath, sandbox);
+  return finalizeTerraformComponentExecution(start, request);
 }
 
 async function executeComponent(
@@ -630,7 +621,21 @@ async function executeComponent(
     ? await mkdtemp(join(tmpdir(), "terrence-stack-run-"))
     : await sandbox.prepareWorkDir(stepId);
   try {
-    return await executeRealTerraformComponent(component, stepId, runId, stackId, deployment, operation, planArtifactPath, destroy, fencingToken, context, workDirectory, sandbox, statePath);
+    return await executeRealTerraformComponent({
+      component,
+      stepId,
+      runId,
+      stackId,
+      deployment,
+      operation,
+      planArtifactPath,
+      destroy,
+      fencingToken,
+      context,
+      workDirectory,
+      sandbox,
+      statePath,
+    });
   } finally {
     await rm(`${statePath}.next`, { force: true });
     if (sandbox === null) await rm(workDirectory, { recursive: true, force: true });

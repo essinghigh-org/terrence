@@ -7,6 +7,7 @@ import { readdirSync, readFileSync } from "fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "os";
 import { join } from "path";
+import { translateDefault } from "../../src/lib/migration/ddl";
 
 /**
  * DB migration fixtures (review item 22.10), post-squash.
@@ -247,4 +248,8 @@ test("journal when timestamps are strictly ascending (no upgrade-skip islands)",
   // those migrations on upgrade and later migrations then fail. This pins the
   // ordering so the landmine cannot regress when the history grows again.
   expect(journalOrderViolations()).toEqual([]);
+});
+
+test("preserves SQLite defaults containing escaped single quotes", () => {
+  expect(translateDefault("'a''b'")).toEqual({ sql: "'a''b'", dropped: false });
 });

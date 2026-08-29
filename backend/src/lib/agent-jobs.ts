@@ -578,8 +578,7 @@ async function tryClaimCandidate(candidate: typeof agentJobs.$inferSelect, agent
   const claimed = await db.update(agentJobs).set({ agentId: agent.id, status: "claimed", claimedAt: now }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "queued"))).returning();
   const claimedJob = claimed[0];
   if (claimedJob !== undefined) return claimedJob;
-  const raced = await db.query.agentJobs.findFirst({ where: and(eq(agentJobs.agentId, agent.id), eq(agentJobs.status, "claimed")) });
-  return raced === undefined ? undefined : await claimedJobDetails(raced) as unknown as typeof agentJobs.$inferSelect;
+  return undefined;
 }
 
 async function validateCandidateRun(candidate: typeof agentJobs.$inferSelect): Promise<{ run: typeof runs.$inferSelect; expectedRunStatus: string; nextRunStatus: string } | null> {
@@ -630,8 +629,6 @@ export async function claimAgentJob(
       const raced = await db.query.agentJobs.findFirst({ where: and(eq(agentJobs.agentId, agent.id), eq(agentJobs.status, "claimed")) });
       return raced === undefined ? undefined : await claimedJobDetails(raced);
     }
-    // Re-fetch claimedJob details for validation path - need to handle the case where tryClaimCandidate returned claimedJobDetails result vs raw; normalize
-    // For simplicity, re-query candidate status via validateCandidateRun which uses candidate id
     const validation = await validateCandidateRun(candidate);
     if (validation === null) continue;
     const { run, expectedRunStatus, nextRunStatus } = validation;

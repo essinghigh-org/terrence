@@ -699,9 +699,11 @@ export async function scopeWorkspaceIdsForOrg(scope: TokenScopes, orgId: string)
   if (!scopeCoversOrg(scope, orgId)) return [];
   if (hasNoWorkspaceRestriction(scope)) return null;
   const matching = new Set<string>();
-  await collectProjectScopedIds(scope, orgId, matching);
-  await collectWorkspaceScopedIds(scope, orgId, matching);
-  await collectTagScopedIds(scope, orgId, matching);
+  await Promise.all([
+    collectProjectScopedIds(scope, orgId, matching),
+    collectWorkspaceScopedIds(scope, orgId, matching),
+    collectTagScopedIds(scope, orgId, matching),
+  ]);
   return [...matching];
 }
 
@@ -1838,7 +1840,8 @@ async function purgeStaleRuns(workspaceRuns: GcCollections["workspaceRuns"], gra
     ids.push(run.id);
   }
   if (ids.length > 0) await db.delete(runs).where(inArray(runs.id, ids));
-  const retainedRuns = workspaceRuns.filter(({ id }): boolean => !staleRuns.some((r): boolean => r.id === id));
+  const staleIds = new Set(ids);
+  const retainedRuns = workspaceRuns.filter(({ id }): boolean => !staleIds.has(id));
   return { count: staleRuns.length, archivesDeleted, retainedRuns };
 }
 

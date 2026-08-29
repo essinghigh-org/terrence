@@ -271,7 +271,7 @@ function buildWorkspaceFlagAttributes(workspace: WorkspaceParam): Record<string,
   };
 }
 
-function buildWorkspaceAttributes(workspace: WorkspaceParam, permissions: WorkspaceResourcePermissions, tags: DeepReadonly<typeof workspaceTags.$inferSelect>[], iacBinary: string): Record<string, unknown> {
+function buildWorkspaceAttributes(workspace: WorkspaceParam, permissions: WorkspaceResourcePermissions, tags: readonly DeepReadonly<typeof workspaceTags.$inferSelect>[], iacBinary: string): Record<string, unknown> {
   return {
     actions: { "is-destroyable": permissions.canPlan },
     ...buildWorkspaceCoreAttributes(workspace),
@@ -326,7 +326,7 @@ function buildWorkspaceRelationships(workspace: WorkspaceParam, orgName: string 
   return base;
 }
 
-async function fetchWorkspaceTagsAndOrg(workspace: WorkspaceParam, options?: WorkspaceResourceOptions): Promise<[DeepReadonly<typeof workspaceTags.$inferSelect>[], string | null | undefined]> {
+async function fetchWorkspaceTagsAndOrg(workspace: WorkspaceParam, options?: WorkspaceResourceOptions): Promise<[readonly DeepReadonly<typeof workspaceTags.$inferSelect>[], string | null | undefined]> {
   const [tags, orgName] = await Promise.all([
     options?.tags
       ?? db.query.workspaceTags.findMany({

@@ -219,9 +219,8 @@ function isValidSingleQuotedLiteral(expr: string): boolean {
   for (let i = 0; i < expr.length; i += 1) {
     const ch = expr[i] ?? "";
     if (ch === "'") {
-      if (expr[i + 1] === "'") {
+      if (quote && expr[i + 1] === "'") {
         i += 1;
-        quote = false;
         continue;
       }
       quote = !quote;
@@ -422,19 +421,19 @@ function tryParseReferences(sql: string, pos: number, result: { references: Fore
   return references.end;
 }
 
-function tryParsePrimaryKeyStep(sql: string, pos: number, rest: string, result: { primaryKey: boolean }): number | null {
+function tryParsePrimaryKeyStep(pos: number, rest: string, result: { primaryKey: boolean }): number | null {
   if (!tryParsePrimaryKey(rest, result)) return null;
   return pos + (/^PRIMARY\s+KEY(?:\s+(?:ASC|DESC))?/i.exec(rest)?.[0].length ?? 0);
 }
-function tryParseNotNullStep(sql: string, pos: number, rest: string, result: { notNull: boolean }): number | null {
+function tryParseNotNullStep(pos: number, rest: string, result: { notNull: boolean }): number | null {
   if (!tryParseNotNull(rest, result)) return null;
   return pos + (/^NOT\s+NULL/i.exec(rest)?.[0].length ?? 0);
 }
-function tryParseUniqueStep(sql: string, pos: number, rest: string, result: { unique: boolean }): number | null {
+function tryParseUniqueStep(pos: number, rest: string, result: { unique: boolean }): number | null {
   if (!tryParseUnique(rest, result)) return null;
   return pos + (/^UNIQUE/i.exec(rest)?.[0].length ?? 0);
 }
-function tryParseAutoincrementStep(sql: string, pos: number, rest: string): number | null {
+function tryParseAutoincrementStep(pos: number, rest: string): number | null {
   if (!tryParseAutoincrement(rest)) return null;
   return pos + (/^AUTOINCREMENT/i.exec(rest)?.[0].length ?? 0);
 }
@@ -444,20 +443,20 @@ function tryParseConstraintStep(sql: string, pos: number, rest: string): number 
   if (ident === null) return null;
   return ident.end;
 }
-function tryParseOnConflictStep(sql: string, pos: number, rest: string): number | null {
+function tryParseOnConflictStep(pos: number, rest: string): number | null {
   if (/^ON\s+CONFLICT/i.exec(rest) === null) return null;
   return pos + (/^ON\s+CONFLICT/i.exec(rest)?.[0].length ?? 0);
 }
 
 function parseConstraintTailStep(sql: string, pos: number, result: { notNull: boolean; primaryKey: boolean; unique: boolean; defaultExpr: string | null; defaultDropped: boolean; references: ForeignKeyDef | null; checksSkipped: number; collate: string | null }): { nextPos: number; shouldBreak: boolean } | null {
   const rest = sql.slice(pos);
-  const primary = tryParsePrimaryKeyStep(sql, pos, rest, result);
+  const primary = tryParsePrimaryKeyStep(pos, rest, result);
   if (primary !== null) return { nextPos: primary, shouldBreak: false };
-  const notNull = tryParseNotNullStep(sql, pos, rest, result);
+  const notNull = tryParseNotNullStep(pos, rest, result);
   if (notNull !== null) return { nextPos: notNull, shouldBreak: false };
-  const unique = tryParseUniqueStep(sql, pos, rest, result);
+  const unique = tryParseUniqueStep(pos, rest, result);
   if (unique !== null) return { nextPos: unique, shouldBreak: false };
-  const auto = tryParseAutoincrementStep(sql, pos, rest);
+  const auto = tryParseAutoincrementStep(pos, rest);
   if (auto !== null) return { nextPos: auto, shouldBreak: false };
   const collateEnd = tryParseCollate(sql, pos, result);
   if (collateEnd !== null) return { nextPos: collateEnd, shouldBreak: false };
@@ -468,7 +467,7 @@ function parseConstraintTailStep(sql: string, pos: number, result: { notNull: bo
   if (defEnd !== null) return { nextPos: defEnd, shouldBreak: false };
   const refEnd = tryParseReferences(sql, pos, result);
   if (refEnd !== null) return { nextPos: refEnd, shouldBreak: false };
-  const conflict = tryParseOnConflictStep(sql, pos, rest);
+  const conflict = tryParseOnConflictStep(pos, rest);
   if (conflict !== null) return { nextPos: conflict, shouldBreak: false };
   const constraint = tryParseConstraintStep(sql, pos, rest);
   if (constraint !== null) return { nextPos: constraint, shouldBreak: false };
@@ -914,10 +913,6 @@ function computeIndegrees(edges: ReadonlyMap<string, ReadonlySet<string>>): Map<
     indegree.set(name, degree);
   }
   return indegree;
-}
-
-function drainIndegreeZero(queue: string[], indegree: ReadonlyMap<string, number>): string[] {
-  return [...queue].filter((name): boolean => (indegree.get(name) ?? 0) === 0).sort();
 }
 
 function topologicalSort(names: ReadonlySet<string>, edges: ReadonlyMap<string, ReadonlySet<string>>, indegree: Map<string, number>): string[] {
