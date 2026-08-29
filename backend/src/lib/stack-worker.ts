@@ -763,17 +763,46 @@ async function recoverAgentApplyState(stack: Stack, run: Readonly<typeof stackRe
   await saveStackState(stack.id, deployment, run.id, statePayload, fencingToken);
 }
 
-export async function runStackDeploymentJob(job: Job, context: DurableJobContext): Promise<void> {
+type StackDeploymentInputs = Readonly<{
+  run: Readonly<typeof stackRecords.$inferSelect>;
+  stack: Stack;
+  configuration: Readonly<typeof stackRecords.$inferSelect>;
+  runPayload: Record<string, unknown>;
+  components: readonly StoredComponent[];
+  index: number;
+  component: StoredComponent;
+}>;
+
+type StackDeploymentStepDecision =
+  | Readonly<{ handled: true }>
+  | Readonly<{ handled: false; step: Readonly<typeof stackRecords.$inferSelect> }>;
+
+async function completeStackDeploymentRun(
+  stack: Stack,
+  run: Readonly<typeof stackRecords.$inferSelect>,
+): Promise<void> {
+  await db.update(stackRecords).set({ status: "succeeded", updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
+  if (run.parentId !== null) {
+    const parent = await db.query.stackRecords.findFirst({ where: eq(stackRecords.id, run.parentId) });
+    await db.update(stackRecords).set({ status: "succeeded", payload: { ...parent?.payload, latestRunId: run.id }, updatedAt: Date.now() }).where(eq(stackRecords.id, run.parentId));
+  }
+  await releaseStackStateLock(stack.id, run.name ?? "default", run.id, payloadFencingToken(run));
+}
+
+async function loadStackDeploymentInputs(
+  job: Job,
+  context: DurableJobContext,
+): Promise<StackDeploymentInputs | undefined> {
   const runId = typeof job.payload.runId === "string" ? job.payload.runId : "";
   if (runId === "") throw new Error("stack-deployment job is missing runId");
   const run = await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, runId), eq(stackRecords.recordType, "stack-deployment-runs")) });
-  if (run === undefined || ["succeeded", "failed", "canceled"].includes(run.status) || await context.canceled()) return;
+  if (run === undefined || ["succeeded", "failed", "canceled"].includes(run.status) || await context.canceled()) return undefined;
   const stack = await db.query.stacks.findFirst({ where: eq(stacks.id, run.stackId) });
   const configurationId = payloadString(run, "configurationId");
   const configuration = configurationId === undefined ? undefined : await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, configurationId), eq(stackRecords.recordType, "stack-configurations")) });
   if (stack === undefined || configuration === undefined) {
     if (stack !== undefined) await failStackRun(stack, run, undefined, "Stack configuration is unavailable");
-    return;
+    return undefined;
   }
   const runPayload = run.payload ?? {};
   const configuredComponents = storedComponents((configuration.payload ?? {}).components);
@@ -782,119 +811,246 @@ export async function runStackDeploymentJob(job: Job, context: DurableJobContext
   const index = payloadNumber(run, "componentIndex", 0);
   const component = components[index];
   if (component === undefined) {
-    await db.update(stackRecords).set({ status: "succeeded", updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
-    if (run.parentId !== null) await db.update(stackRecords).set({ status: "succeeded", payload: { ...(await db.query.stackRecords.findFirst({ where: eq(stackRecords.id, run.parentId) }))?.payload, latestRunId: run.id }, updatedAt: Date.now() }).where(eq(stackRecords.id, run.parentId));
-    await releaseStackStateLock(stack.id, run.name ?? "default", run.id, payloadFencingToken(run));
-    return;
+    await completeStackDeploymentRun(stack, run);
+    return undefined;
   }
-  const steps = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.parentId, run.id), eq(stackRecords.recordType, "stack-deployment-steps")), orderBy: [desc(stackRecords.createdAt)] });
-  let step: Readonly<typeof stackRecords.$inferSelect> | undefined = steps[0];
-  const phase = step === undefined ? "plan" : payloadString(step, "phase") ?? (payloadString(step, "operation-type") === "apply" ? "apply" : "plan");
-  if (step !== undefined && ["failed", "canceled"].includes(step.status)) {
-    await db.update(stackRecords).set({ status: step.status, updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
-    await releaseStackStateLock(stack.id, run.name ?? "default", run.id, payloadFencingToken(step) ?? payloadFencingToken(run));
-    return;
+  return { run, stack, configuration, runPayload, components, index, component };
+}
+
+async function handleTerminalStackDeploymentStep(
+  stack: Stack,
+  run: Readonly<typeof stackRecords.$inferSelect>,
+  step: Readonly<typeof stackRecords.$inferSelect>,
+): Promise<StackDeploymentStepDecision> {
+  if (!["failed", "canceled"].includes(step.status)) return { handled: false, step };
+  await db.update(stackRecords).set({ status: step.status, updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
+  await releaseStackStateLock(stack.id, run.name ?? "default", run.id, payloadFencingToken(step) ?? payloadFencingToken(run));
+  return { handled: true };
+}
+
+async function handlePendingOperatorStackStep(
+  inputs: StackDeploymentInputs,
+): Promise<StackDeploymentStepDecision> {
+  const { run, stack, component, index } = inputs;
+  if (run.status !== "approved") return { handled: true };
+  const fencingToken = await acquireStackStateLock(stack.id, run.name ?? "default", run.id);
+  if (fencingToken === null) {
+    await scheduleStackRun(run.id, 1000);
+    return { handled: true };
   }
-  if (step?.status === "pending_operator") {
-    if (run.status !== "approved") return;
-    const fencingToken = await acquireStackStateLock(stack.id, run.name ?? "default", run.id);
-    if (fencingToken === null) {
-      await scheduleStackRun(run.id, 1000);
-      return;
-    }
-    step = await createDeploymentStep(stack.id, run.id, component, index, "apply", true, fencingToken);
-    await db.update(stackRecords).set({ status: "applying", payload: { ...(run.payload ?? {}), lockAcquired: true, fencingToken }, updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
-  } else if (step?.status === "completed") {
-    const stepPayload = step.payload ?? {};
-    const hasChanges = stepPayload["has-changes"] === true || stepPayload.hasChanges === true;
-    const deferred = stepPayload["deferred-changes"] === true || stepPayload.deferredChanges === true;
-    if (phase === "apply") {
-      if (stack.executionMode === "agent") await recoverAgentApplyState(stack, run, step);
-      const cycle = payloadNumber(run, "cycle", 0) + 1;
-      if (cycle > 10) { await failStackRun(stack, run, step, "Stack deployment did not converge after 10 apply cycles"); return; }
-      const fencingToken = await acquireStackStateLock(stack.id, run.name ?? "default", run.id);
-      if (fencingToken === null) { await scheduleStackRun(run.id, 1000); return; }
-      const convergence = await createDeploymentStep(stack.id, run.id, component, index, "convergence", true, fencingToken);
-      await db.update(stackRecords).set({ status: "planning", payload: { ...(run.payload ?? {}), cycle, fencingToken }, updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
-      step = convergence;
-    } else if (hasChanges || deferred) {
-      if (run.status !== "approved") return;
-      const apply = await createDeploymentStep(stack.id, run.id, component, index, "apply", true);
-      await db.update(stackRecords).set({ status: "applying", updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
-      step = apply;
-    } else {
-      const nextIndex = index + 1;
-      if (nextIndex >= components.length) {
-        await db.update(stackRecords).set({ status: "succeeded", updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
-        if (run.parentId !== null) await db.update(stackRecords).set({ status: "succeeded", payload: { ...(await db.query.stackRecords.findFirst({ where: eq(stackRecords.id, run.parentId) }))?.payload, latestRunId: run.id }, updatedAt: Date.now() }).where(eq(stackRecords.id, run.parentId));
-        await releaseStackStateLock(stack.id, run.name ?? "default", run.id, payloadFencingToken(step) ?? payloadFencingToken(run));
-        return;
-      }
-      const nextComponent = components[nextIndex];
-      if (nextComponent === undefined) return;
-      await createDeploymentStep(stack.id, run.id, nextComponent, nextIndex, "plan", false);
-      await db.update(stackRecords).set({ status: "planning", payload: { ...(run.payload ?? {}), component: nextComponent.name, componentIndex: nextIndex, cycle: 0 }, updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
-      await scheduleStackRun(run.id);
-      return;
-    }
+  const apply = await createDeploymentStep(stack.id, run.id, component, index, "apply", true, fencingToken);
+  await db.update(stackRecords).set({ status: "applying", payload: { ...(run.payload ?? {}), lockAcquired: true, fencingToken }, updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
+  return { handled: false, step: apply };
+}
+
+async function handleCompletedApplyStackStep(
+  inputs: StackDeploymentInputs,
+  step: Readonly<typeof stackRecords.$inferSelect>,
+): Promise<StackDeploymentStepDecision> {
+  const { run, stack, component, index } = inputs;
+  if (stack.executionMode === "agent") await recoverAgentApplyState(stack, run, step);
+  const cycle = payloadNumber(run, "cycle", 0) + 1;
+  if (cycle > 10) {
+    await failStackRun(stack, run, step, "Stack deployment did not converge after 10 apply cycles");
+    return { handled: true };
   }
-  if (step === undefined) {
-    step = await createDeploymentStep(stack.id, run.id, component, index, "plan", false);
+  const fencingToken = await acquireStackStateLock(stack.id, run.name ?? "default", run.id);
+  if (fencingToken === null) {
+    await scheduleStackRun(run.id, 1000);
+    return { handled: true };
+  }
+  const convergence = await createDeploymentStep(stack.id, run.id, component, index, "convergence", true, fencingToken);
+  await db.update(stackRecords).set({ status: "planning", payload: { ...(run.payload ?? {}), cycle, fencingToken }, updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
+  return { handled: false, step: convergence };
+}
+
+async function handleCompletedPlanChanges(
+  inputs: StackDeploymentInputs,
+): Promise<StackDeploymentStepDecision> {
+  const { run, stack, component, index } = inputs;
+  if (run.status !== "approved") return { handled: true };
+  const apply = await createDeploymentStep(stack.id, run.id, component, index, "apply", true);
+  await db.update(stackRecords).set({ status: "applying", updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
+  return { handled: false, step: apply };
+}
+
+async function handleCompletedPlanWithoutChanges(
+  inputs: StackDeploymentInputs,
+): Promise<StackDeploymentStepDecision> {
+  const { run, stack, components, index } = inputs;
+  const nextIndex = index + 1;
+  if (nextIndex >= components.length) {
+    await completeStackDeploymentRun(stack, run);
+    return { handled: true };
+  }
+  const nextComponent = components[nextIndex];
+  if (nextComponent === undefined) return { handled: true };
+  await createDeploymentStep(stack.id, run.id, nextComponent, nextIndex, "plan", false);
+  await db.update(stackRecords).set({ status: "planning", payload: { ...(run.payload ?? {}), component: nextComponent.name, componentIndex: nextIndex, cycle: 0 }, updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
+  await scheduleStackRun(run.id);
+  return { handled: true };
+}
+
+async function handleCompletedStackDeploymentStep(
+  inputs: StackDeploymentInputs,
+  step: Readonly<typeof stackRecords.$inferSelect>,
+  phase: string,
+): Promise<StackDeploymentStepDecision> {
+  const stepPayload = step.payload ?? {};
+  const hasChanges = stepPayload["has-changes"] === true || stepPayload.hasChanges === true;
+  const deferred = stepPayload["deferred-changes"] === true || stepPayload.deferredChanges === true;
+  if (phase === "apply") return handleCompletedApplyStackStep(inputs, step);
+  if (hasChanges || deferred) return handleCompletedPlanChanges(inputs);
+  return handleCompletedPlanWithoutChanges(inputs);
+}
+
+async function advanceStackDeploymentStep(
+  inputs: StackDeploymentInputs,
+  existingStep: Readonly<typeof stackRecords.$inferSelect> | undefined,
+): Promise<StackDeploymentStepDecision> {
+  const { run, stack, component, index } = inputs;
+  const phase = existingStep === undefined
+    ? "plan"
+    : payloadString(existingStep, "phase") ?? (payloadString(existingStep, "operation-type") === "apply" ? "apply" : "plan");
+  if (existingStep !== undefined && ["failed", "canceled"].includes(existingStep.status)) {
+    return handleTerminalStackDeploymentStep(stack, run, existingStep);
+  }
+  if (existingStep?.status === "pending_operator") return handlePendingOperatorStackStep(inputs);
+  if (existingStep?.status === "completed") return handleCompletedStackDeploymentStep(inputs, existingStep, phase);
+  if (existingStep === undefined) {
+    const plan = await createDeploymentStep(stack.id, run.id, component, index, "plan", false);
     await db.update(stackRecords).set({ status: "planning", updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
+    return { handled: false, step: plan };
   }
-  const currentPhase = payloadString(step, "phase") ?? "plan";
-  const operation: "plan" | "apply" = currentPhase === "apply" ? "apply" : "plan";
-  if (step.status === "pending_operator" || step.status === "completed") return;
-  const currentStep = step;
+  return { handled: false, step: existingStep };
+}
+
+async function planArtifactPathForStackStep(
+  run: Readonly<typeof stackRecords.$inferSelect>,
+  component: StoredComponent,
+  step: Readonly<typeof stackRecords.$inferSelect>,
+  operation: "plan" | "apply",
+): Promise<string | null> {
+  if (operation !== "apply") return null;
+  const planPayload = (await db.query.stackRecords.findMany({ where: and(eq(stackRecords.parentId, run.id), eq(stackRecords.recordType, "stack-deployment-steps"), eq(stackRecords.name, component.name)), orderBy: [desc(stackRecords.createdAt)] }))
+    .find((candidate) => ["plan", "convergence"].includes(payloadString(candidate, "phase") ?? "") && candidate.id !== step.id);
+  return planPayload === undefined ? null : join(STACK_STORAGE_DIR, `${planPayload.id}-plan`);
+}
+
+function stackDeploymentArchivePath(
+  run: Readonly<typeof stackRecords.$inferSelect>,
+  configuration: Readonly<typeof stackRecords.$inferSelect>,
+): string {
+  const runArchivePath = (run.payload ?? {}).archivePath;
+  if (typeof runArchivePath === "string") return runArchivePath;
+  const configurationArchivePath = (configuration.payload ?? {}).archivePath;
+  return typeof configurationArchivePath === "string" ? configurationArchivePath : "";
+}
+
+async function executeStackComponentFromArchive(
+  archivePath: string,
+  component: StoredComponent,
+  step: Readonly<typeof stackRecords.$inferSelect>,
+  run: Readonly<typeof stackRecords.$inferSelect>,
+  stack: Stack,
+  configuration: Readonly<typeof stackRecords.$inferSelect>,
+  operation: "plan" | "apply",
+  planArtifactPath: string | null,
+  fencingToken: number | null,
+  context: DurableJobContext,
+): Promise<StackExecutionResult> {
+  const staging = await mkdtemp(join(tmpdir(), "terrence-stack-step-"));
+  try {
+    await validateModuleArchive(archivePath);
+    await extractValidatedModuleArchive(archivePath, staging);
+    const root = await findArchiveRoot(staging);
+    const directory = resolve(root, component.directory);
+    const relativeDirectory = relative(root, directory);
+    const insideRoot = relativeDirectory === "" || (!relativeDirectory.startsWith("..") && !relativeDirectory.startsWith("/"));
+    if (!insideRoot) throw new Error(`Component ${component.name} is outside the Stack configuration archive`);
+    const destroy = (run.payload ?? {}).destroy === true || (configuration.payload ?? {})["destroy-all"] === true;
+    return await executeComponent({ ...component, directory }, step.id, run.id, stack.id, run.name ?? "default", operation, planArtifactPath, destroy, fencingToken, context);
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
+async function persistStackExecutionResult(
+  run: Readonly<typeof stackRecords.$inferSelect>,
+  step: Readonly<typeof stackRecords.$inferSelect>,
+  operation: "plan" | "apply",
+  result: StackExecutionResult,
+): Promise<void> {
+  await db.update(stackRecords).set({ status: result.hasChanges || result.deferredChanges ? "pending_operator" : "completed", payload: { ...(step.payload ?? {}), hasChanges: result.hasChanges, "has-changes": result.hasChanges, deferredChanges: result.deferredChanges, "deferred-changes": result.deferredChanges, output: result.output }, updatedAt: Date.now() }).where(eq(stackRecords.id, step.id));
+  if (operation === "plan" && (result.hasChanges || result.deferredChanges)) {
+    await db.update(stackRecords).set({ status: "pre_deploying_pending_operator", updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
+  } else {
+    await db.update(stackRecords).set({ status: "step_completed", updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
+    await scheduleStackRun(run.id);
+  }
+}
+
+type StackStepExecutionPreparation = Readonly<{ ready: boolean; fencingToken: number | null }>;
+
+async function prepareStackStepExecution(
+  run: Readonly<typeof stackRecords.$inferSelect>,
+  step: Readonly<typeof stackRecords.$inferSelect>,
+  stack: Stack,
+  operation: "plan" | "apply",
+): Promise<StackStepExecutionPreparation> {
   let fencingToken: number | null = null;
   if (operation === "apply" || (step.payload ?? {})["requires-state-lock"] === true) {
     fencingToken = await acquireStackStateLock(stack.id, run.name ?? "default", run.id);
     if (fencingToken === null) {
       await scheduleStackRun(run.id, 1000);
-      return;
+      return { ready: false, fencingToken: null };
     }
     await db.update(stackRecords).set({ payload: { ...(step.payload ?? {}), "fencing-token": fencingToken }, updatedAt: Date.now() }).where(eq(stackRecords.id, step.id));
   }
   await db.update(stackRecords).set({ status: "running", updatedAt: Date.now() }).where(eq(stackRecords.id, step.id));
   await db.update(stackRecords).set({ status: operation === "apply" ? "applying" : "planning", updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
+  return { ready: true, fencingToken };
+}
+
+async function executeStackDeploymentStep(
+  inputs: StackDeploymentInputs,
+  step: Readonly<typeof stackRecords.$inferSelect>,
+  operation: "plan" | "apply",
+  context: DurableJobContext,
+): Promise<void> {
+  const { run, stack, configuration, component } = inputs;
+  const preparation = await prepareStackStepExecution(run, step, stack, operation);
+  if (!preparation.ready) return;
   try {
-    const planPayload = operation === "apply"
-      ? (await db.query.stackRecords.findMany({ where: and(eq(stackRecords.parentId, run.id), eq(stackRecords.recordType, "stack-deployment-steps"), eq(stackRecords.name, component.name)), orderBy: [desc(stackRecords.createdAt)] })).find((candidate) => ["plan", "convergence"].includes(payloadString(candidate, "phase") ?? "") && candidate.id !== currentStep.id)
-      : undefined;
-    const planArtifactPath = operation === "apply" && planPayload !== undefined ? join(STACK_STORAGE_DIR, `${planPayload.id}-plan`) : null;
-    let result: StackExecutionResult;
+    const planArtifactPath = await planArtifactPathForStackStep(run, component, step, operation);
     if (stack.executionMode === "agent") {
       await queueStackAgentStep(stack, run.id, step, operation);
       await scheduleStackRun(run.id, 15_000);
       return;
     }
-    const archivePath = typeof runPayload.archivePath === "string" ? runPayload.archivePath : typeof (configuration.payload ?? {}).archivePath === "string" ? (configuration.payload ?? {}).archivePath as string : "";
+    const archivePath = stackDeploymentArchivePath(run, configuration);
     if (archivePath === "" || !(await Bun.file(archivePath).exists())) throw new Error("The Stack configuration archive is unavailable");
-    const staging = await mkdtemp(join(tmpdir(), "terrence-stack-step-"));
-    try {
-      await validateModuleArchive(archivePath);
-      await extractValidatedModuleArchive(archivePath, staging);
-      const root = await findArchiveRoot(staging);
-      const directory = resolve(root, component.directory);
-      const insideRoot = relative(root, directory) === "" || (!relative(root, directory).startsWith("..") && !relative(root, directory).startsWith("/"));
-      if (!insideRoot) throw new Error(`Component ${component.name} is outside the Stack configuration archive`);
-      result = await executeComponent({ ...component, directory }, step.id, run.id, stack.id, run.name ?? "default", operation, planArtifactPath, (run.payload ?? {}).destroy === true || (configuration.payload ?? {})["destroy-all"] === true, fencingToken, context);
-    } finally {
-      await rm(staging, { recursive: true, force: true });
-    }
+    const result = await executeStackComponentFromArchive(archivePath, component, step, run, stack, configuration, operation, planArtifactPath, preparation.fencingToken, context);
     if (await context.canceled()) return;
-    await db.update(stackRecords).set({ status: result.hasChanges || result.deferredChanges ? "pending_operator" : "completed", payload: { ...(step.payload ?? {}), hasChanges: result.hasChanges, "has-changes": result.hasChanges, deferredChanges: result.deferredChanges, "deferred-changes": result.deferredChanges, output: result.output }, updatedAt: Date.now() }).where(eq(stackRecords.id, step.id));
-    if (operation === "plan" && (result.hasChanges || result.deferredChanges)) {
-      await db.update(stackRecords).set({ status: "pre_deploying_pending_operator", updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
-    } else {
-      await db.update(stackRecords).set({ status: "step_completed", updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
-      await scheduleStackRun(run.id);
-    }
+    await persistStackExecutionResult(run, step, operation, result);
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : String(error);
     if (await context.canceled()) return;
-    await failStackRun(stack, run, step, detail, fencingToken ?? undefined);
+    await failStackRun(stack, run, step, detail, preparation.fencingToken ?? undefined);
   }
+}
+
+export async function runStackDeploymentJob(job: Job, context: DurableJobContext): Promise<void> {
+  const inputs = await loadStackDeploymentInputs(job, context);
+  if (inputs === undefined) return;
+  const steps = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.parentId, inputs.run.id), eq(stackRecords.recordType, "stack-deployment-steps")), orderBy: [desc(stackRecords.createdAt)] });
+  const decision = await advanceStackDeploymentStep(inputs, steps[0]);
+  if (decision.handled) return;
+  const step = decision.step;
+  const currentPhase = payloadString(step, "phase") ?? "plan";
+  const operation: "plan" | "apply" = currentPhase === "apply" ? "apply" : "plan";
+  if (step.status === "pending_operator" || step.status === "completed") return;
+  await executeStackDeploymentStep(inputs, step, operation, context);
 }
 
 async function addDiagnostic(configId: string, stackId: string, detail: string): Promise<void> {
