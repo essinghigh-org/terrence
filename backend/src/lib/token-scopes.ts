@@ -275,62 +275,61 @@ function parseTagExpression(raw: unknown): TokenScopeTags | null {
  * object). Returns null when the value is absent/empty (legacy token), or
  * throws a descriptive error when the value is present but invalid.
  */
+function parseScopesRaw(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new Error("scopes must be valid JSON");
+  }
+}
+
+function assertScopesObject(parsed: unknown): Record<string, unknown> {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("scopes must be an object");
+  return parsed as Record<string, unknown>;
+}
+
+function parseOrgsField(obj: Record<string, unknown>): string[] {
+  const orgs = obj.orgs;
+  if (!Array.isArray(orgs) || orgs.length === 0 || orgs.some((o): boolean => typeof o !== "string" || o === "")) throw new Error("scopes.orgs must be a non-empty array of organization IDs");
+  return orgs as string[];
+}
+
+function parseProjectsField(obj: Record<string, unknown>): string[] | null {
+  const projects = obj.projects;
+  if (projects === null || projects === undefined) return null;
+  if (!(Array.isArray(projects) && projects.every((p): boolean => typeof p === "string" && p !== ""))) throw new Error("scopes.projects must be an array of project IDs or null");
+  return projects as string[];
+}
+
+function parseWorkspacesField(obj: Record<string, unknown>): string[] | null {
+  const workspaces = obj.workspaces;
+  if (workspaces === null || workspaces === undefined) return null;
+  if (!(Array.isArray(workspaces) && workspaces.every((w): boolean => typeof w === "string" && w !== ""))) throw new Error("scopes.workspaces must be an array of workspace IDs or null");
+  return workspaces as string[];
+}
+
+function parsePermissionsField(obj: Record<string, unknown>): Readonly<Record<string, boolean>> {
+  const permissions = obj.permissions;
+  if (typeof permissions !== "object" || permissions === null || Array.isArray(permissions)) throw new Error("scopes.permissions must be an object");
+  for (const [key, value] of Object.entries(permissions as Record<string, unknown>)) {
+    if (!PERMISSION_KEYS.has(key)) throw new Error(`scopes.permissions contains unknown permission: ${key}`);
+    if (typeof value !== "boolean") throw new Error(`scopes.permissions.${key} must be a boolean`);
+  }
+  return permissions as Readonly<Record<string, boolean>>;
+}
+
 export function parseTokenScopes(raw: unknown): TokenScopes | null {
   if (raw === null || raw === undefined || raw === "") return null;
-
-  let parsed: unknown = raw;
-  if (typeof raw === "string") {
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new Error("scopes must be valid JSON");
-    }
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("scopes must be an object");
-  }
-  const obj = parsed as Record<string, unknown>;
-
+  const parsed = parseScopesRaw(raw);
+  const obj = assertScopesObject(parsed);
   if (obj.version !== 1) throw new Error("scopes.version must be 1");
-
-  const orgs = obj.orgs;
-  if (!Array.isArray(orgs) || orgs.length === 0 || orgs.some((o): boolean => typeof o !== "string" || o === "")) {
-    throw new Error("scopes.orgs must be a non-empty array of organization IDs");
-  }
-
-  const projects = obj.projects;
-  if (projects !== null && projects !== undefined && !(Array.isArray(projects) && projects.every((p): boolean => typeof p === "string" && p !== ""))) {
-    throw new Error("scopes.projects must be an array of project IDs or null");
-  }
-
-  const workspaces = obj.workspaces;
-  if (workspaces !== null && workspaces !== undefined && !(Array.isArray(workspaces) && workspaces.every((w): boolean => typeof w === "string" && w !== ""))) {
-    throw new Error("scopes.workspaces must be an array of workspace IDs or null");
-  }
-
+  const orgs = parseOrgsField(obj);
+  const projects = parseProjectsField(obj);
+  const workspaces = parseWorkspacesField(obj);
   const tags = parseTagExpression(obj.tags);
-
-  const permissions = obj.permissions;
-  if (typeof permissions !== "object" || permissions === null || Array.isArray(permissions)) {
-    throw new Error("scopes.permissions must be an object");
-  }
-  for (const [key, value] of Object.entries(permissions as Record<string, unknown>)) {
-    if (!PERMISSION_KEYS.has(key)) {
-      throw new Error(`scopes.permissions contains unknown permission: ${key}`);
-    }
-    if (typeof value !== "boolean") {
-      throw new Error(`scopes.permissions.${key} must be a boolean`);
-    }
-  }
-
-  const scope: TokenScopes = {
-    version: 1,
-    orgs: orgs as string[],
-    projects: (projects as string[] | null | undefined) ?? null,
-    workspaces: (workspaces as string[] | null | undefined) ?? null,
-    tags,
-    permissions: permissions,
-  };
+  const permissions = parsePermissionsField(obj);
+  const scope: TokenScopes = { version: 1, orgs, projects, workspaces, tags, permissions };
   return scope;
 }
 

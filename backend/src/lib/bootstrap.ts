@@ -5,31 +5,40 @@ import { auditLog } from "./utils";
 import { checkPasswordPolicy, loadPasswordPolicy } from "./password-policy";
 import { lockFirstUserElection } from "../db/first-user";
 
-export async function bootstrapInitialAdmin(): Promise<"created" | "disabled" | "skipped"> {
+function consumeAdminPassword(): string | null {
   const password = process.env.ADMIN_PASSWORD;
-  if (password === undefined || password === "") return "disabled";
+  if (password === undefined || password === "") return null;
   delete process.env.ADMIN_PASSWORD;
+  return password;
+}
 
-  const userCount = (await db.select({ value: count() }).from(users))[0]?.value ?? 0;
-  if (userCount > 0) return "skipped";
-  const bootstrapUsername = (process.env.ADMIN_USERNAME ?? "admin").trim();
-  const policy = checkPasswordPolicy(loadPasswordPolicy(), password, bootstrapUsername);
-  if (!policy.ok) {
-    // Preserve the long-standing exact message for the common minimum-length
-    // case so existing deployments/tests keyed on it keep working; include the
-    // full breakdown for any stricter or combined failures.
-    const isOnlyLength = policy.errors.length === 1 && policy.errors[0]?.startsWith("Password must be at least ");
-    const message = isOnlyLength
-      ? `ADMIN_PASSWORD ${policy.errors[0]?.replace(/^Password /, "").toLowerCase()}` : `ADMIN_PASSWORD is invalid: ${policy.errors.join(" ")}`;
-    throw new Error(message);
-  }
+function validateBootstrapPassword(password: string, username: string): void {
+  const policy = checkPasswordPolicy(loadPasswordPolicy(), password, username);
+  if (policy.ok) return;
+  const isOnlyLength = policy.errors.length === 1 && policy.errors[0]?.startsWith("Password must be at least ");
+  const message = isOnlyLength ? `ADMIN_PASSWORD ${policy.errors[0]?.replace(/^Password /, "").toLowerCase()}` : `ADMIN_PASSWORD is invalid: ${policy.errors.join(" ")}`;
+  throw new Error(message);
+}
 
-  const username = bootstrapUsername;
+function resolveBootstrapIdentity(username: string): { username: string; email: string | null; organizationName: string } {
   if (username === "") throw new Error("ADMIN_USERNAME cannot be empty");
   const configuredEmail = process.env.ADMIN_EMAIL?.trim();
   const email = configuredEmail === undefined || configuredEmail === "" ? null : configuredEmail;
   const organizationName = (process.env.ADMIN_ORGANIZATION ?? "default").trim();
   if (organizationName === "") throw new Error("ADMIN_ORGANIZATION cannot be empty");
+  return { username, email, organizationName };
+}
+
+export async function bootstrapInitialAdmin(): Promise<"created" | "disabled" | "skipped"> {
+  const password = consumeAdminPassword();
+  if (password === null) return "disabled";
+
+  const userCount = (await db.select({ value: count() }).from(users))[0]?.value ?? 0;
+  if (userCount > 0) return "skipped";
+  const bootstrapUsername = (process.env.ADMIN_USERNAME ?? "admin").trim();
+  validateBootstrapPassword(password, bootstrapUsername);
+
+  const { username, email, organizationName } = resolveBootstrapIdentity(bootstrapUsername);
   const id = `user-${crypto.randomUUID()}`;
   const organizationId = `org-${crypto.randomUUID()}`;
   const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });

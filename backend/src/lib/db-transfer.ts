@@ -186,46 +186,51 @@ export function schemaTables(): readonly TransferTable[] {
  * already match the target storage class, so it is safe to apply on both
  * sides of a verification sample hash.
  */
+function normalizeBoolean(value: unknown): number {
+  return value === true || value === 1 || value === "1" || value === "t" || value === "true" ? 1 : 0;
+}
+
+function normalizeJson(value: unknown): string {
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function normalizeDate(value: unknown, column: TransferColumn): number | null {
+  const ms = value instanceof Date ? value.getTime() : typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : Number(value);
+  if (!Number.isFinite(ms)) return null;
+  return column.mode === "timestamp_ms" ? ms : Math.floor(ms / 1000);
+}
+
+function normalizeBuffer(value: unknown): Uint8Array | null {
+  if (value instanceof Uint8Array) return value;
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  if (typeof value === "string") return new TextEncoder().encode(value);
+  return null;
+}
+
+function normalizeNumber(value: unknown): number | null {
+  if (value instanceof Date) return value.getTime();
+  const n = typeof value === "bigint" ? Number(value) : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "bigint") return String(value);
+  if (typeof value === "boolean") return value ? "1" : "0";
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
 export function normalizeValue(value: unknown, column: TransferColumn): unknown {
   if (value === null || value === undefined) return null;
   switch (column.dataType) {
-    case "boolean":
-      return value === true || value === 1 || value === "1" || value === "t" || value === "true" ? 1 : 0;
-    case "json":
-      return typeof value === "string" ? value : JSON.stringify(value);
-    case "date": {
-      const ms = value instanceof Date
-        ? value.getTime()
-        : typeof value === "number"
-          ? value
-          : typeof value === "string"
-            ? Date.parse(value)
-            : Number(value);
-      if (!Number.isFinite(ms)) return null;
-      // Drizzle SQLite date modes store epoch seconds except timestamp_ms.
-      return column.mode === "timestamp_ms" ? ms : Math.floor(ms / 1000);
-    }
-    case "buffer":
-      if (value instanceof Uint8Array) return value;
-      if (ArrayBuffer.isView(value)) {
-        return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-      }
-      if (typeof value === "string") return new TextEncoder().encode(value);
-      return null;
-    case "number": {
-      if (value instanceof Date) return value.getTime();
-      const n = typeof value === "bigint" ? Number(value) : Number(value);
-      return Number.isFinite(n) ? n : null;
-    }
-    default: {
-      // text columns
-      if (typeof value === "string") return value;
-      if (typeof value === "number" || typeof value === "bigint") return String(value);
-      if (typeof value === "boolean") return value ? "1" : "0";
-      if (value instanceof Date) return value.toISOString();
-      if (typeof value === "object") return JSON.stringify(value);
-      return String(value);
-    }
+    case "boolean": return normalizeBoolean(value);
+    case "json": return normalizeJson(value);
+    case "date": return normalizeDate(value, column);
+    case "buffer": return normalizeBuffer(value);
+    case "number": return normalizeNumber(value);
+    default: return normalizeText(value);
   }
 }
 
