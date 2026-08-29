@@ -332,11 +332,16 @@ export async function revokeWorkloadIdentityTokens(runId: string, jtis?: readonl
   ));
 }
 
-export async function verifyWorkloadIdentityToken(token: string, audience?: string): Promise<Record<string, unknown>> {
+function keyIdFromWorkloadToken(token: string): string {
   const decoded = jwt.decode(token, { complete: true });
   const header = decoded !== null && typeof decoded === "object" && "header" in decoded ? decoded.header : undefined;
   const keyId = header !== null && typeof header === "object" && header !== undefined && "kid" in header && typeof header.kid === "string" ? header.kid : "";
   if (keyId === "") throw new Error("Workload identity token has no key id");
+  return keyId;
+}
+
+export async function verifyWorkloadIdentityToken(token: string, audience?: string): Promise<Record<string, unknown>> {
+  const keyId = keyIdFromWorkloadToken(token);
   const key = await db.query.workloadIdentityKeys.findFirst({ where: and(eq(workloadIdentityKeys.keyId, keyId), isNull(workloadIdentityKeys.revokedAt)) });
   if (key === undefined) throw new Error("Workload identity token key is unavailable");
   const publicKey = createPublicKey({ key: key.publicJwk, format: "jwk" });
