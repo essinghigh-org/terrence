@@ -515,15 +515,37 @@ function firstUrl(payload: Readonly<Record<string, unknown>>): string {
   return "";
 }
 
+type NotificationRecord = Readonly<Record<string, unknown>>;
+
+function notificationMessage(payload: NotificationRecord, notification: NotificationRecord | undefined): string {
+  return typeof notification?.message === "string" && notification.message.length > 0
+    ? notification.message
+    : (typeof payload.message === "string" ? payload.message : "Terrence notification");
+}
+
+function addAssessmentFields(
+  payload: NotificationRecord,
+  addField: (label: string, value: unknown) => void,
+): void {
+  const details = payload.details as NotificationRecord | undefined;
+  if (details === undefined) return;
+  const result = details.new_assessment_result as NotificationRecord | undefined;
+  const drifted = result?.resources_drifted;
+  if (typeof drifted === "number") addField("Resources drifted", drifted);
+  const checksFailed = result?.checks_failed as number | undefined;
+  if (typeof checksFailed === "number") addField("Failed checks", checksFailed);
+}
+
+function notificationStatus(payload: NotificationRecord, notification: NotificationRecord | undefined): unknown {
+  return typeof payload.run_status === "string"
+    ? payload.run_status
+    : (typeof payload.change_request_status === "string" ? payload.change_request_status : notification?.run_status);
+}
+
 function summarizePayload(payload: Readonly<Record<string, unknown>>): NotificationSummary {
   const notifications = payload.notifications;
-  const notification = (Array.isArray(notifications) ? notifications[0] : notifications) as
-    | Readonly<Record<string, unknown>>
-    | undefined;
-  const message =
-    typeof notification?.message === "string" && notification.message.length > 0
-      ? notification.message
-      : (typeof payload.message === "string" ? payload.message : "Terrence notification");
+  const notification = (Array.isArray(notifications) ? notifications[0] : notifications) as NotificationRecord | undefined;
+  const message = notificationMessage(payload, notification);
 
   const fields: { label: string; value: string }[] = [];
 
@@ -539,20 +561,11 @@ function summarizePayload(payload: Readonly<Record<string, unknown>>): Notificat
   addField("Triggered by", payload.run_created_by ?? payload.run_updated_by);
   addField("Status", payload.run_status ?? payload.change_request_status ?? notification?.run_status);
 
-  const details = payload.details as Readonly<Record<string, unknown>> | undefined;
-  if (details !== undefined) {
-    const result = details.new_assessment_result as Readonly<Record<string, unknown>> | undefined;
-    const drifted = result?.resources_drifted;
-    if (typeof drifted === "number") addField("Resources drifted", drifted);
-    const checksFailed = result?.checks_failed as number | undefined;
-    if (typeof checksFailed === "number") addField("Failed checks", checksFailed);
-  }
+  addAssessmentFields(payload, addField);
 
   const linkUrl = firstUrl(payload);
   const linkLabel = typeof payload.run_id === "string" ? "Open run" : "Open workspace";
-  const status = typeof payload.run_status === "string"
-    ? payload.run_status
-    : (typeof payload.change_request_status === "string" ? payload.change_request_status : notification?.run_status);
+  const status = notificationStatus(payload, notification);
   return {
     title: message,
     subtext: stringify(payload.run_message ?? payload.change_request_message),
