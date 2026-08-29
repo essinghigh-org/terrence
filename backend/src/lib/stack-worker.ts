@@ -432,6 +432,178 @@ export async function removeStackState(stackId: string, deployment: string, runI
   if (fencingToken !== undefined && !await refreshStackStateLock(stackId, deployment, runId, fencingToken)) throw new Error("Stack state lock ownership was lost during state removal");
 }
 
+type TerraformCommandResult = Readonly<{ code: number; output: string; heartbeatLost: boolean }>;
+
+type ComponentExecutionStart = Readonly<{
+  executionDirectory: string;
+  planPath: string;
+  binaryPath: string;
+  init: TerraformCommandResult;
+  commandResult: TerraformCommandResult;
+  heartbeat: () => Promise<boolean>;
+}>;
+
+async function simulatedComponentExecution(
+  stackId: string,
+  deployment: string,
+  runId: string,
+  operation: "plan" | "apply",
+  destroy: boolean,
+  fencingToken: number | null,
+  statePath: string,
+): Promise<StackExecutionResult> {
+  const hasChanges = operation === "plan" && envEnabled(process.env.SIMULATED_STACK_PLAN_CHANGES);
+  const deferredChanges = operation === "plan" && envEnabled(process.env.SIMULATED_STACK_DEFERRED);
+  if (operation === "apply") {
+    if (destroy) await removeStackState(stackId, deployment, runId, fencingToken ?? undefined);
+    else await saveStackState(stackId, deployment, runId, null, fencingToken ?? undefined);
+  }
+  return { hasChanges, deferredChanges, output: hasChanges ? "Plan: changes present" : "No changes. Your infrastructure matches the configuration.", statePath: operation === "apply" ? statePath : null };
+}
+
+function componentSandbox(): RunSandbox | null {
+  const required = runSandboxRequired();
+  const sandbox = required ? (RunSandbox.isUsable() ? new RunSandbox() : null) : null;
+  if (required && sandbox === null) throw new Error("Stack execution requires an available Landlock sandbox");
+  return sandbox;
+}
+
+async function runTerraformComponentOperation(
+  operation: "plan" | "apply",
+  planArgs: string[],
+  planArtifactPath: string | null,
+  executionDirectory: string,
+  workDirectory: string,
+  sandbox: RunSandbox | null,
+  heartbeat: () => Promise<boolean>,
+  binaryPath: string,
+): Promise<TerraformCommandResult> {
+  if (operation === "plan") return command(planArgs, executionDirectory, sandbox, heartbeat);
+  if (planArtifactPath === null || !(await Bun.file(planArtifactPath).exists())) throw new Error("The approved Stack plan artifact is unavailable");
+  const planPath = join(workDirectory, "tfplan");
+  await copyFile(planArtifactPath, planPath);
+  return command([binaryPath, "apply", "-no-color", "-input=false", planPath], executionDirectory, sandbox, heartbeat);
+}
+
+async function startTerraformComponentExecution(
+  component: StackComponent,
+  runId: string,
+  stackId: string,
+  deployment: string,
+  operation: "plan" | "apply",
+  planArtifactPath: string | null,
+  destroy: boolean,
+  fencingToken: number | null,
+  context: DurableJobContext,
+  workDirectory: string,
+  sandbox: RunSandbox | null,
+  statePath: string,
+): Promise<ComponentExecutionStart | StackExecutionResult> {
+  const executionDirectory = join(workDirectory, "source");
+  await cp(component.directory, executionDirectory, { recursive: true });
+  await mkdir(STACK_STORAGE_DIR, { recursive: true, mode: 0o700 });
+  await writeFile(join(executionDirectory, "terrence_backend_override.tf"), 'terraform { backend "local" {} }\n', { mode: 0o600 });
+  const requestedTool = process.env.TERRENCE_STACK_IAC_BINARY ?? "terraform";
+  const requestedVersion = process.env.TERRENCE_STACK_IAC_VERSION ?? "latest";
+  const resolved = await ensureBinary(requestedTool, requestedVersion);
+  if (resolved === null) throw new Error(`Unable to resolve ${requestedTool} ${requestedVersion}`);
+  const heartbeat = async (): Promise<boolean> => {
+    if (!await context.heartbeat()) return false;
+    return fencingToken === null || await refreshStackStateLock(stackId, deployment, runId, fencingToken);
+  };
+  const init = await command([resolved.binaryPath, "init", "-backend=false", "-no-color", "-input=false"], executionDirectory, sandbox, heartbeat);
+  if (init.heartbeatLost || !await heartbeat()) throw new Error(`Stack ${operation} lost its execution lease during initialization`);
+  const planPath = join(workDirectory, "tfplan");
+  const stateExists = await Bun.file(statePath).exists();
+  if (stateExists) await copyFile(statePath, join(executionDirectory, "terraform.tfstate"));
+  const planArgs = [resolved.binaryPath, "plan", "-detailed-exitcode", "-no-color", "-input=false", ...(destroy ? ["-destroy"] : []), "-out", planPath];
+  if (stateExists) planArgs.push("-state", statePath, "-state-out", `${statePath}.next`);
+  const commandResult = await runTerraformComponentOperation(operation, planArgs, planArtifactPath, executionDirectory, workDirectory, sandbox, heartbeat, resolved.binaryPath);
+  if (await context.canceled()) return { hasChanges: false, deferredChanges: false, output: "", statePath: null };
+  if (commandResult.heartbeatLost || !await heartbeat()) throw new Error(`Stack ${operation} lost its execution lease`);
+  return { executionDirectory, planPath, binaryPath: resolved.binaryPath, init, commandResult, heartbeat };
+}
+
+async function persistTerraformComponentArtifacts(
+  start: ComponentExecutionStart,
+  stepId: string,
+  stackId: string,
+  operation: "plan" | "apply",
+): Promise<void> {
+  const { planPath, init, commandResult } = start;
+  const descriptionPath = join(STACK_STORAGE_DIR, `${stepId}-${operation}.txt`);
+  const logPath = join(STACK_STORAGE_DIR, `${stepId}-${operation}.log`);
+  await writeFile(descriptionPath, commandResult.output || init.output, { mode: 0o600 });
+  await writeFile(logPath, [`init (${init.code})`, init.output, `${operation} (${commandResult.code})`, commandResult.output].filter(Boolean).join("\n"), { mode: 0o600 });
+  if (operation === "plan" && (commandResult.code === 0 || commandResult.code === 2) && await Bun.file(planPath).exists()) await copyFile(planPath, join(STACK_STORAGE_DIR, `${stepId}-plan`));
+  const now = Date.now();
+  await db.insert(stackRecords).values([
+    { id: `sart-${crypto.randomUUID()}`, stackId, parentId: stepId, recordType: "stack-artifacts", name: `${operation}-description`, status: "ready", payload: { path: descriptionPath }, createdAt: now, updatedAt: now },
+    { id: `sart-${crypto.randomUUID()}`, stackId, parentId: stepId, recordType: "stack-artifacts", name: `${operation}-debug-log`, status: "ready", payload: { path: logPath }, createdAt: now, updatedAt: now },
+  ]);
+}
+
+async function finalizeTerraformComponentState(
+  start: ComponentExecutionStart,
+  operation: "plan" | "apply",
+  destroy: boolean,
+  stackId: string,
+  deployment: string,
+  runId: string,
+  fencingToken: number | null,
+  sandbox: RunSandbox | null,
+): Promise<string> {
+  const { executionDirectory, planPath, binaryPath, init, commandResult, heartbeat } = start;
+  if (init.code !== 0 || (operation === "plan" ? ![0, 2].includes(commandResult.code) : commandResult.code !== 0)) throw new Error(commandResult.output || init.output || `Terraform ${operation} failed`);
+  if (operation === "plan") {
+    const json = await command([binaryPath, "show", "-json", planPath], executionDirectory, sandbox, heartbeat);
+    if (json.heartbeatLost || !await heartbeat()) throw new Error("Stack plan lost its execution lease while collecting output");
+    return json.code === 0 ? json.output : "";
+  }
+  const generatedState = join(executionDirectory, "terraform.tfstate");
+  const generatedStatePayload = await Bun.file(generatedState).exists() ? await readFile(generatedState, "utf8") : null;
+  if (destroy) await removeStackState(stackId, deployment, runId, fencingToken ?? undefined);
+  else await saveStackState(stackId, deployment, runId, generatedStatePayload, fencingToken ?? undefined);
+  return "";
+}
+
+async function finalizeTerraformComponentExecution(
+  start: ComponentExecutionStart,
+  stepId: string,
+  stackId: string,
+  deployment: string,
+  runId: string,
+  operation: "plan" | "apply",
+  destroy: boolean,
+  fencingToken: number | null,
+  statePath: string,
+  sandbox: RunSandbox | null,
+): Promise<StackExecutionResult> {
+  await persistTerraformComponentArtifacts(start, stepId, stackId, operation);
+  const show = await finalizeTerraformComponentState(start, operation, destroy, stackId, deployment, runId, fencingToken, sandbox);
+  return { hasChanges: operation === "plan" && (start.commandResult.code === 2 || planHasChanges(show)), deferredChanges: operation === "plan" && /\bdeferred\b/i.test(start.commandResult.output), output: start.commandResult.output || start.init.output, statePath: operation === "apply" ? statePath : null };
+}
+
+async function executeRealTerraformComponent(
+  component: StackComponent,
+  stepId: string,
+  runId: string,
+  stackId: string,
+  deployment: string,
+  operation: "plan" | "apply",
+  planArtifactPath: string | null,
+  destroy: boolean,
+  fencingToken: number | null,
+  context: DurableJobContext,
+  workDirectory: string,
+  sandbox: RunSandbox | null,
+  statePath: string,
+): Promise<StackExecutionResult> {
+  const start = await startTerraformComponentExecution(component, runId, stackId, deployment, operation, planArtifactPath, destroy, fencingToken, context, workDirectory, sandbox, statePath);
+  if ("hasChanges" in start) return start;
+  return finalizeTerraformComponentExecution(start, stepId, stackId, deployment, runId, operation, destroy, fencingToken, statePath, sandbox);
+}
+
 async function executeComponent(
   component: StackComponent,
   stepId: string,
@@ -446,79 +618,19 @@ async function executeComponent(
 ): Promise<StackExecutionResult> {
   const statePath = stateFilePath(stackId, deployment);
   if (envEnabled(process.env.SIMULATED_RUNS) || process.env.NODE_ENV === "test") {
-    const hasChanges = operation === "plan" && envEnabled(process.env.SIMULATED_STACK_PLAN_CHANGES);
-    const deferredChanges = operation === "plan" && envEnabled(process.env.SIMULATED_STACK_DEFERRED);
-    if (operation === "apply") {
-      if (destroy) await removeStackState(stackId, deployment, runId, fencingToken ?? undefined);
-      else await saveStackState(stackId, deployment, runId, null, fencingToken ?? undefined);
-    }
-    return { hasChanges, deferredChanges, output: hasChanges ? "Plan: changes present" : "No changes. Your infrastructure matches the configuration.", statePath: operation === "apply" ? statePath : null };
+    return simulatedComponentExecution(stackId, deployment, runId, operation, destroy, fencingToken, statePath);
   }
   if (!(await hasTerraformFiles(component.directory))) {
     throw new Error(component.source === null
       ? `Component ${component.name} has no Terraform configuration files`
       : `Component ${component.name} source ${component.source} is not a local Terraform module; Stack execution requires a remote or agent worker`);
   }
-  const sandbox = runSandboxRequired()
-    ? (RunSandbox.isUsable() ? new RunSandbox() : null)
-    : null;
-  if (runSandboxRequired() && sandbox === null) throw new Error("Stack execution requires an available Landlock sandbox");
+  const sandbox = componentSandbox();
   const workDirectory = sandbox === null
     ? await mkdtemp(join(tmpdir(), "terrence-stack-run-"))
     : await sandbox.prepareWorkDir(stepId);
-  const executionDirectory = join(workDirectory, "source");
   try {
-    await cp(component.directory, executionDirectory, { recursive: true });
-    await mkdir(STACK_STORAGE_DIR, { recursive: true, mode: 0o700 });
-    await writeFile(join(executionDirectory, "terrence_backend_override.tf"), 'terraform { backend "local" {} }\n', { mode: 0o600 });
-    const requestedTool = process.env.TERRENCE_STACK_IAC_BINARY ?? "terraform";
-    const requestedVersion = process.env.TERRENCE_STACK_IAC_VERSION ?? "latest";
-    const resolved = await ensureBinary(requestedTool, requestedVersion);
-    if (resolved === null) throw new Error(`Unable to resolve ${requestedTool} ${requestedVersion}`);
-    const heartbeat = async (): Promise<boolean> => {
-      if (!await context.heartbeat()) return false;
-      return fencingToken === null || await refreshStackStateLock(stackId, deployment, runId, fencingToken);
-    };
-    const init = await command([resolved.binaryPath, "init", "-backend=false", "-no-color", "-input=false"], executionDirectory, sandbox, heartbeat);
-    if (init.heartbeatLost || !await heartbeat()) throw new Error(`Stack ${operation} lost its execution lease during initialization`);
-    const planPath = join(workDirectory, "tfplan");
-    const stateExists = await Bun.file(statePath).exists();
-    if (stateExists) await copyFile(statePath, join(executionDirectory, "terraform.tfstate"));
-    const planArgs = [resolved.binaryPath, "plan", "-detailed-exitcode", "-no-color", "-input=false", ...(destroy ? ["-destroy"] : []), "-out", planPath];
-    if (stateExists) planArgs.push("-state", statePath, "-state-out", `${statePath}.next`);
-    let commandResult: Readonly<{ code: number; output: string; heartbeatLost: boolean }>;
-    if (operation === "plan") {
-      commandResult = await command(planArgs, executionDirectory, sandbox, heartbeat);
-    } else {
-      if (planArtifactPath === null || !(await Bun.file(planArtifactPath).exists())) throw new Error("The approved Stack plan artifact is unavailable");
-      await copyFile(planArtifactPath, planPath);
-      commandResult = await command([resolved.binaryPath, "apply", "-no-color", "-input=false", planPath], executionDirectory, sandbox, heartbeat);
-    }
-    if (await context.canceled()) return { hasChanges: false, deferredChanges: false, output: "", statePath: null };
-    if (commandResult.heartbeatLost || !await heartbeat()) throw new Error(`Stack ${operation} lost its execution lease`);
-    const descriptionPath = join(STACK_STORAGE_DIR, `${stepId}-${operation}.txt`);
-    const logPath = join(STACK_STORAGE_DIR, `${stepId}-${operation}.log`);
-    await writeFile(descriptionPath, commandResult.output || init.output, { mode: 0o600 });
-    await writeFile(logPath, [`init (${init.code})`, init.output, `${operation} (${commandResult.code})`, commandResult.output].filter(Boolean).join("\n"), { mode: 0o600 });
-    if (operation === "plan" && (commandResult.code === 0 || commandResult.code === 2) && await Bun.file(planPath).exists()) await copyFile(planPath, join(STACK_STORAGE_DIR, `${stepId}-plan`));
-    const now = Date.now();
-    await db.insert(stackRecords).values([
-      { id: `sart-${crypto.randomUUID()}`, stackId, parentId: stepId, recordType: "stack-artifacts", name: `${operation}-description`, status: "ready", payload: { path: descriptionPath }, createdAt: now, updatedAt: now },
-      { id: `sart-${crypto.randomUUID()}`, stackId, parentId: stepId, recordType: "stack-artifacts", name: `${operation}-debug-log`, status: "ready", payload: { path: logPath }, createdAt: now, updatedAt: now },
-    ]);
-    if (init.code !== 0 || (operation === "plan" ? ![0, 2].includes(commandResult.code) : commandResult.code !== 0)) throw new Error(commandResult.output || init.output || `Terraform ${operation} failed`);
-    let show = "";
-    if (operation === "plan") {
-      const json = await command([resolved.binaryPath, "show", "-json", planPath], executionDirectory, sandbox, heartbeat);
-      if (json.heartbeatLost || !await heartbeat()) throw new Error("Stack plan lost its execution lease while collecting output");
-      show = json.code === 0 ? json.output : "";
-    } else {
-      const generatedState = join(executionDirectory, "terraform.tfstate");
-      const generatedStatePayload = await Bun.file(generatedState).exists() ? await readFile(generatedState, "utf8") : null;
-      if (destroy) await removeStackState(stackId, deployment, runId, fencingToken ?? undefined);
-      else await saveStackState(stackId, deployment, runId, generatedStatePayload, fencingToken ?? undefined);
-    }
-    return { hasChanges: operation === "plan" && (commandResult.code === 2 || planHasChanges(show)), deferredChanges: operation === "plan" && /\bdeferred\b/i.test(commandResult.output), output: commandResult.output || init.output, statePath: operation === "apply" ? statePath : null };
+    return await executeRealTerraformComponent(component, stepId, runId, stackId, deployment, operation, planArtifactPath, destroy, fencingToken, context, workDirectory, sandbox, statePath);
   } finally {
     await rm(`${statePath}.next`, { force: true });
     if (sandbox === null) await rm(workDirectory, { recursive: true, force: true });
@@ -789,6 +901,152 @@ async function addDiagnostic(configId: string, stackId: string, detail: string):
   await db.insert(stackRecords).values({ id: `sdiag-${crypto.randomUUID()}`, stackId, parentId: configId, recordType: "stack-diagnostics", name: null, status: "error", payload: { severity: "error", summary: "Stack configuration failed", detail }, createdAt: Date.now(), updatedAt: Date.now() });
 }
 
+type ComponentPayload = Readonly<{ name: string; directory: string; source: string | null; dependsOn: readonly string[] }>;
+
+type PreparedStackConfiguration = Readonly<{
+  componentPayload: readonly ComponentPayload[];
+  preparedDeployments: readonly PreparedDeployment[];
+}>;
+
+function eligiblePreviousDeploymentName(
+  group: Readonly<typeof stackRecords.$inferSelect>,
+  currentNames: ReadonlySet<string>,
+  seenPreviousNames: Set<string>,
+): string | undefined {
+  const name = group.name;
+  if (name === null || currentNames.has(name) || seenPreviousNames.has(name) || group.status === "succeeded") return undefined;
+  seenPreviousNames.add(name);
+  return name;
+}
+
+function previousDeploymentArchive(configuration: Readonly<typeof stackRecords.$inferSelect> | undefined): string | undefined {
+  const archivePath = (configuration?.payload ?? {}).archivePath;
+  return typeof archivePath === "string" ? archivePath : undefined;
+}
+
+async function removedDeploymentForGroup(
+  group: Readonly<typeof stackRecords.$inferSelect>,
+  currentNames: ReadonlySet<string>,
+  seenPreviousNames: Set<string>,
+): Promise<PreparedDeployment | undefined> {
+  const name = eligiblePreviousDeploymentName(group, currentNames, seenPreviousNames);
+  if (name === undefined) return undefined;
+  if (group.parentId === null) return undefined;
+  const previousConfiguration = await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, group.parentId), eq(stackRecords.recordType, "stack-configurations")) });
+  const previousComponents = storedComponents((previousConfiguration?.payload ?? {}).components);
+  const previousArchive = previousDeploymentArchive(previousConfiguration);
+  if (previousConfiguration === undefined || previousComponents.length === 0 || previousArchive === undefined || !isStackStoragePath(previousArchive)) return undefined;
+  return { name, destroy: true, components: [...previousComponents].reverse(), archivePath: previousArchive };
+}
+
+async function removedStackDeployments(
+  stackId: string,
+  currentNames: ReadonlySet<string>,
+): Promise<readonly PreparedDeployment[]> {
+  const previousGroups = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, stackId), eq(stackRecords.recordType, "stack-deployment-groups")), orderBy: [desc(stackRecords.createdAt)] });
+  const seenPreviousNames = new Set<string>();
+  const removedDeployments: PreparedDeployment[] = [];
+  for (const group of previousGroups) {
+    const removed = await removedDeploymentForGroup(group, currentNames, seenPreviousNames);
+    if (removed !== undefined) removedDeployments.push(removed);
+  }
+  return removedDeployments;
+}
+
+async function prepareStackConfiguration(
+  stack: Stack,
+  initialPayload: Readonly<Record<string, unknown>>,
+  archivePath: string,
+  context: DurableJobContext,
+): Promise<PreparedStackConfiguration | undefined> {
+  if (!isStackStoragePath(archivePath)) throw new Error("The Stack configuration archive path is invalid");
+  if (initialPayload.source === "fetch") await fetchStackArchive(stack, archivePath);
+  if (!(await Bun.file(archivePath).exists())) throw new Error("The Stack configuration archive is unavailable");
+  await validateModuleArchive(archivePath);
+  const staging = await mkdtemp(join(tmpdir(), "terrence-stack-config-"));
+  try {
+    await extractValidatedModuleArchive(archivePath, staging);
+    const root = await findArchiveRoot(staging);
+    const components = orderComponents(await componentDirectories(root));
+    const deployments = await deploymentDefinitions(root);
+    const componentPayload: ComponentPayload[] = components.map((component) => ({ name: component.name, directory: component.directory.slice(root.length).replace(/^\//, ""), source: component.source, dependsOn: component.dependsOn }));
+    const currentNames = new Set(deployments.map((deployment) => deployment.name));
+    const removedDeployments = await removedStackDeployments(stack.id, currentNames);
+    const preparedDeployments: PreparedDeployment[] = [
+      ...deployments.map((deployment): PreparedDeployment => ({ name: deployment.name, destroy: deployment.destroy, components: componentPayload, archivePath })),
+      ...removedDeployments,
+    ];
+    if (await context.canceled()) return undefined;
+    if (components[0] === undefined) throw new Error("Stack configuration contains no components");
+    return { componentPayload, preparedDeployments };
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
+async function clearPreviousStackDeployments(tx: typeof db, stackId: string, configurationId: string): Promise<void> {
+  const oldGroups = await tx.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, stackId), eq(stackRecords.parentId, configurationId), eq(stackRecords.recordType, "stack-deployment-groups")), columns: { id: true } });
+  const groupIds = oldGroups.map((group) => group.id);
+  if (groupIds.length === 0) return;
+  const oldRuns = await tx.query.stackRecords.findMany({ where: and(inArray(stackRecords.parentId, groupIds), eq(stackRecords.recordType, "stack-deployment-runs")), columns: { id: true } });
+  const oldRunIds = oldRuns.map((run) => run.id);
+  const oldSteps = oldRunIds.length === 0 ? [] : await tx.query.stackRecords.findMany({ where: and(inArray(stackRecords.parentId, oldRunIds), eq(stackRecords.recordType, "stack-deployment-steps")), columns: { id: true } });
+  const stepIds = oldSteps.map((step) => step.id);
+  if (stepIds.length > 0) await tx.update(stackAgentJobs).set({ status: "canceled", agentId: null, completedAt: Date.now(), updatedAt: Date.now() }).where(inArray(stackAgentJobs.stepId, stepIds));
+  if (oldRunIds.length > 0) {
+    await tx.update(stackAgentJobs).set({ status: "canceled", agentId: null, completedAt: Date.now(), updatedAt: Date.now() }).where(inArray(stackAgentJobs.deploymentRunId, oldRunIds));
+    await tx.update(stackStateLocks).set({ runId: null, leaseExpiresAt: null, releasedAt: Date.now(), updatedAt: Date.now() }).where(inArray(stackStateLocks.runId, oldRunIds));
+    await tx.update(durableJobs).set({ status: "canceled", updatedAt: Date.now() }).where(and(
+      eq(durableJobs.kind, "stack-deployment"),
+      inArray(durableJobs.status, ["queued", "running"]),
+      inArray(durableJobs.dedupeKey, oldRunIds.map((runId) => `stack-run:${runId}`)),
+    ));
+  }
+  if (stepIds.length > 0) await tx.delete(stackRecords).where(inArray(stackRecords.parentId, stepIds));
+  if (oldRunIds.length > 0) await tx.delete(stackRecords).where(inArray(stackRecords.parentId, oldRunIds));
+  await tx.delete(stackRecords).where(inArray(stackRecords.parentId, groupIds));
+  await tx.delete(stackRecords).where(inArray(stackRecords.id, groupIds));
+}
+
+async function insertPreparedDeployment(
+  tx: typeof db,
+  stack: Stack,
+  configuration: Readonly<typeof stackRecords.$inferSelect>,
+  initialPayload: Readonly<Record<string, unknown>>,
+  deployment: PreparedDeployment,
+  runIds: string[],
+): Promise<void> {
+  const deploymentFirst = deployment.components[0];
+  if (deploymentFirst === undefined) throw new Error(`Deployment ${deployment.name} contains no components`);
+  const groupId = `sdg-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+  const deploymentRunId = `sdr-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+  const stepId = `sds-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+  const now = Date.now();
+  await tx.insert(stackRecords).values({ id: groupId, stackId: stack.id, parentId: configuration.id, recordType: "stack-deployment-groups", name: deployment.name, status: "pending", payload: { "deployment-group-config": { "auto-approve-checks": [] }, latestRunId: deploymentRunId }, createdAt: now, updatedAt: now });
+  await tx.insert(stackRecords).values({ id: deploymentRunId, stackId: stack.id, parentId: groupId, recordType: "stack-deployment-runs", name: deployment.name, status: "planning", payload: { configurationId: configuration.id, components: deployment.components, archivePath: deployment.archivePath, "plan-mode": initialPayload.speculative === true ? "speculative" : "normal", component: deploymentFirst.name, componentIndex: 0, cycle: 0, destroy: deployment.destroy || initialPayload["destroy-all"] === true }, createdAt: now, updatedAt: now });
+  await tx.insert(stackRecords).values({ id: stepId, stackId: stack.id, parentId: deploymentRunId, recordType: "stack-deployment-steps", name: deploymentFirst.name, status: "queued", payload: { "operation-type": "plan", phase: "plan", componentIndex: 0, "requires-state-lock": false, "has-changes": false, "deferred-changes": false }, createdAt: now, updatedAt: now });
+  runIds.push(deploymentRunId);
+}
+
+async function persistPreparedStackDeployments(
+  stack: Stack,
+  configuration: Readonly<typeof stackRecords.$inferSelect>,
+  initialPayload: Readonly<Record<string, unknown>>,
+  deployments: readonly PreparedDeployment[],
+  context: DurableJobContext,
+): Promise<readonly string[]> {
+  const runIds: string[] = [];
+  await db.transaction(async (transaction): Promise<void> => {
+    const tx = transaction as unknown as typeof db;
+    await clearPreviousStackDeployments(tx, stack.id, configuration.id);
+    for (const deployment of deployments) {
+      if (await context.canceled()) throw new Error("Stack configuration preparation was canceled");
+      await insertPreparedDeployment(tx, stack, configuration, initialPayload, deployment, runIds);
+    }
+  });
+  return runIds;
+}
+
 export async function runStackConfigurationJob(job: Job, context: DurableJobContext): Promise<void> {
   const configurationId = payloadId(job, "configurationId");
   const configuration = await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, configurationId), eq(stackRecords.recordType, "stack-configurations")) });
@@ -799,83 +1057,12 @@ export async function runStackConfigurationJob(job: Job, context: DurableJobCont
   const archivePath = typeof initialPayload.archivePath === "string" && initialPayload.archivePath !== "" ? initialPayload.archivePath : join(STACK_STORAGE_DIR, `${configuration.id}.tar.gz`);
   await db.update(stackRecords).set({ status: "preparing", updatedAt: Date.now() }).where(eq(stackRecords.id, configuration.id));
   try {
-    if (!isStackStoragePath(archivePath)) throw new Error("The Stack configuration archive path is invalid");
-    if (initialPayload.source === "fetch") await fetchStackArchive(stack, archivePath);
-    if (!(await Bun.file(archivePath).exists())) throw new Error("The Stack configuration archive is unavailable");
-    await validateModuleArchive(archivePath);
-    const staging = await mkdtemp(join(tmpdir(), "terrence-stack-config-"));
-    try {
-      await extractValidatedModuleArchive(archivePath, staging);
-      const root = await findArchiveRoot(staging);
-      const components = orderComponents(await componentDirectories(root));
-      const deployments = await deploymentDefinitions(root);
-      const componentPayload = components.map((component) => ({ name: component.name, directory: component.directory.slice(root.length).replace(/^\//, ""), source: component.source, dependsOn: component.dependsOn }));
-      const currentNames = new Set(deployments.map((deployment) => deployment.name));
-      const previousGroups = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, stack.id), eq(stackRecords.recordType, "stack-deployment-groups")), orderBy: [desc(stackRecords.createdAt)] });
-      const seenPreviousNames = new Set<string>();
-      const removedDeployments: PreparedDeployment[] = [];
-      for (const group of previousGroups) {
-        const name = group.name;
-        if (name === null || currentNames.has(name) || seenPreviousNames.has(name) || group.status === "succeeded") continue;
-        seenPreviousNames.add(name);
-        if (group.parentId === null) continue;
-        const previousConfiguration = await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, group.parentId), eq(stackRecords.recordType, "stack-configurations")) });
-        const previousComponents = storedComponents((previousConfiguration?.payload ?? {}).components);
-        const previousArchive = typeof (previousConfiguration?.payload ?? {}).archivePath === "string" ? (previousConfiguration?.payload ?? {}).archivePath as string : "";
-        if (previousConfiguration === undefined || previousComponents.length === 0 || !isStackStoragePath(previousArchive)) continue;
-        removedDeployments.push({ name, destroy: true, components: [...previousComponents].reverse(), archivePath: previousArchive });
-      }
-      const preparedDeployments: PreparedDeployment[] = [
-        ...deployments.map((deployment): PreparedDeployment => ({ name: deployment.name, destroy: deployment.destroy, components: componentPayload, archivePath })),
-        ...removedDeployments,
-      ];
-      if (await context.canceled()) return;
-      const first = components[0];
-      if (first === undefined) throw new Error("Stack configuration contains no components");
-      await db.update(stackRecords).set({ status: "ready", payload: { ...initialPayload, archivePath, components: componentPayload, deployments: preparedDeployments.map(({ name, destroy }) => ({ name, destroy })) }, updatedAt: Date.now() }).where(eq(stackRecords.id, configuration.id));
-      const runIds: string[] = [];
-      await db.transaction(async (tx): Promise<void> => {
-        const oldGroups = await tx.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, stack.id), eq(stackRecords.parentId, configuration.id), eq(stackRecords.recordType, "stack-deployment-groups")), columns: { id: true } });
-        const groupIds = oldGroups.map((group) => group.id);
-        if (groupIds.length > 0) {
-          const oldRuns = await tx.query.stackRecords.findMany({ where: and(inArray(stackRecords.parentId, groupIds), eq(stackRecords.recordType, "stack-deployment-runs")), columns: { id: true } });
-          const oldRunIds = oldRuns.map((run) => run.id);
-          const oldSteps = oldRunIds.length === 0 ? [] : await tx.query.stackRecords.findMany({ where: and(inArray(stackRecords.parentId, oldRunIds), eq(stackRecords.recordType, "stack-deployment-steps")), columns: { id: true } });
-          const stepIds = oldSteps.map((step) => step.id);
-          if (stepIds.length > 0) await tx.update(stackAgentJobs).set({ status: "canceled", agentId: null, completedAt: Date.now(), updatedAt: Date.now() }).where(inArray(stackAgentJobs.stepId, stepIds));
-          if (oldRunIds.length > 0) {
-            await tx.update(stackAgentJobs).set({ status: "canceled", agentId: null, completedAt: Date.now(), updatedAt: Date.now() }).where(inArray(stackAgentJobs.deploymentRunId, oldRunIds));
-            await tx.update(stackStateLocks).set({ runId: null, leaseExpiresAt: null, releasedAt: Date.now(), updatedAt: Date.now() }).where(inArray(stackStateLocks.runId, oldRunIds));
-            await tx.update(durableJobs).set({ status: "canceled", updatedAt: Date.now() }).where(and(
-              eq(durableJobs.kind, "stack-deployment"),
-              inArray(durableJobs.status, ["queued", "running"]),
-              inArray(durableJobs.dedupeKey, oldRunIds.map((runId) => `stack-run:${runId}`)),
-            ));
-          }
-          if (stepIds.length > 0) await tx.delete(stackRecords).where(inArray(stackRecords.parentId, stepIds));
-          if (oldRunIds.length > 0) await tx.delete(stackRecords).where(inArray(stackRecords.parentId, oldRunIds));
-          await tx.delete(stackRecords).where(inArray(stackRecords.parentId, groupIds));
-          await tx.delete(stackRecords).where(inArray(stackRecords.id, groupIds));
-        }
-        for (const deployment of preparedDeployments) {
-          if (await context.canceled()) throw new Error("Stack configuration preparation was canceled");
-          const deploymentFirst = deployment.components[0];
-          if (deploymentFirst === undefined) throw new Error(`Deployment ${deployment.name} contains no components`);
-          const groupId = `sdg-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
-          const deploymentRunId = `sdr-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
-          const stepId = `sds-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
-          const now = Date.now();
-          await tx.insert(stackRecords).values({ id: groupId, stackId: stack.id, parentId: configuration.id, recordType: "stack-deployment-groups", name: deployment.name, status: "pending", payload: { "deployment-group-config": { "auto-approve-checks": [] }, latestRunId: deploymentRunId }, createdAt: now, updatedAt: now });
-          await tx.insert(stackRecords).values({ id: deploymentRunId, stackId: stack.id, parentId: groupId, recordType: "stack-deployment-runs", name: deployment.name, status: "planning", payload: { configurationId: configuration.id, components: deployment.components, archivePath: deployment.archivePath, "plan-mode": initialPayload.speculative === true ? "speculative" : "normal", component: deploymentFirst.name, componentIndex: 0, cycle: 0, destroy: deployment.destroy || initialPayload["destroy-all"] === true }, createdAt: now, updatedAt: now });
-          await tx.insert(stackRecords).values({ id: stepId, stackId: stack.id, parentId: deploymentRunId, recordType: "stack-deployment-steps", name: deploymentFirst.name, status: "queued", payload: { "operation-type": "plan", phase: "plan", componentIndex: 0, "requires-state-lock": false, "has-changes": false, "deferred-changes": false }, createdAt: now, updatedAt: now });
-          runIds.push(deploymentRunId);
-        }
-      });
-      for (const runId of runIds) await scheduleStackRun(runId);
-      await db.update(stackRecords).set({ status: "completed", updatedAt: Date.now() }).where(eq(stackRecords.id, configuration.id));
-    } finally {
-      await rm(staging, { recursive: true, force: true });
-    }
+    const prepared = await prepareStackConfiguration(stack, initialPayload, archivePath, context);
+    if (prepared === undefined) return;
+    await db.update(stackRecords).set({ status: "ready", payload: { ...initialPayload, archivePath, components: prepared.componentPayload, deployments: prepared.preparedDeployments.map(({ name, destroy }) => ({ name, destroy })) }, updatedAt: Date.now() }).where(eq(stackRecords.id, configuration.id));
+    const runIds = await persistPreparedStackDeployments(stack, configuration, initialPayload, prepared.preparedDeployments, context);
+    for (const runId of runIds) await scheduleStackRun(runId);
+    await db.update(stackRecords).set({ status: "completed", updatedAt: Date.now() }).where(eq(stackRecords.id, configuration.id));
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : String(error);
     if (await context.canceled()) return;
