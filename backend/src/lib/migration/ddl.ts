@@ -83,9 +83,17 @@ function parseIdentifier(sql: string, start: number): { name: string; end: numbe
   const rest = sql.slice(start);
   const match = IDENTIFIER.exec(rest);
   if (match === null) return null;
-  const name = match[1] ?? match[2] ?? match[3] ?? "";
+  const name = match[1] !== undefined
+    ? match[1].replaceAll('""', '"')
+    : match[2] !== undefined
+      ? match[2].replaceAll("``", "`")
+      : match[3] ?? "";
   const raw = match[0];
   return { name, end: start + raw.length };
+}
+
+function quoteIdentifier(name: string): string {
+  return `"${name.replaceAll('"', '""')}"`;
 }
 
 /** Scan to the matching close paren of the open paren at `openIndex`. */
@@ -266,16 +274,6 @@ function parseReferenceColumns(sql: string, open: number, close: number): string
   return cols;
 }
 
-function buildReferenceColumns(cols: readonly string[]): string[] | null {
-  const refColumns: string[] = [];
-  for (const col of cols) {
-    const parsed = parseIdentifier(col, 0);
-    if (parsed === null || parsed.end !== col.length) return null;
-    refColumns.push(parsed.name);
-  }
-  return refColumns;
-}
-
 function mapReferenceActionValue(value: string): string | null {
   if (value === "no action") return null;
   if (value === "cascade") return "CASCADE";
@@ -321,10 +319,8 @@ function parseReferenceClause(sql: string, start: number): { fk: ForeignKeyDef; 
   if (close < 0) return null;
   const cols = parseReferenceColumns(sql, pos, close);
   if (cols === null) return null;
-  const refColumns = buildReferenceColumns(cols);
-  if (refColumns === null) return null;
   const actions = parseReferenceActions(sql, close + 1);
-  return { fk: { columns: cols.map((c): string => c.trim()), table: table.name, refColumns, onUpdate: actions.onUpdate, onDelete: actions.onDelete }, end: actions.end };
+  return { fk: { columns: cols, table: table.name, refColumns: cols, onUpdate: actions.onUpdate, onDelete: actions.onDelete }, end: actions.end };
 }
 
 function scanDefaultExprEnd(sql: string, start: number): number {
@@ -423,10 +419,10 @@ function tryParseDefault(sql: string, pos: number, result: { defaultExpr: string
 }
 
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
-function tryParseReferences(sql: string, pos: number, result: { references: ForeignKeyDef | null }): number | null {
+function tryParseReferences(sql: string, pos: number, result: { references: ForeignKeyDef | null }, columnName?: string): number | null {
   const references = parseReferenceClause(sql, pos);
   if (references === null) return null;
-  result.references = references.fk;
+  result.references = columnName === undefined ? references.fk : { ...references.fk, columns: [columnName] };
   return references.end;
 }
 
@@ -461,7 +457,7 @@ function tryParseOnConflictStep(pos: number, rest: string): number | null {
 }
 
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
-function parseConstraintTailStep(sql: string, pos: number, result: { notNull: boolean; primaryKey: boolean; unique: boolean; defaultExpr: string | null; defaultDropped: boolean; references: ForeignKeyDef | null; checksSkipped: number; collate: string | null }): { nextPos: number; shouldBreak: boolean } | null {
+function parseConstraintTailStep(sql: string, pos: number, result: { notNull: boolean; primaryKey: boolean; unique: boolean; defaultExpr: string | null; defaultDropped: boolean; references: ForeignKeyDef | null; checksSkipped: number; collate: string | null }, columnName?: string): { nextPos: number; shouldBreak: boolean } | null {
   const rest = sql.slice(pos);
   const primary = tryParsePrimaryKeyStep(pos, rest, result);
   if (primary !== null) return { nextPos: primary, shouldBreak: false };
@@ -478,7 +474,7 @@ function parseConstraintTailStep(sql: string, pos: number, result: { notNull: bo
   if (tryParseGenerated(rest, result)) return { nextPos: pos, shouldBreak: true };
   const defEnd = tryParseDefault(sql, pos, result);
   if (defEnd !== null) return { nextPos: defEnd, shouldBreak: false };
-  const refEnd = tryParseReferences(sql, pos, result);
+  const refEnd = tryParseReferences(sql, pos, result, columnName);
   if (refEnd !== null) return { nextPos: refEnd, shouldBreak: false };
   const conflict = tryParseOnConflictStep(pos, rest);
   if (conflict !== null) return { nextPos: conflict, shouldBreak: false };
@@ -487,7 +483,7 @@ function parseConstraintTailStep(sql: string, pos: number, result: { notNull: bo
   return null;
 }
 
-function parseConstraintTail(sql: string, start: number): {
+function parseConstraintTail(sql: string, start: number, columnName?: string): {
   notNull: boolean;
   primaryKey: boolean;
   unique: boolean;
@@ -511,7 +507,7 @@ function parseConstraintTail(sql: string, start: number): {
   for (;;) {
     while (pos < sql.length && /\s/.test(sql[pos] ?? "")) pos += 1;
     if (pos >= sql.length) break;
-    const step = parseConstraintTailStep(sql, pos, result);
+    const step = parseConstraintTailStep(sql, pos, result, columnName);
     if (step === null) break;
     if (step.shouldBreak) break;
     pos = step.nextPos;
@@ -590,7 +586,7 @@ function parseColumnSegment(segment: string): ColumnDef | null {
   if (declaredRaw === "") return null;
   const declaredType = normalizeType(declaredRaw);
   pos += declaredRaw.length;
-  const constraints = parseConstraintTail(segment, pos);
+  const constraints = parseConstraintTail(segment, pos, ident.name);
   return {
     name: ident.name,
     declaredType,
@@ -691,7 +687,7 @@ export function postgresColumnType(def: ColumnDef, drizzleMode: DrizzleColumnMod
 
 /** Generate the idempotent CREATE TABLE statement for PostgreSQL. */
 function buildColumnLine(column: ColumnDef, pg: PostgresColumnType, table: TableDef): string {
-  const parts: string[] = [`"${column.name}"`, pg.sqlType];
+  const parts: string[] = [quoteIdentifier(column.name), pg.sqlType];
   if (pg.identity) parts.push("GENERATED BY DEFAULT AS IDENTITY");
   if (column.primaryKey && table.compositePk === null) parts.push("PRIMARY KEY");
   if (column.notNull) parts.push("NOT NULL");
@@ -709,10 +705,10 @@ function buildColumnLine(column: ColumnDef, pg: PostgresColumnType, table: Table
 function buildTableConstraints(table: TableDef): string[] {
   const lines: string[] = [];
   if (table.compositePk !== null && table.compositePk.length > 0) {
-    lines.push(`CONSTRAINT "pk_${table.name}" PRIMARY KEY (${table.compositePk.map((c): string => `"${c}"`).join(", ")})`);
+    lines.push(`CONSTRAINT ${quoteIdentifier(`pk_${table.name}`)} PRIMARY KEY (${table.compositePk.map(quoteIdentifier).join(", ")})`);
   }
   table.tableUniques.forEach((cols, index): void => {
-    lines.push(`CONSTRAINT "uq_${table.name}_${index}" UNIQUE (${cols.map((c): string => `"${c}"`).join(", ")})`);
+    lines.push(`CONSTRAINT ${quoteIdentifier(`uq_${table.name}_${index}`)} UNIQUE (${cols.map(quoteIdentifier).join(", ")})`);
   });
   return lines;
 }
@@ -724,7 +720,7 @@ export function generateCreateTableSql(table: TableDef, modes: Readonly<Readonly
     columnLines.push(buildColumnLine(column, pg, table));
   }
   columnLines.push(...buildTableConstraints(table));
-  return `CREATE TABLE IF NOT EXISTS "${table.name}" (
+  return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(table.name)} (
   ${columnLines.join(",\n  ")}
 )`;
 }
@@ -740,9 +736,10 @@ export function generateForeignKeySql(table: TableDef): string[] {
     const name = `fk_${table.name}_${index}`;
     const onUpdate = fk.onUpdate === null ? "" : ` ON UPDATE ${fk.onUpdate}`;
     const onDelete = fk.onDelete === null ? "" : ` ON DELETE ${fk.onDelete}`;
+    const constraintName = quoteIdentifier(name);
     statements.push(
-      `ALTER TABLE "${table.name}" DROP CONSTRAINT IF EXISTS "${name}";`,
-      `ALTER TABLE "${table.name}" ADD CONSTRAINT "${name}" FOREIGN KEY (${fk.columns.map((c): string => `"${c}"`).join(", ")}) REFERENCES "${fk.table}" (${fk.refColumns.map((c): string => `"${c}"`).join(", ")})${onUpdate}${onDelete} NOT VALID;`,
+      `ALTER TABLE ${quoteIdentifier(table.name)} DROP CONSTRAINT IF EXISTS ${constraintName};`,
+      `ALTER TABLE ${quoteIdentifier(table.name)} ADD CONSTRAINT ${constraintName} FOREIGN KEY (${fk.columns.map(quoteIdentifier).join(", ")}) REFERENCES ${quoteIdentifier(fk.table)} (${fk.refColumns.map(quoteIdentifier).join(", ")})${onUpdate}${onDelete} NOT VALID;`,
     );
   });
   return statements;

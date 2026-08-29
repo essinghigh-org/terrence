@@ -1079,7 +1079,7 @@ function eligiblePreviousDeploymentName(
   seenPreviousNames: Readonly<ReadonlySet<string>>,
 ): string | undefined {
   const name = group.name;
-  if (name === null || currentNames.has(name) || seenPreviousNames.has(name) || group.status === "succeeded") return undefined;
+  if (name === null || currentNames.has(name) || seenPreviousNames.has(name)) return undefined;
   return name;
 }
 
