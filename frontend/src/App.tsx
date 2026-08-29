@@ -92,7 +92,6 @@ const AdminSmtpSettings = lazyView(() => import("./views/AdminSmtpSettings"), "A
 const AdminScimSettings = lazyView(() => import("./views/AdminScimSettings"), "AdminScimSettings");
 const ModuleSharing = lazyView(() => import("./views/ModuleSharing"), "ModuleSharing");
 const NoCodeProvisioning = lazyView(() => import("./views/NoCodeProvisioning"), "NoCodeProvisioning");
-const Explorer = lazyView(() => import("./views/Explorer"), "Explorer");
 const ChangeCalendar = lazyView(() => import("./views/ChangeCalendar"), "ChangeCalendar");
 const ChangeRequests = lazyView(() => import("./views/ChangeRequests"), "ChangeRequests");
 const ChangeRequestDetail = lazyView(() => import("./views/ChangeRequestDetail"), "ChangeRequestDetail");
@@ -237,7 +236,6 @@ function AppRoutes(): JSX.Element {
         <Route path=":orgName" element={<Workspaces />} />
         <Route path=":orgName/workspaces" element={<Workspaces />} />
         <Route path=":orgName/registry" element={<Registry />} />
-        <Route path=":orgName/explorer" element={<Explorer />} />
         <Route path=":orgName/registry/modules/:namespace/:name/:provider" element={<RegistryModuleDetail />} />
         <Route path=":orgName/registry/providers/:namespace/:name" element={<RegistryProviderDetail />} />
         <Route path=":orgName/no-code" element={<NoCodeProvisioning />} />
