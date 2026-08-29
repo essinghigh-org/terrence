@@ -258,6 +258,24 @@ export function destroyRunCgroup(runId: string, env: NodeJS.ProcessEnv = process
   removeCgroupDir(path);
 }
 
+function cgroupErrorCode(error: unknown): string | undefined {
+  return error !== null && typeof error === "object" && "code" in error ? (error as { code?: string }).code : undefined;
+}
+
+function removePlainCgroupFiles(path: string): boolean {
+  try {
+    for (const entry of readdirSync(path)) {
+      const child = join(path, entry);
+      const stat = lstatSync(child);
+      if (!stat.isDirectory()) unlinkSync(child);
+    }
+    rmdirSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Delete an empty cgroup directory. `rmdirSync` (not rmSync) is required:
  * cgroup directories reject unlink(2) — only rmdir(2) works, and the kernel
@@ -276,33 +294,16 @@ function removeCgroupDir(path: string): boolean {
   } catch (error: unknown) {
     // ENOENT is fine (kernel removed it already, or a fake root without the
     // file); any other read failure means we cannot prove it drained.
-    const code = error !== null && typeof error === "object" && "code" in error ? (error as { code?: string }).code : undefined;
-    if (code !== "ENOENT") return false;
+    if (cgroupErrorCode(error) !== "ENOENT") return false;
   }
   try {
     rmdirSync(path);
     return true;
   } catch (error: unknown) {
     // ENOENT means it is already gone — success from the caller's viewpoint.
-    if (error !== null && typeof error === "object" && "code" in error && (error as { code?: string }).code === "ENOENT") {
-      return true;
-    }
-    if (error !== null && typeof error === "object" && "code" in error && (error as { code?: string }).code === "ENOTEMPTY") {
-      // Kernel cgroups never reach here: their files are virtual and rmdir
-      // succeeds once drained. Plain-file leftovers (fake/test roots) can be
-      // cleared by hand before a final rmdir.
-      try {
-        for (const entry of readdirSync(path)) {
-          const child = join(path, entry);
-          const stat = lstatSync(child);
-          if (!stat.isDirectory()) unlinkSync(child);
-        }
-        rmdirSync(path);
-        return true;
-      } catch {
-        return false;
-      }
-    }
+    const code = cgroupErrorCode(error);
+    if (code === "ENOENT") return true;
+    if (code === "ENOTEMPTY") return removePlainCgroupFiles(path);
     /* EBUSY/EPERM: still populated or held open by a liveness watcher.
      * Reported to the caller, which must not reuse the group. */
     return false;
