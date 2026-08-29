@@ -1214,86 +1214,98 @@ async function fetchDefaultBranch(workspace: DeepReadonly<typeof workspaces.$inf
   return oauthDefaultBranch(workspace, vcs, vcs.identifier, encodedPath);
 }
 
+function latestShaFromBody(provider: VcsProvider, body: Record<string, unknown> | Record<string, unknown>[]): string | undefined {
+  if (provider === "github") {
+    const commits = body as Record<string, unknown>[];
+    const sha = commits[0]?.sha;
+    return typeof sha === "string" ? sha : undefined;
+  }
+  if (provider === "gitlab") {
+    const sha = (body as Record<string, unknown>).id;
+    return typeof sha === "string" ? sha : undefined;
+  }
+  const target = (body as Record<string, unknown>).target as Record<string, unknown> | undefined;
+  return typeof target?.hash === "string" ? target.hash : undefined;
+}
+
+async function githubAppLatestCommit(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  vcs: VcsRepo,
+  identifier: string,
+  encodedPath: string,
+  branch: string,
+): Promise<string | undefined> {
+  const installationRef = vcs.githubAppInstallationId;
+  if (installationRef === undefined || installationRef === "") return undefined;
+  const installation = await db.query.githubAppInstallations.findFirst({
+    where: and(eq(githubAppInstallations.id, installationRef), eq(githubAppInstallations.orgId, workspace.orgId)),
+  });
+  if (installation === undefined) return undefined;
+  const token = await getGitHubAppAccessToken(installation.installationId);
+  if (token === null) return undefined;
+  const apiUrl = providerApiUrl(process.env.GITHUB_APP_API_URL ?? process.env.GITHUB_API_URL ?? null, "https://api.github.com");
+  if (apiUrl === undefined) return undefined;
+  const url = `${apiUrl}/repos/${encodedPath}/commits?sha=${encodeURIComponent(branch)}&per_page=1`;
+  const response = await fetch(url, {
+    headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json" },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (response.ok) {
+    const body = await response.json() as Record<string, unknown>[];
+    const sha = body[0]?.sha;
+    if (typeof sha === "string") return sha;
+    console.error(`[terrence] latestCommitSha: unexpected response body for ${identifier}`);
+  } else {
+    const errText = await response.text().catch((): string => "");
+    console.error(`[terrence] latestCommitSha: GitHub API returned ${response.status} for ${url}: ${errText.slice(0, 500)}`);
+  }
+  return undefined;
+}
+
+async function oauthLatestCommit(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  vcs: VcsRepo,
+  identifier: string,
+  encodedPath: string,
+  branch: string,
+): Promise<string | undefined> {
+  const tokenId = vcs.oauthTokenId;
+  if (tokenId === undefined || tokenId === "") return undefined;
+  const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, tokenId) });
+  if (token === undefined) return undefined;
+  const client = await db.query.oauthClients.findFirst({
+    where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
+  });
+  if (client === undefined) return undefined;
+  const provider = providerForOAuthClient(client.serviceProvider);
+  const apiUrl = providerApiUrl(client.apiUrl, provider === "github" ? "https://api.github.com" : "");
+  if (apiUrl === undefined || provider === undefined) return undefined;
+  const secret = await decryptSecret(token.token).catch((): undefined => undefined);
+  if (secret === undefined) return undefined;
+  const url = provider === "github"
+    ? `${apiUrl}/repos/${encodedPath}/commits?sha=${encodeURIComponent(branch)}&per_page=1`
+    : provider === "gitlab"
+      ? `${apiUrl}/projects/${encodeURIComponent(identifier)}/repository/commits?ref_name=${encodeURIComponent(branch)}&per_page=1`
+      : `${apiUrl}/repositories/${encodeURIComponent(identifier)}/refs/branches/${encodeURIComponent(branch)}`;
+  const accept = provider === "github" ? "application/vnd.github.v3+json" : "application/json";
+  const response = await fetch(url, {
+    headers: { Authorization: "Bearer " + secret, Accept: accept },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) return undefined;
+  const body = await response.json() as Record<string, unknown> | Record<string, unknown>[];
+  return latestShaFromBody(provider, body);
+}
+
 /** Get the latest commit SHA on a branch for a VCS workspace. */
 async function latestCommitSha(workspace: DeepReadonly<typeof workspaces.$inferSelect>, branch: string): Promise<string | undefined> {
   const vcs = workspace.vcsRepo;
   if (vcs?.identifier === undefined) return undefined;
-  const repoParts = vcs.identifier.split("/");
-  const encodedPath = repoParts.map(encodeURIComponent).join("/");
-
-  const installationRef = vcs.githubAppInstallationId;
-  if (installationRef !== undefined && installationRef !== "") {
-    const installation = await db.query.githubAppInstallations.findFirst({
-      where: and(eq(githubAppInstallations.id, installationRef), eq(githubAppInstallations.orgId, workspace.orgId)),
-    });
-    if (installation !== undefined) {
-      const token = await getGitHubAppAccessToken(installation.installationId);
-      if (token !== null) {
-        const apiUrl = providerApiUrl(process.env.GITHUB_APP_API_URL ?? process.env.GITHUB_API_URL ?? null, "https://api.github.com");
-        if (apiUrl !== undefined) {
-          const url = `${apiUrl}/repos/${encodedPath}/commits?sha=${encodeURIComponent(branch)}&per_page=1`;
-          const response = await fetch(url, {
-            headers: { Authorization: "Bea" + "rer " + token, Accept: "application/vnd.github.v3+json" },
-            signal: AbortSignal.timeout(10_000),
-          });
-          if (response.ok) {
-            const body = await response.json() as Record<string, unknown>[];
-            const sha = body[0]?.sha;
-            if (typeof sha === "string") return sha;
-            console.error(`[terrence] latestCommitSha: unexpected response body for ${vcs.identifier}`);
-          } else {
-            const errText = await response.text().catch((): string => "");
-            console.error(`[terrence] latestCommitSha: GitHub API returned ${response.status} for ${url}: ${errText.slice(0, 500)}`);
-          }
-        }
-      }
-    }
-  }
-
-  const tokenId = vcs.oauthTokenId;
-  if (tokenId !== undefined && tokenId !== "") {
-    const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, tokenId) });
-    if (token !== undefined) {
-      const client = await db.query.oauthClients.findFirst({
-        where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
-      });
-      if (client !== undefined) {
-        const provider = providerForOAuthClient(client.serviceProvider);
-        const apiUrl = providerApiUrl(client.apiUrl, provider === "github" ? "https://api.github.com" : "");
-        if (apiUrl !== undefined && provider !== undefined) {
-          const secret = await decryptSecret(token.token).catch((): undefined => undefined);
-          if (secret !== undefined) {
-            const url = provider === "github"
-              ? `${apiUrl}/repos/${encodedPath}/commits?sha=${encodeURIComponent(branch)}&per_page=1`
-              : provider === "gitlab"
-                ? `${apiUrl}/projects/${encodeURIComponent(vcs.identifier)}/repository/commits?ref_name=${encodeURIComponent(branch)}&per_page=1`
-                : `${apiUrl}/repositories/${encodeURIComponent(vcs.identifier)}/refs/branches/${encodeURIComponent(branch)}`;
-            const accept = provider === "github" ? "application/vnd.github.v3+json" : "application/json";
-            const response = await fetch(url, {
-              headers: { Authorization: "Bea" + "rer " + secret, Accept: accept },
-              signal: AbortSignal.timeout(10_000),
-            });
-            if (response.ok) {
-              const body = await response.json() as Record<string, unknown> | Record<string, unknown>[];
-              if (provider === "github") {
-                const arr = body as Record<string, unknown>[];
-                const sha = arr[0]?.sha;
-                if (typeof sha === "string") return sha;
-              } else if (provider === "gitlab") {
-                const obj = body as Record<string, unknown>;
-                const sha = obj.id;
-                if (typeof sha === "string") return sha;
-              } else {
-                const target = (body as Record<string, unknown>).target as Record<string, unknown> | undefined;
-                if (target?.hash !== undefined && typeof target.hash === "string") return target.hash;
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  return undefined;
+  const identifier = vcs.identifier;
+  const encodedPath = identifier.split("/").map(encodeURIComponent).join("/");
+  const appSha = await githubAppLatestCommit(workspace, vcs, identifier, encodedPath, branch);
+  if (appSha !== undefined) return appSha;
+  return oauthLatestCommit(workspace, vcs, identifier, encodedPath, branch);
 }
 
 /** Create a configuration version from VCS for a manual run, fetching the latest code on the default branch. */
