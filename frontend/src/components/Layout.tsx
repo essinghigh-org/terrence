@@ -1094,7 +1094,6 @@ export function Layout({
       const links = ([
         { label: "Projects", to: `${orgPath}/projects`, icon: FolderGit2 },
         { label: "Workspaces", to: `${orgPath}/workspaces`, icon: Box },
-        { label: "Explorer", to: `${orgPath}/explorer`, icon: Search },
         { label: "Registry", to: `${orgPath}/registry`, icon: Package },
         { label: "No-code modules", to: `${orgPath}/no-code`, icon: PackageOpen },
         { label: "Change calendar", to: `${orgPath}/calendar`, icon: Calendar },
