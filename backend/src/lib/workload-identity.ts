@@ -364,6 +364,71 @@ function audienceFor(provider: CredentialProvider, values: Readonly<Record<strin
   return typeof configured === "string" && configured.trim() !== "" ? configured.trim() : `${provider}.workload.identity`;
 }
 
+type ProviderEnvironmentContext = Readonly<{
+  values: Readonly<Record<string, unknown>>;
+  audience: string;
+  token: IssuedIdentityToken;
+  tokenPath: string;
+  set: (key: string, value: string) => void;
+}>;
+
+function setAwsProviderEnvironment({ values, audience, tokenPath, set }: ProviderEnvironmentContext): void {
+  set("TFC_AWS_PROVIDER_AUTH", "true");
+  if (typeof values["role-arn"] === "string") set("TFC_AWS_RUN_ROLE_ARN", values["role-arn"]);
+  set("TFC_AWS_WORKLOAD_IDENTITY_AUDIENCE", audience);
+  set("AWS_WEB_IDENTITY_TOKEN_FILE", tokenPath);
+}
+
+function setGcpProviderEnvironment({ values, audience, tokenPath, set }: ProviderEnvironmentContext): void {
+  set("TFC_GCP_PROVIDER_AUTH", "true");
+  if (typeof values["service-account-email"] === "string") set("TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL", values["service-account-email"]);
+  if (typeof values["workload-provider-name"] === "string") set("TFC_GCP_WORKLOAD_PROVIDER_NAME", values["workload-provider-name"]);
+  set("TFC_GCP_WORKLOAD_IDENTITY_AUDIENCE", audience);
+  set("GOOGLE_OIDC_TOKEN_FILE", tokenPath);
+}
+
+function setAzureProviderEnvironment({ values, audience, tokenPath, set }: ProviderEnvironmentContext): void {
+  set("TFC_AZURE_PROVIDER_AUTH", "true");
+  if (typeof values["client-id"] === "string") set("TFC_AZURE_RUN_CLIENT_ID", values["client-id"]);
+  if (typeof values["tenant-id"] === "string") set("TFC_AZURE_RUN_TENANT_ID", values["tenant-id"]);
+  if (typeof values["subscription-id"] === "string") set("TFC_AZURE_RUN_SUBSCRIPTION_ID", values["subscription-id"]);
+  set("TFC_AZURE_WORKLOAD_IDENTITY_AUDIENCE", audience);
+  set("AZURE_FEDERATED_TOKEN_FILE", tokenPath);
+}
+
+function setVaultProviderEnvironment({ values, audience, set }: ProviderEnvironmentContext): void {
+  set("TFC_VAULT_PROVIDER_AUTH", "true");
+  if (typeof values.url === "string") set("TFC_VAULT_ADDR", values.url);
+  if (typeof values["role-name"] === "string") set("TFC_VAULT_RUN_ROLE", values["role-name"]);
+  if (typeof values.namespace === "string") set("TFC_VAULT_NAMESPACE", values.namespace);
+  if (typeof values["auth-path"] === "string") set("TFC_VAULT_AUTH_PATH", values["auth-path"]);
+  set("TFC_VAULT_WORKLOAD_IDENTITY_AUDIENCE", audience);
+}
+
+function setHcpProviderEnvironment({ values, audience, set }: ProviderEnvironmentContext): void {
+  set("TFC_HCP_PROVIDER_AUTH", "true");
+  for (const key of ["run-provider-resource-name", "plan-provider-resource-name", "apply-provider-resource-name"] as const) {
+    if (typeof values[key] === "string") set(`TFC_HCP_${key.replaceAll("-", "_").toUpperCase()}`, values[key]);
+  }
+  set("TFC_HCP_WORKLOAD_IDENTITY_AUDIENCE", audience);
+}
+
+function setKubernetesProviderEnvironment({ audience, token, tokenPath, set }: ProviderEnvironmentContext): void {
+  set("TFC_KUBERNETES_PROVIDER_AUTH", "true");
+  set("TFC_KUBERNETES_WORKLOAD_IDENTITY_AUDIENCE", audience);
+  set("TFC_KUBERNETES_WORKLOAD_IDENTITY_TOKEN_FILE", tokenPath);
+  set("KUBE_TOKEN", token.token);
+}
+
+const PROVIDER_ENVIRONMENT_SETTERS: Readonly<Record<CredentialProvider, (context: ProviderEnvironmentContext) => void>> = {
+  aws: setAwsProviderEnvironment,
+  gcp: setGcpProviderEnvironment,
+  azure: setAzureProviderEnvironment,
+  vault: setVaultProviderEnvironment,
+  hcp: setHcpProviderEnvironment,
+  kubernetes: setKubernetesProviderEnvironment,
+};
+
 function setProviderEnvironment(
   provider: CredentialProvider,
   values: Readonly<Record<string, unknown>>,
@@ -381,43 +446,7 @@ function setProviderEnvironment(
     [`TFC_OIDC_TOKEN${suffix}`]: token.token,
   };
   const set = (key: string, value: string): void => { env[`${key}${suffix}`] = value; };
-  if (provider === "aws") {
-    set("TFC_AWS_PROVIDER_AUTH", "true");
-    if (typeof values["role-arn"] === "string") set("TFC_AWS_RUN_ROLE_ARN", values["role-arn"]);
-    set("TFC_AWS_WORKLOAD_IDENTITY_AUDIENCE", audience);
-    set("AWS_WEB_IDENTITY_TOKEN_FILE", tokenPath);
-  } else if (provider === "gcp") {
-    set("TFC_GCP_PROVIDER_AUTH", "true");
-    if (typeof values["service-account-email"] === "string") set("TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL", values["service-account-email"]);
-    if (typeof values["workload-provider-name"] === "string") set("TFC_GCP_WORKLOAD_PROVIDER_NAME", values["workload-provider-name"]);
-    set("TFC_GCP_WORKLOAD_IDENTITY_AUDIENCE", audience);
-    set("GOOGLE_OIDC_TOKEN_FILE", tokenPath);
-  } else if (provider === "azure") {
-    set("TFC_AZURE_PROVIDER_AUTH", "true");
-    if (typeof values["client-id"] === "string") set("TFC_AZURE_RUN_CLIENT_ID", values["client-id"]);
-    if (typeof values["tenant-id"] === "string") set("TFC_AZURE_RUN_TENANT_ID", values["tenant-id"]);
-    if (typeof values["subscription-id"] === "string") set("TFC_AZURE_RUN_SUBSCRIPTION_ID", values["subscription-id"]);
-    set("TFC_AZURE_WORKLOAD_IDENTITY_AUDIENCE", audience);
-    set("AZURE_FEDERATED_TOKEN_FILE", tokenPath);
-  } else if (provider === "vault") {
-    set("TFC_VAULT_PROVIDER_AUTH", "true");
-    if (typeof values.url === "string") set("TFC_VAULT_ADDR", values.url);
-    if (typeof values["role-name"] === "string") set("TFC_VAULT_RUN_ROLE", values["role-name"]);
-    if (typeof values.namespace === "string") set("TFC_VAULT_NAMESPACE", values.namespace);
-    if (typeof values["auth-path"] === "string") set("TFC_VAULT_AUTH_PATH", values["auth-path"]);
-    set("TFC_VAULT_WORKLOAD_IDENTITY_AUDIENCE", audience);
-  } else if (provider === "hcp") {
-    set("TFC_HCP_PROVIDER_AUTH", "true");
-    for (const key of ["run-provider-resource-name", "plan-provider-resource-name", "apply-provider-resource-name"] as const) {
-      if (typeof values[key] === "string") set(`TFC_HCP_${key.replaceAll("-", "_").toUpperCase()}`, values[key]);
-    }
-    set("TFC_HCP_WORKLOAD_IDENTITY_AUDIENCE", audience);
-  } else {
-    set("TFC_KUBERNETES_PROVIDER_AUTH", "true");
-    set("TFC_KUBERNETES_WORKLOAD_IDENTITY_AUDIENCE", audience);
-    set("TFC_KUBERNETES_WORKLOAD_IDENTITY_TOKEN_FILE", tokenPath);
-    set("KUBE_TOKEN", token.token);
-  }
+  PROVIDER_ENVIRONMENT_SETTERS[provider]({ values, audience, token, tokenPath, set });
   return env;
 }
 
