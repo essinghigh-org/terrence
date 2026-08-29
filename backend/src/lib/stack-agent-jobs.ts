@@ -20,18 +20,16 @@ export const MAX_STACK_AGENT_RESULT_BYTES = 64 * 1024;
 export const MAX_STACK_AGENT_RESULT_DEPTH = 8;
 export const MAX_STACK_AGENT_RESULT_KEYS = 500;
 
-function isStackResultValueTooLarge(value: unknown, depth: number, keyCount: { count: number }): boolean {
-  if (depth > MAX_STACK_AGENT_RESULT_DEPTH) return true;
-  if (typeof value === "string" && value.length > 16_384) return true;
-  if (typeof value !== "object" || value === null) return false;
-  if (Array.isArray(value)) {
-    if (value.length > 1000) return true;
-    keyCount.count += value.length;
-    if (keyCount.count > MAX_STACK_AGENT_RESULT_KEYS) return true;
-    for (const item of value) if (isStackResultValueTooLarge(item, depth + 1, keyCount)) return true;
-    return false;
-  }
-  const entries = Object.entries(value as Record<string, unknown>);
+function isStackResultArrayTooLarge(value: readonly unknown[], depth: number, keyCount: { count: number }): boolean {
+  if (value.length > 1000) return true;
+  keyCount.count += value.length;
+  if (keyCount.count > MAX_STACK_AGENT_RESULT_KEYS) return true;
+  for (const item of value) if (isStackResultValueTooLarge(item, depth + 1, keyCount)) return true;
+  return false;
+}
+
+function isStackResultObjectTooLarge(value: Record<string, unknown>, depth: number, keyCount: { count: number }): boolean {
+  const entries = Object.entries(value);
   if (entries.length > 200) return true;
   keyCount.count += entries.length;
   if (keyCount.count > MAX_STACK_AGENT_RESULT_KEYS) return true;
@@ -41,6 +39,14 @@ function isStackResultValueTooLarge(value: unknown, depth: number, keyCount: { c
     if (isStackResultValueTooLarge(v, depth + 1, keyCount)) return true;
   }
   return false;
+}
+
+function isStackResultValueTooLarge(value: unknown, depth: number, keyCount: { count: number }): boolean {
+  if (depth > MAX_STACK_AGENT_RESULT_DEPTH) return true;
+  if (typeof value === "string" && value.length > 16_384) return true;
+  if (typeof value !== "object" || value === null) return false;
+  if (Array.isArray(value)) return isStackResultArrayTooLarge(value, depth, keyCount);
+  return isStackResultObjectTooLarge(value as Record<string, unknown>, depth, keyCount);
 }
 
 export function isStackAgentResultValid(result: unknown): boolean {
