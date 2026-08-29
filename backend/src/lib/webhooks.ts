@@ -1423,6 +1423,141 @@ async function providerChangedFiles(
   return undefined;
 }
 
+async function matchingOAuthWorkspaces(
+  provider: OAuthProvider,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: DeepReadonly<WebhookDetails>,
+): Promise<readonly DeepReadonly<typeof workspaces.$inferSelect>[]> {
+  const candidates = await db.query.workspaces.findMany({
+    where: sql`${jsonExtract(workspaces.vcsRepo, '$.identifier')} = ${details.repoFullName}`,
+  });
+  const branchMatchedWorkspaces: DeepReadonly<typeof workspaces.$inferSelect>[] = [];
+  for (const workspace of candidates) {
+    if (workspace.vcsRepo?.identifier !== details.repoFullName) continue;
+    const configuredProvider = await configuredVcsProvider(workspace);
+    if (configuredProvider !== undefined && configuredProvider !== provider) continue;
+    if (await matchesVcsTrigger(workspace, details)) branchMatchedWorkspaces.push(workspace);
+  }
+  return branchMatchedWorkspaces;
+}
+
+type OAuthWebhookRun = Readonly<{
+  configurationVersionId: string;
+  credentials: ProviderCredentials | undefined;
+}>;
+
+function oauthWebhookIngressAttributes(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: DeepReadonly<WebhookDetails>,
+  credentials: ProviderCredentials | undefined,
+): Record<string, unknown> {
+  return {
+    commitSha: details.commitSha,
+    commitUrl: details.commitUrl,
+    commitMessage: details.commitMessage,
+    ...(details.branch === undefined ? {} : { branch: details.branch }),
+    ...(details.tag === undefined ? {} : { tag: details.tag }),
+    senderUsername: details.senderUsername,
+    ...(details.senderAvatarUrl === undefined ? {} : {
+      senderAvatarUrl: details.senderAvatarUrl,
+      senderProviderId: credentials?.oauthClientId === undefined ? "vcs" : `vcs:${credentials.oauthClientId}`,
+    }),
+    cloneUrl: details.cloneUrl,
+    ...(details.pullRequestNumber === undefined ? {} : { pullRequestNumber: details.pullRequestNumber }),
+  };
+}
+
+function oauthWebhookAuditAttributes(
+  provider: OAuthProvider,
+  kind: "push" | "pull_request",
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: DeepReadonly<WebhookDetails>,
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  credentials: ProviderCredentials | undefined,
+): Record<string, unknown> {
+  return {
+    workspaceId: workspace.id,
+    status: "pending",
+    source: provider,
+    triggerReason: kind,
+    actorUsername: details.senderUsername,
+    ...(details.senderAvatarUrl === undefined ? {} : {
+      actorAvatarUrl: details.senderAvatarUrl,
+      actorProviderId: credentials?.oauthClientId === undefined ? "vcs" : `vcs:${credentials.oauthClientId}`,
+    }),
+  };
+}
+
+async function persistOAuthWebhookRun(
+  provider: OAuthProvider,
+  kind: "push" | "pull_request",
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: DeepReadonly<WebhookDetails>,
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  credentials: ProviderCredentials | undefined,
+  configurationVersionId: string,
+  runId: string,
+  isSpeculative: boolean,
+): Promise<void> {
+  await db.insert(configurationVersions).values({
+    id: configurationVersionId,
+    workspaceId: workspace.id,
+    status: "pending",
+    speculative: isSpeculative,
+    source: provider,
+    ingressAttributes: oauthWebhookIngressAttributes(details, credentials),
+    statusTimestamps: {},
+  });
+  await db.insert(runs).values({
+    id: runId,
+    workspaceId: workspace.id,
+    configurationVersionId,
+    message: commitSubject(details.commitMessage),
+    status: "pending",
+    isDestroy: false,
+    autoApply: workspace.autoApply === true && !isSpeculative,
+    planOnly: isSpeculative,
+    statusTimestamps: { "pending-at": new Date().toISOString() },
+    logToken: crypto.randomUUID(),
+    createdAt: Date.now(),
+  });
+  await auditLog("create", "runs", runId, null, workspace.orgId, oauthWebhookAuditAttributes(provider, kind, details, workspace, credentials));
+}
+
+async function createOAuthWebhookRun(
+  provider: OAuthProvider,
+  kind: "push" | "pull_request",
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: DeepReadonly<WebhookDetails>,
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+): Promise<OAuthWebhookRun | undefined> {
+  const isSpeculative = kind === "pull_request";
+  if (isSpeculative && workspace.speculativeEnabled === false) return undefined;
+  if (!isSpeculative && workspace.autoApplyRunTrigger !== true && workspace.queueAllRuns !== true) return undefined;
+  const credentials = await oauthProviderCredentials(workspace, provider);
+  const configurationVersionId = `cv-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
+  const runId = `run-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
+  await persistOAuthWebhookRun(provider, kind, details, workspace, credentials, configurationVersionId, runId, isSpeculative);
+  if (credentials !== undefined) void reportRunVcsStatus(runId, "pending");
+  return { configurationVersionId, credentials };
+}
+
+type OAuthWebhookDownloads = Map<string, { credentials: ProviderCredentials; configurationVersionIds: string[] }>;
+
+function addOAuthWebhookDownload(
+  downloads: OAuthWebhookDownloads,
+  credentials: ProviderCredentials,
+  configurationVersionId: string,
+): void {
+  const downloadKey = `${credentials.apiUrl}\u0000${credentials.token}`;
+  const group = downloads.get(downloadKey);
+  if (group === undefined) {
+    downloads.set(downloadKey, { credentials, configurationVersionIds: [configurationVersionId] });
+  } else {
+    group.configurationVersionIds.push(configurationVersionId);
+  }
+}
+
 async function handleOAuthProviderWebhook(
   provider: OAuthProvider,
   kind: "push" | "pull_request",
@@ -1430,16 +1565,7 @@ async function handleOAuthProviderWebhook(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   details: DeepReadonly<WebhookDetails>,
 ): Promise<boolean> {
-  const candidates = await db.query.workspaces.findMany({
-    where: sql`${jsonExtract(workspaces.vcsRepo, '$.identifier')} = ${details.repoFullName}`,
-  });
-  const branchMatchedWorkspaces: typeof candidates = [];
-  for (const workspace of candidates) {
-    if (workspace.vcsRepo?.identifier !== details.repoFullName) continue;
-    const configuredProvider = await configuredVcsProvider(workspace);
-    if (configuredProvider !== undefined && configuredProvider !== provider) continue;
-    if (await matchesVcsTrigger(workspace, details)) branchMatchedWorkspaces.push(workspace);
-  }
+  const branchMatchedWorkspaces = await matchingOAuthWorkspaces(provider, details);
   // PR/MR payloads carry no changed-file list (kanban 1.6). Bitbucket push
   // payloads do not carry one either, so both paths fetch a complete list.
   // Failures fall back to the empty set (trigger-all) so a VCS API outage can
@@ -1450,74 +1576,16 @@ async function handleOAuthProviderWebhook(
   const matchedWorkspaces = branchMatchedWorkspaces.filter((workspace: DeepReadonly<typeof workspaces.$inferSelect>): boolean =>
     details.tag !== undefined || matchesFileTriggers(workspace, triggerDetails.filesChanged));
 
-  const downloads = new Map<string, { credentials: ProviderCredentials; configurationVersionIds: string[] }>();
+  const downloads: OAuthWebhookDownloads = new Map();
   const missingCredentialConfigurationVersionIds: string[] = [];
   for (const workspace of matchedWorkspaces) {
-    const isSpeculative = kind === "pull_request";
-    if (isSpeculative && workspace.speculativeEnabled === false) continue;
-    if (!isSpeculative && workspace.autoApplyRunTrigger !== true && workspace.queueAllRuns !== true) continue;
-    const credentials = await oauthProviderCredentials(workspace, provider);
-
-    const configurationVersionId = `cv-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
-    const runId = `run-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
-    await db.insert(configurationVersions).values({
-      id: configurationVersionId,
-      workspaceId: workspace.id,
-      status: "pending",
-      speculative: isSpeculative,
-      source: provider,
-      ingressAttributes: {
-        commitSha: details.commitSha,
-        commitUrl: details.commitUrl,
-        commitMessage: details.commitMessage,
-        ...(details.branch === undefined ? {} : { branch: details.branch }),
-        ...(details.tag === undefined ? {} : { tag: details.tag }),
-        senderUsername: details.senderUsername,
-        ...(details.senderAvatarUrl === undefined ? {} : {
-          senderAvatarUrl: details.senderAvatarUrl,
-          senderProviderId: credentials?.oauthClientId === undefined ? "vcs" : `vcs:${credentials.oauthClientId}`,
-        }),
-        cloneUrl: details.cloneUrl,
-        ...(details.pullRequestNumber === undefined ? {} : { pullRequestNumber: details.pullRequestNumber }),
-      },
-      statusTimestamps: {},
-    });
-    await db.insert(runs).values({
-      id: runId,
-      workspaceId: workspace.id,
-      configurationVersionId,
-      message: commitSubject(details.commitMessage),
-      status: "pending",
-      isDestroy: false,
-      autoApply: workspace.autoApply === true && !isSpeculative,
-      planOnly: isSpeculative,
-      statusTimestamps: { "pending-at": new Date().toISOString() },
-      logToken: crypto.randomUUID(),
-      createdAt: Date.now(),
-    });
-    await auditLog("create", "runs", runId, null, workspace.orgId, {
-      workspaceId: workspace.id,
-      status: "pending",
-      source: provider,
-      triggerReason: kind,
-      actorUsername: details.senderUsername,
-      ...(details.senderAvatarUrl === undefined ? {} : {
-        actorAvatarUrl: details.senderAvatarUrl,
-        actorProviderId: credentials?.oauthClientId === undefined ? "vcs" : `vcs:${credentials.oauthClientId}`,
-      }),
-    });
-    if (credentials === undefined) {
-      missingCredentialConfigurationVersionIds.push(configurationVersionId);
+    const created = await createOAuthWebhookRun(provider, kind, details, workspace);
+    if (created === undefined) continue;
+    if (created.credentials === undefined) {
+      missingCredentialConfigurationVersionIds.push(created.configurationVersionId);
       continue;
     }
-    void reportRunVcsStatus(runId, "pending");
-    const downloadKey = `${credentials.apiUrl}\u0000${credentials.token}`;
-    const group = downloads.get(downloadKey);
-    if (group === undefined) {
-      downloads.set(downloadKey, { credentials, configurationVersionIds: [configurationVersionId] });
-    } else {
-      group.configurationVersionIds.push(configurationVersionId);
-    }
+    addOAuthWebhookDownload(downloads, created.credentials, created.configurationVersionId);
   }
   if (missingCredentialConfigurationVersionIds.length > 0) {
     await markConfigurationVersionsErrored(
