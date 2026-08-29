@@ -223,6 +223,58 @@ async function hasTerraformFiles(directory: string): Promise<boolean> {
   return (await readdir(directory, { withFileTypes: true })).some((entry) => entry.isFile() && (entry.name.endsWith(".tf") || entry.name.endsWith(".tf.json")));
 }
 
+function componentFromBlock(root: string, directory: string, block: readonly string[]): StackComponent | undefined {
+  const name = block[1];
+  if (typeof name !== "string") return undefined;
+  const body = block[2] ?? "";
+  const sourceMatch = /\bsource\s*=\s*"([^"]+)"/.exec(body);
+  const source = sourceMatch?.[1] ?? null;
+  const dependencyMatch = /\bdepends[_-]on\s*=\s*\[([^\]]*)\]/.exec(body);
+  const dependsOn = dependencyMatch === null
+    ? []
+    : [...(dependencyMatch[1] ?? "").matchAll(/"([^"]+)"|\bcomponent\.([A-Za-z0-9_-]+)/g)].flatMap((match): string[] => {
+        const dependency = match[1] ?? match[2];
+        return typeof dependency === "string" ? [dependency.replace(/^component\./, "")] : [];
+      });
+  const candidate = source !== null && source.startsWith(".") ? resolve(directory, source) : directory;
+  const relativeCandidate = relative(root, candidate);
+  const insideRoot = relativeCandidate === "" || (!relativeCandidate.startsWith("..") && !relativeCandidate.startsWith("/"));
+  return { name, directory: insideRoot ? candidate : directory, source, dependsOn };
+}
+
+async function componentsFromFile(
+  root: string,
+  directory: string,
+  componentFile: Readonly<{ name: string }>,
+  terraformFiles: boolean,
+): Promise<readonly StackComponent[]> {
+  const content = await readFile(join(directory, componentFile.name), "utf8");
+  const blocks = [...content.matchAll(/\bcomponent\s+"([^"]+)"\s*\{([\s\S]*?)(?=\n\s*component\s+"|$)/g)];
+  const components = blocks.flatMap((block): StackComponent[] => {
+    const component = componentFromBlock(root, directory, block);
+    return component === undefined ? [] : [component];
+  });
+  if (blocks.length === 0 && terraformFiles) {
+    return [{ name: componentFile.name.replace(/\.tfcomponent\.hcl$/, ""), directory, source: null, dependsOn: [] }];
+  }
+  return components;
+}
+
+async function componentsInDirectory(root: string, directory: string): Promise<readonly StackComponent[]> {
+  const files = await readdir(directory, { withFileTypes: true });
+  const componentFiles = files.filter((entry) => entry.isFile() && entry.name.endsWith(".tfcomponent.hcl"));
+  const terraformFiles = files.some((entry) => entry.isFile() && (entry.name.endsWith(".tf") || entry.name.endsWith(".tf.json")));
+  if (componentFiles.length === 0 && !terraformFiles) return [];
+  const components: StackComponent[] = [];
+  for (const componentFile of componentFiles) {
+    components.push(...await componentsFromFile(root, directory, componentFile, terraformFiles));
+  }
+  if (componentFiles.length === 0) {
+    components.push({ name: directory === root ? "root" : directory.slice(root.length + 1), directory, source: null, dependsOn: [] });
+  }
+  return components;
+}
+
 async function componentDirectories(root: string): Promise<readonly StackComponent[]> {
   const directories = [root, ...(await walk(root))];
   const result: StackComponent[] = [];
@@ -234,34 +286,7 @@ async function componentDirectories(root: string): Promise<readonly StackCompone
     result.push(component);
   };
   for (const directory of directories) {
-    const files = await readdir(directory, { withFileTypes: true });
-    const componentFiles = files.filter((entry) => entry.isFile() && entry.name.endsWith(".tfcomponent.hcl"));
-    const terraformFiles = files.some((entry) => entry.isFile() && (entry.name.endsWith(".tf") || entry.name.endsWith(".tf.json")));
-    if (componentFiles.length === 0 && !terraformFiles) continue;
-    for (const componentFile of componentFiles) {
-      const content = await readFile(join(directory, componentFile.name), "utf8");
-      const blocks = [...content.matchAll(/\bcomponent\s+"([^"]+)"\s*\{([\s\S]*?)(?=\n\s*component\s+"|$)/g)];
-      for (const block of blocks) {
-        const name = block[1];
-        if (typeof name !== "string") continue;
-        const body = block[2] ?? "";
-        const sourceMatch = /\bsource\s*=\s*"([^"]+)"/.exec(body);
-        const source = sourceMatch?.[1] ?? null;
-        const dependencyMatch = /\bdepends[_-]on\s*=\s*\[([^\]]*)\]/.exec(body);
-        const dependsOn = dependencyMatch === null
-          ? []
-          : [...(dependencyMatch[1] ?? "").matchAll(/"([^"]+)"|\bcomponent\.([A-Za-z0-9_-]+)/g)].flatMap((match): string[] => {
-              const dependency = match[1] ?? match[2];
-              return typeof dependency === "string" ? [dependency.replace(/^component\./, "")] : [];
-            });
-        const candidate = source !== null && source.startsWith(".") ? resolve(directory, source) : directory;
-        const relativeCandidate = relative(root, candidate);
-        const insideRoot = relativeCandidate === "" || (!relativeCandidate.startsWith("..") && !relativeCandidate.startsWith("/"));
-        add({ name, directory: insideRoot ? candidate : directory, source, dependsOn });
-      }
-      if (blocks.length === 0 && terraformFiles) add({ name: componentFile.name.replace(/\.tfcomponent\.hcl$/, ""), directory, source: null, dependsOn: [] });
-    }
-    if (componentFiles.length === 0) add({ name: directory === root ? "root" : directory.slice(root.length + 1), directory, source: null, dependsOn: [] });
+    for (const component of await componentsInDirectory(root, directory)) add(component);
   }
   return result.length === 0 ? [{ name: "root", directory: root, source: null, dependsOn: [] }] : result;
 }
