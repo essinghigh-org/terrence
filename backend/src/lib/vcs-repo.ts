@@ -31,6 +31,17 @@ function isGroupQuantifier(pattern: string, index: number): boolean {
   return char === "*" || char === "+" || char === "?" || isBraceQuantifierStart(pattern, index);
 }
 
+function closeRegexGroup(pattern: string, index: number, openGroups: boolean[]): boolean {
+  const nested = openGroups.pop() ?? false;
+  if (nested && isGroupQuantifier(pattern, index + 1)) return true;
+  if (nested && openGroups.length > 0) openGroups[openGroups.length - 1] = true;
+  return false;
+}
+
+function markRegexGroupQuantifier(openGroups: boolean[]): void {
+  if (openGroups.length > 0) openGroups[openGroups.length - 1] = true;
+}
+
 function hasNestedQuantifiers(pattern: string): boolean {
   const openGroups: boolean[] = [];
   let inClass = false;
@@ -46,13 +57,11 @@ function hasNestedQuantifiers(pattern: string): boolean {
     if (char === "[") { inClass = true; continue; }
     if (char === "(") { openGroups.push(false); continue; }
     if (char === ")") {
-      const nested = openGroups.pop() ?? false;
-      if (nested && isGroupQuantifier(pattern, index + 1)) return true;
-      if (nested && openGroups.length > 0) openGroups[openGroups.length - 1] = true;
+      if (closeRegexGroup(pattern, index, openGroups)) return true;
       continue;
     }
     if (char === "*" || char === "+" || char === "?" || isBraceQuantifierStart(pattern, index)) {
-      if (openGroups.length > 0) openGroups[openGroups.length - 1] = true;
+      markRegexGroupQuantifier(openGroups);
     }
   }
   return false;
