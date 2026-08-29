@@ -608,6 +608,209 @@ function runHasChanges(run: RunParam): boolean {
   return PLAN_REACHED_TERMINAL_STATUSES.includes(run.status);
 }
 
+
+function getRunStatusFlags(run: RunParam): { isPlanned: boolean; isConfirmable: boolean; isRunning: boolean; hasChanges: boolean } {
+  const isPlanned = ["planned", "planned_and_saved", "policy_soft_failed"].includes(run.status);
+  const isConfirmable = ["planned", "planned_and_saved"].includes(run.status);
+  const isRunning = [
+    "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
+    "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated",
+    "policy_checking", "policy_override", "policy_checked", "post_plan_running",
+    "post_plan_completed", "confirmed", "apply_queued", "applying",
+  ].includes(run.status);
+  const hasChanges = runHasChanges(run);
+  return { isPlanned, isConfirmable, isRunning, hasChanges };
+}
+
+function resolveRunOperation(run: RunParam): string {
+  if (typeof run.operation === "string" && run.operation !== "") return run.operation;
+  if (run.isDestroy === true) return "destroy";
+  if (run.refreshOnly) return "refresh_only";
+  if (run.savePlan) return "save_plan";
+  if (run.allowEmptyApply) return "empty_apply";
+  if (run.planOnly) return "plan_only";
+  return "plan_and_apply";
+}
+
+function resolveNormalizedSource(origin?: RunOrigin): string {
+  const src = origin?.source;
+  if (src === "tfe-ui" || src === "tfe-api" || src === "tfe-configuration-version" || src === "github" || src === "gitlab" || src === "bitbucket") {
+    return src;
+  }
+  if (src === undefined || src === null || src === "") return "tfe-api";
+  if (src === "github" || src === "gitlab" || src === "bitbucket") return src;
+  return "tfe-configuration-version";
+}
+
+function buildRunActionAttributes(flags: { isPlanned: boolean; isConfirmable: boolean; isRunning: boolean }, canApply: boolean, canAdmin: boolean): Record<string, unknown> {
+  return {
+    "is-cancelable": canApply && flags.isRunning,
+    "is-confirmable": canApply && flags.isConfirmable,
+    "is-discardable": canApply && flags.isPlanned,
+    "is-force-cancelable": canAdmin && flags.isRunning,
+  };
+}
+
+function buildRunCoreAttributes(run: RunParam, operation: string, normalizedSource: string, hasChanges: boolean): Record<string, unknown> {
+  return {
+    "allow-empty-apply": run.allowEmptyApply,
+    "auto-apply": run.autoApply,
+    "has-changes": hasChanges,
+    message: run.message,
+    operation,
+    "plan-only": run.planOnly,
+    refresh: run.refresh,
+    "refresh-only": run.refreshOnly,
+    "replace-addrs": run.replaceAddrs,
+    "save-plan": run.savePlan,
+    "allow-config-generation": run.allowConfigGeneration,
+    "generated-configuration": run.generatedConfiguration === true,
+    "execution-mode": run.executionMode,
+    source: normalizedSource,
+    status: run.status,
+    "status-timestamps": run.statusTimestamps ?? null,
+  };
+}
+
+function buildRunTimeAttributes(run: RunParam): Record<string, unknown> {
+  return {
+    "applied-at": run.appliedAt === null || run.appliedAt === undefined ? null : new Date(run.appliedAt).toISOString(),
+    "target-addrs": run.targetAddrs,
+    "terraform-version": run.terraformVersion,
+    "invoke-action-addrs": run.invokeActionAddrs ?? [],
+    "debugging-mode": run.debuggingMode,
+    "is-destroy": run.isDestroy === true,
+    "created-at": new Date(run.createdAt).toISOString(),
+  };
+}
+
+function buildRunBaselineAttributes(baseline?: Readonly<{ "median-duration-seconds"?: number | null; "duration-seconds"?: number | null; "is-slow"?: boolean }> | null): Record<string, unknown> {
+  if (baseline === undefined || baseline === null) return { "duration-baseline": undefined };
+  return {
+    "duration-baseline": {
+      "duration-seconds": baseline["duration-seconds"] ?? null,
+      "median-duration-seconds": baseline["median-duration-seconds"] ?? null,
+      "is-slow": baseline["is-slow"] === true,
+    },
+  };
+}
+
+function resolveTriggeredByAvatarUrl(origin?: RunOrigin): string | null {
+  const originRecord = origin as Record<string, unknown> | undefined;
+  const avatar = originRecord?.triggeredByAvatarUrl;
+  const providerId = originRecord?.triggeredByProviderId;
+  return AvatarService.resolveVcsUrl(
+    typeof providerId === "string" ? providerId : null,
+    typeof avatar === "string" ? avatar : null,
+  );
+}
+
+function buildRunTriggerAttributes(origin?: RunOrigin): Record<string, unknown> {
+  const originRecord = origin as Record<string, unknown> | undefined;
+  return {
+    "trigger-reason": originRecord?.triggerReason ?? "manual",
+    "branch": originRecord?.branch ?? null,
+    "commit-sha": originRecord?.commitSha ?? null,
+    "commit-url": originRecord?.commitUrl ?? null,
+    "triggered-by": originRecord?.triggeredBy ?? null,
+    "triggered-by-avatar-url": resolveTriggeredByAvatarUrl(origin),
+  };
+}
+
+function getRunVariablesForResponse(run: RunParam): unknown[] {
+  if (!Array.isArray(run.variables)) return [];
+  return (run.variables as Record<string, unknown>[]).map((v) => ({
+    ...v,
+    value: v.sensitive === true ? "******" : v.value,
+  }));
+}
+
+function buildRunResourceAttributes(run: RunParam): Record<string, unknown> {
+  return {
+    variables: getRunVariablesForResponse(run),
+    "resource-additions": run.planResourceAdditions ?? 0,
+    "resource-changes": run.planResourceChanges ?? 0,
+    "resource-destructions": run.planResourceDestructions ?? 0,
+    "resource-imports": run.planResourceImports ?? 0,
+  };
+}
+
+function buildRunPermissionAttributes(flags: { isPlanned: boolean; isConfirmable: boolean; isRunning: boolean }, canApply: boolean, canAdmin: boolean, canOverridePolicy: boolean, status: string): Record<string, unknown> {
+  return {
+    "can-apply": canApply && flags.isConfirmable,
+    "can-cancel": canApply && flags.isRunning,
+    "can-discard": canApply && flags.isPlanned,
+    "can-force-cancel": canAdmin && flags.isRunning,
+    "can-force-execute": canAdmin && status === "canceled",
+    "can-override-policy-check": canOverridePolicy && status === "policy_soft_failed",
+    "can-comment": canApply,
+  };
+}
+
+function buildRunAttributes(run: RunParam, flags: { isPlanned: boolean; isConfirmable: boolean; isRunning: boolean; hasChanges: boolean }, operation: string, normalizedSource: string, origin?: RunOrigin, baseline?: Readonly<{ "median-duration-seconds"?: number | null; "duration-seconds"?: number | null; "is-slow"?: boolean }> | null, canApply = false, canAdmin = false, canOverridePolicy = false): Record<string, unknown> {
+  return {
+    actions: buildRunActionAttributes(flags, canApply, canAdmin),
+    ...buildRunCoreAttributes(run, operation, normalizedSource, flags.hasChanges),
+    ...buildRunTimeAttributes(run),
+    ...buildRunBaselineAttributes(baseline),
+    ...buildRunTriggerAttributes(origin),
+    ...buildRunResourceAttributes(run),
+    permissions: buildRunPermissionAttributes(flags, canApply, canAdmin, canOverridePolicy, run.status),
+  };
+}
+
+function buildRunRelationships(run: RunParam): Record<string, unknown> {
+  return {
+    workspace: {
+      data: { id: run.workspaceId, type: "workspaces" },
+      links: { related: `/api/v2/workspaces/${run.workspaceId}` },
+    },
+    "configuration-version": {
+      data: run.configurationVersionId !== null
+        ? { id: run.configurationVersionId, type: "configuration-versions" }
+        : null,
+      links: run.configurationVersionId !== null
+        ? { related: `/api/v2/configuration-versions/${run.configurationVersionId}` }
+        : undefined,
+    },
+    plan: {
+      data: { id: `plan-${run.id}`, type: "plans" },
+      links: { related: `/api/v2/runs/${run.id}/plan` },
+    },
+    apply: {
+      data: { id: `apply-${run.id}`, type: "applies" },
+      links: { related: `/api/v2/applies/apply-${run.id}` },
+    },
+    "run-events": {
+      links: { related: `/api/v2/runs/${run.id}/run-events` },
+    },
+    "created-by": {
+      data: run.createdBy !== null ? { id: run.createdBy, type: "users" } : null,
+    },
+    agent: {
+      data: run.agentId !== null ? { id: run.agentId, type: "agents" } : null,
+    },
+    "agent-pool": {
+      data: run.agentPoolId !== null ? { id: run.agentPoolId, type: "agent-pools" } : null,
+    },
+    "cost-estimate": {
+      links: { related: `/api/v2/runs/${run.id}/cost-estimate` },
+    },
+    "policy-checks": {
+      links: { related: `/api/v2/runs/${run.id}/policy-checks` },
+    },
+    comments: {
+      links: { related: `/api/v2/runs/${run.id}/comments` },
+    },
+    "input-state-version": {
+      links: { related: `/api/v2/runs/${run.id}/input-state-version` },
+    },
+    "workspace-run-alerts": {
+      data: [],
+    },
+  };
+}
+
 export function runResource(
   run: RunParam,
   canApply: boolean,
@@ -620,164 +823,14 @@ export function runResource(
   }> | null,
   canAdmin = canApply,
 ): Record<string, unknown> {
-  const isPlanned = ["planned", "planned_and_saved", "policy_soft_failed"].includes(run.status);
-  const isConfirmable = ["planned", "planned_and_saved"].includes(run.status);
-  const isRunning = [
-    "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
-    "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated",
-    "policy_checking", "policy_override", "policy_checked", "post_plan_running",
-    "post_plan_completed", "confirmed", "apply_queued", "applying",
-  ].includes(run.status);
-  const hasChanges = runHasChanges(run);
-  const operation = typeof run.operation === "string" && run.operation !== ""
-    ? run.operation
-    : run.isDestroy === true
-      ? "destroy"
-      : run.refreshOnly
-        ? "refresh_only"
-        : run.savePlan
-          ? "save_plan"
-          : run.allowEmptyApply
-            ? "empty_apply"
-            : run.planOnly
-              ? "plan_only"
-              : "plan_and_apply";
-  // Preserve VCS provider sources (github/gitlab/bitbucket) for UI display
-  // ("via GitHub" etc). The reference format also surfaces them through this
-  // field and the TFE compatibility layer expects them; collapsing to
-  // tfe-configuration-version broke the run list's "via ..." label.
-  const normalizedSource = origin?.source === "tfe-ui" || origin?.source === "tfe-api" || origin?.source === "tfe-configuration-version" || origin?.source === "github" || origin?.source === "gitlab" || origin?.source === "bitbucket"
-    ? origin.source
-    : origin?.source === undefined || origin?.source === null || origin.source === ""
-      ? "tfe-api"
-      : origin.source === "github" || origin.source === "gitlab" || origin.source === "bitbucket"
-        ? origin.source
-        : "tfe-configuration-version";
-
+  const flags = getRunStatusFlags(run);
+  const operation = resolveRunOperation(run);
+  const normalizedSource = resolveNormalizedSource(origin);
   return {
     id: run.id,
     type: "runs",
-    attributes: {
-      actions: {
-        "is-cancelable": canApply && isRunning,
-        "is-confirmable": canApply && isConfirmable,
-        "is-discardable": canApply && isPlanned,
-        "is-force-cancelable": canAdmin && isRunning,
-      },
-      "allow-empty-apply": run.allowEmptyApply,
-      "auto-apply": run.autoApply,
-      "has-changes": hasChanges,
-      message: run.message,
-      operation,
-      "plan-only": run.planOnly,
-      refresh: run.refresh,
-      "refresh-only": run.refreshOnly,
-      "replace-addrs": run.replaceAddrs,
-      "save-plan": run.savePlan,
-      "allow-config-generation": run.allowConfigGeneration,
-      "generated-configuration": run.generatedConfiguration === true,
-      "execution-mode": run.executionMode,
-      source: normalizedSource,
-      status: run.status,
-      "status-timestamps": run.statusTimestamps ?? null,
-      "applied-at": run.appliedAt === null || run.appliedAt === undefined ? null : new Date(run.appliedAt).toISOString(),
-      "target-addrs": run.targetAddrs,
-      "terraform-version": run.terraformVersion,
-      "invoke-action-addrs": run.invokeActionAddrs ?? [],
-      "debugging-mode": run.debuggingMode,
-      "is-destroy": run.isDestroy === true,
-      "created-at": new Date(run.createdAt).toISOString(),
-      "duration-baseline": baseline === undefined || baseline === null
-        ? undefined
-        : {
-            "duration-seconds": baseline["duration-seconds"] ?? null,
-            "median-duration-seconds": baseline["median-duration-seconds"] ?? null,
-            "is-slow": baseline["is-slow"] === true,
-          },
-      "trigger-reason": (origin as Record<string, unknown> | undefined)?.triggerReason ?? "manual",
-      "branch": (origin as Record<string, unknown> | undefined)?.branch ?? null,
-      "commit-sha": (origin as Record<string, unknown> | undefined)?.commitSha ?? null,
-      "commit-url": (origin as Record<string, unknown> | undefined)?.commitUrl ?? null,
-      "triggered-by": (origin as Record<string, unknown> | undefined)?.triggeredBy ?? null,
-      "triggered-by-avatar-url": (() => {
-        const originRecord = origin as Record<string, unknown> | undefined;
-        const avatar = originRecord?.triggeredByAvatarUrl;
-        const providerId = originRecord?.triggeredByProviderId;
-        return AvatarService.resolveVcsUrl(
-          typeof providerId === "string" ? providerId : null,
-          typeof avatar === "string" ? avatar : null,
-        );
-      })(),
-      variables: ((): unknown[] => {
-        if (!Array.isArray(run.variables)) return [];
-        return (run.variables as Record<string, unknown>[]).map((v) => ({
-          ...v,
-          value: v.sensitive === true ? "******" : v.value,
-        }));
-      })(),
-      "resource-additions": run.planResourceAdditions ?? 0,
-      "resource-changes": run.planResourceChanges ?? 0,
-      "resource-destructions": run.planResourceDestructions ?? 0,
-      "resource-imports": run.planResourceImports ?? 0,
-      permissions: {
-        "can-apply": canApply && isConfirmable,
-        "can-cancel": canApply && isRunning,
-        "can-discard": canApply && isPlanned,
-        "can-force-cancel": canAdmin && isRunning,
-        "can-force-execute": canAdmin && run.status === "canceled",
-        "can-override-policy-check": canOverridePolicy && run.status === "policy_soft_failed",
-        "can-comment": canApply,
-      },
-    },
-    relationships: {
-      workspace: {
-        data: { id: run.workspaceId, type: "workspaces" },
-        links: { related: `/api/v2/workspaces/${run.workspaceId}` },
-      },
-      "configuration-version": {
-        data: run.configurationVersionId !== null
-          ? { id: run.configurationVersionId, type: "configuration-versions" }
-          : null,
-        links: run.configurationVersionId !== null
-          ? { related: `/api/v2/configuration-versions/${run.configurationVersionId}` }
-          : undefined,
-      },
-      plan: {
-        data: { id: `plan-${run.id}`, type: "plans" },
-        links: { related: `/api/v2/runs/${run.id}/plan` },
-      },
-      apply: {
-        data: { id: `apply-${run.id}`, type: "applies" },
-        links: { related: `/api/v2/applies/apply-${run.id}` },
-      },
-      "run-events": {
-        links: { related: `/api/v2/runs/${run.id}/run-events` },
-      },
-      "created-by": {
-        data: run.createdBy !== null ? { id: run.createdBy, type: "users" } : null,
-      },
-      agent: {
-        data: run.agentId !== null ? { id: run.agentId, type: "agents" } : null,
-      },
-      "agent-pool": {
-        data: run.agentPoolId !== null ? { id: run.agentPoolId, type: "agent-pools" } : null,
-      },
-      "cost-estimate": {
-        links: { related: `/api/v2/runs/${run.id}/cost-estimate` },
-      },
-      "policy-checks": {
-        links: { related: `/api/v2/runs/${run.id}/policy-checks` },
-      },
-      comments: {
-        links: { related: `/api/v2/runs/${run.id}/comments` },
-      },
-      "input-state-version": {
-        links: { related: `/api/v2/runs/${run.id}/input-state-version` },
-      },
-      "workspace-run-alerts": {
-        data: [],
-      },
-    },
+    attributes: buildRunAttributes(run, flags, operation, normalizedSource, origin, baseline, canApply, canAdmin, canOverridePolicy),
+    relationships: buildRunRelationships(run),
     links: { self: `/api/v2/runs/${run.id}` },
   };
 }
@@ -932,6 +985,116 @@ export function workspaceOutputResources(state: StateParam): Record<string, unkn
   });
 }
 
+function isStateResourceRecord(resource: unknown): resource is Record<string, unknown> {
+  return resource !== null && resource !== undefined && typeof resource === "object" &&
+    typeof (resource as Record<string, unknown>).type === "string" &&
+    typeof (resource as Record<string, unknown>).name === "string";
+}
+
+function normalizeStateResource(resource: Record<string, unknown>): { name: string; type: string; count: number; module: string; provider: string | null } {
+  const rType = resource.type as string;
+  const rName = resource.name as string;
+  const rMode = resource.mode;
+  const rInstances = resource.instances;
+  const rModule = resource.module;
+  const rProvider = resource.provider;
+  return {
+    name: rName,
+    type: `${rMode === "data" ? "data." : ""}${rType}`,
+    count: Array.isArray(rInstances) ? rInstances.length : 0,
+    module: typeof rModule === "string" ? rModule : "root",
+    provider: typeof rProvider === "string" ? rProvider : null,
+  };
+}
+
+function extractStateResources(parsed: unknown): { name: string; type: string; count: number; module: string; provider: string | null }[] {
+  const rawResources = Array.isArray((parsed as Record<string, unknown> | null)?.resources) ? (parsed as Record<string, unknown>).resources as unknown[] : [];
+  return (rawResources)
+    .filter(isStateResourceRecord)
+    .map(normalizeStateResource);
+}
+
+function buildStateAggregates(resources: { name: string; type: string; count: number; module: string; provider: string | null }[]): { modules: Record<string, Record<string, number>>; providers: Record<string, Record<string, number>> } {
+  const modules: Record<string, Record<string, number>> = {};
+  const providers: Record<string, Record<string, number>> = {};
+  for (const resource of resources) {
+    const kind = resource.type.replaceAll("_", "-");
+    const mod = modules[resource.module] ?? {};
+    modules[resource.module] = mod;
+    mod[kind] = (mod[kind] ?? 0) + resource.count;
+    if (typeof resource.provider === "string") {
+      const prov = providers[resource.provider] ?? {};
+      providers[resource.provider] = prov;
+      prov[kind] = (prov[kind] ?? 0) + resource.count;
+    }
+  }
+  return { modules, providers };
+}
+
+function getStateAvailability(state: StateParam, payload: string): { rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean } {
+  const backingDataAvailable = state.status !== "backing_data_soft_deleted" && state.status !== "backing_data_permanently_deleted" && state.status !== "discarded";
+  const rawStateAvailable = backingDataAvailable && payload !== "";
+  const jsonStateAvailable = backingDataAvailable && typeof state.jsonState === "string" && state.jsonState !== "";
+  const pending = state.status === "pending";
+  return { rawStateAvailable, jsonStateAvailable, pending };
+}
+
+function buildStateCoreAttributes(state: StateParam, parsed: Readonly<Record<string, unknown> | null>, resources: { name: string; type: string; count: number; module: string; provider: string | null }[], aggregates: { modules: Record<string, Record<string, number>>; providers: Record<string, Record<string, number>> }, payload: string, includeState: boolean): Record<string, unknown> {
+  return {
+    ...(includeState ? { state: payload } : {}),
+    serial: state.serial,
+    md5: createHash("md5").update(payload).digest("hex"),
+    lineage: typeof (parsed as Record<string, unknown> | null)?.lineage === "string" ? (parsed as Record<string, unknown>).lineage : null,
+    "terraform-version": typeof (parsed as Record<string, unknown> | null)?.terraform_version === "string" ? (parsed as Record<string, unknown>).terraform_version : null,
+    "resources-processed": parsed !== null,
+    resources,
+    modules: aggregates.modules,
+    providers: aggregates.providers,
+    "state-version": parsed !== null && typeof (parsed as Record<string, unknown>).version === "number" && Number.isInteger((parsed as Record<string, unknown>).version) ? (parsed as Record<string, unknown>).version : null,
+    status: state.status ?? "finalized",
+    intermediate: state.intermediate,
+    size: Buffer.byteLength(payload),
+    "created-at": new Date(state.createdAt).toISOString(),
+    "vcs-commit-sha": state.vcsCommitSha,
+    "vcs-commit-url": state.vcsCommitUrl,
+  };
+}
+
+function buildStateUrlAttributes(state: StateParam, flags: { rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean }, request: Readonly<{ url: string }>): Record<string, unknown> {
+  return {
+    "hosted-state-download-url": flags.rawStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/download`) : null,
+    "hosted-state-upload-url": flags.pending && !flags.rawStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/upload`, "PUT") : null,
+    "hosted-json-state-download-url": flags.jsonStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-download`) : null,
+    "hosted-json-state-upload-url": flags.pending && !flags.jsonStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-upload`, "PUT") : null,
+  };
+}
+
+function buildStateRunAttributes(run?: Readonly<{ status: string; message: string | null }> | null): Record<string, unknown> {
+  return {
+    "run-status": run !== null && run !== undefined ? run.status : null,
+    "run-message": run !== null && run !== undefined ? run.message : null,
+  };
+}
+
+function buildStateVersionAttributes(state: StateParam, parsed: Readonly<Record<string, unknown> | null>, resources: { name: string; type: string; count: number; module: string; provider: string | null }[], aggregates: { modules: Record<string, Record<string, number>>; providers: Record<string, Record<string, number>> }, payload: string, flags: { rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean }, request: Readonly<{ url: string }>, includeState: boolean, run?: Readonly<{ status: string; message: string | null }> | null): Record<string, unknown> {
+  return {
+    ...buildStateCoreAttributes(state, parsed, resources, aggregates, payload, includeState),
+    ...buildStateUrlAttributes(state, flags, request),
+    ...buildStateRunAttributes(run),
+  };
+}
+
+function buildStateVersionRelationships(state: StateParam): Record<string, unknown> {
+  const outputResources = stateOutputResources(state);
+  return {
+    workspace: { data: { id: state.workspaceId, type: "workspaces" } },
+    run: state.runId !== null ? { data: { id: state.runId, type: "runs" } } : { data: null },
+    outputs: {
+      data: outputResources.map((output): OutputResourceRef => ({ id: output.id as string, type: output.type as string })),
+    },
+  };
+}
+
 export function stateVersionResource(
   state: StateParam,
   request: Readonly<{ url: string }>,
@@ -939,96 +1102,15 @@ export function stateVersionResource(
   run?: Readonly<{ status: string; message: string | null }> | null,
 ): Record<string, unknown> {
   const parsed = parseStatePayload(state.statePayload);
-  const rawResources = Array.isArray(parsed?.resources) ? parsed.resources : [];
-  const resources = rawResources
-    .filter((resource: unknown): resource is Record<string, unknown> =>
-      resource !== null && resource !== undefined && typeof resource === "object" &&
-      typeof (resource as Record<string, unknown>).type === "string" &&
-      typeof (resource as Record<string, unknown>).name === "string"
-    )
-    .map((resource): { name: string; type: string; count: number; module: string; provider: string | null } => {
-      const rType = resource.type as string;
-      const rName = resource.name as string;
-      const rMode = resource.mode;
-      const rInstances = resource.instances;
-      const rModule = resource.module;
-      const rProvider = resource.provider;
-
-      return {
-        name: rName,
-        type: `${rMode === "data" ? "data." : ""}${rType}`,
-        count: Array.isArray(rInstances) ? rInstances.length : 0,
-        module: typeof rModule === "string" ? rModule : "root",
-        provider: typeof rProvider === "string" ? rProvider : null,
-      };
-    });
-
-  const modules: Record<string, Record<string, number>> = {};
-  const providers: Record<string, Record<string, number>> = {};
-
-  for (const resource of resources) {
-    const kind = resource.type.replaceAll("_", "-");
-    const mod = modules[resource.module] ?? {};
-    modules[resource.module] = mod;
-    mod[kind] = (mod[kind] ?? 0) + resource.count;
-
-    if (typeof resource.provider === "string") {
-      const prov = providers[resource.provider] ?? {};
-      providers[resource.provider] = prov;
-      prov[kind] = (prov[kind] ?? 0) + resource.count;
-    }
-  }
-
-  const outputResources = stateOutputResources(state);
+  const resources = extractStateResources(parsed);
+  const aggregates = buildStateAggregates(resources);
   const payload = state.statePayload === null ? "" : decodeStatePayload(state.statePayload);
-  const backingDataAvailable = state.status !== "backing_data_soft_deleted"
-    && state.status !== "backing_data_permanently_deleted"
-    && state.status !== "discarded";
-  const rawStateAvailable = backingDataAvailable && payload !== "";
-  const jsonStateAvailable = backingDataAvailable && typeof state.jsonState === "string" && state.jsonState !== "";
-  const pending = state.status === "pending";
+  const flags = getStateAvailability(state, payload);
   return {
     id: state.id,
     type: "state-versions",
-    attributes: {
-      ...(includeState ? { state: payload } : {}),
-      serial: state.serial,
-      md5: createHash("md5").update(payload).digest("hex"),
-      lineage: typeof parsed?.lineage === "string" ? parsed.lineage : null,
-      "terraform-version": typeof parsed?.terraform_version === "string" ? parsed.terraform_version : null,
-      "resources-processed": parsed !== null,
-      resources,
-      modules,
-      providers,
-      "state-version": parsed !== null && typeof parsed.version === "number" && Number.isInteger(parsed.version) ? parsed.version : null,
-      status: state.status ?? "finalized",
-      intermediate: state.intermediate,
-      size: Buffer.byteLength(payload),
-      "created-at": new Date(state.createdAt).toISOString(),
-      "vcs-commit-sha": state.vcsCommitSha,
-      "vcs-commit-url": state.vcsCommitUrl,
-      "hosted-state-download-url": rawStateAvailable
-        ? signedApiURL(request, `/api/v2/state-versions/${state.id}/download`)
-        : null,
-      "hosted-state-upload-url": pending && !rawStateAvailable
-        ? signedApiURL(request, `/api/v2/state-versions/${state.id}/upload`, "PUT")
-        : null,
-      "hosted-json-state-download-url": jsonStateAvailable
-        ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-download`)
-        : null,
-      "hosted-json-state-upload-url": pending && !jsonStateAvailable
-        ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-upload`, "PUT")
-        : null,
-      "run-status": run !== null && run !== undefined ? run.status : null,
-      "run-message": run !== null && run !== undefined ? run.message : null,
-    },
-    relationships: {
-      workspace: { data: { id: state.workspaceId, type: "workspaces" } },
-      run: state.runId !== null ? { data: { id: state.runId, type: "runs" } } : { data: null },
-      outputs: {
-        data: outputResources.map((output): OutputResourceRef => ({ id: output.id as string, type: output.type as string })),
-      },
-    },
+    attributes: buildStateVersionAttributes(state, parsed, resources, aggregates, payload, flags, request, includeState, run),
+    relationships: buildStateVersionRelationships(state),
     links: { self: `/api/v2/state-versions/${state.id}` },
   };
 }
