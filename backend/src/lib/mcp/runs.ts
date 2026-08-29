@@ -19,6 +19,98 @@ function runCreationAttributes(args: Readonly<Record<string, unknown>>): Record<
   return attributes;
 }
 
+type AuthorizedRun = NonNullable<Awaited<ReturnType<typeof findAuthorizedRun>>>;
+type ApplyRun = Readonly<Pick<typeof runs.$inferSelect, "id" | "status" | "statusTimestamps">>;
+
+type AgentPoolSelection = Readonly<{ id: string | null; error: string | null }>;
+
+async function selectApplyAgentPool(authorized: AuthorizedRun): Promise<AgentPoolSelection> {
+  if (authorized.workspace.executionMode !== "agent") return { id: null, error: null };
+  const pool = authorized.workspace.agentPoolId === null
+    ? undefined
+    : await db.query.agentPools.findFirst({ where: eq(agentPools.id, authorized.workspace.agentPoolId) });
+  if (
+    pool?.orgId !== authorized.workspace.orgId
+    || !(await agentPoolAllowsWorkspace(pool, authorized.workspace.id, authorized.workspace.projectId))
+  ) {
+    return { id: null, error: "The workspace does not have an allowed agent pool" };
+  }
+  return { id: pool.id, error: null };
+}
+
+async function addRunComment(runId: string, comment: unknown, userId: string | null): Promise<void> {
+  if (typeof comment === "string" && comment.trim() !== "") {
+    await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId, body: comment.trim(), createdAt: Date.now() });
+  }
+}
+
+async function queueAgentApply(
+  runId: string,
+  agentPoolId: string,
+  before: ApplyRun,
+): Promise<unknown> {
+  return db.transaction(async (transaction) => {
+    const tx = transaction as unknown as typeof db;
+    const confirmedTimestamps = {
+      ...(before.statusTimestamps ?? {}),
+      "confirmed-at": new Date().toISOString(),
+    };
+    const confirmed = await tx.update(runs).set({
+      status: "confirmed",
+      statusTimestamps: confirmedTimestamps,
+    }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+    if (confirmed.length === 0) return undefined;
+    return insertAgentApplyJobTx(tx, runId, agentPoolId, confirmedTimestamps);
+  });
+}
+
+async function applyRunThroughAgent(
+  session: McpSession,
+  args: Readonly<Record<string, unknown>>,
+  authorized: AuthorizedRun,
+  before: ApplyRun,
+  runId: string,
+  agentPoolId: string,
+): Promise<unknown> {
+  const job = await queueAgentApply(runId, agentPoolId, before);
+  if (job === undefined) return toolBadRequest("Run apply is already queued");
+  await auditLog("apply", "runs", runId, session.userId ?? null, authorized.workspace.orgId, {
+    workspaceId: authorized.workspace.id,
+    fromStatus: before.status,
+    toStatus: "apply_queued",
+    ...(session.teamId !== null ? { teamId: session.teamId } : {}),
+  });
+  await addRunComment(runId, args.comment, session.userId ?? null);
+  return { id: authorized.run.id, status: "apply_queued" };
+}
+
+async function applyRunDirectly(
+  session: McpSession,
+  args: Readonly<Record<string, unknown>>,
+  authorized: AuthorizedRun,
+  before: ApplyRun,
+  runId: string,
+): Promise<unknown> {
+  const confirmed = await db.update(runs).set({
+    status: "confirmed",
+    statusTimestamps: {
+      ...(before.statusTimestamps ?? {}),
+      "confirmed-at": new Date().toISOString(),
+    },
+  }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
+  if (confirmed.length === 0) return toolBadRequest("Run apply is already queued");
+  await auditLog("apply", "runs", runId, session.userId ?? null, authorized.workspace.orgId, {
+    workspaceId: authorized.workspace.id,
+    fromStatus: before.status,
+    toStatus: "confirmed",
+    ...(session.teamId !== null ? { teamId: session.teamId } : {}),
+  });
+  await addRunComment(runId, args.comment, session.userId ?? null);
+  const { executeApply } = await import("../../worker");
+  executeApply(authorized.run.id).catch((err: unknown): void => { if (err !== null && err !== undefined) console.error(err); });
+  return { id: authorized.run.id, status: "applying" };
+}
+
 /**
  * Run tools. Reads require the `runs:read` grant (the `run-read` workspace
  * permission maps to it). Targets are always re-authorized via
@@ -131,65 +223,10 @@ export const runTools: readonly McpTool[] = [
       }
       const before = await db.query.runs.findFirst({ where: and(eq(runs.id, runId), inArray(runs.status, ["planned", "planned_and_saved"])) });
       if (before === undefined) return toolBadRequest("Run must have a completed saved plan before apply");
-      let agentPoolId: string | null = null;
-      if (authorized.workspace.executionMode === "agent") {
-        const pool = authorized.workspace.agentPoolId === null
-          ? undefined
-          : await db.query.agentPools.findFirst({ where: eq(agentPools.id, authorized.workspace.agentPoolId) });
-        if (
-          pool?.orgId !== authorized.workspace.orgId
-          || !(await agentPoolAllowsWorkspace(pool, authorized.workspace.id, authorized.workspace.projectId))
-        ) {
-          return toolBadRequest("The workspace does not have an allowed agent pool");
-        }
-        agentPoolId = pool.id;
-      }
-      if (agentPoolId !== null) {
-        const job = await db.transaction(async (transaction) => {
-          const tx = transaction as unknown as typeof db;
-          const confirmedTimestamps = {
-            ...(before.statusTimestamps ?? {}),
-            "confirmed-at": new Date().toISOString(),
-          };
-          const confirmed = await tx.update(runs).set({
-            status: "confirmed",
-            statusTimestamps: confirmedTimestamps,
-          }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
-          if (confirmed.length === 0) return undefined;
-          return insertAgentApplyJobTx(tx, runId, agentPoolId, confirmedTimestamps);
-        });
-        if (job === undefined) return toolBadRequest("Run apply is already queued");
-        await auditLog("apply", "runs", runId, session.userId ?? null, authorized.workspace.orgId, {
-          workspaceId: authorized.workspace.id,
-          fromStatus: before.status,
-          toStatus: "apply_queued",
-          ...(session.teamId !== null ? { teamId: session.teamId } : {}),
-        });
-        if (typeof args.comment === "string" && args.comment.trim() !== "") {
-          await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId: session.userId ?? null, body: args.comment.trim(), createdAt: Date.now() });
-        }
-        return { id: authorized.run.id, status: "apply_queued" };
-      }
-      const confirmed = await db.update(runs).set({
-        status: "confirmed",
-        statusTimestamps: {
-          ...(before.statusTimestamps ?? {}),
-          "confirmed-at": new Date().toISOString(),
-        },
-      }).where(and(eq(runs.id, runId), eq(runs.status, before.status))).returning({ id: runs.id });
-      if (confirmed.length === 0) return toolBadRequest("Run apply is already queued");
-      await auditLog("apply", "runs", runId, session.userId ?? null, authorized.workspace.orgId, {
-        workspaceId: authorized.workspace.id,
-        fromStatus: before.status,
-        toStatus: "confirmed",
-        ...(session.teamId !== null ? { teamId: session.teamId } : {}),
-      });
-      if (typeof args.comment === "string" && args.comment.trim() !== "") {
-        await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId: session.userId ?? null, body: args.comment.trim(), createdAt: Date.now() });
-      }
-      const { executeApply } = await import("../../worker");
-      executeApply(authorized.run.id).catch((err: unknown): void => { if (err !== null && err !== undefined) console.error(err); });
-      return { id: authorized.run.id, status: "applying" };
+      const pool = await selectApplyAgentPool(authorized);
+      if (pool.error !== null) return toolBadRequest(pool.error);
+      if (pool.id !== null) return applyRunThroughAgent(session, args, authorized, before, runId, pool.id);
+      return applyRunDirectly(session, args, authorized, before, runId);
     },
   },
   {
