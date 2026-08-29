@@ -138,6 +138,12 @@ async function stopSupervisor(marker: SupervisorMarker): Promise<void> {
   }
 }
 
+async function resultAfterSupervisorExit(resultPath: string): Promise<ModuleTestResult> {
+  const finalResult = await resultAt(resultPath);
+  if (finalResult !== undefined) return finalResult;
+  throw new Error("Module test supervisor exited before publishing its result");
+}
+
 async function waitForSupervisor(
   run: ModuleTestRun,
   context: DurableJobContext,
@@ -162,9 +168,7 @@ async function waitForSupervisor(
     const result = await resultAt(resultPath);
     if (result !== undefined) return result;
     if (!(await processOwned(marker))) {
-      const finalResult = await resultAt(resultPath);
-      if (finalResult !== undefined) return finalResult;
-      throw new Error("Module test supervisor exited before publishing its result");
+      return resultAfterSupervisorExit(resultPath);
     }
     if (!await context.heartbeat()) return undefined;
     await new Promise<void>((resolve): void => { setTimeout(resolve, 500); });
