@@ -775,6 +775,24 @@ function isBitbucketCloudDiffstatTruncated(headers: Headers): boolean {
   return link !== null && link.includes('rel="next"');
 }
 
+
+function extractBitbucketDiffstatPaths(body: unknown, files: Set<string>): boolean {
+  const values = asRecord(body)?.values;
+  if (!Array.isArray(values)) return false;
+  for (const item of values) {
+    const entry = asRecord(item);
+    const path = asRecord(entry?.new)?.path ?? asRecord(entry?.old)?.path;
+    if (typeof path !== "string" || path === "") return false;
+    files.add(path);
+  }
+  return true;
+}
+
+function resolveBitbucketNextUrl(body: unknown): string | null {
+  const next = asRecord(body)?.next;
+  return typeof next === "string" && next !== "" ? next : null;
+}
+
 async function bitbucketCloudDiffstatFiles(
   initialUrl: string,
   auth: Readonly<Record<string, string>>,
@@ -788,16 +806,8 @@ async function bitbucketCloudDiffstatFiles(
     if (!response.ok) return { files: undefined, receivedPage };
     receivedPage = true;
     const body = await response.json() as unknown;
-    const values = asRecord(body)?.values;
-    if (!Array.isArray(values)) return { files: undefined, receivedPage };
-    for (const item of values) {
-      const entry = asRecord(item);
-      const path = asRecord(entry?.new)?.path ?? asRecord(entry?.old)?.path;
-      if (typeof path !== "string" || path === "") return { files: undefined, receivedPage };
-      files.add(path);
-    }
-    const next = asRecord(body)?.next;
-    cloudUrl = typeof next === "string" && next !== "" ? next : null;
+    if (!extractBitbucketDiffstatPaths(body, files)) return { files: undefined, receivedPage };
+    cloudUrl = resolveBitbucketNextUrl(body);
     if (cloudUrl === null) return { files, receivedPage };
   }
   return { files: undefined, receivedPage };
@@ -1069,6 +1079,22 @@ async function fetchConfigurationVersionRecord(configurationVersionId: string): 
   });
 }
 
+
+function validateRefetchConfiguration(workspace: DeepReadonly<typeof workspaces.$inferSelect> | undefined, repoFullName: string | undefined, commitSha: string | undefined, provider: VcsProvider | undefined): string | undefined {
+  if (workspace === undefined) return "workspace";
+  if (repoFullName === undefined) return "repoFullName";
+  if (commitSha === undefined) return "commitSha";
+  if (provider === undefined) return "provider";
+  if (!validRepository(repoFullName, provider)) return "repoFullName";
+  if (!COMMIT_SHA_PATTERN.test(commitSha)) return "commitSha";
+  return undefined;
+}
+
+function resolveRefetchProvider(source: string | null | undefined): VcsProvider | undefined {
+  if (source === "github" || source === "gitlab" || source === "bitbucket") return source;
+  return undefined;
+}
+
 export async function refetchConfigurationVersion(configurationVersionId: string): Promise<boolean> {
   const configuration = await db.query.configurationVersions.findFirst({
     where: eq(configurationVersions.id, configurationVersionId),
@@ -1079,26 +1105,16 @@ export async function refetchConfigurationVersion(configurationVersionId: string
   });
   const repoFullName = workspace?.vcsRepo?.identifier;
   const commitSha = configuration.ingressAttributes?.commitSha;
-  const provider: VcsProvider | undefined =
-    configuration.source === "github" || configuration.source === "gitlab" || configuration.source === "bitbucket"
-      ? configuration.source
-      : undefined;
-  if (
-    workspace === undefined
-    || repoFullName === undefined
-    || commitSha === undefined
-    || provider === undefined
-    || !validRepository(repoFullName, provider)
-    || !COMMIT_SHA_PATTERN.test(commitSha)
-  ) return false;
+  const provider = resolveRefetchProvider(configuration.source);
+  if (validateRefetchConfiguration(workspace as DeepReadonly<typeof workspaces.$inferSelect> | undefined, repoFullName, commitSha, provider) !== undefined) return false;
   const credentials = provider === "github"
-    ? await githubCredentials(workspace)
-    : await oauthProviderCredentials(workspace, provider);
+    ? await githubCredentials(workspace as DeepReadonly<typeof workspaces.$inferSelect>)
+    : await oauthProviderCredentials(workspace as DeepReadonly<typeof workspaces.$inferSelect>, provider as VcsProvider);
   if (credentials === undefined) {
     await markConfigurationVersionsErrored([configurationVersionId], `${provider} credentials are unavailable`);
     return false;
   }
-  await fetchAndSaveProviderTarball([configurationVersionId], credentials, repoFullName, commitSha);
+  await fetchAndSaveProviderTarball([configurationVersionId], credentials, repoFullName as string, commitSha as string);
   const updated = await db.query.configurationVersions.findFirst({
     where: eq(configurationVersions.id, configurationVersionId),
     columns: { status: true },
