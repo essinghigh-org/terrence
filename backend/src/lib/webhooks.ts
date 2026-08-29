@@ -1137,76 +1137,81 @@ export async function refetchConfigurationVersion(configurationVersionId: string
   return updated?.status === "uploaded";
 }
 
+/** Get a provider default branch from its repository response. */
+function defaultBranchFromBody(provider: VcsProvider, body: Record<string, unknown>): string | undefined {
+  if ((provider === "github" || provider === "gitlab") && typeof body.default_branch === "string") return body.default_branch;
+  if (provider === "bitbucket" && body.mainbranch !== null && typeof body.mainbranch === "object") {
+    const mainBranch = body.mainbranch as Record<string, unknown>;
+    if (typeof mainBranch.name === "string") return mainBranch.name;
+  }
+  return undefined;
+}
+
+async function githubAppDefaultBranch(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  vcs: VcsRepo,
+  encodedPath: string,
+): Promise<string | undefined> {
+  const installationRef = vcs.githubAppInstallationId;
+  if (installationRef === undefined || installationRef === "") return undefined;
+  const installation = await db.query.githubAppInstallations.findFirst({
+    where: and(eq(githubAppInstallations.id, installationRef), eq(githubAppInstallations.orgId, workspace.orgId)),
+  });
+  if (installation === undefined) return undefined;
+  const token = await getGitHubAppAccessToken(installation.installationId);
+  if (token === null) return undefined;
+  const apiUrl = providerApiUrl(process.env.GITHUB_APP_API_URL ?? process.env.GITHUB_API_URL ?? null, "https://api.github.com");
+  if (apiUrl === undefined) return undefined;
+  const response = await fetch(`${apiUrl}/repos/${encodedPath}`, {
+    headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json" },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) return undefined;
+  const body = await response.json() as Record<string, unknown>;
+  return typeof body.default_branch === "string" ? body.default_branch : undefined;
+}
+
+async function oauthDefaultBranch(
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  vcs: VcsRepo,
+  identifier: string,
+  encodedPath: string,
+): Promise<string | undefined> {
+  const tokenId = vcs.oauthTokenId;
+  if (tokenId === undefined || tokenId === "") return undefined;
+  const oauthToken = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, tokenId) });
+  if (oauthToken === undefined) return undefined;
+  const client = await db.query.oauthClients.findFirst({
+    where: and(eq(oauthClients.id, oauthToken.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
+  });
+  if (client === undefined) return undefined;
+  const provider = providerForOAuthClient(client.serviceProvider);
+  const apiUrl = providerApiUrl(client.apiUrl, provider === "github" ? "https://api.github.com" : "");
+  if (apiUrl === undefined || provider === undefined) return undefined;
+  const secret = await decryptSecret(oauthToken.token).catch((): undefined => undefined);
+  if (secret === undefined) return undefined;
+  const url = provider === "github"
+    ? `${apiUrl}/repos/${encodedPath}`
+    : provider === "gitlab"
+      ? `${apiUrl}/projects/${encodeURIComponent(identifier)}`
+      : `${apiUrl}/repositories/${encodeURIComponent(identifier)}`;
+  const accept = provider === "github" ? "application/vnd.github.v3+json" : "application/json";
+  const response = await fetch(url, {
+    headers: { Authorization: "Bearer " + secret, Accept: accept },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) return undefined;
+  return defaultBranchFromBody(provider, await response.json() as Record<string, unknown>);
+}
+
 /** Get the default branch name for a VCS workspace by querying the provider API. */
 async function fetchDefaultBranch(workspace: DeepReadonly<typeof workspaces.$inferSelect>): Promise<string | undefined> {
   const vcs = workspace.vcsRepo;
   if (vcs?.identifier === undefined) return undefined;
-  const repoParts = vcs.identifier.split("/");
-  const encodedPath = repoParts.map(encodeURIComponent).join("/");
-
-  const installationRef = vcs.githubAppInstallationId;
-  if (installationRef !== undefined && installationRef !== "") {
-    const installation = await db.query.githubAppInstallations.findFirst({
-      where: and(eq(githubAppInstallations.id, installationRef), eq(githubAppInstallations.orgId, workspace.orgId)),
-    });
-    if (installation !== undefined) {
-      const token = await getGitHubAppAccessToken(installation.installationId);
-      if (token !== null) {
-        const apiUrl = providerApiUrl(process.env.GITHUB_APP_API_URL ?? process.env.GITHUB_API_URL ?? null, "https://api.github.com");
-        if (apiUrl !== undefined) {
-          const url = `${apiUrl}/repos/${encodedPath}`;
-          const response = await fetch(url, {
-            headers: { Authorization: "Bea" + "rer " + token, Accept: "application/vnd.github.v3+json" },
-            signal: AbortSignal.timeout(10_000),
-          });
-          if (response.ok) {
-            const body = await response.json() as Record<string, unknown>;
-            const defaultBranch = body.default_branch;
-            if (typeof defaultBranch === "string") return defaultBranch;
-          }
-        }
-      }
-    }
-  }
-
-  const tokenId = vcs.oauthTokenId;
-  if (tokenId !== undefined && tokenId !== "") {
-    const oauthToken = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, tokenId) });
-    if (oauthToken !== undefined) {
-      const client = await db.query.oauthClients.findFirst({
-        where: and(eq(oauthClients.id, oauthToken.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
-      });
-      if (client !== undefined) {
-        const provider = providerForOAuthClient(client.serviceProvider);
-        const apiUrl = providerApiUrl(client.apiUrl, provider === "github" ? "https://api.github.com" : "");
-        if (apiUrl !== undefined && provider !== undefined) {
-          const secret = await decryptSecret(oauthToken.token).catch((): undefined => undefined);
-          if (secret !== undefined) {
-            const url = provider === "github"
-              ? `${apiUrl}/repos/${encodedPath}`
-              : provider === "gitlab"
-                ? `${apiUrl}/projects/${encodeURIComponent(vcs.identifier)}`
-                : `${apiUrl}/repositories/${encodeURIComponent(vcs.identifier)}`;
-            const accept = provider === "github" ? "application/vnd.github.v3+json" : "application/json";
-            const response = await fetch(url, {
-              headers: { Authorization: "Bea" + "rer " + secret, Accept: accept },
-              signal: AbortSignal.timeout(10_000),
-            });
-            if (response.ok) {
-              const body = await response.json() as Record<string, unknown>;
-              if (provider === "github" && typeof body.default_branch === "string") return body.default_branch;
-              if (provider === "gitlab" && typeof body.default_branch === "string") return body.default_branch;
-              if (provider === "bitbucket" && typeof (body).mainbranch === "object") {
-                const mb = (body).mainbranch as Record<string, unknown>;
-                if (typeof mb.name === "string") return mb.name;
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  return undefined;
+  const encodedPath = vcs.identifier.split("/").map(encodeURIComponent).join("/");
+  const appBranch = await githubAppDefaultBranch(workspace, vcs, encodedPath);
+  if (appBranch !== undefined) return appBranch;
+  return oauthDefaultBranch(workspace, vcs, vcs.identifier, encodedPath);
 }
 
 /** Get the latest commit SHA on a branch for a VCS workspace. */
