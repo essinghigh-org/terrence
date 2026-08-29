@@ -547,113 +547,100 @@ async function claimedJobDetails(job: AgentJob): Promise<ClaimedAgentJob | undef
   };
 }
 
+async function findExistingClaim(agent: Agent): Promise<ClaimedAgentJob | undefined> {
+  const existing = await db.query.agentJobs.findFirst({
+    where: and(eq(agentJobs.agentId, agent.id), eq(agentJobs.status, "claimed")),
+    orderBy: [asc(agentJobs.claimedAt)],
+  });
+  if (existing === undefined) return undefined;
+  return claimedJobDetails(existing);
+}
+
+function resolveAgentBinaries(agent: Agent): readonly string[] {
+  return agent.iacBinaries !== null && agent.iacBinaries.length > 0 ? agent.iacBinaries : ["terraform"];
+}
+
+async function findCandidateJob(agent: Agent, acceptedPhases: readonly string[], agentBinaries: readonly string[], skippedIds: ReadonlySet<string>): Promise<typeof agentJobs.$inferSelect | undefined> {
+  return db.query.agentJobs.findFirst({
+    where: and(
+      eq(agentJobs.agentPoolId, agent.agentPoolId),
+      eq(agentJobs.status, "queued"),
+      inArray(agentJobs.phase, [...acceptedPhases]),
+      inArray(agentJobs.iacBinary, agentBinaries),
+      ...(skippedIds.size > 0 ? [notInArray(agentJobs.id, [...skippedIds])] : []),
+    ),
+    orderBy: [asc(agentJobs.createdAt)],
+  });
+}
+
+async function tryClaimCandidate(candidate: typeof agentJobs.$inferSelect, agent: Agent): Promise<typeof agentJobs.$inferSelect | undefined> {
+  const now = Date.now();
+  const claimed = await db.update(agentJobs).set({ agentId: agent.id, status: "claimed", claimedAt: now }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "queued"))).returning();
+  const claimedJob = claimed[0];
+  if (claimedJob !== undefined) return claimedJob;
+  const raced = await db.query.agentJobs.findFirst({ where: and(eq(agentJobs.agentId, agent.id), eq(agentJobs.status, "claimed")) });
+  return raced === undefined ? undefined : await claimedJobDetails(raced) as unknown as typeof agentJobs.$inferSelect;
+}
+
+async function validateCandidateRun(candidate: typeof agentJobs.$inferSelect): Promise<{ run: typeof runs.$inferSelect; expectedRunStatus: string; nextRunStatus: string } | null> {
+  const expectedRunStatus = candidate.phase === "plan" ? "plan_queued" : "apply_queued";
+  const nextRunStatus = candidate.phase === "plan" ? "planning" : "applying";
+  const run = await db.query.runs.findFirst({ where: eq(runs.id, candidate.runId) });
+  if (run?.status !== expectedRunStatus) {
+    await db.update(agentJobs).set({ status: "canceled", completedAt: Date.now(), errorMessage: "Run is no longer waiting for this job" }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
+    return null;
+  }
+  return { run: run!, expectedRunStatus, nextRunStatus };
+}
+
+
+async function tryLockWorkspaceForApply(candidate: typeof agentJobs.$inferSelect, run: typeof runs.$inferSelect, skippedApplyJobIds: Set<string>): Promise<"locked" | "skipped" | "no-lock"> {
+  if (candidate.phase !== "apply") return "no-lock";
+  const locked = await db.update(workspaces).set({ locked: true, lockedReason: `Run ${candidate.runId} is applying`, lockOwnerType: "agent-run", lockOwnerId: candidate.runId }).where(and(eq(workspaces.id, run.workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
+  if (locked.length > 0) return "locked";
+  skippedApplyJobIds.add(candidate.id);
+  await db.update(agentJobs).set({ agentId: null, status: "queued", claimedAt: null }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
+  return "skipped";
+}
+
+async function tryAssociateRun(candidate: typeof agentJobs.$inferSelect, run: typeof runs.$inferSelect, agent: Agent, expectedRunStatus: string, nextRunStatus: string): Promise<{ id: string } | null> {
+  const associated = await db.update(runs).set({ agentPoolId: agent.agentPoolId, agentId: agent.id, status: nextRunStatus, statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus) }).where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus))).returning({ id: runs.id });
+  if (associated.length > 0) return associated[0] as { id: string };
+  if (candidate.phase === "apply") {
+    await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(eq(workspaces.id, run.workspaceId), eq(workspaces.locked, true), eq(workspaces.lockOwnerType, "agent-run"), eq(workspaces.lockOwnerId, run.id)));
+  }
+  await db.update(agentJobs).set({ status: "canceled", completedAt: Date.now(), errorMessage: "Run is no longer waiting for this job" }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
+  return null;
+}
+
 export async function claimAgentJob(
   agent: Agent,
   acceptedPhases: readonly string[] = ["plan", "apply"],
 ): Promise<ClaimedAgentJob | undefined> {
-  const existing = await db.query.agentJobs.findFirst({
-    where: and(
-      eq(agentJobs.agentId, agent.id),
-      eq(agentJobs.status, "claimed"),
-    ),
-    orderBy: [asc(agentJobs.claimedAt)],
-  });
-  if (existing !== undefined) return claimedJobDetails(existing);
+  const existingClaim = await findExistingClaim(agent);
+  if (existingClaim !== undefined) return existingClaim;
   if (acceptedPhases.length === 0) return undefined;
-
-  // Capability routing: only jobs whose resolved IaC binary the agent
-  // declared at registration are claimable. A plain tfc-agent (default
-  // ["terraform"]) can never claim a tofu job; it waits for an agent that
-  // declared tofu. Fall back to terraform-only for rows predating the
-  // column default (defensive; the DDL default covers new rows).
-  const agentBinaries = agent.iacBinaries !== null && agent.iacBinaries.length > 0
-    ? agent.iacBinaries
-    : ["terraform"];
+  const agentBinaries = resolveAgentBinaries(agent);
   const skippedApplyJobIds = new Set<string>();
-
   for (let attempts = 0; attempts < 10; attempts += 1) {
-    const candidate = await db.query.agentJobs.findFirst({
-      where: and(
-        eq(agentJobs.agentPoolId, agent.agentPoolId),
-        eq(agentJobs.status, "queued"),
-        inArray(agentJobs.phase, [...acceptedPhases]),
-        inArray(agentJobs.iacBinary, agentBinaries),
-        ...(skippedApplyJobIds.size > 0 ? [notInArray(agentJobs.id, [...skippedApplyJobIds])] : []),
-      ),
-      orderBy: [asc(agentJobs.createdAt)],
-    });
+    const candidate = await findCandidateJob(agent, acceptedPhases, agentBinaries, skippedApplyJobIds);
     if (candidate === undefined) return undefined;
-
-    const now = Date.now();
-    const claimed = await db.update(agentJobs).set({
-      agentId: agent.id,
-      status: "claimed",
-      claimedAt: now,
-    }).where(and(
-      eq(agentJobs.id, candidate.id),
-      eq(agentJobs.status, "queued"),
-    )).returning();
-    const claimedJob = claimed[0];
+    const claimedJob = await tryClaimCandidate(candidate, agent);
     if (claimedJob === undefined) {
-      const raced = await db.query.agentJobs.findFirst({
-        where: and(eq(agentJobs.agentId, agent.id), eq(agentJobs.status, "claimed")),
-      });
+      const raced = await db.query.agentJobs.findFirst({ where: and(eq(agentJobs.agentId, agent.id), eq(agentJobs.status, "claimed")) });
       return raced === undefined ? undefined : await claimedJobDetails(raced);
     }
-
-    const expectedRunStatus = candidate.phase === "plan" ? "plan_queued" : "apply_queued";
-    const nextRunStatus = candidate.phase === "plan" ? "planning" : "applying";
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, candidate.runId) });
-    if (run?.status !== expectedRunStatus) {
-      await db.update(agentJobs).set({
-        status: "canceled",
-        completedAt: Date.now(),
-        errorMessage: "Run is no longer waiting for this job",
-      }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
-      continue;
-    }
-    if (candidate.phase === "apply") {
-      const locked = await db.update(workspaces).set({
-        locked: true,
-        lockedReason: `Run ${candidate.runId} is applying`,
-        lockOwnerType: "agent-run",
-        lockOwnerId: candidate.runId,
-      }).where(and(eq(workspaces.id, run.workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
-      if (locked.length === 0) {
-        skippedApplyJobIds.add(candidate.id);
-        await db.update(agentJobs).set({ agentId: null, status: "queued", claimedAt: null }).where(and(
-          eq(agentJobs.id, candidate.id),
-          eq(agentJobs.status, "claimed"),
-        ));
-        continue;
-      }
-    }
-    const associated = await db.update(runs).set({
-      agentPoolId: agent.agentPoolId,
-      agentId: agent.id,
-      status: nextRunStatus,
-      statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus),
-    }).where(and(
-      eq(runs.id, run.id),
-      eq(runs.status, expectedRunStatus),
-    )).returning({ id: runs.id });
-    if (associated.length === 0) {
-      if (candidate.phase === "apply") {
-        await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
-          eq(workspaces.id, run.workspaceId),
-          eq(workspaces.locked, true),
-          eq(workspaces.lockOwnerType, "agent-run"),
-          eq(workspaces.lockOwnerId, run.id),
-        ));
-      }
-      await db.update(agentJobs).set({
-        status: "canceled",
-        completedAt: Date.now(),
-        errorMessage: "Run is no longer waiting for this job",
-      }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
-      continue;
-    }
-    await db.update(agents).set({ status: "busy", lastPingAt: now }).where(eq(agents.id, agent.id));
+    // Re-fetch claimedJob details for validation path - need to handle the case where tryClaimCandidate returned claimedJobDetails result vs raw; normalize
+    // For simplicity, re-query candidate status via validateCandidateRun which uses candidate id
+    const validation = await validateCandidateRun(candidate);
+    if (validation === null) continue;
+    const { run, expectedRunStatus, nextRunStatus } = validation;
+    const claimedAt = Date.now();
+    const lockResult = await tryLockWorkspaceForApply(candidate, run, skippedApplyJobIds);
+    if (lockResult === "skipped") continue;
+    const associated = await tryAssociateRun(candidate, run, agent, expectedRunStatus, nextRunStatus);
+    if (associated === null) continue;
+    await db.update(agents).set({ status: "busy", lastPingAt: claimedAt }).where(eq(agents.id, agent.id));
     notifyRunStatus(claimedJob.runId, claimedJob.phase === "plan" ? "planning" : "applying");
     return await claimedJobDetails(claimedJob);
   }
