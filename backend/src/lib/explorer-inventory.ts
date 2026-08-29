@@ -28,29 +28,34 @@ async function insertMemberships(tx: Parameters<Parameters<typeof db.transaction
   }
 }
 
+function parseStateResources(jsonState: string | null): unknown[] | undefined {
+  try {
+    const parsed = jsonState === null ? undefined : JSON.parse(decodeStatePayload(jsonState)) as Record<string, unknown>;
+    const rawResources = parsed?.resources;
+    return Array.isArray(rawResources) ? rawResources : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function stateItems(jsonState: string | null): Readonly<{ resources: number; providers: string[]; modules: string[]; providerItems: ExplorerCatalogItem[]; moduleItems: ExplorerCatalogItem[] }> {
   const providers = new Map<string, ExplorerCatalogItem>();
   const modules = new Map<string, ExplorerCatalogItem>();
   let resources = 0;
-  try {
-    const parsed = jsonState === null ? undefined : JSON.parse(decodeStatePayload(jsonState)) as Record<string, unknown>;
-    const rawResources = parsed?.resources;
-    if (!Array.isArray(rawResources)) return { resources, providers: [], modules: [], providerItems: [], moduleItems: [] };
-    for (const raw of rawResources) {
-      if (raw === null || typeof raw !== "object") continue;
-      const resource = raw as Record<string, unknown>;
-      resources += Array.isArray(resource.instances) ? resource.instances.length : 0;
-      const provider = typeof resource.provider === "string" ? resource.provider.replace(/^provider\[\"|\"\]$/g, "") : "";
-      if (provider !== "") {
-        const name = provider.split("/").at(-1) ?? provider;
-        const version = typeof resource.provider_version === "string" ? resource.provider_version : "";
-        providers.set(`${name}|${provider}|${version}`, { name, source: provider, version });
-      }
-      const module = typeof resource.module === "string" ? resource.module : "";
-      if (module !== "" && module !== "root") modules.set(`${module}|${module}`, { name: module, source: module, version: "" });
+  const rawResources = parseStateResources(jsonState);
+  if (rawResources === undefined) return { resources, providers: [], modules: [], providerItems: [], moduleItems: [] };
+  for (const raw of rawResources) {
+    if (raw === null || typeof raw !== "object") continue;
+    const resource = raw as Record<string, unknown>;
+    resources += Array.isArray(resource.instances) ? resource.instances.length : 0;
+    const provider = typeof resource.provider === "string" ? resource.provider.replace(/^provider\[\"|\"\]$/g, "") : "";
+    if (provider !== "") {
+      const name = provider.split("/").at(-1) ?? provider;
+      const version = typeof resource.provider_version === "string" ? resource.provider_version : "";
+      providers.set(`${name}|${provider}|${version}`, { name, source: provider, version });
     }
-  } catch {
-    return { resources: 0, providers: [], modules: [], providerItems: [], moduleItems: [] };
+    const module = typeof resource.module === "string" ? resource.module : "";
+    if (module !== "" && module !== "root") modules.set(`${module}|${module}`, { name: module, source: module, version: "" });
   }
   const providerItems = [...providers.values()].sort((a, b) => a.source.localeCompare(b.source));
   const moduleItems = [...modules.values()].sort((a, b) => a.source.localeCompare(b.source));
