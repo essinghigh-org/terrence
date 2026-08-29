@@ -54,7 +54,7 @@ The runs table lists every run on the instance. Administrators can cancel or for
 
 ## Versions and compatibility
 
-The versions section shows the installed Terraform and OpenTofu binaries. The compatibility dashboard compares the implemented API surface against the latest provider release. It shows which resources and data sources are complete, partial, or missing.
+The versions section shows the installed Terraform and OpenTofu binaries. The provider compatibility dashboard compares the tracked `hashicorp/tfe` provider release recorded in `backend/src/data/provider_surface.json` and reports whether a newer release is available. It shows which resources and data sources are covered, planned, or missing.
 
 ## Audit
 

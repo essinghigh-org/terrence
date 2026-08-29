@@ -22,9 +22,11 @@ Terrence runs as a single container. The container holds the API server, the run
 - Connects to Git repositories so pushes trigger runs.
 - Publishes a web interface for operators and teams.
 
-## API compatibility
+## Compatibility
 
-Terrence implements the Terraform Cloud API contract. The `terraform` CLI and tools written against that contract work without modification. The contract is stable: new endpoints are additive, and existing behavior never breaks.
+Terrence supports the official `hashicorp/tfe` Terraform provider and the Terraform/OpenTofu remote workflows required by the platform. The provider surface is tracked against an explicit released provider version and exercised by end-to-end tests.
+
+General Terraform Enterprise or HCP Terraform API and feature parity is not a goal. An endpoint documented by TFE is not automatically part of Terrence; compatibility work must be justified by the provider, the CLI, or a concrete Terrence product requirement.
 
 ## Architecture
 
@@ -48,7 +50,7 @@ The container image is the deployment unit. It includes the API server, the work
 
 ## The web interface
 
-The web interface covers the same surfaces as the API:
+The web interface covers first-class Terrence product surfaces. Provider-only API resources may remain available without a dedicated WebUI:
 
 - The dashboard lists organizations and recent runs.
 - Workspace pages show runs, state versions, variables, and settings.

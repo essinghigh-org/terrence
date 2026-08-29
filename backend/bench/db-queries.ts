@@ -1,11 +1,12 @@
 /**
  * DB query benchmark: runs-table access patterns vs index coverage.
  *
- * Replicates the three hottest runs queries with the real table shape:
+ * Replicates the runs queries that drive queue, workspace-list, and
+ * scheduled-apply work with the real table shape:
  *   1. pollWorkerQueue:      WHERE status='pending' ORDER BY created_at LIMIT 50
  *   2. runs list endpoint:   WHERE workspace_id=? ORDER BY created_at DESC LIMIT 20
- *   3. change calendar:      WHERE workspace_id IN (...) AND status='confirmed'
- *                            AND (future-scheduled range predicate)
+ *   3. scheduled apply:      WHERE status='confirmed' AND plan_only=0
+ *                            AND scheduled_at <= ?
  *
  * Seeds 60k runs, measures each query BEFORE any index, then creates the
  * proposed indexes and measures again. Run: bun run bench/db-queries.ts
@@ -24,24 +25,26 @@ db.run(`CREATE TABLE runs (
   status TEXT NOT NULL DEFAULT 'pending',
   created_at INTEGER NOT NULL,
   scheduled_at INTEGER,
+  plan_only INTEGER NOT NULL DEFAULT 0,
   status_timestamps TEXT
 )`);
 
-const insert = db.prepare("INSERT INTO runs (id, workspace_id, status, created_at, scheduled_at, status_timestamps) VALUES (?, ?, ?, ?, ?, ?)");
+const insert = db.prepare("INSERT INTO runs (id, workspace_id, status, created_at, scheduled_at, plan_only, status_timestamps) VALUES (?, ?, ?, ?, ?, ?, ?)");
 const now = Date.now();
 db.transaction(() => {
   for (let i = 0; i < RUNS; i += 1) {
     const ws = `ws-${i % WORKSPACES}`;
     const status = STATUSES[i % STATUSES.length];
     const created = now - (RUNS - i) * 60_000;
-    // Confirmed rows get schedules distributed around NOW so the calendar
-    // range predicate actually filters (not fixed historical timestamps).
+    // Confirmed rows get schedules distributed around NOW so the scheduled
+    // apply predicate exercises both due and not-yet-due rows.
     const scheduledAt = status === "confirmed" ? now - 3_600_000 + (i % 7) * 3_600_000 : null;
-    insert.run(`run-${i}`, ws, status, created, scheduledAt, JSON.stringify({ "confirmed-at": new Date(created).toISOString() }));
+    // applyDueScheduledRuns excludes plan-only runs, so seed both kinds to
+    // ensure the benchmark measures the production predicate.
+    const planOnly = status === "confirmed" && Math.floor(i / STATUSES.length) % 2 === 0;
+    insert.run(`run-${i}`, ws, status, created, scheduledAt, planOnly ? 1 : 0, JSON.stringify({ "confirmed-at": new Date(created).toISOString() }));
   }
 })();
-
-const workspaceIds = Array.from({ length: 20 }, (_, i) => `ws-${i}`);
 
 function measure(label: string, fn: () => unknown, iterations = 30): void {
   // Warmup
@@ -64,22 +67,14 @@ const pendingScan = (): void => {
 const workspaceList = (): void => {
   db.query("SELECT id FROM runs WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 20").all("ws-42");
 };
-const calendarRange = (): void => {
-  const placeholders = workspaceIds.map((): string => "?").join(",");
-  db.query(
-    `SELECT id FROM runs WHERE workspace_id IN (${placeholders}) AND status = 'confirmed'
-     AND ((scheduled_at IS NOT NULL AND scheduled_at > ? AND scheduled_at <= ?) OR (scheduled_at IS NULL OR scheduled_at <= ?))`,
-  ).all(...workspaceIds, now - 3_600_000, now + 3_600_000, now);
-};
 const confirmedDue = (): void => {
-  db.query("SELECT id FROM runs WHERE status = 'confirmed' AND scheduled_at IS NOT NULL AND scheduled_at <= ? LIMIT 50").all(now);
+  db.query("SELECT id FROM runs WHERE status = 'confirmed' AND plan_only = 0 AND scheduled_at IS NOT NULL AND scheduled_at <= ? LIMIT 50").all(now);
 };
 
 console.log(`\nRuns table: ${RUNS} rows, ${WORKSPACES} workspaces (${db.query("SELECT COUNT(*) FROM runs").get() as object})\n`);
 console.log("=== BASELINE (no indexes) ===");
 measure("pending queue scan (pollWorkerQueue)", pendingScan);
 measure("workspace run list", workspaceList);
-measure("calendar confirmed range (20 workspaces)", calendarRange);
 measure("confirmed+scheduled due (applyDueScheduledRuns)", confirmedDue);
 
 console.log("\n=== AFTER INDEXES ===");
@@ -88,12 +83,10 @@ db.run("CREATE INDEX runs_status_created_idx ON runs (status, created_at)");
 db.run("CREATE INDEX runs_status_scheduled_idx ON runs (status, scheduled_at)");
 measure("pending queue scan (pollWorkerQueue)", pendingScan);
 measure("workspace run list", workspaceList);
-measure("calendar confirmed range (20 workspaces)", calendarRange);
 measure("confirmed+scheduled due (applyDueScheduledRuns)", confirmedDue);
 
 console.log("\n=== WITH ALL THREE (drop status_created, keep status_scheduled) ===");
 db.run("DROP INDEX runs_status_created_idx");
 measure("pending queue scan (pollWorkerQueue)", pendingScan);
 measure("workspace run list", workspaceList);
-measure("calendar confirmed range (20 workspaces)", calendarRange);
 measure("confirmed+scheduled due (applyDueScheduledRuns)", confirmedDue);

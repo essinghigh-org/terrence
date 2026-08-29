@@ -1372,7 +1372,7 @@ export const runComments = sqliteTable("run_comments", {
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 
-export const changeRequests = sqliteTable("change_requests", {
+export const explorerBulkActionRecords = sqliteTable("change_requests", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   subject: text("subject").notNull(),
@@ -1799,19 +1799,6 @@ export const explorerSavedQueries = sqliteTable("explorer_saved_queries", {
   name: text("name").notNull(),
   queryType: text("query_type").notNull(),
   query: text("query", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
-  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
-});
-
-export const queryRuns = sqliteTable("query_runs", {
-  id: text("id").primaryKey(),
-  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  source: text("source").notNull().default("tfe-api"),
-  variables: text("variables", { mode: "json" }).$type<Record<string, unknown>>(),
-  status: text("status").notNull().default("pending"),
-  logReadUrl: text("log_read_url"),
-  statusTimestamps: text("status_timestamps", { mode: "json" }).$type<Record<string, string>>(),
-  createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
-  canceledBy: text("canceled_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });
 

@@ -264,7 +264,7 @@ export const auditLogs = pgTable("audit_logs", {
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.auditLogs.createdAt.defaultFn!()),
 });
 
-export const changeRequests = pgTable("change_requests", {
+export const explorerBulkActionRecords = pgTable("change_requests", {
     id: text("id").notNull().primaryKey(),
     workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
     subject: text("subject").notNull(),
@@ -273,8 +273,8 @@ export const changeRequests = pgTable("change_requests", {
     createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
     resolvedBy: text("resolved_by").references(() => users.id, { onDelete: "set null" }),
     resolvedAt: bigint("resolved_at", { mode: "number" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.changeRequests.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.changeRequests.updatedAt.defaultFn!()),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.explorerBulkActionRecords.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.explorerBulkActionRecords.updatedAt.defaultFn!()),
 }, (table) => [
     index("change_requests_workspace_created_idx").on(table.workspaceId, table.createdAt),
   ]);
@@ -1029,19 +1029,6 @@ export const providerSets = pgTable("provider_sets", {
 }, (table) => [
     uniqueIndex("provider_sets_org_name_idx").on(table.orgId, table.name),
   ]);
-
-export const queryRuns = pgTable("query_runs", {
-    id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-    source: text("source").notNull().default("tfe-api"),
-    variables: jsonb("variables"),
-    status: text("status").notNull().default("pending"),
-    logReadUrl: text("log_read_url"),
-    statusTimestamps: jsonb("status_timestamps"),
-    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
-    canceledBy: text("canceled_by").references(() => users.id, { onDelete: "set null" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.queryRuns.createdAt.defaultFn!()),
-});
 
 export const rateLimitBuckets = pgTable("rate_limit_buckets", {
     bucket: text("bucket").notNull().primaryKey(),

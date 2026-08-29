@@ -76,9 +76,6 @@ import { scimAdminRoutes } from "./routes/scim-admin";
 import { adminRegistrySharingRoutes } from "./routes/admin-registry-sharing";
 import { systemAdminRoutes } from "./routes/system-admin";
 import { policyRoutes } from "./routes/policies";
-import { permissionSimulatorRoutes } from "./routes/permission-simulator";
-import { workspaceScorecardRoutes } from "./routes/workspace-scorecards";
-import { workspaceActivityRoutes } from "./routes/workspace-activity";
 import { agentRoutes } from "./routes/agents";
 import { agentApiRoutes } from "./routes/agent-api";
 import { runTaskRoutes } from "./routes/run-tasks";
@@ -89,14 +86,12 @@ import { sshKeyRoutes } from "./routes/ssh-keys";
 import { githubAppInstallationRoutes } from "./routes/github-app-installations";
 import { miscRoutes } from "./routes/misc";
 import { assessmentRoutes } from "./routes/assessments";
-import { changeRequestRoutes } from "./routes/change-requests";
 import { eventsRoutes } from "./routes/events";
 import { policyEvaluationRoutes } from "./routes/policy-evaluations";
 import { docsRoutes } from "./routes/docs";
 import { workspaceTransferRoutes } from "./routes/workspace-transfers";
 import { planExportRoutes } from "./routes/plan-exports";
 import { cidrRangeRoutes } from "./routes/cidr-ranges";
-import { queryRoutes } from "./routes/queries";
 import { avatarHandler } from "./routes/avatars";
 import { scimRoutes } from "./routes/scim";
 import { explorerRoutes } from "./routes/explorer";
@@ -807,9 +802,6 @@ export const app = new Elysia()
   .use(scimAdminRoutes)
   .use(adminRegistrySharingRoutes)
   .use(policyRoutes)
-  .use(permissionSimulatorRoutes)
-  .use(workspaceScorecardRoutes)
-  .use(workspaceActivityRoutes)
   .use(agentRoutes)
   .use(agentApiRoutes)
   .use(runTaskRoutes)
@@ -820,12 +812,10 @@ export const app = new Elysia()
   .use(githubAppInstallationRoutes)
   .use(miscRoutes)
   .use(assessmentRoutes)
-  .use(changeRequestRoutes)
   .use(eventsRoutes)
   .use(workspaceTransferRoutes)
   .use(planExportRoutes)
   .use(cidrRangeRoutes)
-  .use(queryRoutes)
   .use(scimRoutes)
   .use(explorerRoutes)
   .use(teamProjectRoutes)

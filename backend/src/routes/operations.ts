@@ -1,16 +1,11 @@
 import { Elysia } from "elysia";
-import { eq, and, gte, lte, inArray, asc, sql, type SQL } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { db } from "../db";
-import { durableJobs, runs, workspaces, changeRequests } from "../db/schema";
+import { durableJobs } from "../db/schema";
 import {
-  checkOrgPermission,
   findAuthorizedRun,
-  workspaceIdsForPermission,
-  pageRequest,
-  pagination,
 } from "../lib/utils";
 import { getSettings, resolvePlanExplainerSettings } from "../lib/settings";
-import { jsonExtract } from "../lib/db-json";
 import {
   EXPLAIN_KINDS,
   buildExplainSource,
@@ -28,7 +23,6 @@ import {
 } from "../lib/run-explanations";
 import { authPlugin } from "../auth";
 import { log } from "../lib/log";
-import { cachedOrgByName } from "../lib/cached-lookups";
 import { enqueueDurableJob } from "../lib/durable-jobs";
 
 type ParamCtx = Readonly<{
@@ -48,226 +42,8 @@ function notFound(set: SetObj): { errors: { status: string; title: string }[] } 
   return { errors: [{ status: "404", title: "Not Found" }] };
 }
 
-// --- Change calendar (kanban 21.4) -------------------------------------
-// Upcoming scheduled applies (runs awaiting confirmation), auto-destroys,
-// and open change requests for an organization, sorted by when each item
-// is expected to happen. Applies distinguish true future-scheduled actions
-// (runs.scheduledAt) from historical confirmation activity: the entry `at`
-// is the scheduled time when one exists and `scheduled` is true; otherwise
-// it falls back to the confirmation timestamp and `scheduled` is false.
-
-type CalendarBound = Readonly<{ ms: number; iso: string }>;
-
-/** Parse an inclusive range bound; ISO-8601 strings and epoch milliseconds
- * are accepted. Returns undefined for a missing bound and null for a
- * malformed one so the handler can 422 on garbage instead of silently
- * widening the range. */
-function parseCalendarBound(raw: string | null): CalendarBound | null | undefined {
-  if (raw === null || raw === "") return undefined;
-  const ms = /^\d+$/.test(raw) ? Number(raw) : Date.parse(raw);
-  // ECMAScript Date time-value range: out-of-range numeric bounds would
-  // throw RangeError from toISOString() and 500 the handler.
-  if (!Number.isFinite(ms) || Math.abs(ms) > 8.64e15) return null;
-  return { ms, iso: new Date(ms).toISOString() };
-}
-
-/**
- * SQL range predicate over a confirmed run's effective apply time: its
- * epoch-ms scheduled_at when scheduled, otherwise the ISO confirmed-at
- * timestamp (stored in the status_timestamps JSON). Rows with neither are
- * excluded from a bounded range.
- */
-function confirmedRunRangeCondition(
-  start: CalendarBound | null,
-  end: CalendarBound | null,
-): SQL | undefined {
-  if (start === null && end === null) return undefined;
-  const scheduledConds: SQL[] = [];
-  const confirmedConds: SQL[] = [];
-  if (start !== null) {
-    scheduledConds.push(sql`${runs.scheduledAt} >= ${start.ms}`);
-    confirmedConds.push(sql`${jsonExtract(runs.statusTimestamps, '$."confirmed-at"')} >= ${start.iso}`);
-  }
-  if (end !== null) {
-    scheduledConds.push(sql`${runs.scheduledAt} <= ${end.ms}`);
-    confirmedConds.push(sql`${jsonExtract(runs.statusTimestamps, '$."confirmed-at"')} <= ${end.iso}`);
-  }
-  // scheduled_at semantics (kanban t_19f3556e): only FUTURE scheduled times
-  // range by scheduled_at; a run whose schedule has passed (or never had one)
-  // is ranged by its confirmation time, matching how the entry is rendered.
-  return sql`((${runs.scheduledAt} IS NOT NULL AND ${runs.scheduledAt} > ${Date.now()} AND ${and(...scheduledConds)}) OR ((${runs.scheduledAt} IS NULL OR ${runs.scheduledAt} <= ${Date.now()}) AND ${and(...confirmedConds)}))`;
-}
-
-type CalendarEntry = Readonly<{
-  kind: "apply" | "change-request" | "auto-destroy";
-  at: string;
-  scheduled: boolean;
-  workspaceId: string;
-  workspaceName: string | null;
-  runId?: string;
-  changeRequestId?: string;
-  subject?: string | null;
-  "scheduled-at"?: string | null;
-}>;
-
-function calendarEntryId(entry: CalendarEntry): string {
-  return String(entry.changeRequestId ?? entry.runId ?? entry.workspaceId ?? "entry");
-}
-
-const CALENDAR_KIND_ORDER: Readonly<Record<CalendarEntry["kind"], number>> = {
-  apply: 0,
-  "auto-destroy": 1,
-  "change-request": 2,
-};
-
 export const operationsRoutes = new Elysia({ name: "operations" })
   .use(authPlugin)
-  .get("/api/v2/organizations/:org_name/change-calendar", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
-    const organization = await cachedOrgByName(orgName);
-    if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) {
-      return notFound(set);
-    }
-    const searchParams = new URL(request.url).searchParams;
-    const start = parseCalendarBound(searchParams.get("filter[start]"));
-    if (start === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "filter[start] must be an ISO-8601 date or epoch milliseconds" }] };
-    }
-    const end = parseCalendarBound(searchParams.get("filter[end]"));
-    if (end === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "filter[end] must be an ISO-8601 date or epoch milliseconds" }] };
-    }
-    if (start !== undefined && end !== undefined && start.ms > end.ms) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "filter[start] must not be later than filter[end]" }] };
-    }
-    const { number, size } = pageRequest(request);
-    const wsIds = await workspaceIdsForPermission(organization.id, user?.id, orgId ?? null, teamId ?? null, "run-read");
-    // null = org-wide access; resolve to the org's workspace ids so the
-    // per-workspace queries below are uniform in both cases.
-    const allowedWorkspaceIds = wsIds === null
-      ? (await db.query.workspaces.findMany({
-          columns: { id: true },
-          where: eq(workspaces.orgId, organization.id),
-        })).map((w: Readonly<{ id: string }>): string => w.id)
-      : [...wsIds];
-    const entries: CalendarEntry[] = [];
-    if (allowedWorkspaceIds.length > 0) {
-      const rangeCondition = confirmedRunRangeCondition(start ?? null, end ?? null);
-      const confirmedRuns = await db.query.runs.findMany({
-          columns: { id: true, workspaceId: true, statusTimestamps: true, createdAt: true, scheduledAt: true },
-          where: and(
-            inArray(runs.workspaceId, allowedWorkspaceIds),
-            eq(runs.status, "confirmed"),
-            ...(rangeCondition === undefined ? [] : [rangeCondition]),
-          ),
-          // Deterministic source ordering; the merged sort below re-orders by
-          // effective time with id tie-breaks either way.
-          orderBy: [asc(runs.createdAt), asc(runs.id)],
-        });
-      const pendingRequests = await db.query.changeRequests.findMany({
-          columns: { id: true, workspaceId: true, subject: true, createdAt: true },
-          where: and(
-            inArray(changeRequests.workspaceId, allowedWorkspaceIds),
-            eq(changeRequests.status, "pending"),
-            ...(start === undefined && end === undefined ? [] : [
-              ...(start === undefined ? [] : [gte(changeRequests.createdAt, start.ms)]),
-              ...(end === undefined ? [] : [lte(changeRequests.createdAt, end.ms)]),
-            ]),
-          ),
-          orderBy: [asc(changeRequests.createdAt), asc(changeRequests.id)],
-        });
-      const workspaceIds = [...new Set([...confirmedRuns.map((r): string => r.workspaceId), ...pendingRequests.map((r): string => r.workspaceId)])];
-      const names = workspaceIds.length === 0
-        ? new Map<string, string>()
-        : new Map((await db.query.workspaces.findMany({
-            columns: { id: true, name: true },
-            where: inArray(workspaces.id, workspaceIds),
-          })).map((w: Readonly<{ id: string; name: string }>): [string, string] => [w.id, w.name]));
-      for (const run of confirmedRuns) {
-        const confirmedAt = (run.statusTimestamps)?.["confirmed-at"];
-        const scheduledAt = run.scheduledAt;
-        // scheduled_at semantics (kanban t_19f3556e): an apply is only a
-        // FUTURE scheduled action while its scheduled time is still ahead.
-        // A confirmed run whose scheduled time has passed is historical
-        // activity (shown at its confirmation time, not flagged scheduled).
-        const futureScheduled = scheduledAt !== null && scheduledAt > Date.now();
-        entries.push({
-          kind: "apply",
-          at: futureScheduled
-            ? new Date(scheduledAt).toISOString()
-            : (confirmedAt ?? new Date(run.createdAt).toISOString()),
-          scheduled: futureScheduled,
-          "scheduled-at": futureScheduled ? new Date(scheduledAt).toISOString() : null,
-          runId: run.id,
-          workspaceId: run.workspaceId,
-          workspaceName: names.get(run.workspaceId) ?? null,
-        });
-      }
-      for (const request of pendingRequests) {
-        entries.push({
-          kind: "change-request",
-          at: new Date(request.createdAt).toISOString(),
-          scheduled: false,
-          changeRequestId: request.id,
-          subject: request.subject,
-          workspaceId: request.workspaceId,
-          workspaceName: names.get(request.workspaceId) ?? null,
-        });
-      }
-      // Same run-read permission filter as confirmed runs / change requests:
-      // auto-destroy schedules are only visible for workspaces the user can
-      // read, so a scoped user cannot enumerate other workspaces' schedules.
-      // Without an explicit range the default is future-only (matching the
-      // original endpoint); an explicit filter[start] can reach past ones.
-      const nowIso = new Date().toISOString();
-      const autoDestroys = await db.query.workspaces.findMany({
-        columns: { id: true, name: true, autoDestroyAt: true },
-        where: and(
-          eq(workspaces.orgId, organization.id),
-          inArray(workspaces.id, allowedWorkspaceIds),
-          ...(start === undefined && end === undefined
-            ? [gte(workspaces.autoDestroyAt, nowIso)]
-            : [
-                ...(start === undefined ? [] : [gte(workspaces.autoDestroyAt, start.iso)]),
-                ...(end === undefined ? [] : [lte(workspaces.autoDestroyAt, end.iso)]),
-              ]),
-        ),
-        orderBy: [asc(workspaces.autoDestroyAt), asc(workspaces.id)],
-      });
-      for (const workspace of autoDestroys) {
-        entries.push({
-          kind: "auto-destroy",
-          at: workspace.autoDestroyAt ?? "",
-          scheduled: false,
-          workspaceId: workspace.id,
-          workspaceName: workspace.name,
-        });
-      }
-    }
-    // Deterministic merged ordering: effective time, then a fixed kind
-    // order, then the stable entry id. Sorting happens after the range
-    // filters so every entry in the response is in range.
-    entries.sort((a: CalendarEntry, b: CalendarEntry): number => {
-      const byAt = a.at.localeCompare(b.at);
-      if (byAt !== 0) return byAt;
-      const byKind = CALENDAR_KIND_ORDER[a.kind] - CALENDAR_KIND_ORDER[b.kind];
-      if (byKind !== 0) return byKind;
-      return calendarEntryId(a).localeCompare(calendarEntryId(b));
-    });
-    const pageEntries = entries.slice((number - 1) * size, number * size);
-    const data = pageEntries.map((attributes: CalendarEntry): Record<string, unknown> => ({
-      // Entry-specific id first so every item has a unique type+id pair:
-      // a workspace can appear once per confirmed run / change request, so
-      // workspaceId alone would collide for repeated entries.
-      id: calendarEntryId(attributes),
-      type: "change-calendar-entry",
-      attributes,
-    }));
-    return { data, ...pagination(request, number, size, entries.length) };
-  })
   // --- AI run explainer (kanban 21.2) ------------------------------------
     // Read-only convenience: feeds the sanitized stored plan JSON (or a failed
     // apply log) to a user-configured OpenAI-compatible endpoint and returns the

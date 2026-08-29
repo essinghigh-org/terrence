@@ -46,13 +46,9 @@ Terrence extracts metadata per section: inputs, outputs, resources, and dependen
 
 Module versions follow semantic versioning. Version status is tracked per version. A failed ingestion shows the error and can be retried.
 
-### No-code modules
+### Provider-managed no-code resource
 
-A no-code module is a module with a published configuration schema. Workspaces can be created from it without writing configuration. See [No-code provisioning](no-code).
-
-### Module sharing
-
-Organizations can share modules with other organizations. The module-sharing settings control which modules are visible outside the owning organization.
+The backend retains the `tfe_no_code_module` provider resource and its schema/API behavior. It is managed through provider configuration rather than a Terrence provisioning UI.
 
 ## Providers
 

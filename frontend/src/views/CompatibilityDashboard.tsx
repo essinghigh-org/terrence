@@ -75,7 +75,7 @@ cn("rounded font-mono", STATUS_STYLES[entry.status as keyof typeof STATUS_STYLES
   );
 }
 
-/** Terraform remote-workflow provider compatibility dashboard (kanban 11.18). */
+/** Official hashicorp/tfe provider compatibility dashboard. */
 export function CompatibilityDashboard(): React.JSX.Element {
   const [data, setData] = useState<ProviderSurface | null>(null);
   const [error, setError] = useState("");
@@ -130,7 +130,7 @@ export function CompatibilityDashboard(): React.JSX.Element {
       <PageHeader
         eyebrow="Site administration"
         title="Provider compatibility"
-        description={`${data?.provider ?? "hashicorp/tfe"} API surface: which resources and data sources the Terrence backend can actually serve, tracked by the provider E2E suite.`}
+        description={`${data?.provider ?? "hashicorp/tfe"} provider surface: resources and data sources covered by the provider E2E suite.`}
       />
 
       {loading ? (

@@ -1,15 +1,19 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import {
+  explorerBulkActionRecords,
+  auditLogs,
   explorerSavedQueries,
   organizations,
   type users,
   explorerCatalogMemberships,
   explorerWorkspaceInventory,
+  workspaces,
 } from "../db/schema";
-import { and, asc, count, countDistinct, desc, eq, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, countDistinct, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { checkOrganizationPermission, pageRequest, pagination } from "../lib/utils";
+import { queueExplorerBulkActionNotification } from "../lib/notifications";
 import { ensureExplorerInventory } from "../lib/explorer-inventory";
 import { isPostgres } from "../db/driver";
 
@@ -596,8 +600,188 @@ async function organizationFor(params: Readonly<Record<string, string>>): Promis
   return db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
 }
 
+type ExplorerBulkActionRecord = Readonly<typeof explorerBulkActionRecords.$inferSelect>;
+
+function explorerBulkActionRecordValues(
+  workspaceId: string,
+  subject: string,
+  message: string,
+  createdBy: string | null,
+  now: number,
+): ExplorerBulkActionRecord {
+  return {
+    id: `ebar-${crypto.randomUUID()}`,
+    workspaceId,
+    subject,
+    message,
+    status: "pending",
+    createdBy,
+    resolvedBy: null,
+    resolvedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function explorerBulkActionError(set: SetObj, status: number, title: string, detail?: string): Record<string, unknown> {
+  (set as { status: number }).status = status;
+  return error(String(status), title, detail);
+}
+
+// Explorer is a preserved backend compatibility surface. Its bulk-action
+// contract stores historical Explorer artifacts in the legacy table and emits
+// the provider-valid notification trigger, but no public change-request product
+// routes or WebUI are exposed.
+const MAX_EXPLORER_BULK_ACTION_TARGETS = 500;
+const EXPLORER_NOTIFICATION_CONCURRENCY = 10;
+
+function bulkActionQuery(value: unknown): ExplorerQuery | undefined {
+  if (value === null || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const type = viewType(raw.type);
+  if (type !== "workspaces") return undefined;
+  if (raw.filter !== undefined && !Array.isArray(raw.filter)) return undefined;
+
+  const filter = (raw.filter ?? []).flatMap((item): Readonly<Record<string, unknown>>[] => {
+    if (item === null || typeof item !== "object") return [];
+    const entries = Object.entries(item as Record<string, unknown>);
+    if (entries.length !== 1) return [];
+    const [field, operations] = entries[0] ?? [];
+    if (typeof field !== "string" || operations === null || typeof operations !== "object") return [];
+    return Object.entries(operations as Record<string, unknown>).map(([operator, values]) => ({
+      field,
+      operator,
+      value: values,
+    }));
+  });
+  if (filter.length !== (raw.filter ?? []).length) return undefined;
+  return queryObject({ type, filter, fields: [], sort: [] });
+}
+
+type ExplorerWorkspaceSelection = Readonly<{ ids: string[]; total: number }>;
+
+async function queryWorkspaceIds(
+  orgId: string,
+  orgName: string,
+  query: unknown,
+): Promise<ExplorerWorkspaceSelection | undefined> {
+  const parsed = bulkActionQuery(query);
+  if (parsed === undefined) return undefined;
+  const result = await indexedExplorerRows(
+    orgId,
+    orgName,
+    parsed,
+    { offset: 0, limit: MAX_EXPLORER_BULK_ACTION_TARGETS + 1 },
+  );
+  return { ids: result.rows.map((row): string => row.id), total: result.total };
+}
+
 export const explorerRoutes = new Elysia({ name: "explorer" })
   .use(authPlugin)
+  .post("/api/v2/organizations/:org_name/explorer/bulk-actions", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+    const organization = await organizationFor(params);
+    if (
+      organization === undefined
+      || !(await checkOrganizationPermission(organization.id, user?.id, tokenOrgId, tokenTeamId, "manage-workspaces"))
+    ) return explorerBulkActionError(set, 404, "Not Found");
+
+    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+    const data = payload.data;
+    const dataObject = data !== null && typeof data === "object" ? data as Record<string, unknown> : {};
+    const attributes = dataObject.attributes !== null && typeof dataObject.attributes === "object"
+      ? dataObject.attributes as Record<string, unknown>
+      : {};
+    const inputs = attributes.action_inputs !== null && typeof attributes.action_inputs === "object"
+      ? attributes.action_inputs as Record<string, unknown>
+      : {};
+    const subject = typeof inputs.subject === "string" ? inputs.subject.trim() : "";
+    const message = typeof inputs.message === "string" ? inputs.message.trim() : "";
+    const actionType = attributes.action_type;
+    const targetIds = attributes.target_ids;
+    const query = attributes.query;
+    if (
+      dataObject.type !== "bulk_actions"
+      || (actionType !== "change_request" && actionType !== "change_requests")
+      || subject === ""
+      || message === ""
+      || (targetIds === undefined) === (query === undefined)
+    ) return explorerBulkActionError(set, 422, "Unprocessable Entity", "Valid bulk-action inputs and exactly one target selector are required");
+
+    let selectedIds: string[] | undefined;
+    let selectedTotal: number | undefined;
+    if (targetIds !== undefined) {
+      if (
+        !Array.isArray(targetIds)
+        || targetIds.length === 0
+        || targetIds.length > MAX_EXPLORER_BULK_ACTION_TARGETS
+        || targetIds.some((id): boolean => typeof id !== "string")
+      ) {
+        return explorerBulkActionError(set, 422, "Unprocessable Entity", `target_ids must contain between 1 and ${MAX_EXPLORER_BULK_ACTION_TARGETS} workspace IDs`);
+      }
+      const requestedIds = [...new Set(targetIds as string[])];
+      const candidates = await db.query.workspaces.findMany({
+        columns: { id: true },
+        where: and(eq(workspaces.orgId, organization.id), inArray(workspaces.id, requestedIds)),
+      });
+      const candidateIds = new Set(candidates.map((workspace): string => workspace.id));
+      selectedIds = requestedIds;
+      if (selectedIds.some((id): boolean => !candidateIds.has(id))) selectedIds = undefined;
+    } else {
+      const selection = await queryWorkspaceIds(organization.id, organization.name, query);
+      selectedIds = selection?.ids;
+      selectedTotal = selection?.total;
+    }
+    if (selectedIds === undefined || selectedIds.length === 0) {
+      return explorerBulkActionError(set, 422, "Unprocessable Entity", "The target selector did not resolve to workspaces");
+    }
+    if (
+      selectedIds.length > MAX_EXPLORER_BULK_ACTION_TARGETS
+      || (selectedTotal !== undefined && selectedTotal > MAX_EXPLORER_BULK_ACTION_TARGETS)
+    ) {
+      return explorerBulkActionError(set, 422, "Unprocessable Entity", `The target selector matches more than ${MAX_EXPLORER_BULK_ACTION_TARGETS} workspaces`);
+    }
+
+    const now = Date.now();
+    const records = selectedIds.map((workspaceId): ExplorerBulkActionRecord =>
+      explorerBulkActionRecordValues(workspaceId, subject, message, user?.id ?? null, now));
+    await db.transaction(async (tx): Promise<void> => {
+      await tx.insert(explorerBulkActionRecords).values(records);
+      await tx.insert(auditLogs).values(records.map((record) => ({
+        id: crypto.randomUUID(),
+        orgId: organization.id,
+        userId: user?.id ?? null,
+        action: "create",
+        resourceType: "explorer-bulk-action-records",
+        resourceId: record.id,
+        details: {
+          workspaceId: record.workspaceId,
+          toStatus: "pending",
+        },
+        createdAt: now,
+      })));
+    });
+    // Notifications reread the committed Explorer bulk-action rows. Dispatching only
+    // after commit prevents a failed transaction from producing a notification
+    // for a row that never became durable.
+    for (let i = 0; i < records.length; i += EXPLORER_NOTIFICATION_CONCURRENCY) {
+      await Promise.all(records
+        .slice(i, i + EXPLORER_NOTIFICATION_CONCURRENCY)
+        .map((record): Promise<void> => queueExplorerBulkActionNotification(record.id)));
+    }
+    (set as { status: number }).status = 201;
+    return {
+      data: {
+        id: `eba-${crypto.randomUUID()}`,
+        type: "explorer_bulk_actions",
+        attributes: {
+          organization_id: organization.id,
+          action_type: "change_requests",
+          action_inputs: { subject, message },
+          created_by: user === null || user === undefined ? null : { id: user.id, type: "users" },
+        },
+      },
+    };
+  })
   .get("/api/v2/organizations/:org_name/explorer", async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
     if (org === undefined || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
