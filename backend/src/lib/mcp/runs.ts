@@ -9,6 +9,16 @@ import { queueRunNotification } from "../notifications";
 import { createRun } from "../../routes/runs";
 import { toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
 
+function runCreationAttributes(args: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const attributes: Record<string, unknown> = {};
+  for (const key of ["message", "terraform-version", "is-destroy", "auto-apply", "plan-only", "refresh", "refresh-only"]) {
+    const value = args[key];
+    if (value !== null && value !== undefined) attributes[key] = value;
+  }
+  if (Array.isArray(args["target-addrs"])) attributes["target-addrs"] = args["target-addrs"];
+  return attributes;
+}
+
 /**
  * Run tools. Reads require the `runs:read` grant (the `run-read` workspace
  * permission maps to it). Targets are always re-authorized via
@@ -79,12 +89,7 @@ export const runTools: readonly McpTool[] = [
     requires: ["runs:plan"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
       const workspaceId = String(args.workspace_id);
-      const attributes: Record<string, unknown> = {};
-      for (const key of ["message", "terraform-version", "is-destroy", "auto-apply", "plan-only", "refresh", "refresh-only"]) {
-        const value = args[key];
-        if (value !== null && value !== undefined) attributes[key] = value;
-      }
-      if (Array.isArray(args["target-addrs"])) attributes["target-addrs"] = args["target-addrs"];
+      const attributes = runCreationAttributes(args);
       const set: { status?: number | string; headers: Record<string, string | number> } = { headers: {} };
       const result = await createRun(
         workspaceId,
