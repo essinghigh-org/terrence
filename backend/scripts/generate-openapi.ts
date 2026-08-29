@@ -77,6 +77,9 @@ for (const route of routes) {
   const slug = openApiPath.replaceAll(/[^a-zA-Z0-9]+/g, "-").replaceAll(/^-|-$/g, "");
   const operationId = uniqueOperationId(slug === "" ? `${m}-root` : `${m}-${slug}`);
   const tags = tagForPath(openApiPath);
+  const successStatus = m === "post" && openApiPath === "/api/v2/organizations/{org_name}/explorer/bulk-actions"
+    ? "201"
+    : "200";
 
   paths[openApiPath] ??= {};
   // If two handlers share the same path+method (overlapping plugins), keep the first.
@@ -97,7 +100,7 @@ for (const route of routes) {
       : {}),
     summary: `${m.toUpperCase()} ${openApiPath}`,
     responses: {
-      "200": {
+      [successStatus]: {
         description: "Success",
         content: { "application/vnd.api+json": { schema: { type: "object" } } },
       },

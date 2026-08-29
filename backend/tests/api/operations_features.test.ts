@@ -6,14 +6,11 @@ import { db } from "../../src/db";
 import {
   adminSettings,
   apiTokens,
-  changeRequests,
   logs,
-  organizationMemberships,
   organizations,
   runExplanations,
   runs,
   users,
-  workspaces,
 } from "../../src/db/schema";
 import {
   getSettings,
@@ -76,15 +73,8 @@ const userId = `ops-user-${suffix}`;
 const token = `ops-token-${suffix}`;
 const adminUserId = `ops-admin-${suffix}`;
 const adminToken = `ops-admin-token-${suffix}`;
-// Dedicated principal for the calendar tests: the per-user rate limiter
-// (30 req/1000ms) makes this request-heavy file flake at its tail, so the
-// calendar assertions get their own token bucket instead of stealing from
-// the main user's (see tests/setup.ts rate-limit notes).
-const calendarUserId = `ops-calendar-user-${suffix}`;
-const calendarToken = `ops-calendar-token-${suffix}`;
 const orgName = `ops-org-${suffix}`;
 const workspaceName = `ops-workspace-${suffix}`;
-const calendarRunId = `ops-calendar-run-${suffix}`;
 const planRunId = `ops-plan-run-${suffix}`;
 const webhookRunId = `ops-webhook-run-${suffix}`;
 const explainerRunId = `ops-explainer-run-${suffix}`;
@@ -134,34 +124,11 @@ beforeAll(async () => {
     { id: `ops-token-id-${suffix}`, token: createHash("sha256").update(token).digest("hex"), userId },
     { id: `ops-admin-token-id-${suffix}`, token: createHash("sha256").update(adminToken).digest("hex"), userId: adminUserId },
   ]);
-  // Dedicated principal for the calendar tests (own rate-limit bucket; see
-  // the calendarToken declaration comment above).
-  await db.insert(users).values({
-    id: calendarUserId,
-    username: `ops-calendar-user-${suffix}`,
-    email: `ops-calendar-user-${suffix}@example.com`,
-    passwordHash: "unused",
-  });
-  await db.insert(apiTokens).values({
-    id: `ops-calendar-token-id-${suffix}`,
-    token: createHash("sha256").update(calendarToken).digest("hex"),
-    userId: calendarUserId,
-  });
-
   const orgResponse = await request("/api/v2/organizations", "POST", {
     data: { type: "organizations", attributes: { name: orgName } },
   });
   expect(orgResponse.status).toBe(201);
   orgId = (await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) }))?.id ?? "";
-  await db.insert(organizationMemberships).values({
-    id: `ops-calendar-membership-${suffix}`,
-    userId: calendarUserId,
-    orgId,
-    // Owner role: the calendar tests exercise org-wide run-read scoping,
-    // so the fixture principal needs org-wide workspace access.
-    role: "owner",
-  });
-
   const workspaceResponse = await request(`/api/v2/organizations/${orgName}/workspaces`, "POST", {
     data: { type: "workspaces", attributes: { name: workspaceName } },
   });
@@ -173,15 +140,8 @@ beforeAll(async () => {
   expect(webhookWorkspaceResponse.status).toBe(201);
   webhookWorkspaceId = ((await webhookWorkspaceResponse.json()) as { data: { id: string } }).data.id;
 
-  // A run awaiting apply (confirmed) for the calendar test.
+  // Runs used by the remote-workflow and explainer assertions below.
   await db.insert(runs).values([
-    {
-      id: calendarRunId,
-      workspaceId,
-      status: "confirmed",
-      createdAt: Date.now() - 60_000,
-      statusTimestamps: { "confirmed-at": new Date(Date.now() - 60_000).toISOString() },
-    },
     {
       id: webhookRunId,
       workspaceId: webhookWorkspaceId,
@@ -201,28 +161,17 @@ beforeAll(async () => {
       createdAt: Date.now() - 10_000,
     },
   ]);
-  await db.insert(changeRequests).values({
-    id: `ops-cr-${suffix}`,
-    workspaceId,
-    subject: `Change request ${suffix}`,
-    message: "pending request for calendar",
-    status: "pending",
-    createdAt: Date.now() - 5_000,
-  });
 });
 
 afterAll(async () => {
   await db.delete(adminSettings).where(inArray(adminSettings.id, ["approval-webhook", "maintenance-windows", "plan-explainer"]));
   invalidateSettingsCache();
   await deletePlanJsonArtifact(explainerRunId).catch((): void => {});
-  await db.delete(organizationMemberships).where(eq(organizationMemberships.userId, calendarUserId));
   if (orgId !== "") await db.delete(organizations).where(eq(organizations.id, orgId));
   await db.delete(apiTokens).where(eq(apiTokens.token, createHash("sha256").update(token).digest("hex")));
   await db.delete(apiTokens).where(eq(apiTokens.token, createHash("sha256").update(adminToken).digest("hex")));
-  await db.delete(apiTokens).where(eq(apiTokens.token, createHash("sha256").update(calendarToken).digest("hex")));
   await db.delete(users).where(eq(users.id, userId));
   await db.delete(users).where(eq(users.id, adminUserId));
-  await db.delete(users).where(eq(users.id, calendarUserId));
 });
 
 describe("maintenance windows (21.6)", () => {
@@ -348,147 +297,6 @@ describe("external approval webhook (21.8)", () => {
       body: payload,
     }));
     expect(response.status).toBe(422);
-  });
-});
-
-describe("change calendar (21.4)", () => {
-  it("lists applies, auto-destroys, and change requests sorted by time", async () => {
-    const futureAutoDestroy = new Date(Date.now() + 86_400_000).toISOString();
-    await db.update(workspaces).set({ autoDestroyAt: futureAutoDestroy }).where(eq(workspaces.id, workspaceId));
-
-    const response = await request(`/api/v2/organizations/${orgName}/change-calendar`, "GET", undefined, { Authorization: `Bearer ${calendarToken}` });
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as {
-      data: { type: string; attributes: { kind: string; at?: string; workspaceId?: string; workspaceName?: string; scheduled?: boolean } }[];
-      meta?: { "total-count"?: number; pagination?: { "total-count"?: number; "next-page"?: number | null } };
-    };
-    const kinds = body.data.map((entry): string => entry.attributes.kind);
-    expect(kinds).toContain("apply");
-    expect(kinds).toContain("auto-destroy");
-    expect(kinds).toContain("change-request");
-    expect(body.meta?.pagination?.["total-count"]).toBe(body.data.length);
-    const applyEntry = body.data.find((entry): boolean => entry.attributes.kind === "apply");
-    expect(applyEntry?.attributes.workspaceName).toBe(workspaceName);
-    // A confirmed run without a schedule is historical activity, not a
-    // future-scheduled action: it must be flagged as such.
-    expect(applyEntry?.attributes.scheduled).toBe(false);
-    const atValues = body.data.map((entry): string => String(entry.attributes.at ?? ""));
-    expect([...atValues].sort()).toEqual(atValues);
-
-    // Real pagination: a size-1 page returns exactly one entry and reports
-    // the same total as the full listing.
-    const pageOne = await request(`/api/v2/organizations/${orgName}/change-calendar?page%5Bnumber%5D=1&page%5Bsize%5D=1`, "GET", undefined, { Authorization: `Bearer ${calendarToken}` });
-    expect(pageOne.status).toBe(200);
-    const pageOneBody = (await pageOne.json()) as {
-      data: { attributes: { kind: string } }[];
-      meta: { pagination: { "total-count": number; "next-page": number | null } };
-    };
-    expect(pageOneBody.data.length).toBe(1);
-    expect(pageOneBody.meta.pagination["total-count"]).toBe(body.meta?.pagination?.["total-count"] ?? 0);
-    expect(pageOneBody.meta.pagination["next-page"]).toBe(body.data.length > 1 ? 2 : null);
-  });
-
-  it("filters by date range and exposes future-scheduled applies", async () => {
-    const scheduledRunId = `ops-calendar-scheduled-${suffix}`;
-    const scheduledAt = Date.now() + 3_600_000;
-    // confirmed-at sits INSIDE the past-only window so the exclusion below
-    // can only come from the future scheduled_at branch of the range
-    // predicate, not from the confirmation timestamp.
-    const confirmedAt = Date.now() - 30_000;
-    await db.insert(runs).values({
-      id: scheduledRunId,
-      workspaceId,
-      status: "confirmed",
-      createdAt: Date.now() - 120_000,
-      scheduledAt,
-      statusTimestamps: {
-        "confirmed-at": new Date(confirmedAt).toISOString(),
-        "scheduled-at": new Date(scheduledAt).toISOString(),
-      },
-    });
-    try {
-      // Range excluding the scheduled time: the scheduled run must vanish
-      // even though its confirmation happened inside the window.
-      const pastOnly = await request(
-        `/api/v2/organizations/${orgName}/change-calendar?filter%5Bstart%5D=${encodeURIComponent(new Date(confirmedAt - 30_000).toISOString())}&filter%5Bend%5D=${encodeURIComponent(new Date(confirmedAt + 30_000).toISOString())}`,
-        "GET",
-        undefined,
-        { Authorization: `Bearer ${calendarToken}` },
-      );
-      expect(pastOnly.status).toBe(200);
-      const pastBody = (await pastOnly.json()) as { data: { attributes: { kind: string; runId?: string } }[] };
-      expect(pastBody.data.some((entry): boolean => entry.attributes.runId === scheduledRunId)).toBe(false);
-
-      // Range covering the scheduled time: the entry is flagged as
-      // scheduled and carries the scheduled-at attribute.
-      const upcoming = await request(
-        `/api/v2/organizations/${orgName}/change-calendar?filter%5Bstart%5D=${encodeURIComponent(new Date(scheduledAt - 60_000).toISOString())}&filter%5Bend%5D=${encodeURIComponent(new Date(scheduledAt + 60_000).toISOString())}`,
-        "GET",
-        undefined,
-        { Authorization: `Bearer ${calendarToken}` },
-      );
-      expect(upcoming.status).toBe(200);
-      const upcomingBody = (await upcoming.json()) as {
-        data: { attributes: { kind: string; runId?: string; scheduled?: boolean; "scheduled-at"?: string | null } }[];
-      };
-      const scheduledEntry = upcomingBody.data.find((entry): boolean => entry.attributes.runId === scheduledRunId);
-      expect(scheduledEntry).toBeDefined();
-      expect(scheduledEntry?.attributes.scheduled).toBe(true);
-      expect(scheduledEntry?.attributes["scheduled-at"]).toBe(new Date(scheduledAt).toISOString());
-    } finally {
-      await db.delete(runs).where(eq(runs.id, scheduledRunId));
-    }
-  });
-
-  it("does not flag an apply whose scheduled time has already passed as future-scheduled (t_19f3556e)", async () => {
-    const pastScheduledRunId = `ops-calendar-past-sched-${suffix}`;
-    const confirmedAt = Date.now() - 60_000;
-    await db.insert(runs).values({
-      id: pastScheduledRunId,
-      workspaceId,
-      status: "confirmed",
-      createdAt: Date.now() - 180_000,
-      scheduledAt: Date.now() - 30_000,
-      statusTimestamps: {
-        "confirmed-at": new Date(confirmedAt).toISOString(),
-        "scheduled-at": new Date(Date.now() - 30_000).toISOString(),
-      },
-    });
-    try {
-      const response = await request(`/api/v2/organizations/${orgName}/change-calendar`, "GET", undefined, {
-        Authorization: `Bearer ${calendarToken}`,
-      });
-      expect(response.status).toBe(200);
-      const body = (await response.json()) as {
-        data: { attributes: { kind: string; runId?: string; at?: string; scheduled?: boolean; "scheduled-at"?: string | null } }[];
-      };
-      const entry = body.data.find((item): boolean => item.attributes.runId === pastScheduledRunId);
-      expect(entry).toBeDefined();
-      // Past schedule: rendered as historical activity at the confirmation
-      // time, NOT as a future-scheduled action.
-      expect(entry?.attributes.scheduled).toBe(false);
-      expect(entry?.attributes["scheduled-at"]).toBeNull();
-      expect(entry?.attributes.at).toBe(new Date(confirmedAt).toISOString());
-
-      // The range predicate must match its rendering: a range around the
-      // confirmation time includes the past-scheduled run.
-      const ranged = await request(
-        `/api/v2/organizations/${orgName}/change-calendar?filter%5Bstart%5D=${encodeURIComponent(new Date(confirmedAt - 30_000).toISOString())}&filter%5Bend%5D=${encodeURIComponent(new Date(confirmedAt + 30_000).toISOString())}`,
-        "GET",
-        undefined,
-        { Authorization: `Bearer ${calendarToken}` },
-      );
-      expect(ranged.status).toBe(200);
-      const rangedBody = (await ranged.json()) as { data: { attributes: { runId?: string } }[] };
-      expect(rangedBody.data.some((item): boolean => item.attributes.runId === pastScheduledRunId)).toBe(true);
-    } finally {
-      await db.delete(runs).where(eq(runs.id, pastScheduledRunId));
-    }
-  });
-
-  it("hides the calendar from users without org access", async () => {
-    const response = await request(`/api/v2/organizations/nonexistent-${suffix}/change-calendar`);
-    expect(response.status).toBe(404);
   });
 });
 

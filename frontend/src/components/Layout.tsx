@@ -31,7 +31,6 @@ import {
   Menu,
   MonitorSmartphone,
   Package,
-  PackageOpen,
   Fingerprint,
   PanelLeftClose,
   PanelLeftOpen,
@@ -46,15 +45,11 @@ import {
   UserRound,
   Users,
   Variable,
-  Hourglass,
   Layers,
-  Calendar,
   Tags,
-  FileClock,
   Mail,
   SlidersHorizontal,
   UserCog,
-  Share2,
 } from "lucide-react";
 
 import {
@@ -995,22 +990,10 @@ export function Layout({
           to: `${organizationSettingsPath}/policy-sets/tags`,
         },
         {
-          active: isActivePath(location.pathname, `${organizationSettingsPath}/provider-sets`),
-          icon: Package,
-          label: "Provider sets",
-          to: `${organizationSettingsPath}/provider-sets`,
-        },
-        {
           active: isActivePath(location.pathname, `${organizationSettingsPath}/oidc`),
           icon: Fingerprint,
           label: "OIDC",
           to: `${organizationSettingsPath}/oidc`,
-        },
-        {
-          active: isActivePath(location.pathname, `${organizationSettingsPath}/token-ttl`),
-          icon: Hourglass,
-          label: "Token TTL policies",
-          to: `${organizationSettingsPath}/token-ttl`,
         },
         {
           active: isActivePath(location.pathname, `${organizationSettingsPath}/stacks-workspaces`),
@@ -1018,44 +1001,14 @@ export function Layout({
           label: "Stacks",
           to: `${organizationSettingsPath}/stacks-workspaces`,
         },
-        {
-          active: isActivePath(location.pathname, `${organizationSettingsPath}/agent-pool-scoping`),
-          icon: SlidersHorizontal,
-          label: "Agent pool scoping",
-          to: `${organizationSettingsPath}/agent-pool-scoping`,
-        },
-        {
-          active: isActivePath(location.pathname, `${organizationSettingsPath}/hyok`),
-          icon: KeyRound,
-          label: "Encryption keys",
-          to: `${organizationSettingsPath}/hyok`,
-        },
-        {
-          active: isActivePath(location.pathname, `${organizationSettingsPath}/audit-trail-tokens`),
-          icon: FileClock,
-          label: "Audit trail token",
-          to: `${organizationSettingsPath}/audit-trail-tokens`,
-        },
-        {
-          active: isActivePath(location.pathname, `${organizationSettingsPath}/module-sharing`),
-          icon: Share2,
-          label: "Module sharing",
-          to: `${organizationSettingsPath}/module-sharing`,
-        },
       ] as const).filter((link): boolean =>
         (link.label !== "Variable sets" || canManageWorkspaces)
         && (link.label !== "VCS providers" || canManageVcsSettings)
         && (link.label !== "Agent pools" || canManageAgentPools)
         && (link.label !== "Policy sets" || canManagePolicies)
         && (link.label !== "Tag policy sets" || canManagePolicies)
-        && (link.label !== "Provider sets" || canManagePolicies)
         && (link.label !== "OIDC" || canManagePolicies)
-        && (link.label !== "Token TTL policies" || canManagePolicies)
-        && (link.label !== "Stacks" || canManageWorkspaces)
-        && (link.label !== "Agent pool scoping" || canManageAgentPools)
-        && (link.label !== "Encryption keys" || canManagePolicies)
-        && (link.label !== "Audit trail token" || canManagePolicies)
-        && (link.label !== "Module sharing" || siteAdmin));
+        && (link.label !== "Stacks" || canManageWorkspaces));
 
       return (
         <>
@@ -1095,13 +1048,9 @@ export function Layout({
         { label: "Projects", to: `${orgPath}/projects`, icon: FolderGit2 },
         { label: "Workspaces", to: `${orgPath}/workspaces`, icon: Box },
         { label: "Registry", to: `${orgPath}/registry`, icon: Package },
-        { label: "No-code modules", to: `${orgPath}/no-code`, icon: PackageOpen },
-        { label: "Change calendar", to: `${orgPath}/calendar`, icon: Calendar },
-        { label: "Change requests", to: `${orgPath}/change-requests`, icon: GitPullRequest },
         { label: "Settings", to: `${orgPath}/settings`, icon: Settings, trailing: true },
       ] as const).filter((link): boolean =>
-        (link.label !== "Projects" || canReadProjects)
-        && (link.label !== "No-code modules" || canManageWorkspaces));
+        link.label !== "Projects" || canReadProjects);
 
       // Sidebar shortcuts are re-read on every navigation (visitsRevision
       // bumps when a workspace is visited, so the list stays current).

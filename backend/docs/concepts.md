@@ -7,7 +7,7 @@ description: The object model: organizations, projects, workspaces, runs, state,
 
 # Core concepts
 
-This page explains the objects Terrence manages and how they relate. The model matches the Terraform cloud API, so existing Terraform knowledge transfers directly.
+This page explains the objects Terrence manages and how they relate. The model follows familiar Terraform concepts while Terrence remains an independent self-hosted implementation; provider and CLI compatibility are documented separately.
 
 ## Organizations
 

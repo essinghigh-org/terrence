@@ -303,7 +303,7 @@ function sourceLabel(source: string | undefined): string {
     "tfe-api": "API",
     "tfe-cli": "CLI",
     "tfe-configuration-version": "VCS",
-    "tfe-no-code": "No-code provisioning",
+    "tfe-no-code": "No-code module",
     "tfe-ui": "UI",
   };
   // SAFETY: unknown sources fall through to the raw source label below.

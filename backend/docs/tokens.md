@@ -2,7 +2,7 @@
 title: Tokens
 category: Organizations and access
 order: 50
-description: API tokens, fine-grained scopes, TTL policies, and run tokens.
+description: API tokens, fine-grained scopes, and run tokens.
 ---
 
 # Tokens
@@ -40,15 +40,6 @@ A user token can carry scopes. Scopes restrict the token to:
 - A set of permission grants.
 
 A scoped token cannot mint new tokens. Requests outside the scope are rejected.
-
-## Token TTL policies
-
-Organizations can enforce TTL policies for tokens:
-
-- Maximum lifetime for user tokens.
-- Maximum lifetime for organization and team tokens.
-
-The policy applies at token creation. Tokens longer than the policy are rejected.
 
 ## Run tokens
 

@@ -7,7 +7,7 @@ description: The JSON:API contract, authentication, errors, events, and the MCP 
 
 # API reference
 
-The API implements the Terraform Cloud API contract. Tools written against that contract work unchanged.
+The API serves Terrence's WebUI and supported Terraform/OpenTofu remote workflows. It also implements the endpoints required by the official `hashicorp/tfe` provider. Terrence does not promise general Terraform Enterprise or HCP Terraform API parity.
 
 ## Base and format
 
@@ -127,7 +127,7 @@ Login, registration, and password endpoints are rate limited per address. Exceed
 
 ## Versioning
 
-The API is additive. New endpoints and attributes are added without changing existing behavior. Attribute names use the contract's kebab-case convention.
+The API is additive within the retained Terrence product, provider, and CLI compatibility contracts. New endpoints and attributes are added without changing those supported behaviors; retired non-contract product surfaces are not restored. Attribute names use the contract's kebab-case convention.
 
 ## Documentation endpoints
 

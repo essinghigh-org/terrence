@@ -10,6 +10,5 @@ export const TEST_PATHS = {
   adminSecurity: "/app/admin",
   adminOperations: "/app/admin/operations",
   orgWorkspaces: `/app/${TEST_ORG}/workspaces`,
-  orgCalendar: `/app/${TEST_ORG}/calendar`,
   accountSettings: "/app/account",
 } as const;

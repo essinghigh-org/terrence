@@ -1019,7 +1019,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return new Response(null, { status: 202 });
   })
   .post("/api/v2/runs/:run_id/actions/schedule-apply", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    // Schedule a confirmed apply for a future time (change-calendar 21.4).
+    // Schedule a confirmed apply for a future time.
     // The worker applies the run when scheduled-at arrives; the manual apply
     // action clears the schedule and applies immediately.
     const runId = params.run_id ?? "";

@@ -101,9 +101,9 @@ export const auditLogs: typeof sqliteSchema.auditLogs = pgTables === null
   ? sqliteSchema.auditLogs
   : (pgTables[dbNameOf(sqliteSchema.auditLogs)] as unknown as typeof sqliteSchema.auditLogs);
 
-export const changeRequests: typeof sqliteSchema.changeRequests = pgTables === null
-  ? sqliteSchema.changeRequests
-  : (pgTables[dbNameOf(sqliteSchema.changeRequests)] as unknown as typeof sqliteSchema.changeRequests);
+export const explorerBulkActionRecords: typeof sqliteSchema.explorerBulkActionRecords = pgTables === null
+  ? sqliteSchema.explorerBulkActionRecords
+  : (pgTables[dbNameOf(sqliteSchema.explorerBulkActionRecords)] as unknown as typeof sqliteSchema.explorerBulkActionRecords);
 
 export const cidrRangeListAgentPools: typeof sqliteSchema.cidrRangeListAgentPools = pgTables === null
   ? sqliteSchema.cidrRangeListAgentPools
@@ -340,10 +340,6 @@ export const projects: typeof sqliteSchema.projects = pgTables === null
 export const providerSets: typeof sqliteSchema.providerSets = pgTables === null
   ? sqliteSchema.providerSets
   : (pgTables[dbNameOf(sqliteSchema.providerSets)] as unknown as typeof sqliteSchema.providerSets);
-
-export const queryRuns: typeof sqliteSchema.queryRuns = pgTables === null
-  ? sqliteSchema.queryRuns
-  : (pgTables[dbNameOf(sqliteSchema.queryRuns)] as unknown as typeof sqliteSchema.queryRuns);
 
 export const rateLimitBuckets: typeof sqliteSchema.rateLimitBuckets = pgTables === null
   ? sqliteSchema.rateLimitBuckets

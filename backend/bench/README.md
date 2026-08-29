@@ -11,10 +11,10 @@ benches boot their own temp database.
 
 | File | What it measures |
 |---|---|
-| `db-queries.ts` | The three hottest runs-table queries (queue scan, workspace run list, calendar range) at 60k rows, before/after index creation |
+| `db-queries.ts` | The three hottest runs-table queries (queue scan, workspace run list, scheduled apply) at 60k rows, before/after index creation |
 | `pure.bench.ts` | Security headers, url-safety, plan-json counts, notification rendering, runResource serialization, request helpers |
 | `http-routes.bench.ts` | Real end-to-end HTTP: boot the app against a temp DB, time authed/unauth requests |
-| `frontend/bench/frontend.bench.ts` | cn() patterns, ChangeCalendar sort |
+| `frontend/bench/frontend.bench.ts` | cn() patterns |
 
 ## Results (2026-08-15)
 
@@ -22,13 +22,12 @@ benches boot their own temp database.
 
 | Query | Before (no index) | After (indexed) | Speedup |
 |---|---|---|---|
-| pending queue scan (pollWorkerQueue) | 4.05 ms | 0.02 ms | ~200x |
-| workspace run list | 3.65 ms | 0.10 ms | ~36x |
-| change-calendar confirmed range | 10.49 ms | 0.62 ms | ~17x |
+| pending queue scan (pollWorkerQueue) | 4.14 ms | 0.02 ms | ~207x |
+| workspace run list | 3.59 ms | 0.10 ms | ~36x |
+| scheduled apply (applyDueScheduledRuns) | 0.15 ms | 0.04 ms | ~4x |
 
 Indexes added: `runs(workspace_id, status, created_at)`,
-`runs(status, created_at)`, `configuration_versions(workspace_id, created_at)`,
-`workspaces(org_id)` (both schemas + idempotent boot-time creation).
+`runs(status, created_at)`, and `runs(status, scheduled_at)`.
 
 ### HTTP end-to-end (temp DB, real app)
 
@@ -46,7 +45,8 @@ runResource 0.008 ms/run, signedApiURL 0.012 ms.
 
 ### Frontend
 
-cn() ~0.75 us/call (twMerge floor), calendar sort 2000 entries 0.077 ms.
+cn() ~0.75 us/call (twMerge floor), measured across repeated, conditional,
+and variant-heavy class lists.
 
 ## Dead ends (measured, not assumed)
 

@@ -7,7 +7,7 @@ description: Estimate plan costs with the Infracost integration.
 
 # Cost estimates
 
-Cost estimates show the projected price of a plan. Terrence computes estimates with Infracost when the integration is enabled.
+Cost estimates are an optional convenience integration, not a cost-management product. For richer cost, security, compliance, or approval workflows, use a Run Task so the external tool owns that domain.
 
 ## Enable Infracost
 

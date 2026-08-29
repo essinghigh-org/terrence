@@ -75,7 +75,7 @@ A plan with no resource changes finishes as `planned_and_finished` without apply
 
 Runs that need confirmation stop in `planned`, `planned_and_saved`, or `policy_soft_failed`. Confirm from the web interface or with `POST /api/v2/runs/:id/actions/apply`.
 
-Runs can also be scheduled to apply at a later time. Scheduled applies appear on the change calendar. See [Change calendar](change-calendar).
+Runs can also be scheduled to apply at a later time. The worker persists the schedule and applies the confirmed run when its time arrives, including after a restart.
 
 ## Operator actions
 

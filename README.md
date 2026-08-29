@@ -11,7 +11,7 @@
   <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/essinghigh-org/terrence/ci.yml?branch=master&style=flat-square">
 </p>
 
-Terrence is an open-source alternative for teams that want a Terraform Cloud-style workflow without sending state and execution data to a hosted service.
+Terrence is an open-source self-hosted platform for collaborative Terraform and OpenTofu workflows. Keep state and execution data on infrastructure you control.
 
 ## Features
 
@@ -24,6 +24,8 @@ Terrence is an open-source alternative for teams that want a Terraform Cloud-sty
 - VCS integration with GitHub
 - SSO support (SAML, OIDC, LDAP)
 - Private module registry
+- Run tasks and notifications
+- Agent pools and cloud workload identity
 - Team and role-based access control
 
 ## Quick start
@@ -80,9 +82,11 @@ bun install
 
 Full documentation is available inside a running Terrence instance under the Documentation section.
 
-## API compatibility
+## Compatibility
 
-Terrence implements the JSON:API format used by Terraform CLI remote operations and related tooling. It is an independent implementation and is not affiliated with HashiCorp or any of its products.
+Terrence supports the official `hashicorp/tfe` Terraform provider and the Terraform/OpenTofu remote workflows it implements. The provider surface is tracked against an explicit released provider version and continuously exercised by end-to-end tests.
+
+General Terraform Enterprise or HCP Terraform API and feature parity is not a goal. An endpoint documented by TFE is not automatically part of Terrence.
 
 ## License
 

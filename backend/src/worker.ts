@@ -3,10 +3,6 @@ import { db } from "./db";
 import {
   runs,
   configurationVersions,
-  noCodeModules,
-  noCodeWorkspaceConfigurations,
-  registryModules,
-  registryModuleVersions,
   workspaces,
   workspaceVariables,
   logs,
@@ -89,46 +85,6 @@ import { costEstimationEnabledForOrganization, getSettings } from "./lib/setting
 import { storageDir } from "./db/driver";
 import { insertStateVersionWithSerialRetry } from "./lib/state-serial";
 
-
-type NoCodeUpgradeTarget = Readonly<{
-  noCodeModuleId: string;
-  moduleId: string;
-  moduleVersionId: string;
-  baseConfigurationVersionId: string;
-}>;
-
-type NoCodeUpgradeRunVariable = Readonly<{
-  key: string;
-  value: string;
-  category?: string;
-  hcl?: boolean;
-  sensitive?: boolean;
-  description?: string | null;
-}>;
-
-type NoCodeUpgradeRun = Readonly<{
-  configurationVersionId: string | null;
-  variables: readonly NoCodeUpgradeRunVariable[] | null;
-}>;
-
-type NoCodeUpgradeWorkspace = Readonly<{
-  id: string;
-  orgId: string;
-}>;
-
-function noCodeUpgradeTarget(source: string | null): NoCodeUpgradeTarget | undefined {
-  const [kind, noCodeModuleId, moduleId, moduleVersionId, baseConfigurationVersionId, extra] = source?.split("|") ?? [];
-  if (
-    kind !== "tfe-no-code-upgrade"
-    || noCodeModuleId === undefined
-    || moduleId === undefined
-    || moduleVersionId === undefined
-    || baseConfigurationVersionId === undefined
-    || extra !== undefined
-    || [noCodeModuleId, moduleId, moduleVersionId, baseConfigurationVersionId].some((value): boolean => value === "")
-  ) return undefined;
-  return { noCodeModuleId, moduleId, moduleVersionId, baseConfigurationVersionId };
-}
 
 // --- Run sandbox (Landlock isolation for tofu/terraform) ---
 // Terraform/OpenTofu runs are executed through landlock-runner, which applies
@@ -1580,34 +1536,16 @@ async function executeRunImpl(runId: string): Promise<void> {
       await writeLog(runId, "plan", `[terrence] Seeded workspace state serial #${latestState.serial}.`);
     }
 
-    const configuration = run.configurationVersionId === null
-      ? undefined
-      : await db.query.configurationVersions.findFirst({
-          where: eq(configurationVersions.id, run.configurationVersionId),
-        });
-    const upgradeTarget = noCodeUpgradeTarget(configuration?.source ?? null);
-    const proposedWorkspaceVariables = upgradeTarget === undefined
-      ? undefined
-      : ((run.variables ?? []) as readonly NoCodeUpgradeRunVariable[]).map((variable): Readonly<Pick<ExecutionVariable, "key" | "value" | "category" | "hcl" | "sensitive">> => ({
-          key: variable.key,
-          value: variable.value,
-          category: variable.category === "env" ? "env" : "terraform",
-          hcl: variable.hcl === true,
-          sensitive: false,
-        }));
     const vars = await executionVariables(
       workspace.id,
       workspace.orgId,
       workspace.projectId,
-      proposedWorkspaceVariables,
     );
 
     const extraTfVars: Record<string, string> = {};
-    if (upgradeTarget === undefined) {
-      for (const variable of run.variables ?? []) {
-        if (typeof (variable as unknown as { sensitive?: unknown }).sensitive === "boolean" && (variable as unknown as { sensitive: boolean }).sensitive) {
-          extraTfVars[`TF_VAR_${variable.key}`] = variable.value;
-        }
+    for (const variable of run.variables ?? []) {
+      if (typeof (variable as unknown as { sensitive?: unknown }).sensitive === "boolean" && (variable as unknown as { sensitive: boolean }).sensitive) {
+        extraTfVars[`TF_VAR_${variable.key}`] = variable.value;
       }
     }
     const envVars = { ...buildSanitizedEnv(vars), ...extraTfVars, ...(await runTerraformEnv(run.id, workspace, "plan", vars)) };
@@ -1677,11 +1615,9 @@ async function executeRunImpl(runId: string): Promise<void> {
       for (const target of run.targetAddrs ?? []) planArgs.push(`-target=${target}`);
       for (const replacement of run.replaceAddrs ?? []) planArgs.push(`-replace=${replacement}`);
       if (tfVarsLines.length > 0) planArgs.push("-var-file=terrence.workspace.tfvars");
-      if (upgradeTarget === undefined) {
-        for (const variable of run.variables ?? []) {
-          if (typeof (variable as unknown as { sensitive?: unknown }).sensitive === "boolean" && (variable as unknown as { sensitive: boolean }).sensitive) continue;
-          planArgs.push(`-var=${variable.key}=${variable.value}`);
-        }
+      for (const variable of run.variables ?? []) {
+        if (typeof (variable as unknown as { sensitive?: unknown }).sensitive === "boolean" && (variable as unknown as { sensitive: boolean }).sensitive) continue;
+        planArgs.push(`-var=${variable.key}=${variable.value}`);
       }
       for (const variable of vars) {
         if (variable.category === "terraform" && variable.priority) {
@@ -1904,79 +1840,6 @@ async function executeRunImpl(runId: string): Promise<void> {
       } catch {}
     }
   }
-}
-
-function noCodeInputValue(value: string): unknown {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return value;
-  }
-}
-
-async function finalizeNoCodeUpgrade(
-  run: NoCodeUpgradeRun,
-  workspace: NoCodeUpgradeWorkspace,
-): Promise<void> {
-  if (run.configurationVersionId === null) return;
-  const configuration = await db.query.configurationVersions.findFirst({
-    where: eq(configurationVersions.id, run.configurationVersionId),
-  });
-  const target = noCodeUpgradeTarget(configuration?.source ?? null);
-  if (configuration === undefined || target === undefined) return;
-
-  const [noCode, mod, version, current] = await Promise.all([
-    db.query.noCodeModules.findFirst({ where: eq(noCodeModules.id, target.noCodeModuleId) }),
-    db.query.registryModules.findFirst({ where: eq(registryModules.id, target.moduleId) }),
-    db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, target.moduleVersionId) }),
-    db.query.noCodeWorkspaceConfigurations.findFirst({
-      where: eq(noCodeWorkspaceConfigurations.workspaceId, workspace.id),
-    }),
-  ]);
-  if (
-    noCode === undefined
-    || mod?.orgId !== workspace.orgId
-    || version?.moduleId !== mod.id
-    || current?.noCodeModuleId !== target.noCodeModuleId
-    || current.configurationVersionId !== target.baseConfigurationVersionId
-  ) throw new Error("The no-code workspace changed after this upgrade was confirmed.");
-
-  const proposed = run.variables ?? [];
-  const inputs = Object.fromEntries(proposed
-    .filter((variable): boolean => variable.category !== "env")
-    .map((variable): [string, unknown] => [variable.key, noCodeInputValue(variable.value)]));
-  const moduleSource = `private/${mod.namespace}/${mod.name}/${mod.provider}/${version.version}`;
-
-  await db.transaction(async (tx): Promise<void> => {
-    const advanced = await tx.update(noCodeWorkspaceConfigurations).set({
-      noCodeModuleId: target.noCodeModuleId,
-      moduleId: target.moduleId,
-      moduleVersionId: target.moduleVersionId,
-      configurationVersionId: configuration.id,
-      moduleSource,
-      moduleVersion: version.version,
-      inputs,
-    }).where(and(
-      eq(noCodeWorkspaceConfigurations.workspaceId, workspace.id),
-      eq(noCodeWorkspaceConfigurations.noCodeModuleId, target.noCodeModuleId),
-      eq(noCodeWorkspaceConfigurations.configurationVersionId, target.baseConfigurationVersionId),
-    )).returning({ id: noCodeWorkspaceConfigurations.id });
-    if (advanced.length !== 1) throw new Error("The no-code workspace changed while applying its upgrade.");
-
-    await tx.delete(workspaceVariables).where(eq(workspaceVariables.workspaceId, workspace.id));
-    if (proposed.length > 0) {
-      await tx.insert(workspaceVariables).values(proposed.map((variable): typeof workspaceVariables.$inferInsert => ({
-        id: `wsvar-${crypto.randomUUID()}`,
-        workspaceId: workspace.id,
-        key: variable.key,
-        value: variable.value,
-        category: variable.category === "env" ? "env" : "terraform",
-        hcl: variable.hcl === true,
-        sensitive: variable.sensitive === true,
-        description: variable.description ?? null,
-      })));
-    }
-  });
 }
 
 /** Tracked wrapper: shutdown drain waits for in-flight apply executions. */
@@ -2277,7 +2140,6 @@ async function executeApplyImpl(runId: string): Promise<void> {
     });
     const applyResourceCounts = parseResourceCounts(applyLogs.map((log: Readonly<{ outputText: string }>): string => log.outputText).join("\n"));
 
-    await finalizeNoCodeUpgrade(run, workspace);
     await updateRunStatus(runId, "applied", {
       applyResourceAdditions: applyResourceCounts.additions,
       applyResourceChanges: applyResourceCounts.changes,
@@ -3376,9 +3238,9 @@ export async function pollWorkerQueue(): Promise<string[]> {
 }
 
 /**
- * Apply confirmed runs whose scheduled-at time has arrived (change-calendar
- * 21.4). The schedule-apply endpoint only stamps `scheduledAt`; this poller
- * is the single execution path, so a restart never loses a schedule. The
+ * Apply confirmed runs whose scheduled-at time has arrived.
+ * The schedule-apply endpoint only stamps `scheduledAt`; this poller is the
+ * single execution path, so a restart never loses a schedule. The
  * interactive apply action and the approval webhook stay independent.
  * Each run is claimed atomically (conditional status update) so overlapping
  * polls or a future multi-worker deployment can never dispatch the same run

@@ -761,20 +761,6 @@ export async function insertAgentApplyJobTx(
   return job;
 }
 
-export async function enqueueAgentApplyJob(
-  runId: string,
-  agentPoolId: string,
-): Promise<AgentJob | undefined> {
-  const queued = await db.transaction(async (transaction): Promise<AgentJob | undefined> => {
-    const tx = transaction as unknown as typeof db;
-    const run = await tx.query.runs.findFirst({ where: eq(runs.id, runId) });
-    if (run?.status !== "confirmed") return undefined;
-    return insertAgentApplyJobTx(tx, runId, agentPoolId, run.statusTimestamps);
-  });
-  if (queued !== undefined) void reportRunVcsStatus(runId, "apply_queued");
-  return queued;
-}
-
 type AgentJobRow = DeepReadonly<typeof agentJobs.$inferSelect>;
 type AgentRunRow = DeepReadonly<typeof runs.$inferSelect>;
 type CompletionResult = Readonly<{ job: AgentJob; runStatus: string }>;

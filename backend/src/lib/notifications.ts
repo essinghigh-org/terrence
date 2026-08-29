@@ -4,7 +4,7 @@ import { envEnabled } from "./env";
 import { db } from "../db";
 import {
   assessmentResults,
-  changeRequests,
+  explorerBulkActionRecords,
   notificationConfigurations,
   notificationConfigurationWorkspaceExclusions,
   organizations,
@@ -946,15 +946,15 @@ export function queueAssessmentNotification(
   });
 }
 
-async function deliverChangeRequestNotifications(
-  changeRequestId: string,
+async function deliverExplorerBulkActionNotifications(
+  recordId: string,
 ): Promise<NotificationDelivery[]> {
-  const changeRequest = await db.query.changeRequests.findFirst({
-    where: eq(changeRequests.id, changeRequestId),
+  const record = await db.query.explorerBulkActionRecords.findFirst({
+    where: eq(explorerBulkActionRecords.id, recordId),
   });
-  if (changeRequest === undefined) return [];
+  if (record === undefined) return [];
   const workspace = await db.query.workspaces.findFirst({
-    where: eq(workspaces.id, changeRequest.workspaceId),
+    where: eq(workspaces.id, record.workspaceId),
   });
   if (workspace === undefined) return [];
 
@@ -968,7 +968,7 @@ async function deliverChangeRequestNotifications(
     }),
   ]);
 
-  // Also find team-scoped notification configurations for teams associated with this workspace
+  // Also find team-scoped notification configurations for teams associated with this workspace.
   const workspaceTeams = await db.query.teamWorkspaces.findMany({
     where: eq(teamWorkspaces.workspaceId, workspace.id),
   });
@@ -980,38 +980,36 @@ async function deliverChangeRequestNotifications(
     : [];
 
   const allConfigurations = await withoutProjectExclusions([...configurations, ...teamConfigurations], workspace.id);
-
   const matching = allConfigurations.filter((configuration: NotificationConfiguration): boolean =>
     configuration.enabled === true && configuration.triggers.includes("team:change_request"));
-  const baseUrl = process.env.PUBLIC_URL ?? "http://localhost";
-  const changeRequestUrl = new URL(
-    `/app/${encodeURIComponent(organization?.name ?? workspace.orgId)}/change-requests/${encodeURIComponent(changeRequest.id)}`,
-    baseUrl,
-  ).toString();
 
+  // The field names and trigger value are provider wire compatibility fields.
+  // There is no detail page for the Explorer artifact, so the URL is honest null.
   return Promise.all(matching.map(async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>
     postNotification(configuration, {
       payload_version: 1,
       notification_configuration_id: configuration.id,
-      change_request_id: changeRequest.id,
-      change_request_subject: changeRequest.subject,
-      change_request_message: changeRequest.message,
-      change_request_status: changeRequest.status,
-      change_request_url: changeRequestUrl,
+      change_request_id: record.id,
+      change_request_subject: record.subject,
+      change_request_message: record.message,
+      change_request_status: record.status,
+      change_request_url: null,
       workspace_id: workspace.id,
       workspace_name: workspace.name,
       organization_name: organization?.name ?? workspace.orgId,
       notifications: [{
         message: "Change Request Created",
         trigger: "team:change_request",
-        change_request_subject: changeRequest.subject,
-        change_request_status: changeRequest.status,
+        change_request_subject: record.subject,
+        change_request_status: record.status,
       }],
     })));
 }
 
-export function queueChangeRequestNotification(changeRequestId: string): void {
-  void deliverChangeRequestNotifications(changeRequestId).catch((error: unknown): void => {
-    console.error(`[terrence] Failed to deliver team:change_request notification for change request ${changeRequestId}:`, error);
-  });
+export async function queueExplorerBulkActionNotification(recordId: string): Promise<void> {
+  try {
+    await deliverExplorerBulkActionNotifications(recordId);
+  } catch (error: unknown) {
+    console.error(`[terrence] Failed to deliver team:change_request notification for Explorer bulk-action record ${recordId}:`, error);
+  }
 }

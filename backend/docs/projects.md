@@ -19,7 +19,7 @@ Create a project from the projects page or the API. A project needs a name, uniq
 - Variable set attachment by project.
 - Policy set attachment by project.
 - Project-level permissions for teams.
-- Agent pool scoping.
+- Default agent-pool assignment for project workspaces.
 
 ## Workspaces in projects
 

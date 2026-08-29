@@ -78,23 +78,13 @@ const VcsIntegrations = lazyView(() => import("./views/VcsIntegrations"), "VcsIn
 const AgentPools = lazyView(() => import("./views/AgentPools"), "AgentPools");
 const PolicySets = lazyView(() => import("./views/PolicySets"), "PolicySets");
 const PolicySetDetail = lazyView(() => import("./views/PolicySetDetail"), "PolicySetDetail");
-const ProviderSets = lazyView(() => import("./views/ProviderSets"), "ProviderSets");
 const OidcConfigurations = lazyView(() => import("./views/OidcConfigurations"), "OidcConfigurations");
-const TokenTTLPolicies = lazyView(() => import("./views/TokenTTLPolicies"), "TokenTTLPolicies");
 const StackSettings = lazyView(() => import("./views/StackSettings"), "StackSettings");
-const AgentPoolScoping = lazyView(() => import("./views/AgentPoolScoping"), "AgentPoolScoping");
-const HyokConfigurations = lazyView(() => import("./views/HyokConfigurations"), "HyokConfigurations");
-const AuditTrailTokens = lazyView(() => import("./views/AuditTrailTokens"), "AuditTrailTokens");
 const PolicySetsTags = lazyView(() => import("./views/PolicySetsTags"), "PolicySetsTags");
 const AdminDashboard = lazyView(() => import("./views/AdminDashboard"), "AdminDashboard");
 const CompatibilityDashboard = lazyView(() => import("./views/CompatibilityDashboard"), "CompatibilityDashboard");
 const AdminSmtpSettings = lazyView(() => import("./views/AdminSmtpSettings"), "AdminSmtpSettings");
 const AdminScimSettings = lazyView(() => import("./views/AdminScimSettings"), "AdminScimSettings");
-const ModuleSharing = lazyView(() => import("./views/ModuleSharing"), "ModuleSharing");
-const NoCodeProvisioning = lazyView(() => import("./views/NoCodeProvisioning"), "NoCodeProvisioning");
-const ChangeCalendar = lazyView(() => import("./views/ChangeCalendar"), "ChangeCalendar");
-const ChangeRequests = lazyView(() => import("./views/ChangeRequests"), "ChangeRequests");
-const ChangeRequestDetail = lazyView(() => import("./views/ChangeRequestDetail"), "ChangeRequestDetail");
 const AdminOperationsSettings = lazyView(() => import("./views/AdminOperationsSettings"), "AdminOperationsSettings");
 const AdminDatabaseMigration = lazyView(() => import("./views/AdminDatabaseMigration"), "AdminDatabaseMigration");
 const Docs = lazyView(() => import("./views/Docs"), "Docs");
@@ -238,10 +228,6 @@ function AppRoutes(): JSX.Element {
         <Route path=":orgName/registry" element={<Registry />} />
         <Route path=":orgName/registry/modules/:namespace/:name/:provider" element={<RegistryModuleDetail />} />
         <Route path=":orgName/registry/providers/:namespace/:name" element={<RegistryProviderDetail />} />
-        <Route path=":orgName/no-code" element={<NoCodeProvisioning />} />
-        <Route path=":orgName/calendar" element={<ChangeCalendar />} />
-        <Route path=":orgName/change-requests" element={<ChangeRequests />} />
-        <Route path=":orgName/change-requests/:changeRequestId" element={<ChangeRequestDetail />} />
         <Route path=":orgName/projects" element={<Projects />} />
         <Route path=":orgName/projects/:projectId" element={<ProjectDetail section="overview" />} />
         <Route path=":orgName/projects/:projectId/workspaces" element={<ProjectDetail section="workspaces" />} />
@@ -251,17 +237,11 @@ function AppRoutes(): JSX.Element {
         <Route path=":orgName/settings/vcs" element={<VcsIntegrations />} />
         <Route path=":orgName/settings/agents" element={<AgentPools />} />
         <Route path=":orgName/settings/policy-sets" element={<PolicySets />} />
-        <Route path=":orgName/settings/provider-sets" element={<ProviderSets />} />
         <Route path=":orgName/settings/oidc" element={<OidcConfigurations />} />
         <Route path=":orgName/settings/registry-providers" element={<RegistrySettingsRedirect tab="providers" />} />
         <Route path=":orgName/settings/registry-modules" element={<RegistrySettingsRedirect tab="modules" />} />
-        <Route path=":orgName/settings/token-ttl" element={<TokenTTLPolicies />} />
         <Route path=":orgName/settings/stacks-workspaces" element={<StackSettings />} />
-        <Route path=":orgName/settings/agent-pool-scoping" element={<AgentPoolScoping />} />
-        <Route path=":orgName/settings/hyok" element={<HyokConfigurations />} />
-        <Route path=":orgName/settings/audit-trail-tokens" element={<AuditTrailTokens />} />
         <Route path=":orgName/settings/policy-sets/tags" element={<PolicySetsTags />} />
-        <Route path=":orgName/settings/module-sharing" element={<ModuleSharing />} />
         <Route path=":orgName/settings/policy-sets/:policySetId" element={<PolicySetDetail />} />
         <Route path=":orgName/settings/policy-sets/:policySetId/policies" element={<PolicySetDetail section="policies" />} />
         <Route path=":orgName/settings/policy-sets/:policySetId/attachments" element={<PolicySetDetail section="attachments" />} />

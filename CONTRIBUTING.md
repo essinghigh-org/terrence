@@ -30,6 +30,17 @@
   - **Frontend**: React Testing Library with mocked `fetch` via `bun:test-mock`
   - **Flow tests**: `frontend/tests/flows.test.tsx` — integration-level UI flows
 
+### Compatibility ownership
+
+The ownership manifest in `backend/src/data/compatibility_ownership.json` is the source of truth for major surfaces:
+
+- `core` is first-class Terrence product functionality.
+- `provider` is backend/API behavior retained for the official `hashicorp/tfe` provider and does not imply a WebUI.
+- `cli` is behavior required by Terraform/OpenTofu remote workflows.
+- `internal` covers operation, security, administration, and integration infrastructure.
+
+Do not implement an HCP Terraform or Terraform Enterprise API solely for parity. A new compatibility endpoint must be justified by the official `hashicorp/tfe` provider, Terraform/OpenTofu CLI behavior, or a concrete Terrence product requirement.
+
 ### Commit Conventions
 
 Use conventional commits:

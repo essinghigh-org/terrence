@@ -44,7 +44,7 @@ See [Variables](variables) for the details.
 
 Runs appear on the workspace page. Each run produces a plan, and optionally an apply, policy results, cost estimates, and assessment results.
 
-The workspace shows the current state version and the run history. Run logs stream in real time.
+The workspace shows the current state version and the run history. Run logs stream in real time. The State History and Configuration Versions sections expose the timestamps and status of state and configuration changes, while run details expose the event timeline. Authorized organization and site administrators can review audit events through the audit log.
 
 ## Locking
 
@@ -73,4 +73,4 @@ Each workspace runs a specific Terraform or OpenTofu binary. The version is sele
 
 ## Tags
 
-Workspaces accept tags. Tags filter workspaces in listings and can scope fine-grained tokens and provider sets.
+Workspaces accept tags. Tags filter workspaces in listings and can scope fine-grained token rules.

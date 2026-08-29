@@ -57,7 +57,7 @@ An organization can restrict API access to CIDR ranges. Requests from other addr
 
 ## Tags
 
-Organization-level tags attach to workspaces. Tags filter listings and scope fine-grained tokens and provider sets.
+Organization-level tags attach to workspaces. Tags filter listings and can scope fine-grained token rules.
 
 ## Deleting an organization
 

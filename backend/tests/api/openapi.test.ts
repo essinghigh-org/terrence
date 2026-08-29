@@ -64,6 +64,14 @@ describe("openapi contract", () => {
     expect(spec).toEqual(artifact);
   });
 
+  it("documents create-style bulk actions with their 201 response", () => {
+    const operation = paths["/api/v2/organizations/{org_name}/explorer/bulk-actions"]?.post as {
+      responses?: Record<string, unknown>;
+    } | undefined;
+    expect(operation?.responses?.["201"]).toBeDefined();
+    expect(operation?.responses?.["200"]).toBeUndefined();
+  });
+
   it("has no frontend catch-alls in the contract", () => {
     expect(paths["/*"]).toBeUndefined();
     expect(paths["*"]).toBeUndefined();
