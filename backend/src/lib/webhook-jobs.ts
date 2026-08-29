@@ -36,45 +36,42 @@ export type VcsWebhookJobPayload = Readonly<{
   deliveryId: string | null;
 }>;
 
+function objectValue(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Readonly<Record<string, unknown>>
+    : undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+function gitlabEventIdentity(eventName: string, payload: Readonly<Record<string, unknown>>): string | null {
+  const repo = nonEmptyString(objectValue(payload.project)?.path_with_namespace);
+  const sha = nonEmptyString(payload.checkout_sha) ?? nonEmptyString(payload.after);
+  return repo !== undefined && sha !== undefined
+    ? `gitlab:${repo}:${sha}:${eventName}`
+    : null;
+}
+
+function bitbucketEventIdentity(eventName: string, payload: Readonly<Record<string, unknown>>): string | null {
+  const repo = nonEmptyString(objectValue(payload.repository)?.full_name);
+  const push = objectValue(payload.push);
+  const changes = push?.changes;
+  const firstChange = Array.isArray(changes) && changes.length > 0 ? objectValue(changes[0]) : undefined;
+  const target = objectValue(objectValue(firstChange?.new)?.target);
+  const sha = nonEmptyString(target?.hash);
+  return repo !== undefined && sha !== undefined
+    ? `bitbucket:${repo}:${sha}:${eventName}`
+    : null;
+}
+
 function stableEventIdentity(provider: VcsWebhookProvider, eventName: string, payload: Readonly<Record<string, unknown>>): string | null {
   // Light extraction mirroring the provider parsers: repo + commit identity is
   // enough to collapse a redelivered copy of the SAME push without storing the
   // whole body twice. Unparseable shapes fall back to no dedupe (process it).
-  if (provider === "gitlab") {
-    const project = payload.project;
-    const repo = project !== null && typeof project === "object" && !Array.isArray(project)
-      ? (project as Record<string, unknown>).path_with_namespace
-      : undefined;
-    const sha = typeof payload.checkout_sha === "string" && payload.checkout_sha !== ""
-      ? payload.checkout_sha
-      : typeof payload.after === "string"
-        ? payload.after
-        : undefined;
-    return typeof repo === "string" && repo !== "" && typeof sha === "string" && sha !== ""
-      ? `gitlab:${repo}:${sha}:${eventName}`
-      : null;
-  }
-  const repo = typeof payload.repository === "object" && payload.repository !== null && !Array.isArray(payload.repository)
-    ? (payload.repository as Record<string, unknown>).full_name
-    : undefined;
-  if (provider === "bitbucket") {
-    const push = payload.push;
-    const changes = push !== null && typeof push === "object" && !Array.isArray(push)
-      ? (push as Record<string, unknown>).changes
-      : undefined;
-    const firstChange = Array.isArray(changes) && changes.length > 0 && changes[0] !== null && typeof changes[0] === "object"
-      ? (changes[0] as Record<string, unknown>).new
-      : undefined;
-    const target = firstChange !== null && typeof firstChange === "object" && !Array.isArray(firstChange)
-      ? (firstChange as Record<string, unknown>).target
-      : undefined;
-    const sha = target !== null && typeof target === "object" && !Array.isArray(target)
-      ? (target as Record<string, unknown>).hash
-      : undefined;
-    return typeof repo === "string" && repo !== "" && typeof sha === "string" && sha !== ""
-      ? `bitbucket:${repo}:${sha}:${eventName}`
-      : null;
-  }
+  if (provider === "gitlab") return gitlabEventIdentity(eventName, payload);
+  if (provider === "bitbucket") return bitbucketEventIdentity(eventName, payload);
   return null;
 }
 
