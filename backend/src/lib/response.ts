@@ -756,26 +756,38 @@ export function runResource(
 
 type RequestParam = Readonly<{ readonly url: string }>;
 
+
+function resolvePlanStatus(run: RunParam, planStarted: boolean, planFinished: boolean): string {
+  if (run.status === "planning") return "running";
+  if (run.status === "plan_queued" || run.status === "queuing") return "queued";
+  if (PLAN_REACHED_TERMINAL_STATUSES.includes(run.status)) return "finished";
+  if (run.status === "errored") return planFinished ? "finished" : "errored";
+  if (["canceled", "discarded", "force_canceled"].includes(run.status)) {
+    if (planFinished) return "finished";
+    if (planStarted) return "canceled";
+    return "pending";
+  }
+  if (run.status === "unreachable") return planFinished ? "finished" : "unreachable";
+  return "pending";
+}
+
+function resolveApplyStatus(run: RunParam, applyStarted: boolean): string {
+  if (run.status === "applying") return "running";
+  if (run.status === "confirmed" || run.status === "apply_queued") return "queued";
+  if (run.status === "applied") return "finished";
+  if (run.status === "errored") return applyStarted ? "errored" : "pending";
+  if (["canceled", "discarded", "force_canceled"].includes(run.status)) return applyStarted ? "canceled" : "pending";
+  if (run.status === "unreachable") return applyStarted ? "unreachable" : "pending";
+  return "pending";
+}
+
 export function planResource(run: RunParam, request: RequestParam): Record<string, unknown> {
   const timestamps = run.statusTimestamps ?? {};
   const planStarted = typeof timestamps["planning-at"] === "string";
   const planFinished = typeof timestamps["planned-at"] === "string"
     || typeof timestamps["planned-and-finished-at"] === "string"
     || typeof timestamps["planned-and-saved-at"] === "string";
-  const status = run.status === "planning"
-    ? "running"
-    : run.status === "plan_queued" || run.status === "queuing"
-      ? "queued"
-      : PLAN_REACHED_TERMINAL_STATUSES.includes(run.status)
-        ? "finished"
-        : run.status === "errored"
-          ? planFinished ? "finished" : "errored"
-          : ["canceled", "discarded", "force_canceled"].includes(run.status)
-            ? planFinished ? "finished" : planStarted ? "canceled" : "pending"
-            : run.status === "unreachable"
-              ? planFinished ? "finished" : "unreachable"
-              : "pending";
-
+  const status = resolvePlanStatus(run, planStarted, planFinished);
   return {
     id: `plan-${run.id}`,
     type: "plans",
@@ -804,20 +816,7 @@ export function applyResource(run: RunParam, request: RequestParam): Record<stri
   const timestamps = run.statusTimestamps ?? {};
   const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"]
     .some((key: string): boolean => typeof timestamps[key] === "string");
-  const status = run.status === "applying"
-    ? "running"
-    : run.status === "confirmed" || run.status === "apply_queued"
-      ? "queued"
-      : run.status === "applied"
-        ? "finished"
-        : run.status === "errored"
-          ? applyStarted ? "errored" : "pending"
-          : ["canceled", "discarded", "force_canceled"].includes(run.status)
-            ? applyStarted ? "canceled" : "pending"
-            : run.status === "unreachable"
-              ? applyStarted ? "unreachable" : "pending"
-              : "pending";
-
+  const status = resolveApplyStatus(run, applyStarted);
   return {
     id: `apply-${run.id}`,
     type: "applies",
