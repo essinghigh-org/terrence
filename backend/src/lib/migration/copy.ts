@@ -85,6 +85,28 @@ function rowidColumn(columns: readonly CopyColumn[]): string | null {
   return null;
 }
 
+function readCopyBatch(
+  source: SqliteQueryable,
+  table: CopyTable,
+  rowid: string | null,
+  batchSize: number,
+  total: number,
+  cursor: number,
+): readonly Readonly<Record<string, unknown>>[] {
+  const sql = rowid === null
+    ? `SELECT * FROM ${quoted(table.name)} LIMIT ? OFFSET ?`
+    : `SELECT ${rowid} AS "_terrence_rowid", * FROM ${quoted(table.name)} WHERE ${rowid} > ? ORDER BY ${rowid} LIMIT ?`;
+  try {
+    const rows = rowid === null
+      ? source.query(sql).all(batchSize, total)
+      : source.query(sql).all(cursor, batchSize);
+    return rows as readonly Readonly<Record<string, unknown>>[];
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Copy source read failed on table "${table.name}" (${sql}): ${message}`);
+  }
+}
+
 /**
  * Copy one table from source to target. Idempotent: rows already present in
  * the target are skipped via ON CONFLICT DO NOTHING. Returns rows copied.
@@ -105,19 +127,7 @@ export async function copyTable(
   let cursor = 0;
   for (;;) {
     if (options.isCancelled?.() === true) break;
-    let rows: readonly Readonly<Record<string, unknown>>[];
-    try {
-      rows = (rowid === null
-        ? source.query(`SELECT * FROM ${quoted(table.name)} LIMIT ? OFFSET ?`).all(batchSize, total)
-        : source.query(`SELECT ${rowid} AS "_terrence_rowid", * FROM ${quoted(table.name)} WHERE ${rowid} > ? ORDER BY ${rowid} LIMIT ?`).all(cursor, batchSize)) as
-        readonly Readonly<Record<string, unknown>>[];
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      const sql = rowid === null
-        ? `SELECT * FROM ${quoted(table.name)} LIMIT ? OFFSET ?`
-        : `SELECT ${rowid} AS "_terrence_rowid", * FROM ${quoted(table.name)} WHERE ${rowid} > ? ORDER BY ${rowid} LIMIT ?`;
-      throw new Error(`Copy source read failed on table "${table.name}" (${sql}): ${message}`);
-    }
+    const rows = readCopyBatch(source, table, rowid, batchSize, total, cursor);
     if (rows.length === 0) break;
 
     const params: unknown[] = [];
