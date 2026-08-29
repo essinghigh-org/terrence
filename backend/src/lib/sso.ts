@@ -140,22 +140,18 @@ export class SsoConflictError extends Error {
   }
 }
 
-/**
- * Provision or link a local account for an external identity.
- *
- * Conflict policy (applies to SAML, OIDC, and LDAP alike):
- *  1. Identity match — an account already carrying (provider, subject) wins.
- *  2. Email match — a verified email links the identity to the existing
- *     account only when the provider's link-by-email setting is enabled.
- *  3. Username match — if the username belongs to a DIFFERENT account,
- *     provisioning is refused with SsoConflictError. No silent takeover.
- *  4. Otherwise a new account is created with an unusable password hash, so
- *     the SSO identity can never authenticate with local credentials.
- */
-export async function provisionSsoUser(identity: SsoIdentity): Promise<{
+type SsoProvisionResult = {
   user: typeof users.$inferSelect;
   created: boolean;
-}> {
+};
+
+type NormalizedSsoIdentity = Readonly<{
+  subject: string;
+  username: string;
+  email: string | null;
+}>;
+
+function normalizeSsoIdentity(identity: SsoIdentity): NormalizedSsoIdentity {
   const subject = identity.subject.trim();
   if (subject === "") {
     throw new SsoConflictError(
@@ -173,77 +169,127 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
       + "Change the identity provider username, then retry.",
     );
   }
-  const email = validEmail(identity.email);
+  return { subject, username, email: validEmail(identity.email) };
+}
 
-  const byIdentity = await db.query.users.findFirst({
-    where: and(eq(users.ssoProvider, identity.provider), eq(users.ssoSubject, subject)),
-  });
-  if (byIdentity !== undefined) {
-    const verifiedEmailAt = identity.emailVerified === true && email !== null ? Date.now() : undefined;
-    if (byIdentity.email === null && email !== null
-      && identity.emailVerified === true && identity.allowEmailLinking === true) {
-      try {
-        await db.update(users).set({ email, emailVerifiedAt: verifiedEmailAt }).where(and(
-          eq(users.id, byIdentity.id),
-          isNull(users.email),
-          sql`NOT EXISTS (
-            SELECT 1 FROM ${users} AS email_owner
-            WHERE email_owner.id <> ${byIdentity.id}
-              AND lower(email_owner.email) = ${email}
-          )`,
-        ));
-      } catch (error: unknown) {
-        if (!isUniqueConstraintError(error)) throw error;
-      }
-    }
-    if (verifiedEmailAt !== undefined && byIdentity.email !== null && canonicalEmail(byIdentity.email) === email) {
-      await db.update(users).set({ emailVerifiedAt: verifiedEmailAt }).where(eq(users.id, byIdentity.id));
-    }
-    await db.insert(identityLinks).values({ id: `idlink-${crypto.randomUUID()}`, userId: byIdentity.id, provider: identity.provider, externalId: subject, emailAtLinkTime: email, createdAt: Date.now() }).onConflictDoNothing();
-    const refreshed = await db.query.users.findFirst({ where: eq(users.id, byIdentity.id) });
-    if (refreshed === undefined) throw new Error("SSO user is unavailable");
-    return { user: refreshed, created: false };
-  }
+async function insertSsoIdentityLink(
+  identity: SsoIdentity,
+  userId: string,
+  subject: string,
+  email: string | null,
+): Promise<void> {
+  await db.insert(identityLinks).values({
+    id: `idlink-${crypto.randomUUID()}`,
+    userId,
+    provider: identity.provider,
+    externalId: subject,
+    emailAtLinkTime: email,
+    createdAt: Date.now(),
+  }).onConflictDoNothing();
+}
 
-  // Only link by email when the provider asserts the address is verified and
-  // the site administrator explicitly enabled linking for that provider.
-  // Attaching an external identity to an unverified-email account would let
-  // an attacker take over a local account (including site admins) by signing
-  // in with an address they can control. SAML and LDAP callers pass
-  // emailVerified = true; OIDC derives it from the email_verified claim.
-  if (email !== null && identity.emailVerified === true && identity.allowEmailLinking === true) {
-    const byEmail = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
-    if (byEmail !== undefined) {
-      const claimed = byEmail.ssoProvider !== null || byEmail.ssoSubject !== null;
-      if (claimed) throw new SsoConflictError(identity.provider, username);
-      const linked = await db.update(users)
-        .set({ ssoProvider: identity.provider, ssoSubject: subject, emailVerifiedAt: Date.now() })
-        .where(and(eq(users.id, byEmail.id), isNull(users.ssoProvider), isNull(users.ssoSubject)))
-        .returning({ id: users.id });
-      if (linked.length === 0) throw new SsoConflictError(identity.provider, username);
-      await db.insert(identityLinks).values({ id: `idlink-${crypto.randomUUID()}`, userId: byEmail.id, provider: identity.provider, externalId: subject, emailAtLinkTime: email, createdAt: Date.now() }).onConflictDoNothing();
-      const refreshed = await db.query.users.findFirst({ where: eq(users.id, byEmail.id) });
-      if (refreshed === undefined) throw new Error("SSO user is unavailable");
-      return { user: refreshed, created: false };
+async function ssoUserById(userId: string): Promise<typeof users.$inferSelect> {
+  const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
+  if (user === undefined) throw new Error("SSO user is unavailable");
+  return user;
+}
+
+async function provisionExistingSsoIdentity(
+  identity: SsoIdentity,
+  normalized: NormalizedSsoIdentity,
+  existing: typeof users.$inferSelect,
+): Promise<SsoProvisionResult> {
+  const verifiedEmailAt = identity.emailVerified === true && normalized.email !== null ? Date.now() : undefined;
+  if (existing.email === null && normalized.email !== null
+    && identity.emailVerified === true && identity.allowEmailLinking === true) {
+    try {
+      await db.update(users).set({ email: normalized.email, emailVerifiedAt: verifiedEmailAt }).where(and(
+        eq(users.id, existing.id),
+        isNull(users.email),
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${users} AS email_owner
+          WHERE email_owner.id <> ${existing.id}
+            AND lower(email_owner.email) = ${normalized.email}
+        )`,
+      ));
+    } catch (error: unknown) {
+      if (!isUniqueConstraintError(error)) throw error;
     }
   }
+  if (verifiedEmailAt !== undefined && existing.email !== null && canonicalEmail(existing.email) === normalized.email) {
+    await db.update(users).set({ emailVerifiedAt: verifiedEmailAt }).where(eq(users.id, existing.id));
+  }
+  await insertSsoIdentityLink(identity, existing.id, normalized.subject, normalized.email);
+  return { user: await ssoUserById(existing.id), created: false };
+}
 
+async function provisionByVerifiedEmail(
+  identity: SsoIdentity,
+  normalized: NormalizedSsoIdentity,
+): Promise<SsoProvisionResult | undefined> {
+  if (normalized.email === null || identity.emailVerified !== true || identity.allowEmailLinking !== true) return undefined;
+  const byEmail = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${normalized.email}` });
+  if (byEmail === undefined) return undefined;
+  const claimed = byEmail.ssoProvider !== null || byEmail.ssoSubject !== null;
+  if (claimed) throw new SsoConflictError(identity.provider, normalized.username);
+  const linked = await db.update(users)
+    .set({ ssoProvider: identity.provider, ssoSubject: normalized.subject, emailVerifiedAt: Date.now() })
+    .where(and(eq(users.id, byEmail.id), isNull(users.ssoProvider), isNull(users.ssoSubject)))
+    .returning({ id: users.id });
+  if (linked.length === 0) throw new SsoConflictError(identity.provider, normalized.username);
+  await insertSsoIdentityLink(identity, byEmail.id, normalized.subject, normalized.email);
+  return { user: await ssoUserById(byEmail.id), created: false };
+}
+
+async function assertSsoUsernameAvailable(identity: SsoIdentity, username: string): Promise<void> {
   const byUsername = await db.query.users.findFirst({ where: eq(users.username, username) });
-  if (byUsername !== undefined) {
-    // A user with the same external subject but a different identity record
-    // cannot happen (unique index), so any hit here is a genuine conflict.
-    const owner = byUsername.ssoProvider === null ? "a local account" : `an account linked to ${byUsername.ssoProvider}`;
+  if (byUsername === undefined) return;
+  const owner = byUsername.ssoProvider === null ? "a local account" : `an account linked to ${byUsername.ssoProvider}`;
+  throw new SsoConflictError(
+    identity.provider,
+    username,
+    `Sign-in blocked: username "${username}" is already in use by ${owner}. `
+    + "Rename the existing account or change the identity provider username, then retry.",
+  );
+}
+
+async function resolveSsoInsertCollision(
+  identity: SsoIdentity,
+  username: string,
+  email: string | null,
+): Promise<never> {
+  const usernameCollision = await db.query.users.findFirst({
+    where: sql`lower(${users.username}) = lower(${username})`,
+  });
+  if (usernameCollision !== undefined) {
     throw new SsoConflictError(
       identity.provider,
       username,
-      `Sign-in blocked: username "${username}" is already in use by ${owner}. `
-      + "Rename the existing account or change the identity provider username, then retry.",
+      `Sign-in blocked: username "${username}" is already in use by a local account. `
+      + "Rename the local account or change the identity provider username, then retry.",
     );
   }
+  if (email !== null) {
+    const emailCollision = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
+    if (emailCollision !== undefined) {
+      throw new SsoConflictError(
+        identity.provider,
+        username,
+        `Sign-in blocked: the email "${email}" is already in use by another account. `
+        + "Change the identity provider email, then retry.",
+      );
+    }
+  }
+  throw new Error("Failed to provision SSO user");
+}
 
-  let insertEmail = identity.emailVerified === true ? email : null;
+async function createProvisionedSsoUser(
+  identity: SsoIdentity,
+  normalized: NormalizedSsoIdentity,
+): Promise<SsoProvisionResult> {
+  let insertEmail = identity.emailVerified === true ? normalized.email : null;
   if (insertEmail !== null && identity.allowEmailLinking !== true) {
-    const emailOwner = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
+    const emailOwner = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${insertEmail}` });
     if (emailOwner !== undefined) insertEmail = null;
   }
 
@@ -257,55 +303,52 @@ export async function provisionSsoUser(identity: SsoIdentity): Promise<{
   // and the re-read below returns the winning row.
   await db.insert(users).values({
     id: userId,
-    username,
+    username: normalized.username,
     email: insertEmail,
     passwordHash: unusableHash,
     ssoProvider: identity.provider,
-    ssoSubject: subject,
+    ssoSubject: normalized.subject,
     emailVerifiedAt: identity.emailVerified === true && insertEmail !== null ? Date.now() : null,
     isSiteAdmin: false,
   }).onConflictDoNothing();
   const raced = await db.query.users.findFirst({
-    where: and(eq(users.ssoProvider, identity.provider), eq(users.ssoSubject, subject)),
+    where: and(eq(users.ssoProvider, identity.provider), eq(users.ssoSubject, normalized.subject)),
   });
-  if (raced === undefined) {
-    // The insert was skipped: find out why so the caller gets a specific,
-    // sanitized conflict instead of a silent failure. Usernames and emails
-    // are matched case-insensitively so "Alice" cannot shadow "alice".
-    const usernameCollision = await db.query.users.findFirst({
-      where: sql`lower(${users.username}) = lower(${username})`,
-    });
-    if (usernameCollision !== undefined) {
-      throw new SsoConflictError(
-        identity.provider,
-        username,
-        `Sign-in blocked: username "${username}" is already in use by a local account. `
-        + "Rename the local account or change the identity provider username, then retry.",
-      );
-    }
-    if (email !== null) {
-      const emailCollision = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
-      if (emailCollision !== undefined) {
-        throw new SsoConflictError(
-          identity.provider,
-          username,
-          `Sign-in blocked: the email "${email}" is already in use by another account. `
-          + "Change the identity provider email, then retry.",
-        );
-      }
-    }
-    throw new Error("Failed to provision SSO user");
-  }
-  await db.insert(identityLinks).values({ id: `idlink-${crypto.randomUUID()}`, userId: raced.id, provider: identity.provider, externalId: subject, emailAtLinkTime: email, createdAt: Date.now() }).onConflictDoNothing();
+  if (raced === undefined) return resolveSsoInsertCollision(identity, normalized.username, normalized.email);
+  await insertSsoIdentityLink(identity, raced.id, normalized.subject, normalized.email);
   if (raced.id !== userId) {
     // Another concurrent login created the identity; reuse that account.
     return { user: raced, created: false };
   }
   await auditLog("create", "users", userId, null, null, {
     source: `sso:${identity.provider}`,
-    username,
+    username: normalized.username,
   });
   return { user: raced, created: true };
+}
+
+/**
+ * Provision or link a local account for an external identity.
+ *
+ * Conflict policy (applies to SAML, OIDC, and LDAP alike):
+ *  1. Identity match — an account already carrying (provider, subject) wins.
+ *  2. Email match — a verified email links the identity to the existing
+ *     account only when the provider's link-by-email setting is enabled.
+ *  3. Username match — if the username belongs to a DIFFERENT account,
+ *     provisioning is refused with SsoConflictError. No silent takeover.
+ *  4. Otherwise a new account is created with an unusable password hash, so
+ *     the SSO identity can never authenticate with local credentials.
+ */
+export async function provisionSsoUser(identity: SsoIdentity): Promise<SsoProvisionResult> {
+  const normalized = normalizeSsoIdentity(identity);
+  const byIdentity = await db.query.users.findFirst({
+    where: and(eq(users.ssoProvider, identity.provider), eq(users.ssoSubject, normalized.subject)),
+  });
+  if (byIdentity !== undefined) return provisionExistingSsoIdentity(identity, normalized, byIdentity);
+  const linkedByEmail = await provisionByVerifiedEmail(identity, normalized);
+  if (linkedByEmail !== undefined) return linkedByEmail;
+  await assertSsoUsernameAvailable(identity, normalized.username);
+  return createProvisionedSsoUser(identity, normalized);
 }
 
 /**
