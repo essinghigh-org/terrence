@@ -92,7 +92,7 @@ export function outboundAllowlistAllows(hostname: string, addresses: readonly st
   return allowlistAllows(hostname, addresses, readOutboundAllowlist());
 }
 
-function expandHextets(parts: string[]): string[] | null {
+function expandHextets(parts: readonly string[]): string[] | null {
   if (parts.length === 2) {
     const headPart = parts[0] ?? "";
     const tailPart = parts[1] ?? "";
@@ -108,7 +108,7 @@ function expandHextets(parts: string[]): string[] | null {
   return hextets;
 }
 
-function isEmbeddedIpv4Private(hextets: string[]): boolean | null {
+function isEmbeddedIpv4Private(hextets: readonly string[]): boolean | null {
   const tail = hextets.slice(-2);
   const last = tail[1] ?? "";
   if (!last.includes(".")) return null;
@@ -118,7 +118,7 @@ function isEmbeddedIpv4Private(hextets: string[]): boolean | null {
   return isPrivateV4(n);
 }
 
-function isSpecialV6Private(hextets: string[]): boolean {
+function isSpecialV6Private(hextets: readonly string[]): boolean {
   if (hextets.every((h): boolean => h === "0")) return true;
   if (hextets.slice(0, 7).every((h): boolean => h === "0") && (hextets[7] ?? "") === "1") return true;
   const firstHextet = Number.parseInt(hextets[0] ?? "0", 16);
@@ -260,7 +260,7 @@ function parseExternalUrl(url: string): URL | string {
   }
 }
 
-function validateExternalProtocol(parsed: URL): string | null {
+function validateExternalProtocol(parsed: Readonly<URL>): string | null {
   if (!["http:", "https:"].includes(parsed.protocol)) return "Only http and https URLs are allowed";
   if (parsed.username !== "" || parsed.password !== "") return "URLs with embedded credentials (user:password@host) are not allowed";
   return null;

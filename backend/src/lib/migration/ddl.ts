@@ -266,7 +266,7 @@ function parseReferenceColumns(sql: string, open: number, close: number): string
   return cols;
 }
 
-function buildReferenceColumns(cols: string[]): string[] | null {
+function buildReferenceColumns(cols: readonly string[]): string[] | null {
   const refColumns: string[] = [];
   for (const col of cols) {
     const parsed = parseIdentifier(col, 0);
@@ -354,6 +354,7 @@ function scanDefaultExprEnd(sql: string, start: number): number {
   return sql.length;
 }
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
 function tryParsePrimaryKey(rest: string, result: { primaryKey: boolean }): boolean {
   const primary = /^PRIMARY\s+KEY(?:\s+(?:ASC|DESC))?/i.exec(rest);
   if (primary === null) return false;
@@ -361,12 +362,14 @@ function tryParsePrimaryKey(rest: string, result: { primaryKey: boolean }): bool
   return true;
 }
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
 function tryParseNotNull(rest: string, result: { notNull: boolean }): boolean {
   if (/^NOT\s+NULL/i.exec(rest) === null) return false;
   result.notNull = true;
   return true;
 }
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
 function tryParseUnique(rest: string, result: { unique: boolean }): boolean {
   if (/^UNIQUE/i.exec(rest) === null) return false;
   result.unique = true;
@@ -377,6 +380,7 @@ function tryParseAutoincrement(rest: string): boolean {
   return /^AUTOINCREMENT/i.exec(rest) !== null;
 }
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
 function tryParseCollate(sql: string, pos: number, result: { collate: string | null }): number | null {
   const collate = /^COLLATE\s+/i.exec(sql.slice(pos));
   if (collate === null) return null;
@@ -388,6 +392,7 @@ function tryParseCollate(sql: string, pos: number, result: { collate: string | n
   return pos + collate[0].length;
 }
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
 function tryParseCheck(sql: string, pos: number, rest: string, result: { checksSkipped: number }): number | null {
   if (/^CHECK\s*\(/i.exec(rest) === null) return null;
   const close = scanBalanced(sql, pos + (/^CHECK\s*\(/i.exec(rest)?.[0].length ?? 0) - 1);
@@ -396,12 +401,14 @@ function tryParseCheck(sql: string, pos: number, rest: string, result: { checksS
   return close + 1;
 }
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
 function tryParseGenerated(rest: string, result: { checksSkipped: number }): boolean {
   if (/^GENERATED\s+ALWAYS\s+AS/i.exec(rest) === null) return false;
   result.checksSkipped += 1;
   return true;
 }
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
 function tryParseDefault(sql: string, pos: number, result: { defaultExpr: string | null; defaultDropped: boolean }): number | null {
   if (/^DEFAULT\b/i.exec(sql.slice(pos)) === null) return null;
   const defLen = /^DEFAULT\b/i.exec(sql.slice(pos))?.[0].length ?? 0;
@@ -414,6 +421,7 @@ function tryParseDefault(sql: string, pos: number, result: { defaultExpr: string
   return exprEnd;
 }
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
 function tryParseReferences(sql: string, pos: number, result: { references: ForeignKeyDef | null }): number | null {
   const references = parseReferenceClause(sql, pos);
   if (references === null) return null;
@@ -421,14 +429,17 @@ function tryParseReferences(sql: string, pos: number, result: { references: Fore
   return references.end;
 }
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
 function tryParsePrimaryKeyStep(pos: number, rest: string, result: { primaryKey: boolean }): number | null {
   if (!tryParsePrimaryKey(rest, result)) return null;
   return pos + (/^PRIMARY\s+KEY(?:\s+(?:ASC|DESC))?/i.exec(rest)?.[0].length ?? 0);
 }
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
 function tryParseNotNullStep(pos: number, rest: string, result: { notNull: boolean }): number | null {
   if (!tryParseNotNull(rest, result)) return null;
   return pos + (/^NOT\s+NULL/i.exec(rest)?.[0].length ?? 0);
 }
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
 function tryParseUniqueStep(pos: number, rest: string, result: { unique: boolean }): number | null {
   if (!tryParseUnique(rest, result)) return null;
   return pos + (/^UNIQUE/i.exec(rest)?.[0].length ?? 0);
@@ -448,6 +459,7 @@ function tryParseOnConflictStep(pos: number, rest: string): number | null {
   return pos + (/^ON\s+CONFLICT/i.exec(rest)?.[0].length ?? 0);
 }
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- parser state is intentionally mutated as constraints are recognized
 function parseConstraintTailStep(sql: string, pos: number, result: { notNull: boolean; primaryKey: boolean; unique: boolean; defaultExpr: string | null; defaultDropped: boolean; references: ForeignKeyDef | null; checksSkipped: number; collate: string | null }): { nextPos: number; shouldBreak: boolean } | null {
   const rest = sql.slice(pos);
   const primary = tryParsePrimaryKeyStep(pos, rest, result);
@@ -704,7 +716,7 @@ function buildTableConstraints(table: TableDef): string[] {
   return lines;
 }
 
-export function generateCreateTableSql(table: TableDef, modes: ReadonlyMap<string, DrizzleColumnMode>): string {
+export function generateCreateTableSql(table: TableDef, modes: Readonly<ReadonlyMap<string, DrizzleColumnMode>>): string {
   const columnLines: string[] = [];
   for (const column of table.columns) {
     const pg = postgresColumnType(column, modes.get(column.name));
@@ -817,7 +829,7 @@ export function parseCreateIndexSql(sql: string): IndexDef {
  * columns reject those, so the literals are rewritten to true/false for the
  * boolean columns of the index's table.
  */
-export function generateCreateIndexSql(index: IndexDef, booleanColumns?: ReadonlySet<string>): string {
+export function generateCreateIndexSql(index: IndexDef, booleanColumns?: Readonly<ReadonlySet<string>>): string {
   const unique = index.unique ? "UNIQUE " : "";
   let where = index.where ?? "";
   if (where !== "" && booleanColumns !== undefined) {
@@ -841,7 +853,7 @@ export function generateCreateIndexSql(index: IndexDef, booleanColumns?: Readonl
 }
 
 /** Read the full schema (tables, indexes, triggers) from a SQLite connection. */
-export function inspectSourceSchema(client: { query: (sql: string) => { all: () => unknown[] } }): SourceSchema {
+export function inspectSourceSchema(client: Readonly<{ query: (sql: string) => { all: () => unknown[] } }>): SourceSchema {
   const rows = client.query(
     "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type, name",
   ).all() as readonly { type: string; name: string; sql: string }[];
@@ -874,7 +886,8 @@ export function collectDrizzleModes(
   for (const [exportName, value] of Object.entries(schemaModule)) {
     const columns = (value as Record<PropertyKey, unknown> | null | undefined)?.[columnsSymbol];
     if (columns === null || columns === undefined || typeof columns !== "object") continue;
-    const tableDbName = String((value as Record<PropertyKey, unknown>)[nameSymbol] ?? exportName);
+    const rawTableName = (value as Record<PropertyKey, unknown>)[nameSymbol];
+    const tableDbName = typeof rawTableName === "string" ? rawTableName : exportName;
     const modes = new Map<string, DrizzleColumnMode>();
     for (const column of Object.values(columns as Record<string, { name?: string; mode?: unknown }>)) {
       const mode = column.mode;
@@ -888,7 +901,7 @@ export function collectDrizzleModes(
 }
 
 /** Deterministic FK topological order (parents first) for the copy phase. */
-function buildDependencyEdges(tables: readonly TableDef[], names: ReadonlySet<string>): Map<string, Set<string>> {
+function buildDependencyEdges(tables: readonly TableDef[], names: Readonly<ReadonlySet<string>>): Map<string, Set<string>> {
   const edges = new Map<string, Set<string>>();
   for (const table of tables) {
     const targets = new Set<string>();
@@ -903,7 +916,7 @@ function buildDependencyEdges(tables: readonly TableDef[], names: ReadonlySet<st
   return edges;
 }
 
-function computeIndegrees(edges: ReadonlyMap<string, ReadonlySet<string>>): Map<string, number> {
+function computeIndegrees(edges: Readonly<ReadonlyMap<string, Readonly<ReadonlySet<string>>>>): Map<string, number> {
   const indegree = new Map<string, number>();
   for (const [name, targets] of edges) {
     let degree = 0;
@@ -915,7 +928,8 @@ function computeIndegrees(edges: ReadonlyMap<string, ReadonlySet<string>>): Map<
   return indegree;
 }
 
-function topologicalSort(names: ReadonlySet<string>, edges: ReadonlyMap<string, ReadonlySet<string>>, indegree: Map<string, number>): string[] {
+function topologicalSort(names: Readonly<ReadonlySet<string>>, edges: Readonly<ReadonlyMap<string, Readonly<ReadonlySet<string>>>>, initialIndegree: Readonly<ReadonlyMap<string, number>>): string[] {
+  const indegree = new Map(initialIndegree);
   const queue = [...names].filter((name): boolean => (indegree.get(name) ?? 0) === 0).sort();
   const ordered: string[] = [];
   while (queue.length > 0) {

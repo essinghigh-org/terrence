@@ -73,25 +73,25 @@ async function readBodyCapped(init: BodyInit, capBytes: number): Promise<Buffer>
   return Buffer.concat(chunks);
 }
 
-function validateForwardUrl(input: string | URL): URL {
+function validateForwardUrl(input: string | Readonly<URL>): URL {
   const url = new URL(input);
   if (!/^https?:$/.test(url.protocol) || url.username !== "" || url.password !== "") throw new Error("Forwarded requests require an HTTP(S) URL without embedded credentials");
   return url;
 }
 
-function validateForwardMethod(init: RequestInit): string {
+function validateForwardMethod(init: Readonly<RequestInit>): string {
   const method = (init.method ?? "GET").toUpperCase();
   if (!/^[A-Z]+$/.test(method) || method === "CONNECT" || method === "TRACE") throw new Error("Forwarded request method is not supported");
   return method;
 }
 
-function buildForwardHeaders(init: RequestInit): Record<string, string[]> {
+function buildForwardHeaders(init: Readonly<RequestInit>): Record<string, string[]> {
   const headers: Record<string, string[]> = {};
   new Headers(init.headers).forEach((value, name): void => { headers[name] = [value]; });
   return headers;
 }
 
-async function readForwardBody(init: RequestInit): Promise<Buffer | null> {
+async function readForwardBody(init: Readonly<RequestInit>): Promise<Buffer | null> {
   if (init.body === undefined || init.body === null) return null;
   const bodyBytes = await readBodyCapped(init.body, MAX_FORWARD_BODY_BYTES);
   if ((bodyBytes?.byteLength ?? 0) > MAX_FORWARD_BODY_BYTES) throw new Error("Forwarded request body exceeds 10 MiB");
@@ -120,8 +120,8 @@ async function pollForwardResponse(id: string, deadline: number): Promise<Respon
 
 export async function forwardFetch(
   agentPoolId: string,
-  input: string | URL,
-  init: RequestInit = {},
+  input: string | Readonly<URL>,
+  init: Readonly<RequestInit> = {},
 ): Promise<Response> {
   const url = validateForwardUrl(input);
   const method = validateForwardMethod(init);

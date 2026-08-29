@@ -289,27 +289,27 @@ function assertScopesObject(parsed: unknown): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-function parseOrgsField(obj: Record<string, unknown>): string[] {
+function parseOrgsField(obj: Readonly<Record<string, unknown>>): string[] {
   const orgs = obj.orgs;
   if (!Array.isArray(orgs) || orgs.length === 0 || orgs.some((o): boolean => typeof o !== "string" || o === "")) throw new Error("scopes.orgs must be a non-empty array of organization IDs");
   return orgs as string[];
 }
 
-function parseProjectsField(obj: Record<string, unknown>): string[] | null {
+function parseProjectsField(obj: Readonly<Record<string, unknown>>): string[] | null {
   const projects = obj.projects;
   if (projects === null || projects === undefined) return null;
   if (!(Array.isArray(projects) && projects.every((p): boolean => typeof p === "string" && p !== ""))) throw new Error("scopes.projects must be an array of project IDs or null");
   return projects as string[];
 }
 
-function parseWorkspacesField(obj: Record<string, unknown>): string[] | null {
+function parseWorkspacesField(obj: Readonly<Record<string, unknown>>): string[] | null {
   const workspaces = obj.workspaces;
   if (workspaces === null || workspaces === undefined) return null;
   if (!(Array.isArray(workspaces) && workspaces.every((w): boolean => typeof w === "string" && w !== ""))) throw new Error("scopes.workspaces must be an array of workspace IDs or null");
   return workspaces as string[];
 }
 
-function parsePermissionsField(obj: Record<string, unknown>): Readonly<Record<string, boolean>> {
+function parsePermissionsField(obj: Readonly<Record<string, unknown>>): Readonly<Record<string, boolean>> {
   const permissions = obj.permissions;
   if (typeof permissions !== "object" || permissions === null || Array.isArray(permissions)) throw new Error("scopes.permissions must be an object");
   for (const [key, value] of Object.entries(permissions as Record<string, unknown>)) {

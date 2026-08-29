@@ -641,44 +641,46 @@ function teamWorkspaceAllows(
  * workspace/project/tag restriction). Returns [] when the scope cannot reach
  * any workspace in the org.
  */
-async function collectProjectScopedIds(scope: TokenScopes, orgId: string, matching: Set<string>): Promise<void> {
-  if (scope.projects === null || scope.projects.length === 0) return;
+async function collectProjectScopedIds(scope: TokenScopes, orgId: string): Promise<readonly string[]> {
+  if (scope.projects === null || scope.projects.length === 0) return [];
   const rows = await db.query.workspaces.findMany({
     where: and(eq(workspaces.orgId, orgId), inArray(workspaces.projectId, scope.projects as string[])),
     columns: { id: true },
   });
-  for (const row of rows) matching.add(row.id);
+  return rows.map((row): string => row.id);
 }
 
-async function collectWorkspaceScopedIds(scope: TokenScopes, orgId: string, matching: Set<string>): Promise<void> {
-  if (scope.workspaces === null || scope.workspaces.length === 0) return;
+async function collectWorkspaceScopedIds(scope: TokenScopes, orgId: string): Promise<readonly string[]> {
+  if (scope.workspaces === null || scope.workspaces.length === 0) return [];
   const rows = await db.query.workspaces.findMany({
     where: and(eq(workspaces.orgId, orgId), inArray(workspaces.id, scope.workspaces as string[])),
     columns: { id: true },
   });
-  for (const row of rows) matching.add(row.id);
+  return rows.map((row): string => row.id);
 }
 
-async function collectTagScopedIds(scope: TokenScopes, orgId: string, matching: Set<string>): Promise<void> {
-  if (scope.tags === null || scope.tags.rules.length === 0) return;
+async function collectTagScopedIds(scope: TokenScopes, orgId: string): Promise<readonly string[]> {
+  if (scope.tags === null || scope.tags.rules.length === 0) return [];
   const orgWorkspaceIds = (await db.query.workspaces.findMany({
     where: eq(workspaces.orgId, orgId),
     columns: { id: true },
   })).map((row): string => row.id);
-  if (orgWorkspaceIds.length === 0) return;
+  if (orgWorkspaceIds.length === 0) return [];
   const tagRows = await db.query.workspaceTags.findMany({
     where: inArray(workspaceTags.workspaceId, orgWorkspaceIds),
     columns: { workspaceId: true, key: true, value: true },
   });
   const tagsByWorkspace = buildTagsByWorkspace(tagRows);
+  const matching: string[] = [];
   for (const workspaceId of orgWorkspaceIds) {
     if (evaluateTagExpression(scope.tags, tagsByWorkspace.get(workspaceId) ?? new Set<string>())) {
-      matching.add(workspaceId);
+      matching.push(workspaceId);
     }
   }
+  return matching;
 }
 
-function buildTagsByWorkspace(tagRows: readonly { workspaceId: string; key: string; value: string | null }[]): Map<string, Set<string>> {
+function buildTagsByWorkspace(tagRows: readonly DeepReadonly<{ workspaceId: string; key: string; value: string | null }>[]): Map<string, Set<string>> {
   const tagsByWorkspace = new Map<string, Set<string>>();
   for (const row of tagRows) {
     const tags = tagsByWorkspace.get(row.workspaceId) ?? new Set<string>();
@@ -699,11 +701,12 @@ export async function scopeWorkspaceIdsForOrg(scope: TokenScopes, orgId: string)
   if (!scopeCoversOrg(scope, orgId)) return [];
   if (hasNoWorkspaceRestriction(scope)) return null;
   const matching = new Set<string>();
-  await Promise.all([
-    collectProjectScopedIds(scope, orgId, matching),
-    collectWorkspaceScopedIds(scope, orgId, matching),
-    collectTagScopedIds(scope, orgId, matching),
+  const scopedIds = await Promise.all([
+    collectProjectScopedIds(scope, orgId),
+    collectWorkspaceScopedIds(scope, orgId),
+    collectTagScopedIds(scope, orgId),
   ]);
+  for (const ids of scopedIds) for (const id of ids) matching.add(id);
   return [...matching];
 }
 
@@ -737,21 +740,21 @@ function workspacePermissionGrant(required: WorkspacePermission): readonly Works
  * 10-permission-level workspace handlers into one set of DB reads plus
  * in-memory derivations.
  */
-type WorkspaceAccessBase = {
-  readonly orgId: string;
-  readonly userId: string | undefined;
-  readonly tokenOrgId: string | null;
-  readonly tokenTeamId: string | null;
-  readonly tokenTeam: (typeof teams.$inferSelect) | null;
-  readonly tokenTeamWorkspaces: readonly (typeof teamWorkspaces.$inferSelect)[];
-  readonly isOwner: boolean;
-  readonly isMember: boolean;
-  readonly userTeamData: {
-    readonly teamIds: readonly string[];
-    readonly teamWorkspaces: readonly (typeof teamWorkspaces.$inferSelect)[];
-    readonly userTeams: readonly (typeof teams.$inferSelect)[];
+type WorkspaceAccessBase = DeepReadonly<{
+  orgId: string;
+  userId: string | undefined;
+  tokenOrgId: string | null;
+  tokenTeamId: string | null;
+  tokenTeam: (typeof teams.$inferSelect) | null;
+  tokenTeamWorkspaces: (typeof teamWorkspaces.$inferSelect)[];
+  isOwner: boolean;
+  isMember: boolean;
+  userTeamData: {
+    teamIds: string[];
+    teamWorkspaces: (typeof teamWorkspaces.$inferSelect)[];
+    userTeams: (typeof teams.$inferSelect)[];
   } | null;
-}
+}>;
 
 async function loadWorkspaceAccessBase(
   orgId: string,
@@ -859,7 +862,7 @@ function derivesFromTeamToken(base: WorkspaceAccessBase, required: WorkspacePerm
     .map((entry): string => entry.workspaceId))];
 }
 
-function grantsTeamOrgWide(team: (typeof teams.$inferSelect), required: WorkspacePermission): boolean {
+function grantsTeamOrgWide(team: DeepReadonly<typeof teams.$inferSelect>, required: WorkspacePermission): boolean {
   if (required === "read" && team.organizationAccess["manage-policies"] === true) return true;
   if (required === "policy-override" && team.organizationAccess["manage-policy-overrides"] === true) return true;
   if (["read", "run-read", "variables-read", "state-outputs", "state-read"].includes(required)
@@ -873,7 +876,7 @@ function derivesFromOrgToken(base: WorkspaceAccessBase, required: WorkspacePermi
   return null;
 }
 
-function grantsUserOrgWide(userTeams: readonly (typeof teams.$inferSelect)[], required: WorkspacePermission): boolean {
+function grantsUserOrgWide(userTeams: readonly DeepReadonly<typeof teams.$inferSelect>[], required: WorkspacePermission): boolean {
   if (userTeams.some((team): boolean => teamOrganizationAllows(team.organizationAccess, "manage-workspaces"))) return true;
   if (required === "read" && userTeams.some((team): boolean => team.organizationAccess["manage-policies"] === true)) return true;
   if (required === "policy-override" && userTeams.some((team): boolean => team.organizationAccess["manage-policy-overrides"] === true)) return true;
@@ -894,7 +897,7 @@ function deriveForUserTeams(base: WorkspaceAccessBase, required: WorkspacePermis
     .map((entry): string => entry.workspaceId))];
 }
 
-function buildDelegateTeamIds(userTeams: readonly (typeof teams.$inferSelect)[], required: WorkspacePermission): ReadonlySet<string> | null {
+function buildDelegateTeamIds(userTeams: readonly DeepReadonly<typeof teams.$inferSelect>[], required: WorkspacePermission): ReadonlySet<string> | null {
   if (required !== "policy-override") return null;
   return new Set(userTeams
     .filter((t: DeepReadonly<typeof teams.$inferSelect>): boolean => teamOverrideDelegationActive(t))
@@ -902,7 +905,6 @@ function buildDelegateTeamIds(userTeams: readonly (typeof teams.$inferSelect)[],
 }
 
 function deriveWorkspaceIdsForRequired(
-  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- access-base type carries mutable element types but is treated as read-only here.
   base: WorkspaceAccessBase,
   required: WorkspacePermission,
 ): readonly string[] | null {
@@ -1509,101 +1511,94 @@ export async function findLockedInheritedTagKey(
   return matches[0]?.key;
 }
 
-type RunWhereConditions = (ReturnType<typeof eq> | ReturnType<typeof or>)[];
+type RunWhereCondition = DeepReadonly<ReturnType<typeof eq> | ReturnType<typeof or>>;
+type RunWhereConditions = readonly RunWhereCondition[];
 
-function addStatusFilter(conditions: RunWhereConditions, csv: (name: string) => string[] | undefined): void {
+function addStatusFilter(conditions: readonly RunWhereCondition[], csv: (name: string) => string[] | undefined): RunWhereConditions {
   const statuses = csv("filter[status]");
-  if (statuses !== undefined && statuses.length > 0) conditions.push(inArray(runs.status, statuses));
+  return statuses !== undefined && statuses.length > 0 ? [...conditions, inArray(runs.status, statuses)] : conditions;
 }
 
-function addOperationFilter(conditions: RunWhereConditions, csv: (name: string) => string[] | undefined): void {
+function addOperationFilter(conditions: readonly RunWhereCondition[], csv: (name: string) => string[] | undefined): RunWhereConditions {
   const operations = csv("filter[operation]");
-  if (operations !== undefined && operations.length > 0) conditions.push(inArray(runs.operation, operations));
+  return operations !== undefined && operations.length > 0 ? [...conditions, inArray(runs.operation, operations)] : conditions;
 }
 
-function addSourceFilter(conditions: RunWhereConditions, csv: (name: string) => string[] | undefined): void {
+function addSourceFilter(conditions: readonly RunWhereCondition[], csv: (name: string) => string[] | undefined): RunWhereConditions {
   const sources = csv("filter[source]");
-  if (sources === undefined || sources.length === 0) return;
+  if (sources === undefined || sources.length === 0) return conditions;
   const wantsApi = sources.includes("tfe-api");
   const wantsVcs = sources.includes("tfe-vcs");
   if (!wantsApi && !wantsVcs) {
-    conditions.push(sql`false`);
-    return;
+    return [...conditions, sql`false`];
   }
-  if (wantsApi === wantsVcs) return;
+  if (wantsApi === wantsVcs) return conditions;
   const vcsSources = ["github", "gitlab", "bitbucket"];
   const vcsRuns = exists(db.select({ id: configurationVersions.id })
     .from(configurationVersions)
     .where(and(eq(configurationVersions.id, runs.configurationVersionId), inArray(configurationVersions.source, vcsSources))));
-  conditions.push(wantsVcs ? vcsRuns : or(isNull(runs.configurationVersionId), sql`NOT ${vcsRuns}`));
+  return [...conditions, wantsVcs ? vcsRuns : or(isNull(runs.configurationVersionId), sql`NOT ${vcsRuns}`)];
 }
 
-function addStatusGroupFilter(conditions: RunWhereConditions, statusGroup: string | null): void {
-  if (statusGroup === null || statusGroup === "") return;
-  if (statusGroup === "final") conditions.push(inArray(runs.status, FINAL_RUN_STATUSES));
-  else if (statusGroup === "non_final") conditions.push(notInArray(runs.status, FINAL_RUN_STATUSES));
-  else if (statusGroup === "discardable") conditions.push(inArray(runs.status, DISCARDABLE_RUN_STATUSES));
-  else conditions.push(sql`false`);
+function addStatusGroupFilter(conditions: readonly RunWhereCondition[], statusGroup: string | null): RunWhereConditions {
+  if (statusGroup === null || statusGroup === "") return conditions;
+  if (statusGroup === "final") return [...conditions, inArray(runs.status, FINAL_RUN_STATUSES)];
+  if (statusGroup === "non_final") return [...conditions, notInArray(runs.status, FINAL_RUN_STATUSES)];
+  if (statusGroup === "discardable") return [...conditions, inArray(runs.status, DISCARDABLE_RUN_STATUSES)];
+  return [...conditions, sql`false`];
 }
 
-function addTimeframeFilter(conditions: RunWhereConditions, timeframe: string | null): void {
-  if (timeframe === null || timeframe === "") return;
+function addTimeframeFilter(conditions: readonly RunWhereCondition[], timeframe: string | null): RunWhereConditions {
+  if (timeframe === null || timeframe === "") return conditions;
   if (timeframe === "year") {
-    conditions.push(gte(runs.createdAt, Date.now() - 365 * 24 * 60 * 60 * 1000));
-    return;
+    return [...conditions, gte(runs.createdAt, Date.now() - 365 * 24 * 60 * 60 * 1000)];
   }
   if (/^\d{4}$/.test(timeframe)) {
     const year = Number(timeframe);
-    conditions.push(gte(runs.createdAt, Date.UTC(year, 0, 1)));
-    conditions.push(lt(runs.createdAt, Date.UTC(year + 1, 0, 1)));
-    return;
+    return [...conditions, gte(runs.createdAt, Date.UTC(year, 0, 1)), lt(runs.createdAt, Date.UTC(year + 1, 0, 1))];
   }
-  conditions.push(sql`false`);
+  return [...conditions, sql`false`];
 }
 
-function addBasicSearchFilter(conditions: RunWhereConditions, basic: string | undefined): void {
-  if (basic === undefined || basic === "") return;
-  conditions.push(or(like(runs.id, `%${basic}%`), like(runs.message, `%${basic}%`)));
+function addBasicSearchFilter(conditions: readonly RunWhereCondition[], basic: string | undefined): RunWhereConditions {
+  if (basic === undefined || basic === "") return conditions;
+  return [...conditions, or(like(runs.id, `%${basic}%`), like(runs.message, `%${basic}%`))];
 }
 
-function addUserSearchFilter(conditions: RunWhereConditions, userSearch: string | undefined): void {
-  if (userSearch === undefined || userSearch === "") return;
+function addUserSearchFilter(conditions: readonly RunWhereCondition[], userSearch: string | undefined): RunWhereConditions {
+  if (userSearch === undefined || userSearch === "") return conditions;
   const userMatches = db.select({ id: users.id }).from(users).where(like(users.username, `%${userSearch}%`));
-  conditions.push(inArray(runs.createdBy, userMatches));
+  return [...conditions, inArray(runs.createdBy, userMatches)];
 }
 
-function addAgentPoolFilter(conditions: RunWhereConditions, csv: (name: string) => string[] | undefined): void {
+function addAgentPoolFilter(conditions: readonly RunWhereCondition[], csv: (name: string) => string[] | undefined): RunWhereConditions {
   const agentPoolNames = csv("filter[agent_pool_names]");
-  if (agentPoolNames === undefined || agentPoolNames.length === 0) return;
+  if (agentPoolNames === undefined || agentPoolNames.length === 0) return conditions;
   const matchingPools = db.select({ id: agentPools.id }).from(agentPools).where(inArray(agentPools.name, agentPoolNames));
   const matchingWorkspaces = db.select({ id: workspaces.id }).from(workspaces).where(inArray(workspaces.agentPoolId, matchingPools));
-  conditions.push(inArray(runs.workspaceId, matchingWorkspaces));
+  return [...conditions, inArray(runs.workspaceId, matchingWorkspaces)];
 }
 
-function addCommitSearchFilter(conditions: RunWhereConditions, commitSearch: string | undefined): void {
-  if (commitSearch === undefined || commitSearch === "") return;
-  conditions.push(
-    inArray(runs.id,
-      db.select({ id: runs.id }).from(runs)
-        .innerJoin(configurationVersions, eq(runs.configurationVersionId, configurationVersions.id))
-        .where(sql`COALESCE(${jsonExtract(configurationVersions.ingressAttributes, '$.commitSha')}, '') LIKE ${`%${commitSearch}%`}`)
-    )
-  );
+function addCommitSearchFilter(conditions: readonly RunWhereCondition[], commitSearch: string | undefined): RunWhereConditions {
+  if (commitSearch === undefined || commitSearch === "") return conditions;
+  return [...conditions, inArray(runs.id, db.select({ id: runs.id }).from(runs)
+    .innerJoin(configurationVersions, eq(runs.configurationVersionId, configurationVersions.id))
+    .where(sql`COALESCE(${jsonExtract(configurationVersions.ingressAttributes, '$.commitSha')}, '') LIKE ${`%${commitSearch}%`}`))];
 }
 
 export function workspaceRunHistoryWhere(request: RequestWithUrl, workspaceId: string): ReturnType<typeof and> {
   const params = new URL(request.url).searchParams;
   const csv = (name: string): string[] | undefined => params.get(name)?.split(",").map((value: string): string => value.trim()).filter((s: string): boolean => s !== "");
-  const conditions: RunWhereConditions = [eq(runs.workspaceId, workspaceId)];
-  addStatusFilter(conditions, csv);
-  addOperationFilter(conditions, csv);
-  addSourceFilter(conditions, csv);
-  addStatusGroupFilter(conditions, params.get("filter[status_group]"));
-  addTimeframeFilter(conditions, params.get("filter[timeframe]"));
-  addBasicSearchFilter(conditions, params.get("search[basic]")?.trim());
-  addUserSearchFilter(conditions, params.get("search[user]")?.trim());
-  addAgentPoolFilter(conditions, csv);
-  addCommitSearchFilter(conditions, params.get("search[commit]")?.trim());
+  let conditions: RunWhereConditions = [eq(runs.workspaceId, workspaceId)];
+  conditions = addStatusFilter(conditions, csv);
+  conditions = addOperationFilter(conditions, csv);
+  conditions = addSourceFilter(conditions, csv);
+  conditions = addStatusGroupFilter(conditions, params.get("filter[status_group]"));
+  conditions = addTimeframeFilter(conditions, params.get("filter[timeframe]"));
+  conditions = addBasicSearchFilter(conditions, params.get("search[basic]")?.trim());
+  conditions = addUserSearchFilter(conditions, params.get("search[user]")?.trim());
+  conditions = addAgentPoolFilter(conditions, csv);
+  conditions = addCommitSearchFilter(conditions, params.get("search[commit]")?.trim());
   return and(...conditions);
 }
 
@@ -1744,7 +1739,7 @@ function getGraceCutoff(now: number, gracePeriodMs: number | undefined): number 
   return now - (gracePeriodMs ?? defaultGracePeriodMs);
 }
 
-function getRetentionCutoff(policy: { deleteOlderThanNDays?: number | null } | undefined, now: number): number | null {
+function getRetentionCutoff(policy: Readonly<{ deleteOlderThanNDays?: number | null }> | undefined, now: number): number | null {
   if (policy === undefined) return null;
   if (typeof policy.deleteOlderThanNDays !== "number" || policy.deleteOlderThanNDays <= 0) return null;
   return now - policy.deleteOlderThanNDays * 86_400_000;
@@ -1765,13 +1760,13 @@ async function loadRetentionPolicy(workspaceId: string): Promise<{ policy: typeo
   return { policy, policySource };
 }
 
-type GcCollections = {
-  finalizedVersions: readonly { id: string; createdAt: number; intermediate: boolean }[];
-  softDeletedVersions: readonly { id: string; softDeletedAt: number | null }[];
-  retainedConfigurationVersions: readonly { id: string; createdAt: number }[];
-  softDeletedConfigurationVersions: readonly { id: string; archivePath: string | null; softDeletedAt: number | null }[];
-  workspaceRuns: readonly { id: string; status: string; createdAt: number; configurationVersionId: string | null; softDeletedAt: number | null }[];
-};
+type GcCollections = DeepReadonly<{
+  finalizedVersions: { id: string; createdAt: number; intermediate: boolean }[];
+  softDeletedVersions: { id: string; softDeletedAt: number | null }[];
+  retainedConfigurationVersions: { id: string; createdAt: number }[];
+  softDeletedConfigurationVersions: { id: string; archivePath: string | null; softDeletedAt: number | null }[];
+  workspaceRuns: { id: string; status: string; createdAt: number; configurationVersionId: string | null; softDeletedAt: number | null }[];
+}>;
 
 async function fetchGcCollections(workspaceId: string): Promise<GcCollections> {
   const [finalizedVersions, softDeletedVersions, retainedConfigurationVersions, softDeletedConfigurationVersions, workspaceRuns] = await Promise.all([
@@ -1845,28 +1840,28 @@ async function purgeStaleRuns(workspaceRuns: GcCollections["workspaceRuns"], gra
   return { count: staleRuns.length, archivesDeleted, retainedRuns };
 }
 
-function collectStateVersionIdsToSoftDelete(finalizedVersions: GcCollections["finalizedVersions"], policy: { stateVersionsCount?: number | null }, currentStateVersionId: string | undefined, retentionCutoff: number | null): Set<string> {
-  const ids = new Set<string>();
-  addCountBasedStateVersions(ids, finalizedVersions, policy, currentStateVersionId);
-  addCutoffBasedStateVersions(ids, finalizedVersions, currentStateVersionId, retentionCutoff);
-  return ids;
+function collectStateVersionIdsToSoftDelete(finalizedVersions: GcCollections["finalizedVersions"], policy: Readonly<{ stateVersionsCount?: number | null }>, currentStateVersionId: string | undefined, retentionCutoff: number | null): Set<string> {
+  return new Set([
+    ...addCountBasedStateVersions(finalizedVersions, policy, currentStateVersionId),
+    ...addCutoffBasedStateVersions(finalizedVersions, currentStateVersionId, retentionCutoff),
+  ]);
 }
 
-function addCountBasedStateVersions(ids: Set<string>, finalizedVersions: GcCollections["finalizedVersions"], policy: { stateVersionsCount?: number | null }, currentStateVersionId: string | undefined): void {
-  if (typeof policy.stateVersionsCount !== "number" || policy.stateVersionsCount <= 0) return;
-  for (const sv of finalizedVersions.slice(policy.stateVersionsCount)) {
-    if (sv.id !== currentStateVersionId) ids.add(sv.id);
-  }
+function addCountBasedStateVersions(finalizedVersions: GcCollections["finalizedVersions"], policy: Readonly<{ stateVersionsCount?: number | null }>, currentStateVersionId: string | undefined): readonly string[] {
+  if (typeof policy.stateVersionsCount !== "number" || policy.stateVersionsCount <= 0) return [];
+  return finalizedVersions.slice(policy.stateVersionsCount)
+    .filter((sv): boolean => sv.id !== currentStateVersionId)
+    .map((sv): string => sv.id);
 }
 
-function addCutoffBasedStateVersions(ids: Set<string>, finalizedVersions: GcCollections["finalizedVersions"], currentStateVersionId: string | undefined, retentionCutoff: number | null): void {
-  if (retentionCutoff === null) return;
-  for (const sv of finalizedVersions) {
-    if (sv.id !== currentStateVersionId && sv.createdAt <= retentionCutoff) ids.add(sv.id);
-  }
+function addCutoffBasedStateVersions(finalizedVersions: GcCollections["finalizedVersions"], currentStateVersionId: string | undefined, retentionCutoff: number | null): readonly string[] {
+  if (retentionCutoff === null) return [];
+  return finalizedVersions
+    .filter((sv): boolean => sv.id !== currentStateVersionId && sv.createdAt <= retentionCutoff)
+    .map((sv): string => sv.id);
 }
 
-async function softDeleteStateVersions(ids: Set<string>, now: number): Promise<void> {
+async function softDeleteStateVersions(ids: Readonly<ReadonlySet<string>>, now: number): Promise<void> {
   if (ids.size === 0) return;
   await db.update(stateVersions).set({ status: "backing_data_soft_deleted", softDeletedAt: now }).where(inArray(stateVersions.id, [...ids]));
 }
@@ -1886,26 +1881,26 @@ function buildProtectedConfigurationIds(retainedConfigurationVersions: GcCollect
   return ids;
 }
 
-async function softDeleteConfigurationVersions(ids: string[], now: number): Promise<void> {
+async function softDeleteConfigurationVersions(ids: readonly string[], now: number): Promise<void> {
   if (ids.length === 0) return;
   await db.update(configurationVersions).set({ status: "backing_data_soft_deleted", softDeletedAt: now }).where(inArray(configurationVersions.id, ids));
 }
 
-function collectExpiredRunIds(retainedRuns: GcCollections["workspaceRuns"], retentionCutoff: number | null): string[] {
+function collectExpiredRunIds(retainedRuns: GcCollections["workspaceRuns"], retentionCutoff: number | null): readonly string[] {
   if (retentionCutoff === null) return [];
   return retainedRuns.filter(({ status, createdAt, softDeletedAt }): boolean => FINAL_RUN_STATUSES.includes(status) && softDeletedAt === null && createdAt <= retentionCutoff).map(({ id }): string => id);
 }
 
-async function archiveAndDeleteExpiredRuns(expiredRunIds: string[]): Promise<{ logsDeletedCount: number; logsArchived: number }> {
+async function archiveAndDeleteExpiredRuns(expiredRunIds: readonly string[], now: number): Promise<{ logsDeletedCount: number; logsArchived: number }> {
   if (expiredRunIds.length === 0) return { logsDeletedCount: 0, logsArchived: 0 };
   const expiredLogs = await db.query.logs.findMany({ where: inArray(logs.runId, expiredRunIds), columns: { id: true } });
   const logsArchived = (await Promise.all(expiredRunIds.map(archiveRunLogs))).filter(Boolean).length;
   await db.delete(logs).where(inArray(logs.runId, expiredRunIds));
-  await db.update(runs).set({ softDeletedAt: Date.now() }).where(inArray(runs.id, expiredRunIds));
+  await db.update(runs).set({ softDeletedAt: now }).where(inArray(runs.id, expiredRunIds));
   return { logsDeletedCount: expiredLogs.length, logsArchived };
 }
 
-async function applyRetentionPolicy(collections: GcCollections, policy: { stateVersionsCount?: number | null; deleteOlderThanNDays?: number | null }, now: number, retainedRuns: GcCollections["workspaceRuns"]): Promise<{ stateVersionIds: Set<string>; configurationVersionIds: string[]; expiredRunIds: string[]; logsDeleted: number; logsArchived: number }> {
+async function applyRetentionPolicy(collections: GcCollections, policy: Readonly<{ stateVersionsCount?: number | null; deleteOlderThanNDays?: number | null }>, now: number, retainedRuns: GcCollections["workspaceRuns"]): Promise<{ stateVersionIds: Set<string>; configurationVersionIds: readonly string[]; expiredRunIds: readonly string[]; logsDeleted: number; logsArchived: number }> {
   const retentionCutoff = getRetentionCutoff(policy, now);
   const currentStateVersionId = collections.finalizedVersions.find(({ intermediate }): boolean => !intermediate)?.id;
   const stateVersionIds = collectStateVersionIdsToSoftDelete(collections.finalizedVersions, policy, currentStateVersionId, retentionCutoff);
@@ -1913,7 +1908,7 @@ async function applyRetentionPolicy(collections: GcCollections, policy: { stateV
   const configurationVersionIds = collectConfigurationVersionIds(collections.retainedConfigurationVersions, retainedRuns, retentionCutoff);
   await softDeleteConfigurationVersions(configurationVersionIds, now);
   const expiredRunIds = collectExpiredRunIds(retainedRuns, retentionCutoff);
-  const { logsDeletedCount, logsArchived } = await archiveAndDeleteExpiredRuns(expiredRunIds);
+  const { logsDeletedCount, logsArchived } = await archiveAndDeleteExpiredRuns(expiredRunIds, now);
   return { stateVersionIds, configurationVersionIds, expiredRunIds, logsDeleted: logsDeletedCount, logsArchived };
 }
 

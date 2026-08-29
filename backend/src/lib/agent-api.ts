@@ -115,7 +115,7 @@ function parseVersionParts(version: string): number[] {
   return version.replace(/^v/, "").split(".").map((n: string): number => Number.parseInt(n, 10) || 0);
 }
 
-function compareVersionParts(parts: number[], target: number[]): number {
+function compareVersionParts(parts: readonly number[], target: readonly number[]): number {
   for (let i = 0; i < Math.max(parts.length, target.length); i += 1) {
     const diff = (parts[i] ?? 0) - (target[i] ?? 0);
     if (diff !== 0) return diff;
@@ -123,7 +123,7 @@ function compareVersionParts(parts: number[], target: number[]): number {
   return 0;
 }
 
-function satisfiesOperator(cmp: number, op: string, parts: number[], target: number[]): boolean {
+function satisfiesOperator(cmp: number, op: string, parts: readonly number[], target: readonly number[]): boolean {
   if (op === ">=") return cmp >= 0;
   if (op === "<=") return cmp <= 0;
   if (op === ">") return cmp > 0;
@@ -138,7 +138,7 @@ function satisfiesOperator(cmp: number, op: string, parts: number[], target: num
   return false;
 }
 
-function satisfiesSingleClause(parts: number[], clause: string): boolean {
+function satisfiesSingleClause(parts: readonly number[], clause: string): boolean {
   const trimmed = clause.trim();
   const match = /^(>=|<=|>|<|!=|~>|==)?\s*(.+)$/.exec(trimmed);
   if (match === null) return false;
@@ -175,9 +175,9 @@ export async function buildAgentJobPayload(
   details: AgentJobDetails,
   baseUrl: string,
   runToken: string,
-  terraformInfo: { version: string; url: string; checksum: string },
-  terraformVariables: Record<string, string>,
-  environment: Record<string, string>,
+  terraformInfo: Readonly<{ version: string; url: string; checksum: string }>,
+  terraformVariables: Readonly<Record<string, string>>,
+  environment: Readonly<Record<string, string>>,
 ): Promise<Record<string, unknown>> {
   const { job, run, workspace, organizationName } = details;
   const phase = job.phase;

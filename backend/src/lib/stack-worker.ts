@@ -19,7 +19,7 @@ import {
 import { getGitHubAppAccessToken } from "./webhooks";
 import { decryptSecret } from "./secrets";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./url-safety";
-import { validateExternalUrl } from "./utils";
+import { validateExternalUrl, type DeepReadonly } from "./utils";
 import { ensureBinary } from "../binaryManager";
 import { extractValidatedModuleArchive, validateModuleArchive } from "./registry-module-archive";
 import { enqueueDurableJob, type DurableJobContext } from "./durable-jobs";
@@ -28,8 +28,8 @@ import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./sandbox"
 const STACK_STORAGE_DIR = join(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "stacks");
 const MAX_STACK_ARCHIVE_BYTES = 100 * 1024 * 1024;
 const STACK_STATE_LOCK_LEASE_MS = 60_000;
-type Job = Readonly<typeof durableJobs.$inferSelect>;
-type Stack = Readonly<typeof stacks.$inferSelect>;
+type Job = DeepReadonly<typeof durableJobs.$inferSelect>;
+type Stack = DeepReadonly<typeof stacks.$inferSelect>;
 
 export function isStackStoragePath(path: string): boolean {
   const root = resolve(STACK_STORAGE_DIR);
@@ -106,7 +106,7 @@ async function fetchArchive(url: string, headers: Readonly<Record<string, string
   throw new Error("The Stack source download exceeded the redirect limit");
 }
 
-async function writeResponseArchive(response: Response, destination: string): Promise<void> {
+async function writeResponseArchive(response: DeepReadonly<Response>, destination: string): Promise<void> {
   if (!response.ok || response.body === null) throw new Error(`The Stack source download failed with HTTP ${response.status}`);
   const contentLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > MAX_STACK_ARCHIVE_BYTES) throw new Error("The Stack source download is too large");
@@ -330,15 +330,15 @@ async function deploymentDefinitions(root: string): Promise<readonly StackDeploy
 }
 
 async function command(
-  args: string[],
+  args: readonly string[],
   cwd: string,
-  sandbox: RunSandbox | null,
+  sandbox: DeepReadonly<RunSandbox> | null,
   heartbeat?: () => Promise<boolean>,
 ): Promise<Readonly<{ code: number; output: string; heartbeatLost: boolean }>> {
   const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", LANG: "C" };
   const child = sandbox === null
-    ? spawn(args, { cwd, env, stdout: "pipe", stderr: "pipe" })
-    : sandbox.spawn(args, { cwd, env });
+    ? spawn([...args], { cwd, env, stdout: "pipe", stderr: "pipe" })
+    : sandbox.spawn([...args], { cwd, env });
   let heartbeatLost = false;
   const interval = heartbeat === undefined ? undefined : setInterval((): void => {
     void heartbeat().then((owned): void => {
@@ -470,11 +470,11 @@ function componentSandbox(): RunSandbox | null {
 
 async function runTerraformComponentOperation(
   operation: "plan" | "apply",
-  planArgs: string[],
+  planArgs: readonly string[],
   planArtifactPath: string | null,
   executionDirectory: string,
   workDirectory: string,
-  sandbox: RunSandbox | null,
+  sandbox: DeepReadonly<RunSandbox> | null,
   heartbeat: () => Promise<boolean>,
   binaryPath: string,
 ): Promise<TerraformCommandResult> {
@@ -485,7 +485,7 @@ async function runTerraformComponentOperation(
   return command([binaryPath, "apply", "-no-color", "-input=false", planPath], executionDirectory, sandbox, heartbeat);
 }
 
-type ComponentExecutionRequest = Readonly<{
+type ComponentExecutionRequest = DeepReadonly<{
   component: StackComponent;
   stepId: string;
   runId: string;
@@ -656,17 +656,17 @@ function storedComponents(value: unknown): readonly StoredComponent[] {
   });
 }
 
-function payloadString(record: Readonly<typeof stackRecords.$inferSelect>, key: string): string | undefined {
+function payloadString(record: DeepReadonly<typeof stackRecords.$inferSelect>, key: string): string | undefined {
   const value = (record.payload ?? {})[key];
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
-function payloadNumber(record: Readonly<typeof stackRecords.$inferSelect>, key: string, fallback: number): number {
+function payloadNumber(record: DeepReadonly<typeof stackRecords.$inferSelect>, key: string, fallback: number): number {
   const value = (record.payload ?? {})[key];
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : fallback;
 }
 
-function payloadFencingToken(record: Readonly<typeof stackRecords.$inferSelect>): number | undefined {
+function payloadFencingToken(record: DeepReadonly<typeof stackRecords.$inferSelect>): number | undefined {
   const value = (record.payload ?? {})["fencing-token"] ?? (record.payload ?? {}).fencingToken;
   return typeof value === "number" && Number.isInteger(value) ? value : undefined;
 }
@@ -706,7 +706,7 @@ async function releaseStackStateLock(stackId: string, deployment: string, runId:
   ));
 }
 
-async function createDeploymentStep(stackId: string, runId: string, component: StoredComponent, index: number, phase: "plan" | "apply" | "convergence", requiresStateLock: boolean, fencingToken?: number): Promise<Readonly<typeof stackRecords.$inferSelect>> {
+async function createDeploymentStep(stackId: string, runId: string, component: StoredComponent, index: number, phase: "plan" | "apply" | "convergence", requiresStateLock: boolean, fencingToken?: number): Promise<DeepReadonly<typeof stackRecords.$inferSelect>> {
   const step: typeof stackRecords.$inferInsert = {
     id: `sds-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
     stackId,
@@ -725,7 +725,7 @@ async function createDeploymentStep(stackId: string, runId: string, component: S
   return created;
 }
 
-async function queueStackAgentStep(stack: Stack, runId: string, step: typeof stackRecords.$inferSelect, phase: "plan" | "apply"): Promise<void> {
+async function queueStackAgentStep(stack: Stack, runId: string, step: DeepReadonly<typeof stackRecords.$inferSelect>, phase: "plan" | "apply"): Promise<void> {
   if (stack.agentPoolId === null) throw new Error("Agent execution requires an agent pool");
   const existing = await db.query.stackAgentJobs.findFirst({ where: and(eq(stackAgentJobs.stepId, step.id), eq(stackAgentJobs.phase, phase)) });
   if (existing !== undefined && ["queued", "claimed"].includes(existing.status)) return;
@@ -740,7 +740,7 @@ async function scheduleStackRun(runId: string, delay = 0): Promise<void> {
   await enqueueDurableJob("stack-deployment", { runId }, { dedupeKey: `stack-run:${runId}`, runAfter: Date.now() + delay, rescheduleRunning: true });
 }
 
-async function failStackRun(stack: Stack, run: Readonly<typeof stackRecords.$inferSelect>, step: Readonly<typeof stackRecords.$inferSelect> | undefined, detail: string, fencingToken?: number): Promise<void> {
+async function failStackRun(stack: Stack, run: DeepReadonly<typeof stackRecords.$inferSelect>, step: DeepReadonly<typeof stackRecords.$inferSelect> | undefined, detail: string, fencingToken?: number): Promise<void> {
   const now = Date.now();
   if (step !== undefined) await db.update(stackRecords).set({ status: "failed", payload: { ...(step.payload ?? {}), error: detail }, updatedAt: now }).where(eq(stackRecords.id, step.id));
   await db.update(stackRecords).set({ status: "failed", payload: { ...(run.payload ?? {}), error: detail }, updatedAt: now }).where(eq(stackRecords.id, run.id));
@@ -748,7 +748,7 @@ async function failStackRun(stack: Stack, run: Readonly<typeof stackRecords.$inf
   await releaseStackStateLock(stack.id, run.name ?? "default", run.id, fencingToken ?? payloadFencingToken(step ?? run) ?? payloadFencingToken(run));
 }
 
-async function recoverAgentApplyState(stack: Stack, run: Readonly<typeof stackRecords.$inferSelect>, step: Readonly<typeof stackRecords.$inferSelect>): Promise<void> {
+async function recoverAgentApplyState(stack: Stack, run: DeepReadonly<typeof stackRecords.$inferSelect>, step: DeepReadonly<typeof stackRecords.$inferSelect>): Promise<void> {
   const deployment = run.name ?? "default";
   const current = await db.query.stackRecords.findFirst({ where: and(
     eq(stackRecords.stackId, stack.id),
@@ -768,10 +768,10 @@ async function recoverAgentApplyState(stack: Stack, run: Readonly<typeof stackRe
   await saveStackState(stack.id, deployment, run.id, statePayload, fencingToken);
 }
 
-type StackDeploymentInputs = Readonly<{
-  run: Readonly<typeof stackRecords.$inferSelect>;
+type StackDeploymentInputs = DeepReadonly<{
+  run: typeof stackRecords.$inferSelect;
   stack: Stack;
-  configuration: Readonly<typeof stackRecords.$inferSelect>;
+  configuration: typeof stackRecords.$inferSelect;
   runPayload: Record<string, unknown>;
   components: readonly StoredComponent[];
   index: number;
@@ -780,11 +780,11 @@ type StackDeploymentInputs = Readonly<{
 
 type StackDeploymentStepDecision =
   | Readonly<{ handled: true }>
-  | Readonly<{ handled: false; step: Readonly<typeof stackRecords.$inferSelect> }>;
+  | Readonly<{ handled: false; step: DeepReadonly<typeof stackRecords.$inferSelect> }>;
 
 async function completeStackDeploymentRun(
   stack: Stack,
-  run: Readonly<typeof stackRecords.$inferSelect>,
+  run: DeepReadonly<typeof stackRecords.$inferSelect>,
 ): Promise<void> {
   await db.update(stackRecords).set({ status: "succeeded", updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
   if (run.parentId !== null) {
@@ -824,8 +824,8 @@ async function loadStackDeploymentInputs(
 
 async function handleTerminalStackDeploymentStep(
   stack: Stack,
-  run: Readonly<typeof stackRecords.$inferSelect>,
-  step: Readonly<typeof stackRecords.$inferSelect>,
+  run: DeepReadonly<typeof stackRecords.$inferSelect>,
+  step: DeepReadonly<typeof stackRecords.$inferSelect>,
 ): Promise<StackDeploymentStepDecision> {
   if (!["failed", "canceled"].includes(step.status)) return { handled: false, step };
   await db.update(stackRecords).set({ status: step.status, updatedAt: Date.now() }).where(eq(stackRecords.id, run.id));
@@ -850,7 +850,7 @@ async function handlePendingOperatorStackStep(
 
 async function handleCompletedApplyStackStep(
   inputs: StackDeploymentInputs,
-  step: Readonly<typeof stackRecords.$inferSelect>,
+  step: DeepReadonly<typeof stackRecords.$inferSelect>,
 ): Promise<StackDeploymentStepDecision> {
   const { run, stack, component, index } = inputs;
   if (stack.executionMode === "agent") await recoverAgentApplyState(stack, run, step);
@@ -898,7 +898,7 @@ async function handleCompletedPlanWithoutChanges(
 
 async function handleCompletedStackDeploymentStep(
   inputs: StackDeploymentInputs,
-  step: Readonly<typeof stackRecords.$inferSelect>,
+  step: DeepReadonly<typeof stackRecords.$inferSelect>,
   phase: string,
 ): Promise<StackDeploymentStepDecision> {
   const stepPayload = step.payload ?? {};
@@ -911,7 +911,7 @@ async function handleCompletedStackDeploymentStep(
 
 async function advanceStackDeploymentStep(
   inputs: StackDeploymentInputs,
-  existingStep: Readonly<typeof stackRecords.$inferSelect> | undefined,
+  existingStep: DeepReadonly<typeof stackRecords.$inferSelect> | undefined,
 ): Promise<StackDeploymentStepDecision> {
   const { run, stack, component, index } = inputs;
   const phase = existingStep === undefined
@@ -931,9 +931,9 @@ async function advanceStackDeploymentStep(
 }
 
 async function planArtifactPathForStackStep(
-  run: Readonly<typeof stackRecords.$inferSelect>,
+  run: DeepReadonly<typeof stackRecords.$inferSelect>,
   component: StoredComponent,
-  step: Readonly<typeof stackRecords.$inferSelect>,
+  step: DeepReadonly<typeof stackRecords.$inferSelect>,
   operation: "plan" | "apply",
 ): Promise<string | null> {
   if (operation !== "apply") return null;
@@ -943,8 +943,8 @@ async function planArtifactPathForStackStep(
 }
 
 function stackDeploymentArchivePath(
-  run: Readonly<typeof stackRecords.$inferSelect>,
-  configuration: Readonly<typeof stackRecords.$inferSelect>,
+  run: DeepReadonly<typeof stackRecords.$inferSelect>,
+  configuration: DeepReadonly<typeof stackRecords.$inferSelect>,
 ): string {
   const runArchivePath = (run.payload ?? {}).archivePath;
   if (typeof runArchivePath === "string") return runArchivePath;
@@ -955,10 +955,10 @@ function stackDeploymentArchivePath(
 async function executeStackComponentFromArchive(
   archivePath: string,
   component: StoredComponent,
-  step: Readonly<typeof stackRecords.$inferSelect>,
-  run: Readonly<typeof stackRecords.$inferSelect>,
+  step: DeepReadonly<typeof stackRecords.$inferSelect>,
+  run: DeepReadonly<typeof stackRecords.$inferSelect>,
   stack: Stack,
-  configuration: Readonly<typeof stackRecords.$inferSelect>,
+  configuration: DeepReadonly<typeof stackRecords.$inferSelect>,
   operation: "plan" | "apply",
   planArtifactPath: string | null,
   fencingToken: number | null,
@@ -981,8 +981,8 @@ async function executeStackComponentFromArchive(
 }
 
 async function persistStackExecutionResult(
-  run: Readonly<typeof stackRecords.$inferSelect>,
-  step: Readonly<typeof stackRecords.$inferSelect>,
+  run: DeepReadonly<typeof stackRecords.$inferSelect>,
+  step: DeepReadonly<typeof stackRecords.$inferSelect>,
   operation: "plan" | "apply",
   result: StackExecutionResult,
 ): Promise<void> {
@@ -998,8 +998,8 @@ async function persistStackExecutionResult(
 type StackStepExecutionPreparation = Readonly<{ ready: boolean; fencingToken: number | null }>;
 
 async function prepareStackStepExecution(
-  run: Readonly<typeof stackRecords.$inferSelect>,
-  step: Readonly<typeof stackRecords.$inferSelect>,
+  run: DeepReadonly<typeof stackRecords.$inferSelect>,
+  step: DeepReadonly<typeof stackRecords.$inferSelect>,
   stack: Stack,
   operation: "plan" | "apply",
 ): Promise<StackStepExecutionPreparation> {
@@ -1019,7 +1019,7 @@ async function prepareStackStepExecution(
 
 async function executeStackDeploymentStep(
   inputs: StackDeploymentInputs,
-  step: Readonly<typeof stackRecords.$inferSelect>,
+  step: DeepReadonly<typeof stackRecords.$inferSelect>,
   operation: "plan" | "apply",
   context: DurableJobContext,
 ): Promise<void> {
@@ -1069,54 +1069,61 @@ type PreparedStackConfiguration = Readonly<{
   preparedDeployments: readonly PreparedDeployment[];
 }>;
 
+type RemovedDeploymentCandidate = Readonly<{
+  name: string;
+  deployment?: PreparedDeployment;
+}>;
+
 function eligiblePreviousDeploymentName(
-  group: Readonly<typeof stackRecords.$inferSelect>,
-  currentNames: ReadonlySet<string>,
-  seenPreviousNames: Set<string>,
+  group: DeepReadonly<typeof stackRecords.$inferSelect>,
+  currentNames: Readonly<ReadonlySet<string>>,
+  seenPreviousNames: Readonly<ReadonlySet<string>>,
 ): string | undefined {
   const name = group.name;
   if (name === null || currentNames.has(name) || seenPreviousNames.has(name) || group.status === "succeeded") return undefined;
-  seenPreviousNames.add(name);
   return name;
 }
 
-function previousDeploymentArchive(configuration: Readonly<typeof stackRecords.$inferSelect> | undefined): string | undefined {
+function previousDeploymentArchive(configuration: DeepReadonly<typeof stackRecords.$inferSelect> | undefined): string | undefined {
   const archivePath = (configuration?.payload ?? {}).archivePath;
   return typeof archivePath === "string" ? archivePath : undefined;
 }
 
 async function removedDeploymentForGroup(
-  group: Readonly<typeof stackRecords.$inferSelect>,
-  currentNames: ReadonlySet<string>,
-  seenPreviousNames: Set<string>,
-): Promise<PreparedDeployment | undefined> {
+  group: DeepReadonly<typeof stackRecords.$inferSelect>,
+  currentNames: Readonly<ReadonlySet<string>>,
+  seenPreviousNames: Readonly<ReadonlySet<string>>,
+): Promise<RemovedDeploymentCandidate | undefined> {
   const name = eligiblePreviousDeploymentName(group, currentNames, seenPreviousNames);
   if (name === undefined) return undefined;
-  if (group.parentId === null) return undefined;
+  if (group.parentId === null) return { name };
   const previousConfiguration = await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, group.parentId), eq(stackRecords.recordType, "stack-configurations")) });
   const previousComponents = storedComponents((previousConfiguration?.payload ?? {}).components);
   const previousArchive = previousDeploymentArchive(previousConfiguration);
-  if (previousConfiguration === undefined || previousComponents.length === 0 || previousArchive === undefined || !isStackStoragePath(previousArchive)) return undefined;
-  return { name, destroy: true, components: [...previousComponents].reverse(), archivePath: previousArchive };
+  if (previousConfiguration === undefined || previousComponents.length === 0 || previousArchive === undefined || !isStackStoragePath(previousArchive)) return { name };
+  return { name, deployment: { name, destroy: true, components: [...previousComponents].reverse(), archivePath: previousArchive } };
 }
 
 async function removedStackDeployments(
   stackId: string,
-  currentNames: ReadonlySet<string>,
+  currentNames: Readonly<ReadonlySet<string>>,
 ): Promise<readonly PreparedDeployment[]> {
   const previousGroups = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, stackId), eq(stackRecords.recordType, "stack-deployment-groups")), orderBy: [desc(stackRecords.createdAt)] });
   const seenPreviousNames = new Set<string>();
   const removedDeployments: PreparedDeployment[] = [];
   for (const group of previousGroups) {
     const removed = await removedDeploymentForGroup(group, currentNames, seenPreviousNames);
-    if (removed !== undefined) removedDeployments.push(removed);
+    if (removed !== undefined) {
+      seenPreviousNames.add(removed.name);
+      if (removed.deployment !== undefined) removedDeployments.push(removed.deployment);
+    }
   }
   return removedDeployments;
 }
 
 async function prepareStackConfiguration(
   stack: Stack,
-  initialPayload: Readonly<Record<string, unknown>>,
+  initialPayload: DeepReadonly<Record<string, unknown>>,
   archivePath: string,
   context: DurableJobContext,
 ): Promise<PreparedStackConfiguration | undefined> {
@@ -1145,7 +1152,7 @@ async function prepareStackConfiguration(
   }
 }
 
-async function clearPreviousStackDeployments(tx: typeof db, stackId: string, configurationId: string): Promise<void> {
+async function clearPreviousStackDeployments(tx: DeepReadonly<typeof db>, stackId: string, configurationId: string): Promise<void> {
   const oldGroups = await tx.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, stackId), eq(stackRecords.parentId, configurationId), eq(stackRecords.recordType, "stack-deployment-groups")), columns: { id: true } });
   const groupIds = oldGroups.map((group) => group.id);
   if (groupIds.length === 0) return;
@@ -1170,13 +1177,12 @@ async function clearPreviousStackDeployments(tx: typeof db, stackId: string, con
 }
 
 async function insertPreparedDeployment(
-  tx: typeof db,
+  tx: DeepReadonly<typeof db>,
   stack: Stack,
-  configuration: Readonly<typeof stackRecords.$inferSelect>,
-  initialPayload: Readonly<Record<string, unknown>>,
+  configuration: DeepReadonly<typeof stackRecords.$inferSelect>,
+  initialPayload: DeepReadonly<Record<string, unknown>>,
   deployment: PreparedDeployment,
-  runIds: string[],
-): Promise<void> {
+): Promise<string> {
   const deploymentFirst = deployment.components[0];
   if (deploymentFirst === undefined) throw new Error(`Deployment ${deployment.name} contains no components`);
   const groupId = `sdg-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
@@ -1186,13 +1192,13 @@ async function insertPreparedDeployment(
   await tx.insert(stackRecords).values({ id: groupId, stackId: stack.id, parentId: configuration.id, recordType: "stack-deployment-groups", name: deployment.name, status: "pending", payload: { "deployment-group-config": { "auto-approve-checks": [] }, latestRunId: deploymentRunId }, createdAt: now, updatedAt: now });
   await tx.insert(stackRecords).values({ id: deploymentRunId, stackId: stack.id, parentId: groupId, recordType: "stack-deployment-runs", name: deployment.name, status: "planning", payload: { configurationId: configuration.id, components: deployment.components, archivePath: deployment.archivePath, "plan-mode": initialPayload.speculative === true ? "speculative" : "normal", component: deploymentFirst.name, componentIndex: 0, cycle: 0, destroy: deployment.destroy || initialPayload["destroy-all"] === true }, createdAt: now, updatedAt: now });
   await tx.insert(stackRecords).values({ id: stepId, stackId: stack.id, parentId: deploymentRunId, recordType: "stack-deployment-steps", name: deploymentFirst.name, status: "queued", payload: { "operation-type": "plan", phase: "plan", componentIndex: 0, "requires-state-lock": false, "has-changes": false, "deferred-changes": false }, createdAt: now, updatedAt: now });
-  runIds.push(deploymentRunId);
+  return deploymentRunId;
 }
 
 async function persistPreparedStackDeployments(
   stack: Stack,
-  configuration: Readonly<typeof stackRecords.$inferSelect>,
-  initialPayload: Readonly<Record<string, unknown>>,
+  configuration: DeepReadonly<typeof stackRecords.$inferSelect>,
+  initialPayload: DeepReadonly<Record<string, unknown>>,
   deployments: readonly PreparedDeployment[],
   context: DurableJobContext,
 ): Promise<readonly string[]> {
@@ -1202,7 +1208,7 @@ async function persistPreparedStackDeployments(
     await clearPreviousStackDeployments(tx, stack.id, configuration.id);
     for (const deployment of deployments) {
       if (await context.canceled()) throw new Error("Stack configuration preparation was canceled");
-      await insertPreparedDeployment(tx, stack, configuration, initialPayload, deployment, runIds);
+      runIds.push(await insertPreparedDeployment(tx, stack, configuration, initialPayload, deployment));
     }
   });
   return runIds;

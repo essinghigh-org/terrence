@@ -642,7 +642,7 @@ function resolveNormalizedSource(origin?: RunOrigin): string {
   return "tfe-configuration-version";
 }
 
-function buildRunActionAttributes(flags: { isPlanned: boolean; isConfirmable: boolean; isRunning: boolean }, canApply: boolean, canAdmin: boolean): Record<string, unknown> {
+function buildRunActionAttributes(flags: DeepReadonly<{ isPlanned: boolean; isConfirmable: boolean; isRunning: boolean }>, canApply: boolean, canAdmin: boolean): Record<string, unknown> {
   return {
     "is-cancelable": canApply && flags.isRunning,
     "is-confirmable": canApply && flags.isConfirmable,
@@ -735,7 +735,7 @@ function buildRunResourceAttributes(run: RunParam): Record<string, unknown> {
   };
 }
 
-function buildRunPermissionAttributes(flags: { isPlanned: boolean; isConfirmable: boolean; isRunning: boolean }, canApply: boolean, canAdmin: boolean, canOverridePolicy: boolean, status: string): Record<string, unknown> {
+function buildRunPermissionAttributes(flags: DeepReadonly<{ isPlanned: boolean; isConfirmable: boolean; isRunning: boolean }>, canApply: boolean, canAdmin: boolean, canOverridePolicy: boolean, status: string): Record<string, unknown> {
   return {
     "can-apply": canApply && flags.isConfirmable,
     "can-cancel": canApply && flags.isRunning,
@@ -747,7 +747,7 @@ function buildRunPermissionAttributes(flags: { isPlanned: boolean; isConfirmable
   };
 }
 
-function buildRunAttributes(run: RunParam, flags: { isPlanned: boolean; isConfirmable: boolean; isRunning: boolean; hasChanges: boolean }, operation: string, normalizedSource: string, origin?: RunOrigin, baseline?: Readonly<{ "median-duration-seconds"?: number | null; "duration-seconds"?: number | null; "is-slow"?: boolean }> | null, canApply = false, canAdmin = false, canOverridePolicy = false): Record<string, unknown> {
+function buildRunAttributes(run: RunParam, flags: DeepReadonly<{ isPlanned: boolean; isConfirmable: boolean; isRunning: boolean; hasChanges: boolean }>, operation: string, normalizedSource: string, origin?: RunOrigin, baseline?: Readonly<{ "median-duration-seconds"?: number | null; "duration-seconds"?: number | null; "is-slow"?: boolean }> | null, canApply = false, canAdmin = false, canOverridePolicy = false): Record<string, unknown> {
   return {
     actions: buildRunActionAttributes(flags, canApply, canAdmin),
     ...buildRunCoreAttributes(run, operation, normalizedSource, flags.hasChanges),
@@ -991,7 +991,10 @@ function isStateResourceRecord(resource: unknown): resource is Record<string, un
     typeof (resource as Record<string, unknown>).name === "string";
 }
 
-function normalizeStateResource(resource: Record<string, unknown>): { name: string; type: string; count: number; module: string; provider: string | null } {
+type StateResource = Readonly<{ name: string; type: string; count: number; module: string; provider: string | null }>;
+type StateAggregates = DeepReadonly<{ modules: Record<string, Record<string, number>>; providers: Record<string, Record<string, number>> }>;
+
+function normalizeStateResource(resource: Readonly<Record<string, unknown>>): StateResource {
   const rType = resource.type as string;
   const rName = resource.name as string;
   const rMode = resource.mode;
@@ -1007,14 +1010,14 @@ function normalizeStateResource(resource: Record<string, unknown>): { name: stri
   };
 }
 
-function extractStateResources(parsed: unknown): { name: string; type: string; count: number; module: string; provider: string | null }[] {
+function extractStateResources(parsed: unknown): StateResource[] {
   const rawResources = Array.isArray((parsed as Record<string, unknown> | null)?.resources) ? (parsed as Record<string, unknown>).resources as unknown[] : [];
   return (rawResources)
     .filter(isStateResourceRecord)
     .map(normalizeStateResource);
 }
 
-function buildStateAggregates(resources: { name: string; type: string; count: number; module: string; provider: string | null }[]): { modules: Record<string, Record<string, number>>; providers: Record<string, Record<string, number>> } {
+function buildStateAggregates(resources: readonly StateResource[]): StateAggregates {
   const modules: Record<string, Record<string, number>> = {};
   const providers: Record<string, Record<string, number>> = {};
   for (const resource of resources) {
@@ -1039,7 +1042,7 @@ function getStateAvailability(state: StateParam, payload: string): { rawStateAva
   return { rawStateAvailable, jsonStateAvailable, pending };
 }
 
-function buildStateCoreAttributes(state: StateParam, parsed: Readonly<Record<string, unknown> | null>, resources: { name: string; type: string; count: number; module: string; provider: string | null }[], aggregates: { modules: Record<string, Record<string, number>>; providers: Record<string, Record<string, number>> }, payload: string, includeState: boolean): Record<string, unknown> {
+function buildStateCoreAttributes(state: StateParam, parsed: Readonly<Record<string, unknown> | null>, resources: readonly StateResource[], aggregates: StateAggregates, payload: string, includeState: boolean): Record<string, unknown> {
   return {
     ...(includeState ? { state: payload } : {}),
     serial: state.serial,
@@ -1076,7 +1079,7 @@ function buildStateRunAttributes(run?: Readonly<{ status: string; message: strin
   };
 }
 
-function buildStateVersionAttributes(state: StateParam, parsed: Readonly<Record<string, unknown> | null>, resources: { name: string; type: string; count: number; module: string; provider: string | null }[], aggregates: { modules: Record<string, Record<string, number>>; providers: Record<string, Record<string, number>> }, payload: string, flags: { rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean }, request: Readonly<{ url: string }>, includeState: boolean, run?: Readonly<{ status: string; message: string | null }> | null): Record<string, unknown> {
+function buildStateVersionAttributes(state: StateParam, parsed: Readonly<Record<string, unknown> | null>, resources: readonly StateResource[], aggregates: StateAggregates, payload: string, flags: DeepReadonly<{ rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean }>, request: Readonly<{ url: string }>, includeState: boolean, run?: Readonly<{ status: string; message: string | null }> | null): Record<string, unknown> {
   return {
     ...buildStateCoreAttributes(state, parsed, resources, aggregates, payload, includeState),
     ...buildStateUrlAttributes(state, flags, request),

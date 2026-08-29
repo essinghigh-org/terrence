@@ -38,6 +38,7 @@ import http from "node:http";
 import https from "node:https";
 import { lookup } from "node:dns/promises";
 import { db } from "../db";
+import type { DeepReadonly } from "./utils";
 
 export const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 6_000;
@@ -278,8 +279,10 @@ function expandEmbeddedIpv4(addr: string): string {
   if (embedded === null || embedded[2] === undefined) return addr;
   const v4 = embedded[2].split(".").map(Number);
   if (v4.some((o: number): boolean => o > 255)) throw new Error("bad v4 tail");
-  const hi = ((v4[0]! << 8) | v4[1]!) & 0xffff;
-  const lo = ((v4[2]! << 8) | v4[3]!) & 0xffff;
+  const [v4a, v4b, v4c, v4d] = v4;
+  if (v4a === undefined || v4b === undefined || v4c === undefined || v4d === undefined) throw new Error("bad v4 tail");
+  const hi = ((v4a << 8) | v4b) & 0xffff;
+  const lo = ((v4c << 8) | v4d) & 0xffff;
   return `${embedded[1]}:${hi.toString(16)}:${lo.toString(16)}`;
 }
 
@@ -471,7 +474,7 @@ type RawResponse = Readonly<{
   truncated: boolean;
 }>;
 
-async function requestPinned(target: {
+async function requestPinned(target: DeepReadonly<{
   scheme: "http" | "https";
   address: string;  // validated IP / literal host to connect to
   hostname: string; // original hostname (no port) for Host + TLS SNI
@@ -480,7 +483,7 @@ async function requestPinned(target: {
   headers: Record<string, string>;
   timeoutMs: number;
   maxBytes: number;
-}): Promise<RawResponse> {
+}>): Promise<RawResponse> {
   return new Promise((resolvePromise, rejectPromise): void => {
     const { scheme, address, hostname, port, path, headers, timeoutMs, maxBytes } = target;
     const mod = scheme === "https" ? https : http;
@@ -539,26 +542,26 @@ function isSvgHead(head: string): boolean {
   return head.startsWith("<svg") || head.startsWith("<?xml");
 }
 
-function isPngMagic(bytes: Buffer): boolean {
+function isPngMagic(bytes: Readonly<Uint8Array>): boolean {
   return bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
 }
 
-function isJpegMagic(bytes: Buffer): boolean {
+function isJpegMagic(bytes: Readonly<Uint8Array>): boolean {
   return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
 }
 
-function isGifMagic(bytes: Buffer): boolean {
+function isGifMagic(bytes: Readonly<Uint8Array>): boolean {
   if (bytes.length < 6) return false;
-  const head = bytes.slice(0, 6).toString("latin1");
+  const head = Buffer.from(bytes.subarray(0, 6)).toString("latin1");
   return head === "GIF87a" || head === "GIF89a";
 }
 
-function isWebpMagic(bytes: Buffer): boolean {
-  return bytes.length >= 12 && bytes.slice(0, 4).toString("latin1") === "RIFF"
-    && bytes.slice(8, 12).toString("latin1") === "WEBP";
+function isWebpMagic(bytes: Readonly<Uint8Array>): boolean {
+  return bytes.length >= 12 && Buffer.from(bytes.subarray(0, 4)).toString("latin1") === "RIFF"
+    && Buffer.from(bytes.subarray(8, 12)).toString("latin1") === "WEBP";
 }
 
-function sniffImageKind(bytes: Uint8Array): string | null {
+function sniffImageKind(bytes: Readonly<Uint8Array>): string | null {
   const b = Buffer.from(bytes);
   const head = b.slice(0, 512).toString("utf8").trimStart();
   if (isSvgHead(head)) return "svg";
@@ -592,14 +595,14 @@ function parseAvatarUrl(urlStr: string): { scheme: "http" | "https"; hostname: s
   return { scheme, hostname, port, path: `${parsed.pathname}${parsed.search}` };
 }
 
-function validateAvatarStatus(raw: RawResponse): string | null {
+function validateAvatarStatus(raw: DeepReadonly<RawResponse>): string | null {
   if (raw.truncated) return "avatar exceeds the 2 MiB limit";
   if (raw.status < 200 || raw.status >= 300) return `upstream returned ${raw.status}`;
   if (raw.bytes.length === 0) return "upstream returned an empty body";
   return null;
 }
 
-function validateAvatarContentType(raw: RawResponse): string | null {
+function validateAvatarContentType(raw: DeepReadonly<RawResponse>): string | null {
   const contentType = typeof raw.headers["content-type"] === "string"
     ? (raw.headers["content-type"]).toLowerCase()
     : "";
@@ -607,21 +610,21 @@ function validateAvatarContentType(raw: RawResponse): string | null {
   return null;
 }
 
-function resolveAvatarMime(raw: RawResponse): { mime: string; kind: string } | { error: string } {
+function resolveAvatarMime(raw: DeepReadonly<RawResponse>): { mime: string; kind: string } | { error: string } {
   const kind = sniffImageKind(new Uint8Array(raw.bytes));
   if (kind === null) return { error: "upstream bytes are not a recognized image" };
   const mime = IMAGE_KIND_TO_MIME[kind] ?? "image/png";
   return { mime, kind };
 }
 
-async function storeAvatarImage(key: string, bytes: Buffer): Promise<void> {
+async function storeAvatarImage(key: string, bytes: Readonly<Uint8Array>): Promise<void> {
   await mkdir(join(avatarDir(), key.slice(0, 2)), { recursive: true, mode: 0o700 });
   const tmpImg = `${imgPath(key)}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(tmpImg, bytes, { mode: 0o600 });
   await rename(tmpImg, imgPath(key));
 }
 
-function buildFetchedAvatarMeta(meta: AvatarMeta, raw: RawResponse, mime: string, contentHash: string, now: number): AvatarMeta {
+function buildFetchedAvatarMeta(meta: DeepReadonly<AvatarMeta>, raw: DeepReadonly<RawResponse>, mime: string, contentHash: string, now: number): AvatarMeta {
   return {
     ...meta,
     state: "fetched",
@@ -641,7 +644,7 @@ async function handleAvatarNotModified(meta: AvatarMeta, now: number): Promise<A
   return { ok: true, status: 304, message: null, meta: refreshed };
 }
 
-async function handleAvatarSuccess(meta: AvatarMeta, raw: RawResponse, now: number): Promise<AvatarFetchResult> {
+async function handleAvatarSuccess(meta: DeepReadonly<AvatarMeta>, raw: DeepReadonly<RawResponse>, now: number): Promise<AvatarFetchResult> {
   const statusError = validateAvatarStatus(raw);
   if (statusError !== null) {
     const status = raw.truncated ? 413 : (raw.status < 200 || raw.status >= 300 ? raw.status : 0);
@@ -733,7 +736,7 @@ async function collectAvatarShardNames(dir: string): Promise<string[] | null> {
   }
 }
 
-async function collectAvatarEntries(dir: string, shardNames: string[]): Promise<Map<string, { img?: string; json?: string; size: number; last: number }>> {
+async function collectAvatarEntries(dir: string, shardNames: readonly string[]): Promise<Map<string, { img?: string; json?: string; size: number; last: number }>> {
   const entries = new Map<string, { img?: string; json?: string; size: number; last: number }>();
   for (const shard of shardNames) {
     const shardPath = join(dir, shard);
@@ -783,13 +786,13 @@ async function hydrateAvatarEntry(record: { img?: string; json?: string; size: n
   record.last = last;
 }
 
-async function hydrateAvatarEntries(entries: Map<string, { img?: string; json?: string; size: number; last: number }>): Promise<void> {
+async function hydrateAvatarEntries(entries: ReadonlyMap<string, { img?: string; json?: string; size: number; last: number }>): Promise<void> {
   for (const [key, record] of entries) {
     await hydrateAvatarEntry(record, key);
   }
 }
 
-function selectAgeBasedRemovals(entries: Map<string, { img?: string; json?: string; size: number; last: number }>, now: number, maxAgeMs: number): Set<string> {
+function selectAgeBasedRemovals(entries: ReadonlyMap<string, { img?: string; json?: string; size: number; last: number }>, now: number, maxAgeMs: number): Set<string> {
   const removals = new Set<string>();
   for (const [key, record] of entries) {
     const orphan = record.img === undefined;
@@ -799,7 +802,7 @@ function selectAgeBasedRemovals(entries: Map<string, { img?: string; json?: stri
   return removals;
 }
 
-function selectBudgetRemovals(entries: Map<string, { img?: string; json?: string; size: number; last: number }>, removals: Set<string>, maxBytes: number, maxEntries: number): void {
+function selectBudgetRemovals(entries: ReadonlyMap<string, { img?: string; json?: string; size: number; last: number }>, removals: Set<string>, maxBytes: number, maxEntries: number): void {
   let totalBytes = 0;
   const live: { key: string; last: number; size: number }[] = [];
   for (const [key, record] of entries) {
@@ -817,7 +820,7 @@ function selectBudgetRemovals(entries: Map<string, { img?: string; json?: string
   }
 }
 
-async function removeAvatarEntries(entries: Map<string, { img?: string; json?: string; size: number; last: number }>, removals: Set<string>): Promise<number> {
+async function removeAvatarEntries(entries: ReadonlyMap<string, { img?: string; json?: string; size: number; last: number }>, removals: ReadonlySet<string>): Promise<number> {
   let removed = 0;
   for (const key of removals) {
     const record = entries.get(key);

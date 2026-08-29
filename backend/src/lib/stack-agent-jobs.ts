@@ -13,13 +13,14 @@ import type { DeepReadonly } from "./utils";
 
 export type StackAgent = DeepReadonly<typeof agents.$inferSelect>;
 export type StackAgentJob = DeepReadonly<typeof stackAgentJobs.$inferSelect>;
-type StackRecord = Readonly<typeof stackRecords.$inferSelect>;
+type StackRecord = DeepReadonly<typeof stackRecords.$inferSelect>;
 const STACK_AGENT_CLAIM_TIMEOUT_MS = 15 * 60_000;
 
 export const MAX_STACK_AGENT_RESULT_BYTES = 64 * 1024;
 export const MAX_STACK_AGENT_RESULT_DEPTH = 8;
 export const MAX_STACK_AGENT_RESULT_KEYS = 500;
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- recursive validation intentionally shares a mutable counter
 function isStackResultArrayTooLarge(value: readonly unknown[], depth: number, keyCount: { count: number }): boolean {
   if (value.length > 1000) return true;
   keyCount.count += value.length;
@@ -28,6 +29,7 @@ function isStackResultArrayTooLarge(value: readonly unknown[], depth: number, ke
   return false;
 }
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- recursive validation intentionally shares a mutable counter
 function isStackResultObjectTooLarge(value: Record<string, unknown>, depth: number, keyCount: { count: number }): boolean {
   const entries = Object.entries(value);
   if (entries.length > 200) return true;
@@ -41,6 +43,7 @@ function isStackResultObjectTooLarge(value: Record<string, unknown>, depth: numb
   return false;
 }
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- recursive validation intentionally shares a mutable counter
 function isStackResultValueTooLarge(value: unknown, depth: number, keyCount: { count: number }): boolean {
   if (depth > MAX_STACK_AGENT_RESULT_DEPTH) return true;
   if (typeof value === "string" && value.length > 16_384) return true;
@@ -55,8 +58,9 @@ export function isStackAgentResultValid(result: unknown): boolean {
     // State payloads are stored as artifacts, not in the JSONB metadata — exclude
     // them from the size budget so large valid Terraform state does not reject
     // the run.
-    const { state: _s, json_state: _js, ...metadata } = result as Record<string, unknown>;
-    const serialized = JSON.stringify(Object.keys(metadata).length === Object.keys(result).length ? result : metadata);
+    const resultRecord = result as Record<string, unknown>;
+    const metadata = Object.fromEntries(Object.entries(resultRecord).filter(([key]): boolean => key !== "state" && key !== "json_state"));
+    const serialized = JSON.stringify(Object.keys(metadata).length === Object.keys(resultRecord).length ? resultRecord : metadata);
     if (new TextEncoder().encode(serialized).byteLength > MAX_STACK_AGENT_RESULT_BYTES) return false;
   } catch {
     return false;
@@ -78,7 +82,7 @@ type StackAgentCompletionOutcome = Readonly<{
 
 export type ClaimedStackAgentJob = Readonly<{
   job: StackAgentJob;
-  stack: Readonly<typeof stacks.$inferSelect>;
+  stack: DeepReadonly<typeof stacks.$inferSelect>;
   configuration: StackRecord;
   deploymentRun: StackRecord;
   step: StackRecord;
@@ -235,7 +239,7 @@ async function persistCompletedApplyState(outcome: StackAgentCompletionOutcome):
   }
 }
 
-type StackAgentTransaction = typeof db;
+type StackAgentTransaction = DeepReadonly<typeof db>;
 
 type StackAgentCompletionContext = Readonly<{
   job: StackAgentJob;
@@ -246,7 +250,8 @@ function validateStackAgentCompletion(completion: StackAgentJobCompletion): void
   // Terraform state can be arbitrarily large — validate the metadata envelope
   // without the state payload so a valid apply with a large state is not
   // rejected. State is persisted as a file artifact via saveStackState.
-  const { state: _state, json_state: _jsonState, ...metadata } = completion.result as Record<string, unknown>;
+  const resultRecord = completion.result as Record<string, unknown>;
+  const metadata = Object.fromEntries(Object.entries(resultRecord).filter(([key]): boolean => key !== "state" && key !== "json_state"));
   if (!isStackAgentResultValid(metadata)) throw new Error(`stack agent result metadata exceeds ${MAX_STACK_AGENT_RESULT_BYTES} bytes or structural limits`);
 }
 

@@ -153,7 +153,7 @@ function assertExportNotExists(storage: string, fileName: string): void {
   if (listExportFiles(storage).some((f) => f.name === fileName)) throw new DbExportError("exists", `An export file named "${fileName}" already exists; choose a different name`);
 }
 
-function formatFailedTables(verification: VerificationReport): string[] {
+function formatFailedTables(verification: Readonly<VerificationReport>): string[] {
   return verification.tables.filter((table): boolean => !table.countMatch || table.uniqueChecks.some((check): boolean => !check.match) || !table.sampleHash.match)
     .map((table): string => {
       const uniques = table.uniqueChecks.filter((check): boolean => !check.match).map((check): string => `${check.index}(${check.source}/${check.target})`).join(", ");
@@ -161,7 +161,7 @@ function formatFailedTables(verification: VerificationReport): string[] {
     });
 }
 
-async function assertNoActiveRuns(source: TransferSource, force: boolean | undefined): Promise<number> {
+async function assertNoActiveRuns(source: Readonly<TransferSource>, force: boolean | undefined): Promise<number> {
   const placeholders = TERMINAL_RUN_STATUSES.map(() => "?").join(",");
   const activeRuns = await source.countWhere("runs", `status NOT IN (${placeholders})`, TERMINAL_RUN_STATUSES);
   if (activeRuns > 0 && force !== true) throw new DbExportError("active-runs", `${activeRuns} run(s) are still active in the source database; wait for them to finish or force the export`);

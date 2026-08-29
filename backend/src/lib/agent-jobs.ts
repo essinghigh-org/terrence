@@ -38,7 +38,7 @@ function isLargeString(value: unknown): boolean {
   return typeof value === "string" && value.length > 16_384;
 }
 
-function isArrayTooLarge(value: unknown[], keyCount: { count: number }, depth: number): boolean {
+function isArrayTooLarge(value: readonly unknown[], keyCount: { count: number }, depth: number): boolean {
   if (value.length > 1000) return true;
   keyCount.count += value.length;
   if (keyCount.count > MAX_AGENT_RESULT_KEYS) return true;
@@ -46,7 +46,7 @@ function isArrayTooLarge(value: unknown[], keyCount: { count: number }, depth: n
   return false;
 }
 
-function isObjectTooLarge(entries: [string, unknown][], keyCount: { count: number }, depth: number): boolean {
+function isObjectTooLarge(entries: readonly [string, unknown][], keyCount: { count: number }, depth: number): boolean {
   if (entries.length > 200) return true;
   keyCount.count += entries.length;
   if (keyCount.count > MAX_AGENT_RESULT_KEYS) return true;
@@ -560,7 +560,7 @@ function resolveAgentBinaries(agent: Agent): readonly string[] {
   return agent.iacBinaries !== null && agent.iacBinaries.length > 0 ? agent.iacBinaries : ["terraform"];
 }
 
-async function findCandidateJob(agent: Agent, acceptedPhases: readonly string[], agentBinaries: readonly string[], skippedIds: ReadonlySet<string>): Promise<typeof agentJobs.$inferSelect | undefined> {
+async function findCandidateJob(agent: Agent, acceptedPhases: readonly string[], agentBinaries: readonly string[], skippedIds: ReadonlySet<string>): Promise<AgentJobRow | undefined> {
   return db.query.agentJobs.findFirst({
     where: and(
       eq(agentJobs.agentPoolId, agent.agentPoolId),
@@ -573,7 +573,7 @@ async function findCandidateJob(agent: Agent, acceptedPhases: readonly string[],
   });
 }
 
-async function tryClaimCandidate(candidate: typeof agentJobs.$inferSelect, agent: Agent): Promise<typeof agentJobs.$inferSelect | undefined> {
+async function tryClaimCandidate(candidate: AgentJobRow, agent: Agent): Promise<AgentJobRow | undefined> {
   const now = Date.now();
   const claimed = await db.update(agentJobs).set({ agentId: agent.id, status: "claimed", claimedAt: now }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "queued"))).returning();
   const claimedJob = claimed[0];
@@ -581,19 +581,19 @@ async function tryClaimCandidate(candidate: typeof agentJobs.$inferSelect, agent
   return undefined;
 }
 
-async function validateCandidateRun(candidate: typeof agentJobs.$inferSelect): Promise<{ run: typeof runs.$inferSelect; expectedRunStatus: string; nextRunStatus: string } | null> {
+async function validateCandidateRun(candidate: AgentJobRow): Promise<{ run: AgentRunRow; expectedRunStatus: string; nextRunStatus: string } | null> {
   const expectedRunStatus = candidate.phase === "plan" ? "plan_queued" : "apply_queued";
   const nextRunStatus = candidate.phase === "plan" ? "planning" : "applying";
   const run = await db.query.runs.findFirst({ where: eq(runs.id, candidate.runId) });
-  if (run?.status !== expectedRunStatus) {
+  if (run === undefined || run.status !== expectedRunStatus) {
     await db.update(agentJobs).set({ status: "canceled", completedAt: Date.now(), errorMessage: "Run is no longer waiting for this job" }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "claimed")));
     return null;
   }
-  return { run: run!, expectedRunStatus, nextRunStatus };
+  return { run, expectedRunStatus, nextRunStatus };
 }
 
 
-async function tryLockWorkspaceForApply(candidate: typeof agentJobs.$inferSelect, run: typeof runs.$inferSelect, skippedApplyJobIds: Set<string>): Promise<"locked" | "skipped" | "no-lock"> {
+async function tryLockWorkspaceForApply(candidate: AgentJobRow, run: AgentRunRow, skippedApplyJobIds: Set<string>): Promise<"locked" | "skipped" | "no-lock"> {
   if (candidate.phase !== "apply") return "no-lock";
   const locked = await db.update(workspaces).set({ locked: true, lockedReason: `Run ${candidate.runId} is applying`, lockOwnerType: "agent-run", lockOwnerId: candidate.runId }).where(and(eq(workspaces.id, run.workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
   if (locked.length > 0) return "locked";
@@ -602,7 +602,7 @@ async function tryLockWorkspaceForApply(candidate: typeof agentJobs.$inferSelect
   return "skipped";
 }
 
-async function tryAssociateRun(candidate: typeof agentJobs.$inferSelect, run: typeof runs.$inferSelect, agent: Agent, expectedRunStatus: string, nextRunStatus: string): Promise<{ id: string } | null> {
+async function tryAssociateRun(candidate: AgentJobRow, run: AgentRunRow, agent: Agent, expectedRunStatus: string, nextRunStatus: string): Promise<{ id: string } | null> {
   const associated = await db.update(runs).set({ agentPoolId: agent.agentPoolId, agentId: agent.id, status: nextRunStatus, statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus) }).where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus))).returning({ id: runs.id });
   if (associated.length > 0) return associated[0] as { id: string };
   if (candidate.phase === "apply") {

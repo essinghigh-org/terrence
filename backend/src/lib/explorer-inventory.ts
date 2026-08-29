@@ -16,12 +16,13 @@ import {
 import { enqueueDurableJob, type DurableJobContext } from "./durable-jobs";
 import { log } from "./log";
 import { decodeStatePayload } from "./validation";
+import type { DeepReadonly } from "./utils";
 
 export type ExplorerCatalogItem = Readonly<{ name: string; source: string; version: string }>;
-type Job = Readonly<typeof durableJobs.$inferSelect>;
+type Job = DeepReadonly<typeof durableJobs.$inferSelect>;
 const MEMBERSHIP_BATCH_SIZE = 100;
 
-async function insertMemberships(tx: Parameters<Parameters<typeof db.transaction>[0]>[0], memberships: readonly (typeof explorerCatalogMemberships.$inferInsert)[]): Promise<void> {
+async function insertMemberships(tx: DeepReadonly<Parameters<Parameters<typeof db.transaction>[0]>[0]>, memberships: readonly DeepReadonly<typeof explorerCatalogMemberships.$inferInsert>[]): Promise<void> {
   for (let index = 0; index < memberships.length; index += MEMBERSHIP_BATCH_SIZE) {
     const batch = memberships.slice(index, index + MEMBERSHIP_BATCH_SIZE);
     if (batch.length > 0) await tx.insert(explorerCatalogMemberships).values(batch);
@@ -100,15 +101,15 @@ function membershipRows(row: ExplorerInventoryCatalogRow): typeof explorerCatalo
   }));
 }
 
-type ExplorerWorkspaceData = Readonly<{
-  workspace: Readonly<typeof workspaces.$inferSelect>;
-  organization: Readonly<typeof organizations.$inferSelect> | undefined;
-  project: Readonly<typeof projects.$inferSelect> | undefined;
-  state: Readonly<typeof stateVersions.$inferSelect> | undefined;
-  run: Readonly<typeof runs.$inferSelect> | undefined;
-  assessment: Readonly<typeof assessmentResults.$inferSelect> | undefined;
-  tags: readonly Readonly<{ key: string }>[];
-  noCode: Readonly<typeof noCodeWorkspaceConfigurations.$inferSelect> | undefined;
+type ExplorerWorkspaceData = DeepReadonly<{
+  workspace: typeof workspaces.$inferSelect;
+  organization: typeof organizations.$inferSelect | undefined;
+  project: typeof projects.$inferSelect | undefined;
+  state: typeof stateVersions.$inferSelect | undefined;
+  run: typeof runs.$inferSelect | undefined;
+  assessment: typeof assessmentResults.$inferSelect | undefined;
+  tags: { key: string }[];
+  noCode: typeof noCodeWorkspaceConfigurations.$inferSelect | undefined;
 }>;
 
 async function loadExplorerWorkspaceData(workspaceId: string): Promise<ExplorerWorkspaceData | undefined> {
@@ -126,7 +127,7 @@ async function loadExplorerWorkspaceData(workspaceId: string): Promise<ExplorerW
   return { workspace, organization, project, state, run, assessment, tags, noCode };
 }
 
-function explorerWorkspaceFields(data: ExplorerWorkspaceData, now: number): Readonly<Record<string, unknown>> {
+function explorerWorkspaceFields(data: DeepReadonly<ExplorerWorkspaceData>, now: number): Readonly<Record<string, unknown>> {
   const { workspace } = data;
   const repo = typeof workspace.vcsRepo === "object" && workspace.vcsRepo !== null ? workspace.vcsRepo as Record<string, unknown> : {};
   return {
@@ -143,7 +144,7 @@ function explorerWorkspaceFields(data: ExplorerWorkspaceData, now: number): Read
   };
 }
 
-function explorerRunFields(data: ExplorerWorkspaceData): Readonly<Record<string, unknown>> {
+function explorerRunFields(data: DeepReadonly<ExplorerWorkspaceData>): Readonly<Record<string, unknown>> {
   return {
     currentRunStatus: data.run?.status ?? null,
     currentRunAppliedAt: data.run?.appliedAt ?? null,
@@ -151,7 +152,7 @@ function explorerRunFields(data: ExplorerWorkspaceData): Readonly<Record<string,
   };
 }
 
-function explorerAssessmentDriftFields(data: ExplorerWorkspaceData): Readonly<Record<string, unknown>> {
+function explorerAssessmentDriftFields(data: DeepReadonly<ExplorerWorkspaceData>): Readonly<Record<string, unknown>> {
   return {
     drifted: data.assessment?.drifted ?? null,
     resourcesDrifted: data.assessment?.resourcesDrifted ?? 0,
@@ -160,7 +161,7 @@ function explorerAssessmentDriftFields(data: ExplorerWorkspaceData): Readonly<Re
   };
 }
 
-function explorerAssessmentCheckFields(data: ExplorerWorkspaceData): Readonly<Record<string, unknown>> {
+function explorerAssessmentCheckFields(data: DeepReadonly<ExplorerWorkspaceData>): Readonly<Record<string, unknown>> {
   return {
     checksPassed: data.assessment?.checksPassed ?? 0,
     checksFailed: data.assessment?.checksFailed ?? 0,
@@ -169,11 +170,11 @@ function explorerAssessmentCheckFields(data: ExplorerWorkspaceData): Readonly<Re
   };
 }
 
-function explorerAssessmentFields(data: ExplorerWorkspaceData): Readonly<Record<string, unknown>> {
+function explorerAssessmentFields(data: DeepReadonly<ExplorerWorkspaceData>): Readonly<Record<string, unknown>> {
   return { ...explorerAssessmentDriftFields(data), ...explorerAssessmentCheckFields(data) };
 }
 
-function explorerStateFields(data: ExplorerWorkspaceData, items: ReturnType<typeof stateItems>): Readonly<Record<string, unknown>> {
+function explorerStateFields(data: DeepReadonly<ExplorerWorkspaceData>, items: DeepReadonly<ReturnType<typeof stateItems>>): Readonly<Record<string, unknown>> {
   return {
     currentResourceCount: items.resources,
     stateVersionTerraformVersion: data.state?.terraformVersion ?? data.workspace.terraformVersion,
@@ -181,7 +182,7 @@ function explorerStateFields(data: ExplorerWorkspaceData, items: ReturnType<type
   };
 }
 
-function explorerCatalogFields(data: ExplorerWorkspaceData, items: ReturnType<typeof stateItems>): Readonly<Record<string, unknown>> {
+function explorerCatalogFields(data: DeepReadonly<ExplorerWorkspaceData>, items: DeepReadonly<ReturnType<typeof stateItems>>): Readonly<Record<string, unknown>> {
   return {
     tags: data.tags.map((tag) => tag.key).sort().join(", "),
     providers: items.providers.join(", "),
@@ -194,8 +195,8 @@ function explorerCatalogFields(data: ExplorerWorkspaceData, items: ReturnType<ty
 }
 
 function explorerInventoryRow(
-  data: ExplorerWorkspaceData,
-  items: ReturnType<typeof stateItems>,
+  data: DeepReadonly<ExplorerWorkspaceData>,
+  items: DeepReadonly<ReturnType<typeof stateItems>>,
   now: number,
 ): typeof explorerWorkspaceInventory.$inferInsert {
   return {
@@ -210,7 +211,7 @@ function explorerInventoryRow(
 }
 
 async function persistExplorerInventory(
-  row: typeof explorerWorkspaceInventory.$inferInsert,
+  row: DeepReadonly<typeof explorerWorkspaceInventory.$inferInsert>,
 ): Promise<void> {
   await db.transaction(async (tx): Promise<void> => {
     await tx.insert(explorerWorkspaceInventory).values(row).onConflictDoUpdate({

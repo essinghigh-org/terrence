@@ -97,7 +97,7 @@ function assertDatabaseObject(db: unknown, source: string): Record<string, unkno
   return db as Record<string, unknown>;
 }
 
-function parseDatabaseDriver(db: Record<string, unknown>, source: string): DatabaseDriver {
+function parseDatabaseDriver(db: Readonly<Record<string, unknown>>, source: string): DatabaseDriver {
   const driver = db.driver;
   if (driver !== "sqlite" && driver !== "postgres") throw new BootConfigError(`Invalid boot configuration in ${source}: "database.driver" must be "sqlite" or "postgres", got ${String(driver)}`);
   return driver;

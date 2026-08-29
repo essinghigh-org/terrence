@@ -21,7 +21,7 @@ import { synchronizeRegistryModule } from "./registry-module-sync";
 import { auditLog , type DeepReadonly } from "./utils";
 
 type WebhookPayload = Readonly<Record<string, unknown>>;
-type VcsRepo = NonNullable<typeof workspaces.$inferSelect.vcsRepo>;
+type VcsRepo = DeepReadonly<NonNullable<typeof workspaces.$inferSelect.vcsRepo>>;
 type WebhookDetails = Readonly<{
   readonly branch?: string;
   readonly targetBranch?: string;
@@ -123,7 +123,7 @@ function parseRefBranchTag(ref: string): { branch?: string; tag?: string } | und
   };
 }
 
-function validateGithubPushFields(ref: string | undefined, commitSha: string | undefined, commitMessage: string | undefined, commitUrl: string | undefined, filesChanged: ReadonlySet<string> | undefined): string | undefined {
+function validateGithubPushFields(ref: string | undefined, commitSha: string | undefined, commitMessage: string | undefined, commitUrl: string | undefined, filesChanged: Readonly<ReadonlySet<string>> | undefined): string | undefined {
   if (ref === undefined) return "ref";
   if (commitSha === undefined) return "commitSha";
   if (commitMessage === undefined) return "commitMessage";
@@ -132,7 +132,7 @@ function validateGithubPushFields(ref: string | undefined, commitSha: string | u
   return undefined;
 }
 
-function parseGithubPushWebhook(payload: WebhookPayload, base: { cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined }): WebhookDetails | undefined {
+function parseGithubPushWebhook(payload: WebhookPayload, base: DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined }>): WebhookDetails | undefined {
   const ref = requiredString(payload.ref);
   const commitSha = requiredString(payload.after);
   const headCommit = asRecord(payload.head_commit);
@@ -140,16 +140,17 @@ function parseGithubPushWebhook(payload: WebhookPayload, base: { cloneUrl: strin
   const commitUrl = requiredString(headCommit?.url);
   const filesChanged = changedFiles(payload);
   if (validateGithubPushFields(ref, commitSha, commitMessage, commitUrl, filesChanged) !== undefined) return undefined;
-  const branchTag = parseRefBranchTag(ref as string);
+  if (ref === undefined || commitSha === undefined || commitMessage === undefined || commitUrl === undefined || filesChanged === undefined) return undefined;
+  const branchTag = parseRefBranchTag(ref);
   if (branchTag === undefined) return undefined;
-  if (branchTag.branch !== undefined && (filesChanged as ReadonlySet<string>).size === 0) return undefined;
+  if (branchTag.branch !== undefined && filesChanged.size === 0) return undefined;
   return {
     ...(branchTag.branch === undefined ? {} : { branch: branchTag.branch }),
     cloneUrl: base.cloneUrl,
-    commitMessage: commitMessage as string,
-    commitSha: commitSha as string,
-    commitUrl: commitUrl as string,
-    filesChanged: filesChanged as ReadonlySet<string>,
+    commitMessage,
+    commitSha,
+    commitUrl,
+    filesChanged,
     ...(base.deliveryInstallationId === undefined ? {} : { githubInstallationId: base.deliveryInstallationId }),
     repoFullName: base.repoFullName,
     senderUsername: base.senderUsername,
@@ -164,11 +165,11 @@ function validateGithubPrFields(branch: string | undefined, commitSha: string | 
   if (commitMessage === undefined) return "commitMessage";
   if (commitUrl === undefined) return "commitUrl";
   if (typeof pullRequestNumber !== "number") return "pullRequestNumber";
-  if (!Number.isSafeInteger(pullRequestNumber as number)) return "pullRequestNumber";
+  if (!Number.isSafeInteger(pullRequestNumber)) return "pullRequestNumber";
   return undefined;
 }
 
-function buildGithubPrDetails(branch: string, targetBranch: string | undefined, base: { cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined }, commitMessage: string, commitSha: string, commitUrl: string, pullRequestNumber: number): WebhookDetails {
+function buildGithubPrDetails(branch: string, targetBranch: string | undefined, base: DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined }>, commitMessage: string, commitSha: string, commitUrl: string, pullRequestNumber: number): WebhookDetails {
   return {
     branch,
     cloneUrl: base.cloneUrl,
@@ -185,7 +186,7 @@ function buildGithubPrDetails(branch: string, targetBranch: string | undefined, 
   };
 }
 
-function parseGithubPullRequestWebhook(payload: WebhookPayload, base: { cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined }): WebhookDetails | undefined {
+function parseGithubPullRequestWebhook(payload: WebhookPayload, base: DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined }>): WebhookDetails | undefined {
   const pullRequest = asRecord(payload.pull_request);
   const head = asRecord(pullRequest?.head);
   const baseRef = asRecord(pullRequest?.base);
@@ -196,14 +197,15 @@ function parseGithubPullRequestWebhook(payload: WebhookPayload, base: { cloneUrl
   const commitUrl = requiredString(pullRequest?.html_url);
   const pullRequestNumber = payload.number;
   if (validateGithubPrFields(branch, commitSha, commitMessage, commitUrl, pullRequestNumber) !== undefined) return undefined;
-  return buildGithubPrDetails(branch as string, targetBranch, base, commitMessage as string, commitSha as string, commitUrl as string, pullRequestNumber as number);
+  if (branch === undefined || commitSha === undefined || commitMessage === undefined || commitUrl === undefined || typeof pullRequestNumber !== "number" || !Number.isSafeInteger(pullRequestNumber)) return undefined;
+  return buildGithubPrDetails(branch, targetBranch, base, commitMessage, commitSha, commitUrl, pullRequestNumber);
 }
 
 function extractGitlabCommits(payload: WebhookPayload): unknown[] {
   return Array.isArray(payload.commits) ? payload.commits : [];
 }
 
-function resolveGitlabCommitUrl(headCommit: Record<string, unknown> | undefined, project: Record<string, unknown> | undefined, cloneUrl: string, commitSha: string | undefined): string {
+function resolveGitlabCommitUrl(headCommit: Readonly<Record<string, unknown>> | undefined, project: Readonly<Record<string, unknown>> | undefined, cloneUrl: string, commitSha: string | undefined): string {
   const fromHead = requiredString(headCommit?.url);
   if (fromHead !== undefined) return fromHead;
   const webUrl = requiredString(project?.web_url) ?? cloneUrl;
@@ -214,14 +216,14 @@ function resolveGitlabCommitSha(payload: WebhookPayload): string | undefined {
   return requiredString(payload.checkout_sha) ?? requiredString(payload.after);
 }
 
-function validateGitlabPushFields(ref: string | undefined, commitSha: string | undefined, filesChanged: ReadonlySet<string> | undefined): string | undefined {
+function validateGitlabPushFields(ref: string | undefined, commitSha: string | undefined, filesChanged: Readonly<ReadonlySet<string>> | undefined): string | undefined {
   if (ref === undefined) return "ref";
   if (commitSha === undefined) return "commitSha";
   if (filesChanged === undefined) return "filesChanged";
   return undefined;
 }
 
-function parseGitlabPushWebhook(payload: WebhookPayload, project: Record<string, unknown> | undefined, repoFullName: string, cloneUrl: string, senderUsername: string): ParsedProviderWebhook | undefined {
+function parseGitlabPushWebhook(payload: WebhookPayload, project: Readonly<Record<string, unknown>> | undefined, repoFullName: string, cloneUrl: string, senderUsername: string): ParsedProviderWebhook | undefined {
   const ref = requiredString(payload.ref);
   const commitSha = resolveGitlabCommitSha(payload);
   const commits = extractGitlabCommits(payload);
@@ -230,18 +232,19 @@ function parseGitlabPushWebhook(payload: WebhookPayload, project: Record<string,
   const commitUrl = resolveGitlabCommitUrl(headCommit, project, cloneUrl, commitSha);
   const filesChanged = changedFiles(payload);
   if (validateGitlabPushFields(ref, commitSha, filesChanged) !== undefined) return undefined;
-  const branchTag = parseRefBranchTag(ref as string);
+  if (ref === undefined || commitSha === undefined || filesChanged === undefined) return undefined;
+  const branchTag = parseRefBranchTag(ref);
   if (branchTag === undefined) return undefined;
-  if (branchTag.branch !== undefined && (filesChanged as ReadonlySet<string>).size === 0) return undefined;
+  if (branchTag.branch !== undefined && filesChanged.size === 0) return undefined;
   return {
     kind: "push",
     details: {
       ...(branchTag.branch === undefined ? {} : { branch: branchTag.branch }),
       cloneUrl,
       commitMessage,
-      commitSha: commitSha as string,
+      commitSha,
       commitUrl,
-      filesChanged: filesChanged as ReadonlySet<string>,
+      filesChanged,
       repoFullName,
       senderUsername,
       ...(branchTag.tag === undefined ? {} : { tag: branchTag.tag }),
@@ -249,7 +252,7 @@ function parseGitlabPushWebhook(payload: WebhookPayload, project: Record<string,
   };
 }
 
-function resolveGitlabMrCommitMessage(attributes: Record<string, unknown> | undefined, lastCommit: Record<string, unknown> | undefined): string {
+function resolveGitlabMrCommitMessage(attributes: Readonly<Record<string, unknown>> | undefined, lastCommit: Readonly<Record<string, unknown>> | undefined): string {
   const fromTitle = requiredString(attributes?.title);
   if (fromTitle !== undefined) return fromTitle;
   const fromCommit = requiredString(lastCommit?.message);
@@ -257,7 +260,7 @@ function resolveGitlabMrCommitMessage(attributes: Record<string, unknown> | unde
   return "Merge request";
 }
 
-function resolveGitlabMrCommitUrl(attributes: Record<string, unknown> | undefined, lastCommit: Record<string, unknown> | undefined): string | undefined {
+function resolveGitlabMrCommitUrl(attributes: Readonly<Record<string, unknown>> | undefined, lastCommit: Readonly<Record<string, unknown>> | undefined): string | undefined {
   const fromAttr = requiredString(attributes?.url);
   if (fromAttr !== undefined) return fromAttr;
   return requiredString(lastCommit?.url);
@@ -268,7 +271,7 @@ function validateGitlabMrFields(branch: string | undefined, commitSha: string | 
   if (commitSha === undefined) return "commitSha";
   if (commitUrl === undefined) return "commitUrl";
   if (typeof pullRequestNumber !== "number") return "pullRequestNumber";
-  if (!Number.isSafeInteger(pullRequestNumber as number)) return "pullRequestNumber";
+  if (!Number.isSafeInteger(pullRequestNumber)) return "pullRequestNumber";
   return undefined;
 }
 
@@ -284,17 +287,18 @@ function parseGitlabMergeRequestWebhook(payload: WebhookPayload, repoFullName: s
   const commitUrl = resolveGitlabMrCommitUrl(attributes, lastCommit);
   const pullRequestNumber = attributes?.iid;
   if (validateGitlabMrFields(branch, commitSha, commitUrl, pullRequestNumber) !== undefined) return undefined;
+  if (branch === undefined || commitSha === undefined || commitUrl === undefined || typeof pullRequestNumber !== "number" || !Number.isSafeInteger(pullRequestNumber)) return undefined;
   return {
     kind: "pull_request",
     details: {
-      branch: branch as string,
+      branch,
       ...(targetBranch === undefined ? {} : { targetBranch }),
       cloneUrl,
       commitMessage,
-      commitSha: commitSha as string,
-      commitUrl: commitUrl as string,
+      commitSha,
+      commitUrl,
       filesChanged: new Set<string>(),
-      pullRequestNumber: pullRequestNumber as number,
+      pullRequestNumber,
       repoFullName,
       senderUsername,
     },
@@ -306,7 +310,7 @@ function extractBitbucketChanges(payload: WebhookPayload): unknown[] | undefined
   const changes = push?.changes;
   if (!Array.isArray(changes)) return undefined;
   if (changes.length !== 1) return undefined;
-  return changes;
+  return changes as unknown[];
 }
 
 function validateBitbucketPushFields(referenceType: string | undefined, referenceName: string | undefined, commitSha: string | undefined, commitUrl: string | undefined): string | undefined {
@@ -331,14 +335,15 @@ function parseBitbucketPushWebhook(payload: WebhookPayload, repoFullName: string
   const commitMessage = requiredString(target?.message) ?? "VCS push";
   const commitUrl = requiredString(html?.href);
   if (validateBitbucketPushFields(referenceType, referenceName, commitSha, commitUrl) !== undefined) return undefined;
+  if ((referenceType !== "branch" && referenceType !== "tag") || referenceName === undefined || commitSha === undefined || commitUrl === undefined) return undefined;
   return {
     kind: "push",
     details: {
-      ...(referenceType === "branch" ? { branch: referenceName as string } : { tag: referenceName as string }),
+      ...(referenceType === "branch" ? { branch: referenceName } : { tag: referenceName }),
       cloneUrl,
       commitMessage,
-      commitSha: commitSha as string,
-      commitUrl: commitUrl as string,
+      commitSha,
+      commitUrl,
       filesChanged: new Set<string>(),
       repoFullName,
       senderUsername,
@@ -351,11 +356,11 @@ function validateBitbucketPrFields(branch: string | undefined, commitSha: string
   if (commitSha === undefined) return "commitSha";
   if (commitUrl === undefined) return "commitUrl";
   if (typeof pullRequestNumber !== "number") return "pullRequestNumber";
-  if (!Number.isSafeInteger(pullRequestNumber as number)) return "pullRequestNumber";
+  if (!Number.isSafeInteger(pullRequestNumber)) return "pullRequestNumber";
   return undefined;
 }
 
-function resolveBitbucketPrCommitUrl(pullRequest: Record<string, unknown> | undefined, commit: Record<string, unknown> | undefined): string | undefined {
+function resolveBitbucketPrCommitUrl(pullRequest: Readonly<Record<string, unknown>> | undefined, commit: Readonly<Record<string, unknown>> | undefined): string | undefined {
   const prLinks = asRecord(pullRequest?.links);
   const prHtml = asRecord(prLinks?.html);
   const fromPr = requiredString(prHtml?.href);
@@ -379,17 +384,18 @@ function parseBitbucketPullRequestWebhook(payload: WebhookPayload, repoFullName:
   const commitUrl = resolveBitbucketPrCommitUrl(pullRequest, commit);
   const pullRequestNumber = pullRequest?.id;
   if (validateBitbucketPrFields(branch, commitSha, commitUrl, pullRequestNumber) !== undefined) return undefined;
+  if (branch === undefined || commitSha === undefined || commitUrl === undefined || typeof pullRequestNumber !== "number" || !Number.isSafeInteger(pullRequestNumber)) return undefined;
   return {
     kind: "pull_request",
     details: {
-      branch: branch as string,
+      branch,
       ...(targetBranch === undefined ? {} : { targetBranch }),
       cloneUrl,
       commitMessage,
-      commitSha: commitSha as string,
-      commitUrl: commitUrl as string,
+      commitSha,
+      commitUrl,
       filesChanged: new Set<string>(),
-      pullRequestNumber: pullRequestNumber as number,
+      pullRequestNumber,
       repoFullName,
       senderUsername,
     },
@@ -708,6 +714,7 @@ async function githubPullRequestFiles(
 }
 
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- file collection is intentionally accumulated in the caller-owned set
 function extractGitlabMrFiles(body: unknown, files: Set<string>): boolean {
   const changes = asRecord(body)?.changes;
   if (!Array.isArray(changes)) return false;
@@ -772,6 +779,7 @@ type BitbucketCloudDiffstatResult = Readonly<{
 }>;
 
 
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- file collection is intentionally accumulated in the caller-owned set
 function extractBitbucketDiffstatPaths(body: unknown, files: Set<string>): boolean {
   const values = asRecord(body)?.values;
   if (!Array.isArray(values)) return false;
@@ -964,7 +972,7 @@ function vcsProviderFromSource(source: string | null): VcsProvider | undefined {
 
 type RunVcsStatusRecords = Readonly<{
   workspace: DeepReadonly<typeof workspaces.$inferSelect> | undefined;
-  configuration: Readonly<typeof configurationVersions.$inferSelect> | undefined;
+  configuration: DeepReadonly<typeof configurationVersions.$inferSelect> | undefined;
 }>;
 
 type RunVcsStatusTarget = Readonly<{
@@ -984,7 +992,7 @@ async function loadRunVcsStatusRecords(runId: string): Promise<RunVcsStatusRecor
   return { workspace, configuration };
 }
 
-function runVcsStatusTarget(records: RunVcsStatusRecords): RunVcsStatusTarget | undefined {
+function runVcsStatusTarget(records: DeepReadonly<RunVcsStatusRecords>): RunVcsStatusTarget | undefined {
   const repoFullName = records.workspace?.vcsRepo?.identifier;
   const commitSha = records.configuration?.ingressAttributes?.commitSha;
   if (records.workspace === undefined || records.configuration === undefined || typeof repoFullName !== "string" || typeof commitSha !== "string") return undefined;
@@ -1030,7 +1038,7 @@ async function githubRunsForCommit(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
   repoFullName: string,
   commitSha: string,
-): Promise<readonly (typeof runs.$inferSelect)[]> {
+): Promise<readonly DeepReadonly<typeof runs.$inferSelect>[]> {
   const relatedWorkspaces = await db.query.workspaces.findMany({
     where: and(
       eq(workspaces.orgId, workspace.orgId),
@@ -1053,9 +1061,9 @@ async function githubRunsForCommit(
 }
 
 function latestGithubRunsByWorkspace(
-  relatedRuns: readonly (typeof runs.$inferSelect)[],
-): readonly (typeof runs.$inferSelect)[] {
-  const latestPerWorkspace = new Map<string, typeof runs.$inferSelect>();
+  relatedRuns: readonly DeepReadonly<typeof runs.$inferSelect>[],
+): readonly DeepReadonly<typeof runs.$inferSelect>[] {
+  const latestPerWorkspace = new Map<string, DeepReadonly<typeof runs.$inferSelect>>();
   for (const candidate of [...relatedRuns].sort((a, b): number => b.createdAt - a.createdAt)) {
     if (!latestPerWorkspace.has(candidate.workspaceId)) latestPerWorkspace.set(candidate.workspaceId, candidate);
   }
@@ -1186,15 +1194,16 @@ export async function refetchConfigurationVersion(configurationVersionId: string
   const repoFullName = workspace?.vcsRepo?.identifier;
   const commitSha = configuration.ingressAttributes?.commitSha;
   const provider = resolveRefetchProvider(configuration.source);
-  if (validateRefetchConfiguration(workspace as DeepReadonly<typeof workspaces.$inferSelect> | undefined, repoFullName, commitSha, provider) !== undefined) return false;
+  if (validateRefetchConfiguration(workspace, repoFullName, commitSha, provider) !== undefined) return false;
+  if (workspace === undefined || repoFullName === undefined || commitSha === undefined || provider === undefined) return false;
   const credentials = provider === "github"
-    ? await githubCredentials(workspace as DeepReadonly<typeof workspaces.$inferSelect>)
-    : await oauthProviderCredentials(workspace as DeepReadonly<typeof workspaces.$inferSelect>, provider as VcsProvider);
+    ? await githubCredentials(workspace)
+    : await oauthProviderCredentials(workspace, provider);
   if (credentials === undefined) {
     await markConfigurationVersionsErrored([configurationVersionId], `${provider} credentials are unavailable`);
     return false;
   }
-  await fetchAndSaveProviderTarball([configurationVersionId], credentials, repoFullName as string, commitSha as string);
+  await fetchAndSaveProviderTarball([configurationVersionId], credentials, repoFullName, commitSha);
   const updated = await db.query.configurationVersions.findFirst({
     where: eq(configurationVersions.id, configurationVersionId),
     columns: { status: true },
@@ -1203,7 +1212,7 @@ export async function refetchConfigurationVersion(configurationVersionId: string
 }
 
 /** Get a provider default branch from its repository response. */
-function defaultBranchFromBody(provider: VcsProvider, body: Record<string, unknown>): string | undefined {
+function defaultBranchFromBody(provider: VcsProvider, body: Readonly<Record<string, unknown>>): string | undefined {
   if ((provider === "github" || provider === "gitlab") && typeof body.default_branch === "string") return body.default_branch;
   if (provider === "bitbucket" && body.mainbranch !== null && typeof body.mainbranch === "object") {
     const mainBranch = body.mainbranch as Record<string, unknown>;
@@ -1279,7 +1288,7 @@ async function fetchDefaultBranch(workspace: DeepReadonly<typeof workspaces.$inf
   return oauthDefaultBranch(workspace, vcs, vcs.identifier, encodedPath);
 }
 
-function latestShaFromBody(provider: VcsProvider, body: Record<string, unknown> | Record<string, unknown>[]): string | undefined {
+function latestShaFromBody(provider: VcsProvider, body: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[]): string | undefined {
   if (provider === "github") {
     const commits = body as Record<string, unknown>[];
     const sha = commits[0]?.sha;
@@ -1616,6 +1625,7 @@ async function createOAuthWebhookRun(
 type OAuthWebhookDownloads = Map<string, { credentials: ProviderCredentials; configurationVersionIds: string[] }>;
 
 function addOAuthWebhookDownload(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- downloads are grouped into this mutable per-webhook cache
   downloads: OAuthWebhookDownloads,
   credentials: ProviderCredentials,
   configurationVersionId: string,
@@ -1736,6 +1746,7 @@ async function githubTriggerSelection(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   details: DeepReadonly<WebhookDetails>,
   branchMatchedWorkspaces: readonly DeepReadonly<typeof workspaces.$inferSelect>[],
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- installation credentials are cached during one webhook
   installationTokens: Map<string, string | null>,
 ): Promise<GithubTriggerSelection> {
   let triggerDetails = details;
@@ -1760,6 +1771,7 @@ async function createGithubWebhookRun(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   details: DeepReadonly<WebhookDetails>,
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- installation credentials are cached during one webhook
   installationTokens: Map<string, string | null>,
 ): Promise<OAuthWebhookRun | undefined> {
   const isSpeculative = eventName === "pull_request";
