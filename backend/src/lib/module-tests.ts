@@ -138,6 +138,48 @@ async function writeResult(versionId: string, result: ModuleTestResult): Promise
   await writeModuleTestResultFile(resultPath(versionId), result);
 }
 
+function inheritedTestEnvironment(): Record<string, string> {
+  return Object.fromEntries(
+    [
+      "PATH", "HOME", "TMPDIR", "USER", "LANG", "LC_ALL", "SHELL",
+      "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+      "SSL_CERT_FILE", "SSL_CERT_DIR", "TF_CLI_CONFIG_FILE", "TF_PLUGIN_CACHE_DIR",
+    ]
+      .flatMap((key): [string, string][] => typeof process.env[key] === "string" ? [[key, process.env[key]]] : []),
+  );
+}
+
+type TerraformTestProcessResult = Readonly<{ exitCode: number; stdout: string; stderr: string }>;
+
+async function executeTerraformTest(
+  // Bun's spawn API requires a mutable command array.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  args: string[],
+  root: string,
+  environment: Readonly<Record<string, string>>,
+  // AbortSignal exposes mutable event-listener operations by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  signal?: AbortSignal,
+): Promise<TerraformTestProcessResult> {
+  const processHandle = Bun.spawn(args, { cwd: root, env: environment, stdout: "pipe", stderr: "pipe" });
+  const abort = (): void => { processHandle.kill(); };
+  if (signal !== undefined) signal.addEventListener("abort", abort, { once: true });
+  let exitCode: number;
+  let stdout: string;
+  let stderr: string;
+  try {
+    [exitCode, stdout, stderr] = await Promise.all([
+      processHandle.exited,
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+    ]);
+  } finally {
+    if (processHandle.exitCode === null) processHandle.kill();
+    signal?.removeEventListener("abort", abort);
+  }
+  return { exitCode, stdout, stderr };
+}
+
 export async function writeModuleTestResultFile(path: string, result: ModuleTestResult): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.${crypto.randomUUID()}.tmp`;
@@ -169,31 +211,9 @@ export async function runModuleTest(
       ...configuration.variables.map((variable): string => `-var=${variable.key}=${variable.value}`),
     ];
     if (signal?.aborted) throw new Error("Module test canceled");
-    const inherited = Object.fromEntries(
-      [
-        "PATH", "HOME", "TMPDIR", "USER", "LANG", "LC_ALL", "SHELL",
-        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
-        "SSL_CERT_FILE", "SSL_CERT_DIR", "TF_CLI_CONFIG_FILE", "TF_PLUGIN_CACHE_DIR",
-      ]
-        .flatMap((key): [string, string][] => typeof process.env[key] === "string" ? [[key, process.env[key]]] : []),
-    );
+    const inherited = inheritedTestEnvironment();
     const environment = { ...inherited, ...(await environmentFactory?.(staging) ?? {}) };
-    const processHandle = Bun.spawn(args, { cwd: root, env: environment, stdout: "pipe", stderr: "pipe" });
-    const abort = (): void => { processHandle.kill(); };
-    if (signal !== undefined) signal.addEventListener("abort", abort, { once: true });
-    let exitCode: number;
-    let stdout: string;
-    let stderr: string;
-    try {
-      [exitCode, stdout, stderr] = await Promise.all([
-        processHandle.exited,
-        new Response(processHandle.stdout).text(),
-        new Response(processHandle.stderr).text(),
-      ]);
-    } finally {
-      if (processHandle.exitCode === null) processHandle.kill();
-      signal?.removeEventListener("abort", abort);
-    }
+    const { exitCode, stdout, stderr } = await executeTerraformTest(args, root, environment, signal);
     if (signal?.aborted === true) throw new Error("Module test canceled");
     const output = [stdout.trim(), stderr.trim()]
       .filter((entry): boolean => entry !== "")
