@@ -296,72 +296,55 @@ export function decryptSecretSync(value: string, storageDir: string): string {
   return decrypt(loadEncryptionKeySync(storageDir));
 }
 
-function loadEncryptionKeySync(storageDir: string): Buffer {
-  const resolvedDir = resolve(storageDir);
-
-  // Reuse the async loader's cache when the directory matches: a key
-  // already loaded by encryptSecret/decryptSecret is valid here too.
-  if (cachedKey !== undefined && cachedStorageDir === resolvedDir) {
-    return cachedKey;
-  }
-
-  const password = process.env.ENCRYPTION_PASSWORD;
-  if (password !== undefined && password !== "") {
-    const saltPath = join(resolvedDir, SALT_FILE_NAME);
-    let saltText: string | undefined;
+function readBase64MaterialSync(path: string, expectedLength: number, minimumLength: boolean): string | undefined {
+  let encoded: string | undefined;
+  for (let attempt = 0; attempt < SYNC_READ_RETRIES; attempt += 1) {
     try {
-      for (let attempt = 0; attempt < SYNC_READ_RETRIES; attempt += 1) {
-        try {
-          const candidate = Buffer.from(readFileSync(saltPath, "utf8").trim(), "base64");
-          if (candidate.length >= SALT_LENGTH) {
-            saltText = candidate.toString("base64");
-            break;
-          }
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException).code;
-          if (code !== "EAGAIN" && code !== "EINTR") throw error;
-        }
-        if (attempt + 1 < SYNC_READ_RETRIES) Bun.sleepSync(SYNC_READ_RETRY_DELAY_MS);
+      const candidate = Buffer.from(readFileSync(path, "utf8").trim(), "base64");
+      const valid = minimumLength ? candidate.length >= expectedLength : candidate.length === expectedLength;
+      if (valid) {
+        encoded = candidate.toString("base64");
+        break;
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new Error(
-          `Cannot decrypt storage secret: KDF salt not found at ${saltPath}. ` +
-          "Persist STORAGE_DIR whenever ENCRYPTION_PASSWORD is configured.",
-        );
-      }
-      throw error;
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EAGAIN" && code !== "EINTR") throw error;
     }
-    const salt = Buffer.from(saltText ?? "", "base64");
-    if (salt.length < SALT_LENGTH) {
-      throw new Error(`Invalid KDF salt in ${saltPath}`);
-    }
-    if (saltWasRecreatedOnLoad) {
-      log.warn(KDF_SALT_RECREATED_WARNING);
-      saltWasRecreatedOnLoad = false;
-    }
-    const key = scryptSync(password, salt, KEY_LENGTH);
-    cachedKey = key;
-    cachedStorageDir = resolvedDir;
-    return key;
+    if (attempt + 1 < SYNC_READ_RETRIES) Bun.sleepSync(SYNC_READ_RETRY_DELAY_MS);
   }
+  return encoded;
+}
 
+function loadPasswordDerivedKeySync(resolvedDir: string, password: string): Buffer {
+  const saltPath = join(resolvedDir, SALT_FILE_NAME);
+  let saltText: string | undefined;
+  try {
+    saltText = readBase64MaterialSync(saltPath, SALT_LENGTH, true);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(
+        `Cannot decrypt storage secret: KDF salt not found at ${saltPath}. ` +
+        "Persist STORAGE_DIR whenever ENCRYPTION_PASSWORD is configured.",
+      );
+    }
+    throw error;
+  }
+  const salt = Buffer.from(saltText ?? "", "base64");
+  if (salt.length < SALT_LENGTH) {
+    throw new Error(`Invalid KDF salt in ${saltPath}`);
+  }
+  if (saltWasRecreatedOnLoad) {
+    log.warn(KDF_SALT_RECREATED_WARNING);
+    saltWasRecreatedOnLoad = false;
+  }
+  return scryptSync(password, salt, KEY_LENGTH);
+}
+
+function loadFileEncryptionKeySync(resolvedDir: string): Buffer {
   const keyPath = join(resolvedDir, KEY_FILE_NAME);
   let keyText: string | undefined;
   try {
-    for (let attempt = 0; attempt < SYNC_READ_RETRIES; attempt += 1) {
-      try {
-        const candidate = Buffer.from(readFileSync(keyPath, "utf8").trim(), "base64");
-        if (candidate.length === KEY_LENGTH) {
-          keyText = candidate.toString("base64");
-          break;
-        }
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "EAGAIN" && code !== "EINTR") throw error;
-      }
-      if (attempt + 1 < SYNC_READ_RETRIES) Bun.sleepSync(SYNC_READ_RETRY_DELAY_MS);
-    }
+    keyText = readBase64MaterialSync(keyPath, KEY_LENGTH, false);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error(
@@ -375,6 +358,22 @@ function loadEncryptionKeySync(storageDir: string): Buffer {
   if (key.length !== KEY_LENGTH) {
     throw new Error(`Invalid encryption key in ${keyPath}`);
   }
+  return key;
+}
+
+function loadEncryptionKeySync(storageDir: string): Buffer {
+  const resolvedDir = resolve(storageDir);
+
+  // Reuse the async loader's cache when the directory matches: a key
+  // already loaded by encryptSecret/decryptSecret is valid here too.
+  if (cachedKey !== undefined && cachedStorageDir === resolvedDir) {
+    return cachedKey;
+  }
+
+  const password = process.env.ENCRYPTION_PASSWORD;
+  const key = password !== undefined && password !== ""
+    ? loadPasswordDerivedKeySync(resolvedDir, password)
+    : loadFileEncryptionKeySync(resolvedDir);
   cachedKey = key;
   cachedStorageDir = resolvedDir;
   return key;
