@@ -216,12 +216,117 @@ type WorkspaceResourceOptions = Readonly<{
   readonly currentRun?: Readonly<{ id: string }> | null;
 }>;
 
-export async function workspaceResource(
-  workspace: WorkspaceParam,
-  defaultIacBinary: string | null | undefined,
-  permissions: WorkspaceResourcePermissions,
-  options?: WorkspaceResourceOptions,
-): Promise<Record<string, unknown>> {
+
+function buildWorkspacePermissions(permissions: WorkspaceResourcePermissions): Record<string, unknown> {
+  return {
+    "can-destroy": permissions.canPlan,
+    "can-force-unlock": permissions.canAdmin,
+    "can-lock": permissions.canLock,
+    "can-manage-run-tasks": permissions.canManageRunTasks,
+    "can-queue-apply": permissions.canApply,
+    "can-queue-destroy": permissions.canPlan,
+    "can-queue-run": permissions.canPlan,
+    "can-read-settings": true,
+    "can-read-state-versions": permissions.canReadStateVersions,
+    "can-write-state-versions": permissions.canWriteStateVersions === true,
+    "can-read-variable": permissions.canReadVariables,
+    "can-unlock": permissions.canLock,
+    "can-update": permissions.canAdmin,
+    "can-update-variable": permissions.canWriteVariables,
+    "can-force-delete": permissions.canAdmin,
+  };
+}
+
+
+function buildWorkspaceCoreAttributes(workspace: WorkspaceParam): Record<string, unknown> {
+  return {
+    name: workspace.name,
+    description: workspace.description,
+    "vcs-repo": vcsRepoResource(workspace.vcsRepo ?? null),
+    "terraform-version": workspace.terraformVersion,
+    "working-directory": workspace.workingDirectory,
+    "source-name": workspace.sourceName,
+    "source-url": workspace.sourceUrl,
+    "execution-mode": workspace.executionMode,
+    "created-at": new Date(workspace.createdAt).toISOString(),
+    source: workspace.source ?? "tfe-api",
+  };
+}
+
+function buildWorkspaceFlagAttributes(workspace: WorkspaceParam): Record<string, unknown> {
+  return {
+    "allow-destroy-plan": workspace.allowDestroyPlan ?? true,
+    "auto-apply": workspace.autoApply === true,
+    "auto-apply-run-trigger": workspace.autoApplyRunTrigger === true,
+    "file-triggers-enabled": workspace.fileTriggersEnabled ?? true,
+    "trigger-prefixes": workspace.triggerPrefixes ?? [],
+    "trigger-patterns": workspace.triggerPatterns ?? [],
+    "queue-all-runs": workspace.queueAllRuns ?? true,
+    "speculative-enabled": workspace.speculativeEnabled ?? true,
+    "global-remote-state": workspace.globalRemoteState === true,
+    "project-remote-state": workspace.projectRemoteState === true,
+    "assessments-enabled": workspace.assessmentsEnabled === true,
+    operations: true,
+    "structured-run-output-enabled": true,
+  };
+}
+
+function buildWorkspaceAttributes(workspace: WorkspaceParam, permissions: WorkspaceResourcePermissions, tags: DeepReadonly<typeof workspaceTags.$inferSelect>[], iacBinary: string): Record<string, unknown> {
+  return {
+    actions: { "is-destroyable": permissions.canPlan },
+    ...buildWorkspaceCoreAttributes(workspace),
+    ...buildWorkspaceFlagAttributes(workspace),
+    "agent-pool-id": workspace.agentPoolId ?? null,
+    "auto-destroy-at": workspace.autoDestroyAt ?? null,
+    "auto-destroy-activity-duration": workspace.autoDestroyActivityDuration ?? null,
+    "inherits-project-auto-destroy": workspace.inheritsProjectAutoDestroy,
+    "setting-overwrites": workspace.settingOverwrites ?? { "execution-mode": false, "agent-pool": false },
+    "tag-names": tags.map((tag: DeepReadonly<typeof workspaceTags.$inferSelect>): string => tag.key),
+    "iac-binary": iacBinary,
+    locked: workspace.locked === true,
+    "locked-reason": workspace.lockedReason ?? (workspace.locked === true ? "Locked manually" : null),
+    permissions: buildWorkspacePermissions(permissions),
+    "owned-by-type": workspace.ownedByType ?? null,
+    "owned-by-id": workspace.ownedById ?? null,
+    "contact-email": workspace.contactEmail ?? null,
+  };
+}
+
+function buildWorkspaceRelationships(workspace: WorkspaceParam, orgName: string | null | undefined, options?: WorkspaceResourceOptions): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    organization: {
+      data: { id: orgName ?? workspace.orgId, type: "organizations" },
+    },
+    project: {
+      data: workspace.projectId !== null ? { id: workspace.projectId, type: "projects" } : null,
+    },
+    "ssh-key": {
+      data: workspace.sshKeyId !== null ? { id: workspace.sshKeyId, type: "ssh-keys" } : null,
+    },
+    "tag-bindings": {
+      links: { related: `/api/v2/workspaces/${workspace.id}/tag-bindings` },
+    },
+    "effective-tag-bindings": {
+      links: { related: `/api/v2/workspaces/${workspace.id}/effective-tag-bindings` },
+    },
+    "remote-state-consumers": {
+      links: { related: `/api/v2/workspaces/${workspace.id}/relationships/remote-state-consumers` },
+    },
+    "data-retention-policy": {
+      links: { related: `/api/v2/workspaces/${workspace.id}/relationships/data-retention-policy` },
+    },
+    ...(options?.currentRun === undefined
+      ? {}
+      : {
+          "current-run": {
+            data: options.currentRun === null ? null : { id: options.currentRun.id, type: "runs" },
+          },
+        }),
+  };
+  return base;
+}
+
+async function fetchWorkspaceTagsAndOrg(workspace: WorkspaceParam, options?: WorkspaceResourceOptions): Promise<[DeepReadonly<typeof workspaceTags.$inferSelect>[], string | null | undefined]> {
   const [tags, orgName] = await Promise.all([
     options?.tags
       ?? db.query.workspaceTags.findMany({
@@ -231,99 +336,22 @@ export async function workspaceResource(
     options?.orgName
       ?? organizationName(workspace.orgId),
   ]);
+  return [tags, orgName];
+}
 
+export async function workspaceResource(
+  workspace: WorkspaceParam,
+  defaultIacBinary: string | null | undefined,
+  permissions: WorkspaceResourcePermissions,
+  options?: WorkspaceResourceOptions,
+): Promise<Record<string, unknown>> {
+  const [tags, orgName] = await fetchWorkspaceTagsAndOrg(workspace, options);
   const iacBinary = workspace.iacBinary ?? defaultIacBinary ?? "terraform";
-
   return {
     id: workspace.id,
     type: "workspaces",
-    attributes: {
-      actions: { "is-destroyable": permissions.canPlan },
-      "allow-destroy-plan": workspace.allowDestroyPlan ?? true,
-      name: workspace.name,
-      description: workspace.description,
-      "auto-apply": workspace.autoApply === true,
-      "auto-apply-run-trigger": workspace.autoApplyRunTrigger === true,
-      "file-triggers-enabled": workspace.fileTriggersEnabled ?? true,
-      "trigger-prefixes": workspace.triggerPrefixes ?? [],
-      "trigger-patterns": workspace.triggerPatterns ?? [],
-      "vcs-repo": vcsRepoResource(workspace.vcsRepo ?? null),
-      "queue-all-runs": workspace.queueAllRuns ?? true,
-      "speculative-enabled": workspace.speculativeEnabled ?? true,
-      "global-remote-state": workspace.globalRemoteState === true,
-      "project-remote-state": workspace.projectRemoteState === true,
-      "agent-pool-id": workspace.agentPoolId ?? null,
-      "assessments-enabled": workspace.assessmentsEnabled === true,
-      "auto-destroy-at": workspace.autoDestroyAt ?? null,
-      "auto-destroy-activity-duration": workspace.autoDestroyActivityDuration ?? null,
-      "inherits-project-auto-destroy": workspace.inheritsProjectAutoDestroy,
-      "setting-overwrites": workspace.settingOverwrites ?? { "execution-mode": false, "agent-pool": false },
-      "terraform-version": workspace.terraformVersion,
-      "working-directory": workspace.workingDirectory,
-      "source-name": workspace.sourceName,
-      "source-url": workspace.sourceUrl,
-      "tag-names": tags.map((tag: DeepReadonly<typeof workspaceTags.$inferSelect>): string => tag.key),
-      "iac-binary": iacBinary,
-      "execution-mode": workspace.executionMode,
-      locked: workspace.locked === true,
-      "locked-reason": workspace.lockedReason ?? (workspace.locked === true ? "Locked manually" : null),
-      operations: true,
-      permissions: {
-        "can-destroy": permissions.canPlan,
-        "can-force-unlock": permissions.canAdmin,
-        "can-lock": permissions.canLock,
-        "can-manage-run-tasks": permissions.canManageRunTasks,
-        "can-queue-apply": permissions.canApply,
-        "can-queue-destroy": permissions.canPlan,
-        "can-queue-run": permissions.canPlan,
-        "can-read-settings": true,
-        "can-read-state-versions": permissions.canReadStateVersions,
-        "can-write-state-versions": permissions.canWriteStateVersions === true,
-        "can-read-variable": permissions.canReadVariables,
-        "can-unlock": permissions.canLock,
-        "can-update": permissions.canAdmin,
-        "can-update-variable": permissions.canWriteVariables,
-        "can-force-delete": permissions.canAdmin,
-      },
-      "created-at": new Date(workspace.createdAt).toISOString(),
-      source: workspace.source ?? "tfe-api",
-      "structured-run-output-enabled": true,
-      "owned-by-type": workspace.ownedByType ?? null,
-      "owned-by-id": workspace.ownedById ?? null,
-      "contact-email": workspace.contactEmail ?? null,
-    },
-    relationships: {
-      organization: {
-        data: { id: orgName ?? workspace.orgId, type: "organizations" },
-      },
-      project: {
-        data: workspace.projectId !== null ? { id: workspace.projectId, type: "projects" } : null,
-      },
-      "ssh-key": {
-        data: workspace.sshKeyId !== null ? { id: workspace.sshKeyId, type: "ssh-keys" } : null,
-      },
-      "tag-bindings": {
-        links: { related: `/api/v2/workspaces/${workspace.id}/tag-bindings` },
-      },
-      "effective-tag-bindings": {
-        links: { related: `/api/v2/workspaces/${workspace.id}/effective-tag-bindings` },
-      },
-      "remote-state-consumers": {
-        links: { related: `/api/v2/workspaces/${workspace.id}/relationships/remote-state-consumers` },
-      },
-      "data-retention-policy": {
-        links: { related: `/api/v2/workspaces/${workspace.id}/relationships/data-retention-policy` },
-      },
-      ...(options?.currentRun === undefined
-        ? {}
-        : {
-            "current-run": {
-              data: options.currentRun === null
-                ? null
-                : { id: options.currentRun.id, type: "runs" },
-            },
-          }),
-    },
+    attributes: buildWorkspaceAttributes(workspace, permissions, tags, iacBinary),
+    relationships: buildWorkspaceRelationships(workspace, orgName, options),
     links: { self: `/api/v2/workspaces/${workspace.id}` },
   };
 }
