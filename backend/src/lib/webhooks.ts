@@ -656,6 +656,32 @@ function validRepository(repoFullName: string, provider: VcsProvider): boolean {
     && parts.every((part: string): boolean => REPOSITORY_PATTERN.test(part));
 }
 
+
+function extractGithubPrFilenames(body: unknown): ReadonlySet<string> | undefined {
+  if (!Array.isArray(body)) return undefined;
+  const files = new Set<string>();
+  for (const item of body) {
+    const filename = asRecord(item)?.filename;
+    if (typeof filename !== "string" || filename === "") return undefined;
+    files.add(filename);
+  }
+  return files;
+}
+
+async function fetchGithubPrFilesPage(credentials: ProviderCredentials, repoFullName: string, pullRequestNumber: number): Promise<ReadonlySet<string> | undefined> {
+  const response = await fetch(
+    `${credentials.apiUrl}/repos/${repoFullName.split("/").map(encodeURIComponent).join("/")}/pulls/${String(pullRequestNumber)}/files?per_page=100`,
+    {
+      headers: { Authorization: `Bearer ${credentials.token}`, Accept: "application/vnd.github+json" },
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    },
+  );
+  if (!response.ok) return undefined;
+  if (response.headers.get("link")?.includes('rel="next"') === true) return undefined;
+  const body = await response.json() as unknown;
+  return extractGithubPrFilenames(body);
+}
+
 async function githubPullRequestFiles(
   candidates: readonly DeepReadonly<typeof workspaces.$inferSelect>[],
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
@@ -664,32 +690,15 @@ async function githubPullRequestFiles(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   installationTokens?: Map<string, string | null>,
 ): Promise<ReadonlySet<string> | undefined> {
-  if (candidates.length === 0 || details.pullRequestNumber === undefined || !validRepository(details.repoFullName, "github")) return undefined;
+  if (candidates.length === 0) return undefined;
+  if (details.pullRequestNumber === undefined) return undefined;
+  if (!validRepository(details.repoFullName, "github")) return undefined;
   for (const workspace of candidates) {
     try {
       const credentials = await githubCredentials(workspace, installationTokens);
       if (credentials === undefined) continue;
-      const response = await fetch(
-        `${credentials.apiUrl}/repos/${details.repoFullName.split("/").map(encodeURIComponent).join("/")}/pulls/${String(details.pullRequestNumber)}/files?per_page=100`,
-        {
-          headers: { Authorization: `Bearer ${credentials.token}`, Accept: "application/vnd.github+json" },
-          signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-        },
-      );
-      if (!response.ok || response.headers.get("link")?.includes('rel="next"') === true) continue;
-      const body = await response.json() as unknown;
-      if (!Array.isArray(body)) continue;
-      const files = new Set<string>();
-      let valid = true;
-      for (const item of body) {
-        const filename = asRecord(item)?.filename;
-        if (typeof filename !== "string" || filename === "") {
-          valid = false;
-          break;
-        }
-        files.add(filename);
-      }
-      if (valid) return files;
+      const files = await fetchGithubPrFilesPage(credentials, details.repoFullName, details.pullRequestNumber);
+      if (files !== undefined) return files;
     } catch {
       // Try the next matching workspace's credentials before failing open.
     }
@@ -697,46 +706,58 @@ async function githubPullRequestFiles(
   return undefined;
 }
 
+
+function extractGitlabMrFiles(body: unknown, files: Set<string>): boolean {
+  const changes = asRecord(body)?.changes;
+  if (!Array.isArray(changes)) return false;
+  for (const item of changes) {
+    const change = asRecord(item);
+    const newPath = change?.new_path;
+    if (typeof newPath !== "string" || newPath === "") return false;
+    files.add(newPath);
+  }
+  return true;
+}
+
+async function fetchGitlabMrFilesPage(credentials: ProviderCredentials, repoFullName: string, pullRequestNumber: number, page: number): Promise<{ files: Set<string>; nextPage: string | null } | undefined> {
+  const response = await fetch(
+    `${credentials.apiUrl}/projects/${encodeURIComponent(repoFullName)}/merge_requests/${String(pullRequestNumber)}/changes?per_page=100&page=${page}`,
+    {
+      headers: { Authorization: `Bearer ${credentials.token}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    },
+  );
+  if (!response.ok) return undefined;
+  const body = await response.json() as unknown;
+  const files = new Set<string>();
+  if (!extractGitlabMrFiles(body, files)) return undefined;
+  let nextPage = response.headers.get("x-next-page");
+  if (nextPage !== null && nextPage.trim() === "") nextPage = null;
+  return { files, nextPage };
+}
+
 async function gitlabMergeRequestFiles(
   workspace: DeepReadonly<typeof workspaces.$inferSelect> | undefined,
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   details: Readonly<WebhookDetails>,
 ): Promise<ReadonlySet<string> | undefined> {
-  if (workspace === undefined || details.pullRequestNumber === undefined || !validRepository(details.repoFullName, "gitlab")) return undefined;
+  if (workspace === undefined) return undefined;
+  if (details.pullRequestNumber === undefined) return undefined;
+  if (!validRepository(details.repoFullName, "gitlab")) return undefined;
   try {
     const credentials = await oauthProviderCredentials(workspace, "gitlab");
     if (credentials === undefined) return undefined;
-    // Follow X-Next-Page until all changes are collected (bounded): a
-    // truncated file list would make trigger patterns miss matching files.
     const files = new Set<string>();
     let page = 1;
     let nextPage: string | null = "1";
     const MAX_PAGES = 10;
     while (nextPage !== null && page <= MAX_PAGES) {
-      const response = await fetch(
-        `${credentials.apiUrl}/projects/${encodeURIComponent(details.repoFullName)}/merge_requests/${String(details.pullRequestNumber)}/changes?per_page=100&page=${page}`,
-        {
-          headers: { Authorization: `Bearer ${credentials.token}`, Accept: "application/json" },
-          signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-        },
-      );
-      if (!response.ok) return undefined;
-      const body = await response.json() as unknown;
-      const changes = asRecord(body)?.changes;
-      if (!Array.isArray(changes)) return undefined;
-      for (const item of changes) {
-        const change = asRecord(item);
-        const newPath = change?.new_path;
-        if (typeof newPath !== "string" || newPath === "") return undefined;
-        files.add(newPath);
-      }
-      nextPage = response.headers.get("x-next-page");
-      if (nextPage !== null && nextPage.trim() === "") nextPage = null;
+      const pageResult = await fetchGitlabMrFilesPage(credentials, details.repoFullName, details.pullRequestNumber, page);
+      if (pageResult === undefined) return undefined;
+      for (const f of pageResult.files) files.add(f);
+      nextPage = pageResult.nextPage;
       page += 1;
     }
-    // A hard page cap must fail open. Returning a partial set would make a
-    // matching file beyond the cap silently suppress a required run.
-    if (nextPage !== null) return undefined;
     return files;
   } catch {
     return undefined;
@@ -747,6 +768,12 @@ type BitbucketCloudDiffstatResult = Readonly<{
   files: ReadonlySet<string> | undefined;
   receivedPage: boolean;
 }>;
+
+
+function isBitbucketCloudDiffstatTruncated(headers: Headers): boolean {
+  const link = headers.get("link");
+  return link !== null && link.includes('rel="next"');
+}
 
 async function bitbucketCloudDiffstatFiles(
   initialUrl: string,
@@ -1033,6 +1060,13 @@ export async function reportRunVcsStatus(runId: string, runStatus: string): Prom
   } catch (error) {
     console.error(`[terrence] Failed to report VCS commit status for run ${runId}:`, error);
   }
+}
+
+
+async function fetchConfigurationVersionRecord(configurationVersionId: string): Promise<typeof configurationVersions.$inferSelect | undefined> {
+  return db.query.configurationVersions.findFirst({
+    where: eq(configurationVersions.id, configurationVersionId),
+  });
 }
 
 export async function refetchConfigurationVersion(configurationVersionId: string): Promise<boolean> {
