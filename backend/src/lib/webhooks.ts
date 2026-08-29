@@ -1713,6 +1713,147 @@ export async function syncRegistryModulesForTag(repoFullName: string, tag: strin
   }
 }
 
+async function matchingGithubWorkspaces(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: DeepReadonly<WebhookDetails>,
+): Promise<readonly DeepReadonly<typeof workspaces.$inferSelect>[]> {
+  const candidates = await db.query.workspaces.findMany({
+    where: sql`${jsonExtract(workspaces.vcsRepo, '$.identifier')} = ${details.repoFullName}`,
+  });
+  const branchMatchedWorkspaces: DeepReadonly<typeof workspaces.$inferSelect>[] = [];
+  for (const workspace of candidates) {
+    if (workspace.vcsRepo?.identifier !== details.repoFullName) continue;
+    const configuredProvider = await configuredVcsProvider(workspace);
+    if (configuredProvider !== undefined && configuredProvider !== "github") continue;
+    if (details.githubInstallationId !== undefined && !await matchesGithubAppInstallation(workspace, details.githubInstallationId)) continue;
+    if (await matchesVcsTrigger(workspace, details)) branchMatchedWorkspaces.push(workspace);
+  }
+  return branchMatchedWorkspaces;
+}
+
+type GithubTriggerSelection = Readonly<{
+  triggerDetails: DeepReadonly<WebhookDetails>;
+  matchedWorkspaces: readonly DeepReadonly<typeof workspaces.$inferSelect>[];
+}>;
+
+async function githubTriggerSelection(
+  eventName: string,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: DeepReadonly<WebhookDetails>,
+  branchMatchedWorkspaces: readonly DeepReadonly<typeof workspaces.$inferSelect>[],
+  installationTokens: Map<string, string | null>,
+): Promise<GithubTriggerSelection> {
+  let triggerDetails = details;
+  if (eventName === "pull_request") {
+    const filesChanged = await githubPullRequestFiles(branchMatchedWorkspaces, details, installationTokens);
+    if (filesChanged !== undefined) triggerDetails = { ...details, filesChanged };
+  }
+  const matchedWorkspaces = branchMatchedWorkspaces.filter((workspace): boolean =>
+    details.tag !== undefined || matchesFileTriggers(workspace, triggerDetails.filesChanged));
+  if (eventName === "pull_request") {
+    await Promise.all(branchMatchedWorkspaces
+      .filter((workspace): boolean => !matchesFileTriggers(workspace, triggerDetails.filesChanged))
+      .map(async (workspace): Promise<void> => {
+        await reportUntriggeredSpeculativeStatus(workspace, triggerDetails, installationTokens);
+      }));
+  }
+  return { triggerDetails, matchedWorkspaces };
+}
+
+function githubWebhookIngressAttributes(
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: DeepReadonly<WebhookDetails>,
+  credentials: ProviderCredentials | undefined,
+): Record<string, unknown> {
+  return {
+    commitSha: details.commitSha,
+    commitUrl: details.commitUrl,
+    commitMessage: details.commitMessage,
+    ...(details.branch === undefined ? {} : { branch: details.branch }),
+    ...(details.tag === undefined ? {} : { tag: details.tag }),
+    senderUsername: details.senderUsername,
+    ...(details.senderAvatarUrl === undefined ? {} : {
+      senderAvatarUrl: details.senderAvatarUrl,
+      senderProviderId: credentials?.oauthClientId === undefined ? "github-app" : `vcs:${credentials.oauthClientId}`,
+    }),
+    cloneUrl: details.cloneUrl,
+    ...(details.pullRequestNumber === undefined ? {} : { pullRequestNumber: details.pullRequestNumber }),
+  };
+}
+
+function githubWebhookAuditAttributes(
+  eventName: string,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: DeepReadonly<WebhookDetails>,
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  credentials: ProviderCredentials | undefined,
+): Record<string, unknown> {
+  return {
+    workspaceId: workspace.id,
+    status: "pending",
+    source: "github",
+    triggerReason: eventName === "pull_request" ? "pull_request" : "push",
+    actorUsername: details.senderUsername,
+    ...(details.senderAvatarUrl === undefined ? {} : {
+      actorAvatarUrl: details.senderAvatarUrl,
+      actorProviderId: credentials?.oauthClientId === undefined ? "github-app" : `vcs:${credentials.oauthClientId}`,
+    }),
+  };
+}
+
+async function persistGithubWebhookRun(
+  eventName: string,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: DeepReadonly<WebhookDetails>,
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  credentials: ProviderCredentials | undefined,
+  configurationVersionId: string,
+  runId: string,
+  isSpeculative: boolean,
+): Promise<void> {
+  await db.insert(configurationVersions).values({
+    id: configurationVersionId,
+    workspaceId: workspace.id,
+    status: "pending",
+    speculative: isSpeculative,
+    source: "github",
+    ingressAttributes: githubWebhookIngressAttributes(details, credentials),
+    statusTimestamps: {},
+  });
+  await db.insert(runs).values({
+    id: runId,
+    workspaceId: workspace.id,
+    configurationVersionId,
+    message: commitSubject(details.commitMessage),
+    status: "pending",
+    isDestroy: false,
+    autoApply: workspace.autoApply === true && !isSpeculative,
+    planOnly: isSpeculative,
+    statusTimestamps: { "pending-at": new Date().toISOString() },
+    logToken: crypto.randomUUID(),
+    createdAt: Date.now(),
+  });
+  await auditLog("create", "runs", runId, null, workspace.orgId, githubWebhookAuditAttributes(eventName, details, workspace, credentials));
+}
+
+async function createGithubWebhookRun(
+  eventName: string,
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: DeepReadonly<WebhookDetails>,
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  installationTokens: Map<string, string | null>,
+): Promise<OAuthWebhookRun | undefined> {
+  const isSpeculative = eventName === "pull_request";
+  if (isSpeculative && workspace.speculativeEnabled === false) return undefined;
+  if (!isSpeculative && workspace.autoApplyRunTrigger !== true && workspace.queueAllRuns !== true) return undefined;
+  const credentials = await githubCredentials(workspace, installationTokens);
+  const configurationVersionId = `cv-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
+  const runId = `run-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
+  await persistGithubWebhookRun(eventName, details, workspace, credentials, configurationVersionId, runId, isSpeculative);
+  if (credentials !== undefined) void reportRunVcsStatus(runId, "pending");
+  return { configurationVersionId, credentials };
+}
+
 export async function handleGithubWebhook(eventName: string, payload: WebhookPayload): Promise<void> {
   const details = parseWebhook(eventName, payload);
   if (details === undefined) return;
@@ -1728,101 +1869,20 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
     });
   }
 
-  const candidates = await db.query.workspaces.findMany({
-    where: sql`${jsonExtract(workspaces.vcsRepo, '$.identifier')} = ${details.repoFullName}`,
-  });
-  const branchMatchedWorkspaces: typeof candidates = [];
-  for (const workspace of candidates) {
-    if (workspace.vcsRepo?.identifier !== details.repoFullName) continue;
-    const configuredProvider = await configuredVcsProvider(workspace);
-    if (configuredProvider !== undefined && configuredProvider !== "github") continue;
-    if (details.githubInstallationId !== undefined && !await matchesGithubAppInstallation(workspace, details.githubInstallationId)) continue;
-    if (await matchesVcsTrigger(workspace, details)) branchMatchedWorkspaces.push(workspace);
-  }
+  const branchMatchedWorkspaces = await matchingGithubWorkspaces(details);
   const installationTokens = new Map<string, string | null>();
-  let triggerDetails = details;
-  if (eventName === "pull_request") {
-    const filesChanged = await githubPullRequestFiles(branchMatchedWorkspaces, details, installationTokens);
-    if (filesChanged !== undefined) triggerDetails = { ...details, filesChanged };
-  }
-  const matchedWorkspaces = branchMatchedWorkspaces.filter((workspace): boolean =>
-    details.tag !== undefined || matchesFileTriggers(workspace, triggerDetails.filesChanged));
-  if (eventName === "pull_request") {
-    await Promise.all(branchMatchedWorkspaces
-      .filter((workspace): boolean => !matchesFileTriggers(workspace, triggerDetails.filesChanged))
-      .map(async (workspace): Promise<void> => {
-        await reportUntriggeredSpeculativeStatus(workspace, triggerDetails, installationTokens);
-      }));
-  }
+  const { matchedWorkspaces } = await githubTriggerSelection(eventName, details, branchMatchedWorkspaces, installationTokens);
 
   const missingCredentialConfigurationVersionIds: string[] = [];
-  const downloads = new Map<string, { credentials: ProviderCredentials; configurationVersionIds: string[] }>();
+  const downloads: OAuthWebhookDownloads = new Map();
   for (const workspace of matchedWorkspaces) {
-    const isSpeculative = eventName === "pull_request";
-    if (isSpeculative && workspace.speculativeEnabled === false) continue;
-    if (!isSpeculative && workspace.autoApplyRunTrigger !== true && workspace.queueAllRuns !== true) continue;
-
-    const credentials = await githubCredentials(workspace, installationTokens);
-    const configurationVersionId = `cv-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
-    const runId = `run-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
-    await db.insert(configurationVersions).values({
-      id: configurationVersionId,
-      workspaceId: workspace.id,
-      status: "pending",
-      speculative: isSpeculative,
-      source: "github",
-      ingressAttributes: {
-        commitSha: details.commitSha,
-        commitUrl: details.commitUrl,
-        commitMessage: details.commitMessage,
-        ...(details.branch === undefined ? {} : { branch: details.branch }),
-        ...(details.tag === undefined ? {} : { tag: details.tag }),
-        senderUsername: details.senderUsername,
-        ...(details.senderAvatarUrl === undefined ? {} : {
-          senderAvatarUrl: details.senderAvatarUrl,
-          senderProviderId: credentials?.oauthClientId === undefined ? "github-app" : `vcs:${credentials.oauthClientId}`,
-        }),
-        cloneUrl: details.cloneUrl,
-        ...(details.pullRequestNumber === undefined ? {} : { pullRequestNumber: details.pullRequestNumber }),
-      },
-      statusTimestamps: {},
-    });
-    await db.insert(runs).values({
-      id: runId,
-      workspaceId: workspace.id,
-      configurationVersionId,
-      message: commitSubject(details.commitMessage),
-      status: "pending",
-      isDestroy: false,
-      autoApply: workspace.autoApply === true && !isSpeculative,
-      planOnly: isSpeculative,
-      statusTimestamps: { "pending-at": new Date().toISOString() },
-      logToken: crypto.randomUUID(),
-      createdAt: Date.now(),
-    });
-    await auditLog("create", "runs", runId, null, workspace.orgId, {
-      workspaceId: workspace.id,
-      status: "pending",
-      source: "github",
-      triggerReason: isSpeculative ? "pull_request" : "push",
-      actorUsername: details.senderUsername,
-      ...(details.senderAvatarUrl === undefined ? {} : {
-        actorAvatarUrl: details.senderAvatarUrl,
-        actorProviderId: credentials?.oauthClientId === undefined ? "github-app" : `vcs:${credentials.oauthClientId}`,
-      }),
-    });
-    if (credentials === undefined) {
-      missingCredentialConfigurationVersionIds.push(configurationVersionId);
+    const created = await createGithubWebhookRun(eventName, details, workspace, installationTokens);
+    if (created === undefined) continue;
+    if (created.credentials === undefined) {
+      missingCredentialConfigurationVersionIds.push(created.configurationVersionId);
       continue;
     }
-    void reportRunVcsStatus(runId, "pending");
-    const downloadKey = `${credentials.apiUrl}\u0000${credentials.token}`;
-    const group = downloads.get(downloadKey);
-    if (group === undefined) {
-      downloads.set(downloadKey, { credentials, configurationVersionIds: [configurationVersionId] });
-    } else {
-      group.configurationVersionIds.push(configurationVersionId);
-    }
+    addOAuthWebhookDownload(downloads, created.credentials, created.configurationVersionId);
   }
 
   if (missingCredentialConfigurationVersionIds.length > 0) {
