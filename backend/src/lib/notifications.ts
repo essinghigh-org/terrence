@@ -399,17 +399,19 @@ async function emailRecipientList(configuration: NotificationConfiguration): Pro
   return [...recipients];
 }
 
-function missingEmailConfiguration(
+type CompleteEmailConfiguration = Readonly<{ host: string; senderEmail: string }>;
+
+function emailConfigurationOrMissing(
   enabled: boolean,
   host: string | null,
   senderEmail: string | null,
   recipientCount: number,
-): string | null {
+): string | CompleteEmailConfiguration {
   if (!enabled) return "SMTP is disabled";
   if (host === null) return "SMTP host is not configured";
   if (senderEmail === null) return "SMTP sender email is not configured";
   if (recipientCount === 0) return "no email recipients";
-  return null;
+  return { host, senderEmail };
 }
 
 async function smtpNotificationSettings(
@@ -443,10 +445,10 @@ async function deliverEmailNotification(
   const recipientList = await emailRecipientList(configuration);
   const now = new Date().toISOString();
 
-  const missing = missingEmailConfiguration(enabled, host, senderEmail, recipientList.length);
-  if (missing !== null) {
+  const emailConfiguration = emailConfigurationOrMissing(enabled, host, senderEmail, recipientList.length);
+  if (typeof emailConfiguration === "string") {
     return {
-      body: `Email delivery skipped: ${missing}`,
+      body: `Email delivery skipped: ${emailConfiguration}`,
       code: "0",
       headers: {},
       sentAt: now,
@@ -459,7 +461,7 @@ async function deliverEmailNotification(
   const { subject, text, html } = emailContent(payload);
   try {
     await sendEmail(
-      await smtpNotificationSettings(smtp, host!, senderEmail!),
+      await smtpNotificationSettings(smtp, emailConfiguration.host, emailConfiguration.senderEmail),
       { to: recipientList, subject, text, html },
     );
     recordBreakerSuccess(configuration.id);
@@ -555,8 +557,8 @@ function addAssessmentFields(
   payload: NotificationRecord,
   addField: (label: string, value: unknown) => void,
 ): void {
-  const details = payload.details as NotificationRecord | undefined;
-  if (details === undefined) return;
+  const details = payload.details as NotificationRecord | null | undefined;
+  if (details === undefined || details === null) return;
   const result = details.new_assessment_result as NotificationRecord | undefined;
   const drifted = result?.resources_drifted;
   if (typeof drifted === "number") addField("Resources drifted", drifted);

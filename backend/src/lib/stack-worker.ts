@@ -21,7 +21,7 @@ import { decryptSecret } from "./secrets";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./url-safety";
 import { validateExternalUrl, type DeepReadonly } from "./utils";
 import { ensureBinary } from "../binaryManager";
-import { extractValidatedModuleArchive, validateModuleArchive } from "./registry-module-archive";
+import { extractValidatedModuleArchive } from "./registry-module-archive";
 import { enqueueDurableJob, type DurableJobContext } from "./durable-jobs";
 import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./sandbox";
 
@@ -966,7 +966,6 @@ async function executeStackComponentFromArchive(
 ): Promise<StackExecutionResult> {
   const staging = await mkdtemp(join(tmpdir(), "terrence-stack-step-"));
   try {
-    await validateModuleArchive(archivePath);
     await extractValidatedModuleArchive(archivePath, staging);
     const root = await findArchiveRoot(staging);
     const directory = resolve(root, component.directory);
@@ -1130,7 +1129,6 @@ async function prepareStackConfiguration(
   if (!isStackStoragePath(archivePath)) throw new Error("The Stack configuration archive path is invalid");
   if (initialPayload.source === "fetch") await fetchStackArchive(stack, archivePath);
   if (!(await Bun.file(archivePath).exists())) throw new Error("The Stack configuration archive is unavailable");
-  await validateModuleArchive(archivePath);
   const staging = await mkdtemp(join(tmpdir(), "terrence-stack-config-"));
   try {
     await extractValidatedModuleArchive(archivePath, staging);

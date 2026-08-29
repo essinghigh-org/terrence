@@ -70,9 +70,9 @@ class SmtpError extends Error {
 }
 
 type Session = {
-  socket: Socket;
   nextResponse(): Promise<Response>;
   send(line: string): Promise<Response>;
+  upgradeTLS(): void;
   close(): void;
 }
 
@@ -113,12 +113,11 @@ async function createSession(host: string, port: number, tls: boolean): Promise<
     },
   };
 
-  const socket = tls
+  let socket: Socket = tls
     ? await connect({ hostname: host, port, tls: { rejectUnauthorized: true }, socket: handlers })
     : await connect({ hostname: host, port, socket: handlers });
 
   return {
-    socket,
     async nextResponse(): Promise<Response> {
       return new Promise((resolve) => {
         pending.push(resolve);
@@ -130,6 +129,13 @@ async function createSession(host: string, port: number, tls: boolean): Promise<
       });
       socket.write(`${line}\r\n`);
       return responsePromise;
+    },
+    upgradeTLS(): void {
+      const [, tlsSocket] = socket.upgradeTLS<undefined>({
+        tls: { rejectUnauthorized: true, serverName: host },
+        socket: handlers,
+      });
+      socket = tlsSocket;
     },
     close(): void {
       if (!closed) {
@@ -183,7 +189,7 @@ async function negotiateStartTls(session: Session, implicitTls: boolean, step: S
   if (implicitTls) return;
   const startTls = await step(session.send("STARTTLS"), "STARTTLS");
   if (startTls.code === 220) {
-    (session.socket as unknown as { upgradeTLS?(options?: Readonly<Record<string, never>>): boolean }).upgradeTLS?.({});
+    session.upgradeTLS();
     const tlsEhlo = await step(session.send("EHLO terrence.local"), "EHLO after STARTTLS");
     if (tlsEhlo.code !== 250) {
       throw new SmtpError(`EHLO after STARTTLS rejected: ${tlsEhlo.code} ${tlsEhlo.message}`, tlsEhlo.code);

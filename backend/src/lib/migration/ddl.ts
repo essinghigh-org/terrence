@@ -289,6 +289,7 @@ function parseReferenceActions(sql: string, start: number): { onUpdate: string |
   let onUpdate: string | null = null;
   let onDelete: string | null = null;
   for (;;) {
+    while (pos < sql.length && /\s/.test(sql[pos] ?? "")) pos += 1;
     const action = /^ON\s+(UPDATE|DELETE)\s+(NO\s+ACTION|CASCADE|SET\s+NULL|SET\s+DEFAULT|RESTRICT)/i.exec(sql.slice(pos));
     if (action === null) break;
     const kind = action[1]?.toLowerCase() ?? "";

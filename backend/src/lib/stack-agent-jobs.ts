@@ -76,6 +76,7 @@ export type StackAgentJobCompletion = Readonly<{
 
 type StackAgentCompletionOutcome = Readonly<{
   job: StackAgentJob;
+  stepPayload: Readonly<Record<string, unknown>>;
   runStatus: string;
   fencingToken?: number;
 }>;
@@ -227,7 +228,7 @@ async function persistCompletedApplyState(outcome: StackAgentCompletionOutcome):
     const detail = error instanceof Error ? error.message : String(error);
     const now = Date.now();
     await db.transaction(async (tx): Promise<void> => {
-      await tx.update(stackRecords).set({ status: "failed", payload: { ...(outcome.job.result ?? {}), error: detail }, updatedAt: now }).where(eq(stackRecords.id, outcome.job.stepId));
+      await tx.update(stackRecords).set({ status: "failed", payload: { ...outcome.stepPayload, ...(outcome.job.result ?? {}), error: detail }, updatedAt: now }).where(eq(stackRecords.id, outcome.job.stepId));
       await tx.update(stackRecords).set({ status: "failed", payload: { error: detail }, updatedAt: now }).where(eq(stackRecords.id, run.id));
       await tx.update(stackStateLocks).set({ runId: null, leaseExpiresAt: null, releasedAt: now, updatedAt: now }).where(and(
         eq(stackStateLocks.runId, run.id),
@@ -291,12 +292,13 @@ async function persistTerminalStackAgentCompletion(
   tx: StackAgentTransaction,
   agentId: string,
   completed: StackAgentJob,
+  step: StackRecord,
   run: StackRecord,
   now: number,
 ): Promise<StackAgentCompletionOutcome | undefined> {
   if (!["succeeded", "failed", "canceled"].includes(run.status)) return undefined;
   await tx.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agentId));
-  return { job: completed, runStatus: run.status };
+  return { job: completed, stepPayload: step.payload ?? {}, runStatus: run.status };
 }
 
 async function persistFailedStackAgentCompletion(
@@ -318,7 +320,7 @@ async function persistFailedStackAgentCompletion(
     ...(fencingToken === undefined ? [] : [eq(stackStateLocks.fencingToken, fencingToken)]),
   ));
   await tx.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agentId));
-  return { job, runStatus: "failed" };
+  return { job, stepPayload: step.payload ?? {}, runStatus: "failed" };
 }
 
 function completionFlag(result: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean {
@@ -347,7 +349,7 @@ async function persistSuccessfulStackAgentCompletion(
   await tx.update(stackRecords).set({ status: runStatus, payload: { ...(run.payload ?? {}), lastAgentJobId: job.id }, updatedAt: now }).where(eq(stackRecords.id, run.id));
   await tx.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agentId));
   const fencingToken = payloadFencingToken(step);
-  return { job, runStatus, ...(fencingToken === undefined ? {} : { fencingToken }) };
+  return { job, stepPayload: result, runStatus, ...(fencingToken === undefined ? {} : { fencingToken }) };
 }
 
 export async function completeStackAgentJob(
@@ -365,7 +367,7 @@ export async function completeStackAgentJob(
     if (completed === undefined) return undefined;
     const run = await stackAgentCompletionRun(tx, context.step);
     if (run === undefined) return undefined;
-    const terminal = await persistTerminalStackAgentCompletion(tx, agentId, completed, run, now);
+    const terminal = await persistTerminalStackAgentCompletion(tx, agentId, completed, context.step, run, now);
     if (terminal !== undefined) return terminal;
     if (completion.status === "errored") return persistFailedStackAgentCompletion(tx, agentId, completed, context.step, run, completion, now);
     return persistSuccessfulStackAgentCompletion(tx, agentId, completed, context.step, run, completion, now);

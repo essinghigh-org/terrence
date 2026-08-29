@@ -1497,10 +1497,16 @@ async function providerChangedFiles(
   return undefined;
 }
 
-async function matchingOAuthWorkspaces(
-  provider: OAuthProvider,
+type GithubInstallationPredicate = (
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  installationId: number,
+) => Promise<boolean>;
+
+async function matchingWebhookWorkspaces(
+  provider: VcsProvider,
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   details: DeepReadonly<WebhookDetails>,
+  githubInstallationPredicate?: GithubInstallationPredicate,
 ): Promise<readonly DeepReadonly<typeof workspaces.$inferSelect>[]> {
   const candidates = await db.query.workspaces.findMany({
     where: sql`${jsonExtract(workspaces.vcsRepo, '$.identifier')} = ${details.repoFullName}`,
@@ -1510,6 +1516,7 @@ async function matchingOAuthWorkspaces(
     if (workspace.vcsRepo?.identifier !== details.repoFullName) continue;
     const configuredProvider = await configuredVcsProvider(workspace);
     if (configuredProvider !== undefined && configuredProvider !== provider) continue;
+    if (details.githubInstallationId !== undefined && githubInstallationPredicate !== undefined && !await githubInstallationPredicate(workspace, details.githubInstallationId)) continue;
     if (await matchesVcsTrigger(workspace, details)) branchMatchedWorkspaces.push(workspace);
   }
   return branchMatchedWorkspaces;
@@ -1604,6 +1611,25 @@ async function persistWebhookRun(
   await auditLog("create", "runs", runId, null, workspace.orgId, webhookAuditAttributes(provider, kind, details, workspace, credentials));
 }
 
+async function createWebhookRun(
+  provider: VcsProvider,
+  kind: "push" | "pull_request",
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  details: DeepReadonly<WebhookDetails>,
+  workspace: DeepReadonly<typeof workspaces.$inferSelect>,
+  resolveCredentials: () => Promise<ProviderCredentials | undefined>,
+): Promise<OAuthWebhookRun | undefined> {
+  const isSpeculative = kind === "pull_request";
+  if (isSpeculative && workspace.speculativeEnabled === false) return undefined;
+  if (!isSpeculative && workspace.autoApplyRunTrigger !== true && workspace.queueAllRuns !== true) return undefined;
+  const credentials = await resolveCredentials();
+  const configurationVersionId = `cv-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
+  const runId = `run-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
+  await persistWebhookRun(provider, kind, details, workspace, credentials, configurationVersionId, runId, isSpeculative);
+  if (credentials !== undefined) void reportRunVcsStatus(runId, "pending");
+  return { configurationVersionId, credentials };
+}
+
 async function createOAuthWebhookRun(
   provider: OAuthProvider,
   kind: "push" | "pull_request",
@@ -1611,15 +1637,7 @@ async function createOAuthWebhookRun(
   details: DeepReadonly<WebhookDetails>,
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
 ): Promise<OAuthWebhookRun | undefined> {
-  const isSpeculative = kind === "pull_request";
-  if (isSpeculative && workspace.speculativeEnabled === false) return undefined;
-  if (!isSpeculative && workspace.autoApplyRunTrigger !== true && workspace.queueAllRuns !== true) return undefined;
-  const credentials = await oauthProviderCredentials(workspace, provider);
-  const configurationVersionId = `cv-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
-  const runId = `run-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
-  await persistWebhookRun(provider, kind, details, workspace, credentials, configurationVersionId, runId, isSpeculative);
-  if (credentials !== undefined) void reportRunVcsStatus(runId, "pending");
-  return { configurationVersionId, credentials };
+  return createWebhookRun(provider, kind, details, workspace, async (): Promise<ProviderCredentials | undefined> => oauthProviderCredentials(workspace, provider));
 }
 
 type OAuthWebhookDownloads = Map<string, { credentials: ProviderCredentials; configurationVersionIds: string[] }>;
@@ -1646,7 +1664,7 @@ async function handleOAuthProviderWebhook(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   details: DeepReadonly<WebhookDetails>,
 ): Promise<boolean> {
-  const branchMatchedWorkspaces = await matchingOAuthWorkspaces(provider, details);
+  const branchMatchedWorkspaces = await matchingWebhookWorkspaces(provider, details);
   // PR/MR payloads carry no changed-file list (kanban 1.6). Bitbucket push
   // payloads do not carry one either, so both paths fetch a complete list.
   // Failures fall back to the empty set (trigger-all) so a VCS API outage can
@@ -1718,24 +1736,6 @@ export async function syncRegistryModulesForTag(repoFullName: string, tag: strin
   }
 }
 
-async function matchingGithubWorkspaces(
-  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
-  details: DeepReadonly<WebhookDetails>,
-): Promise<readonly DeepReadonly<typeof workspaces.$inferSelect>[]> {
-  const candidates = await db.query.workspaces.findMany({
-    where: sql`${jsonExtract(workspaces.vcsRepo, '$.identifier')} = ${details.repoFullName}`,
-  });
-  const branchMatchedWorkspaces: DeepReadonly<typeof workspaces.$inferSelect>[] = [];
-  for (const workspace of candidates) {
-    if (workspace.vcsRepo?.identifier !== details.repoFullName) continue;
-    const configuredProvider = await configuredVcsProvider(workspace);
-    if (configuredProvider !== undefined && configuredProvider !== "github") continue;
-    if (details.githubInstallationId !== undefined && !await matchesGithubAppInstallation(workspace, details.githubInstallationId)) continue;
-    if (await matchesVcsTrigger(workspace, details)) branchMatchedWorkspaces.push(workspace);
-  }
-  return branchMatchedWorkspaces;
-}
-
 type GithubTriggerSelection = Readonly<{
   triggerDetails: DeepReadonly<WebhookDetails>;
   matchedWorkspaces: readonly DeepReadonly<typeof workspaces.$inferSelect>[];
@@ -1774,15 +1774,8 @@ async function createGithubWebhookRun(
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- installation credentials are cached during one webhook
   installationTokens: Map<string, string | null>,
 ): Promise<OAuthWebhookRun | undefined> {
-  const isSpeculative = eventName === "pull_request";
-  if (isSpeculative && workspace.speculativeEnabled === false) return undefined;
-  if (!isSpeculative && workspace.autoApplyRunTrigger !== true && workspace.queueAllRuns !== true) return undefined;
-  const credentials = await githubCredentials(workspace, installationTokens);
-  const configurationVersionId = `cv-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
-  const runId = `run-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
-  await persistWebhookRun("github", eventName === "pull_request" ? "pull_request" : "push", details, workspace, credentials, configurationVersionId, runId, isSpeculative);
-  if (credentials !== undefined) void reportRunVcsStatus(runId, "pending");
-  return { configurationVersionId, credentials };
+  const kind = eventName === "pull_request" ? "pull_request" : "push";
+  return createWebhookRun("github", kind, details, workspace, async (): Promise<ProviderCredentials | undefined> => githubCredentials(workspace, installationTokens));
 }
 
 export async function handleGithubWebhook(eventName: string, payload: WebhookPayload): Promise<void> {
@@ -1800,7 +1793,7 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
     });
   }
 
-  const branchMatchedWorkspaces = await matchingGithubWorkspaces(details);
+  const branchMatchedWorkspaces = await matchingWebhookWorkspaces("github", details, matchesGithubAppInstallation);
   const installationTokens = new Map<string, string | null>();
   const { matchedWorkspaces } = await githubTriggerSelection(eventName, details, branchMatchedWorkspaces, installationTokens);
 
