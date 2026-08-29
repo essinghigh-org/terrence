@@ -38,32 +38,16 @@ function safeRelativePath(value: string): boolean {
     && !normalized.split("/").includes("..");
 }
 
-export function moduleTestConfiguration(input: unknown): ModuleTestConfiguration | Readonly<{ error: string }> {
-  const payload = input !== null && typeof input === "object" ? input as Record<string, unknown> : {};
-  const rawData = payload.data;
-  const data = rawData !== null && typeof rawData === "object" ? rawData as Record<string, unknown> : {};
-  if (data.type !== undefined && data.type !== "module-tests" && data.type !== "test-runs") {
-    return { error: "data.type must be module-tests or test-runs" };
-  }
-  const rawAttributes = data.attributes;
-  const attributes = rawAttributes !== null && typeof rawAttributes === "object"
-    ? rawAttributes as Record<string, unknown>
-    : {};
-  const verbose = attributes.verbose ?? false;
-  const rawFilters = attributes.filters ?? [];
-  const testDirectory = attributes["test-directory"] ?? "tests";
-  const rawVariables = attributes.variables ?? [];
-  if (typeof verbose !== "boolean") return { error: "verbose must be a boolean" };
-  if (
-    !Array.isArray(rawFilters)
-    || rawFilters.length > 100
-    || rawFilters.some((filter: unknown): boolean => typeof filter !== "string" || !safeRelativePath(filter))
-  ) {
-    return { error: "filters must contain at most 100 safe relative paths" };
-  }
-  if (typeof testDirectory !== "string" || !safeRelativePath(testDirectory)) {
-    return { error: "test-directory must be a safe relative path" };
-  }
+type ParsedModuleTestVariables = Readonly<{ key: string; value: string }>[] | Readonly<{ error: string }>;
+
+type ModuleTestInputFields = Readonly<{
+  verbose: unknown;
+  rawFilters: unknown;
+  testDirectory: unknown;
+  rawVariables: unknown;
+}> | Readonly<{ error: string }>;
+
+function parseModuleTestVariables(rawVariables: unknown): ParsedModuleTestVariables {
   if (!Array.isArray(rawVariables)) return { error: "variables must be an array" };
   const variables: { key: string; value: string }[] = [];
   for (const rawVariable of rawVariables) {
@@ -82,6 +66,45 @@ export function moduleTestConfiguration(input: unknown): ModuleTestConfiguration
     if (value === undefined) return { error: `variable ${key} must have a string, number, or boolean value` };
     variables.push({ key, value });
   }
+  return variables;
+}
+
+function moduleTestInputFields(input: unknown): ModuleTestInputFields {
+  const payload = input !== null && typeof input === "object" ? input as Record<string, unknown> : {};
+  const rawData = payload.data;
+  const data = rawData !== null && typeof rawData === "object" ? rawData as Record<string, unknown> : {};
+  if (data.type !== undefined && data.type !== "module-tests" && data.type !== "test-runs") {
+    return { error: "data.type must be module-tests or test-runs" };
+  }
+  const rawAttributes = data.attributes;
+  const attributes = rawAttributes !== null && typeof rawAttributes === "object"
+    ? rawAttributes as Record<string, unknown>
+    : {};
+  return {
+    verbose: attributes.verbose ?? false,
+    rawFilters: attributes.filters ?? [],
+    testDirectory: attributes["test-directory"] ?? "tests",
+    rawVariables: attributes.variables ?? [],
+  };
+}
+
+export function moduleTestConfiguration(input: unknown): ModuleTestConfiguration | Readonly<{ error: string }> {
+  const fields = moduleTestInputFields(input);
+  if ("error" in fields) return fields;
+  const { verbose, rawFilters, testDirectory, rawVariables } = fields;
+  if (typeof verbose !== "boolean") return { error: "verbose must be a boolean" };
+  if (
+    !Array.isArray(rawFilters)
+    || rawFilters.length > 100
+    || rawFilters.some((filter: unknown): boolean => typeof filter !== "string" || !safeRelativePath(filter))
+  ) {
+    return { error: "filters must contain at most 100 safe relative paths" };
+  }
+  if (typeof testDirectory !== "string" || !safeRelativePath(testDirectory)) {
+    return { error: "test-directory must be a safe relative path" };
+  }
+  const variables = parseModuleTestVariables(rawVariables);
+  if (!Array.isArray(variables)) return variables;
   return {
     verbose,
     filters: rawFilters as string[],
