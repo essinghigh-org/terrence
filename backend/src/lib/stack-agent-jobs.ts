@@ -107,6 +107,62 @@ async function jobDetails(job: StackAgentJob): Promise<ClaimedStackAgentJob | un
   return { job, stack, configuration, deploymentRun, step };
 }
 
+type StackAgentClaimAttempt =
+  | Readonly<{ kind: "empty" }>
+  | Readonly<{ kind: "retry" }>
+  | Readonly<{ kind: "claimed"; details: ClaimedStackAgentJob }>;
+
+async function claimStackAgentAttempt(
+  agent: StackAgent,
+  acceptedPhases: readonly string[],
+  binaries: readonly string[],
+): Promise<StackAgentClaimAttempt> {
+  const candidate = await db.query.stackAgentJobs.findFirst({
+    where: and(
+      eq(stackAgentJobs.agentPoolId, agent.agentPoolId),
+      eq(stackAgentJobs.status, "queued"),
+      inArray(stackAgentJobs.phase, [...acceptedPhases]),
+      inArray(stackAgentJobs.iacBinary, binaries),
+    ),
+    orderBy: [asc(stackAgentJobs.createdAt)],
+  });
+  if (candidate === undefined) return { kind: "empty" };
+  const now = Date.now();
+  const claimed = await db.update(stackAgentJobs).set({ agentId: agent.id, status: "claimed", claimedAt: now, updatedAt: now }).where(and(
+    eq(stackAgentJobs.id, candidate.id),
+    eq(stackAgentJobs.status, "queued"),
+  )).returning();
+  const job = claimed[0];
+  if (job === undefined) return { kind: "retry" };
+  const details = await jobDetails(job);
+  if (details === undefined) {
+    await db.update(stackAgentJobs).set({ status: "errored", errorMessage: "Stack deployment step no longer exists", completedAt: now, updatedAt: now }).where(eq(stackAgentJobs.id, job.id));
+    return { kind: "retry" };
+  }
+  if (["succeeded", "failed", "canceled"].includes(details.deploymentRun.status)) {
+    await db.update(stackAgentJobs).set({ status: "canceled", agentId: null, completedAt: now, updatedAt: now }).where(eq(stackAgentJobs.id, job.id));
+    return { kind: "retry" };
+  }
+  const nextStatus = job.phase === "plan" ? "planning" : "applying";
+  await db.update(stackRecords).set({ status: "running", updatedAt: now }).where(and(eq(stackRecords.id, details.step.id), inArray(stackRecords.status, ["queued", "approved", "pending"])));
+  await db.update(stackRecords).set({ status: nextStatus, updatedAt: now }).where(and(eq(stackRecords.id, details.deploymentRun.id), inArray(stackRecords.status, ["queued", "approved", "acquiring_lock", "planning", "applying"])));
+  await db.update(agents).set({ status: "busy", lastPingAt: now }).where(eq(agents.id, agent.id));
+  const rawFencingToken = (details.step.payload ?? {})["fencing-token"];
+  const fencingToken = typeof rawFencingToken === "number" && Number.isInteger(rawFencingToken) ? rawFencingToken : undefined;
+  const needsLock = (details.step.payload ?? {})["requires-state-lock"] === true;
+  const lockHeld = !needsLock || (
+    fencingToken !== undefined
+    && await refreshStackStateLock(details.stack.id, details.deploymentRun.name ?? "default", details.deploymentRun.id, fencingToken)
+  );
+  if (!lockHeld) {
+    await db.update(stackAgentJobs).set({ agentId: null, status: "queued", claimedAt: null, updatedAt: Date.now() }).where(eq(stackAgentJobs.id, job.id));
+    await db.update(agents).set({ status: "idle", lastPingAt: Date.now() }).where(eq(agents.id, agent.id));
+    await enqueueDurableJob("stack-deployment", { runId: details.deploymentRun.id }, { dedupeKey: `stack-run:${details.deploymentRun.id}`, runAfter: Date.now() + 1000, rescheduleRunning: true });
+    return { kind: "retry" };
+  }
+  return { kind: "claimed", details: { ...details, job } };
+}
+
 export async function claimStackAgentJob(
   agent: StackAgent,
   acceptedPhases: readonly string[] = ["plan", "apply"],
@@ -123,46 +179,9 @@ export async function claimStackAgentJob(
   if (acceptedPhases.length === 0) return undefined;
   const binaries = agent.iacBinaries !== null && agent.iacBinaries.length > 0 ? agent.iacBinaries : ["terraform"];
   for (let attempt = 0; attempt < 10; attempt += 1) {
-    const candidate = await db.query.stackAgentJobs.findFirst({
-      where: and(
-        eq(stackAgentJobs.agentPoolId, agent.agentPoolId),
-        eq(stackAgentJobs.status, "queued"),
-        inArray(stackAgentJobs.phase, [...acceptedPhases]),
-        inArray(stackAgentJobs.iacBinary, binaries),
-      ),
-      orderBy: [asc(stackAgentJobs.createdAt)],
-    });
-    if (candidate === undefined) return undefined;
-    const now = Date.now();
-    const claimed = await db.update(stackAgentJobs).set({ agentId: agent.id, status: "claimed", claimedAt: now, updatedAt: now }).where(and(
-      eq(stackAgentJobs.id, candidate.id),
-      eq(stackAgentJobs.status, "queued"),
-    )).returning();
-    const job = claimed[0];
-    if (job === undefined) continue;
-    const details = await jobDetails(job);
-    if (details === undefined) {
-      await db.update(stackAgentJobs).set({ status: "errored", errorMessage: "Stack deployment step no longer exists", completedAt: now, updatedAt: now }).where(eq(stackAgentJobs.id, job.id));
-      continue;
-    }
-    if (["succeeded", "failed", "canceled"].includes(details.deploymentRun.status)) {
-      await db.update(stackAgentJobs).set({ status: "canceled", agentId: null, completedAt: now, updatedAt: now }).where(eq(stackAgentJobs.id, job.id));
-      continue;
-    }
-    const nextStatus = job.phase === "plan" ? "planning" : "applying";
-    await db.update(stackRecords).set({ status: "running", updatedAt: now }).where(and(eq(stackRecords.id, details.step.id), inArray(stackRecords.status, ["queued", "approved", "pending"])));
-    await db.update(stackRecords).set({ status: nextStatus, updatedAt: now }).where(and(eq(stackRecords.id, details.deploymentRun.id), inArray(stackRecords.status, ["queued", "approved", "acquiring_lock", "planning", "applying"])));
-    await db.update(agents).set({ status: "busy", lastPingAt: now }).where(eq(agents.id, agent.id));
-    const rawFencingToken = (details.step.payload ?? {})["fencing-token"];
-    const fencingToken = typeof rawFencingToken === "number" && Number.isInteger(rawFencingToken) ? rawFencingToken : undefined;
-    const needsLock = (details.step.payload ?? {})["requires-state-lock"] === true;
-    if (needsLock && (fencingToken === undefined || !await refreshStackStateLock(details.stack.id, details.deploymentRun.name ?? "default", details.deploymentRun.id, fencingToken))) {
-      await db.update(stackAgentJobs).set({ agentId: null, status: "queued", claimedAt: null, updatedAt: Date.now() }).where(eq(stackAgentJobs.id, job.id));
-      await db.update(agents).set({ status: "idle", lastPingAt: Date.now() }).where(eq(agents.id, agent.id));
-      await enqueueDurableJob("stack-deployment", { runId: details.deploymentRun.id }, { dedupeKey: `stack-run:${details.deploymentRun.id}`, runAfter: Date.now() + 1000, rescheduleRunning: true });
-      continue;
-    }
-    return { ...details, job };
+    const result = await claimStackAgentAttempt(agent, acceptedPhases, binaries);
+    if (result.kind === "empty") return undefined;
+    if (result.kind === "claimed") return result.details;
   }
   return undefined;
 }
@@ -180,10 +199,6 @@ export async function heartbeatStackAgentJob(agentId: string, jobId: string): Pr
   return typeof rawFencingToken === "number" && Number.isInteger(rawFencingToken)
     ? refreshStackStateLock(claimed.stack.id, claimed.deploymentRun.name ?? "default", claimed.deploymentRun.id, rawFencingToken)
     : false;
-}
-
-function boolResult(result: Readonly<Record<string, unknown>>, key: string): boolean {
-  return result[key] === true;
 }
 
 function stackStatePayload(result: Readonly<Record<string, unknown>> | null | undefined): string | null {
@@ -220,61 +235,135 @@ async function persistCompletedApplyState(outcome: StackAgentCompletionOutcome):
   }
 }
 
+type StackAgentTransaction = typeof db;
+
+type StackAgentCompletionContext = Readonly<{
+  job: StackAgentJob;
+  step: StackRecord;
+}>;
+
+function validateStackAgentCompletion(completion: StackAgentJobCompletion): void {
+  // Terraform state can be arbitrarily large — validate the metadata envelope
+  // without the state payload so a valid apply with a large state is not
+  // rejected. State is persisted as a file artifact via saveStackState.
+  const { state: _state, json_state: _jsonState, ...metadata } = completion.result as Record<string, unknown>;
+  if (!isStackAgentResultValid(metadata)) throw new Error(`stack agent result metadata exceeds ${MAX_STACK_AGENT_RESULT_BYTES} bytes or structural limits`);
+}
+
+async function stackAgentCompletionContext(
+  tx: StackAgentTransaction,
+  agentId: string,
+  jobId: string,
+): Promise<StackAgentCompletionContext | undefined> {
+  const job = await tx.query.stackAgentJobs.findFirst({ where: and(eq(stackAgentJobs.id, jobId), eq(stackAgentJobs.agentId, agentId), eq(stackAgentJobs.status, "claimed")) });
+  if (job === undefined) return undefined;
+  const step = await tx.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, job.stepId), eq(stackRecords.recordType, "stack-deployment-steps")) });
+  if (step === undefined) return undefined;
+  return { job, step };
+}
+
+async function persistStackAgentCompletion(
+  tx: StackAgentTransaction,
+  agentId: string,
+  job: StackAgentJob,
+  completion: StackAgentJobCompletion,
+  now: number,
+): Promise<StackAgentJob | undefined> {
+  const jobStatus = completion.status === "completed" ? "completed" : "errored";
+  const updated = await tx.update(stackAgentJobs).set({ status: jobStatus, result: { ...completion.result }, errorMessage: completion.errorMessage, completedAt: now, updatedAt: now }).where(and(
+    eq(stackAgentJobs.id, job.id), eq(stackAgentJobs.agentId, agentId), eq(stackAgentJobs.status, "claimed"),
+  )).returning();
+  return updated[0];
+}
+
+async function stackAgentCompletionRun(tx: StackAgentTransaction, step: StackRecord): Promise<StackRecord | undefined> {
+  return step.parentId === null
+    ? undefined
+    : tx.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, step.parentId), eq(stackRecords.recordType, "stack-deployment-runs")) });
+}
+
+async function persistTerminalStackAgentCompletion(
+  tx: StackAgentTransaction,
+  agentId: string,
+  completed: StackAgentJob,
+  run: StackRecord,
+  now: number,
+): Promise<StackAgentCompletionOutcome | undefined> {
+  if (!["succeeded", "failed", "canceled"].includes(run.status)) return undefined;
+  await tx.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agentId));
+  return { job: completed, runStatus: run.status };
+}
+
+async function persistFailedStackAgentCompletion(
+  tx: StackAgentTransaction,
+  agentId: string,
+  job: StackAgentJob,
+  step: StackRecord,
+  run: StackRecord,
+  completion: StackAgentJobCompletion,
+  now: number,
+): Promise<StackAgentCompletionOutcome> {
+  const detail = completion.errorMessage ?? "Stack agent execution failed";
+  await tx.update(stackRecords).set({ status: "failed", payload: { ...(step.payload ?? {}), error: detail }, updatedAt: now }).where(eq(stackRecords.id, step.id));
+  await tx.update(stackRecords).set({ status: "failed", payload: { ...(run.payload ?? {}), error: detail }, updatedAt: now }).where(eq(stackRecords.id, run.id));
+  const fencingToken = payloadFencingToken(step);
+  await tx.update(stackStateLocks).set({ runId: null, leaseExpiresAt: null, releasedAt: now, updatedAt: now }).where(and(
+    eq(stackStateLocks.runId, run.id),
+    eq(stackStateLocks.stackId, job.stackId),
+    ...(fencingToken === undefined ? [] : [eq(stackStateLocks.fencingToken, fencingToken)]),
+  ));
+  await tx.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agentId));
+  return { job, runStatus: "failed" };
+}
+
+function completionFlag(result: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean {
+  return keys.some((key): boolean => result[key] === true);
+}
+
+async function persistSuccessfulStackAgentCompletion(
+  tx: StackAgentTransaction,
+  agentId: string,
+  job: StackAgentJob,
+  step: StackRecord,
+  run: StackRecord,
+  completion: StackAgentJobCompletion,
+  now: number,
+): Promise<StackAgentCompletionOutcome> {
+  const result = { ...(step.payload ?? {}), ...(completion.result), "agent-job-id": job.id };
+  const hasChanges = completionFlag(completion.result, ["hasChanges", "has-changes", "has_changes"]);
+  let runStatus = "step_completed";
+  const deferredChanges = completionFlag(completion.result, ["deferredChanges", "deferred-changes", "deferred_changes"]);
+  if (job.phase === "plan" && (hasChanges || deferredChanges)) {
+    await tx.update(stackRecords).set({ status: "pending_operator", payload: result, updatedAt: now }).where(eq(stackRecords.id, step.id));
+    runStatus = "pre_deploying_pending_operator";
+  } else {
+    await tx.update(stackRecords).set({ status: "completed", payload: result, updatedAt: now }).where(eq(stackRecords.id, step.id));
+  }
+  await tx.update(stackRecords).set({ status: runStatus, payload: { ...(run.payload ?? {}), lastAgentJobId: job.id }, updatedAt: now }).where(eq(stackRecords.id, run.id));
+  await tx.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agentId));
+  const fencingToken = payloadFencingToken(step);
+  return { job, runStatus, ...(fencingToken === undefined ? {} : { fencingToken }) };
+}
+
 export async function completeStackAgentJob(
   agentId: string,
   jobId: string,
   completion: StackAgentJobCompletion,
 ): Promise<StackAgentCompletionOutcome | undefined> {
-  const outcome = await db.transaction(async (tx): Promise<StackAgentCompletionOutcome | undefined> => {
-    // Terraform state can be arbitrarily large — validate the metadata envelope
-    // without the state payload so a valid apply with a large state is not
-    // rejected. State is persisted as a file artifact via saveStackState.
-    const { state: _state, json_state: _jsonState, ...metadata } = completion.result as Record<string, unknown>;
-    if (!isStackAgentResultValid(metadata)) throw new Error(`stack agent result metadata exceeds ${MAX_STACK_AGENT_RESULT_BYTES} bytes or structural limits`);
-    const job = await tx.query.stackAgentJobs.findFirst({ where: and(eq(stackAgentJobs.id, jobId), eq(stackAgentJobs.agentId, agentId), eq(stackAgentJobs.status, "claimed")) });
-    if (job === undefined) return undefined;
-    const step = await tx.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, job.stepId), eq(stackRecords.recordType, "stack-deployment-steps")) });
-    if (step === undefined) return undefined;
+  const outcome = await db.transaction(async (transaction): Promise<StackAgentCompletionOutcome | undefined> => {
+    validateStackAgentCompletion(completion);
+    const tx = transaction as unknown as StackAgentTransaction;
+    const context = await stackAgentCompletionContext(tx, agentId, jobId);
+    if (context === undefined) return undefined;
     const now = Date.now();
-    const jobStatus = completion.status === "completed" ? "completed" : "errored";
-    const updated = await tx.update(stackAgentJobs).set({ status: jobStatus, result: { ...completion.result }, errorMessage: completion.errorMessage, completedAt: now, updatedAt: now }).where(and(
-      eq(stackAgentJobs.id, job.id), eq(stackAgentJobs.agentId, agentId), eq(stackAgentJobs.status, "claimed"),
-    )).returning();
-    const completed = updated[0];
+    const completed = await persistStackAgentCompletion(tx, agentId, context.job, completion, now);
     if (completed === undefined) return undefined;
-    const run = step.parentId === null ? undefined : await tx.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, step.parentId), eq(stackRecords.recordType, "stack-deployment-runs")) });
+    const run = await stackAgentCompletionRun(tx, context.step);
     if (run === undefined) return undefined;
-    if (["succeeded", "failed", "canceled"].includes(run.status)) {
-      await tx.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agentId));
-      return { job: completed, runStatus: run.status };
-    }
-    if (completion.status === "errored") {
-      await tx.update(stackRecords).set({ status: "failed", payload: { ...(step.payload ?? {}), error: completion.errorMessage ?? "Stack agent execution failed" }, updatedAt: now }).where(eq(stackRecords.id, step.id));
-      await tx.update(stackRecords).set({ status: "failed", payload: { ...(run.payload ?? {}), error: completion.errorMessage ?? "Stack agent execution failed" }, updatedAt: now }).where(eq(stackRecords.id, run.id));
-      const fencingToken = payloadFencingToken(step);
-      await tx.update(stackStateLocks).set({ runId: null, leaseExpiresAt: null, releasedAt: now, updatedAt: now }).where(and(
-        eq(stackStateLocks.runId, run.id),
-        eq(stackStateLocks.stackId, job.stackId),
-        ...(fencingToken === undefined ? [] : [eq(stackStateLocks.fencingToken, fencingToken)]),
-      ));
-      await tx.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agentId));
-      return { job: completed, runStatus: "failed" };
-    }
-    const result = { ...(step.payload ?? {}), ...(completion.result), "agent-job-id": job.id };
-    const hasChanges = boolResult(completion.result, "hasChanges") || boolResult(completion.result, "has-changes") || boolResult(completion.result, "has_changes");
-    let runStatus = "step_completed";
-    const deferredChanges = boolResult(completion.result, "deferredChanges") || boolResult(completion.result, "deferred-changes") || boolResult(completion.result, "deferred_changes");
-    if (job.phase === "plan" && (hasChanges || deferredChanges)) {
-      await tx.update(stackRecords).set({ status: "pending_operator", payload: result, updatedAt: now }).where(eq(stackRecords.id, step.id));
-      runStatus = "pre_deploying_pending_operator";
-    } else {
-      await tx.update(stackRecords).set({ status: "completed", payload: result, updatedAt: now }).where(eq(stackRecords.id, step.id));
-    }
-    await tx.update(stackRecords).set({ status: runStatus, payload: { ...(run.payload ?? {}), lastAgentJobId: job.id }, updatedAt: now }).where(eq(stackRecords.id, run.id));
-    await tx.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agentId));
-    const rawFencingToken = (step.payload ?? {})["fencing-token"];
-    const fencingToken = typeof rawFencingToken === "number" && Number.isInteger(rawFencingToken) ? rawFencingToken : undefined;
-    return { job: completed, runStatus, ...(fencingToken === undefined ? {} : { fencingToken }) };
+    const terminal = await persistTerminalStackAgentCompletion(tx, agentId, completed, run, now);
+    if (terminal !== undefined) return terminal;
+    if (completion.status === "errored") return persistFailedStackAgentCompletion(tx, agentId, completed, context.step, run, completion, now);
+    return persistSuccessfulStackAgentCompletion(tx, agentId, completed, context.step, run, completion, now);
   });
   if (outcome !== undefined && outcome.runStatus === "step_completed") {
     await persistCompletedApplyState(outcome);
