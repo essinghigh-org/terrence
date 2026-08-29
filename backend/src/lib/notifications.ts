@@ -370,6 +370,63 @@ function emailContent(payload: Readonly<Record<string, unknown>>): Readonly<{ su
   return { subject, text, html: `<html><body>${htmlLines.join("")}</body></html>` };
 }
 
+async function emailMemberIds(configuration: NotificationConfiguration): Promise<readonly string[]> {
+  if ((configuration.teamId === null && configuration.projectId === null)
+    || (configuration.emailAllMembers !== true && (configuration.emailUserIds ?? []).length === 0)) return [];
+  if (configuration.emailAllMembers === true) {
+    if (configuration.teamId !== null) {
+      return (await db.query.teamMemberships.findMany({ where: eq(teamMemberships.teamId, configuration.teamId), columns: { userId: true } }))
+        .map((member): string => member.userId);
+    }
+    if (configuration.projectId !== null) {
+      const project = await db.query.projects.findFirst({ where: eq(projects.id, configuration.projectId), columns: { orgId: true } });
+      if (project === undefined) return [];
+      return (await db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.orgId, project.orgId), columns: { userId: true } }))
+        .map((member): string => member.userId);
+    }
+    return [];
+  }
+  return configuration.emailUserIds ?? [];
+}
+
+async function emailRecipientList(configuration: NotificationConfiguration): Promise<readonly string[]> {
+  const recipients = new Set(configuration.emailAddresses ?? []);
+  const memberIds = await emailMemberIds(configuration);
+  if (memberIds.length > 0) {
+    const memberRows = await db.query.users.findMany({ where: inArray(users.id, [...new Set(memberIds)]), columns: { email: true } });
+    for (const member of memberRows) if (typeof member.email === "string" && member.email !== "") recipients.add(member.email);
+  }
+  return [...recipients];
+}
+
+function missingEmailConfiguration(
+  enabled: boolean,
+  host: string | null,
+  senderEmail: string | null,
+  recipientCount: number,
+): string | null {
+  if (!enabled) return "SMTP is disabled";
+  if (host === null) return "SMTP host is not configured";
+  if (senderEmail === null) return "SMTP sender email is not configured";
+  if (recipientCount === 0) return "no email recipients";
+  return null;
+}
+
+async function smtpNotificationSettings(
+  smtp: Readonly<Record<string, unknown>>,
+  host: string,
+  senderEmail: string,
+): Promise<Parameters<typeof sendEmail>[0]> {
+  return {
+    host,
+    port: typeof smtp.port === "number" ? smtp.port : 25,
+    username: typeof smtp.username === "string" && smtp.username !== "" ? smtp.username : null,
+    password: typeof smtp.password === "string" ? await decryptSecret(smtp.password) : null,
+    senderEmail,
+    auth: smtp.auth === "none" || smtp.auth === "login" || smtp.auth === "plain" ? smtp.auth : "plain",
+  };
+}
+
 /**
  * Deliver an email notification through the organization's SMTP settings.
  * Without configured SMTP the delivery is recorded as unsuccessful, so
@@ -383,32 +440,10 @@ async function deliverEmailNotification(
   const enabled = smtp.enabled === true;
   const host = typeof smtp.host === "string" && smtp.host !== "" ? smtp.host : null;
   const senderEmail = typeof smtp["sender-email"] === "string" && smtp["sender-email"] !== "" ? smtp["sender-email"] : null;
-  const recipients = new Set(configuration.emailAddresses ?? []);
-  if ((configuration.teamId !== null || configuration.projectId !== null) && (configuration.emailAllMembers === true || (configuration.emailUserIds ?? []).length > 0)) {
-    const memberIds = configuration.emailAllMembers
-      ? configuration.teamId !== null
-        ? (await db.query.teamMemberships.findMany({ where: eq(teamMemberships.teamId, configuration.teamId), columns: { userId: true } })).map((member): string => member.userId)
-        : configuration.projectId !== null
-          ? (await db.query.projects.findFirst({ where: eq(projects.id, configuration.projectId), columns: { orgId: true } }).then(async (project) => project === undefined ? [] : (await db.query.organizationMemberships.findMany({ where: eq(organizationMemberships.orgId, project.orgId), columns: { userId: true } })).map((member): string => member.userId)))
-          : []
-      : configuration.emailUserIds ?? [];
-    if (memberIds.length > 0) {
-      const memberRows = await db.query.users.findMany({ where: inArray(users.id, [...new Set(memberIds)]), columns: { email: true } });
-      for (const member of memberRows) if (typeof member.email === "string" && member.email !== "") recipients.add(member.email);
-    }
-  }
-  const recipientList = [...recipients];
+  const recipientList = await emailRecipientList(configuration);
   const now = new Date().toISOString();
 
-  const missing = !enabled
-    ? "SMTP is disabled"
-    : host === null
-      ? "SMTP host is not configured"
-      : senderEmail === null
-        ? "SMTP sender email is not configured"
-          : recipientList.length === 0
-          ? "no email recipients"
-          : null;
+  const missing = missingEmailConfiguration(enabled, host, senderEmail, recipientList.length);
   if (missing !== null) {
     return {
       body: `Email delivery skipped: ${missing}`,
@@ -424,14 +459,7 @@ async function deliverEmailNotification(
   const { subject, text, html } = emailContent(payload);
   try {
     await sendEmail(
-      {
-        host: host!,
-        port: typeof smtp.port === "number" ? smtp.port : 25,
-        username: typeof smtp.username === "string" && smtp.username !== "" ? smtp.username : null,
-        password: typeof smtp.password === "string" ? await decryptSecret(smtp.password) : null,
-        senderEmail: senderEmail!,
-        auth: smtp.auth === "none" || smtp.auth === "login" || smtp.auth === "plain" ? smtp.auth : "plain",
-      },
+      await smtpNotificationSettings(smtp, host!, senderEmail!),
       { to: recipientList, subject, text, html },
     );
     recordBreakerSuccess(configuration.id);
