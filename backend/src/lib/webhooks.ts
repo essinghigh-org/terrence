@@ -831,6 +831,48 @@ async function bitbucketCommitFiles(
   }
 }
 
+function bitbucketDataCenterPath(item: unknown): string | undefined {
+  const path = asRecord(item)?.path;
+  const pathRecord = asRecord(path);
+  const pathValue = pathRecord === undefined ? undefined : Reflect.get(pathRecord, "toString");
+  return typeof pathValue === "string"
+    ? pathValue
+    : typeof path === "string" ? path : undefined;
+}
+
+async function bitbucketDataCenterPullRequestFiles(
+  apiUrl: string,
+  owner: string | undefined,
+  repo: string | undefined,
+  pullRequestNumber: number,
+  auth: Readonly<Record<string, string>>,
+): Promise<ReadonlySet<string> | undefined> {
+  const files = new Set<string>();
+  const encodedOwner = encodeURIComponent(owner ?? "");
+  const encodedRepo = encodeURIComponent(repo ?? "");
+  const pullRequest = String(pullRequestNumber);
+  let dcUrl: string | null = `${apiUrl}/rest/api/1.0/projects/${encodedOwner}/repos/${encodedRepo}/pull-requests/${pullRequest}/changes?limit=100`;
+  for (let page = 1; dcUrl !== null && page <= 10; page += 1) {
+    const dcResponse = await fetch(dcUrl, { headers: auth, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+    if (!dcResponse.ok) return undefined;
+    const dcBody = await dcResponse.json() as unknown;
+    const dcValues = asRecord(dcBody)?.values;
+    if (!Array.isArray(dcValues)) return undefined;
+    for (const item of dcValues) {
+      const pathName = bitbucketDataCenterPath(item);
+      if (typeof pathName !== "string" || pathName === "") return undefined;
+      files.add(pathName);
+    }
+    const nextStart = asRecord(dcBody)?.nextPageStart;
+    dcUrl = typeof nextStart === "number" && Number.isFinite(nextStart)
+      ? `${apiUrl}/rest/api/1.0/projects/${encodedOwner}/repos/${encodedRepo}/pull-requests/${pullRequest}/changes?limit=100&start=${nextStart}`
+      : null;
+  }
+  // A partial Data Center response is unsafe for file triggers.
+  if (dcUrl !== null) return undefined;
+  return files;
+}
+
 async function bitbucketPullRequestFiles(
   workspace: DeepReadonly<typeof workspaces.$inferSelect> | undefined,
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
@@ -842,9 +884,6 @@ async function bitbucketPullRequestFiles(
     if (credentials === undefined) return undefined;
     const [owner, repo] = details.repoFullName.split("/");
     const auth = { Authorization: `Bearer ${credentials.token}`, Accept: "application/json" };
-    const files = new Set<string>();
-    const MAX_PAGES = 10;
-
     // Bitbucket Cloud diffstat: values[].new.path (new.path absent for
     // deleted files; fall back to old.path so deletions still filter).
     const cloudUrl = `${credentials.apiUrl}/repositories/${encodeURIComponent(owner ?? "")}/${encodeURIComponent(repo ?? "")}/pullrequests/${String(details.pullRequestNumber)}/diffstat?pagelen=100`;
@@ -855,31 +894,7 @@ async function bitbucketPullRequestFiles(
     if (cloudResult.receivedPage) return undefined;
 
     // Bitbucket Data Center: changes endpoint with path.toString entries.
-    let dcUrl: string | null = `${credentials.apiUrl}/rest/api/1.0/projects/${encodeURIComponent(owner ?? "")}/repos/${encodeURIComponent(repo ?? "")}/pull-requests/${String(details.pullRequestNumber)}/changes?limit=100`;
-    for (let page = 1; dcUrl !== null && page <= MAX_PAGES; page += 1) {
-      const dcResponse = await fetch(dcUrl, { headers: auth, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
-      if (!dcResponse.ok) return undefined;
-      const dcBody = await dcResponse.json() as unknown;
-      const dcValues = asRecord(dcBody)?.values;
-      if (!Array.isArray(dcValues)) return undefined;
-      for (const item of dcValues) {
-        const path = asRecord(item)?.path;
-        const pathRecord = asRecord(path);
-        const pathValue = pathRecord === undefined ? undefined : Reflect.get(pathRecord, "toString");
-        const pathName = typeof pathValue === "string"
-          ? pathValue
-          : typeof path === "string" ? path : undefined;
-        if (typeof pathName !== "string" || pathName === "") return undefined;
-        files.add(pathName);
-      }
-      const nextStart = asRecord(dcBody)?.nextPageStart;
-      dcUrl = typeof nextStart === "number" && Number.isFinite(nextStart)
-        ? `${credentials.apiUrl}/rest/api/1.0/projects/${encodeURIComponent(owner ?? "")}/repos/${encodeURIComponent(repo ?? "")}/pull-requests/${String(details.pullRequestNumber)}/changes?limit=100&start=${nextStart}`
-        : null;
-    }
-    // A partial Data Center response is unsafe for file triggers.
-    if (dcUrl !== null) return undefined;
-    return files;
+    return await bitbucketDataCenterPullRequestFiles(credentials.apiUrl, owner, repo, details.pullRequestNumber, auth);
   } catch {
     return undefined;
   }
