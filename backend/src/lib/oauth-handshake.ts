@@ -17,6 +17,7 @@
 import { and, eq, gt, lt, sql } from "drizzle-orm";
 import { db } from "../db";
 import { oauthHandshakeStates } from "../db/schema";
+import { decryptSecret, encryptSecret } from "./secrets";
 
 export type OAuthHandshakePayload = Record<string, unknown>;
 
@@ -26,8 +27,12 @@ export async function putOAuthHandshakeState(
   expiresAt: number,
   payload: Readonly<OAuthHandshakePayload>,
 ): Promise<void> {
-  await db.insert(oauthHandshakeStates).values({ id, expiresAt, payload })
-    .onConflictDoUpdate({ target: oauthHandshakeStates.id, set: { expiresAt, payload } });
+  const storedPayload: OAuthHandshakePayload = { ...payload };
+  if (typeof storedPayload.requestTokenSecret === "string") {
+    storedPayload.requestTokenSecret = await encryptSecret(storedPayload.requestTokenSecret, { force: true });
+  }
+  await db.insert(oauthHandshakeStates).values({ id, expiresAt, payload: storedPayload })
+    .onConflictDoUpdate({ target: oauthHandshakeStates.id, set: { expiresAt, payload: storedPayload } });
 }
 
 /**
@@ -48,7 +53,12 @@ export async function takeOAuthHandshakeState<T extends OAuthHandshakePayload>(
   // Single atomic statement: the row is deleted only if it exists AND is
   // unexpired, so two concurrent callbacks (or two replicas) can never both
   // receive the same state.
-  return row?.payload as T | undefined;
+  const payload = row?.payload as T | undefined;
+  if (payload === undefined || typeof payload.requestTokenSecret !== "string") return payload;
+  return {
+    ...payload,
+    requestTokenSecret: await decryptSecret(payload.requestTokenSecret),
+  };
 }
 
 /** Read a handshake without consuming it. Returns undefined when unknown or expired. */

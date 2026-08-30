@@ -222,8 +222,8 @@ export function isEncryptedSecret(value: string): boolean {
     && Buffer.from(parts[3] ?? "", "base64").length === 16;
 }
 
-export async function encryptSecret(value: string): Promise<string> {
-  if (isEncryptedSecret(value)) return value;
+export async function encryptSecret(value: string, options: Readonly<{ force?: boolean }> = {}): Promise<string> {
+  if (options.force !== true && isEncryptedSecret(value)) return value;
 
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", await loadEncryptionKey(), iv);

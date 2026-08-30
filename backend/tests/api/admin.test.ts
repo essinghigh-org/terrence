@@ -15,6 +15,7 @@ import {
   user2FA,
 } from "../../src/db/schema";
 import { invalidateSettingsCache } from "../../src/lib/settings";
+import { decryptSecret, isEncryptedSecret } from "../../src/lib/secrets";
 
 describe("Admin Operations API contract", () => {
   const suffix = crypto.randomUUID();
@@ -278,12 +279,22 @@ describe("Admin Operations API contract", () => {
     await db.delete(users).where(eq(users.id, targetId));
   });
 
-  it("never returns cost or Twilio credential material from admin settings", async () => {
+  it("never returns cost, Twilio, or SMTP credential material from admin settings", async () => {
     const originalCost = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "cost") });
     const originalTwilio = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "twilio") });
+    const originalSmtp = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "smtp") });
+    const forgedInfracost = `enc:v1:${Buffer.alloc(12).toString("base64")}:${Buffer.alloc(16).toString("base64")}:plaintext-cost-secret`;
     try {
       const costPatch = await request("/api/v2/admin/cost-estimation-settings", "PATCH", {
-        data: { attributes: { "infracost-api-key": "secret-infracost", "aws-access-key-id": "AKIA-secret", "aws-secret-key": "secret-aws" } },
+        data: {
+          attributes: {
+            "infracost-api-key": forgedInfracost,
+            "aws-access-key-id": "AKIA-secret",
+            "aws-secret-key": "secret-aws",
+            "gcp-credentials": { client_email: "cost@example.com", private_key: "gcp-private-key" },
+            "azure-client-secret": "secret-azure",
+          },
+        },
       });
       expect(costPatch.status).toBe(200);
       const costGet = await request("/api/v2/admin/cost-estimation-settings");
@@ -292,6 +303,20 @@ describe("Admin Operations API contract", () => {
       expect(costAttributes["aws-secret-key"]).toBeUndefined();
       expect(costAttributes["infracost-api-key-set"]).toBeTrue();
       expect(costAttributes["aws-access-key-id-set"]).toBeTrue();
+      const storedCost = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "cost") });
+      const storedCostValues = storedCost?.values ?? {};
+      for (const key of ["infracost-api-key", "aws-secret-key", "gcp-credentials", "azure-client-secret"]) {
+        const value = storedCostValues[key];
+        expect(typeof value).toBe("string");
+        expect(isEncryptedSecret(value as string)).toBeTrue();
+      }
+      expect(await decryptSecret(storedCostValues["infracost-api-key"] as string)).toBe(forgedInfracost);
+      expect(await decryptSecret(storedCostValues["aws-secret-key"] as string)).toBe("secret-aws");
+      expect(JSON.parse(await decryptSecret(storedCostValues["gcp-credentials"] as string))).toEqual({
+        client_email: "cost@example.com",
+        private_key: "gcp-private-key",
+      });
+      expect(await decryptSecret(storedCostValues["azure-client-secret"] as string)).toBe("secret-azure");
 
       const twilioPatch = await request("/api/v2/admin/twilio-settings", "PATCH", {
         data: { attributes: { "auth-token": "secret-twilio" } },
@@ -301,11 +326,31 @@ describe("Admin Operations API contract", () => {
       const twilioAttributes = (await twilioGet.json()).data.attributes as Record<string, unknown>;
       expect(twilioAttributes["auth-token"]).toBeUndefined();
       expect(twilioAttributes["auth-token-set"]).toBeTrue();
+      const storedTwilio = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "twilio") });
+      const storedAuthToken = storedTwilio?.values["auth-token"];
+      expect(typeof storedAuthToken).toBe("string");
+      expect(isEncryptedSecret(storedAuthToken as string)).toBeTrue();
+      expect(await decryptSecret(storedAuthToken as string)).toBe("secret-twilio");
+
+      const smtpPatch = await request("/api/v2/admin/smtp-settings", "PATCH", {
+        data: { attributes: { enabled: true, host: "smtp.example.com", password: "secret-smtp" } },
+      });
+      expect(smtpPatch.status).toBe(200);
+      const smtpAttributes = (await smtpPatch.json()).data.attributes as Record<string, unknown>;
+      expect(smtpAttributes.password).toBeUndefined();
+      expect(smtpAttributes["password-set"]).toBeTrue();
+      const storedSmtp = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "smtp") });
+      const storedSmtpPassword = storedSmtp?.values.password;
+      expect(typeof storedSmtpPassword).toBe("string");
+      expect(isEncryptedSecret(storedSmtpPassword as string)).toBeTrue();
+      expect(await decryptSecret(storedSmtpPassword as string)).toBe("secret-smtp");
     } finally {
       if (originalCost === undefined) await db.delete(adminSettings).where(eq(adminSettings.id, "cost"));
       else await db.update(adminSettings).set({ values: originalCost.values, updatedAt: originalCost.updatedAt }).where(eq(adminSettings.id, "cost"));
       if (originalTwilio === undefined) await db.delete(adminSettings).where(eq(adminSettings.id, "twilio"));
       else await db.update(adminSettings).set({ values: originalTwilio.values, updatedAt: originalTwilio.updatedAt }).where(eq(adminSettings.id, "twilio"));
+      if (originalSmtp === undefined) await db.delete(adminSettings).where(eq(adminSettings.id, "smtp"));
+      else await db.update(adminSettings).set({ values: originalSmtp.values, updatedAt: originalSmtp.updatedAt }).where(eq(adminSettings.id, "smtp"));
       invalidateSettingsCache();
     }
   });

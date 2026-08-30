@@ -14,6 +14,7 @@ import { checkOrganizationPermission, findAuthorizedRun, findAuthorizedWorkspace
 import { authPlugin } from "../auth";
 import { organizationName } from "../lib/response";
 import { cachedOrgByName } from "../lib/cached-lookups";
+import { encryptSecret } from "../lib/secrets";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -179,7 +180,9 @@ const createOrgRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId:
   const description = typeof attrs.description === "string" ? attrs.description : null;
   const category = typeof attrs.category === "string" && attrs.category.trim() !== "" ? attrs.category : "general";
   const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : true;
-  const hmacKey = typeof attrs["hmac-key"] === "string" ? attrs["hmac-key"] : null;
+  const hmacKey = typeof attrs["hmac-key"] === "string" && attrs["hmac-key"] !== ""
+    ? await encryptSecret(attrs["hmac-key"], { force: true })
+    : null;
   const globalConfiguration = parseGlobalConfig(attrs["global-configuration"]);
   const globalUrlError = globalRunTaskUrlError(url, globalConfiguration, enabled);
   if (globalUrlError !== undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: globalUrlError }] }; }
@@ -214,7 +217,11 @@ const updateRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: to
     updates.url = attrs.url.trim();
   }
   if (typeof attrs.category === "string" && attrs.category.trim() !== "") updates.category = attrs.category;
-  if (attrs["hmac-key"] !== undefined) updates.hmacKey = typeof attrs["hmac-key"] === "string" ? attrs["hmac-key"] : null;
+  if (attrs["hmac-key"] !== undefined) {
+    updates.hmacKey = typeof attrs["hmac-key"] === "string" && attrs["hmac-key"] !== ""
+      ? await encryptSecret(attrs["hmac-key"], { force: true })
+      : null;
+  }
   if (typeof attrs.enabled === "boolean") updates.enabled = attrs.enabled;
   if (attrs["global-configuration"] !== undefined) {
     updates.globalConfiguration = parseGlobalConfig(attrs["global-configuration"]);

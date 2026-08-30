@@ -15,6 +15,7 @@ import {
   workspaces,
 } from "../../src/db/schema";
 import { executeRun } from "../../src/worker";
+import { decryptSecret, isEncryptedSecret } from "../../src/lib/secrets";
 
 describe("team token workspace authorization", () => {
   const suffix = crypto.randomUUID();
@@ -348,6 +349,45 @@ describe("team token workspace authorization", () => {
     expect((await request(`/api/v2/workspaces/${workspaceId}/run-tasks`, tokens.custom, "POST", bindingBody)).status).toBe(404);
     expect((await request(`/api/v2/workspaces/${workspaceId}/run-tasks`, tokens.manager, "POST", bindingBody)).status).toBe(201);
     expect((await request(`/api/v2/workspaces/${workspaceId}/run-tasks/${runTaskId}`, tokens.manager, "DELETE")).status).toBe(204);
+  });
+
+  it("encrypts run-task HMAC keys on API create and update", async () => {
+    const forgedHmacKey = `enc:v1:${Buffer.alloc(12).toString("base64")}:${Buffer.alloc(16).toString("base64")}:plaintext-task-secret`;
+    const createResponse = await request(`/api/v2/organizations/${orgName}/tasks`, tokens.plan, "POST", {
+      data: {
+        type: "tasks",
+        attributes: {
+          name: `encrypted-task-${suffix}`,
+          url: "https://example.test/encrypted-run-task",
+          "hmac-key": forgedHmacKey,
+        },
+      },
+    });
+    expect(createResponse.status).toBe(201);
+    const created = await responseData<{ id: string }>(createResponse);
+    let rawTask = await db.query.runTasks.findFirst({ where: eq(runTasks.id, created.id) });
+    expect(rawTask?.hmacKey).toBeString();
+    expect(isEncryptedSecret(rawTask?.hmacKey ?? "")).toBeTrue();
+    expect(await decryptSecret(rawTask?.hmacKey ?? "")).toBe(forgedHmacKey);
+
+    const updateResponse = await request(`/api/v2/tasks/${created.id}`, tokens.plan, "PATCH", {
+      data: { type: "tasks", attributes: { "hmac-key": forgedHmacKey } },
+    });
+    expect(updateResponse.status).toBe(200);
+    rawTask = await db.query.runTasks.findFirst({ where: eq(runTasks.id, created.id) });
+    expect(isEncryptedSecret(rawTask?.hmacKey ?? "")).toBeTrue();
+    expect(await decryptSecret(rawTask?.hmacKey ?? "")).toBe(forgedHmacKey);
+
+    const normalUpdateResponse = await request(`/api/v2/tasks/${created.id}`, tokens.plan, "PATCH", {
+      data: { type: "tasks", attributes: { "hmac-key": "updated-run-task-secret" } },
+    });
+    expect(normalUpdateResponse.status).toBe(200);
+    rawTask = await db.query.runTasks.findFirst({ where: eq(runTasks.id, created.id) });
+    expect(isEncryptedSecret(rawTask?.hmacKey ?? "")).toBeTrue();
+    expect(await decryptSecret(rawTask?.hmacKey ?? "")).toBe("updated-run-task-secret");
+
+    expect((await request(`/api/v2/tasks/${created.id}`, tokens.plan)).status).toBe(200);
+    expect((await request(`/api/v2/tasks/${created.id}`, tokens.plan, "DELETE")).status).toBe(204);
   });
 
   it("returns included workspace outputs to readers without state-read access", async () => {

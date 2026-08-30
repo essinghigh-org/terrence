@@ -12,7 +12,6 @@ import { workloadIdentityKeys } from "../../db/schema";
 import { count, desc } from "drizzle-orm";
 import { sendEmail } from "../../lib/smtp";
 import { normalizeEmail } from "../../lib/identity";
-import { decryptSecret, encryptSecret } from "../../lib/secrets";
 
 function hidden(set: ParamCtx["set"]): Record<string, unknown> {
   (set as { status: number }).status = 404;
@@ -78,9 +77,6 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
     const updated = { ...attrs };
     delete updated["test-email-address"];
-    if (typeof updated.password === "string" && updated.password !== "") {
-      updated.password = await encryptSecret(updated.password);
-    }
     return smtpSettingsResource(await updateSettings("smtp", updated));
   })
   .post("/api/v2/admin/smtp-settings/test", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
@@ -102,7 +98,7 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
           host,
           port: typeof settings.port === "number" ? settings.port : 25,
           username: typeof settings.username === "string" && settings.username !== "" ? settings.username : null,
-          password: typeof settings.password === "string" ? await decryptSecret(settings.password) : null,
+          password: typeof settings.password === "string" ? settings.password : null,
           senderEmail,
           auth: settings.auth === "none" || settings.auth === "login" || settings.auth === "plain" ? settings.auth : "plain",
         },

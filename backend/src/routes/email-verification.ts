@@ -4,7 +4,6 @@ import { db } from "../db";
 import { emailVerificationTokens, users } from "../db/schema";
 import { authPlugin } from "../auth";
 import { apiURL, auditLog } from "../lib/utils";
-import { decryptSecret } from "../lib/secrets";
 import { generateAuthenticationToken, hashAuthenticationToken, tokenHashCandidates } from "../lib/token-service";
 import { normalizeEmail } from "../lib/identity";
 import { getSettings } from "../lib/settings";
@@ -108,7 +107,7 @@ export const emailVerificationRoutes = new Elysia({ name: "email-verification" }
           host,
           port: typeof smtp.port === "number" ? smtp.port : 25,
           username: typeof smtp.username === "string" && smtp.username !== "" ? smtp.username : null,
-          password: typeof smtp.password === "string" ? await decryptSecret(smtp.password) : null,
+          password: typeof smtp.password === "string" ? smtp.password : null,
           senderEmail,
           auth: smtp.auth === "none" || smtp.auth === "login" || smtp.auth === "plain" ? smtp.auth : "plain",
         },

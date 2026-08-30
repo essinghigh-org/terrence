@@ -4,7 +4,7 @@ import type { users, organizations, workspaces, runs} from "../../db/schema";
 import { registryPartnerships, samlSettings, adminSettings } from "../../db/schema";
 import { eq } from "drizzle-orm";
 import { AvatarService } from "../../lib/avatars";
-import { type Settings, getSettings, invalidateSettingsCache, normalizePlanExplainerBaseUrl } from "../../lib/settings";
+import { type Settings, encryptSettingsValues, getSettings, invalidateSettingsCache, normalizePlanExplainerBaseUrl } from "../../lib/settings";
 import { type DeepReadonly, apiURL } from "../../lib/utils";
 import { withDbLock } from "../../lib/db-lock";
 import type { SetObj } from "./types";
@@ -145,7 +145,8 @@ export async function updateSettings(group: string, attrs: Settings): Promise<Se
   for (const key of Object.keys(attrs)) {
     if (attrs[key] !== undefined) values[key] = attrs[key];
   }
-  await db.insert(adminSettings).values({ id: group, values, updatedAt: Date.now() }).onConflictDoUpdate({ target: adminSettings.id, set: { values, updatedAt: Date.now() } });
+  const storedValues = await encryptSettingsValues(group, values);
+  await db.insert(adminSettings).values({ id: group, values: storedValues, updatedAt: Date.now() }).onConflictDoUpdate({ target: adminSettings.id, set: { values: storedValues, updatedAt: Date.now() } });
   invalidateSettingsCache();
   return values;
 }

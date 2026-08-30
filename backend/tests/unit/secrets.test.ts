@@ -53,6 +53,16 @@ describe("isEncryptedSecret", () => {
     const mod = await import("../../src/lib/secrets");
     expect(mod.isEncryptedSecret("plain-value")).toBe(false);
   });
+  it("force-encrypts plaintext that mimics an encrypted envelope", async () => {
+    const mod = await import("../../src/lib/secrets");
+    const forged = `enc:v1:${Buffer.alloc(12).toString("base64")}:${Buffer.alloc(16).toString("base64")}:plaintext-secret`;
+
+    expect(await mod.encryptSecret(forged)).toBe(forged);
+    const encrypted = await mod.encryptSecret(forged, { force: true });
+    expect(encrypted).not.toBe(forged);
+    expect(mod.isEncryptedSecret(encrypted)).toBe(true);
+    expect(await mod.decryptSecret(encrypted)).toBe(forged);
+  });
 });
 
 describe("per-installation KDF salt (4.10)", () => {

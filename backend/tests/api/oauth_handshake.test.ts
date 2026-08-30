@@ -7,6 +7,7 @@ import {
   apiTokens,
   oauthClientProjects,
   oauthClients,
+  oauthHandshakeStates,
   oauthTokens,
   organizationMemberships,
   organizations,
@@ -14,6 +15,7 @@ import {
   users,
 } from "../../src/db/schema";
 import { decryptSecret, isEncryptedSecret } from "../../src/lib/secrets";
+import { putOAuthHandshakeState, takeOAuthHandshakeState } from "../../src/lib/oauth-handshake";
 import { legacyHashAuthenticationToken } from "../../src/lib/token-service";
 
 function oauthPercentEncode(value: string): string {
@@ -239,6 +241,20 @@ describe("VCS OAuth handshakes", () => {
     await db.delete(users).where(eq(users.id, otherUserId));
   });
 
+  test("force-encrypts OAuth request-token secrets that mimic envelopes", async () => {
+    const id = `oauth-forged-secret-${suffix}`;
+    const forged = `enc:v1:${Buffer.alloc(12).toString("base64")}:${Buffer.alloc(16).toString("base64")}:plaintext-oauth-secret`;
+    await putOAuthHandshakeState(id, Date.now() + 60_000, { requestTokenSecret: forged });
+
+    const stored = await db.query.oauthHandshakeStates.findFirst({ where: eq(oauthHandshakeStates.id, id) });
+    const storedSecret = (stored?.payload as Record<string, unknown> | undefined)?.requestTokenSecret;
+    expect(typeof storedSecret).toBe("string");
+    expect(storedSecret).not.toBe(forged);
+    expect(isEncryptedSecret(storedSecret as string)).toBeTrue();
+    expect(await decryptSecret(storedSecret as string)).toBe(forged);
+    expect((await takeOAuthHandshakeState(id))?.requestTokenSecret).toBe(forged);
+  });
+
   test("enforces organization and project scope before redirecting", async () => {
     expect((await request(`/api/v2/oauth-clients/${clientId}/connect`, null)).status).toBe(404);
     expect((await request(`/api/v2/oauth-clients/${clientId}/connect`, otherApiToken)).status).toBe(404);
@@ -350,6 +366,13 @@ describe("VCS OAuth handshakes", () => {
     const providerCallback = new URL(callbackUrl);
     const state = providerCallback.searchParams.get("state");
     expect(state).not.toBeEmpty();
+    const storedHandshake = await db.query.oauthHandshakeStates.findFirst({
+      where: eq(oauthHandshakeStates.id, state!),
+    });
+    const storedHandshakePayload = storedHandshake?.payload as Record<string, unknown> | undefined;
+    const storedRequestTokenSecret = storedHandshakePayload?.requestTokenSecret;
+    expect(typeof storedRequestTokenSecret).toBe("string");
+    expect(isEncryptedSecret(typeof storedRequestTokenSecret === "string" ? storedRequestTokenSecret : "")).toBeTrue();
 
     providerCallback.searchParams.set("oauth_token", "request-token");
     providerCallback.searchParams.set("oauth_verifier", "provider-verifier");
