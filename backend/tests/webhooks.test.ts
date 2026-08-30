@@ -834,4 +834,14 @@ describe("GitHub Webhooks", () => {
     await waitForDelivery(deliveryId);
     expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, secondWorkspaceId) })).toHaveLength(0);
   });
+
+  test("reopened pull request creates a speculative run", async () => {
+    const deliveryId = crypto.randomUUID();
+    const payload = pullRequestPayload();
+    payload.action = "reopened";
+    expect((await sendWebhook("pull_request", payload, deliveryId)).status).toBe(200);
+    const runList = await waitForRuns((items): boolean => items.some((run): boolean => run.planOnly));
+    await waitForDelivery(deliveryId);
+    expect(runList.find((run): boolean => run.workspaceId === workspaceId && run.planOnly)).toBeDefined();
+  });
 });
