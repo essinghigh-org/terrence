@@ -95,7 +95,10 @@ function truncateSyslogFrame(frame: string): Buffer {
       : `${header}${
           structuredDataEndIndex === 1 ? "-" : remainder.slice(0, structuredDataEndIndex + 1)
         } `;
-  const messageStart = structuredDataEndIndex === null ? 2 : structuredDataEndIndex + 2;
+  const messageStart =
+    structuredDataEndIndex === null || structuredDataEndIndex === 1
+      ? 2
+      : structuredDataEndIndex + 2;
   const message = remainder.slice(messageStart);
   const safePrefix =
     structuredDataEndIndex !== null && Buffer.byteLength(prefix, "utf8") >= MAX_UDP_PAYLOAD_BYTES
