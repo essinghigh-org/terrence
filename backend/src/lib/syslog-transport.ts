@@ -17,6 +17,8 @@ export type SyslogTarget = Readonly<{
   port: number;
 }>;
 
+const MAX_UDP_PAYLOAD_BYTES = 1024;
+
 /** Parse TERRENCE_SYSLOG_TARGET ("udp://host:514", "tcp://host:514"). */
 export function parseSyslogTarget(raw: string | undefined): SyslogTarget | null {
   const value = raw?.trim() ?? "";
@@ -31,6 +33,57 @@ export function parseSyslogTarget(raw: string | undefined): SyslogTarget | null 
 }
 
 let udpSocket: Socket | null = null;
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
+  let result = "";
+  for (const character of value) {
+    if (Buffer.byteLength(result + character, "utf8") > maxBytes) break;
+    result += character;
+  }
+  return result;
+}
+
+function structuredDataEnd(value: string): number | null {
+  if (value.startsWith("- ")) return 1;
+  if (!value.startsWith("[")) return null;
+  for (let index = 1; index < value.length; index += 1) {
+    if (value[index] === "\\") {
+      index += 1;
+    } else if (value[index] === "]" && value[index + 1] === " ") {
+      return index;
+    }
+  }
+  return null;
+}
+
+function truncateSyslogFrame(frame: string): Buffer {
+  const headerMatch = /^<\d+>1 \S+ \S+ \S+ \S+ \S+ /.exec(frame);
+  if (headerMatch === null) return Buffer.from(truncateUtf8(frame, MAX_UDP_PAYLOAD_BYTES), "utf8");
+  const header = headerMatch[0];
+  const remainder = frame.slice(header.length);
+  const structuredDataEndIndex = structuredDataEnd(remainder);
+  const prefix =
+    structuredDataEndIndex === null
+      ? `${header}- `
+      : `${header}${
+          structuredDataEndIndex === 1 ? "-" : remainder.slice(0, structuredDataEndIndex + 1)
+        } `;
+  const messageStart = structuredDataEndIndex === null ? 2 : structuredDataEndIndex + 2;
+  const message = remainder.slice(messageStart);
+  const safePrefix =
+    structuredDataEndIndex !== null && Buffer.byteLength(prefix, "utf8") >= MAX_UDP_PAYLOAD_BYTES
+      ? `${header}- `
+      : prefix;
+  const prefixBytes = Buffer.byteLength(safePrefix, "utf8");
+  if (prefixBytes >= MAX_UDP_PAYLOAD_BYTES) {
+    return Buffer.from(truncateUtf8(safePrefix, MAX_UDP_PAYLOAD_BYTES), "utf8");
+  }
+  return Buffer.from(
+    truncateUtf8(safePrefix + message, MAX_UDP_PAYLOAD_BYTES),
+    "utf8",
+  );
+}
 
 function getUdpSocket(): Socket {
   udpSocket ??= createSocket("udp4");
@@ -47,9 +100,10 @@ export function sendSyslogFrame(target: SyslogTarget, frame: string): void {
   const payload = Buffer.from(frame, "utf8");
   try {
     if (target.transport === "udp") {
-      // RFC 5426: one syslog message per datagram; truncate at 1024 bytes
-      // (the minimum every receiver must accept) rather than fragmenting.
-      const datagram = payload.length > 1024 ? payload.subarray(0, 1024) : payload;
+      // RFC 5426: one syslog message per datagram; keep the frame valid while
+      // truncating at 1024 bytes (the minimum every receiver must accept).
+      const datagram =
+        payload.length > MAX_UDP_PAYLOAD_BYTES ? truncateSyslogFrame(frame) : payload;
       getUdpSocket().send(datagram, target.port, target.host);
     } else {
       // RFC 6587 octet counting: "LEN MSG" so messages with newlines
