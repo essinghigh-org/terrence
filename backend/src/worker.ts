@@ -44,7 +44,7 @@ import { isStorageDegraded, isDiskFullError, markStorageDegraded } from "./lib/s
 import { workspaceExecutionDirectory } from "./workspace";
 import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
 import { canTransitionRunStatus, isTerminalRunStatus } from "./lib/run-status";
-import { FINAL_RUN_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, signedApiURL, decodeStatePayload } from "./lib/utils";
+import { FINAL_RUN_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, apiURL, signedApiURL, decodeStatePayload } from "./lib/utils";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./lib/url-safety";
 import {
   emptyCostEstimate,
@@ -1158,6 +1158,7 @@ async function executeRunTasks(
   if (executions.size === 0) return true;
 
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+  const taskAccessToken = (await runTokenStateFor(runId, workspace)).token;
   let proceed = true;
   const configuredTimeout = Number(process.env.RUN_TASK_TIMEOUT_MS ?? 3_600_000);
   const timeoutMs = Number.isSafeInteger(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 3_600_000;
@@ -1197,6 +1198,7 @@ async function executeRunTasks(
       "PATCH",
       Math.ceil(timeoutMs / 1000) + 60,
     );
+    const planJsonApiUrl = apiURL({ url: callbackBase }, `/api/v2/plans/plan-${runId}/json-output`);
     const payload = JSON.stringify({
       payload_version: 1,
       stage,
@@ -1204,7 +1206,8 @@ async function executeRunTasks(
       configuration_version_id: run?.configurationVersionId ?? null,
       is_speculative: run?.planOnly === true,
       organization_name: orgName,
-      plan_json_api_url: `/api/v2/plans/plan-${runId}/json-output`,
+      access_token: taskAccessToken,
+      plan_json_api_url: planJsonApiUrl,
       run_created_at: new Date(run?.createdAt ?? Date.now()).toISOString(),
       run_id: runId,
       run_message: run?.message ?? "",
@@ -2228,6 +2231,8 @@ async function executeApplyImpl(runId: string): Promise<void> {
       }
     } catch (error: unknown) {
       await writeLog(runId, "apply", `[terrence] Post-apply run tasks could not complete: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      await cleanupRunToken(runId);
     }
     if (savedPlanRequired) await cleanupSavedPlan(runId);
   } catch (error: unknown) {
@@ -3542,7 +3547,25 @@ async function trackLocalExecution<T>(promise: Promise<T>): Promise<T> {
  * minted per run and reused across plan and apply; it is revoked when the run
  * reaches a terminal state and expires at most 24h after minting.
  */
-const runTokenCache = new Map<string, { token: string; tfrcPath: string; oidc: Partial<Record<"plan" | "apply", Record<string, string>>> }>();
+type RunTokenState = {
+  token: string;
+  tfrcPath: string;
+  oidc: Partial<Record<"plan" | "apply", Record<string, string>>>;
+};
+const runTokenCache = new Map<string, RunTokenState>();
+
+async function runTokenStateFor(
+  runId: string,
+  workspace: Readonly<{ id: string; orgId: string }>,
+): Promise<RunTokenState> {
+  const cached = runTokenCache.get(runId);
+  if (cached !== undefined) return cached;
+  const token = await mintRunToken(runId, workspace.id, workspace.orgId);
+  const tfrcPath = await writeRunCliConfig(runWorkDir(runId), registryHostname(), token);
+  const value: RunTokenState = { token, tfrcPath, oidc: {} };
+  runTokenCache.set(runId, value);
+  return value;
+}
 
 function registryHostname(): string {
   let hostname = "localhost";
@@ -3572,14 +3595,7 @@ async function runTerraformEnv(
   phase: "plan" | "apply",
   variables: readonly Readonly<{ key: string; value: string; category: string }>[],
 ): Promise<Record<string, string>> {
-  const cached = runTokenCache.get(runId);
-  const base = cached ?? await (async (): Promise<{ token: string; tfrcPath: string; oidc: Partial<Record<"plan" | "apply", Record<string, string>>> }> => {
-    const token = await mintRunToken(runId, workspace.id, workspace.orgId);
-    const tfrcPath = await writeRunCliConfig(runWorkDir(runId), registryHostname(), token);
-    const value = { token, tfrcPath, oidc: {} };
-    runTokenCache.set(runId, value);
-    return value;
-  })();
+  const base = await runTokenStateFor(runId, workspace);
   const existingIdentity = base.oidc[phase];
   if (existingIdentity !== undefined) return { TF_CLI_CONFIG_FILE: base.tfrcPath, ...existingIdentity };
   const oidcConfigured = variables.some((variable) => variable.category === "env" && (

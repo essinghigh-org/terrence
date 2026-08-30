@@ -572,6 +572,23 @@ function encodeRunCursor(run: Readonly<{ createdAt: number; id: string }>): stri
   return Buffer.from(JSON.stringify({ createdAt: run.createdAt, id: run.id })).toString("base64url");
 }
 
+async function authorizedPlanWorkspace(
+  runId: string,
+  run: Readonly<typeof runs.$inferSelect>,
+  runContext: ParamCtx["run"],
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null,
+): Promise<typeof workspaces.$inferSelect | undefined> {
+  if (runContext !== undefined && runContext !== null) {
+    if (runContext.runId !== runId || runContext.workspaceId !== run.workspaceId) return undefined;
+    return db.query.workspaces.findFirst({
+      where: and(eq(workspaces.id, run.workspaceId), eq(workspaces.orgId, runContext.organizationId)),
+    });
+  }
+  return findAuthorizedWorkspace(run.workspaceId, userId, tokenOrgId, tokenTeamId);
+}
+
 export const runRoutes = new Elysia({ name: "runs" })
   .use(authPlugin)
   .get("/api/v2/workspaces/:workspace_id/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -1320,12 +1337,12 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: commentResource(enrichedSingle ?? comment) };
   })
   // --- Plan JSON Output ---
-  .get("/api/v2/plans/:plan_id/json-output", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/plans/:plan_id/json-output", async ({ params, user, orgId, teamId, run: runContext, set }: ParamCtx): Promise<unknown> => {
     const planId = params.plan_id ?? "";
     const runId = planId.replace(/^plan-/, "");
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId ?? null, teamId ?? null);
+    const ws = await authorizedPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const planJson = await readPlanJsonArtifact(runId);
     if (planJson === undefined) {
@@ -1340,10 +1357,10 @@ export const runRoutes = new Elysia({ name: "runs" })
     }
     return planJson;
   })
-  .get("/api/v2/runs/:run_id/plan/json-output", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id/plan/json-output", async ({ params, user, orgId, teamId, run: runContext, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-    if (run === undefined || await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId ?? null, teamId ?? null) === undefined) {
+    if (run === undefined || await authorizedPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null) === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }

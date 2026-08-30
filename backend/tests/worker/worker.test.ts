@@ -442,6 +442,8 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
     const { executeRun } = await import("./src/worker.ts");
 
     const received = [];
+    let planJsonAccessStatus;
+    let planJsonApiUrl;
     const server = Bun.serve({
       port: 0,
       async fetch(request) {
@@ -454,6 +456,11 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
         const taskPayload = JSON.parse(body);
         const stage = taskPayload.stage;
         if (stage === "post_plan") {
+          planJsonApiUrl = taskPayload.plan_json_api_url;
+          const planResponse = await app.handle(new Request(planJsonApiUrl, {
+            headers: { Authorization: "Bearer " + taskPayload.access_token },
+          }));
+          planJsonAccessStatus = planResponse.status;
           setTimeout(() => {
             void app.handle(new Request(taskPayload.task_result_callback_url, {
               method: "PATCH",
@@ -546,6 +553,8 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
     });
     console.log(JSON.stringify({
       status: completed?.status,
+      planJsonAccessStatus,
+      planJsonApiUrlIsAbsolute: typeof planJsonApiUrl === "string" && new URL(planJsonApiUrl).origin !== "",
       statusKeys: Object.keys(completed?.statusTimestamps ?? {}),
       tasks: received.map(({ body, path, signature }) => ({
         path,
@@ -560,6 +569,8 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
   `, { NODE_ENV: "test", SIMULATED_RUNS: "true", RUN_TASK_TIMEOUT_MS: "1000", TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS: "true" });
 
   expect(result.status).toBe("applied");
+  expect(result.planJsonAccessStatus).toBe(200);
+  expect(result.planJsonApiUrlIsAbsolute).toBe(true);
   expect(result.tasks).toEqual([
     { path: "/global", stage: "pre_apply", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },
     { path: "/global", stage: "post_apply", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },
