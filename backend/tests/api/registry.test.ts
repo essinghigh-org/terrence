@@ -146,6 +146,14 @@ describe("Private Module & Provider Registries API contract", () => {
     expect(body.data.map(({ id }: { id: string }): string => id)).toEqual([vcsId]);
     expect(body.meta.pagination["total-count"]).toBe(1);
     expect(body.meta.providers).toEqual(["aws", "azurerm"]);
+
+    const sortedResponse = await request(
+      `/api/v2/organizations/${orgName}/registry-modules?q=search&sort=name&page[size]=10`,
+    );
+    expect((await sortedResponse.json()).data.map(({ id }: { id: string }): string => id)).toEqual([manualId, vcsId]);
+
+    const providersResponse = await request(`/api/v2/organizations/${orgName}/registry-providers`);
+    expect((await providersResponse.json()).meta["total-count"]).toBe(0);
     await db.delete(registryModules).where(inArray(registryModules.id, [manualId, vcsId]));
   });
 

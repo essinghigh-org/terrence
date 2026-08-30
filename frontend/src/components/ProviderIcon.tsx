@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { fetchApi } from "../lib/api";
 
 const iconCache = new Map<string, string | null>();
@@ -9,9 +9,9 @@ function normalizeProvider(providerName: string | null | undefined): string | nu
   if (typeof providerName !== "string" || providerName === "") return null;
   const parts = providerName.trim().split("/").filter((p): boolean => p !== "");
   if (parts.length < 2) return null;
-  const name = parts[parts.length - 1]!;
-  const ns = parts[parts.length - 2]!;
-  if (!/^[a-z0-9][a-z0-9-_]{0,63}$/i.test(ns) || !/^[a-z0-9][a-z0-9-_]{0,63}$/i.test(name)) return null;
+  const name = parts[parts.length - 1];
+  const ns = parts[parts.length - 2];
+  if (name === undefined || ns === undefined || !/^[a-z0-9][a-z0-9-_]{0,63}$/i.test(ns) || !/^[a-z0-9][a-z0-9-_]{0,63}$/i.test(name)) return null;
   return `${ns.toLowerCase()}/${name.toLowerCase()}`;
 }
 
@@ -25,8 +25,8 @@ async function flushPending(): Promise<void> {
       data?: { id: string; attributes: { "icon-url": string | null } }[];
     };
     for (const item of res.data ?? []) {
-      const key = String(item.id).toLowerCase();
-      const url = (item.attributes?.["icon-url"] as string | null) ?? null;
+      const key = item.id.toLowerCase();
+      const url = item.attributes["icon-url"] ?? null;
       iconCache.set(key, url);
     }
     for (const key of batch) {
@@ -45,21 +45,31 @@ function scheduleFetch(key: string): void {
   if (inflight !== null) return;
   // Coalesce multiple mounts in one tick
   inflight = new Promise<void>((resolve): void => {
-    queueMicrotask(async (): Promise<void> => {
-      while (pending.size > 0) {
-        await flushPending();
-      }
-      inflight = null;
-      resolve();
+    queueMicrotask((): void => {
+      const drain = async (): Promise<void> => {
+        while (pending.size > 0) {
+          await flushPending();
+        }
+      };
+      void drain().then(
+        (): void => {
+          inflight = null;
+          resolve();
+        },
+        (): void => {
+          inflight = null;
+          resolve();
+        },
+      );
     });
   });
 }
 
 export function useProviderIcon(providerName: string | null | undefined): string | null | undefined {
   const key = normalizeProvider(providerName);
-  const [url, setUrl] = useState<string | null | undefined>(() => (key === null ? null : iconCache.get(key)));
+  const [url, setUrl] = useState<string | null | undefined>((): string | null | undefined => (key === null ? null : iconCache.get(key)));
 
-  useEffect(() => {
+  useEffect((): (() => void) | undefined => {
     if (key === null) {
       setUrl(null);
       return;
@@ -106,13 +116,19 @@ export function useProviderIcon(providerName: string | null | undefined): string
 export function ProviderIcon({
   providerName,
   size = 14,
-}: Readonly<{ providerName: string | null | undefined; size?: number }>): React.JSX.Element | null {
+  alt = "",
+  fallback,
+}: Readonly<{ providerName: string | null | undefined; size?: number; alt?: string; fallback?: ReactNode }>): React.JSX.Element | ReactNode | null {
   const url = useProviderIcon(providerName);
-  if (url === undefined || url === null) return null;
+  const [imageFailed, setImageFailed] = useState(false);
+  useEffect((): void => {
+    setImageFailed(false);
+  }, [url]);
+  if (url === undefined || url === null || imageFailed) return fallback ?? null;
   return (
     <img
       src={url}
-      alt=""
+      alt={alt}
       width={size}
       height={size}
       loading="lazy"
@@ -120,8 +136,8 @@ export function ProviderIcon({
       title={providerName ?? undefined}
       className="shrink-0 object-contain"
       style={{ width: size, height: size }}
-      onError={(event): void => {
-        (event.currentTarget as HTMLImageElement).style.display = "none";
+      onError={(): void => {
+        setImageFailed(true);
       }}
     />
   );

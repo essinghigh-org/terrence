@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 import { RegistrySettingsRedirect } from "../src/App";
+import { ProviderIcon } from "../src/components/ProviderIcon";
 import { Registry } from "../src/views/Registry";
 import { RegistryModuleDetail } from "../src/views/RegistryModuleDetail";
 import { isString } from "../src/lib/type-guards";
@@ -99,26 +100,37 @@ test("browses and filters registry cards with distinct module permissions", asyn
   globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     requests.push(url);
+    if (url.startsWith("/api/v2/provider-icons?")) return json({ data: [
+      { id: "hashicorp/aws", type: "provider-icons", attributes: { "icon-url": "/icons/providers/hashicorp-aws.svg" } },
+      { id: "acme/sendgrid", type: "provider-icons", attributes: { "icon-url": "/icons/providers/acme-sendgrid.svg" } },
+    ] });
     if (url === "/api/v2/organizations/acme") return json({ data: { attributes: { permissions: { "can-manage-providers": true, "can-manage-modules": false } } } });
-    if (url.startsWith("/api/v2/organizations/acme/registry-modules?")) return json({ data: [moduleResource()], meta: { pagination: { "total-pages": 2 }, providers: ["aws", "azurerm"] } });
+    if (url.startsWith("/api/v2/organizations/acme/registry-modules?")) return json({ data: [moduleResource()], meta: { pagination: { "total-pages": 2, "total-count": 1 }, providers: ["aws", "azurerm"] } });
     if (url === "/api/v2/organizations/acme/registry-providers") return json({ data: [{ id: "provider-sendgrid", attributes: { name: "sendgrid", namespace: "acme", "registry-name": "private", "created-at": "2026-08-01T12:00:00.000Z" } }] });
     throw new Error(`Unexpected request: ${url}`);
   }) as typeof fetch;
 
-  const view = render(<MemoryRouter initialEntries={["/app/acme/registry"]}><Routes><Route path="/app/:orgName/registry" element={<Registry />} /></Routes></MemoryRouter>);
+  const view = render(<MemoryRouter initialEntries={["/app/acme/registry"]}><Routes><Route path="/app/:orgName/registry" element={<><Registry /><LocationProbe /></>} /></Routes></MemoryRouter>);
   const title = await view.findByText("network");
   expect(title.closest("a")?.getAttribute("href")).toBe("/app/acme/registry/modules/acme/network/aws");
+  expect(view.getByText("acme/terraform-network")).toBeTruthy();
+  expect(view.getByText("Git tag")).toBeTruthy();
+  expect(view.getByText(/Ready · Synced/)).toBeTruthy();
+  await waitFor((): void => { expect(view.getByAltText("aws provider logo")).toBeTruthy(); });
   expect(view.queryByRole("button", { name: "Publish module" })).toBeNull();
   expect(view.getByRole("option", { name: "azurerm" })).toBeTruthy();
 
   changeInput(view.getByRole("searchbox", { name: "Search registry" }), "net");
   fireEvent.change(view.getByRole("combobox", { name: "Filter by provider" }), { target: { value: "aws" } });
   fireEvent.change(view.getByRole("combobox", { name: "Filter by publishing type" }), { target: { value: "vcs" } });
+  fireEvent.change(view.getByRole("combobox", { name: "Sort registry" }), { target: { value: "name" } });
   await waitFor((): void => {
     const latest = new URL(requests.filter((url): boolean => url.includes("registry-modules?")).at(-1) ?? "", "http://localhost");
     expect(latest.searchParams.get("q")).toBe("net");
     expect(latest.searchParams.get("filter[provider]")).toBe("aws");
     expect(latest.searchParams.get("filter[publishing_mechanism]")).toBe("vcs");
+    expect(latest.searchParams.get("sort")).toBe("name");
+    expect(view.getByText("/app/acme/registry?q=net&provider=aws&publishing=vcs&sort=name")).toBeTruthy();
   });
   fireEvent.click(view.getByRole("button", { name: "Next" }));
   await waitFor((): void => { expect(requests.some((url): boolean => url.includes("page%5Bnumber%5D=2"))).toBeTrue(); });
@@ -127,6 +139,31 @@ test("browses and filters registry cards with distinct module permissions", asyn
   changeInput(view.getByRole("searchbox", { name: "Search registry" }), "");
   const provider = await view.findByText("sendgrid");
   expect(provider.closest("a")?.getAttribute("href")).toBe("/app/acme/registry/providers/acme/sendgrid");
+  await waitFor((): void => { expect(view.getByAltText("sendgrid provider logo")).toBeTruthy(); });
+});
+
+test("renders the provider icon fallback after artwork loading fails", async () => {
+  // SAFETY: the mock's handling mirrors the provider-icon endpoint contract.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url.startsWith("/api/v2/provider-icons?")) return json({ data: [{
+      id: "example/widget",
+      type: "provider-icons",
+      attributes: { "icon-url": "/icons/providers/missing.svg" },
+    }] });
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const view = render(
+    <ProviderIcon
+      alt="widget provider logo"
+      fallback={<span data-testid="provider-icon-fallback">Provider icon fallback</span>}
+      providerName="example/widget"
+    />,
+  );
+  const image = await view.findByAltText("widget provider logo");
+  fireEvent.error(image);
+  await waitFor((): void => { expect(view.getByTestId("provider-icon-fallback")).toBeTruthy(); });
 });
 
 test("shows loading, retryable errors, and an honest empty state", async () => {
@@ -152,6 +189,21 @@ test("shows loading, retryable errors, and an honest empty state", async () => {
   fireEvent.click(view.getByRole("button", { name: "Try again" }));
   await view.findByText("No private modules");
   expect(view.getByRole("button", { name: "Publish module" })).toBeTruthy();
+});
+
+test("suppresses provider browse controls for a confirmed empty collection", async () => {
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations/acme") return json({ data: { attributes: { permissions: { "can-manage-modules": true } } } });
+    if (url === "/api/v2/organizations/acme/registry-providers") return json({ data: [], meta: { "total-count": 0 } });
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const view = render(<MemoryRouter initialEntries={["/app/acme/registry?tab=providers"]}><Routes><Route path="/app/:orgName/registry" element={<Registry />} /></Routes></MemoryRouter>);
+  await view.findByText("No private providers");
+  expect(view.queryByRole("searchbox", { name: "Search registry" })).toBeNull();
+  expect(view.queryByRole("section", { name: "Registry browse controls" })).toBeNull();
 });
 
 test("renders version-specific module documentation, usage, lifecycle, and keyboard tabs", async () => {

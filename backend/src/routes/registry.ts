@@ -1191,6 +1191,8 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const search = (query.get("q") ?? "").trim().toLocaleLowerCase();
     const provider = query.get("filter[provider]");
     const publishingMechanism = query.get("filter[publishing_mechanism]");
+    const requestedSort = query.get("sort");
+    const sort = requestedSort === "name" || requestedSort === "provider" ? requestedSort : "updated";
     const conditions: SQL[] = [eq(registryModules.orgId, org.id)];
     if (search !== "") {
       const pattern = `%${search}%`;
@@ -1212,7 +1214,11 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const [pageModules, countRows, providerRows] = await Promise.all([
       db.query.registryModules.findMany({
         where,
-        orderBy: [desc(registryModules.updatedAt), asc(registryModules.id)],
+        orderBy: sort === "name"
+          ? [asc(registryModules.name), asc(registryModules.provider), asc(registryModules.id)]
+          : sort === "provider"
+            ? [asc(registryModules.provider), asc(registryModules.name), asc(registryModules.id)]
+            : [desc(registryModules.updatedAt), asc(registryModules.id)],
         limit: page.size,
         offset: start,
       }),
@@ -1835,7 +1841,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const provList = await db.query.registryProviders.findMany({ where: eq(registryProviders.orgId, org.id) });
-        return { data: provList.map((p: ProvItem): Record<string, unknown> => registryProviderResource(p, org.name)) };
+    return { data: provList.map((p: ProvItem): Record<string, unknown> => registryProviderResource(p, org.name)), meta: { "total-count": provList.length } };
       })
       .get("/api/v2/registry-providers/:provider_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
         const providerId = params.provider_id ?? "";
