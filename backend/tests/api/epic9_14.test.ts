@@ -209,6 +209,61 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
     const taskBody = await createTask.json();
     const taskId = taskBody.data.id;
 
+    const insecureGlobal = await app.handle(
+      new Request(`http://localhost/api/v2/organizations/${orgName}/run-tasks`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${userToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({
+          data: {
+            type: "run-tasks",
+            attributes: {
+              name: "Insecure global task",
+              url: "http://scanner.internal/run",
+              "global-configuration": { enabled: true, stages: ["pre_apply"], "enforcement-level": "mandatory" },
+            },
+          },
+        }),
+      }),
+    );
+    expect(insecureGlobal.status).toBe(422);
+
+    const disabledGlobal = await app.handle(
+      new Request(`http://localhost/api/v2/organizations/${orgName}/run-tasks`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${userToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({
+          data: {
+            type: "run-tasks",
+            attributes: {
+              name: "Disabled global task",
+              url: "http://scanner.internal/run",
+              enabled: false,
+              "global-configuration": { enabled: true, stages: ["pre_apply"], "enforcement-level": "mandatory" },
+            },
+          },
+        }),
+      }),
+    );
+    expect(disabledGlobal.status).toBe(201);
+    const disabledGlobalId = (await disabledGlobal.json()).data.id;
+    const reenableDisabledGlobal = await app.handle(
+      new Request(`http://localhost/api/v2/run-tasks/${disabledGlobalId}`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${userToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({ data: { attributes: { enabled: true } } }),
+      }),
+    );
+    expect(reenableDisabledGlobal.status).toBe(422);
+
     const bindTask = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/run-tasks`, {
         method: "POST",

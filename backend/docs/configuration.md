@@ -55,6 +55,7 @@ Set variables through the container environment or an `.env` file.
 | `HEALTH_ASSESSMENT_INTERVAL_MS` | default | Minimum interval between assessments of one workspace. |
 | `AGENT_HEARTBEAT_TIMEOUT_MS` | default | Agent heartbeat timeout before jobs are recovered. |
 | `RUN_TASK_TIMEOUT_MS` | default | Run task request timeout. |
+| `TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS` | off | Allow HTTP pre-apply and enabled global task endpoints. Use only for trusted development; HTTPS is required by default. |
 | `GC_GRACE_PERIOD_DAYS` | default | Grace period for soft-deleted runs before garbage collection. |
 
 ## Run execution
