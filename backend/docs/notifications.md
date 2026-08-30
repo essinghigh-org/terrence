@@ -75,6 +75,7 @@ Notifications are queued and delivered asynchronously. A failed delivery logs th
 
 - `GET /api/v2/admin/smtp-settings`
 - `PATCH /api/v2/admin/smtp-settings`
+- `POST /api/v2/admin/smtp-settings/test`
 - `GET /api/v2/organizations/:org_name/notification-configurations`
 - `POST /api/v2/organizations/:org_name/notification-configurations`
 - `PATCH /api/v2/notification-configurations/:id`
