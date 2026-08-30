@@ -44,6 +44,19 @@ enabled only for trusted development environments that intentionally use HTTP.
 4. The worker records the result on the run.
 
 The request includes run context so the service can fetch details from the API.
+`plan_json_api_url` is absolute and points at the current Terrence instance. The
+payload also includes `access_token`, an ephemeral token scoped to the run's
+workspace and organization. An integration can fetch the plan with:
+
+```text
+Authorization: Bearer <access_token>
+GET <plan_json_api_url>
+```
+
+The token is revoked when the run or task lifecycle ends and is not a
+persistent user or organization credential. Terrence documents the fields it
+sends here rather than promising undocumented Terraform Cloud or HCP Terraform
+UI/API parity.
 
 ## Task results
 
