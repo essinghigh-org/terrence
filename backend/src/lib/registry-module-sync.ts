@@ -12,6 +12,7 @@ import {
 } from "../db/schema";
 import { decryptSecret } from "./secrets";
 import { getGitHubAppAccessToken } from "./webhooks";
+import { firstConfiguredValue } from "./vcs-source";
 import { ingestModuleArchive, MAX_MODULE_ARCHIVE_BYTES } from "./registry-module-archive";
 import { inspectRegistryModule, type RegistryModuleMetadata } from "./registry-module-metadata";
 import {
@@ -28,10 +29,10 @@ type RegistryModule = Readonly<typeof registryModules.$inferSelect>;
 type Credentials = Readonly<{ apiUrl: string; token: string }>;
 type Candidate = Readonly<{ version: string; ref: string; sha: string; branch: string | null }>;
 
-function githubApiUrl(value: string | null | undefined): string {
+function githubApiUrl(value: string | null | undefined, requireHttps = false): string {
   const raw = value === undefined || value === null || value === "" ? "https://api.github.com" : value;
   const url = new URL(raw);
-  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("The VCS connection API URL is invalid");
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || (requireHttps && url.protocol !== "https:")) throw new Error("The VCS connection API URL is invalid");
   return url.toString().replace(/\/$/, "");
 }
 
@@ -46,7 +47,7 @@ async function credentialsFor(mod: RegistryModule): Promise<Credentials> {
     if (installation === undefined) throw new Error("The selected VCS connection is unavailable");
     const token = await getGitHubAppAccessToken(installation.installationId);
     if (token === null) throw new Error("The selected VCS connection could not authenticate");
-    return { apiUrl: githubApiUrl(process.env.GITHUB_API_URL), token };
+    return { apiUrl: githubApiUrl(firstConfiguredValue(process.env.GITHUB_APP_API_URL, process.env.GITHUB_API_URL), true), token };
   }
   if (mod.vcsConnectionType === "oauth-token" && mod.vcsConnectionId !== null) {
     const tokenRow = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, mod.vcsConnectionId) });
