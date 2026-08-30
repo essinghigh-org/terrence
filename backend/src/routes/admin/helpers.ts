@@ -4,7 +4,7 @@ import type { users, organizations, workspaces, runs} from "../../db/schema";
 import { registryPartnerships, samlSettings, adminSettings } from "../../db/schema";
 import { eq } from "drizzle-orm";
 import { AvatarService } from "../../lib/avatars";
-import { type Settings, encryptSettingsValues, getSettings, invalidateSettingsCache, normalizePlanExplainerBaseUrl } from "../../lib/settings";
+import { type Settings, encryptSettingsValues, getSettings, getSettingsFresh, invalidateSettingsCache, normalizePlanExplainerBaseUrl } from "../../lib/settings";
 import { type DeepReadonly, apiURL } from "../../lib/utils";
 import { withDbLock } from "../../lib/db-lock";
 import type { SetObj } from "./types";
@@ -155,8 +155,10 @@ export async function withAuthSettingsLock<T>(operation: () => Promise<T>): Prom
 
 export async function updateSettings(group: string, attrs: Settings): Promise<Settings> {
   return withSettingsLock(group, async (): Promise<Settings> => {
-    const current = await getSettings(group);
-    const values = { ...current };
+    const current = await getSettingsFresh(group);
+    // A null-prototype target prevents a JSON attribute named `__proto__` from
+    // invoking Object.prototype's setter during the read-modify-write merge.
+    const values = Object.assign(Object.create(null) as Settings, current);
     for (const key of Object.keys(attrs)) {
       if (attrs[key] !== undefined) values[key] = attrs[key];
     }
