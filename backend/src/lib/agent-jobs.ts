@@ -446,7 +446,7 @@ export async function recoverStaleAgentJobs(now = Date.now()): Promise<string[]>
           eq(runs.id, job.runId),
           eq(runs.status, expectedRunStatus),
         )).returning({ id: runs.id });
-    if (updatedRuns.length === 0) {
+    if (run === undefined || updatedRuns.length === 0) {
       // The run is no longer waiting for this job; drop the requeued job so it
       // is not left orphaned, the claim path reconciles any in-flight claim.
       await db.update(agentJobs).set({
@@ -458,6 +458,19 @@ export async function recoverStaleAgentJobs(now = Date.now()): Promise<string[]>
         eq(agentJobs.status, "queued"),
       ));
       continue;
+    }
+    if (job.phase === "apply") {
+      await db.update(workspaces).set({
+        locked: false,
+        lockedReason: null,
+        lockOwnerType: null,
+        lockOwnerId: null,
+      }).where(and(
+        eq(workspaces.id, run.workspaceId),
+        eq(workspaces.locked, true),
+        eq(workspaces.lockOwnerType, "agent-run"),
+        eq(workspaces.lockOwnerId, run.id),
+      ));
     }
     recoveredJobs.push({ jobId: job.id, runId: job.runId, runStatus: queuedRunStatus });
   }

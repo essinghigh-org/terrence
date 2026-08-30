@@ -626,6 +626,95 @@ test("requeues a claimed job when its agent heartbeat expires", async () => {
   });
 }, 30_000);
 
+test("releases only the recovered run-owned workspace lock", async () => {
+  const result = await runAgentProtocolScript(`
+    const { and, eq } = await import("drizzle-orm");
+    const { db } = await import("./src/db/index.ts");
+    const { agentJobs, agentPools, agents, organizations, runs, workspaces } = await import("./src/db/schema.ts");
+    const { claimAgentJob, recoverStaleAgentJobs } = await import("./src/lib/agent-jobs.ts");
+
+    process.env.AGENT_HEARTBEAT_TIMEOUT_MS = "1000";
+    const now = Date.now();
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(agentPools).values({ id: "pool", orgId: "org", name: "pool", organizationScoped: true });
+    await db.insert(workspaces).values([
+      {
+        id: "workspace",
+        orgId: "org",
+        name: "workspace",
+        executionMode: "agent",
+        agentPoolId: "pool",
+        locked: true,
+        lockedReason: "Run run is applying",
+        lockOwnerType: "agent-run",
+        lockOwnerId: "run",
+      },
+      {
+        id: "manual-workspace",
+        orgId: "org",
+        name: "manual-workspace",
+        executionMode: "agent",
+        agentPoolId: "pool",
+        locked: true,
+        lockedReason: "Operator lock",
+        lockOwnerType: "manual",
+        lockOwnerId: "operator",
+      },
+    ]);
+    await db.insert(agents).values([
+      { id: "stale-agent", agentPoolId: "pool", name: "stale", status: "busy", lastPingAt: now - 2000 },
+      { id: "replacement-agent", agentPoolId: "pool", name: "replacement", status: "idle", lastPingAt: now },
+    ]);
+    await db.insert(runs).values([
+      { id: "run", workspaceId: "workspace", agentPoolId: "pool", agentId: "stale-agent", status: "applying", createdAt: now - 3000 },
+      { id: "manual-run", workspaceId: "manual-workspace", agentPoolId: "pool", agentId: "stale-agent", status: "applying", createdAt: now - 2000 },
+    ]);
+    await db.insert(agentJobs).values([
+      { id: "job", runId: "run", agentPoolId: "pool", agentId: "stale-agent", phase: "apply", status: "claimed", claimedAt: now - 3000, createdAt: now - 3000 },
+      { id: "manual-job", runId: "manual-run", agentPoolId: "pool", agentId: "stale-agent", phase: "apply", status: "claimed", claimedAt: now - 2000, createdAt: now - 2000 },
+    ]);
+
+    const recovered = await recoverStaleAgentJobs(now);
+    const [recoveredJob, recoveredRun, recoveredWorkspace, manualWorkspace] = await Promise.all([
+      db.query.agentJobs.findFirst({ where: eq(agentJobs.id, "job") }),
+      db.query.runs.findFirst({ where: eq(runs.id, "run") }),
+      db.query.workspaces.findFirst({ where: eq(workspaces.id, "workspace") }),
+      db.query.workspaces.findFirst({ where: eq(workspaces.id, "manual-workspace") }),
+    ]);
+    const replacement = await db.query.agents.findFirst({ where: eq(agents.id, "replacement-agent") });
+    const reclaimed = await claimAgentJob(replacement);
+    const [reclaimedJob, reclaimedRun, reclaimedWorkspace] = await Promise.all([
+      db.query.agentJobs.findFirst({ where: eq(agentJobs.id, "job") }),
+      db.query.runs.findFirst({ where: eq(runs.id, "run") }),
+      db.query.workspaces.findFirst({ where: eq(workspaces.id, "workspace") }),
+    ]);
+    console.log(JSON.stringify({
+      recovered: recovered.sort(),
+      recoveredJob: [recoveredJob?.status, recoveredJob?.agentId],
+      recoveredRun: [recoveredRun?.status, recoveredRun?.agentId],
+      recoveredWorkspace: [recoveredWorkspace?.locked, recoveredWorkspace?.lockOwnerType, recoveredWorkspace?.lockOwnerId],
+      manualWorkspace: [manualWorkspace?.locked, manualWorkspace?.lockOwnerType, manualWorkspace?.lockOwnerId],
+      reclaimedJobId: reclaimed?.job.id,
+      reclaimedJob: [reclaimedJob?.status, reclaimedJob?.agentId],
+      reclaimedRun: [reclaimedRun?.status, reclaimedRun?.agentId],
+      reclaimedWorkspace: [reclaimedWorkspace?.locked, reclaimedWorkspace?.lockOwnerType, reclaimedWorkspace?.lockOwnerId],
+    }));
+    process.exit(0);
+  `);
+
+  expect(result).toEqual({
+    recovered: ["job", "manual-job"],
+    recoveredJob: ["queued", null],
+    recoveredRun: ["apply_queued", null],
+    recoveredWorkspace: [false, null, null],
+    manualWorkspace: [true, "manual", "operator"],
+    reclaimedJobId: "job",
+    reclaimedJob: ["claimed", "replacement-agent"],
+    reclaimedRun: ["applying", "replacement-agent"],
+    reclaimedWorkspace: [true, "agent-run", "run"],
+  });
+}, 30_000);
+
 test("evaluates agent-enabled Sentinel policies in the claimed plan job", async () => {
   const result = await runAgentProtocolScript(`
     const { createHash } = await import("node:crypto");

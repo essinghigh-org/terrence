@@ -2,10 +2,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../../src/db";
 import { agents, agentPools, organizations, stackAgentJobs, stackRecords, stackStateLocks, stacks } from "../../src/db/schema";
-import { claimStackAgentJob, completeStackAgentJob } from "../../src/lib/stack-agent-jobs";
+import { claimStackAgentJob, completeStackAgentJob, heartbeatStackAgentJob } from "../../src/lib/stack-agent-jobs";
 import { runStackDeploymentJob } from "../../src/lib/stack-worker";
 import type { DurableJob } from "../../src/lib/durable-jobs";
 
@@ -126,6 +126,52 @@ describe("Stack deployment worker", () => {
     expect(claimed?.job.phase).toBe("plan");
     await completeStackAgentJob(agentId, claimed!.job.id, { status: "completed", errorMessage: null, result: { hasChanges: false } });
     expect((await db.query.stackAgentJobs.findFirst({ where: eq(stackAgentJobs.id, claimed!.job.id) }))?.status).toBe("completed");
+    await db.update(stacks).set({ executionMode: "remote", agentPoolId: null }).where(eq(stacks.id, stackId));
+  });
+
+  test("renews long-running Stack claims and recovers dead claims", async () => {
+    const poolId = `stack-pool-${crypto.randomUUID()}`;
+    const agentId = `stack-agent-${crypto.randomUUID()}`;
+    const replacementAgentId = `stack-agent-${crypto.randomUUID()}`;
+    const configurationId = `stack-config-${crypto.randomUUID()}`;
+    const groupId = `stack-group-${crypto.randomUUID()}`;
+    const runId = `stack-run-${crypto.randomUUID()}`;
+    const stepId = `stack-step-${crypto.randomUUID()}`;
+    const recordIds = [configurationId, groupId, runId, stepId];
+    await db.insert(agentPools).values({ id: poolId, orgId, name: poolId, organizationScoped: true, createdAt: Date.now() });
+    await db.insert(agents).values([
+      { id: agentId, agentPoolId: poolId, name: agentId, iacBinaries: ["terraform"], createdAt: Date.now() },
+      { id: replacementAgentId, agentPoolId: poolId, name: replacementAgentId, iacBinaries: ["terraform"], createdAt: Date.now() },
+    ]);
+    await db.update(stacks).set({ executionMode: "agent", agentPoolId: poolId }).where(eq(stacks.id, stackId));
+    await db.insert(stackRecords).values([
+      { id: configurationId, stackId, parentId: null, recordType: "stack-configurations", name: null, status: "completed", payload: { archivePath, components: [{ name: "a", directory: "a", source: null, dependsOn: [] }] }, createdAt: Date.now(), updatedAt: Date.now() },
+      { id: groupId, stackId, parentId: configurationId, recordType: "stack-deployment-groups", name: "heartbeat", status: "pending", payload: {}, createdAt: Date.now(), updatedAt: Date.now() },
+      { id: runId, stackId, parentId: groupId, recordType: "stack-deployment-runs", name: "heartbeat", status: "planning", payload: { configurationId, componentIndex: 0, cycle: 0 }, createdAt: Date.now(), updatedAt: Date.now() },
+      { id: stepId, stackId, parentId: runId, recordType: "stack-deployment-steps", name: "a", status: "queued", payload: { phase: "plan", "operation-type": "plan", componentIndex: 0 }, createdAt: Date.now(), updatedAt: Date.now() },
+    ]);
+    await runStackDeploymentJob(job(runId), context);
+    const agent = await db.query.agents.findFirst({ where: eq(agents.id, agentId) });
+    const replacement = await db.query.agents.findFirst({ where: eq(agents.id, replacementAgentId) });
+    if (agent === undefined || replacement === undefined) throw new Error("Stack test agents were not created");
+    const claimed = await claimStackAgentJob(agent);
+    if (claimed === undefined) throw new Error("Stack test job was not claimed");
+    const staleClaimedAt = Date.now() - (16 * 60_000);
+    await db.update(stackAgentJobs).set({ claimedAt: staleClaimedAt }).where(eq(stackAgentJobs.id, claimed.job.id));
+    expect(await heartbeatStackAgentJob(agentId, claimed.job.id)).toBe(true);
+    const renewed = await db.query.stackAgentJobs.findFirst({ where: eq(stackAgentJobs.id, claimed.job.id) });
+    expect(renewed?.claimedAt).toBeGreaterThan(staleClaimedAt);
+    expect(await claimStackAgentJob(replacement)).toBeUndefined();
+
+    await db.update(stackAgentJobs).set({ claimedAt: Date.now() - (16 * 60_000) }).where(eq(stackAgentJobs.id, claimed.job.id));
+    const recovered = await claimStackAgentJob(replacement);
+    expect(recovered?.job.id).toBe(claimed.job.id);
+    expect(recovered?.job.agentId).toBe(replacementAgentId);
+
+    await db.delete(stackAgentJobs).where(eq(stackAgentJobs.id, claimed.job.id));
+    await db.delete(stackRecords).where(inArray(stackRecords.id, recordIds));
+    await db.delete(agents).where(inArray(agents.id, [agentId, replacementAgentId]));
+    await db.delete(agentPools).where(eq(agentPools.id, poolId));
     await db.update(stacks).set({ executionMode: "remote", agentPoolId: null }).where(eq(stacks.id, stackId));
   });
 });

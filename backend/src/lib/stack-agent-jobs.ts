@@ -199,11 +199,19 @@ export async function findClaimedStackAgentJob(agentId: string, jobId: string): 
 export async function heartbeatStackAgentJob(agentId: string, jobId: string): Promise<boolean> {
   const claimed = await findClaimedStackAgentJob(agentId, jobId);
   if (claimed === undefined) return false;
-  if ((claimed.step.payload ?? {})["requires-state-lock"] !== true) return true;
-  const rawFencingToken = (claimed.step.payload ?? {})["fencing-token"];
-  return typeof rawFencingToken === "number" && Number.isInteger(rawFencingToken)
-    ? refreshStackStateLock(claimed.stack.id, claimed.deploymentRun.name ?? "default", claimed.deploymentRun.id, rawFencingToken)
-    : false;
+  const requiresStateLock = (claimed.step.payload ?? {})["requires-state-lock"] === true;
+  if (requiresStateLock) {
+    const rawFencingToken = (claimed.step.payload ?? {})["fencing-token"];
+    if (typeof rawFencingToken !== "number" || !Number.isInteger(rawFencingToken)) return false;
+    if (!await refreshStackStateLock(claimed.stack.id, claimed.deploymentRun.name ?? "default", claimed.deploymentRun.id, rawFencingToken)) return false;
+  }
+  const now = Date.now();
+  const renewed = await db.update(stackAgentJobs).set({ claimedAt: now, updatedAt: now }).where(and(
+    eq(stackAgentJobs.id, jobId),
+    eq(stackAgentJobs.agentId, agentId),
+    eq(stackAgentJobs.status, "claimed"),
+  )).returning({ id: stackAgentJobs.id });
+  return renewed.length > 0;
 }
 
 function stackStatePayload(result: Readonly<Record<string, unknown>> | null | undefined): string | null {
