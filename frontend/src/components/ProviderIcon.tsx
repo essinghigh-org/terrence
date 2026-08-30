@@ -5,6 +5,11 @@ const iconCache = new Map<string, string | null>();
 let inflight: Promise<void> | null = null;
 const pending = new Set<string>();
 
+function providerKey(providerName: string | null | undefined): string | null {
+  const key = providerName?.trim().toLowerCase() ?? "";
+  return key === "" ? null : key;
+}
+
 async function flushPending(): Promise<void> {
   if (pending.size === 0) return;
   const batch = [...pending].slice(0, 32);
@@ -15,7 +20,8 @@ async function flushPending(): Promise<void> {
       data?: { id: string; attributes: { "icon-url": string | null } }[];
     };
     for (const item of res.data ?? []) {
-      iconCache.set(item.id, item.attributes["icon-url"] ?? null);
+      const key = providerKey(item.id);
+      if (key !== null) iconCache.set(key, item.attributes["icon-url"] ?? null);
     }
     for (const key of batch) {
       if (!iconCache.has(key)) iconCache.set(key, null);
@@ -54,7 +60,7 @@ function scheduleFetch(key: string): void {
 }
 
 export function useProviderIcon(providerName: string | null | undefined): string | null | undefined {
-  const key = providerName === undefined || providerName === null || providerName === "" ? null : providerName;
+  const key = providerKey(providerName);
   const [url, setUrl] = useState<string | null | undefined>((): string | null | undefined => (key === null ? null : iconCache.get(key)));
 
   useEffect((): (() => void) | undefined => {

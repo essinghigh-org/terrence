@@ -119,6 +119,10 @@ test("browses and filters registry cards with distinct module permissions", asyn
   expect(view.getByText("Git tag")).toBeTruthy();
   expect(view.getByText(/Ready · Synced/)).toBeTruthy();
   await waitFor((): void => { expect(view.getByAltText("aws provider logo")).toBeTruthy(); });
+  const moduleIconRequest = requests.find((url): boolean => url.startsWith("/api/v2/provider-icons?"));
+  const moduleIconNames = new URL(moduleIconRequest ?? "", "http://terrence.test").searchParams.getAll("provider-name");
+  expect(moduleIconNames).toContain("hashicorp/aws");
+  expect(moduleIconNames).not.toContain("aws");
   expect(view.queryByRole("button", { name: "Publish module" })).toBeNull();
   expect(view.getByRole("option", { name: "azurerm" })).toBeTruthy();
 
@@ -196,7 +200,7 @@ test("uses provider dependency sources without guessing namespaces", async () =>
 
   const view = render(
     <div>
-      <ProviderIcon alt="cloudflare provider logo" providerName="registry.terraform.io/cloudflare/cloudflare" />
+      <ProviderIcon alt="cloudflare provider logo" providerName="  REGISTRY.TERRAFORM.IO/Cloudflare/Cloudflare  " />
       <ProviderIcon alt="github provider logo" providerName="registry.terraform.io/integrations/github" />
       <ProviderIcon alt="tfe provider logo" providerName="registry.terraform.io/hashicorp/tfe" />
       <ProviderIcon alt="community provider logo" providerName="acme/widgets" />
