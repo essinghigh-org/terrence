@@ -452,7 +452,7 @@ function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetail
   if (sourceIdentity === undefined) return undefined;
   const base = { cloneUrl, repoFullName, senderUsername, senderAvatarUrl, deliveryInstallationId, sourceIdentity };
   if (eventName === "push") return parseGithubPushWebhook(payload, base);
-  if (eventName === "pull_request" && (payload.action === "opened" || payload.action === "synchronize")) return parseGithubPullRequestWebhook(payload, base);
+  if (eventName === "pull_request" && (payload.action === "opened" || payload.action === "synchronize" || payload.action === "reopened")) return parseGithubPullRequestWebhook(payload, base);
   return undefined;
 }
 
