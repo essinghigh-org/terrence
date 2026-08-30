@@ -101,6 +101,13 @@ describe("Private Module & Provider Registries API contract", () => {
     expect((await uploadRes.json()).data.attributes.status).toBe("ok");
     expect((await upload()).status).toBe(409);
 
+    // The listing exposes the exact provider dependency discovered from the
+    // published module, not a guessed namespace derived from `provider: aws`.
+    const listingRes = await request(`/api/v2/organizations/${orgName}/registry-modules`);
+    expect(listingRes.status).toBe(200);
+    const listingBody = await listingRes.json();
+    expect(listingBody.data[0].attributes["provider-source"]).toBe("hashicorp/aws");
+
     // 3. Query module versions via standard registry protocol
     const verRes = await request(`/api/registry/v1/modules/${orgName}/vpc/aws/versions`);
     expect(verRes.status).toBe(200);

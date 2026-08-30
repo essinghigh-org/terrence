@@ -5,17 +5,23 @@
 // `logo_url` (often `/images/providers/aws.png` or an absolute github avatar
 // URL). We reuse the hardened AvatarService internally for the image fetch and
 // cache so the browser never loads a third-party URL and no new CSP host is
-// needed. The browser-facing URL remains /api/v2/provider-icons/<ns>/<name>;
+// needed. The browser-facing URL remains /api/v2/provider-icons/<hostname>/<ns>/<name>;
 // it must not expose the generic avatar endpoint as the provider icon API.
 //
-// Flow: normalize provider_name ("registry.terraform.io/hashicorp/aws" ->
-// "hashicorp/aws") -> registry API (4s timeout, 24h memo) -> absolute logo
-// URL -> AvatarService cache. The provider-icon image handler delegates to
-// that cache without changing the public route identity.
+// Flow: parse the provider source (two-part sources use Terraform's documented
+// default registry; explicit hostnames are retained) -> Terraform Registry API
+// (4s timeout, 24h memo) -> absolute logo URL -> AvatarService cache. The
+// provider-icon image handler delegates to that cache without changing the
+// public route identity.
 import { AvatarService } from "./avatars";
-import { normalizeProviderSource } from "./provider-source";
+import {
+  DEFAULT_PROVIDER_REGISTRY_HOST,
+  normalizeProviderSource,
+  parseProviderSource,
+  type ProviderSource,
+} from "./provider-source";
 
-const REGISTRY = "https://registry.terraform.io";
+const REGISTRY = `https://${DEFAULT_PROVIDER_REGISTRY_HOST}`;
 const FETCH_TIMEOUT_MS = 4_000;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const NEGATIVE_TTL_MS = 10 * 60 * 1000; // transient fetch failures: retry soon
@@ -67,11 +73,9 @@ export function normalizeProvider(providerName: string | null | undefined): stri
 
 /** Build the browser-facing URL for one canonical provider source. */
 export function providerIconPath(providerName: string | null | undefined): string | null {
-  const key = normalizeProvider(providerName);
-  if (key === null) return null;
-  const [namespace, name] = key.split("/");
-  if (namespace === undefined || name === undefined) return null;
-  return `/api/v2/provider-icons/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`;
+  const source = parseProviderSource(providerName);
+  if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
+  return `/api/v2/provider-icons/${encodeURIComponent(source.hostname)}/${encodeURIComponent(source.namespace)}/${encodeURIComponent(source.name)}`;
 }
 
 function absoluteLogoUrl(logoUrl: string): string | null {
@@ -88,11 +92,11 @@ function absoluteLogoUrl(logoUrl: string): string | null {
   }
 }
 
-async function fetchLogoUrl(nsName: string): Promise<string | null> {
+async function fetchLogoUrl(source: ProviderSource): Promise<string | null> {
+  if (source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
   await acquireRegistrySlot();
   try {
-    const [ns, name] = nsName.split("/") as [string, string];
-    const url = `${REGISTRY}/v1/providers/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`;
+    const url = `${REGISTRY}/v1/providers/${encodeURIComponent(source.namespace)}/${encodeURIComponent(source.name)}`;
     let res: Response;
     try {
       res = await fetch(url, {
@@ -120,8 +124,9 @@ async function fetchLogoUrl(nsName: string): Promise<string | null> {
 }
 
 export async function resolveProviderIconUrl(providerName: string | null | undefined): Promise<string | null> {
-  const key = normalizeProvider(providerName);
-  if (key === null) return null;
+  const source = parseProviderSource(providerName);
+  if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
+  const key = `${source.hostname}/${source.namespace}/${source.name}`;
   const now = Date.now();
   const hit = cache.get(key);
   if (hit !== undefined && now < hit.expiresAt) {
@@ -131,7 +136,7 @@ export async function resolveProviderIconUrl(providerName: string | null | undef
   const existing = inflightByKey.get(key);
   if (existing !== undefined) return existing;
   const run = (async (): Promise<string | null> => {
-    const logoUrl = await fetchLogoUrl(key);
+    const logoUrl = await fetchLogoUrl(source);
     const avatarUrl = logoUrl === null ? null : AvatarService.resolveUrl("provider-icon", logoUrl);
     // Transient miss (fetch failed / no logo) gets a short TTL so we retry soon.
     const ttl = avatarUrl === null && logoUrl === null ? NEGATIVE_TTL_MS : CACHE_TTL_MS;
@@ -163,5 +168,7 @@ export function clearProviderIconCache(): void {
 
 /** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function primeProviderIconCache(key: string, url: string | null): void {
-  setCache(key.toLowerCase(), url, CACHE_TTL_MS);
+  const source = parseProviderSource(key);
+  if (source === null) return;
+  setCache(`${source.hostname}/${source.namespace}/${source.name}`, url, CACHE_TTL_MS);
 }

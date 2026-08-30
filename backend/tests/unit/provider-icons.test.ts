@@ -10,6 +10,8 @@ import {
   clearProviderIconCache,
   normalizeProvider,
   primeProviderIconCache,
+  providerIconPath,
+  resolveProviderIconUrl,
 } from "../../src/lib/provider-icons";
 
 const originalStorageDir = process.env.STORAGE_DIR;
@@ -31,31 +33,48 @@ afterEach(async (): Promise<void> => {
   await removeFixtureStorage();
 });
 
-test("normalizes real provider sources without inventing hashicorp namespaces", () => {
-  expect(normalizeProvider("registry.terraform.io/cloudflare/cloudflare")).toBe("cloudflare/cloudflare");
+test("preserves provider sources without inventing namespaces or registries", async () => {
+  expect(normalizeProvider("registry.terraform.io/cloudflare/cloudflare")).toBe("registry.terraform.io/cloudflare/cloudflare");
   expect(normalizeProvider("cloudflare/cloudflare")).toBe("cloudflare/cloudflare");
-  expect(normalizeProvider("cloudflare")).toBe("cloudflare/cloudflare");
-  expect(normalizeProvider("registry.terraform.io/integrations/github")).toBe("integrations/github");
-  expect(normalizeProvider("github")).toBe("integrations/github");
-  expect(normalizeProvider("tfe")).toBe("hashicorp/tfe");
-  expect(normalizeProvider("made-up-provider")).toBeNull();
-  expect(normalizeProvider("toString")).toBeNull();
+  expect(normalizeProvider("registry.terraform.io/integrations/github")).toBe("registry.terraform.io/integrations/github");
+  expect(normalizeProvider("acme/widgets")).toBe("acme/widgets");
+  expect(normalizeProvider("registry.opentofu.org/acme/widgets")).toBe("registry.opentofu.org/acme/widgets");
+  expect(normalizeProvider("cloudflare")).toBeNull();
   expect(normalizeProvider("https://registry.terraform.io/cloudflare/cloudflare")).toBeNull();
   expect(normalizeProvider("registry.terraform.io//cloudflare/cloudflare")).toBeNull();
   expect(normalizeProvider("cloudflare//cloudflare")).toBeNull();
+  expect(providerIconPath("acme/widgets")).toBe("/api/v2/provider-icons/registry.terraform.io/acme/widgets");
+  expect(providerIconPath("registry.opentofu.org/acme/widgets")).toBeNull();
+
+  const originalFetch = globalThis.fetch;
+  let fetches = 0;
+  globalThis.fetch = (async (): Promise<Response> => {
+    fetches += 1;
+    throw new Error("OpenTofu sources must not use the Terraform Registry");
+  }) as unknown as typeof fetch;
+  try {
+    expect(await resolveProviderIconUrl("registry.opentofu.org/acme/widgets")).toBeNull();
+    expect(fetches).toBe(0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("keeps Cloudflare, GitHub, and TFE icon cache entries independent", async () => {
-  primeProviderIconCache("cloudflare/cloudflare", "/api/v2/avatars/cloudflare");
-  primeProviderIconCache("integrations/github", "/api/v2/avatars/github");
-  primeProviderIconCache("hashicorp/tfe", "/api/v2/avatars/tfe");
+  primeProviderIconCache("registry.terraform.io/cloudflare/cloudflare", "/api/v2/avatars/cloudflare");
+  primeProviderIconCache("registry.terraform.io/integrations/github", "/api/v2/avatars/github");
+  primeProviderIconCache("registry.terraform.io/hashicorp/tfe", "/api/v2/avatars/tfe");
 
-  const mapping = await batchResolveProviderIconUrls(["cloudflare", "github", "tfe"]);
+  const mapping = await batchResolveProviderIconUrls([
+    "registry.terraform.io/cloudflare/cloudflare",
+    "registry.terraform.io/integrations/github",
+    "registry.terraform.io/hashicorp/tfe",
+  ]);
 
   expect(mapping).toEqual({
-    "cloudflare/cloudflare": "/api/v2/avatars/cloudflare",
-    "integrations/github": "/api/v2/avatars/github",
-    "hashicorp/tfe": "/api/v2/avatars/tfe",
+    "registry.terraform.io/cloudflare/cloudflare": "/api/v2/avatars/cloudflare",
+    "registry.terraform.io/integrations/github": "/api/v2/avatars/github",
+    "registry.terraform.io/hashicorp/tfe": "/api/v2/avatars/tfe",
   });
 });
 
@@ -65,7 +84,7 @@ test("returns dedicated provider-icon URLs instead of generic avatar URLs", asyn
   primeProviderIconCache("hashicorp/tfe", "/api/v2/avatars/tfe");
 
   const response = await app.handle(new Request(
-    "http://terrence.test/api/v2/provider-icons?provider-name=cloudflare&provider-name=github&provider-name=tfe",
+    "http://terrence.test/api/v2/provider-icons?provider-name=cloudflare%2Fcloudflare&provider-name=integrations%2Fgithub&provider-name=hashicorp%2Ftfe",
   ));
   expect(response.status).toBe(200);
   const body = await response.json() as {
@@ -77,9 +96,9 @@ test("returns dedicated provider-icon URLs instead of generic avatar URLs", asyn
     "hashicorp/tfe",
   ]);
   expect(body.data.map((item): string | null => item.attributes["icon-url"])).toEqual([
-    "/api/v2/provider-icons/cloudflare/cloudflare",
-    "/api/v2/provider-icons/integrations/github",
-    "/api/v2/provider-icons/hashicorp/tfe",
+    "/api/v2/provider-icons/registry.terraform.io/cloudflare/cloudflare",
+    "/api/v2/provider-icons/registry.terraform.io/integrations/github",
+    "/api/v2/provider-icons/registry.terraform.io/hashicorp/tfe",
   ]);
   expect(body.data.every((item): boolean => !item.attributes["icon-url"]?.includes("/api/v2/avatars/"))).toBeTrue();
 });
@@ -110,7 +129,7 @@ test("serves cached artwork through the provider-icon image route", async () => 
   primeProviderIconCache("cloudflare/cloudflare", `/api/v2/avatars/${key}`);
 
   const response = await app.handle(new Request(
-    "http://terrence.test/api/v2/provider-icons/cloudflare/cloudflare",
+    "http://terrence.test/api/v2/provider-icons/registry.terraform.io/cloudflare/cloudflare",
   ));
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toBe("image/svg+xml");

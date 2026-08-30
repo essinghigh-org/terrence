@@ -28,7 +28,6 @@ import { Spinner } from "../components/ui/spinner";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { fetchApi } from "../lib/api";
 import { registryModuleFromResource, registryModulePath, type RegistryModule } from "../lib/registry";
-import { normalizeProviderSource } from "../lib/provider-source";
 import { cn } from "../lib/utils";
 import { isRecord, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
@@ -160,7 +159,7 @@ function ModuleCard({ orgName, module }: Readonly<{ orgName: string; module: Reg
                 <ProviderIcon
                   alt={`${module.provider} provider logo`}
                   fallback={<Package aria-hidden="true" />}
-                  providerName={normalizeProviderSource(module.provider)}
+                  providerName={module.providerSource}
                   size={24}
                 />
               </div>

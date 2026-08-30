@@ -182,6 +182,39 @@ function registryModuleVersionResource(version: ModVerItem): Record<string, unkn
   };
 }
 
+type ProviderDependency = Readonly<{ name: string; source: string | null }>;
+
+function metadataProviderDependencies(metadata: unknown): readonly ProviderDependency[] {
+  if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) return [];
+  const providers = (metadata as Record<string, unknown>).providers;
+  if (!Array.isArray(providers)) return [];
+  return providers.flatMap((value): ProviderDependency[] => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return [];
+    const provider = value as Record<string, unknown>;
+    if (typeof provider.name !== "string" || provider.name === "") return [];
+    return [{
+      name: provider.name,
+      source: typeof provider.source === "string" && provider.source !== "" ? provider.source : null,
+    }];
+  });
+}
+
+function primaryProviderSource(moduleProvider: string, metadata: unknown): string | null {
+  const providers = metadataProviderDependencies(metadata);
+  const exact = providers.find((provider): boolean => provider.name === moduleProvider && provider.source !== null);
+  if (exact?.source !== null && exact !== undefined) return exact.source;
+
+  const candidates = providers.filter((provider): boolean =>
+    provider.source !== null && provider.source.split("/").at(-1) === moduleProvider,
+  );
+  return candidates.length === 1 ? candidates[0]?.source ?? null : null;
+}
+
+function latestUsableProviderSource(moduleProvider: string, versions: readonly ModVerItem[]): string | null {
+  const latest = versions.find((version): boolean => version.status === "ok" && version.isRevoked !== true);
+  return latest === undefined ? null : primaryProviderSource(moduleProvider, latest.metadata);
+}
+
 // RegistryModule carry a pointer `organization` relationship plus attributes
 // the provider's model dereferences (status, publishing-mechanism, no-code);
 // omitting any makes the provider nil-deref or return inconsistently.
@@ -201,6 +234,7 @@ async function registryModuleResource(
     attributes: {
       name: m.name,
       provider: m.provider,
+      "provider-source": latestUsableProviderSource(m.provider, versions),
       namespace: m.namespace,
       "registry-name": "private",
       "no-code": false,

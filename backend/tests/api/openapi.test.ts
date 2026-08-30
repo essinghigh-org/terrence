@@ -73,7 +73,7 @@ describe("openapi contract", () => {
   });
 
   it("documents provider artwork as an image response", () => {
-    const operation = paths["/api/v2/provider-icons/{namespace}/{name}"]?.get as {
+    const operation = paths["/api/v2/provider-icons/{hostname}/{namespace}/{name}"]?.get as {
       responses?: Record<string, { content?: Record<string, unknown> }>;
     } | undefined;
     expect(operation?.responses?.["200"]?.content?.["image/svg+xml"]).toEqual({

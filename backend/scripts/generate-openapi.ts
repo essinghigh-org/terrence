@@ -108,7 +108,7 @@ for (const route of routes) {
       "404": { description: "Not Found" },
     },
   };
-  if (m === "get" && openApiPath === "/api/v2/provider-icons/{namespace}/{name}") {
+  if (m === "get" && openApiPath === "/api/v2/provider-icons/{hostname}/{namespace}/{name}") {
     operation.responses = {
       "200": {
         description: "Provider icon image",

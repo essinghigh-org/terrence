@@ -1,6 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { fetchApi } from "../lib/api";
-import { normalizeProviderSource } from "../lib/provider-source";
 
 const iconCache = new Map<string, string | null>();
 let inflight: Promise<void> | null = null;
@@ -16,10 +15,7 @@ async function flushPending(): Promise<void> {
       data?: { id: string; attributes: { "icon-url": string | null } }[];
     };
     for (const item of res.data ?? []) {
-      const key = normalizeProviderSource(item.id);
-      if (key === null) continue;
-      const url = item.attributes["icon-url"] ?? null;
-      iconCache.set(key, url);
+      iconCache.set(item.id, item.attributes["icon-url"] ?? null);
     }
     for (const key of batch) {
       if (!iconCache.has(key)) iconCache.set(key, null);
@@ -58,7 +54,7 @@ function scheduleFetch(key: string): void {
 }
 
 export function useProviderIcon(providerName: string | null | undefined): string | null | undefined {
-  const key = normalizeProviderSource(providerName);
+  const key = providerName === undefined || providerName === null || providerName === "" ? null : providerName;
   const [url, setUrl] = useState<string | null | undefined>((): string | null | undefined => (key === null ? null : iconCache.get(key)));
 
   useEffect((): (() => void) | undefined => {

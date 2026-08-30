@@ -26986,13 +26986,21 @@
         }
       }
     },
-    "/api/v2/provider-icons/{namespace}/{name}": {
+    "/api/v2/provider-icons/{hostname}/{namespace}/{name}": {
       "get": {
-        "operationId": "get-api-v2-provider-icons-namespace-name",
+        "operationId": "get-api-v2-provider-icons-hostname-namespace-name",
         "tags": [
           "provider-icons"
         ],
         "parameters": [
+          {
+            "name": "hostname",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "namespace",
             "in": "path",
@@ -27010,7 +27018,7 @@
             }
           }
         ],
-        "summary": "GET /api/v2/provider-icons/{namespace}/{name}",
+        "summary": "GET /api/v2/provider-icons/{hostname}/{namespace}/{name}",
         "responses": {
           "200": {
             "description": "Provider icon image",

@@ -1,66 +1,50 @@
-const PROVIDER_SOURCE_ALIASES: Readonly<Record<string, string>> = {
-  archive: "hashicorp/archive",
-  aws: "hashicorp/aws",
-  awscc: "hashicorp/awscc",
-  azurerm: "hashicorp/azurerm",
-  azuread: "hashicorp/azuread",
-  boundary: "hashicorp/boundary",
-  cloudflare: "cloudflare/cloudflare",
-  cloudinit: "hashicorp/cloudinit",
-  consul: "hashicorp/consul",
-  external: "hashicorp/external",
-  google: "hashicorp/google",
-  "google-beta": "hashicorp/google-beta",
-  helm: "hashicorp/helm",
-  http: "hashicorp/http",
-  github: "integrations/github",
-  kubernetes: "hashicorp/kubernetes",
-  local: "hashicorp/local",
-  nomad: "hashicorp/nomad",
-  null: "hashicorp/null",
-  random: "hashicorp/random",
-  template: "hashicorp/template",
-  tfe: "hashicorp/tfe",
-  time: "hashicorp/time",
-  tls: "hashicorp/tls",
-  vault: "hashicorp/vault",
-};
+export const DEFAULT_PROVIDER_REGISTRY_HOST = "registry.terraform.io";
 
 const PROVIDER_PART = /^[a-z0-9][a-z0-9-_]{0,63}$/i;
-const REGISTRY_HOSTS = new Set(["registry.terraform.io", "registry.opentofu.org"]);
+const HOST_PART = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i;
 
-/**
- * Convert a Terraform provider source, registry provider id, or supported
- * bare provider label to the canonical namespace/name form used by the
- * provider icon service. Bare labels are resolved only through the explicit
- * alias map: a missing namespace must never silently become hashicorp/<name>.
- */
-function normalizeBareProvider(parts: readonly string[]): string | null {
-  const bare = parts[0]?.toLowerCase() ?? "";
-  if (!Object.prototype.hasOwnProperty.call(PROVIDER_SOURCE_ALIASES, bare)) return null;
-  return PROVIDER_SOURCE_ALIASES[bare] ?? null;
-}
+export type ProviderSource = Readonly<{
+  source: string;
+  hostname: string;
+  namespace: string;
+  name: string;
+}>;
 
-function normalizeQualifiedProvider(parts: readonly string[]): string | null {
-  const registryHost = parts[0]?.toLowerCase() ?? "";
-  const sourceParts = parts.length === 3 && REGISTRY_HOSTS.has(registryHost)
-    ? parts.slice(1)
-    : parts;
-  if (sourceParts.length !== 2) return null;
-  const namespace = sourceParts[0] ?? "";
-  const name = sourceParts[1] ?? "";
-  if (!PROVIDER_PART.test(namespace) || !PROVIDER_PART.test(name)) return null;
-  return `${namespace.toLowerCase()}/${name.toLowerCase()}`;
-}
-
-export function normalizeProviderSource(providerName: string | null | undefined): string | null {
-  if (typeof providerName !== "string") return null;
-  const trimmed = providerName.trim();
+function parseProviderAddress(trimmed: string): ProviderSource | null {
   if (trimmed === "") return null;
 
   const parts = trimmed.split("/");
-  if (parts.some((part): boolean => part === "")) return null;
-  return parts.length === 1
-    ? normalizeBareProvider(parts)
-    : normalizeQualifiedProvider(parts);
+  if ((parts.length !== 2 && parts.length !== 3) || parts.some((part): boolean => part === "")) return null;
+
+  const hasExplicitHostname = parts.length === 3;
+  const hostname = (hasExplicitHostname ? parts[0] : DEFAULT_PROVIDER_REGISTRY_HOST) ?? "";
+  const namespace = (hasExplicitHostname ? parts[1] : parts[0]) ?? "";
+  const name = (hasExplicitHostname ? parts[2] : parts[1]) ?? "";
+  if (!HOST_PART.test(hostname) || !PROVIDER_PART.test(namespace) || !PROVIDER_PART.test(name)) return null;
+
+  const canonicalHostname = hostname.toLowerCase();
+  const canonicalNamespace = namespace.toLowerCase();
+  const canonicalName = name.toLowerCase();
+  return {
+    source: hasExplicitHostname
+      ? `${canonicalHostname}/${canonicalNamespace}/${canonicalName}`
+      : `${canonicalNamespace}/${canonicalName}`,
+    hostname: canonicalHostname,
+    namespace: canonicalNamespace,
+    name: canonicalName,
+  };
+}
+
+/**
+ * Parse a Terraform provider source address without inventing a namespace.
+ * Two-part addresses use Terraform's documented default registry, while
+ * three-part addresses retain their explicit hostname for routing decisions.
+ */
+export function parseProviderSource(providerName: string | null | undefined): ProviderSource | null {
+  if (typeof providerName !== "string") return null;
+  return parseProviderAddress(providerName.trim());
+}
+
+export function normalizeProviderSource(providerName: string | null | undefined): string | null {
+  return parseProviderSource(providerName)?.source ?? null;
 }

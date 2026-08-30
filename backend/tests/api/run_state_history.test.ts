@@ -233,6 +233,21 @@ describe("workspace run history and state metadata", () => {
     expect(listed.relationships.outputs.data).toHaveLength(2);
     expect(listed.links.self).toBe(`/api/v2/state-versions/${stateId}`);
 
+    const resourcesResponse = await request(`/api/v2/workspaces/${workspaceId}/resources`);
+    expect(resourcesResponse.status).toBe(200);
+    expect((await resourcesResponse.json()).data).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        attributes: expect.objectContaining({
+          provider: "registry.terraform.io/hashicorp/null",
+        }),
+      }),
+      expect.objectContaining({
+        attributes: expect.objectContaining({
+          provider: "terraform.io/builtin/terraform",
+        }),
+      }),
+    ]));
+
     const showResponse = await request(`/api/v2/state-versions/${stateId}`);
     expect(showResponse.status).toBe(200);
     expect((await showResponse.json()).data.attributes.state).toBe(statePayload);

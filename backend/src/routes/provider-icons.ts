@@ -3,10 +3,11 @@ import { authPlugin } from "../auth";
 import { avatarHandler } from "./avatars";
 import {
   batchResolveProviderIconUrls,
-  normalizeProvider,
   providerIconPath,
+  normalizeProvider,
   resolveProviderIconUrl,
 } from "../lib/provider-icons";
+import { DEFAULT_PROVIDER_REGISTRY_HOST, parseProviderSource } from "../lib/provider-source";
 
 type SetContext = { status?: number | string; headers: Record<string, string | number> };
 type Ctx = Readonly<{
@@ -25,24 +26,33 @@ function providerIconNotFound(set: SetContext): Record<string, unknown> {
   return { errors: [{ status: "404", title: "Not Found" }] };
 }
 
+async function serveProviderIconImage(
+  providerName: string,
+  request: Request,
+  set: SetContext,
+): Promise<unknown> {
+  const source = parseProviderSource(providerName);
+  if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return providerIconNotFound(set);
+
+  // The lookup service records the upstream logo in the hardened avatar
+  // cache. Serve the resulting bytes through this provider-specific route so
+  // the browser never needs to know that the cache implementation is shared.
+  const avatarUrl = await resolveProviderIconUrl(source.source);
+  const avatarMatch = avatarUrl === null ? null : /^\/api\/v2\/avatars\/([0-9a-f]{64})$/.exec(avatarUrl);
+  const avatarKey = avatarMatch?.[1];
+  if (avatarKey === undefined) return providerIconNotFound(set);
+  return avatarHandler({
+    params: { key: avatarKey },
+    request,
+    set: set as { status: number | string; headers: Record<string, string | number> },
+  });
+}
+
 export const providerIconRoutes = new Elysia()
   .use(authPlugin)
-  .get("/api/v2/provider-icons/:namespace/:name", async ({ params, request, set }: ImageCtx): Promise<unknown> => {
-    const key = normalizeProvider(`${params.namespace ?? ""}/${params.name ?? ""}`);
-    if (key === null) return providerIconNotFound(set);
-
-    // The lookup service records the upstream logo in the hardened avatar
-    // cache. Serve the resulting bytes through this provider-specific route so
-    // the browser never needs to know that the cache implementation is shared.
-    const avatarUrl = await resolveProviderIconUrl(key);
-    const avatarMatch = avatarUrl === null ? null : /^\/api\/v2\/avatars\/([0-9a-f]{64})$/.exec(avatarUrl);
-    const avatarKey = avatarMatch?.[1];
-    if (avatarKey === undefined) return providerIconNotFound(set);
-    return avatarHandler({
-      params: { key: avatarKey },
-      request,
-      set: set as { status: number | string; headers: Record<string, string | number> },
-    });
+  .get("/api/v2/provider-icons/:hostname/:namespace/:name", async ({ params, request, set }: ImageCtx): Promise<unknown> => {
+    const providerName = `${params.hostname ?? ""}/${params.namespace ?? ""}/${params.name ?? ""}`;
+    return serveProviderIconImage(providerName, request, set);
   })
   .get("/api/v2/provider-icons", async ({ query, request, set }: Ctx): Promise<unknown> => {
     const url = new URL(request.url);
