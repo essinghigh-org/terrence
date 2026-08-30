@@ -1,19 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { fetchApi } from "../lib/api";
+import { normalizeProviderSource } from "../lib/provider-source";
 
 const iconCache = new Map<string, string | null>();
 let inflight: Promise<void> | null = null;
 const pending = new Set<string>();
-
-function normalizeProvider(providerName: string | null | undefined): string | null {
-  if (typeof providerName !== "string" || providerName === "") return null;
-  const parts = providerName.trim().split("/").filter((p): boolean => p !== "");
-  if (parts.length < 2) return null;
-  const name = parts[parts.length - 1];
-  const ns = parts[parts.length - 2];
-  if (name === undefined || ns === undefined || !/^[a-z0-9][a-z0-9-_]{0,63}$/i.test(ns) || !/^[a-z0-9][a-z0-9-_]{0,63}$/i.test(name)) return null;
-  return `${ns.toLowerCase()}/${name.toLowerCase()}`;
-}
 
 async function flushPending(): Promise<void> {
   if (pending.size === 0) return;
@@ -25,7 +16,8 @@ async function flushPending(): Promise<void> {
       data?: { id: string; attributes: { "icon-url": string | null } }[];
     };
     for (const item of res.data ?? []) {
-      const key = item.id.toLowerCase();
+      const key = normalizeProviderSource(item.id);
+      if (key === null) continue;
       const url = item.attributes["icon-url"] ?? null;
       iconCache.set(key, url);
     }
@@ -66,7 +58,7 @@ function scheduleFetch(key: string): void {
 }
 
 export function useProviderIcon(providerName: string | null | undefined): string | null | undefined {
-  const key = normalizeProvider(providerName);
+  const key = normalizeProviderSource(providerName);
   const [url, setUrl] = useState<string | null | undefined>((): string | null | undefined => (key === null ? null : iconCache.get(key)));
 
   useEffect((): (() => void) | undefined => {

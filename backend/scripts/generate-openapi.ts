@@ -108,6 +108,22 @@ for (const route of routes) {
       "404": { description: "Not Found" },
     },
   };
+  if (m === "get" && openApiPath === "/api/v2/provider-icons/{namespace}/{name}") {
+    operation.responses = {
+      "200": {
+        description: "Provider icon image",
+        content: Object.fromEntries([
+          "image/gif",
+          "image/jpeg",
+          "image/png",
+          "image/svg+xml",
+          "image/webp",
+        ].map((mediaType) => [mediaType, { schema: { type: "string", format: "binary" } }])),
+      },
+      "401": { description: "Unauthorized" },
+      "404": { description: "Not Found" },
+    };
+  }
   if (m === "patch" && openApiPath === "/api/v2/organization-memberships/{id}") {
     operation.requestBody = {
       required: true,

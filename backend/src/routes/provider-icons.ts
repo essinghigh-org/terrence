@@ -1,15 +1,49 @@
 import { Elysia } from "elysia";
 import { authPlugin } from "../auth";
-import { batchResolveProviderIconUrls, normalizeProvider } from "../lib/provider-icons";
+import { avatarHandler } from "./avatars";
+import {
+  batchResolveProviderIconUrls,
+  normalizeProvider,
+  providerIconPath,
+  resolveProviderIconUrl,
+} from "../lib/provider-icons";
 
+type SetContext = { status?: number | string; headers: Record<string, string | number> };
 type Ctx = Readonly<{
   query?: Readonly<Record<string, string>>;
   request: Readonly<{ url: string }>;
-  set: Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
+  set: SetContext;
 }>;
+type ImageCtx = Readonly<{
+  params: Readonly<Record<string, string>>;
+  request: Request;
+  set: SetContext;
+}>;
+
+function providerIconNotFound(set: SetContext): Record<string, unknown> {
+  set.status = 404;
+  return { errors: [{ status: "404", title: "Not Found" }] };
+}
 
 export const providerIconRoutes = new Elysia()
   .use(authPlugin)
+  .get("/api/v2/provider-icons/:namespace/:name", async ({ params, request, set }: ImageCtx): Promise<unknown> => {
+    const key = normalizeProvider(`${params.namespace ?? ""}/${params.name ?? ""}`);
+    if (key === null) return providerIconNotFound(set);
+
+    // The lookup service records the upstream logo in the hardened avatar
+    // cache. Serve the resulting bytes through this provider-specific route so
+    // the browser never needs to know that the cache implementation is shared.
+    const avatarUrl = await resolveProviderIconUrl(key);
+    const avatarMatch = avatarUrl === null ? null : /^\/api\/v2\/avatars\/([0-9a-f]{64})$/.exec(avatarUrl);
+    const avatarKey = avatarMatch?.[1];
+    if (avatarKey === undefined) return providerIconNotFound(set);
+    return avatarHandler({
+      params: { key: avatarKey },
+      request,
+      set: set as { status: number | string; headers: Record<string, string | number> },
+    });
+  })
   .get("/api/v2/provider-icons", async ({ query, request, set }: Ctx): Promise<unknown> => {
     const url = new URL(request.url);
     // Support both ?provider-name= and ?provider_name=, repeated or comma-separated.
@@ -32,25 +66,31 @@ export const providerIconRoutes = new Elysia()
       .slice(0, 32); // cap fan-out per request
 
     if (names.length === 0) {
-      (set as { status: number }).status = 422;
+      set.status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "provider-name is required" }] };
     }
 
-    const invalid = names.filter((name): boolean => normalizeProvider(name) === null);
-    if (invalid.length > 0) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Invalid provider name: ${invalid[0]}` }] };
+    const canonicalNames: string[] = [];
+    for (const name of names) {
+      const canonical = normalizeProvider(name);
+      if (canonical === null) {
+        set.status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Invalid provider name: ${name}` }] };
+      }
+      canonicalNames.push(canonical);
     }
 
-    const mapping = await batchResolveProviderIconUrls(names);
-    const data = names.map((name): Record<string, unknown> => {
-      const key = normalizeProvider(name)!;
+    const mapping = await batchResolveProviderIconUrls(canonicalNames);
+    const data = canonicalNames.map((key): Record<string, unknown> => {
+      const resolved = (mapping as Record<string, string | null>)[key] ?? null;
       return {
         id: key,
         type: "provider-icons",
         attributes: {
           "provider-name": key,
-          "icon-url": (mapping as Record<string, string | null>)[key] ?? null,
+          "icon-url": resolved === null
+            ? null
+            : providerIconPath(key),
         },
       };
     });

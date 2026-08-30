@@ -3,9 +3,10 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 import { RegistrySettingsRedirect } from "../src/App";
-import { ProviderIcon } from "../src/components/ProviderIcon";
+import { clearProviderIconCacheForTests, ProviderIcon } from "../src/components/ProviderIcon";
 import { Registry } from "../src/views/Registry";
 import { RegistryModuleDetail } from "../src/views/RegistryModuleDetail";
+import { normalizeProviderSource } from "../src/lib/provider-source";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
 
@@ -91,6 +92,7 @@ const versionResource = (id: string, version: string, readme: string) => ({
 
 afterEach((): void => {
   cleanup();
+  clearProviderIconCacheForTests();
   globalThis.fetch = originalFetch;
 });
 
@@ -169,6 +171,57 @@ test("renders the provider icon fallback after artwork loading fails", async () 
   const image = await view.findByAltText("widget provider logo");
   fireEvent.error(image);
   await waitFor((): void => { expect(view.getByTestId("provider-icon-fallback")).toBeTruthy(); });
+});
+
+test("uses canonical provider namespaces for run and registry icons", async () => {
+  const requests: string[] = [];
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    requests.push(url);
+    if (url.startsWith("/api/v2/provider-icons?")) {
+      const parsed = new URL(url, "http://terrence.test");
+      const names = parsed.searchParams.getAll("provider-name");
+      return json({ data: names.map((name) => ({
+        id: name,
+        type: "provider-icons",
+        attributes: { "icon-url": `/api/v2/provider-icons/${name}` },
+      })) });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  expect(normalizeProviderSource("cloudflare")).toBe("cloudflare/cloudflare");
+  expect(normalizeProviderSource("github")).toBe("integrations/github");
+  expect(normalizeProviderSource("tfe")).toBe("hashicorp/tfe");
+
+  const view = render(
+    <div>
+      <ProviderIcon alt="cloudflare provider logo" providerName="cloudflare" />
+      <ProviderIcon alt="cloudflare full provider logo" providerName="registry.terraform.io/cloudflare/cloudflare" />
+      <ProviderIcon alt="github provider logo" providerName="github" />
+      <ProviderIcon alt="github full provider logo" providerName="registry.terraform.io/integrations/github" />
+      <ProviderIcon alt="tfe provider logo" providerName="tfe" />
+      <ProviderIcon alt="tfe full provider logo" providerName="registry.terraform.io/hashicorp/tfe" />
+      <ProviderIcon alt="unknown provider logo" providerName="unknown-provider" />
+    </div>,
+  );
+
+  await waitFor((): void => { expect(requests).toHaveLength(1); });
+  const requestUrl = new URL(requests[0] ?? "", "http://terrence.test");
+  expect(requestUrl.searchParams.getAll("provider-name").sort()).toEqual([
+    "cloudflare/cloudflare",
+    "hashicorp/tfe",
+    "integrations/github",
+  ]);
+  expect(requests[0]).not.toContain("hashicorp%2Fcloudflare");
+  expect(requests[0]).not.toContain("hashicorp%2Fgithub");
+
+  await waitFor((): void => {
+    expect(view.getByAltText("cloudflare provider logo").getAttribute("src")).toBe("/api/v2/provider-icons/cloudflare/cloudflare");
+    expect(view.getByAltText("github provider logo").getAttribute("src")).toBe("/api/v2/provider-icons/integrations/github");
+    expect(view.getByAltText("tfe provider logo").getAttribute("src")).toBe("/api/v2/provider-icons/hashicorp/tfe");
+  });
+  expect(view.queryByAltText("unknown provider logo")).toBeNull();
 });
 
 test("shows loading, retryable errors, and an honest empty state", async () => {

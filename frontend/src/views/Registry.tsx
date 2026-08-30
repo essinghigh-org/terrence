@@ -28,6 +28,7 @@ import { Spinner } from "../components/ui/spinner";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { fetchApi } from "../lib/api";
 import { registryModuleFromResource, registryModulePath, type RegistryModule } from "../lib/registry";
+import { normalizeProviderSource } from "../lib/provider-source";
 import { cn } from "../lib/utils";
 import { isRecord, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
@@ -139,11 +140,6 @@ function moduleRepositoryLabel(module: RegistryModule): string {
     ?? (module.publishingMechanism === "manual" ? "Terrence API" : "Repository pending");
 }
 
-function providerIconName(provider: string): string {
-  const value = provider.trim();
-  return value.includes("/") ? value : `hashicorp/${value}`;
-}
-
 function ModuleCard({ orgName, module }: Readonly<{ orgName: string; module: RegistryModule }>): React.JSX.Element {
   const latest = module.versions.find((version): boolean => version.status === "ok" && !version.revoked);
   const repositoryLabel = moduleRepositoryLabel(module);
@@ -164,7 +160,7 @@ function ModuleCard({ orgName, module }: Readonly<{ orgName: string; module: Reg
                 <ProviderIcon
                   alt={`${module.provider} provider logo`}
                   fallback={<Package aria-hidden="true" />}
-                  providerName={providerIconName(module.provider)}
+                  providerName={normalizeProviderSource(module.provider)}
                   size={24}
                 />
               </div>
