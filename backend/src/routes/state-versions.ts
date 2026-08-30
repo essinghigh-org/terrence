@@ -43,6 +43,7 @@ type ParamCtx = Readonly<{
 }>;
 
 const MAX_IMPORTED_STATE_BYTES = 100 * 1024 * 1024;
+export const MAX_LEGACY_STATE_OUTPUT_CANDIDATES = 100;
 
 async function withStateSerialRetry<T>(operation: () => Promise<T>): Promise<T> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -333,25 +334,38 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const versions = await db.query.stateVersions.findMany();
-    // Pre-fetch all relevant workspaces to avoid N+1
-    const wsIds = [...new Set(versions.map((sv): string => sv.workspaceId))];
-    const workspacesById = wsIds.length === 0
-      ? new Map<string, typeof workspaces.$inferSelect>()
-      : new Map(
-          (await db.query.workspaces.findMany({
-            where: inArray(workspaces.id, wsIds),
-          })).map((ws): [string, typeof workspaces.$inferSelect] => [ws.id, ws]),
-        );
-    for (const stateVersion of versions) {
-      if (["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(stateVersion.status ?? "")) continue;
-      const output = stateOutputResources(stateVersion).find(({ id }): boolean => id === stateVersionOutputId);
-      if (output === undefined) continue;
-      const ws = workspacesById.get(stateVersion.workspaceId);
-      if (ws !== undefined && (await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-outputs") || checkRunStateAccess(run, ws.id))) {
-        return { data: output };
+    // The index is authoritative for new rows. Keep pre-index state reachable
+    // through a bounded compatibility probe, but never load or parse an
+    // unbounded portion of the instance's state history for a miss.
+    const legacyCandidates = await db.query.stateVersions.findMany({
+      columns: { id: true, workspaceId: true, status: true },
+      orderBy: [desc(stateVersions.createdAt), desc(stateVersions.serial)],
+      limit: MAX_LEGACY_STATE_OUTPUT_CANDIDATES,
+    });
+    if (legacyCandidates.length === 0) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const legacyWorkspaceIds = [...new Set(legacyCandidates.map((candidate): string => candidate.workspaceId))];
+    const legacyWorkspaces = await db.query.workspaces.findMany({
+      where: inArray(workspaces.id, legacyWorkspaceIds),
+    });
+    const authorizedWorkspaceIds = new Set<string>();
+    for (const ws of legacyWorkspaces) {
+      if (await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-outputs") || checkRunStateAccess(run, ws.id)) {
+        authorizedWorkspaceIds.add(ws.id);
       }
-      break;
+    }
+    for (const candidate of legacyCandidates) {
+      if (!authorizedWorkspaceIds.has(candidate.workspaceId)
+        || ["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(candidate.status ?? "")) continue;
+      // Fetch one authorized payload at a time so a bounded candidate set
+      // cannot retain many potentially large state documents simultaneously.
+      const stateVersion = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, candidate.id) });
+      if (stateVersion === undefined
+        || ["discarded", "backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(stateVersion.status ?? "")) continue;
+      const output = stateOutputResources(stateVersion).find(({ id }): boolean => id === stateVersionOutputId);
+      if (output !== undefined) return { data: output };
     }
     (set as { status: number }).status = 404;
     return { errors: [{ status: "404", title: "Not Found" }] };
