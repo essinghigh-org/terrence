@@ -99,4 +99,91 @@ describe("syslog UDP transport end to end", (): void => {
     // The transport truncates to exactly 1024 bytes of UTF-8 payload.
     expect(Buffer.byteLength(bigFrame.slice(0, 1024), "utf8")).toBeLessThanOrEqual(1024);
   });
+
+  it("keeps oversized UDP frames valid UTF-8 with complete structured data", async (): Promise<void> => {
+    const port = await new Promise<number>((resolve, reject): void => {
+      const socket = createSocket("udp4");
+      probe = socket;
+      socket.on("error", reject);
+      socket.bind(0, "127.0.0.1", (): void => {
+        resolve((socket.address() as { port: number }).port);
+      });
+    });
+
+    const target = parseSyslogTarget(`udp://127.0.0.1:${port}`);
+    if (target === null) throw new Error("unreachable");
+    const received = new Promise<Buffer>((resolve): void => {
+      probe?.once("message", (message: Buffer): void => {
+        resolve(message);
+      });
+    });
+    const frame = formatSyslogMessage(
+      {
+        timestamp: "2026-08-26T03:00:00.000Z",
+        level: "info",
+        message: "🙂".repeat(1_000),
+        meta: { detail: "é".repeat(1_000) },
+      },
+      { hostname: "test-host", appName: "terrence", procId: "7" },
+    );
+
+    sendSyslogFrame(target, frame);
+
+    const message = await Promise.race([
+      received,
+      new Promise<Buffer>((_, reject): void => {
+        setTimeout((): void => {
+          reject(new Error("collector never received the frame"));
+        }, 3_000);
+      }),
+    ]);
+    const decoded = message.toString("utf8");
+    expect(message.byteLength).toBeLessThanOrEqual(1024);
+    expect(Buffer.from(decoded, "utf8").equals(message)).toBeTrue();
+    expect(decoded.startsWith("<14>1 2026-08-26T03:00:00.000Z test-host terrence 7 - ")).toBeTrue();
+    expect(decoded).not.toContain("[terrence@65024");
+  }, 5_000);
+
+  it("preserves the first emoji when truncating a NILVALUE UDP frame", async (): Promise<void> => {
+    const port = await new Promise<number>((resolve, reject): void => {
+      const socket = createSocket("udp4");
+      probe = socket;
+      socket.on("error", reject);
+      socket.bind(0, "127.0.0.1", (): void => {
+        resolve((socket.address() as { port: number }).port);
+      });
+    });
+
+    const target = parseSyslogTarget(`udp://127.0.0.1:${port}`);
+    if (target === null) throw new Error("unreachable");
+    const received = new Promise<Buffer>((resolve): void => {
+      probe?.once("message", (message: Buffer): void => {
+        resolve(message);
+      });
+    });
+    const frame = formatSyslogMessage(
+      {
+        timestamp: "2026-08-26T03:00:00.000Z",
+        level: "info",
+        message: `🙂${"x".repeat(2_048)}`,
+      },
+      { hostname: "test-host", appName: "terrence", procId: "7" },
+    );
+
+    expect(frame.startsWith("<14>1 2026-08-26T03:00:00.000Z test-host terrence 7 - - 🙂")).toBeTrue();
+    sendSyslogFrame(target, frame);
+
+    const message = await Promise.race([
+      received,
+      new Promise<Buffer>((_, reject): void => {
+        setTimeout((): void => {
+          reject(new Error("collector never received the frame"));
+        }, 3_000);
+      }),
+    ]);
+    const decoded = message.toString("utf8");
+    expect(message.byteLength).toBeLessThanOrEqual(1024);
+    expect(Buffer.from(decoded, "utf8").equals(message)).toBeTrue();
+    expect(decoded.startsWith("<14>1 2026-08-26T03:00:00.000Z test-host terrence 7 - - 🙂")).toBeTrue();
+  }, 5_000);
 });
