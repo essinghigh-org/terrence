@@ -50,6 +50,9 @@ const providers = [
 ] as const;
 
 const policySetId = (provider: string): string => `polset-sync-${provider}-${suffix}`;
+const otherHostPolicySetId = `polset-sync-other-host-${suffix}`;
+const otherHostClientId = `oc-policy-other-host-${suffix}`;
+const otherHostTokenId = `ot-policy-other-host-${suffix}`;
 
 async function archiveWith(files: Readonly<Record<string, string>>, name: string): Promise<Uint8Array> {
   const source = join(testDirectory, `${name}-source`);
@@ -235,12 +238,24 @@ describe("VCS-backed policy set synchronization", () => {
         name: "Bitbucket",
         serviceProvider: "bitbucket",
       },
+      {
+        id: otherHostClientId,
+        orgId,
+        name: "Other GitHub host",
+        serviceProvider: "github",
+        apiUrl: "https://other-github.example/api/v3",
+      },
     ]);
     await db.insert(oauthTokens).values(await Promise.all(providers.map(async (provider) => ({
       id: provider.tokenId,
       oauthClientId: `oc-policy-${provider.name}-${suffix}`,
       token: await encryptSecret(`${provider.name}-policy-token`),
     }))));
+    await db.insert(oauthTokens).values({
+      id: otherHostTokenId,
+      oauthClientId: otherHostClientId,
+      token: await encryptSecret("other-host-policy-token"),
+    });
     await db.insert(policySets).values(providers.map((provider) => ({
       id: policySetId(provider.name),
       orgId,
@@ -254,6 +269,19 @@ describe("VCS-backed policy set synchronization", () => {
         oauthTokenId: provider.tokenId,
       },
     })));
+    await db.insert(policySets).values({
+      id: otherHostPolicySetId,
+      orgId,
+      name: "Other GitHub host policies",
+      kind: "sentinel",
+      policiesPath: "/policy-sets/foo",
+      policyUpdatePatterns: ["policy-sets/foo/**/*.sentinel", "policy-sets/foo/sentinel.hcl"],
+      vcsRepo: {
+        identifier: providers[0].repo,
+        branch: "main",
+        oauthTokenId: otherHostTokenId,
+      },
+    });
     await db.insert(policies).values(providers.map((provider) => ({
       id: `pol-old-${provider.name}-${suffix}`,
       policySetId: policySetId(provider.name),
@@ -385,6 +413,21 @@ describe("VCS-backed policy set synchronization", () => {
         authorization: `Bearer ${provider.name}-policy-token`,
       }));
     }
+  });
+
+  test("does not synchronize a policy set on another provider host", async () => {
+    const before = await db.query.policySetVersions.findMany({
+      where: eq(policySetVersions.policySetId, policySetId("github")),
+    });
+    await triggerProvider(providers[0]);
+    const after = await db.query.policySetVersions.findMany({
+      where: eq(policySetVersions.policySetId, policySetId("github")),
+    });
+    const otherHostVersions = await db.query.policySetVersions.findMany({
+      where: eq(policySetVersions.policySetId, otherHostPolicySetId),
+    });
+    expect(after).toHaveLength(before.length + 1);
+    expect(otherHostVersions).toHaveLength(0);
   });
 
   test("does not synchronize when changed files miss policy-update-patterns", async () => {

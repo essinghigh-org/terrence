@@ -19,6 +19,15 @@ import { decryptSecret } from "./secrets";
 import { matchesPolicySetWebhook, synchronizeVcsPolicySet } from "./policy-sync";
 import { synchronizeRegistryModule } from "./registry-module-sync";
 import { auditLog , type DeepReadonly } from "./utils";
+import {
+  firstConfiguredValue,
+  providerForServiceProvider,
+  sourceIdentityForConnection,
+  vcsSourceMatchesConnection,
+  vcsSourceIdentity,
+  type VcsProvider,
+  type VcsSourceIdentity,
+} from "./vcs-source";
 
 type WebhookPayload = Readonly<Record<string, unknown>>;
 type VcsRepo = DeepReadonly<NonNullable<typeof workspaces.$inferSelect.vcsRepo>>;
@@ -35,10 +44,10 @@ type WebhookDetails = Readonly<{
   readonly repoFullName: string;
   readonly senderUsername: string;
   readonly senderAvatarUrl?: string;
+  readonly sourceIdentity: VcsSourceIdentity;
   readonly tag?: string;
 }>;
 type OAuthProvider = "gitlab" | "bitbucket";
-type VcsProvider = "github" | OAuthProvider;
 type ParsedProviderWebhook = Readonly<{
   details: WebhookDetails;
   kind: "push" | "pull_request";
@@ -132,7 +141,7 @@ function validateGithubPushFields(ref: string | undefined, commitSha: string | u
   return undefined;
 }
 
-function parseGithubPushWebhook(payload: WebhookPayload, base: DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined }>): WebhookDetails | undefined {
+function parseGithubPushWebhook(payload: WebhookPayload, base: DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined; sourceIdentity: VcsSourceIdentity }>): WebhookDetails | undefined {
   const ref = requiredString(payload.ref);
   const commitSha = requiredString(payload.after);
   const headCommit = asRecord(payload.head_commit);
@@ -155,6 +164,7 @@ function parseGithubPushWebhook(payload: WebhookPayload, base: DeepReadonly<{ cl
     repoFullName: base.repoFullName,
     senderUsername: base.senderUsername,
     ...(base.senderAvatarUrl === undefined ? {} : { senderAvatarUrl: base.senderAvatarUrl }),
+    sourceIdentity: base.sourceIdentity,
     ...(branchTag.tag === undefined ? {} : { tag: branchTag.tag }),
   };
 }
@@ -169,7 +179,7 @@ function validateGithubPrFields(branch: string | undefined, commitSha: string | 
   return undefined;
 }
 
-function buildGithubPrDetails(branch: string, targetBranch: string | undefined, base: DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined }>, commitMessage: string, commitSha: string, commitUrl: string, pullRequestNumber: number): WebhookDetails {
+function buildGithubPrDetails(branch: string, targetBranch: string | undefined, base: DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined; sourceIdentity: VcsSourceIdentity }>, commitMessage: string, commitSha: string, commitUrl: string, pullRequestNumber: number): WebhookDetails {
   return {
     branch,
     cloneUrl: base.cloneUrl,
@@ -183,10 +193,11 @@ function buildGithubPrDetails(branch: string, targetBranch: string | undefined, 
     ...(targetBranch === undefined ? {} : { targetBranch }),
     ...(base.deliveryInstallationId === undefined ? {} : { githubInstallationId: base.deliveryInstallationId }),
     ...(base.senderAvatarUrl === undefined ? {} : { senderAvatarUrl: base.senderAvatarUrl }),
+    sourceIdentity: base.sourceIdentity,
   };
 }
 
-function parseGithubPullRequestWebhook(payload: WebhookPayload, base: DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined }>): WebhookDetails | undefined {
+function parseGithubPullRequestWebhook(payload: WebhookPayload, base: DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined; sourceIdentity: VcsSourceIdentity }>): WebhookDetails | undefined {
   const pullRequest = asRecord(payload.pull_request);
   const head = asRecord(pullRequest?.head);
   const baseRef = asRecord(pullRequest?.base);
@@ -223,7 +234,7 @@ function validateGitlabPushFields(ref: string | undefined, commitSha: string | u
   return undefined;
 }
 
-function parseGitlabPushWebhook(payload: WebhookPayload, project: Readonly<Record<string, unknown>> | undefined, repoFullName: string, cloneUrl: string, senderUsername: string): ParsedProviderWebhook | undefined {
+function parseGitlabPushWebhook(payload: WebhookPayload, project: Readonly<Record<string, unknown>> | undefined, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity): ParsedProviderWebhook | undefined {
   const ref = requiredString(payload.ref);
   const commitSha = resolveGitlabCommitSha(payload);
   const commits = extractGitlabCommits(payload);
@@ -247,6 +258,7 @@ function parseGitlabPushWebhook(payload: WebhookPayload, project: Readonly<Recor
       filesChanged,
       repoFullName,
       senderUsername,
+      sourceIdentity,
       ...(branchTag.tag === undefined ? {} : { tag: branchTag.tag }),
     },
   };
@@ -275,7 +287,7 @@ function validateGitlabMrFields(branch: string | undefined, commitSha: string | 
   return undefined;
 }
 
-function parseGitlabMergeRequestWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string): ParsedProviderWebhook | undefined {
+function parseGitlabMergeRequestWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity): ParsedProviderWebhook | undefined {
   const attributes = asRecord(payload.object_attributes);
   const action = attributes?.action;
   if (!["open", "reopen", "update"].includes(typeof action === "string" ? action : "")) return undefined;
@@ -301,6 +313,7 @@ function parseGitlabMergeRequestWebhook(payload: WebhookPayload, repoFullName: s
       pullRequestNumber,
       repoFullName,
       senderUsername,
+      sourceIdentity,
     },
   };
 }
@@ -321,7 +334,7 @@ function validateBitbucketPushFields(referenceType: string | undefined, referenc
   return undefined;
 }
 
-function parseBitbucketPushWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string): ParsedProviderWebhook | undefined {
+function parseBitbucketPushWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity): ParsedProviderWebhook | undefined {
   const changes = extractBitbucketChanges(payload);
   if (changes === undefined) return undefined;
   const change = asRecord(changes[0]);
@@ -347,6 +360,7 @@ function parseBitbucketPushWebhook(payload: WebhookPayload, repoFullName: string
       filesChanged: new Set<string>(),
       repoFullName,
       senderUsername,
+      sourceIdentity,
     },
   };
 }
@@ -370,7 +384,7 @@ function resolveBitbucketPrCommitUrl(pullRequest: Readonly<Record<string, unknow
   return requiredString(commitHtml?.href);
 }
 
-function parseBitbucketPullRequestWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string): ParsedProviderWebhook | undefined {
+function parseBitbucketPullRequestWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity): ParsedProviderWebhook | undefined {
   const pullRequest = asRecord(payload.pullrequest);
   const source = asRecord(pullRequest?.source);
   const destination = asRecord(pullRequest?.destination);
@@ -398,6 +412,7 @@ function parseBitbucketPullRequestWebhook(payload: WebhookPayload, repoFullName:
       pullRequestNumber,
       repoFullName,
       senderUsername,
+      sourceIdentity,
     },
   };
 }
@@ -413,7 +428,9 @@ function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetail
   if (repoFullName === undefined) return undefined;
   if (cloneUrl === undefined) return undefined;
   if (senderUsername === undefined) return undefined;
-  const base = { cloneUrl, repoFullName, senderUsername, senderAvatarUrl, deliveryInstallationId };
+  const sourceIdentity = vcsSourceIdentity("github", cloneUrl, deliveryInstallationId);
+  if (sourceIdentity === undefined) return undefined;
+  const base = { cloneUrl, repoFullName, senderUsername, senderAvatarUrl, deliveryInstallationId, sourceIdentity };
   if (eventName === "push") return parseGithubPushWebhook(payload, base);
   if (eventName === "pull_request" && (payload.action === "opened" || payload.action === "synchronize")) return parseGithubPullRequestWebhook(payload, base);
   return undefined;
@@ -428,8 +445,10 @@ function gitlabWebhook(eventName: string, payload: WebhookPayload): ParsedProvid
   if (repoFullName === undefined) return undefined;
   if (cloneUrl === undefined) return undefined;
   if (senderUsername === undefined) return undefined;
-  if (eventName === "Push Hook" || eventName === "Tag Push Hook") return parseGitlabPushWebhook(payload, project, repoFullName, cloneUrl, senderUsername);
-  if (eventName === "Merge Request Hook") return parseGitlabMergeRequestWebhook(payload, repoFullName, cloneUrl, senderUsername);
+  const sourceIdentity = vcsSourceIdentity("gitlab", cloneUrl);
+  if (sourceIdentity === undefined) return undefined;
+  if (eventName === "Push Hook" || eventName === "Tag Push Hook") return parseGitlabPushWebhook(payload, project, repoFullName, cloneUrl, senderUsername, sourceIdentity);
+  if (eventName === "Merge Request Hook") return parseGitlabMergeRequestWebhook(payload, repoFullName, cloneUrl, senderUsername, sourceIdentity);
   return undefined;
 }
 
@@ -453,8 +472,10 @@ function bitbucketWebhook(eventName: string, payload: WebhookPayload): ParsedPro
   if (repoFullName === undefined) return undefined;
   if (cloneUrl === undefined) return undefined;
   if (senderUsername === undefined) return undefined;
-  if (eventName === "repo:push") return parseBitbucketPushWebhook(payload, repoFullName, cloneUrl, senderUsername);
-  if (eventName === "pullrequest:created" || eventName === "pullrequest:updated") return parseBitbucketPullRequestWebhook(payload, repoFullName, cloneUrl, senderUsername);
+  const sourceIdentity = vcsSourceIdentity("bitbucket", cloneUrl);
+  if (sourceIdentity === undefined) return undefined;
+  if (eventName === "repo:push") return parseBitbucketPushWebhook(payload, repoFullName, cloneUrl, senderUsername, sourceIdentity);
+  if (eventName === "pullrequest:created" || eventName === "pullrequest:updated") return parseBitbucketPullRequestWebhook(payload, repoFullName, cloneUrl, senderUsername, sourceIdentity);
   return undefined;
 }
 
@@ -510,10 +531,7 @@ export async function getGitHubAppAccessToken(installationId: number): Promise<s
       exp: Math.floor(Date.now() / 1000) + (10 * 60),
       iss: appId,
     }, key, { algorithm: "RS256" });
-    const apiUrl = providerApiUrl(
-      process.env.GITHUB_APP_API_URL ?? process.env.GITHUB_API_URL ?? null,
-      "https://api.github.com",
-    );
+    const apiUrl = githubAppApiUrl();
     if (apiUrl === undefined) return null;
     const response = await fetch(`${apiUrl}/app/installations/${String(installationId)}/access_tokens`, {
       method: "POST",
@@ -532,32 +550,21 @@ export async function getGitHubAppAccessToken(installationId: number): Promise<s
   }
 }
 
-function providerForOAuthClient(serviceProvider: string): "github" | OAuthProvider | undefined {
-  if (serviceProvider === "github" || serviceProvider === "github_enterprise") return "github";
-  if (serviceProvider === "gitlab" || serviceProvider === "gitlab_ce" || serviceProvider === "gitlab_ee") return "gitlab";
-  if (serviceProvider === "bitbucket") return "bitbucket";
-  return undefined;
-}
-
 /**
- * Resolve the provider configured for a workspace without decrypting its
- * token. An unresolved reference deliberately returns undefined so stale
- * configurations still reach the normal missing-credentials error path.
+ * Resolve the source configured for a workspace without decrypting its token.
+ * An unresolved reference deliberately returns undefined so stale or
+ * cross-organization configurations cannot match an incoming webhook.
  */
-async function configuredVcsProvider(
+async function configuredVcsSource(
   workspace: DeepReadonly<VcsCredentialSubject>,
-): Promise<VcsProvider | undefined> {
+): Promise<VcsSourceIdentity | undefined> {
   const vcs = workspace.vcsRepo;
-  if (vcs?.githubAppInstallationId !== undefined && vcs.githubAppInstallationId !== "") return "github";
+  if (vcs?.githubAppInstallationId !== undefined && vcs.githubAppInstallationId !== "") {
+    return sourceIdentityForConnection(workspace.orgId, "github-app", vcs.githubAppInstallationId);
+  }
   const tokenId = vcs?.oauthTokenId;
   if (tokenId === undefined || tokenId === "") return undefined;
-  const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, tokenId) });
-  if (token === undefined) return undefined;
-  const client = await db.query.oauthClients.findFirst({
-    where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
-    columns: { serviceProvider: true },
-  });
-  return client === undefined ? undefined : providerForOAuthClient(client.serviceProvider);
+  return sourceIdentityForConnection(workspace.orgId, "oauth-token", tokenId);
 }
 
 async function matchesGithubAppInstallation(
@@ -577,14 +584,18 @@ async function matchesGithubAppInstallation(
   return installation !== undefined;
 }
 
-function providerApiUrl(value: string | null, fallback: string): string | undefined {
+function providerApiUrl(value: string | null, fallback: string, requireHttps = false): string | undefined {
   try {
     const url = new URL(value === null || value === "" ? fallback : value);
-    if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+    if ((url.protocol !== "https:" && url.protocol !== "http:") || (requireHttps && url.protocol !== "https:")) return undefined;
     return url.toString().replace(/\/$/, "");
   } catch {
     return undefined;
   }
+}
+
+function githubAppApiUrl(): string | undefined {
+  return providerApiUrl(firstConfiguredValue(process.env.GITHUB_APP_API_URL, process.env.GITHUB_API_URL) ?? null, "https://api.github.com", true);
 }
 
 async function oauthProviderCredentials(
@@ -598,7 +609,7 @@ async function oauthProviderCredentials(
   const client = await db.query.oauthClients.findFirst({
     where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
   });
-  if (client === undefined || providerForOAuthClient(client.serviceProvider) !== provider) return undefined;
+  if (client === undefined || providerForServiceProvider(client.serviceProvider) !== provider) return undefined;
   const apiUrl = providerApiUrl(
     client.apiUrl,
     provider === "github"
@@ -638,7 +649,7 @@ async function githubCredentials(
         token = await getGitHubAppAccessToken(installation.installationId);
         installationTokens?.set(installationKey, token);
       }
-      const apiUrl = providerApiUrl(process.env.GITHUB_APP_API_URL ?? process.env.GITHUB_API_URL ?? null, "https://api.github.com");
+      const apiUrl = githubAppApiUrl();
       if (token !== null && apiUrl !== undefined) return { apiUrl, provider: "github", token };
     }
   }
@@ -1259,7 +1270,7 @@ async function oauthDefaultBranch(
     where: and(eq(oauthClients.id, oauthToken.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
   });
   if (client === undefined) return undefined;
-  const provider = providerForOAuthClient(client.serviceProvider);
+  const provider = providerForServiceProvider(client.serviceProvider);
   const apiUrl = providerApiUrl(client.apiUrl, provider === "github" ? "https://api.github.com" : "");
   if (apiUrl === undefined || provider === undefined) return undefined;
   const secret = await decryptSecret(oauthToken.token).catch((): undefined => undefined);
@@ -1351,7 +1362,7 @@ async function oauthLatestCommit(
     where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
   });
   if (client === undefined) return undefined;
-  const provider = providerForOAuthClient(client.serviceProvider);
+  const provider = providerForServiceProvider(client.serviceProvider);
   const apiUrl = providerApiUrl(client.apiUrl, provider === "github" ? "https://api.github.com" : "");
   if (apiUrl === undefined || provider === undefined) return undefined;
   const secret = await decryptSecret(token.token).catch((): undefined => undefined);
@@ -1403,7 +1414,7 @@ export async function createConfigurationVersionFromVcs(
       const client = await db.query.oauthClients.findFirst({
         where: and(eq(oauthClients.id, token.oauthClientId), eq(oauthClients.orgId, workspace.orgId)),
       });
-      const provider = providerForOAuthClient(client?.serviceProvider ?? "");
+      const provider = providerForServiceProvider(client?.serviceProvider ?? "");
       source = provider ?? "tfe-api";
     }
   }
@@ -1514,8 +1525,8 @@ async function matchingWebhookWorkspaces(
   const branchMatchedWorkspaces: DeepReadonly<typeof workspaces.$inferSelect>[] = [];
   for (const workspace of candidates) {
     if (workspace.vcsRepo?.identifier !== details.repoFullName) continue;
-    const configuredProvider = await configuredVcsProvider(workspace);
-    if (configuredProvider !== undefined && configuredProvider !== provider) continue;
+    const configuredSource = await configuredVcsSource(workspace);
+    if (configuredSource === undefined || configuredSource.provider !== provider || !vcsSourceMatchesConnection(configuredSource, details.sourceIdentity)) continue;
     if (details.githubInstallationId !== undefined && githubInstallationPredicate !== undefined && !await githubInstallationPredicate(workspace, details.githubInstallationId)) continue;
     if (await matchesVcsTrigger(workspace, details)) branchMatchedWorkspaces.push(workspace);
   }
@@ -1716,9 +1727,14 @@ export async function handleBitbucketWebhook(eventName: string, payload: Webhook
  * a tag is pushed. Tag prefix filtering mirrors the registry's tag-prefix
  * setting; synchronizeRegistryModule imports any new matching tags and
  * records per-module errors on the module row, so callers can run this
- * fire-and-forget.
+ * fire-and-forget. The source identity is required so a repository with the
+ * same owner/name on another provider host cannot trigger this module.
  */
-export async function syncRegistryModulesForTag(repoFullName: string, tag: string): Promise<void> {
+export async function syncRegistryModulesForTag(
+  repoFullName: string,
+  tag: string,
+  sourceIdentity: VcsSourceIdentity,
+): Promise<void> {
   const modules = await db.query.registryModules.findMany({
     where: and(
       eq(registryModules.publishingMechanism, "vcs"),
@@ -1727,6 +1743,8 @@ export async function syncRegistryModulesForTag(repoFullName: string, tag: strin
   });
   for (const mod of modules) {
     if (mod.tagPrefix !== "" && !tag.startsWith(mod.tagPrefix)) continue;
+    const moduleSource = await sourceIdentityForConnection(mod.orgId, mod.vcsConnectionType, mod.vcsConnectionId);
+    if (moduleSource === undefined || !vcsSourceMatchesConnection(moduleSource, sourceIdentity)) continue;
     try {
       await synchronizeRegistryModule(mod);
     } catch (error: unknown) {
@@ -1788,7 +1806,7 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
   // the reference format's tag workflow). Isolated: a failing module must not affect the
   // workspace run path below.
   if (details.tag !== undefined) {
-    void syncRegistryModulesForTag(details.repoFullName, details.tag).catch((error: unknown): void => {
+    void syncRegistryModulesForTag(details.repoFullName, details.tag, details.sourceIdentity).catch((error: unknown): void => {
       console.error("[terrence] Registry module tag sync failed:", error);
     });
   }
@@ -1954,8 +1972,20 @@ async function synchronizeVcsPolicySets(
   const candidates = await db.query.policySets.findMany({
     where: sql`${jsonExtract(policySets.vcsRepo, '$.identifier')} = ${details.repoFullName}`,
   });
-  const matched = candidates.filter((policySet: DeepReadonly<typeof policySets.$inferSelect>): boolean =>
-    matchesPolicySetWebhook(policySet, details));
+  const matched: DeepReadonly<typeof policySets.$inferSelect>[] = [];
+  for (const policySet of candidates) {
+    const vcsRepo = policySet.vcsRepo;
+    const connectionType = vcsRepo?.githubAppInstallationId !== undefined && vcsRepo.githubAppInstallationId !== ""
+      ? "github-app"
+      : vcsRepo?.oauthTokenId !== undefined && vcsRepo.oauthTokenId !== ""
+        ? "oauth-token"
+        : undefined;
+    const connectionId = connectionType === "github-app" ? vcsRepo?.githubAppInstallationId : vcsRepo?.oauthTokenId;
+    const configuredSource = await sourceIdentityForConnection(policySet.orgId, connectionType, connectionId);
+    if (configuredSource !== undefined && vcsSourceMatchesConnection(configuredSource, details.sourceIdentity) && matchesPolicySetWebhook(policySet, details)) {
+      matched.push(policySet);
+    }
+  }
   await Promise.all(matched.map(async (policySet: DeepReadonly<typeof policySets.$inferSelect>): Promise<void> =>
     synchronizeVcsPolicySet(policySet, provider, details, async (): Promise<Uint8Array> => {
       const credentials = provider === "github"
