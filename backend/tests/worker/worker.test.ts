@@ -335,7 +335,7 @@ test("plans uploaded cloud configuration against the latest local state and reco
 test("finishes plan-only runs without applying even when the workspace auto-applies", async () => {
   const result = await runWorkerScript(`
     const { db } = await import("./src/db/index.ts");
-    const { organizations, runs, workspaces } = await import("./src/db/schema.ts");
+    const { organizations, runTaskResults, runTasks, runs, workspaces } = await import("./src/db/schema.ts");
     const { executeRun } = await import("./src/worker.ts");
 
     await db.insert(organizations).values({ id: "org", name: "org" });
@@ -344,6 +344,13 @@ test("finishes plan-only runs without applying even when the workspace auto-appl
       name: "workspace",
       orgId: "org",
       autoApply: true,
+    });
+    await db.insert(runTasks).values({
+      id: "plan-only-global-task",
+      orgId: "org",
+      name: "plan-only-global",
+      url: "not-a-url",
+      globalConfiguration: { enabled: true, stages: ["pre_apply"], enforcementLevel: "mandatory" },
     });
     await db.insert(runs).values({
       id: "run",
@@ -355,8 +362,10 @@ test("finishes plan-only runs without applying even when the workspace auto-appl
 
     await executeRun("run");
     const run = await db.query.runs.findFirst({ where: (row, { eq }) => eq(row.id, "run") });
+    const taskResults = await db.query.runTaskResults.findMany({ where: (row, { eq }) => eq(row.runId, "run") });
     console.log(JSON.stringify({
       status: run?.status,
+      taskResultCount: taskResults.length,
       planCounts: {
         additions: run?.planResourceAdditions,
         changes: run?.planResourceChanges,
@@ -368,6 +377,7 @@ test("finishes plan-only runs without applying even when the workspace auto-appl
 
   expect(result).toEqual({
     status: "planned_and_finished",
+    taskResultCount: 0,
     planCounts: { additions: 1, changes: 0, destructions: 0, imports: 0 },
   });
 }, 30_000);
@@ -438,6 +448,7 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
         const body = await request.text();
         received.push({
           body,
+          path: new URL(request.url).pathname,
           signature: request.headers.get("x-tfc-task-signature"),
         });
         const taskPayload = JSON.parse(body);
@@ -463,7 +474,10 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
     const endpoint = server.url.toString().replace(/\\/$/, "");
     const hmacKey = "worker-task-secret";
 
-    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(organizations).values([
+      { id: "org", name: "org" },
+      { id: "other-org", name: "other-org" },
+    ]);
     await db.insert(workspaces).values({
       id: "workspace",
       name: "workspace",
@@ -473,10 +487,46 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
     await db.insert(runTasks).values([
       { id: "pre-task", orgId: "org", name: "pre", url: endpoint + "/pre", hmacKey },
       { id: "post-task", orgId: "org", name: "post", url: endpoint + "/post", hmacKey },
+      { id: "pre-apply-task", orgId: "org", name: "pre-apply", url: endpoint + "/pre-apply", hmacKey },
+      { id: "post-apply-task", orgId: "org", name: "post-apply", url: endpoint + "/post-apply", hmacKey },
+      {
+        id: "global-task",
+        orgId: "org",
+        name: "global",
+        url: endpoint + "/global",
+        hmacKey,
+        globalConfiguration: { enabled: true, stages: ["pre_apply", "post_apply"], enforcementLevel: "mandatory" },
+      },
+      {
+        id: "overlap-task",
+        orgId: "org",
+        name: "overlap",
+        url: endpoint + "/overlap",
+        hmacKey,
+        globalConfiguration: { enabled: true, stages: ["pre_apply"], enforcementLevel: "advisory" },
+      },
+      {
+        id: "disabled-global-task",
+        orgId: "org",
+        name: "disabled-global",
+        url: endpoint + "/disabled-global",
+        globalConfiguration: { enabled: true, stages: ["pre_apply"], enforcementLevel: "mandatory" },
+        enabled: false,
+      },
+      {
+        id: "foreign-global-task",
+        orgId: "other-org",
+        name: "foreign-global",
+        url: endpoint + "/foreign-global",
+        globalConfiguration: { enabled: true, stages: ["pre_apply"], enforcementLevel: "mandatory" },
+      },
     ]);
     await db.insert(workspaceRunTasks).values([
       { id: "pre-binding", workspaceId: "workspace", runTaskId: "pre-task", stage: "pre_plan", enforcementLevel: "mandatory" },
       { id: "post-binding", workspaceId: "workspace", runTaskId: "post-task", stage: "post_plan", enforcementLevel: "mandatory" },
+      { id: "pre-apply-binding", workspaceId: "workspace", runTaskId: "pre-apply-task", stage: "pre_apply", enforcementLevel: "mandatory" },
+      { id: "post-apply-binding", workspaceId: "workspace", runTaskId: "post-apply-task", stage: "post_apply", enforcementLevel: "mandatory" },
+      { id: "overlap-binding", workspaceId: "workspace", runTaskId: "overlap-task", stage: "pre_apply", enforcementLevel: "mandatory" },
     ]);
     await db.insert(runs).values({
       id: "run",
@@ -497,22 +547,29 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
     console.log(JSON.stringify({
       status: completed?.status,
       statusKeys: Object.keys(completed?.statusTimestamps ?? {}),
-      tasks: received.map(({ body, signature }) => ({
+      tasks: received.map(({ body, path, signature }) => ({
+        path,
         stage: JSON.parse(body).stage,
+        enforcementLevel: JSON.parse(body).task_result_enforcement_level,
         hasCallback: new URL(JSON.parse(body).task_result_callback_url).pathname.endsWith("/callback"),
         signatureValid: signature === createHmac("sha512", hmacKey).update(body).digest("hex"),
-      })),
+      })).sort((left, right) => left.path.localeCompare(right.path)),
       resultStatuses: taskResults.map(result => result.status).sort(),
     }));
     process.exit(0);
-  `, { NODE_ENV: "test", SIMULATED_RUNS: "true", RUN_TASK_TIMEOUT_MS: "1000" });
+  `, { NODE_ENV: "test", SIMULATED_RUNS: "true", RUN_TASK_TIMEOUT_MS: "1000", TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS: "true" });
 
   expect(result.status).toBe("applied");
   expect(result.tasks).toEqual([
-    { stage: "pre_plan", hasCallback: true, signatureValid: true },
-    { stage: "post_plan", hasCallback: true, signatureValid: true },
+    { path: "/global", stage: "pre_apply", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },
+    { path: "/global", stage: "post_apply", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },
+    { path: "/overlap", stage: "pre_apply", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },
+    { path: "/post", stage: "post_plan", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },
+    { path: "/post-apply", stage: "post_apply", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },
+    { path: "/pre", stage: "pre_plan", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },
+    { path: "/pre-apply", stage: "pre_apply", enforcementLevel: "mandatory", hasCallback: true, signatureValid: true },
   ]);
-  expect(result.resultStatuses).toEqual(["passed", "passed"]);
+  expect(result.resultStatuses).toEqual(["passed", "passed", "passed", "passed", "passed", "passed", "passed"]);
   expect(result.statusKeys).toEqual([
     "pending-at",
     "fetching-at",
@@ -536,6 +593,80 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
     "applied-at",
   ]);
 });
+
+test("blocks apply on mandatory pre-apply failure and preserves applied after post-apply failure", async () => {
+  const result = await runWorkerScript(`
+    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
+    const { db } = await import("./src/db/index.ts");
+    const { logs, organizations, runs, runTaskResults, runTasks, workspaceRunTasks, workspaces } = await import("./src/db/schema.ts");
+    const { executeRun } = await import("./src/worker.ts");
+
+    let postApplyObservedStatus;
+    const receivedStages = [];
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const payload = JSON.parse(await request.text());
+        receivedStages.push(payload.stage);
+        if (payload.stage === "post_apply") {
+          postApplyObservedStatus = (await db.query.runs.findFirst({ where: (row, { eq }) => eq(row.id, "post-run") }))?.status;
+        }
+        const status = payload.stage === "pre_apply" || payload.stage === "post_apply" ? "failed" : "passed";
+        return Response.json({ data: { attributes: { status, message: payload.stage } } });
+      },
+    });
+    const endpoint = server.url.toString().replace(/\\/$/, "");
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(workspaces).values([
+      { id: "pre-workspace", name: "pre-workspace", orgId: "org", autoApply: true },
+      { id: "post-workspace", name: "post-workspace", orgId: "org", autoApply: true },
+    ]);
+    await db.insert(runTasks).values([
+      { id: "pre-failing-task", orgId: "org", name: "pre-failing", url: endpoint + "/pre-failing" },
+      { id: "post-failing-task", orgId: "org", name: "post-failing", url: endpoint + "/post-failing" },
+    ]);
+    await db.insert(workspaceRunTasks).values([
+      { id: "pre-failing-binding", workspaceId: "pre-workspace", runTaskId: "pre-failing-task", stage: "pre_apply", enforcementLevel: "mandatory" },
+      { id: "post-failing-binding", workspaceId: "post-workspace", runTaskId: "post-failing-task", stage: "post_apply", enforcementLevel: "mandatory" },
+    ]);
+    await db.insert(runs).values([
+      { id: "pre-run", workspaceId: "pre-workspace", status: "pending", autoApply: true, createdAt: Date.now() },
+      { id: "post-run", workspaceId: "post-workspace", status: "pending", autoApply: true, createdAt: Date.now() },
+    ]);
+
+    await executeRun("pre-run");
+    await executeRun("post-run");
+    server.stop(true);
+
+    const preRun = await db.query.runs.findFirst({ where: (row, { eq }) => eq(row.id, "pre-run") });
+    const postRun = await db.query.runs.findFirst({ where: (row, { eq }) => eq(row.id, "post-run") });
+    const preResults = await db.query.runTaskResults.findMany({ where: (row, { eq }) => eq(row.runId, "pre-run") });
+    const postResults = await db.query.runTaskResults.findMany({ where: (row, { eq }) => eq(row.runId, "post-run") });
+    const preLogs = await db.query.logs.findMany({ where: (row, { eq }) => eq(row.runId, "pre-run") });
+    console.log(JSON.stringify({
+      preStatus: preRun?.status,
+      postStatus: postRun?.status,
+      preResults: preResults.map((entry) => entry.status),
+      postResults: postResults.map((entry) => entry.status),
+      preAppliedLog: preLogs.some((entry) => entry.outputText.includes("Simulated apply completed successfully")),
+      prePartialStateLog: preLogs.some((entry) => entry.outputText.includes("partial state was journaled")),
+      preApplyRequests: receivedStages.filter((stage) => stage === "pre_apply").length,
+      postTaskObservedStatus: postApplyObservedStatus,
+    }));
+    process.exit(0);
+  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+
+  expect(result).toEqual({
+    preStatus: "errored",
+    postStatus: "applied",
+    preResults: ["failed"],
+    postResults: ["failed"],
+    preAppliedLog: false,
+    prePartialStateLog: false,
+    preApplyRequests: 0,
+    postTaskObservedStatus: "applied",
+  });
+}, 30_000);
 
 test("evaluates project policy sets after cost estimation and honors workspace exclusions", async () => {
   const result = await runWorkerScript(`

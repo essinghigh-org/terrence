@@ -1,5 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
+import { envEnabled } from "../lib/env";
 import {
   runTasks,
   workspaceRunTasks,
@@ -108,6 +109,17 @@ function parseGlobalConfig(value: unknown): GlobalConfig | null {
   };
 }
 
+function globalRunTaskUrlError(url: string, configuration: GlobalConfig | null | undefined, taskEnabled = true): string | undefined {
+  if (configuration?.enabled !== true || taskEnabled !== true || envEnabled(process.env.TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS)) return undefined;
+  try {
+    return new URL(url).protocol === "https:"
+      ? undefined
+      : "Enabled organization-global run tasks require an HTTPS URL";
+  } catch {
+    return undefined;
+  }
+}
+
 const runTaskResource = async (t: RunTaskRow, orgNameOverride?: string | null): Promise<Record<string, unknown>> => {
   const orgName = orgNameOverride !== undefined ? orgNameOverride : await organizationName(t.orgId);
   return {
@@ -169,6 +181,8 @@ const createOrgRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId:
   const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : true;
   const hmacKey = typeof attrs["hmac-key"] === "string" ? attrs["hmac-key"] : null;
   const globalConfiguration = parseGlobalConfig(attrs["global-configuration"]);
+  const globalUrlError = globalRunTaskUrlError(url, globalConfiguration, enabled);
+  if (globalUrlError !== undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: globalUrlError }] }; }
   const rowData = { id, orgId: org.id, name, description, url, category, enabled, hmacKey, globalConfiguration, createdAt: Date.now() };
   await db.insert(runTasks).values(rowData);
   (set as { status: number }).status = 201;
@@ -205,6 +219,10 @@ const updateRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: to
   if (attrs["global-configuration"] !== undefined) {
     updates.globalConfiguration = parseGlobalConfig(attrs["global-configuration"]);
   }
+  const nextGlobalConfiguration = updates.globalConfiguration !== undefined ? updates.globalConfiguration : task.globalConfiguration;
+  const nextEnabled = updates.enabled !== undefined ? updates.enabled === true : task.enabled === true;
+  const globalUrlError = globalRunTaskUrlError(updates.url ?? task.url, nextGlobalConfiguration, nextEnabled);
+  if (globalUrlError !== undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: globalUrlError }] }; }
   if (Object.keys(updates).length > 0) await db.update(runTasks).set(updates).where(eq(runTasks.id, taskId));
   const updated = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
   if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }

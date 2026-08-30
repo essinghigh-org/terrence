@@ -1106,23 +1106,57 @@ async function unnestArchiveDirectory(
   }
 }
 
+type RunTaskStage = "pre_plan" | "post_plan" | "pre_apply" | "post_apply";
+type RunTaskExecution = Readonly<{
+  task: Readonly<typeof runTasks.$inferSelect>;
+  enforcementLevel: string;
+  isGlobal: boolean;
+}>;
+
+function runTaskTransportError(taskUrl: string, stage: RunTaskStage, isGlobal: boolean): string | undefined {
+  if ((stage !== "pre_apply" && !isGlobal) || envEnabled(process.env.TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS)) return undefined;
+  try {
+    return new URL(taskUrl).protocol === "https:"
+      ? undefined
+      : "Pre-apply run task URLs must use HTTPS";
+  } catch {
+    return undefined;
+  }
+}
+
 async function executeRunTasks(
   runId: string,
-  workspace: Readonly<{ id: string; name: string; workingDirectory: string | null }>,
+  workspace: Readonly<{ id: string; name: string; orgId: string; workingDirectory: string | null }>,
   orgName: string,
-  stage: "pre_plan" | "post_plan",
+  stage: RunTaskStage,
 ): Promise<boolean> {
-  const bindings = await db.query.workspaceRunTasks.findMany({
-    where: and(eq(workspaceRunTasks.workspaceId, workspace.id), eq(workspaceRunTasks.stage, stage)),
-    orderBy: [asc(workspaceRunTasks.id)],
-  });
-  if (bindings.length === 0) return true;
+  const [bindings, globalTasks] = await Promise.all([
+    db.query.workspaceRunTasks.findMany({
+      where: and(eq(workspaceRunTasks.workspaceId, workspace.id), eq(workspaceRunTasks.stage, stage)),
+      orderBy: [asc(workspaceRunTasks.id)],
+    }),
+    db.query.runTasks.findMany({
+      where: and(eq(runTasks.orgId, workspace.orgId), eq(runTasks.enabled, true)),
+      orderBy: [asc(runTasks.id)],
+    }),
+  ]);
+  const tasksById = new Map(globalTasks.map((task: Readonly<typeof runTasks.$inferSelect>): readonly [string, Readonly<typeof runTasks.$inferSelect>] => [task.id, task]));
+  const executions = new Map<string, RunTaskExecution>();
+  for (const binding of bindings) {
+    const task = tasksById.get(binding.runTaskId);
+    if (task !== undefined) executions.set(task.id, { task, enforcementLevel: binding.enforcementLevel, isGlobal: false });
+  }
+  for (const task of globalTasks) {
+    const globalConfiguration = task.globalConfiguration;
+    if (globalConfiguration?.enabled !== true || !Array.isArray(globalConfiguration.stages) || !globalConfiguration.stages.includes(stage)) continue;
+    if (executions.has(task.id)) continue;
+    const enforcementLevel = ["mandatory", "must_pass"].includes(globalConfiguration.enforcementLevel)
+      ? globalConfiguration.enforcementLevel
+      : "advisory";
+    executions.set(task.id, { task, enforcementLevel, isGlobal: true });
+  }
+  if (executions.size === 0) return true;
 
-  const taskIds = bindings.map((binding: Readonly<{ runTaskId: string }>): string => binding.runTaskId);
-  const configuredTasks = await db.query.runTasks.findMany({
-    where: and(inArray(runTasks.id, taskIds), eq(runTasks.enabled, true)),
-  });
-  const tasksById = new Map(configuredTasks.map((task: Readonly<typeof runTasks.$inferSelect>): readonly [string, Readonly<typeof runTasks.$inferSelect>] => [task.id, task]));
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
   let proceed = true;
   const configuredTimeout = Number(process.env.RUN_TASK_TIMEOUT_MS ?? 3_600_000);
@@ -1131,15 +1165,16 @@ async function executeRunTasks(
   // Batch-insert all pending run-task results in one statement instead of
   // issuing one INSERT per binding inside the loop below.
   const entryList: Readonly<{
-    binding: Readonly<(typeof bindings)[number]>;
+    enforcementLevel: string;
+    isGlobal: boolean;
     task: Readonly<typeof runTasks.$inferSelect>;
     resultId: string;
-  }>[] = [];
-  for (const binding of bindings) {
-    const task = tasksById.get(binding.runTaskId);
-    if (task === undefined) continue;
-    entryList.push({ binding, task, resultId: `taskrs-${crypto.randomUUID()}` });
-  }
+  }>[] = [...executions.values()].map(({ task, enforcementLevel, isGlobal }): Readonly<{
+    enforcementLevel: string;
+    isGlobal: boolean;
+    task: Readonly<typeof runTasks.$inferSelect>;
+    resultId: string;
+  }> => ({ enforcementLevel, isGlobal, task, resultId: `taskrs-${crypto.randomUUID()}` }));
   if (entryList.length > 0) {
     await db.insert(runTaskResults).values(
       entryList.map((entry): typeof runTaskResults.$inferInsert => ({
@@ -1152,7 +1187,7 @@ async function executeRunTasks(
     );
   }
 
-  for (const { binding, task, resultId } of entryList) {
+  for (const { enforcementLevel, isGlobal, task, resultId } of entryList) {
     const port = process.env.PORT ?? "3000";
     const callbackBase = process.env.PUBLIC_URL ?? `http://localhost:${port}`;
     const callbackPath = `/api/v2/task-results/${resultId}/callback`;
@@ -1174,7 +1209,7 @@ async function executeRunTasks(
       run_id: runId,
       run_message: run?.message ?? "",
       task_result_callback_url: callbackUrl,
-      task_result_enforcement_level: binding.enforcementLevel,
+      task_result_enforcement_level: enforcementLevel,
       task_result_id: resultId,
       workspace_id: workspace.id,
       workspace_name: workspace.name,
@@ -1188,39 +1223,48 @@ async function executeRunTasks(
     let status = "running";
     let message: string | null = null;
     let resultUrl: string | null = null;
-    const destination = await resolveExternalUrl(task.url, envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_URLS));
+    const transportError = runTaskTransportError(task.url, stage, isGlobal);
+    const destination = transportError === undefined
+      ? await resolveExternalUrl(task.url, envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_URLS))
+      : { error: transportError };
     if ("error" in destination) {
       status = "failed";
       message = destination.error;
-    } else try {
-      const response = await fetchResolvedExternalUrl(destination.target, {
+    } else {
+      const resolvedTransportError = runTaskTransportError(destination.target.url, stage, isGlobal);
+      if (resolvedTransportError !== undefined) {
+        status = "failed";
+        message = resolvedTransportError;
+      } else try {
+        const response = await fetchResolvedExternalUrl(destination.target, {
         method: "POST",
         headers,
         body: payload,
         timeoutMs: 10_000,
-      });
-      const responseText = await response.text();
-      status = response.ok ? "running" : "failed";
-      message = response.ok ? null : `Run task returned HTTP ${response.status}`;
-      if (responseText !== "") {
-        try {
-          const parsed = JSON.parse(responseText) as Record<string, unknown>;
-          const rawData = parsed.data;
-          const data = rawData !== null && typeof rawData === "object"
-            ? rawData as Record<string, unknown>
-            : parsed;
-          const rawAttributes = data.attributes;
-          const attributes = rawAttributes !== null && typeof rawAttributes === "object"
-            ? rawAttributes as Record<string, unknown>
-            : data;
-          if (["running", "passed", "failed"].includes(String(attributes.status))) status = String(attributes.status);
-          if (typeof attributes.message === "string") message = attributes.message;
-          if (typeof attributes.url === "string") resultUrl = attributes.url;
-        } catch {}
+        });
+        const responseText = await response.text();
+        status = response.ok ? "running" : "failed";
+        message = response.ok ? null : `Run task returned HTTP ${response.status}`;
+        if (responseText !== "") {
+          try {
+            const parsed = JSON.parse(responseText) as Record<string, unknown>;
+            const rawData = parsed.data;
+            const data = rawData !== null && typeof rawData === "object"
+              ? rawData as Record<string, unknown>
+              : parsed;
+            const rawAttributes = data.attributes;
+            const attributes = rawAttributes !== null && typeof rawAttributes === "object"
+              ? rawAttributes as Record<string, unknown>
+              : data;
+            if (["running", "passed", "failed"].includes(String(attributes.status))) status = String(attributes.status);
+            if (typeof attributes.message === "string") message = attributes.message;
+            if (typeof attributes.url === "string") resultUrl = attributes.url;
+          } catch {}
+        }
+      } catch (error: unknown) {
+        status = "failed";
+        message = error instanceof Error ? error.message : String(error);
       }
-    } catch (error: unknown) {
-      status = "failed";
-      message = error instanceof Error ? error.message : String(error);
     }
 
     const callbackResult = await db.query.runTaskResults.findFirst({ where: eq(runTaskResults.id, resultId) });
@@ -1243,8 +1287,9 @@ async function executeRunTasks(
         await db.update(runTaskResults).set({ status, message }).where(eq(runTaskResults.id, resultId));
       }
     }
-    await writeLog(runId, "plan", `[terrence] ${stage} run task "${task.name}" ${status}.`);
-    if (status === "failed" && (binding.enforcementLevel === "mandatory" || binding.enforcementLevel === "must_pass")) {
+    const taskLogPhase = stage === "pre_apply" || stage === "post_apply" ? "apply" : "plan";
+    await writeLog(runId, taskLogPhase, `[terrence] ${stage} run task "${task.name}" ${status}.`);
+    if (status === "failed" && (enforcementLevel === "mandatory" || enforcementLevel === "must_pass")) {
       proceed = false;
     }
   }
@@ -1897,6 +1942,20 @@ async function releaseRunWorkspaceLock(workspaceId: string, runId: string): Prom
   ));
 }
 
+async function cleanupApplyArtifacts(runId: string): Promise<void> {
+  try {
+    await cleanupSavedPlan(runId);
+  } catch {
+    // Cleanup is best effort after a task gate or apply failure.
+  }
+  try {
+    if (runSandbox !== null) await removeSandboxWorkDir(runId);
+    else await rm(runWorkDir(runId), { recursive: true, force: true });
+  } catch {
+    // Cleanup is best effort after a task gate or apply failure.
+  }
+}
+
 async function executeApplyImpl(runId: string): Promise<void> {
   assertRunSandboxAvailable();
   const run = await db.query.runs.findFirst({
@@ -1962,12 +2021,26 @@ async function executeApplyImpl(runId: string): Promise<void> {
 
   try {
     if (!["confirmed", "apply_queued", "applying"].includes(run.status)) await updateRunStatus(runId, "confirmed");
+    if (await runWasCanceled(runId)) return;
+    try {
+      if (!(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "pre_apply"))) {
+        await updateRunStatus(runId, "errored");
+        await writeLog(runId, "apply", "[terrence] Run blocked by mandatory pre-apply task failure.");
+        await cleanupApplyArtifacts(runId);
+        return;
+      }
+    } catch (error: unknown) {
+      await writeLog(runId, "apply", `[terrence] Pre-apply run tasks could not complete: ${error instanceof Error ? error.message : String(error)}`);
+      await cleanupApplyArtifacts(runId);
+      throw error;
+    }
     await updateRunStatus(runId, "apply_queued");
     await updateRunStatus(runId, "applying");
     if (await runWasCanceled(runId)) return;
   const workDir = runWorkDir(runId);
 
   let applySuccess = false;
+  let applyStarted = false;
 
   try {
     const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
@@ -2088,6 +2161,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
         await writeLog(runId, "apply", `[terrence] Recorded state version serial #${nextSerial}`);
       };
 
+      applyStarted = true;
       const applyProc = spawnRunProcess(
         runId,
         applyArgs,
@@ -2148,6 +2222,13 @@ async function executeApplyImpl(runId: string): Promise<void> {
     });
     applySuccess = true;
     await writeLog(runId, "apply", `[terrence] Run status updated to 'applied'.`);
+    try {
+      if (!(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "post_apply"))) {
+        await writeLog(runId, "apply", "[terrence] Post-apply run task failure recorded; the apply remains completed.");
+      }
+    } catch (error: unknown) {
+      await writeLog(runId, "apply", `[terrence] Post-apply run tasks could not complete: ${error instanceof Error ? error.message : String(error)}`);
+    }
     if (savedPlanRequired) await cleanupSavedPlan(runId);
   } catch (error: unknown) {
     if (await runWasCanceled(runId)) return;
@@ -2166,7 +2247,9 @@ async function executeApplyImpl(runId: string): Promise<void> {
         }
       } catch {}
     } else {
-      await writeLog(runId, "apply", `[terrence] Apply failed; partial state was journaled before cleaning the execution directory.`);
+      if (applyStarted) {
+        await writeLog(runId, "apply", `[terrence] Apply failed; partial state was journaled before cleaning the execution directory.`);
+      }
       try {
         if (runSandbox !== null) await removeSandboxWorkDir(runId);
         else await rm(workDir, { recursive: true, force: true });
