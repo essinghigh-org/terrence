@@ -10,7 +10,7 @@ import { pageRequest, pagination } from "../../lib/utils";
 import { db } from "../../db";
 import { workloadIdentityKeys } from "../../db/schema";
 import { count, desc } from "drizzle-orm";
-import { sendEmail } from "../../lib/smtp";
+import { isSmtpEncryption, sendEmail } from "../../lib/smtp";
 import { normalizeEmail } from "../../lib/identity";
 
 function hidden(set: ParamCtx["set"]): Record<string, unknown> {
@@ -75,6 +75,10 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    if (attrs.encryption !== undefined && !isSmtpEncryption(attrs.encryption)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "encryption must be one of starttls, tls, plain" }] };
+    }
     const updated = { ...attrs };
     delete updated["test-email-address"];
     return smtpSettingsResource(await updateSettings("smtp", updated));
@@ -101,6 +105,7 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
           password: typeof settings.password === "string" ? settings.password : null,
           senderEmail,
           auth: settings.auth === "none" || settings.auth === "login" || settings.auth === "plain" ? settings.auth : "plain",
+          encryption: isSmtpEncryption(settings.encryption) ? settings.encryption : null,
         },
         {
           to: [recipient],

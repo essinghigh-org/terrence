@@ -1,13 +1,14 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { sendEmail, type SmtpSettings } from "../../src/lib/smtp";
+import { defaultSmtpEncryption, sendEmail, type SmtpSettings } from "../../src/lib/smtp";
 
 /**
  * Minimal scriptable SMTP server for tests. Speaks just enough of the
  * protocol: greeting, EHLO (advertising AUTH PLAIN), optional STARTTLS
  * refusal, AUTH PLAIN, MAIL/RCPT/DATA, QUIT. Captures the raw message.
  */
-function createFakeSmtpServer(options: Readonly<{ rejectRcpt?: string }> = {}) {
+function createFakeSmtpServer(options: Readonly<{ rejectRcpt?: string; startTlsCode?: number }> = {}) {
   let received: string[] = [];
+  let commands: string[] = [];
   let inData = false;
   let authLoginStep = 0;
 
@@ -27,6 +28,7 @@ function createFakeSmtpServer(options: Readonly<{ rejectRcpt?: string }> = {}) {
         for (let segmentIndex = 0; segmentIndex < lineCount; segmentIndex += 1) {
           const rawLine = segments[segmentIndex] ?? "";
           const line = rawLine.trim();
+          if (!inData) commands.push(line);
           if (inData) {
             if (line === ".") {
               socket.write("250 accepted\r\n");
@@ -39,7 +41,7 @@ function createFakeSmtpServer(options: Readonly<{ rejectRcpt?: string }> = {}) {
           if (line.startsWith("EHLO")) {
             socket.write("250-test-smtp\r\n250 AUTH PLAIN\r\n");
           } else if (line === "STARTTLS") {
-            socket.write("502 STARTTLS not supported\r\n");
+            socket.write(`${options.startTlsCode ?? 502} STARTTLS not supported\r\n`);
           } else if (line.startsWith("AUTH PLAIN")) {
             socket.write("235 authenticated\r\n");
           } else if (line === "AUTH LOGIN") {
@@ -75,7 +77,8 @@ function createFakeSmtpServer(options: Readonly<{ rejectRcpt?: string }> = {}) {
     port: server.port,
     stop: (): void => { server.stop(true); },
     received: (): string[] => received,
-    reset: (): void => { received = []; },
+    commands: (): string[] => commands,
+    reset: (): void => { received = []; commands = []; },
   };
 }
 
@@ -93,11 +96,39 @@ describe("sendEmail", () => {
 
   beforeAll(() => {
     fake = createFakeSmtpServer();
-    testSettings = { ...settings, port: fake.port };
+    testSettings = { ...settings, port: fake.port, encryption: "plain" };
   });
 
   afterAll(() => {
     fake.stop();
+  });
+
+  for (const startTlsCode of [500, 502, 504]) {
+    test(`fails closed when STARTTLS returns ${startTlsCode} by default`, async () => {
+      const unsupported = createFakeSmtpServer({ startTlsCode });
+      try {
+        let failure: unknown;
+        try {
+          await sendEmail({ ...settings, port: unsupported.port }, {
+            to: ["one@example.com"],
+            subject: "Secure default",
+            text: "body",
+          });
+        } catch (reason) {
+          failure = reason;
+        }
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure instanceof Error ? failure.message : "").toContain("STARTTLS is required");
+        expect(unsupported.commands().some((line): boolean => line.startsWith("AUTH "))).toBeFalse();
+      } finally {
+        unsupported.stop();
+      }
+    });
+  }
+
+  test("maps legacy port 465 to implicit TLS and other ports to required STARTTLS", () => {
+    expect(defaultSmtpEncryption(465)).toBe("tls");
+    expect(defaultSmtpEncryption(587)).toBe("starttls");
   });
 
   test("delivers a message through EHLO/AUTH/DATA with correct headers", async () => {
@@ -108,6 +139,7 @@ describe("sendEmail", () => {
       text: "Workspace: prod\nDetails: https://terraform.example.test/run/1",
     });
 
+    expect(fake.commands().some((line): boolean => line.startsWith("AUTH PLAIN "))).toBeTrue();
     const lines = fake.received();
     expect(lines).toContain("From: terrence@example.com");
     expect(lines).toContain("To: one@example.com, two@example.com");
@@ -166,6 +198,17 @@ describe("sendEmail", () => {
     expect(fake.received()).toContain("body");
   });
 
+  test("does not authenticate an explicitly anonymous plaintext relay", async () => {
+    fake.reset();
+    await sendEmail({ ...testSettings, username: null, password: null, auth: "none", encryption: "plain" }, {
+      to: ["one@example.com"],
+      subject: "Anonymous relay",
+      text: "body",
+    });
+    expect(fake.commands().some((line): boolean => line.startsWith("AUTH "))).toBeFalse();
+    expect(fake.received()).toContain("body");
+  });
+
   test("encodes non-ASCII plain text without HTML", async () => {
     fake.reset();
     await sendEmail(testSettings, {
@@ -200,7 +243,7 @@ describe("sendEmail", () => {
     const strict = createFakeSmtpServer({ rejectRcpt: "ghost@example.com" });
     try {
       await expect(sendEmail(
-        { ...settings, port: strict.port },
+        { ...settings, port: strict.port, encryption: "plain" },
         { to: ["ghost@example.com"], subject: "s", text: "b" },
       )).rejects.toThrow(/RCPT TO rejected/);
     } finally {

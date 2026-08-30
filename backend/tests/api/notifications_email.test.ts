@@ -221,6 +221,7 @@ describe("Email notification configurations (API + SMTP delivery)", () => {
         password: "test-pass",
         "sender-email": "terrence@example.com",
         auth: "plain",
+        encryption: "plain",
       },
       updatedAt: Date.now(),
     }]);

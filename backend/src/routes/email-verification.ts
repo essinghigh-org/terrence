@@ -7,7 +7,7 @@ import { apiURL, auditLog } from "../lib/utils";
 import { generateAuthenticationToken, hashAuthenticationToken, tokenHashCandidates } from "../lib/token-service";
 import { normalizeEmail } from "../lib/identity";
 import { getSettings } from "../lib/settings";
-import { sendEmail } from "../lib/smtp";
+import { isSmtpEncryption, sendEmail } from "../lib/smtp";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 type Ctx = Readonly<{
@@ -110,6 +110,7 @@ export const emailVerificationRoutes = new Elysia({ name: "email-verification" }
           password: typeof smtp.password === "string" ? smtp.password : null,
           senderEmail,
           auth: smtp.auth === "none" || smtp.auth === "login" || smtp.auth === "plain" ? smtp.auth : "plain",
+          encryption: isSmtpEncryption(smtp.encryption) ? smtp.encryption : null,
         },
         smtpMessage(email, verificationUrl),
       );

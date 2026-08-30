@@ -1,16 +1,17 @@
 // Minimal RFC 5321 SMTP client.
 //
-// Supports plain, STARTTLS, and implicit TLS (SMTPS on port 465) transports
+// Supports plain, STARTTLS, and implicit TLS (SMTPS) transports
 // with PLAIN or LOGIN authentication. Dependency-free: one message at a time, strict
 // per-step timeouts, and a hard overall deadline so a misconfigured SMTP
 // server can never hang a notification delivery.
 //
-// Connection rules:
-//   port 465: implicit TLS from the first byte
-//   any other port: plaintext, upgraded via STARTTLS when the server
-//     accepts the upgrade; known unsupported replies fall back to plaintext
+// Connection rules are explicit: STARTTLS is required by default, implicit TLS
+// is selected for legacy port-465 settings, and plaintext is opt-in only.
 
 import { connect, type Socket } from "bun";
+
+export const SMTP_ENCRYPTION_MODES = ["starttls", "tls", "plain"] as const;
+export type SmtpEncryption = (typeof SMTP_ENCRYPTION_MODES)[number];
 
 export type SmtpSettings = Readonly<{
   host: string;
@@ -19,6 +20,7 @@ export type SmtpSettings = Readonly<{
   password: string | null;
   senderEmail: string;
   auth?: "none" | "plain" | "login" | null;
+  encryption?: SmtpEncryption | null;
 }>;
 
 export type EmailMessage = Readonly<{
@@ -32,6 +34,15 @@ type Response = Readonly<{ code: number; message: string }>;
 
 const STEP_TIMEOUT_MS = 10_000;
 const OVERALL_TIMEOUT_MS = 30_000;
+const SMTP_ENCRYPTION_MODE_SET = new Set<string>(SMTP_ENCRYPTION_MODES);
+
+export function isSmtpEncryption(value: unknown): value is SmtpEncryption {
+  return typeof value === "string" && SMTP_ENCRYPTION_MODE_SET.has(value);
+}
+
+export function defaultSmtpEncryption(port: number): SmtpEncryption {
+  return port === 465 ? "tls" : "starttls";
+}
 
 function validateMailbox(value: string, label: string): void {
   if (value === "" || value.trim() !== value || /[\s<> ,\r\n\u0000-\u001f\u007f]/.test(value) || !value.includes("@")) {
@@ -183,10 +194,16 @@ function smtpAuthMode(settings: SmtpSettings): string {
   return authMode;
 }
 
-async function negotiateStartTls(session: Session, implicitTls: boolean, step: SmtpStep): Promise<void> {
-  // STARTTLS on non-465 ports. Only known unsupported replies continue in
-  // plaintext; other failures must not silently downgrade delivery.
-  if (implicitTls) return;
+function smtpEncryption(settings: SmtpSettings): SmtpEncryption {
+  if (settings.encryption === undefined || settings.encryption === null) return defaultSmtpEncryption(settings.port);
+  if (!isSmtpEncryption(settings.encryption)) {
+    throw new SmtpError(`Unsupported SMTP encryption mode: ${String(settings.encryption)}`, 0);
+  }
+  return settings.encryption;
+}
+
+async function negotiateStartTls(session: Session, encryption: SmtpEncryption, step: SmtpStep): Promise<void> {
+  if (encryption !== "starttls") return;
   const startTls = await step(session.send("STARTTLS"), "STARTTLS");
   if (startTls.code === 220) {
     session.upgradeTLS();
@@ -196,9 +213,7 @@ async function negotiateStartTls(session: Session, implicitTls: boolean, step: S
     }
     return;
   }
-  if (![500, 502, 504].includes(startTls.code)) {
-    throw new SmtpError(`STARTTLS rejected: ${startTls.code} ${startTls.message}`, startTls.code);
-  }
+  throw new SmtpError(`STARTTLS is required but unavailable: ${startTls.code} ${startTls.message}`, startTls.code);
 }
 
 async function authenticateSmtp(settings: SmtpSettings, authMode: string, session: Session, step: SmtpStep): Promise<void> {
@@ -290,13 +305,13 @@ async function sendSmtpMessage(settings: SmtpSettings, message: EmailMessage, se
 export async function sendEmail(settings: SmtpSettings, message: EmailMessage): Promise<void> {
   validateEmailRequest(settings, message);
 
-  const implicitTls = settings.port === 465;
+  const encryption = smtpEncryption(settings);
   const authMode = smtpAuthMode(settings);
   const deadline = Date.now() + OVERALL_TIMEOUT_MS;
   const step: SmtpStep = async <T>(promise: Readonly<Promise<T>>, what: string): Promise<T> =>
     withTimeout(promise, Math.min(STEP_TIMEOUT_MS, Math.max(1, deadline - Date.now())), what);
 
-  const session = await step(createSession(settings.host, settings.port, implicitTls), "connect");
+  const session = await step(createSession(settings.host, settings.port, encryption === "tls"), "connect");
   try {
     const greeting = await step(session.nextResponse(), "greeting");
     if (greeting.code !== 220) {
@@ -308,7 +323,7 @@ export async function sendEmail(settings: SmtpSettings, message: EmailMessage): 
       throw new SmtpError(`EHLO rejected: ${ehlo.code} ${ehlo.message}`, ehlo.code);
     }
 
-    await negotiateStartTls(session, implicitTls, step);
+    await negotiateStartTls(session, encryption, step);
     await authenticateSmtp(settings, authMode, session, step);
     await sendSmtpMessage(settings, message, session, step);
     await step(session.send("QUIT"), "QUIT");
