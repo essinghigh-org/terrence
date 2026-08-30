@@ -750,20 +750,31 @@ async function githubPullRequestFiles(
 
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- file collection is intentionally accumulated in the caller-owned set
 function extractGitlabMrFiles(body: unknown, files: Set<string>): boolean {
-  const changes = asRecord(body)?.changes;
-  if (!Array.isArray(changes)) return false;
-  for (const item of changes) {
+  if (!Array.isArray(body)) return false;
+  for (const item of body) {
     const change = asRecord(item);
+    if (change?.too_large === true) return false;
+    const oldPath = change?.old_path;
     const newPath = change?.new_path;
-    if (typeof newPath !== "string" || newPath === "") return false;
-    files.add(newPath);
+    const oldFile = typeof oldPath === "string" && oldPath !== "" ? oldPath : undefined;
+    const newFile = typeof newPath === "string" && newPath !== "" ? newPath : undefined;
+    if (oldFile === undefined && newFile === undefined) return false;
+    if (oldFile !== undefined) files.add(oldFile);
+    if (newFile !== undefined) files.add(newFile);
   }
   return true;
 }
 
+function gitlabNextPage(value: string | null): number | null | undefined {
+  if (value === null || value.trim() === "") return null;
+  if (!/^\d+$/u.test(value.trim())) return undefined;
+  const page = Number(value);
+  return Number.isSafeInteger(page) && page > 0 ? page : undefined;
+}
+
 async function fetchGitlabMrFilesPage(credentials: ProviderCredentials, repoFullName: string, pullRequestNumber: number, page: number): Promise<{ files: Set<string>; nextPage: string | null } | undefined> {
   const response = await fetch(
-    `${credentials.apiUrl}/projects/${encodeURIComponent(repoFullName)}/merge_requests/${String(pullRequestNumber)}/changes?per_page=100&page=${page}`,
+    `${credentials.apiUrl}/projects/${encodeURIComponent(repoFullName)}/merge_requests/${String(pullRequestNumber)}/diffs?per_page=100&page=${page}`,
     {
       headers: { Authorization: `Bearer ${credentials.token}`, Accept: "application/json" },
       signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
@@ -790,15 +801,20 @@ async function gitlabMergeRequestFiles(
     const credentials = await oauthProviderCredentials(workspace, "gitlab");
     if (credentials === undefined) return undefined;
     const files = new Set<string>();
-    let page = 1;
-    let nextPage: string | null = "1";
+    const visitedPages = new Set<number>();
     const MAX_PAGES = 10;
-    while (nextPage !== null && page <= MAX_PAGES) {
+    let page = 1;
+    let nextPage: number | null | undefined = 1;
+    let requests = 0;
+    while (nextPage !== null && nextPage !== undefined && requests < MAX_PAGES) {
+      page = nextPage;
+      if (visitedPages.has(page)) return undefined;
+      visitedPages.add(page);
       const pageResult = await fetchGitlabMrFilesPage(credentials, details.repoFullName, details.pullRequestNumber, page);
       if (pageResult === undefined) return undefined;
-      for (const f of pageResult.files) files.add(f);
-      nextPage = pageResult.nextPage;
-      page += 1;
+      for (const file of pageResult.files) files.add(file);
+      nextPage = gitlabNextPage(pageResult.nextPage);
+      requests += 1;
     }
     if (nextPage !== null) return undefined;
     return files;
