@@ -322,7 +322,6 @@ function extractBitbucketChanges(payload: WebhookPayload): unknown[] | undefined
   const push = asRecord(payload.push);
   const changes = push?.changes;
   if (!Array.isArray(changes)) return undefined;
-  if (changes.length !== 1) return undefined;
   return changes as unknown[];
 }
 
@@ -334,10 +333,14 @@ function validateBitbucketPushFields(referenceType: string | undefined, referenc
   return undefined;
 }
 
-function parseBitbucketPushWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity): ParsedProviderWebhook | undefined {
-  const changes = extractBitbucketChanges(payload);
-  if (changes === undefined) return undefined;
-  const change = asRecord(changes[0]);
+function parseBitbucketPushChange(
+  changeValue: unknown,
+  repoFullName: string,
+  cloneUrl: string,
+  senderUsername: string,
+  sourceIdentity: VcsSourceIdentity,
+): ParsedProviderWebhook | undefined {
+  const change = asRecord(changeValue);
   const reference = asRecord(change?.new);
   const target = asRecord(reference?.target);
   const targetLinks = asRecord(target?.links);
@@ -363,6 +366,23 @@ function parseBitbucketPushWebhook(payload: WebhookPayload, repoFullName: string
       sourceIdentity,
     },
   };
+}
+
+function parseBitbucketPushWebhooks(
+  payload: WebhookPayload,
+  repoFullName: string,
+  cloneUrl: string,
+  senderUsername: string,
+  sourceIdentity: VcsSourceIdentity,
+): readonly ParsedProviderWebhook[] {
+  const changes = extractBitbucketChanges(payload);
+  if (changes === undefined) return [];
+  const parsed: ParsedProviderWebhook[] = [];
+  for (const change of changes) {
+    const parsedChange = parseBitbucketPushChange(change, repoFullName, cloneUrl, senderUsername, sourceIdentity);
+    if (parsedChange !== undefined) parsed.push(parsedChange);
+  }
+  return parsed;
 }
 
 function validateBitbucketPrFields(branch: string | undefined, commitSha: string | undefined, commitUrl: string | undefined, pullRequestNumber: unknown): string | undefined {
@@ -463,7 +483,7 @@ function bitbucketCloneUrl(repository: Readonly<Record<string, unknown>>): strin
   return undefined;
 }
 
-function bitbucketWebhook(eventName: string, payload: WebhookPayload): ParsedProviderWebhook | undefined {
+function bitbucketWebhook(eventName: string, payload: WebhookPayload): readonly ParsedProviderWebhook[] | undefined {
   const repository = asRecord(payload.repository);
   const actor = asRecord(payload.actor);
   const repoFullName = requiredString(repository?.full_name);
@@ -474,8 +494,11 @@ function bitbucketWebhook(eventName: string, payload: WebhookPayload): ParsedPro
   if (senderUsername === undefined) return undefined;
   const sourceIdentity = vcsSourceIdentity("bitbucket", cloneUrl);
   if (sourceIdentity === undefined) return undefined;
-  if (eventName === "repo:push") return parseBitbucketPushWebhook(payload, repoFullName, cloneUrl, senderUsername, sourceIdentity);
-  if (eventName === "pullrequest:created" || eventName === "pullrequest:updated") return parseBitbucketPullRequestWebhook(payload, repoFullName, cloneUrl, senderUsername, sourceIdentity);
+  if (eventName === "repo:push") return parseBitbucketPushWebhooks(payload, repoFullName, cloneUrl, senderUsername, sourceIdentity);
+  if (eventName === "pullrequest:created" || eventName === "pullrequest:updated") {
+    const parsed = parseBitbucketPullRequestWebhook(payload, repoFullName, cloneUrl, senderUsername, sourceIdentity);
+    return parsed === undefined ? undefined : [parsed];
+  }
   return undefined;
 }
 
@@ -1719,7 +1742,11 @@ export async function handleGitlabWebhook(eventName: string, payload: WebhookPay
 
 export async function handleBitbucketWebhook(eventName: string, payload: WebhookPayload): Promise<boolean> {
   const parsed = bitbucketWebhook(eventName, payload);
-  return parsed === undefined ? false : handleOAuthProviderWebhook("bitbucket", parsed.kind, parsed.details);
+  if (parsed === undefined) return false;
+  await Promise.all(parsed.map(async (event): Promise<void> => {
+    await handleOAuthProviderWebhook("bitbucket", event.kind, event.details);
+  }));
+  return parsed.length > 0;
 }
 
 /**

@@ -38,7 +38,20 @@ const gitlabPayload = {
   commits: [{ id: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", added: ["main.tf"], modified: [], removed: [] }],
 };
 
-const gitlabDedupeKey = "gitlab:durability/repo:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef:Push Hook";
+const gitlabDedupeKey = [
+  "gitlab",
+  "durability/repo",
+  "Push Hook",
+  "refs/heads/main",
+  "",
+  "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+].map(encodeURIComponent).join(":");
+const bitbucketDedupeKey = [
+  "bitbucket",
+  "durability/repo",
+  "repo:push",
+  "branch:main::feedfacefeedfacefeedfacefeedfacefeedface",
+].map(encodeURIComponent).join(":");
 
 async function jobByDedupeKey(dedupeKey: string) {
   return db.query.durableJobs.findFirst({
@@ -71,7 +84,53 @@ describe("vcs webhook durability", () => {
           },
         }],
       },
-    }, null)).toBe("bitbucket:durability/repo:feedfacefeedfacefeedfacefeedfacefeedface:repo:push");
+    }, null)).toBe(bitbucketDedupeKey);
+
+    const gitlabRelease = { ...gitlabPayload, ref: "refs/heads/release" };
+    expect(vcsWebhookDeliveryId("gitlab", "Push Hook", gitlabRelease, null)).not.toBe(gitlabDedupeKey);
+    expect(vcsWebhookDeliveryId("gitlab", "Push Hook", gitlabPayload, null)).toBe(
+      vcsWebhookDeliveryId("gitlab", "Push Hook", gitlabPayload, null),
+    );
+
+    const bitbucketBranch = {
+      new: {
+        type: "branch",
+        name: "main",
+        target: { hash: "feedfacefeedfacefeedfacefeedfacefeedface", message: "x" },
+      },
+    };
+    const bitbucketTag = {
+      new: {
+        type: "tag",
+        name: "v1.0.0",
+        target: { hash: "feedfacefeedfacefeedfacefeedfacefeedface", message: "x" },
+      },
+    };
+    const bitbucketMultiChange = {
+      repository: { full_name: "durability/repo" },
+      push: { changes: [bitbucketBranch, bitbucketTag] },
+    };
+    const bitbucketMultiChangeReversed = {
+      repository: { full_name: "durability/repo" },
+      push: { changes: [bitbucketTag, bitbucketBranch] },
+    };
+    const bitbucketBranchKey = vcsWebhookDeliveryId("bitbucket", "repo:push", {
+      repository: { full_name: "durability/repo" },
+      push: { changes: [bitbucketBranch] },
+    }, null);
+    const bitbucketTagKey = vcsWebhookDeliveryId("bitbucket", "repo:push", {
+      repository: { full_name: "durability/repo" },
+      push: { changes: [bitbucketTag] },
+    }, null);
+    expect(bitbucketBranchKey).toBe(bitbucketDedupeKey);
+    expect(bitbucketTagKey).not.toBe(bitbucketBranchKey);
+    expect(vcsWebhookDeliveryId("bitbucket", "repo:push", bitbucketMultiChange, null)).toBe(
+      vcsWebhookDeliveryId("bitbucket", "repo:push", bitbucketMultiChangeReversed, null),
+    );
+    expect(vcsWebhookDeliveryId("bitbucket", "repo:push", bitbucketMultiChange, null)).not.toBe(bitbucketBranchKey);
+    expect(vcsWebhookDeliveryId("gitlab", "Push Hook", gitlabPayload, "gitlab-request-uuid")).toBe("gitlab:gitlab-request-uuid");
+    expect(vcsWebhookDeliveryId("bitbucket", "repo:push", bitbucketMultiChange, "bitbucket-request-uuid")).toBe("bitbucket:bitbucket-request-uuid");
+
     // Unparseable payloads fall back to no dedupe rather than collapsing distinct events.
     expect(vcsWebhookDeliveryId("gitlab", "Push Hook", {}, null)).toBeNull();
     expect(vcsWebhookDeliveryId("bitbucket", "repo:push", {}, null)).toBeNull();
