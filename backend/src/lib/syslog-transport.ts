@@ -15,29 +15,59 @@ export type SyslogTarget = Readonly<{
   transport: SyslogTransport;
   host: string;
   port: number;
+  family?: 4 | 6;
 }>;
+
+type SyslogUrlFields = Readonly<Pick<URL, "username" | "password" | "pathname" | "search" | "hash" | "port">>;
+
+function isValidSyslogUrl(url: SyslogUrlFields): boolean {
+  return (
+    url.username === "" &&
+    url.password === "" &&
+    url.pathname === "/" &&
+    url.search === "" &&
+    url.hash === "" &&
+    url.port !== ""
+  );
+}
 
 /** Parse TERRENCE_SYSLOG_TARGET ("udp://host:514", "tcp://host:514"). */
 export function parseSyslogTarget(raw: string | undefined): SyslogTarget | null {
   const value = raw?.trim() ?? "";
   if (value === "") return null;
-  const match = /^(udp|tcp):\/\/([A-Za-z0-9._-]+):(\d{1,5})$/.exec(value);
-  if (match === null || match[1] === undefined || match[2] === undefined || match[3] === undefined) {
+  const schemeMatch = /^(udp|tcp):\/\//.exec(value);
+  if (schemeMatch === null || schemeMatch[1] === undefined) return null;
+  let url: URL;
+  try {
+    url = new URL(`http://${value.slice(schemeMatch[0].length)}`);
+  } catch {
     return null;
   }
-  const port = Number.parseInt(match[3], 10);
+  if (!isValidSyslogUrl(url)) return null;
+  const isIpv6 = url.hostname.startsWith("[") && url.hostname.endsWith("]");
+  const host = isIpv6 ? url.hostname.slice(1, -1) : url.hostname;
+  if (!isIpv6 && !/^[A-Za-z0-9._-]+$/.test(host)) return null;
+  const port = Number.parseInt(url.port, 10);
   if (!Number.isFinite(port) || port < 1 || port > 65_535) return null;
-  return { transport: match[1] as SyslogTransport, host: match[2], port };
+  return {
+    transport: schemeMatch[1] as SyslogTransport,
+    host,
+    port,
+    ...(isIpv6 ? { family: 6 as const } : {}),
+  };
 }
 
-let udpSocket: Socket | null = null;
+const udpSockets = new Map<4 | 6, Socket>();
 
-function getUdpSocket(): Socket {
-  udpSocket ??= createSocket("udp4");
-  udpSocket.on("error", () => {
+function getUdpSocket(family: 4 | 6): Socket {
+  let socket = udpSockets.get(family);
+  if (socket !== undefined) return socket;
+  socket = createSocket(family === 6 ? "udp6" : "udp4");
+  socket.on("error", () => {
     /* ICMP unreachable etc. — syslog is fire-and-forget; keep the socket. */
   });
-  return udpSocket;
+  udpSockets.set(family, socket);
+  return socket;
 }
 
 const tcpSockets = new Map<string, TcpSocket>();
@@ -50,7 +80,7 @@ export function sendSyslogFrame(target: SyslogTarget, frame: string): void {
       // RFC 5426: one syslog message per datagram; truncate at 1024 bytes
       // (the minimum every receiver must accept) rather than fragmenting.
       const datagram = payload.length > 1024 ? payload.subarray(0, 1024) : payload;
-      getUdpSocket().send(datagram, target.port, target.host);
+      getUdpSocket(target.family ?? 4).send(datagram, target.port, target.host);
     } else {
       // RFC 6587 octet counting: "LEN MSG" so messages with newlines
       // reassemble unambiguously on the collector.
@@ -78,11 +108,16 @@ export function sendSyslogFrame(target: SyslogTarget, frame: string): void {
 /** Close transports cleanly (used by graceful shutdown and tests). */
 export function closeSyslogTransports(): void {
   try {
-    udpSocket?.close();
-  } catch {
-    /* already closed */
+    for (const socket of udpSockets.values()) {
+      try {
+        socket.close();
+      } catch {
+        /* already closed */
+      }
+    }
+  } finally {
+    udpSockets.clear();
   }
-  udpSocket = null;
   for (const [, socket] of tcpSockets) {
     try {
       socket.end();
