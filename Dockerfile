@@ -63,7 +63,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
 # Base pinned to an immutable digest (reviewed/immutable supply chain).
 # Tag at pin time: cgr.dev/chainguard/wolfi-base:latest. Bump deliberately
 # after reviewing what changed in the new tag (pin the new digest).
-FROM cgr.dev/chainguard/wolfi-base@sha256:19f7a7b40a11c435311e3784bd134c6b6f19677462440da48f96d5c84eefd669
+FROM cgr.dev/chainguard/wolfi-base@sha256:e624c5d5e42382ce7165ddafcbbf8e6769a24cbd02ea6114b880b05ae5ba2a8d
 ARG BUILD_VERSION=0.0.0
 ARG BUILD_SHA=unknown
 WORKDIR /app
