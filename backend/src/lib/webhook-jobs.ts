@@ -8,8 +8,8 @@
  * keyed by a provider-specific delivery identity so redeliveries dedupe:
  *
  * - github:    `github:<x-github-delivery>`
- * - gitlab:    `gitlab:<repo>:<sha>` (GitLab sends no delivery UUID)
- * - bitbucket: `bitbucket:<repo>:<sha>` (Bitbucket sends no delivery UUID)
+ * - gitlab:    provider UUID, or `gitlab:<repo>:<event>:<ref>:<before>:<after>`
+ * - bitbucket: provider UUID, or `bitbucket:<repo>:<event>:<all changes>`
  *
  * Recovery and dead-lettering reuse the durable job machinery: an expired
  * lease (process death mid-run) is reclaimed by another worker, and a job
@@ -43,33 +43,65 @@ function objectValue(value: unknown): Readonly<Record<string, unknown>> | undefi
 }
 
 function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value !== "" ? value : undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+function encodedEventIdentity(parts: readonly string[]): string {
+  return parts.map(encodeURIComponent).join(":");
+}
+
+function gitlabRef(payload: Readonly<Record<string, unknown>>): string | undefined {
+  const attributes = objectValue(payload.object_attributes);
+  return nonEmptyString(payload.ref)
+    ?? nonEmptyString(attributes?.source_branch)
+    ?? nonEmptyString(attributes?.target_branch);
 }
 
 function gitlabEventIdentity(eventName: string, payload: Readonly<Record<string, unknown>>): string | null {
   const repo = nonEmptyString(objectValue(payload.project)?.path_with_namespace);
-  const sha = nonEmptyString(payload.checkout_sha) ?? nonEmptyString(payload.after);
-  return repo !== undefined && sha !== undefined
-    ? `gitlab:${repo}:${sha}:${eventName}`
+  const ref = gitlabRef(payload);
+  const before = nonEmptyString(payload.before);
+  const after = nonEmptyString(payload.checkout_sha) ?? nonEmptyString(payload.after);
+  return repo !== undefined && ref !== undefined && after !== undefined
+    ? encodedEventIdentity(["gitlab", repo, eventName, ref, before ?? "", after])
     : null;
+}
+
+function bitbucketChangeIdentity(value: unknown): string | undefined {
+  const change = objectValue(value);
+  const next = objectValue(change?.new);
+  const previous = objectValue(change?.old);
+  const reference = next ?? previous;
+  const type = nonEmptyString(reference?.type);
+  const name = nonEmptyString(reference?.name);
+  const nextTarget = objectValue(next?.target);
+  const previousTarget = objectValue(previous?.target);
+  const before = nonEmptyString(previousTarget?.hash);
+  const after = nonEmptyString(nextTarget?.hash);
+  if (type === undefined || name === undefined || (before === undefined && after === undefined)) return undefined;
+  return encodedEventIdentity([type, name, before ?? "", after ?? ""]);
 }
 
 function bitbucketEventIdentity(eventName: string, payload: Readonly<Record<string, unknown>>): string | null {
   const repo = nonEmptyString(objectValue(payload.repository)?.full_name);
-  const push = objectValue(payload.push);
-  const changes = push?.changes;
-  const firstChange = Array.isArray(changes) && changes.length > 0 ? objectValue(changes[0]) : undefined;
-  const target = objectValue(objectValue(firstChange?.new)?.target);
-  const sha = nonEmptyString(target?.hash);
-  return repo !== undefined && sha !== undefined
-    ? `bitbucket:${repo}:${sha}:${eventName}`
-    : null;
+  const changes = objectValue(payload.push)?.changes;
+  if (repo === undefined || !Array.isArray(changes) || changes.length === 0) return null;
+  const changeIdentities: string[] = [];
+  for (const change of changes) {
+    const identity = bitbucketChangeIdentity(change);
+    if (identity === undefined) return null;
+    changeIdentities.push(identity);
+  }
+  changeIdentities.sort();
+  return encodedEventIdentity(["bitbucket", repo, eventName, ...changeIdentities]);
 }
 
 function stableEventIdentity(provider: VcsWebhookProvider, eventName: string, payload: Readonly<Record<string, unknown>>): string | null {
-  // Light extraction mirroring the provider parsers: repo + commit identity is
-  // enough to collapse a redelivered copy of the SAME push without storing the
-  // whole body twice. Unparseable shapes fall back to no dedupe (process it).
+  // Light extraction mirroring the provider parsers. Ref and before/after
+  // identity distinguish legitimate same-SHA ref updates; malformed shapes
+  // fall back to no dedupe rather than collapsing unrelated deliveries.
   if (provider === "gitlab") return gitlabEventIdentity(eventName, payload);
   if (provider === "bitbucket") return bitbucketEventIdentity(eventName, payload);
   return null;
@@ -77,8 +109,9 @@ function stableEventIdentity(provider: VcsWebhookProvider, eventName: string, pa
 
 /**
  * Derive the delivery identity for an inbound webhook. GitHub uses its
- * delivery GUID; GitLab/Bitbucket fall back to a stable repo+commit key so a
- * provider redelivery of the same push dedupes instead of double-triggering.
+ * delivery GUID; GitLab/Bitbucket prefer a provider delivery UUID and fall
+ * back to a stable repo/ref/change identity so redeliveries dedupe without
+ * collapsing distinct ref updates.
  */
 export function vcsWebhookDeliveryId(
   provider: VcsWebhookProvider,
@@ -86,7 +119,8 @@ export function vcsWebhookDeliveryId(
   payload: Readonly<Record<string, unknown>>,
   headerDeliveryId: string | null,
 ): string | null {
-  if (provider === "github") return headerDeliveryId;
+  const header = nonEmptyString(headerDeliveryId);
+  if (header !== undefined) return provider === "github" ? header : encodedEventIdentity([provider, header]);
   return stableEventIdentity(provider, eventName, payload);
 }
 

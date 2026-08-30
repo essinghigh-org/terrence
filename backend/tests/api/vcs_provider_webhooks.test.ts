@@ -6,6 +6,7 @@ import { db } from "../../src/db";
 import {
   configurationVersions,
   auditLogs,
+  githubWebhookDeliveries,
   oauthClients,
   oauthTokens,
   organizations,
@@ -18,11 +19,15 @@ import { refetchConfigurationVersion, reportRunVcsStatus } from "../../src/lib/w
 const orgId = "org-provider-webhooks";
 const gitlabWorkspaceId = "ws-provider-gitlab";
 const bitbucketWorkspaceId = "ws-provider-bitbucket";
+const bitbucketReleaseWorkspaceId = "ws-provider-bitbucket-release";
+const bitbucketTagWorkspaceId = "ws-provider-bitbucket-tag";
 const gitlabTokenId = "ot-provider-gitlab";
 const bitbucketTokenId = "ot-provider-bitbucket";
 const originalFetch = globalThis.fetch;
 const originalGitlabSecret = process.env.GITLAB_WEBHOOK_SECRET;
 const originalBitbucketSecret = process.env.BITBUCKET_WEBHOOK_SECRET;
+const gitlabHeaderDeliveryUuid = "gitlab-header-delivery-uuid";
+const bitbucketHeaderDeliveryUuid = "bitbucket-header-delivery-uuid";
 const fetches: { authorization: string | null; url: string }[] = [];
 const requestBodies: { body: string; url: string }[] = [];
 
@@ -160,6 +165,28 @@ describe("GitLab and Bitbucket webhooks", () => {
         },
         queueAllRuns: true,
       },
+      {
+        id: bitbucketReleaseWorkspaceId,
+        orgId,
+        name: "bitbucket-release-workspace",
+        vcsRepo: {
+          identifier: "platform/infrastructure",
+          branch: "release",
+          oauthTokenId: bitbucketTokenId,
+        },
+        queueAllRuns: true,
+      },
+      {
+        id: bitbucketTagWorkspaceId,
+        orgId,
+        name: "bitbucket-tag-workspace",
+        vcsRepo: {
+          identifier: "platform/infrastructure",
+          tagsRegex: "^v\\d+\\.\\d+\\.\\d+$",
+          oauthTokenId: bitbucketTokenId,
+        },
+        queueAllRuns: true,
+      },
     ]);
   });
 
@@ -168,8 +195,12 @@ describe("GitLab and Bitbucket webhooks", () => {
     requestBodies.length = 0;
     await db.delete(runs).where(eq(runs.workspaceId, gitlabWorkspaceId));
     await db.delete(runs).where(eq(runs.workspaceId, bitbucketWorkspaceId));
+    await db.delete(runs).where(eq(runs.workspaceId, bitbucketReleaseWorkspaceId));
+    await db.delete(runs).where(eq(runs.workspaceId, bitbucketTagWorkspaceId));
     await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, gitlabWorkspaceId));
     await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, bitbucketWorkspaceId));
+    await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, bitbucketReleaseWorkspaceId));
+    await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, bitbucketTagWorkspaceId));
   });
 
   afterAll(() => {
@@ -229,6 +260,43 @@ describe("GitLab and Bitbucket webhooks", () => {
     expect((await db.query.configurationVersions.findFirst({
       where: eq(configurationVersions.id, version.id),
     }))?.status).toBe("uploaded");
+  });
+
+  test("prefers provider delivery UUID headers for durable identity", async () => {
+    const gitlabBody = JSON.stringify(gitlabPayload);
+    const gitlabResponse = await app.handle(new Request("http://127.0.0.1/api/webhooks/gitlab", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/vnd.api+json",
+        "x-gitlab-event": "Push Hook",
+        "x-gitlab-token": "gitlab-secret",
+        "x-gitlab-event-uuid": gitlabHeaderDeliveryUuid,
+      },
+      body: gitlabBody,
+    }));
+    expect(gitlabResponse.status).toBe(200);
+    expect((await db.query.githubWebhookDeliveries.findFirst({
+      where: eq(githubWebhookDeliveries.id, `gitlab:${gitlabHeaderDeliveryUuid}`),
+    }))?.status).toBe("processed");
+
+    const bitbucketBody = JSON.stringify(bitbucketPayload);
+    const bitbucketResponse = await app.handle(new Request("http://127.0.0.1/api/webhooks/bitbucket", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/vnd.api+json",
+        "x-event-key": "repo:push",
+        "x-hub-signature": bitbucketSignature(bitbucketBody),
+        "x-request-uuid": bitbucketHeaderDeliveryUuid,
+      },
+      body: bitbucketBody,
+    }));
+    expect(bitbucketResponse.status).toBe(200);
+    expect((await db.query.githubWebhookDeliveries.findFirst({
+      where: eq(githubWebhookDeliveries.id, `bitbucket:${bitbucketHeaderDeliveryUuid}`),
+    }))?.status).toBe("processed");
+
+    await db.delete(githubWebhookDeliveries).where(eq(githubWebhookDeliveries.id, `gitlab:${gitlabHeaderDeliveryUuid}`));
+    await db.delete(githubWebhookDeliveries).where(eq(githubWebhookDeliveries.id, `bitbucket:${bitbucketHeaderDeliveryUuid}`));
   });
 
   test("empty-commit GitLab push creates no run", async () => {
@@ -313,6 +381,58 @@ describe("GitLab and Bitbucket webhooks", () => {
       const parsed = JSON.parse(body) as { state?: unknown };
       return parsed.state === "FAILED";
     })).toBe(true);
+  });
+
+  test("processes valid branch and tag changes in a multi-ref push", async () => {
+    const mainSha = "1111111111111111111111111111111111111111";
+    const releaseSha = "2222222222222222222222222222222222222222";
+    const tagSha = "3333333333333333333333333333333333333333";
+    const ignoredSha = "4444444444444444444444444444444444444444";
+    const change = (type: string, name: string, sha: string): Record<string, unknown> => ({
+      new: {
+        type,
+        name,
+        target: {
+          hash: sha,
+          message: `Update ${name}`,
+          links: { html: { href: `https://bitbucket.org/platform/infrastructure/commits/${sha}` } },
+        },
+      },
+    });
+    const payload = {
+      ...bitbucketPayload,
+      push: {
+        changes: [
+          change("bookmark", "ignored", ignoredSha),
+          change("branch", "main", mainSha),
+          change("branch", "release", releaseSha),
+          change("tag", "v1.2.3", tagSha),
+        ],
+      },
+    };
+    const rawBody = JSON.stringify(payload);
+    const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/bitbucket", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/vnd.api+json",
+        "x-event-key": "repo:push",
+        "x-hub-signature": bitbucketSignature(rawBody),
+      },
+      body: rawBody,
+    }));
+    expect(response.status).toBe(200);
+
+    const [mainVersion, releaseVersion, tagVersion] = await Promise.all([
+      waitForUploaded(bitbucketWorkspaceId),
+      waitForUploaded(bitbucketReleaseWorkspaceId),
+      waitForUploaded(bitbucketTagWorkspaceId),
+    ]);
+    expect(mainVersion).toMatchObject({ ingressAttributes: { branch: "main", commitSha: mainSha } });
+    expect(releaseVersion).toMatchObject({ ingressAttributes: { branch: "release", commitSha: releaseSha } });
+    expect(tagVersion).toMatchObject({ ingressAttributes: { tag: "v1.2.3", commitSha: tagSha } });
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, bitbucketWorkspaceId) })).toHaveLength(1);
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, bitbucketReleaseWorkspaceId) })).toHaveLength(1);
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, bitbucketTagWorkspaceId) })).toHaveLength(1);
   });
 
   test("rejects an invalid Bitbucket signature without creating a run", async () => {

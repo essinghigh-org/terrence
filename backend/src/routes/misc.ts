@@ -219,6 +219,14 @@ const webhookAcknowledged = {
   data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } },
 } as const;
 
+function firstWebhookHeader(request: Request, names: readonly string[]): string | null {
+  for (const name of names) {
+    const value = request.headers.get(name);
+    if (value !== null && value.trim() !== "") return value;
+  }
+  return null;
+}
+
 export const miscRoutes = new Elysia({ name: "misc" })
   .use(authPlugin)
   // --- Webhook Receivers ---
@@ -294,7 +302,12 @@ export const miscRoutes = new Elysia({ name: "misc" })
       provider: "gitlab",
       eventName,
       payload: parsed.payload,
-      deliveryId: vcsWebhookDeliveryId("gitlab", eventName, parsed.payload, null),
+      deliveryId: vcsWebhookDeliveryId(
+        "gitlab",
+        eventName,
+        parsed.payload,
+        firstWebhookHeader(request, ["x-gitlab-event-uuid", "x-gitlab-webhook-uuid", "webhook-id", "idempotency-key"]),
+      ),
     });
     return webhookAcknowledged;
   })
@@ -314,7 +327,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
       provider: "bitbucket",
       eventName,
       payload: parsed.payload,
-      deliveryId: vcsWebhookDeliveryId("bitbucket", eventName, parsed.payload, null),
+      deliveryId: vcsWebhookDeliveryId("bitbucket", eventName, parsed.payload, firstWebhookHeader(request, ["x-request-uuid"])),
     });
     return webhookAcknowledged;
   })
