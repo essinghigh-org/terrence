@@ -3,6 +3,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
+import { MAX_LEGACY_STATE_OUTPUT_CANDIDATES } from "../../src/routes/state-versions";
 import { db } from "../../src/db";
 import {
   apiTokens,
@@ -320,5 +321,68 @@ describe("workspace run history and state metadata", () => {
       `/api/v2/state-versions/${stateId}/state-version-outputs`,
       false,
     )).status).toBe(401);
+  });
+
+  it("bounds valid-shaped output misses instead of scanning all state history", async () => {
+    const unknownOutputId = `wsout-${"f".repeat(64)}`;
+    const stateVersionQuery = db.query.stateVersions as unknown as {
+      findMany: (config?: unknown) => Promise<unknown>;
+    };
+    const originalFindMany = stateVersionQuery.findMany;
+    const calls: unknown[] = [];
+    stateVersionQuery.findMany = (config?: unknown): Promise<unknown> => {
+      calls.push(config);
+      return originalFindMany.call(stateVersionQuery, config);
+    };
+
+    try {
+      const response = await request(`/api/v2/state-version-outputs/${unknownOutputId}`);
+      expect(response.status).toBe(404);
+    } finally {
+      stateVersionQuery.findMany = originalFindMany;
+    }
+
+    const boundedCalls = calls.filter((config): config is { limit?: unknown } =>
+      config !== null && typeof config === "object" && "limit" in config);
+    expect(boundedCalls).toHaveLength(1);
+    expect(boundedCalls[0]?.limit).toBe(MAX_LEGACY_STATE_OUTPUT_CANDIDATES);
+    expect(calls).not.toContain(undefined);
+  });
+
+  it("authorizes legacy candidates before fetching their state payloads", async () => {
+    const outsiderOrgId = `outsider-org-${suffix}`;
+    const outsiderWorkspaceId = `outsider-workspace-${suffix}`;
+    const outsiderStateId = `outsider-state-${suffix}`;
+    await db.insert(organizations).values({ id: outsiderOrgId, name: `outsider-${suffix}` });
+    await db.insert(workspaces).values({ id: outsiderWorkspaceId, name: "unreadable", orgId: outsiderOrgId });
+    await db.insert(stateVersions).values({
+      id: outsiderStateId,
+      workspaceId: outsiderWorkspaceId,
+      serial: 1,
+      statePayload: JSON.stringify({ outputs: { outsider: { value: "must-not-be-read" } } }),
+      createdAt: Date.now() + 1,
+    });
+
+    const stateVersionQuery = db.query.stateVersions as unknown as {
+      findFirst: (config?: unknown) => Promise<unknown>;
+    };
+    const originalFindFirst = stateVersionQuery.findFirst;
+    const calls: unknown[] = [];
+    stateVersionQuery.findFirst = (config?: unknown): Promise<unknown> => {
+      calls.push(config);
+      return originalFindFirst.call(stateVersionQuery, config);
+    };
+
+    try {
+      const response = await request(`/api/v2/state-version-outputs/wsout-${"e".repeat(64)}`);
+      expect(response.status).toBe(404);
+    } finally {
+      stateVersionQuery.findFirst = originalFindFirst;
+      await db.delete(organizations).where(eq(organizations.id, outsiderOrgId));
+    }
+
+    // Only the authorized workspace's payload may be fetched. The outsider
+    // candidate is rejected while its state is still metadata-only.
+    expect(calls).toHaveLength(1);
   });
 });
