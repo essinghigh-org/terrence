@@ -6,7 +6,7 @@ import {
   severityForLevel,
   type SyslogEntryInput,
 } from "../../src/lib/syslog-format";
-import { parseSyslogTarget } from "../../src/lib/syslog-transport";
+import { parseSyslogTarget, parseSyslogTargets } from "../../src/lib/syslog-transport";
 
 const IDENTITY = { hostname: "terrence-host", appName: "terrence", procId: "4242" };
 
@@ -40,6 +40,13 @@ describe("syslog target parsing", (): void => {
     expect(parseSyslogTarget("udp://user:pass@[::1]:514")).toBeNull();
     expect(parseSyslogTarget("udp://[::1]:514/path")).toBeNull();
     expect(parseSyslogTarget("udp://[::1]:514?query")).toBeNull();
+  });
+
+  it("parses multiple targets while ignoring malformed entries", (): void => {
+    expect(parseSyslogTargets("udp://one.example:514\ntcp://two.example:601,ftp://bad.example:514")).toEqual([
+      { transport: "udp", host: "one.example", port: 514 },
+      { transport: "tcp", host: "two.example", port: 601 },
+    ]);
   });
 
   it("rejects malformed targets", (): void => {

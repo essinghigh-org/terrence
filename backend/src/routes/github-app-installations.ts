@@ -9,6 +9,7 @@ import { decryptSecret } from "../lib/secrets";
 import { getGitHubAppAccessToken } from "../lib/webhooks";
 import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail, type VcsIntegrationUsage } from "../lib/vcs-integration-usage";
 import { AvatarService } from "../lib/avatars";
+import { githubAppApiBase } from "../lib/github-api";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 type ParamCtx = Readonly<{
@@ -51,7 +52,6 @@ type VerifiedInstallation = Readonly<{
 const SETUP_STATE_TTL_MS = 10 * 60 * 1000;
 const GITHUB_TIMEOUT_MS = 10_000;
 const setupStates = new Map<string, SetupState>();
-const GITHUB_API_BASE = "https://api.github.com";
 const AUTH_BEARER_PREFIX = "Bea" + "rer "; // auth scheme sentinel
 
 function stringQuery(query: Readonly<Record<string, unknown>> | undefined, key: string): string {
@@ -86,16 +86,16 @@ function githubAppConfig(): GitHubAppConfig | null {
   const privateKey = process.env.GITHUB_APP_PRIVATE_KEY?.replaceAll("\\n", "\n").trim() ?? "";
   const slug = process.env.GITHUB_APP_SLUG?.trim() ?? "";
   const httpUrl = configuredUrl(process.env.GITHUB_APP_HTTP_URL, "https://github.com");
-  const apiUrl = configuredUrl(process.env.GITHUB_APP_API_URL, "https://api.github.com");
+  const apiUrl = githubAppApiBase(true);
   if (
     appId === null
     || privateKey === ""
     || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,98}[A-Za-z0-9])?$/.test(slug)
     || httpUrl === null
-    || apiUrl === null
+    || apiUrl === undefined
   ) return null;
   const installUrl = new URL(`/apps/${encodeURIComponent(slug)}/installations/new`, httpUrl);
-  return { apiUrl: apiUrl.toString(), appId, appIdText, installUrl: installUrl.toString(), privateKey };
+  return { apiUrl, appId, appIdText, installUrl: installUrl.toString(), privateKey };
 }
 
 function redirect(location: string, status: 302 | 303): Response {
@@ -164,23 +164,9 @@ function httpUrl(value: unknown): string | null {
 }
 
 /**
- * Base URL for GitHub REST API calls. Honors a configured GITHUB_APP_API_URL
- * (GitHub Enterprise) so every call goes to the same instance the install
- * lives on; falls back to the public api.github.com default.
+ * Base URL for GitHub REST API calls. Every App request uses the same
+ * GITHUB_APP_API_URL > GITHUB_API_URL > public default resolution.
  */
-function githubApiBase(): string {
-  const configured = process.env.GITHUB_APP_API_URL?.trim() ?? "";
-  try {
-    const url = new URL(configured);
-    if (url.protocol === "https:" || url.protocol === "http:") {
-      return url.toString().replace(/\/$/, "");
-    }
-  } catch {
-    // invalid config — fall through to the default
-  }
-  return GITHUB_API_BASE;
-}
-
 type RepositoryProvider = "github" | "gitlab" | "bitbucket";
 type RepositoryRecord = Readonly<Record<string, unknown>>;
 type RepositoryResource = { id: string; type: string; attributes: { identifier: string; name: string; owner: string } };
@@ -295,6 +281,41 @@ function nextLink(headers: Headers): string | null {
     if (match?.[1] !== undefined) return match[1];
   }
   return null;
+}
+
+async function discoverGithubInstallationRepositories(
+  apiBase: string,
+  token: string,
+): Promise<RepositoryResource[]> {
+  const base = new URL(apiBase);
+  let url = repositoryEndpoint(base, "installation/repositories", { per_page: String(REPOSITORY_PAGE_SIZE) });
+  const seenUrls = new Set<string>();
+  const repositories = new Map<string, RepositoryResource>();
+  for (let requestCount = 0; requestCount < MAX_REPOSITORY_PAGES; requestCount += 1) {
+    const urlKey = url.toString();
+    if (seenUrls.has(urlKey)) break;
+    seenUrls.add(urlKey);
+    const response = await fetchRepositoryPage(url, token);
+    if (response === null) break;
+    const body = recordValue(response.body);
+    const records = body?.repositories;
+    if (!Array.isArray(records)) break;
+    for (const value of records) {
+      const record = recordValue(value);
+      const fullName = stringValue(record?.full_name);
+      if (record === null || fullName === null) continue;
+      const name = stringValue(record.name) ?? fullName.split("/").at(-1) ?? fullName;
+      repositories.set(fullName, {
+        id: fullName,
+        type: "vcs-repositories",
+        attributes: { identifier: fullName, name, owner: fullName.split("/")[0] ?? "" },
+      });
+    }
+    const next = safeNextRepositoryUrl(nextLink(response.headers), base);
+    if (next === null) break;
+    url = next;
+  }
+  return [...repositories.values()];
 }
 
 function stringValue(value: unknown): string | null {
@@ -580,24 +601,14 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
 
     if (installation !== undefined) {
       const token = await getGitHubAppAccessToken(installation.installationId);
-      if (token !== null) {
+      const apiBase = githubAppApiBase(true);
+      if (token !== null && apiBase !== undefined) {
         try {
-          const res = await fetch(`${githubApiBase()}/installation/repositories?per_page=100`, {
-            headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json" },
-          });
-          if (res.ok) {
-            const body = await res.json() as { repositories?: { full_name?: string; name?: string }[] }; // eslint-disable-line @typescript-eslint/naming-convention
-            for (const repo of body.repositories ?? []) {
-              if (typeof repo.full_name === "string" && repo.full_name !== "") {
-                repos.push({
-                  id: repo.full_name,
-                  type: "vcs-repositories",
-                  attributes: { identifier: repo.full_name, name: repo.name ?? repo.full_name, owner: repo.full_name.split("/")[0] ?? "" },
-                });  
-              }
-            }
-          }
-        } catch {}
+          repos.push(...await discoverGithubInstallationRepositories(apiBase, token));
+        } catch {
+          // A valid installation with a temporarily unavailable API returns an
+          // empty discovery result, matching OAuth discovery semantics.
+        }
       }
       return { data: repos };
     } else {
@@ -884,7 +895,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       const repoHeaders = { Authorization: `${AUTH_BEARER_PREFIX}${token}`, Accept: "application/vnd.github.v3+json" };
       // Listing repositories is the read path Terrence uses to resolve a
       // workspace's VCS repo; an install scoped to too few repos breaks it.
-      const statusRes = await fetch(`${githubApiBase()}/installation/repositories?per_page=1`, {
+      const statusRes = await fetch(`${githubAppApiBase(true) ?? "https://api.github.com"}/installation/repositories?per_page=1`, {
         headers: repoHeaders, signal: AbortSignal.timeout(5_000),
       });
       if (!statusRes.ok) {
@@ -898,7 +909,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
         return { installationId: installation.installationId, config: config?.appId ?? null, checks };
       }
       const testSha = "a".repeat(40);
-      const writeRes = await fetch(`${githubApiBase()}/repos/${encodeURIComponent(repo.full_name)}/statuses/${testSha}`, {
+      const writeRes = await fetch(`${githubAppApiBase(true) ?? "https://api.github.com"}/repos/${encodeURIComponent(repo.full_name)}/statuses/${testSha}`, {
         method: "POST",
         headers: repoHeaders,
         body: JSON.stringify({ state: "pending", context: "terrence/diagnostics", description: "Terrence permission check" }),

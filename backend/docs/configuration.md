@@ -25,7 +25,7 @@ Set variables through the container environment or an `.env` file.
 | `ENCRYPTION_PASSWORD` | generated | Password for encryption-at-rest features. |
 | `SIGNED_URL_SECRET` | generated | Secret for signed URL tokens (state downloads). |
 | `SIGNED_URL_TTL_SECONDS` | `300` | Lifetime of signed download URLs. |
-| `LOG_LEVEL` | `info` | Log verbosity. |
+| `LOG_LEVEL` | `info` | Log verbosity. Site Admin logging settings can override it at runtime. |
 | `BUILD_SHA` / `BUILD_VERSION` | none | Build identifiers shown in diagnostics. |
 
 ## Administration and users
@@ -86,8 +86,8 @@ Set variables through the container environment or an `.env` file.
 | `GITHUB_APP_PRIVATE_KEY` | none | GitHub App RSA private key. |
 | `GITHUB_WEBHOOK_SECRET` | none | Webhook secret from the GitHub App settings. |
 | `GITHUB_APP_HTTP_URL` | `https://github.com` | GitHub HTTP URL for GitHub Enterprise. |
-| `GITHUB_APP_API_URL` | `https://api.github.com` | GitHub API URL for GitHub Enterprise. |
-| `GITHUB_API_URL` | derived | API URL used for VCS lookups. |
+| `GITHUB_APP_API_URL` | `https://api.github.com` | GitHub App API URL for GitHub Enterprise. GitHub App calls require HTTPS. |
+| `GITHUB_API_URL` | derived | API URL used for VCS lookups. GitHub App calls require HTTPS. |
 | `GITLAB_WEBHOOK_SECRET` | none | Secret for GitLab webhook deliveries. |
 | `BITBUCKET_WEBHOOK_SECRET` | none | Secret for Bitbucket webhook deliveries. |
 
@@ -105,10 +105,23 @@ Set variables through the container environment or an `.env` file.
 | Variable | Default | Purpose |
 |---|---|---|
 | `AUDIT_STRICT` | off | Record token minting, SSH key access, and sensitive variable reads. |
+| `TERRENCE_SYSLOG_TARGET` / `TERRENCE_SYSLOG_TARGETS` | none | Remote syslog destination(s). Site Admin logging settings override these when persisted. |
+| `TERRENCE_SYSLOG_LEVEL` | `LOG_LEVEL` | Remote syslog verbosity. |
+| `TERRENCE_SYSLOG_HOSTNAME` / `TERRENCE_SYSLOG_APP` | derived / `terrence` | Remote syslog identity overrides. |
 | `TERRENCE_QUERY_LOG` | off | Log every database query. |
 | `TERRENCE_QUERY_COUNT` | off | Count database queries for diagnostics. |
 | `MIGRATION_CHECKPOINT_RETRIES` | default | Retry count for migration checkpoints. |
 | `MIGRATION_DRAIN_TIMEOUT_MS` | default | Drain timeout for the migration wizard. |
+
+## Dependency update policy
+
+Bun rejects releases younger than three days (`minimumReleaseAge = 259200`).
+Renovate uses the matching `minimumReleaseAge` and does not run standalone lock
+file maintenance, because that job can ask Bun to resolve a newly published
+package and turn the repository's deliberate release-age guard into a failed
+Renovate branch. Direct dependency updates still refresh and validate
+`bun.lock`; CI checks both the frozen lockfile and this policy. Do not weaken
+the three-day guard to clear a Renovate warning.
 
 ## Invalid values
 

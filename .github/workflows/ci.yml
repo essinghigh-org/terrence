@@ -108,6 +108,20 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Check lockfile deduplication
         run: bun run deps:dedupe:check
+      - name: Check dependency release-age policy
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const renovate = JSON.parse(fs.readFileSync("renovate.json", "utf8"));
+          const lines = fs.readFileSync("bunfig.toml", "utf8").split(/\r?\n/);
+          const installStart = lines.findIndex((line) => line.trim() === "[install]");
+          const installEnd = lines.findIndex((line, index) => index > installStart && /^\s*\[/.test(line));
+          const installLines = lines.slice(installStart + 1, installEnd === -1 ? lines.length : installEnd);
+          const ageAssignments = installLines.filter((line) => /^\s*minimumReleaseAge\s*=/.test(line));
+          const activeAge = ageAssignments[0]?.match(/^\s*minimumReleaseAge\s*=\s*(\d+)\s*(?:#.*)?$/)?.[1];
+          if (renovate.minimumReleaseAge !== "3 days" || renovate.lockFileMaintenance?.enabled !== false || ageAssignments.length !== 1 || activeAge !== "259200") process.exit(1);
+          console.log("Dependency release-age policy is enforced; Renovate lock maintenance is disabled because Bun enforces the same guard.");
+          NODE
       - name: Typecheck
         run: bun run typecheck
       - name: Lint (baseline report)

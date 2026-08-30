@@ -32,6 +32,7 @@ describe("No-code module API contract", () => {
   const otherModuleId = `other-mod-${suffix}`;
   const versionOneId = `modver-one-${suffix}`;
   const versionTwoId = `modver-two-${suffix}`;
+  const versionThreeId = `modver-three-${suffix}`;
   const otherVersionId = `other-modver-${suffix}`;
   const userToken = `user-token-${suffix}`;
   const otherUserToken = `other-user-token-${suffix}`;
@@ -126,6 +127,9 @@ variable "enable_monitoring" {
     await db.insert(registryModuleVersions).values([
       { id: versionOneId, moduleId, version: "1.0.0", status: "ok", createdAt: Date.now() - 100 },
       { id: versionTwoId, moduleId, version: "2.0.0", status: "ok", archivePath: moduleArchivePath, metadata: { description: "Preserved metadata" }, createdAt: Date.now() },
+      // Higher SemVer but older creation time: unpinned selection must use
+      // release precedence, not insertion order.
+      { id: versionThreeId, moduleId, version: "3.0.0", status: "ok", archivePath: moduleArchivePath, createdAt: Date.now() - 1_000 },
       { id: otherVersionId, moduleId: otherModuleId, version: "9.9.9", status: "ok", createdAt: Date.now() },
     ]);
   });
@@ -211,9 +215,9 @@ variable "enable_monitoring" {
     expect(updated.status).toBe(200);
     const updatedBody = await updated.json();
     expect(updatedBody.data.id).toBe(noCodeId);
-    expect(updatedBody.data.attributes).toEqual({ enabled: false, "version-pin": "2.0.0" });
+    expect(updatedBody.data.attributes).toEqual({ enabled: false, "version-pin": "3.0.0" });
     const stored = await db.query.noCodeModules.findFirst({ where: eq(noCodeModules.id, noCodeId) });
-    expect(stored?.versionId).toBe(versionTwoId);
+    expect(stored?.versionId).toBe(versionThreeId);
 
     expect((await request(`/api/v2/organizations/${otherOrgName}/no-code-modules`)).status).toBe(404);
   });

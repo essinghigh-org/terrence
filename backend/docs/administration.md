@@ -28,7 +28,7 @@ Site administrators are created by the bootstrap flow or by an existing administ
 | Auth | OIDC, SAML, LDAP configuration |
 | SMTP | Outbound email |
 | SCIM | Identity provisioning |
-| Operations | Maintenance mode, apply gates |
+| Operations | Maintenance mode, apply gates, runtime log levels and remote syslog destinations |
 | Database | Export, migration, maintenance |
 
 ## Users
@@ -70,6 +70,35 @@ PATCH requests are merged from the latest committed group state. If concurrent
 requests change the same key, the last request to acquire the group lock wins.
 Cache invalidation occurs after the group write commits.
 
+## Logging and remote syslog
+
+The Operations page and `GET/PATCH /api/v2/admin/logging-settings` configure
+runtime logging without a restart. The settings are stored in the `logging`
+group. Local and remote levels accept `error`, `warn`, `info`, or `debug`.
+Set `enabled` to false to disable remote delivery even when environment
+variables specify a destination.
+Remote destinations are one `udp://host:port` or `tcp://host:port` value per
+entry, with up to 16 entries. Syslog delivery is best effort and fans out to
+every configured destination; a failed collector does not block other
+collectors or the application logger.
+
+Environment variables remain the bootstrap fallback when the corresponding
+Site Admin value is unset:
+
+- `LOG_LEVEL` controls local logging.
+- `TERRENCE_SYSLOG_TARGET` controls one remote destination.
+- `TERRENCE_SYSLOG_TARGETS` controls comma/newline-separated destinations and
+  takes precedence over the singular variable when non-empty.
+- `TERRENCE_SYSLOG_LEVEL`, `TERRENCE_SYSLOG_HOSTNAME`, and
+  `TERRENCE_SYSLOG_APP` control remote level and identity.
+
+A persisted non-null Site Admin value overrides its environment fallback. An
+explicit empty `syslog-targets` array disables environment-configured remote
+sinks. Existing environment-only deployments continue to work. Running
+replicas re-read the persisted logging group periodically, so a PATCH reaches
+each replica without a restart (the PATCH-serving replica applies it
+immediately).
+
 ## API surface
 
 - `GET /api/v2/admin/users`
@@ -81,3 +110,4 @@ Cache invalidation occurs after the group write commits.
 - `GET /api/v2/admin/workspaces`
 - `GET /api/v2/admin/runs`
 - `GET /api/v2/admin/provider-surface`
+- `GET/PATCH /api/v2/admin/logging-settings`

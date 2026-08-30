@@ -80,6 +80,32 @@ afterEach((): void => {
   globalThis.fetch = originalFetch;
 });
 
+test("offers only registry-supported VCS connections with an honest provider boundary", async () => {
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = urlOf(input);
+    const base = baseResponse(url);
+    if (base !== null && !url.endsWith("/oauth-clients")) return base;
+    if (url === "/api/v2/organizations/acme/oauth-clients") return json({ data: [
+      { id: "github-client", attributes: { name: "GitHub", "service-provider": "github", "service-provider-display-name": "GitHub" } },
+      { id: "gitlab-client", attributes: { name: "GitLab", "service-provider": "gitlab", "service-provider-display-name": "GitLab" } },
+    ] });
+    if (url === "/api/v2/oauth-clients/github-client/oauth-tokens") return json({ data: [
+      { id: "github-token", attributes: { "service-provider-user": "octocat" } },
+    ] });
+    if (url === "/api/v2/oauth-clients/github-token/oauth-tokens") return json({ data: [] });
+    if (url === "/api/v2/organizations/acme/vcs-connections/oauth-token%3Agithub-token/repositories") return json({ data: [] });
+    throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
+  }) as typeof fetch;
+  const view = renderRegistry();
+  await openPublish(view);
+  const connectionSelect = await view.findByLabelText("VCS connection");
+  const connectionLabels = [...(connectionSelect as HTMLSelectElement).options].map((option): string => option.textContent ?? "");
+  expect(connectionLabels.some((label): boolean => label.includes("GitHub"))).toBeTrue();
+  expect(connectionLabels.some((label): boolean => label.includes("octocat"))).toBeTrue();
+  expect(connectionLabels.some((label): boolean => label.includes("GitLab"))).toBeFalse();
+  expect(view.queryByText(/No supported GitHub connections/)).toBeNull();
+});
+
 test("publishes a tag-based VCS module with the existing keyboard repository picker", async () => {
   let payload: JsonObject | null = null;
 // SAFETY: the mock's handling mirrors the backend contract for this test.

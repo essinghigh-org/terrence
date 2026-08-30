@@ -92,8 +92,11 @@ export function formatSyslogMessage(entry: SyslogEntryInput, identity: SyslogIde
 
 /** Deterministic default hostname: container id hash when /etc/hostname is
  * unavailable (some sandboxed environments). Kept stable per boot. */
-export function resolveHostname(env: NodeJS.ProcessEnv = process.env): string {
-  const configured = env.TERRENCE_SYSLOG_HOSTNAME?.trim();
+export function resolveHostname(env: NodeJS.ProcessEnv = process.env, override?: string | null): string {
+  const overrideValue = override?.trim();
+  const configured = overrideValue === undefined || overrideValue === ""
+    ? env.TERRENCE_SYSLOG_HOSTNAME?.trim()
+    : overrideValue;
   if (configured !== undefined && configured !== "") return configured;
   try {
     const name = readFileSync("/etc/hostname", "utf8").trim();

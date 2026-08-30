@@ -102,6 +102,17 @@ beforeAll(async () => {
       authorization: authorization ?? headers.get("authorization"),
       url,
     });
+    if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+    if (url.includes("/installation/repositories")) {
+      const page = new URL(url).searchParams.get("page");
+      if (page === "2") {
+        return Response.json({ repositories: [{ full_name: "acme/second-repository", name: "second-repository" }] });
+      }
+      return Response.json(
+        { repositories: [{ full_name: "acme/first-repository", name: "first-repository" }] },
+        { headers: { Link: '<https://github.example/api/v3/installation/repositories?per_page=100&page=2>; rel="next"' } },
+      );
+    }
     return Response.json({
       account: {
         avatar_url: "https://avatars.githubusercontent.com/u/12345?v=4",
@@ -307,6 +318,32 @@ describe("GitHub App installation setup", () => {
     expect(await db.query.githubAppInstallations.findFirst({
       where: eq(githubAppInstallations.orgId, orgId),
     })).toBeUndefined();
+  });
+
+  test("discovers all installation repositories across bounded Link pages", async () => {
+    const localId = `ghain-pagination-${suffix}`;
+    const previousApiUrl = process.env.GITHUB_APP_API_URL;
+    process.env.GITHUB_APP_API_URL = "https://github.example/api/v3";
+    await db.insert(githubAppInstallations).values({
+      id: localId,
+      orgId,
+      name: "paginated-installation",
+      installationId: installationId + 10,
+    });
+    try {
+      const response = await request(`/api/v2/organizations/${orgName}/vcs-connections/github-app:${localId}/repositories`);
+      expect(response.status).toBe(200);
+      const body = await response.json() as { data?: { id: string }[] };
+      expect(body.data?.map((repository): string => repository.id)).toEqual([
+        "acme/first-repository",
+        "acme/second-repository",
+      ]);
+      expect(providerRequests.filter((entry): boolean => entry.url.includes("/installation/repositories"))).toHaveLength(2);
+    } finally {
+      await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, localId));
+      if (previousApiUrl === undefined) delete process.env.GITHUB_APP_API_URL;
+      else process.env.GITHUB_APP_API_URL = previousApiUrl;
+    }
   });
 
   test("allows a VCS manager to remove an installation but denies outsiders", async () => {

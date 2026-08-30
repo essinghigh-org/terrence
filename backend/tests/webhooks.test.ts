@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { eq } from "drizzle-orm";
 import { app } from "../src/app";
 import { db } from "../src/db";
-import { reportRunVcsStatus } from "../src/lib/webhooks";
+import { clearDefaultBranchCacheForTests, reportRunVcsStatus } from "../src/lib/webhooks";
 import {
   apiTokens,
   configurationVersions,
@@ -41,6 +41,9 @@ const originalPrivateKey = process.env.GITHUB_APP_PRIVATE_KEY;
 const originalAppApiUrl = process.env.GITHUB_APP_API_URL;
 const originalFetch = globalThis.fetch;
 let tarballFetches = 0;
+let paginatePullRequestFiles = false;
+let pullRequestFileRequests = 0;
+let defaultBranchResponse = "main";
 const tarballRequests: { url: string; authorization: string | null }[] = [];
 const commitStatuses: Record<string, unknown>[] = [];
 
@@ -156,7 +159,16 @@ describe("GitHub Webhooks", () => {
       if (url.includes("/access_tokens")) {
         return Response.json({ token: url.includes("/67891/") ? "secondary-token" : "test-token" });
       }
-      if (url.includes("/pulls/42/files")) return Response.json([{ filename: "src/main.tf" }]);
+      if (url.includes("/pulls/42/files")) {
+        pullRequestFileRequests += 1;
+        if (!paginatePullRequestFiles) return Response.json([{ filename: "src/main.tf" }]);
+        const page = new URL(url).searchParams.get("page");
+        if (page === "2") return Response.json([{ filename: "src/main.tf" }]);
+        return Response.json([{ filename: "docs/readme.md" }], {
+          headers: { Link: '<https://api.github.com/repos/hashicorp/terraform/pulls/42/files?per_page=100&page=2>; rel="next"' },
+        });
+      }
+      if (url.endsWith("/repos/hashicorp/terraform")) return Response.json({ default_branch: defaultBranchResponse });
       if (url.includes("/tarball/")) {
         tarballFetches += 1;
         tarballRequests.push({ url, authorization: new Headers(init?.headers).get("authorization") });
@@ -206,6 +218,9 @@ describe("GitHub Webhooks", () => {
 
   beforeEach(async () => {
     tarballFetches = 0;
+    paginatePullRequestFiles = false;
+    pullRequestFileRequests = 0;
+    defaultBranchResponse = "main";
     tarballRequests.length = 0;
     commitStatuses.length = 0;
     await db.delete(githubWebhookDeliveries);
@@ -418,6 +433,16 @@ describe("GitHub Webhooks", () => {
     expect(runList.find((run): boolean => run.workspaceId === workspaceId && run.planOnly)).toBeDefined();
   });
 
+  test("matching pull request uses every page of the GitHub file list", async () => {
+    paginatePullRequestFiles = true;
+    const deliveryId = crypto.randomUUID();
+    expect((await sendWebhook("pull_request", pullRequestPayload(), deliveryId)).status).toBe(200);
+    const runList = await waitForRuns((items): boolean => items.some((run): boolean => run.planOnly));
+    await waitForDelivery(deliveryId);
+    expect(runList.find((run): boolean => run.workspaceId === workspaceId && run.planOnly)).toBeDefined();
+    expect(pullRequestFileRequests).toBe(2);
+  });
+
   test("can pass unaffected pull requests when non-aggregated statuses are enabled", async () => {
     await db.update(organizations).set({
       aggregatedCommitStatusEnabled: false,
@@ -436,6 +461,35 @@ describe("GitHub Webhooks", () => {
     await sendWebhook("push", { ...pushPayload, ref: "refs/heads/release" }, deliveryId);
     await waitForDelivery(deliveryId);
     expect((await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).length).toBe(0);
+  });
+
+  test("does not retain a stale default-branch decision after cache invalidation", async () => {
+    clearDefaultBranchCacheForTests();
+    await db.update(workspaces).set({
+      vcsRepo: { identifier: "hashicorp/terraform", githubAppInstallationId: installationId },
+      fileTriggersEnabled: true,
+      triggerPrefixes: ["src/"],
+    }).where(eq(workspaces.id, workspaceId));
+    defaultBranchResponse = "main";
+    const firstDelivery = crypto.randomUUID();
+    await sendWebhook("push", pushPayload, firstDelivery);
+    await waitForDelivery(firstDelivery);
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).toHaveLength(1);
+
+    await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
+    await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, workspaceId));
+    defaultBranchResponse = "release";
+    const staleDelivery = crypto.randomUUID();
+    await sendWebhook("push", { ...pushPayload, ref: "refs/heads/release" }, staleDelivery);
+    await waitForDelivery(staleDelivery);
+    // The unexpired cache still reflects the previous provider response.
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).toHaveLength(0);
+
+    clearDefaultBranchCacheForTests();
+    const refreshedDelivery = crypto.randomUUID();
+    await sendWebhook("push", { ...pushPayload, ref: "refs/heads/release" }, refreshedDelivery);
+    await waitForDelivery(refreshedDelivery);
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).toHaveLength(1);
   });
 
   test("matching tag regex creates a run and records the tag", async () => {

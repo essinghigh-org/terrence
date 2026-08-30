@@ -1,5 +1,6 @@
 import { Elysia } from "elysia";
 import { authPlugin } from "../../auth";
+import { applyLoggingSettings, isLogLevel, LOG_LEVELS } from "../../lib/log";
 import { getSettings } from "../../lib/settings";
 import { ldapSettings } from "../../lib/sso";
 import { invalidatePingSsoCache } from "../health";
@@ -11,6 +12,7 @@ import { db } from "../../db";
 import { workloadIdentityKeys } from "../../db/schema";
 import { count, desc } from "drizzle-orm";
 import { isSmtpEncryption, sendEmail } from "../../lib/smtp";
+import { parseSyslogTarget } from "../../lib/syslog-transport";
 import { normalizeEmail } from "../../lib/identity";
 
 function hidden(set: ParamCtx["set"]): Record<string, unknown> {
@@ -40,8 +42,75 @@ function redactedSettingsResource(
   return settingResource(id, safe);
 }
 
+function loggingSettingsResource(values: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  return settingResource("logging-settings", values);
+}
+
+function loggingSettingError(set: ParamCtx["set"], detail: string): Record<string, unknown> {
+  (set as { status: number }).status = 422;
+  return { errors: [{ status: "422", title: "Unprocessable Entity", detail }] };
+}
+
+type LoggingValidation = Readonly<
+  | { ok: true; values: Readonly<Record<string, unknown>> }
+  | { ok: false; error: string }
+>;
+
+function validateLoggingAttributes(
+  attrs: Readonly<Record<string, unknown>>,
+): LoggingValidation {
+  const enabled = attrs.enabled;
+  if (enabled !== undefined && enabled !== null && typeof enabled !== "boolean") {
+    return { ok: false, error: "enabled must be a boolean or null" };
+  }
+  for (const key of ["log-level", "syslog-level"] as const) {
+    const value = attrs[key];
+    if (value !== undefined && value !== null && (typeof value !== "string" || !isLogLevel(value))) {
+      return { ok: false, error: `${key} must be one of: ${LOG_LEVELS.join(", ")} or null` };
+    }
+  }
+  const targets = attrs["syslog-targets"];
+  if (targets !== undefined && targets !== null) {
+    if (!Array.isArray(targets) || targets.length > 16) {
+      return { ok: false, error: "syslog-targets must be an array of at most 16 targets or null" };
+    }
+    for (const value of targets) {
+      if (typeof value !== "string" || parseSyslogTarget(value) === null) {
+        return { ok: false, error: "syslog-targets entries must be udp://host:port or tcp://host:port" };
+      }
+    }
+  }
+  const normalized: Record<string, unknown> = { ...attrs };
+  for (const key of ["syslog-hostname", "syslog-app"] as const) {
+    const value = attrs[key];
+    const maxLength = key === "syslog-hostname" ? 255 : 48;
+    if (value === undefined || value === null) continue;
+    const trimmed = typeof value === "string" ? value.trim() : "";
+    if (trimmed === "" || trimmed.length > maxLength || !/^[\x21-\x7E]+$/u.test(trimmed)) {
+      return { ok: false, error: `${key} must be at most ${maxLength} printable ASCII characters without spaces, or null` };
+    }
+    normalized[key] = trimmed;
+  }
+  return { ok: true, values: normalized };
+}
+
 export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
   .use(authPlugin)
+  .get("/api/v2/admin/logging-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) return hidden(set);
+    return loggingSettingsResource(await getSettings("logging"));
+  })
+  .patch("/api/v2/admin/logging-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) return hidden(set);
+    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
+    const attrs = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
+    const validated = validateLoggingAttributes(attrs);
+    if (!validated.ok) return loggingSettingError(set, validated.error);
+    const updated = await updateSettings("logging", validated.values);
+    applyLoggingSettings(updated);
+    return loggingSettingsResource(updated);
+  })
   .get("/api/v2/admin/cost-estimation-settings", async ({ user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
     return redactedSettingsResource("cost-estimation-settings", await getSettings("cost"), [

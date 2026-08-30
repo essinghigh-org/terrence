@@ -8,7 +8,8 @@ import {
   validateModuleArchive,
 } from "../../src/lib/registry-module-archive";
 import { inspectRegistryModule } from "../../src/lib/registry-module-metadata";
-import { discoverModuleVersions } from "../../src/lib/registry-module-sync";
+import { discoverModuleVersions, selectRegistryModuleVersionBatch } from "../../src/lib/registry-module-sync";
+import { isModuleVersion } from "../../src/lib/registry-version";
 import { makeRegistryModuleArchive } from "../registry-module-helpers";
 
 async function expectRejection(operation: () => Promise<unknown>, message?: string): Promise<void> {
@@ -44,9 +45,34 @@ describe("registry module ingestion", () => {
       { name: "v9.0.0", sha: "wrong-prefix" },
       { name: "network-latest", sha: "bad-word" },
     ], "network-")).toEqual([
-      { version: "1.2.3", ref: "network-v1.2.3", sha: "sha-123", branch: null },
       { version: "1.3.0", ref: "network-1.3.0", sha: "sha-130", branch: null },
+      { version: "1.2.3", ref: "network-v1.2.3", sha: "sha-123", branch: null },
     ]);
+  });
+
+  test("rejects zero-padded numeric prerelease identifiers", () => {
+    expect(isModuleVersion("1.0.0-01")).toBeFalse();
+    expect(isModuleVersion("1.0.0-alpha.01")).toBeFalse();
+    expect(isModuleVersion("1.0.0-alpha.1")).toBeTrue();
+    expect(isModuleVersion("1.0.0-0")).toBeTrue();
+  });
+
+  test("keeps discovery bounded by pagination but advances through every import batch", () => {
+    const candidates = discoverModuleVersions(
+      Array.from({ length: 101 }, (_, index) => ({
+        name: `network-v1.0.${index + 1}`,
+        sha: `sha-${index + 1}`,
+      })),
+      "network-",
+    );
+    expect(candidates).toHaveLength(101);
+    const first = selectRegistryModuleVersionBatch(candidates, new Set());
+    expect(first).toHaveLength(100);
+    const imported = new Set(first.map((candidate): string => candidate.version));
+    const second = selectRegistryModuleVersionBatch(candidates, imported);
+    expect(second).toHaveLength(1);
+    expect(second[0]?.version).toBe("1.0.1");
+    expect(selectRegistryModuleVersionBatch(candidates, new Set(candidates.map((candidate): string => candidate.version)))).toEqual([]);
   });
 
   test("extracts cached metadata from a realistic module fixture", async () => {

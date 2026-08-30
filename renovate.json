@@ -6,11 +6,9 @@
     ":semanticCommitTypeAll(chore)",
     "helpers:pinGitHubActionDigests"
   ],
+  "minimumReleaseAge": "3 days",
   "lockFileMaintenance": {
-    "enabled": true,
-    "automerge": true,
-    "automergeType": "pr",
-    "platformAutomerge": true
+    "enabled": false
   },
   "prConcurrentLimit": 10,
   "branchConcurrentLimit": 10,

@@ -207,6 +207,33 @@ describe("VCS integration gaps", () => {
     expect(persisted?.vcsRepo?.tagsRegex).toBe("^release-");
   });
 
+  test("rejects a workspace VCS repository that combines App and OAuth credentials", async () => {
+    const clientResponse = await createClient(`mutually-exclusive-${suffix}`, "github");
+    expect(clientResponse.status).toBe(201);
+    const client = await clientResponse.json();
+    const tokenId = `ot-mutually-exclusive-${suffix}`;
+    await db.insert(oauthTokens).values({
+      id: tokenId,
+      oauthClientId: client.data.id as string,
+      token: `oauth-secret-${suffix}`,
+    });
+    const response = await request(`/api/v2/organizations/${orgName}/workspaces`, "POST", {
+      data: {
+        type: "workspaces",
+        attributes: {
+          name: `both-credentials-${suffix}`,
+          "vcs-repo": {
+            identifier: "example/both",
+            "github-app-installation-id": installationId,
+            "oauth-token-id": tokenId,
+          },
+        },
+      },
+    });
+    expect(response.status).toBe(422);
+    expect((await response.json()).errors[0].detail).toContain("either");
+  });
+
   test("serializes workspace vcs-repo with the reference format kebab-case attribute names only", async () => {
     // go-tfe (the tfe provider's JSON:API client) parses kebab-case
     // attributes; camelCase keys in the response silently drop the

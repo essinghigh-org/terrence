@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { FileArchive, GitBranch } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { VcsRepoSelector } from "./VcsRepoSelector";
-import { loadOrganizationVcsConnections, type VcsConnection } from "./WorkspaceVcs";
+import { loadOrganizationVcsConnections, REGISTRY_SUPPORTED_VCS_PROVIDERS, type VcsConnection } from "./WorkspaceVcs";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -59,9 +59,9 @@ export function PublishModuleDialog({
     const controller = new AbortController();
     setLoadingConnections(true);
     setError("");
-    void loadOrganizationVcsConnections(orgName, controller.signal)
+    void loadOrganizationVcsConnections(orgName, controller.signal, { supportedProviders: REGISTRY_SUPPORTED_VCS_PROVIDERS })
       .then((loaded): void => { if (!controller.signal.aborted) setConnections(loaded); })
-      .catch((caught): void => {
+      .catch((caught: unknown): void => {
         if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "VCS connections could not be loaded.");
       })
       .finally((): void => { if (!controller.signal.aborted) setLoadingConnections(false); });
@@ -92,7 +92,7 @@ export function PublishModuleDialog({
         if (!isString(repository["identifier"]) || !isString(repository["name"])) return [];
         return [{ identifier: repository["identifier"], name: repository["name"], ...(isString(repository["owner"]) ? { owner: repository["owner"] } : undefined) }];
       }));
-    }).catch((caught): void => {
+    }).catch((caught: unknown): void => {
       if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Repositories could not be loaded.");
     }).finally((): void => { if (!controller.signal.aborted) setLoadingRepositories(false); });
     return (): void => { controller.abort(); };
@@ -273,6 +273,11 @@ export function PublishModuleDialog({
                   <SelectItem value="">{loadingConnections ? "Loading connections…" : "Select a connection"}</SelectItem>
                   {connections.map((candidate): React.JSX.Element => <SelectItem key={candidate.value} value={candidate.value}>{candidate.label}</SelectItem>)}
                 </Select>
+                {!loadingConnections && error === "" && connections.length === 0 && (
+                  <FieldDescription>
+                    No supported GitHub connections are registered. Add a GitHub App installation or GitHub OAuth connection before publishing a VCS module.
+                  </FieldDescription>
+                )}
               </Field>
               <Field>
                 <FieldLabel htmlFor="module-vcs-repository">Repository</FieldLabel>

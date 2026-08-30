@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
 import { db } from "../src/db";
-import { handleGitlabWebhook } from "../src/lib/webhooks";
+import { handleGitlabWebhook, gitlabPushCommitListTruncated } from "../src/lib/webhooks";
 import { configurationVersions, oauthClients, oauthTokens, organizations, runs, workspaces } from "../src/db/schema";
 
 describe("GitLab merge-request file trigger filtering (kanban 1.6)", () => {
@@ -187,5 +187,25 @@ describe("GitLab merge-request file trigger filtering (kanban 1.6)", () => {
     const handled = await handleGitlabWebhook("Merge Request Hook", mrPayload());
     expect(handled).toBe(true);
     expect(await runCount()).toBe(before + 1);
+  });
+
+  it("fails open when GitLab truncates the inline push commit list", async () => {
+    const payload = {
+      ref: "refs/heads/main",
+      after: "abcdef123abcdef123abcdef123abcdef123abcd",
+      total_commits_count: 21,
+      commits: [{ modified: ["docs/readme.md"] }],
+      project: {
+        path_with_namespace: "acme/infra",
+        git_http_url: "https://gitlab.example.com/acme/infra.git",
+        web_url: "https://gitlab.example.com/acme/infra",
+      },
+      user_username: "octocat",
+    };
+    expect(gitlabPushCommitListTruncated(payload)).toBeTrue();
+    const handled = await handleGitlabWebhook("Push Hook", payload);
+    expect(handled).toBe(true);
+    expect(await runCount()).toBe(1);
+    expect(tarballFetches).toBe(1);
   });
 });

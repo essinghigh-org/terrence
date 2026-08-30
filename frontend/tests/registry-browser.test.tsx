@@ -6,6 +6,7 @@ import { RegistrySettingsRedirect } from "../src/App";
 import { clearProviderIconCacheForTests, ProviderIcon } from "../src/components/ProviderIcon";
 import { Registry } from "../src/views/Registry";
 import { RegistryModuleDetail } from "../src/views/RegistryModuleDetail";
+import { compareRegistryVersions, highestUsableRegistryVersion } from "../src/lib/registry";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
 
@@ -96,6 +97,17 @@ afterEach((): void => {
   globalThis.fetch = originalFetch;
 });
 
+test("orders registry releases by SemVer and skips revoked releases", () => {
+  expect(compareRegistryVersions("1.10.0", "1.9.0")).toBeGreaterThan(0);
+  expect(compareRegistryVersions("100000000000000000000.0.0", "99999999999999999999.0.0")).toBeGreaterThan(0);
+  expect(compareRegistryVersions("2.0.0-rc.1", "2.0.0")).toBeLessThan(0);
+  expect(highestUsableRegistryVersion([
+    { version: "10.0.0", status: "ok", deprecated: false, revoked: true },
+    { version: "2.0.0", status: "ok", deprecated: true, revoked: false },
+    { version: "1.0.0", status: "ok", deprecated: false, revoked: false },
+  ])?.version).toBe("2.0.0");
+});
+
 test("browses and filters registry cards with distinct module permissions", async () => {
   const requests: string[] = [];
 // SAFETY: the mock's handling mirrors the backend contract for this test.
@@ -150,7 +162,8 @@ test("browses and filters registry cards with distinct module permissions", asyn
   changeInput(view.getByRole("searchbox", { name: "Search registry" }), "");
   const provider = await view.findByText("sendgrid");
   expect(provider.closest("a")?.getAttribute("href")).toBe("/app/acme/registry/providers/acme/sendgrid");
-  await waitFor((): void => { expect(view.getByAltText("sendgrid provider logo")).toBeTruthy(); });
+  expect(view.queryByAltText("sendgrid provider logo")).toBeNull();
+  expect(requests.filter((url): boolean => url.startsWith("/api/v2/provider-icons?")).length).toBe(1);
 });
 
 test("renders the provider icon fallback after artwork loading fails", async () => {

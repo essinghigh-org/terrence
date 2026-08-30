@@ -16,6 +16,7 @@ describe("Registry module sync on tag push", () => {
   const prefixedModuleId = `mod-tag-prefix-${suffix}`;
   const wrongPrefixModuleId = `mod-tag-wrongprefix-${suffix}`;
   const otherHostModuleId = `mod-tag-other-host-${suffix}`;
+  const branchModuleId = `mod-tag-branch-${suffix}`;
   const otherHostClientId = `oauthc-modtag-other-host-${suffix}`;
   const otherHostTokenId = `oautht-modtag-other-host-${suffix}`;
   const otherInstallationId = `ghain-modtag-other-${suffix}`;
@@ -111,6 +112,21 @@ describe("Registry module sync on tag push", () => {
         status: "setup_complete",
       },
       {
+        id: branchModuleId,
+        orgId,
+        namespace: "ns",
+        name: "branch-publication",
+        provider: "github",
+        publishingMechanism: "vcs",
+        publishingWorkflow: "branch",
+        vcsConnectionType: "github-app",
+        vcsConnectionId: "ghain-missing",
+        repositoryIdentifier: repo,
+        tagPrefix: "",
+        branch: "main",
+        status: "setup_complete",
+      },
+      {
         id: otherHostModuleId,
         orgId,
         namespace: "ns",
@@ -167,6 +183,11 @@ describe("Registry module sync on tag push", () => {
     // Same repo, tag matches the tag prefix: also attempted.
     const prefixed = await db.query.registryModules.findFirst({ where: eq(registryModules.id, prefixedModuleId) });
     expect(prefixed?.lastSyncAttemptAt).not.toBeNull();
+
+    // Tag delivery must never invoke branch-based module synchronization.
+    const branch = await db.query.registryModules.findFirst({ where: eq(registryModules.id, branchModuleId) });
+    expect(branch?.lastSyncAttemptAt).toBeNull();
+    expect(branch?.status).toBe("setup_complete");
 
     // Different repository: never considered.
     const other = await db.query.registryModules.findFirst({ where: eq(registryModules.id, otherModuleId) });

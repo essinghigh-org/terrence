@@ -43,6 +43,7 @@ import {
 } from "../lib/registry-module-archive";
 import { inspectRegistryModule } from "../lib/registry-module-metadata";
 import { synchronizeRegistryModule } from "../lib/registry-module-sync";
+import { highestUsableModuleVersion, isModuleVersion, sortModuleVersionsDescending } from "../lib/registry-version";
 import {
   moduleTestConfiguration,
   moduleTestResource,
@@ -151,7 +152,7 @@ function registryProviderPlatformResource(platform: PlatItem): Record<string, un
 }
 
 function validModuleVersion(value: string): boolean {
-  return /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(value);
+  return isModuleVersion(value);
 }
 
 function registryModuleVersionResource(version: ModVerItem): Record<string, unknown> {
@@ -211,7 +212,7 @@ function primaryProviderSource(moduleProvider: string, metadata: unknown): strin
 }
 
 function latestUsableProviderSource(moduleProvider: string, versions: readonly ModVerItem[]): string | null {
-  const latest = versions.find((version): boolean => version.status === "ok" && version.isRevoked !== true);
+  const latest = highestUsableModuleVersion(versions);
   return latest === undefined ? null : primaryProviderSource(moduleProvider, latest.metadata);
 }
 
@@ -224,10 +225,10 @@ async function registryModuleResource(
   canManage: boolean,
   suppliedVersions?: readonly ModVerItem[],
 ): Promise<Record<string, unknown>> {
-  const versions = suppliedVersions ?? await db.query.registryModuleVersions.findMany({
+  const versions = sortModuleVersionsDescending(suppliedVersions ?? await db.query.registryModuleVersions.findMany({
     where: eq(registryModuleVersions.moduleId, m.id),
     orderBy: [desc(registryModuleVersions.createdAt)],
-  });
+  }));
   return {
     id: m.id,
     type: "registry-modules",
@@ -308,9 +309,7 @@ async function availableModuleVersions(moduleId: string): Promise<ModVerItem[]> 
     && version.isRevoked !== true
     && version.archivePath !== null
     && await Bun.file(version.archivePath).exists()));
-  return versions
-    .filter((_, index): boolean => available[index] === true)
-    .sort((left, right): number => Bun.semver.order(right.version, left.version) || right.version.localeCompare(left.version));
+  return sortModuleVersionsDescending(versions.filter((_, index): boolean => available[index] === true));
 }
 
 async function deleteRegistryModuleAndArchives(moduleId: string): Promise<void> {
@@ -1131,7 +1130,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     }
     const readable = await Promise.all(provs.map(async (provider): Promise<boolean> => checkRegistryReadPermission(user?.id, provider.orgId, "providers", tokenOrgId)));
     const versions = await Promise.all(provs.filter((_, index): boolean => readable[index] === true).map(async (p: ProvItem): Promise<Record<string, unknown>> => {
-      const verList = await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, p.id), orderBy: [desc(registryProviderVersions.createdAt)] });
+      const verList = sortModuleVersionsDescending(await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, p.id), orderBy: [desc(registryProviderVersions.createdAt)] }));
       return { id: `${p.namespace}/${p.type}`, namespace: p.namespace, versions: verList.map((v: ProvVerItem): Record<string, unknown> => ({ version: v.version, protocols: v.protocols ?? ["5.0"], platforms: [] })) };
     }));
     return { versions };
@@ -1141,7 +1140,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const type = params.type ?? "";
     const prov = await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.namespace, namespace), eq(registryProviders.type, type)) });
     if (prov === undefined || !(await checkRegistryReadPermission(user?.id, prov.orgId, "providers", tokenOrgId))) { return { versions: [] }; }
-    const verList = await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, prov.id) });
+    const verList = sortModuleVersionsDescending(await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, prov.id) }));
     const versions = await Promise.all(verList.map(async (v: ProvVerItem): Promise<Record<string, unknown>> => {
       const platList = await db.query.registryProviderPlatforms.findMany({ where: eq(registryProviderPlatforms.versionId, v.id) });
       return { version: v.version, protocols: v.protocols ?? ["5.0"], platforms: platList.map((p: PlatItem): Record<string, string> => ({ os: p.os, arch: p.arch })) };
@@ -1187,7 +1186,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     ) {
       return new Response(null, { status: 404 });
     }
-    const versions = await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, prov.id) });
+    const versions = sortModuleVersionsDescending(await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, prov.id) }));
     return Response.json({ versions: Object.fromEntries(versions.map((version: ProvVerItem): [string, Record<string, never>] => [version.version, {}])) });
   })
   .get("/api/registry/v1/provider-mirror/:hostname/:namespace/:type/:version", async ({ params, request, user, orgId: tokenOrgId }: ParamCtx): Promise<Response> => {
@@ -1684,10 +1683,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const version = input.versionPin === undefined
-      ? await db.query.registryModuleVersions.findFirst({
-          where: eq(registryModuleVersions.moduleId, mod.id),
-          orderBy: [desc(registryModuleVersions.createdAt)],
-        })
+      ? (await availableModuleVersions(mod.id))[0]
       : await db.query.registryModuleVersions.findFirst({
           where: and(
             eq(registryModuleVersions.moduleId, mod.id),
@@ -1797,19 +1793,14 @@ export const registryRoutes = new Elysia({ name: "registry" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const targetVersion = input.versionPin === undefined && targetModule.id === details.mod.id
-      ? details.version
-      : input.versionPin === undefined
-        ? await db.query.registryModuleVersions.findFirst({
-            where: eq(registryModuleVersions.moduleId, targetModule.id),
-            orderBy: [desc(registryModuleVersions.createdAt)],
-          })
-        : await db.query.registryModuleVersions.findFirst({
-            where: and(
-              eq(registryModuleVersions.moduleId, targetModule.id),
-              eq(registryModuleVersions.version, input.versionPin),
-            ),
-          });
+    const targetVersion = input.versionPin === undefined
+      ? (await availableModuleVersions(targetModule.id))[0]
+      : await db.query.registryModuleVersions.findFirst({
+          where: and(
+            eq(registryModuleVersions.moduleId, targetModule.id),
+            eq(registryModuleVersions.version, input.versionPin),
+          ),
+        });
     if (targetVersion?.status !== "ok") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "version-pin must identify a published version of the registry module" }] };
@@ -1941,7 +1932,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const providerId = params.provider_id ?? "";
     const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
     if (prov === undefined || !(await checkRegistryManagementRead(user?.id, prov.orgId, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const versions = await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, providerId), orderBy: [desc(registryProviderVersions.createdAt)] });
+    const versions = sortModuleVersionsDescending(await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, providerId), orderBy: [desc(registryProviderVersions.createdAt)] }));
     return { data: versions.map((v: ProvVerItem): Record<string, unknown> => ({ id: v.id, type: "registry-provider-versions", attributes: { version: v.version, "key-id": v.keyId, protocols: v.protocols, "shasums-url": v.shasumsUrl, "shasums-signature-url": v.shasumsSignatureUrl, "created-at": new Date(v.createdAt).toISOString() } })) };
   })
   .post("/api/v2/registry-providers/:provider_id/versions", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -2038,7 +2029,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const org = await cachedOrgByName(params.org_name ?? "");
     const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params.namespace ?? ""), eq(registryProviders.type, params.name ?? ""), eq(registryProviders.registryName, "private")) });
     if (org === undefined || provider === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) return registryNotFound(set);
-    const versions = await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, provider.id), orderBy: [desc(registryProviderVersions.createdAt)] });
+    const versions = sortModuleVersionsDescending(await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, provider.id), orderBy: [desc(registryProviderVersions.createdAt)] }));
     return { data: versions.map(registryProviderVersionResource) };
   })
   .get("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -2170,7 +2161,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const moduleId = params.module_id ?? "";
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
     if (mod === undefined || !(await checkRegistryManagementRead(user?.id, mod.orgId, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const versions = await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, moduleId), orderBy: [desc(registryModuleVersions.createdAt)] });
+    const versions = sortModuleVersionsDescending(await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, moduleId), orderBy: [desc(registryModuleVersions.createdAt)] }));
     return { data: versions.map(registryModuleVersionResource) };
   })
   .post("/api/v2/registry-modules/:module_id/versions", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {

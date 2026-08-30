@@ -165,7 +165,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await db.delete(adminSettings).where(inArray(adminSettings.id, ["approval-webhook", "maintenance-windows", "plan-explainer"]));
+  await db.delete(adminSettings).where(inArray(adminSettings.id, ["approval-webhook", "maintenance-windows", "plan-explainer", "logging"]));
   invalidateSettingsCache();
   await deletePlanJsonArtifact(explainerRunId).catch((): void => {});
   if (orgId !== "") await db.delete(organizations).where(eq(organizations.id, orgId));
@@ -948,6 +948,45 @@ describe("admin operations settings surface", () => {
       }),
     }));
     expect(patch.status).toBe(422);
+  });
+
+  it("validates and hot-reloads Site Admin logging settings", async () => {
+    expect((await request("/api/v2/admin/logging-settings")).status).toBe(404);
+    const invalid = await app.handle(new Request("http://terrence.test/api/v2/admin/logging-settings", {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+      body: JSON.stringify({ data: { attributes: { "syslog-targets": ["ftp://bad.example:514"] } } }),
+    }));
+    expect(invalid.status).toBe(422);
+    const invalidHeader = await app.handle(new Request("http://terrence.test/api/v2/admin/logging-settings", {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+      body: JSON.stringify({ data: { attributes: { "syslog-app": "bad app" } } }),
+    }));
+    expect(invalidHeader.status).toBe(422);
+
+    const patch = await app.handle(new Request("http://terrence.test/api/v2/admin/logging-settings", {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+      body: JSON.stringify({ data: { attributes: {
+        "log-level": "debug",
+        "syslog-level": "warn",
+        enabled: false,
+        error: "caller metadata",
+        "syslog-targets": ["udp://collector-a.example:514", "tcp://collector-b.example:601"],
+        "syslog-hostname": " ops-host ",
+        "syslog-app": " terrence-test ",
+      } } }),
+    }));
+    expect(patch.status).toBe(200);
+    const body = await patch.json() as { data: { attributes: Record<string, unknown> } };
+    expect(body.data.attributes["log-level"]).toBe("debug");
+    expect(body.data.attributes.enabled).toBe(false);
+    expect(body.data.attributes["syslog-hostname"]).toBe("ops-host");
+    expect(body.data.attributes["syslog-app"]).toBe("terrence-test");
+    expect(body.data.attributes["syslog-targets"]).toEqual(["udp://collector-a.example:514", "tcp://collector-b.example:601"]);
+    const persisted = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "logging") });
+    expect(persisted?.values["syslog-targets"]).toEqual(["udp://collector-a.example:514", "tcp://collector-b.example:601"]);
   });
 
   it("serves the provider catalog and per-provider models to admins only", async () => {
