@@ -27,7 +27,7 @@ import { Select, SelectItem } from "../components/ui/select";
 import { Spinner } from "../components/ui/spinner";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { fetchApi } from "../lib/api";
-import { registryModuleFromResource, registryModulePath, type RegistryModule } from "../lib/registry";
+import { registryModuleFromResource, highestUsableRegistryVersion, registryModulePath, type RegistryModule } from "../lib/registry";
 import { cn } from "../lib/utils";
 import { isRecord, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
@@ -140,7 +140,7 @@ function moduleRepositoryLabel(module: RegistryModule): string {
 }
 
 function ModuleCard({ orgName, module }: Readonly<{ orgName: string; module: RegistryModule }>): React.JSX.Element {
-  const latest = module.versions.find((version): boolean => version.status === "ok" && !version.revoked);
+  const latest = highestUsableRegistryVersion(module.versions);
   const repositoryLabel = moduleRepositoryLabel(module);
   const repositoryUrl = module.vcsRepo?.repositoryUrl ?? undefined;
   const syncIsHealthy = module.lastSyncError === null;
@@ -230,7 +230,7 @@ function ProviderCard({ registryPath, provider }: Readonly<{ registryPath: strin
                 <ProviderIcon
                   alt={`${provider.name} provider logo`}
                   fallback={<Globe2 aria-hidden="true" />}
-                  providerName={`${provider.namespace}/${provider.name}`}
+                  providerName={null}
                   size={24}
                 />
               </div>

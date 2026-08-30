@@ -19,6 +19,7 @@ const settingDefaults: Record<string, Settings> = {
   site: { "cost-estimation-enabled": false, "sentinel-enabled": true, "opa-enabled": true, "agent-enabled": false, "module-registry-enabled": true, "provider-registry-enabled": true, "max-run-timeout": 43200, "default-terraform-version": "latest" },
   "approval-webhook": { enabled: false, url: null, secret: null },
   "maintenance-windows": { enabled: false, windows: [] },
+  logging: { enabled: null, "log-level": null, "syslog-level": null, "syslog-targets": null, "syslog-hostname": null, "syslog-app": null },
   "plan-explainer": { enabled: false, provider: null, "base-url": null, "api-key": null, model: null, "reasoning-effort": null },
 };
 

@@ -17,6 +17,7 @@ import {
   stacks,
 } from "../db/schema";
 import { getGitHubAppAccessToken } from "./webhooks";
+import { githubAppApiBase } from "./github-api";
 import { decryptSecret } from "./secrets";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./url-safety";
 import { validateExternalUrl, type DeepReadonly } from "./utils";
@@ -58,7 +59,9 @@ async function credentialsFor(stack: Stack): Promise<SourceCredentials> {
     if (installation === undefined) throw new Error("The Stack GitHub App installation is unavailable");
     const token = await getGitHubAppAccessToken(installation.installationId);
     if (token === null) throw new Error("The Stack GitHub App could not authenticate");
-    return { provider: stack.vcsServiceProvider ?? "github", apiUrl: process.env.GITHUB_API_URL ?? "https://api.github.com", token };
+    const apiUrl = githubAppApiBase(true);
+    if (apiUrl === undefined) throw new Error("The Stack GitHub App API URL is invalid");
+    return { provider: stack.vcsServiceProvider ?? "github", apiUrl, token };
   }
   return { provider: stack.vcsServiceProvider ?? "github", apiUrl: null, token: null };
 }

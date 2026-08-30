@@ -242,7 +242,9 @@ async function normalizeVcsRepo(
     : typeof identifierValue === "string" ? identifierValue.trim() : "";
   if (identifier === "") return { error: "Repository identifier is required" };
 
-  const installationValue = raw["github-app-installation-id"] ?? raw.githubAppInstallationId;
+  const installationValue = Object.hasOwn(raw, "github-app-installation-id")
+    ? raw["github-app-installation-id"]
+    : raw.githubAppInstallationId;
   if (installationValue !== undefined && installationValue !== null && typeof installationValue !== "string") {
     return { error: "github-app-installation-id must be a string or null" };
   }
@@ -250,13 +252,18 @@ async function normalizeVcsRepo(
     ? undefined
     : typeof installationValue === "string" ? installationValue.trim() : existing?.githubAppInstallationId;
 
-  const oauthTokenValue = raw["oauth-token-id"] ?? raw.oauthTokenId;
+  const oauthTokenValue = Object.hasOwn(raw, "oauth-token-id")
+    ? raw["oauth-token-id"]
+    : raw.oauthTokenId;
   if (oauthTokenValue !== undefined && oauthTokenValue !== null && typeof oauthTokenValue !== "string") {
     return { error: "oauth-token-id must be a string or null" };
   }
   const oauthTokenId = oauthTokenValue === null
     ? undefined
     : typeof oauthTokenValue === "string" ? oauthTokenValue.trim() : existing?.oauthTokenId;
+  if ((installationId !== undefined && installationId !== "") && (oauthTokenId !== undefined && oauthTokenId !== "")) {
+    return { error: "A vcs-repo may contain either a GitHub App installation or an OAuth token, not both" };
+  }
   if ((installationId === undefined || installationId === "") && (oauthTokenId === undefined || oauthTokenId === "")) {
     return { error: "A GitHub App installation or OAuth token is required" };
   }

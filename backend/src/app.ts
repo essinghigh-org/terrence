@@ -9,7 +9,7 @@ import { distributedFixedWindowContext } from "./lib/distributed-rate-limit";
 import { isPostgres } from "./db/driver";
 import { trustedClientIpForPeer } from "./lib/client-ip";
 import { oauthPlugin } from "./oauth";
-import { log } from "./lib/log";
+import { applyLoggingSettings, log } from "./lib/log";
 import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
 import { strongDocumentEtag } from "./lib/utils";
 import { setRequestTokenScopes, setRequestSiteAdmin } from "./lib/request-scope";
@@ -842,6 +842,21 @@ export const systemApiApp = new Elysia({ name: "system-api-listener" })
 // 500s every request in worker-thread test runs). A 0ms timer guarantees
 // the module graph has fully evaluated before the first poll.
 setTimeout((): void => {
+  let loggingRefreshFailureReported = false;
+  const refreshLoggingSettings = (): void => {
+    void import("./lib/settings").then(({ getSettings }): Promise<void> =>
+      getSettings("logging").then(applyLoggingSettings),
+    ).then((): void => {
+      loggingRefreshFailureReported = false;
+    }).catch((error: unknown): void => {
+      if (loggingRefreshFailureReported) return;
+      loggingRefreshFailureReported = true;
+      log.warn("Failed to load Site Admin logging settings", { error: String(error) });
+    });
+  };
+  refreshLoggingSettings();
+  const loggingRefreshTimer = setInterval(refreshLoggingSettings, 1_000);
+  (loggingRefreshTimer as unknown as { unref?: () => void }).unref?.();
   import("./worker").then(({ startWorkerQueue }: { startWorkerQueue: () => void }): void => {
     startWorkerQueue();
     log.info("Worker queue started");

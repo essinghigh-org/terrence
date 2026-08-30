@@ -1,72 +1,123 @@
 import { formatSyslogMessage, resolveHostname } from "./syslog-format";
-import { closeSyslogTransports, parseSyslogTarget, sendSyslogFrame, type SyslogTarget } from "./syslog-transport";
+import {
+  closeSyslogTransports,
+  parseSyslogTarget,
+  parseSyslogTargets,
+  sendSyslogFrame,
+  type SyslogTarget,
+} from "./syslog-transport";
 
-// Initialize log level
-const LOG_LEVELS = ["error", "warn", "info", "debug"] as const;
-type LogLevel = (typeof LOG_LEVELS)[number];
+export const LOG_LEVELS = ["error", "warn", "info", "debug"] as const;
+export type LogLevel = (typeof LOG_LEVELS)[number];
 const DEFAULT_LOG_LEVEL: LogLevel = "info";
 
-/** Resolve LOG_LEVEL defensively: an unknown value previously produced an
- * index of -1, which silently disabled every log line. Fall back to the
- * default and warn instead. Empty/unset means default. */
-function resolveLogLevel(rawLevel?: string): LogLevel {
-  const configured = (rawLevel ?? "").trim().toLowerCase();
-  if (configured === "") return DEFAULT_LOG_LEVEL;
-  if ((LOG_LEVELS as readonly string[]).includes(configured)) return configured as LogLevel;
+type LoggingConfiguration = Readonly<{
+  enabled: boolean;
+  logLevel: LogLevel;
+  syslogLevel: LogLevel;
+  syslogTargets: readonly SyslogTarget[];
+  syslogHostname: string | null;
+  syslogApp: string;
+}>;
+
+export function isLogLevel(value: unknown): value is LogLevel {
+  return typeof value === "string" && (LOG_LEVELS as readonly string[]).includes(value.trim().toLowerCase());
+}
+
+/** Resolve a log level defensively. Unknown values never disable all logging. */
+function resolveLogLevel(rawLevel: unknown, fallback = DEFAULT_LOG_LEVEL): LogLevel {
+  const configured = typeof rawLevel === "string" ? rawLevel.trim().toLowerCase() : "";
+  if (configured === "") return fallback;
+  if (isLogLevel(configured)) return configured;
   console.warn(
     `[terrence] Unknown log level ${JSON.stringify(rawLevel)}; ` +
-      `expected one of: ${LOG_LEVELS.join(", ")}. Falling back to "${DEFAULT_LOG_LEVEL}".`,
+      `expected one of: ${LOG_LEVELS.join(", ")}. Falling back to "${fallback}".`,
   );
-  return DEFAULT_LOG_LEVEL;
+  return fallback;
 }
 
-const LOG_LEVEL = resolveLogLevel(process.env.LOG_LEVEL);
-
-// ── Remote syslog sink (kanban: configurable RFC 5424 forwarding) ──────────
-//
-//   TERRENCE_SYSLOG_TARGET   udp://collector.example.com:514 | tcp://host:514
-//   TERRENCE_SYSLOG_LEVEL    independent level for the remote sink; defaults
-//                            to LOG_LEVEL when unset. Lets operators ship
-//                            debug locally but only warn+ remotely (or the
-//                            reverse).
-//   TERRENCE_SYSLOG_HOSTNAME overrides the reported hostname.
-//   TERRENCE_SYSLOG_APP      app name field (default "terrence").
-
-const SYSLOG_TARGET: SyslogTarget | null = (() => {
-  const rawTarget = process.env.TERRENCE_SYSLOG_TARGET;
-  const target = parseSyslogTarget(rawTarget);
-  if (target === null && rawTarget !== undefined && rawTarget.trim() !== "") {
-    console.warn(
-      `[terrence] Invalid TERRENCE_SYSLOG_TARGET ${JSON.stringify(process.env.TERRENCE_SYSLOG_TARGET)}; ` +
-        `expected udp://host:port or tcp://host:port. Remote syslog disabled.`,
-    );
-  }
-  return target;
-})();
-
-const SYSLOG_LEVEL: LogLevel = SYSLOG_TARGET === null ? LOG_LEVEL : resolveLogLevel(process.env.TERRENCE_SYSLOG_LEVEL ?? process.env.LOG_LEVEL);
-const SYSLOG_IDENTITY = {
-  hostname: resolveHostname(),
-  appName: process.env.TERRENCE_SYSLOG_APP?.trim() ?? "terrence",
-  procId: String(process.pid),
-};
-
-function isLogLevelEnabled(level: LogLevel): boolean {
-  return LOG_LEVELS.indexOf(level) <= LOG_LEVELS.indexOf(LOG_LEVEL);
+function environmentTargetString(): string | undefined {
+  const multiple = process.env["TERRENCE_SYSLOG_TARGETS"]?.trim();
+  return multiple === undefined || multiple === ""
+    ? process.env["TERRENCE_SYSLOG_TARGET"]
+    : multiple;
 }
 
-function isSyslogEnabled(level: LogLevel): boolean {
-  return (
-    SYSLOG_TARGET !== null &&
-    SYSLOG_LEVELS.indexOf(level) <= SYSLOG_LEVELS.indexOf(SYSLOG_LEVEL)
-  );
+function environmentConfiguration(): LoggingConfiguration {
+  const logLevel = resolveLogLevel(process.env.LOG_LEVEL);
+  const syslogTargets = parseSyslogTargets(environmentTargetString());
+  return {
+    enabled: syslogTargets.length > 0,
+    logLevel,
+    syslogLevel: resolveLogLevel(process.env["TERRENCE_SYSLOG_LEVEL"], logLevel),
+    syslogTargets,
+    syslogHostname: process.env["TERRENCE_SYSLOG_HOSTNAME"]?.trim() || null,
+    syslogApp: process.env["TERRENCE_SYSLOG_APP"]?.trim() || "terrence",
+  };
 }
 
-const SYSLOG_LEVELS = LOG_LEVELS;
+let loggingConfiguration: LoggingConfiguration = environmentConfiguration();
 
-/** Serialize log meta defensively: BigInt throws in JSON.stringify and
- * circular references would otherwise crash the logger (and, with it, the
- * request handler that called it). */
+function settingString(settings: Readonly<Record<string, unknown>>, key: string): string | undefined {
+  const value = settings[key];
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+}
+
+function settingTargets(settings: Readonly<Record<string, unknown>>): readonly SyslogTarget[] | undefined {
+  const value = settings["syslog-targets"];
+  if (!Array.isArray(value)) return undefined;
+  return value.flatMap((entry): SyslogTarget[] => {
+    if (typeof entry !== "string") return [];
+    const target = parseSyslogTarget(entry);
+    return target === null ? [] : [target];
+  });
+}
+
+function targetKey(target: SyslogTarget): string {
+  return `${target.transport}:${target.family ?? 4}:${target.host}:${target.port}`;
+}
+
+function targetSetChanged(previous: readonly SyslogTarget[], next: readonly SyslogTarget[]): boolean {
+  if (previous.length !== next.length) return true;
+  const previousKeys = previous.map(targetKey).sort();
+  const nextKeys = next.map(targetKey).sort();
+  return previousKeys.some((key, index): boolean => key !== nextKeys[index]);
+}
+
+/** Apply effective Site Admin logging settings without restarting the process.
+ * A non-null persisted field overrides its environment fallback; an explicit
+ * empty target array disables environment-configured remote sinks. */
+export function applyLoggingSettings(settings: Readonly<Record<string, unknown>>): void {
+  const environment = environmentConfiguration();
+  const configuredLogLevel = settingString(settings, "log-level");
+  const configuredSyslogLevel = settingString(settings, "syslog-level");
+  const configuredTargets = settingTargets(settings);
+  const configuredEnabled = settings.enabled;
+  const next: LoggingConfiguration = {
+    enabled: typeof configuredEnabled === "boolean"
+      ? configuredEnabled
+      : (configuredTargets ?? environment.syslogTargets).length > 0,
+    logLevel: configuredLogLevel === undefined
+      ? environment.logLevel
+      : resolveLogLevel(configuredLogLevel, environment.logLevel),
+    syslogLevel: configuredSyslogLevel === undefined
+      ? environment.syslogLevel
+      : resolveLogLevel(configuredSyslogLevel, environment.syslogLevel),
+    syslogTargets: configuredTargets ?? environment.syslogTargets,
+    syslogHostname: settingString(settings, "syslog-hostname") ?? environment.syslogHostname,
+    syslogApp: settingString(settings, "syslog-app") ?? environment.syslogApp,
+  };
+  if (
+    targetSetChanged(loggingConfiguration.syslogTargets, next.syslogTargets)
+    || loggingConfiguration.enabled !== next.enabled
+  ) closeSyslogTransports();
+  loggingConfiguration = next;
+}
+
+function isLogLevelEnabled(level: LogLevel, configured: LogLevel): boolean {
+  return LOG_LEVELS.indexOf(level) <= LOG_LEVELS.indexOf(configured);
+}
+
 function safeJsonStringify(value: unknown): string {
   const seen = new WeakSet<object>();
   return JSON.stringify(value, (_key: string, entry: unknown) => {
@@ -80,61 +131,56 @@ function safeJsonStringify(value: unknown): string {
 }
 
 function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<string, unknown>>): void {
-  // Remote sink first so a local console failure can never suppress shipping;
-  // both paths are individually failure-isolated below.
-  if (SYSLOG_TARGET !== null && isSyslogEnabled(level)) {
+  const configuration = loggingConfiguration;
+  if (
+    configuration.enabled
+    && configuration.syslogTargets.length > 0
+    && isLogLevelEnabled(level, configuration.syslogLevel)
+  ) {
     try {
       const frame = formatSyslogMessage(
         meta !== undefined
           ? { timestamp: new Date().toISOString(), level, message, meta }
           : { timestamp: new Date().toISOString(), level, message },
-        SYSLOG_IDENTITY,
+        {
+          hostname: resolveHostname(process.env, configuration.syslogHostname),
+          appName: configuration.syslogApp,
+          procId: String(process.pid),
+        },
       );
-      sendSyslogFrame(SYSLOG_TARGET, frame);
+      for (const target of configuration.syslogTargets) {
+        try {
+          sendSyslogFrame(target, frame);
+        } catch {
+          // A single destination must never suppress the remaining fan-out.
+        }
+      }
     } catch {
-      /* transport errors are swallowed inside sendSyslogFrame */
+      // Formatting and transport are best-effort diagnostics.
     }
   }
-  if (!isLogLevelEnabled(level)) return;
-  // Logging is best-effort: a failing stream or a meta serialization failure
-  // must never crash the process or propagate to the caller.
+  if (!isLogLevelEnabled(level, configuration.logLevel)) return;
   try {
     const entry: Record<string, unknown> = {
       timestamp: new Date().toISOString(),
       level,
       message,
     };
-    // Metadata is nested under a reserved `meta` key so caller-supplied
-    // keys can never collide with the structured fields (12.5).
-    if (meta !== undefined && Object.keys(meta).length > 0) {
-      entry.meta = meta;
-    }
+    if (meta !== undefined && Object.keys(meta).length > 0) entry["meta"] = meta;
     const output = safeJsonStringify(entry);
-    if (level === "error") {
-      console.error(output);
-    } else if (level === "warn") {
-      console.warn(output);
-    } else {
-      console.log(output);
-    }
+    if (level === "error") console.error(output);
+    else if (level === "warn") console.warn(output);
+    else console.log(output);
   } catch {
-    // Swallow: logging failures must never propagate to the caller.
+    // Logging failures must never propagate to the caller.
   }
 }
 
 export const log = {
-  error: (msg: string, meta?: Readonly<Record<string, unknown>>): void => {
-    structuredLog("error", msg, meta);
-  },
-  warn: (msg: string, meta?: Readonly<Record<string, unknown>>): void => {
-    structuredLog("warn", msg, meta);
-  },
-  info: (msg: string, meta?: Readonly<Record<string, unknown>>): void => {
-    structuredLog("info", msg, meta);
-  },
-  debug: (msg: string, meta?: Readonly<Record<string, unknown>>): void => {
-    structuredLog("debug", msg, meta);
-  },
+  error: (msg: string, meta?: Readonly<Record<string, unknown>>): void => structuredLog("error", msg, meta),
+  warn: (msg: string, meta?: Readonly<Record<string, unknown>>): void => structuredLog("warn", msg, meta),
+  info: (msg: string, meta?: Readonly<Record<string, unknown>>): void => structuredLog("info", msg, meta),
+  debug: (msg: string, meta?: Readonly<Record<string, unknown>>): void => structuredLog("debug", msg, meta),
 };
 
 /** Test/shutdown hook: close UDP socket and TCP connections. */

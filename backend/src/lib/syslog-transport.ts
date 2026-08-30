@@ -58,6 +58,14 @@ export function parseSyslogTarget(raw: string | undefined): SyslogTarget | null 
   };
 }
 
+/** Parse one or more comma/newline-separated syslog targets. Invalid entries
+ * are omitted so one stale destination cannot disable valid destinations. */
+export function parseSyslogTargets(raw: string | undefined): SyslogTarget[] {
+  return (raw?.split(/[\n,]+/u) ?? [])
+    .map((value): SyslogTarget | null => parseSyslogTarget(value))
+    .filter((target): target is SyslogTarget => target !== null);
+}
+
 const udpSockets = new Map<4 | 6, Socket>();
 
 function truncateUtf8(value: string, maxBytes: number): string {
@@ -140,14 +148,14 @@ export function sendSyslogFrame(target: SyslogTarget, frame: string): void {
     } else {
       // RFC 6587 octet counting: "LEN MSG" so messages with newlines
       // reassemble unambiguously on the collector.
-      const key = `${target.host}:${target.port}`;
+      const key = `${target.transport}:${target.family ?? 4}:${target.host}:${target.port}`;
       let socket: TcpSocket | undefined = tcpSockets.get(key);
       if (socket === undefined || socket.destroyed) {
         socket = connect({ host: target.host, port: target.port });
         socket.setNoDelay(true);
         socket.on("error", () => {
           /* connection refused/reset: drop this message, retry next time */
-          tcpSockets.delete(key);
+          if (tcpSockets.get(key) === socket) tcpSockets.delete(key);
         });
         tcpSockets.set(key, socket);
       }

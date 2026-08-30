@@ -20,7 +20,6 @@ import { matchesPolicySetWebhook, synchronizeVcsPolicySet } from "./policy-sync"
 import { synchronizeRegistryModule } from "./registry-module-sync";
 import { auditLog , type DeepReadonly } from "./utils";
 import {
-  firstConfiguredValue,
   providerForServiceProvider,
   sourceIdentityForConnection,
   vcsSourceMatchesConnection,
@@ -28,6 +27,7 @@ import {
   type VcsProvider,
   type VcsSourceIdentity,
 } from "./vcs-source";
+import { githubAppApiBase } from "./github-api";
 
 type WebhookPayload = Readonly<Record<string, unknown>>;
 type VcsRepo = DeepReadonly<NonNullable<typeof workspaces.$inferSelect.vcsRepo>>;
@@ -216,6 +216,17 @@ function extractGitlabCommits(payload: WebhookPayload): unknown[] {
   return Array.isArray(payload.commits) ? payload.commits : [];
 }
 
+/** GitLab limits the inline commit list (normally to 20 entries). A larger
+ * total means the file list is incomplete and file-trigger matching is unsafe. */
+export function gitlabPushCommitListTruncated(payload: WebhookPayload): boolean {
+  const commits = payload.commits;
+  const total = payload.total_commits_count;
+  return Array.isArray(commits)
+    && typeof total === "number"
+    && Number.isSafeInteger(total)
+    && total > commits.length;
+}
+
 function resolveGitlabCommitUrl(headCommit: Readonly<Record<string, unknown>> | undefined, project: Readonly<Record<string, unknown>> | undefined, cloneUrl: string, commitSha: string | undefined): string {
   const fromHead = requiredString(headCommit?.url);
   if (fromHead !== undefined) return fromHead;
@@ -241,12 +252,16 @@ function parseGitlabPushWebhook(payload: WebhookPayload, project: Readonly<Recor
   const headCommit = asRecord(commits.at(-1));
   const commitMessage = requiredString(headCommit?.message) ?? "VCS push";
   const commitUrl = resolveGitlabCommitUrl(headCommit, project, cloneUrl, commitSha);
-  const filesChanged = changedFiles(payload);
+  const filesTruncated = gitlabPushCommitListTruncated(payload);
+  const filesChanged = filesTruncated ? new Set<string>() : changedFiles(payload);
   if (validateGitlabPushFields(ref, commitSha, filesChanged) !== undefined) return undefined;
   if (ref === undefined || commitSha === undefined || filesChanged === undefined) return undefined;
   const branchTag = parseRefBranchTag(ref);
   if (branchTag === undefined) return undefined;
-  if (branchTag.branch !== undefined && filesChanged.size === 0) return undefined;
+  // An actually empty complete push has no useful file trigger and is ignored.
+  // A truncated inline list is different: continue with an empty set so the
+  // file-trigger matcher fails open rather than suppressing the push.
+  if (branchTag.branch !== undefined && filesChanged.size === 0 && !filesTruncated) return undefined;
   return {
     kind: "push",
     details: {
@@ -618,7 +633,7 @@ function providerApiUrl(value: string | null, fallback: string, requireHttps = f
 }
 
 function githubAppApiUrl(): string | undefined {
-  return providerApiUrl(firstConfiguredValue(process.env.GITHUB_APP_API_URL, process.env.GITHUB_API_URL) ?? null, "https://api.github.com", true);
+  return githubAppApiBase(true);
 }
 
 async function oauthProviderCredentials(
@@ -709,18 +724,48 @@ function extractGithubPrFilenames(body: unknown): ReadonlySet<string> | undefine
   return files;
 }
 
+function githubNextPageUrl(headers: Headers, baseUrl: string): string | null | undefined {
+  const link = headers.get("link");
+  if (link === null) return null;
+  for (const part of link.split(",")) {
+    const match = /<([^>]+)>\s*;\s*rel=["']?next["']?/iu.exec(part);
+    if (match?.[1] === undefined) continue;
+    try {
+      const base = new URL(baseUrl);
+      const next = new URL(match[1], base);
+      if (next.origin !== base.origin || next.username !== "" || next.password !== "" || next.hash !== "") return undefined;
+      return next.toString();
+    } catch {
+      return undefined;
+    }
+  }
+  return null;
+}
+
+const MAX_GITHUB_PR_FILE_PAGES = 10;
+
 async function fetchGithubPrFilesPage(credentials: ProviderCredentials, repoFullName: string, pullRequestNumber: number): Promise<ReadonlySet<string> | undefined> {
-  const response = await fetch(
-    `${credentials.apiUrl}/repos/${repoFullName.split("/").map(encodeURIComponent).join("/")}/pulls/${String(pullRequestNumber)}/files?per_page=100`,
-    {
+  let url = `${credentials.apiUrl}/repos/${repoFullName.split("/").map(encodeURIComponent).join("/")}/pulls/${String(pullRequestNumber)}/files?per_page=100`;
+  const visited = new Set<string>();
+  const files = new Set<string>();
+  for (let page = 0; page < MAX_GITHUB_PR_FILE_PAGES; page += 1) {
+    if (visited.has(url)) return undefined;
+    visited.add(url);
+    const response = await fetch(url, {
       headers: { Authorization: `Bearer ${credentials.token}`, Accept: "application/vnd.github+json" },
       signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-    },
-  );
-  if (!response.ok) return undefined;
-  if (response.headers.get("link")?.includes('rel="next"') === true) return undefined;
-  const body = await response.json() as unknown;
-  return extractGithubPrFilenames(body);
+    });
+    if (!response.ok) return undefined;
+    const pageFiles = extractGithubPrFilenames(await response.json() as unknown);
+    if (pageFiles === undefined) return undefined;
+    for (const file of pageFiles) files.add(file);
+    const next = githubNextPageUrl(response.headers, credentials.apiUrl);
+    if (next === undefined) return undefined;
+    if (next === null) return files;
+    url = next;
+  }
+  // A capped response is incomplete and must fail open for file triggers.
+  return undefined;
 }
 
 async function githubPullRequestFiles(
@@ -1284,7 +1329,7 @@ async function githubAppDefaultBranch(
   if (installation === undefined) return undefined;
   const token = await getGitHubAppAccessToken(installation.installationId);
   if (token === null) return undefined;
-  const apiUrl = providerApiUrl(process.env.GITHUB_APP_API_URL ?? process.env.GITHUB_API_URL ?? null, "https://api.github.com");
+  const apiUrl = githubAppApiBase(true);
   if (apiUrl === undefined) return undefined;
   const response = await fetch(`${apiUrl}/repos/${encodedPath}`, {
     headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json" },
@@ -1367,7 +1412,7 @@ async function githubAppLatestCommit(
   if (installation === undefined) return undefined;
   const token = await getGitHubAppAccessToken(installation.installationId);
   if (token === null) return undefined;
-  const apiUrl = providerApiUrl(process.env.GITHUB_APP_API_URL ?? process.env.GITHUB_API_URL ?? null, "https://api.github.com");
+  const apiUrl = githubAppApiBase(true);
   if (apiUrl === undefined) return undefined;
   const url = `${apiUrl}/repos/${encodedPath}/commits?sha=${encodeURIComponent(branch)}&per_page=1`;
   const response = await fetch(url, {
@@ -1475,12 +1520,23 @@ export async function createConfigurationVersionFromVcs(
   return cvId;
 }
 
-type MatchesCache = Map<string, string | undefined>;
-const defaultBranchCache: MatchesCache = new Map<string, string | undefined>();
+type DefaultBranchCacheEntry = Readonly<{
+  value: string | undefined;
+  expiresAt: number;
+}>;
+const DEFAULT_BRANCH_CACHE_TTL_MS = 60_000;
+const DEFAULT_BRANCH_NEGATIVE_TTL_MS = 5_000;
+const defaultBranchCache = new Map<string, DefaultBranchCacheEntry>();
+
+export function clearDefaultBranchCacheForTests(): void {
+  defaultBranchCache.clear();
+}
+
 async function matchesConfiguredBranch(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   details: DeepReadonly<WebhookDetails>,
+  configuredSource?: VcsSourceIdentity,
 ): Promise<boolean> {
   const vcsRepo = workspace.vcsRepo;
   if (vcsRepo === null || vcsRepo === undefined) return false;
@@ -1492,12 +1548,23 @@ async function matchesConfiguredBranch(
   // cannot be determined so we never mis-route a push.
   let expectedBranch = vcsRepo.branch;
   if (expectedBranch === undefined || expectedBranch === "") {
-    const cacheKey = `${workspace.orgId}:${workspace.vcsRepo?.identifier ?? ""}`;
-    if (defaultBranchCache.has(cacheKey)) {
-      expectedBranch = defaultBranchCache.get(cacheKey);
+    const source = configuredSource ?? await configuredVcsSource(workspace);
+    const connectionId = vcsRepo.githubAppInstallationId ?? vcsRepo.oauthTokenId ?? "unknown";
+    const sourceKey = source === undefined
+      ? "unknown"
+      : `${source.provider}:${source.host}:${source.installationId ?? "oauth"}:${connectionId}`;
+    const cacheKey = `${workspace.orgId}:${sourceKey}:${vcsRepo.identifier ?? ""}`;
+    const now = Date.now();
+    const cached = defaultBranchCache.get(cacheKey);
+    if (cached !== undefined && cached.expiresAt > now) {
+      expectedBranch = cached.value;
     } else {
+      if (cached !== undefined) defaultBranchCache.delete(cacheKey);
       expectedBranch = await fetchDefaultBranch(workspace);
-      defaultBranchCache.set(cacheKey, expectedBranch);
+      defaultBranchCache.set(cacheKey, {
+        value: expectedBranch,
+        expiresAt: now + (expectedBranch === undefined ? DEFAULT_BRANCH_NEGATIVE_TTL_MS : DEFAULT_BRANCH_CACHE_TTL_MS),
+      });
     }
     if (expectedBranch === undefined || expectedBranch === "") return false;
   }
@@ -1514,6 +1581,7 @@ async function matchesVcsTrigger(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
   details: DeepReadonly<WebhookDetails>,
+  configuredSource?: VcsSourceIdentity,
 ): Promise<boolean> {
   const vcsRepo = workspace.vcsRepo;
   if (vcsRepo === null || vcsRepo === undefined) return false;
@@ -1522,7 +1590,7 @@ async function matchesVcsTrigger(
   if (typeof vcsRepo.tagsRegex === "string" && vcsRepo.tagsRegex !== "") {
     return details.tag !== undefined && matchesTag(vcsRepo, details.tag);
   }
-  return details.tag === undefined && await matchesConfiguredBranch(workspace, details);
+  return details.tag === undefined && await matchesConfiguredBranch(workspace, details, configuredSource);
 }
 
 async function providerChangedFiles(
@@ -1567,7 +1635,7 @@ async function matchingWebhookWorkspaces(
     const configuredSource = await configuredVcsSource(workspace);
     if (configuredSource === undefined || configuredSource.provider !== provider || !vcsSourceMatchesConnection(configuredSource, details.sourceIdentity)) continue;
     if (details.githubInstallationId !== undefined && githubInstallationPredicate !== undefined && !await githubInstallationPredicate(workspace, details.githubInstallationId)) continue;
-    if (await matchesVcsTrigger(workspace, details)) branchMatchedWorkspaces.push(workspace);
+    if (await matchesVcsTrigger(workspace, details, configuredSource)) branchMatchedWorkspaces.push(workspace);
   }
   return branchMatchedWorkspaces;
 }
@@ -1781,6 +1849,7 @@ export async function syncRegistryModulesForTag(
   const modules = await db.query.registryModules.findMany({
     where: and(
       eq(registryModules.publishingMechanism, "vcs"),
+      eq(registryModules.publishingWorkflow, "tag"),
       eq(registryModules.repositoryIdentifier, repoFullName),
     ),
   });

@@ -39,6 +39,15 @@ type PlanExplainerSettings = {
   "reasoning-effort"?: ReasoningEffort | null;
 };
 
+type LoggingSettings = {
+  enabled?: boolean | null;
+  "log-level"?: string | null;
+  "syslog-level"?: string | null;
+  "syslog-targets"?: string[] | null;
+  "syslog-hostname"?: string | null;
+  "syslog-app"?: string | null;
+};
+
 type ExplainerProvider = {
   id: string;
   name: string;
@@ -63,7 +72,7 @@ type OperationsSettings = {
 };
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const DAY_OPTIONS = DAY_LABELS.map((label, index) => ({ day: index, label }));
+const DAY_OPTIONS = DAY_LABELS.map((label, index): { day: number; label: string } => ({ day: index, label }));
 
 function humanizeDays(days: number[]): string {
   if (days.length === 0) return "Never";
@@ -98,23 +107,26 @@ function SettingToggle({
   label,
   checked,
   onCheckedChange,
+  disabled = false,
 }: Readonly<{
   id: string;
   label: string;
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
+  disabled?: boolean;
 }>): React.JSX.Element {
   return (
     <label
       htmlFor={id}
       className={`inline-flex min-h-8 cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs font-medium shadow-sm transition-colors hover:bg-muted ${
         checked ? "border-success/30 bg-success/5 text-success" : "border-border bg-background text-muted-foreground"
-      }`}
+      } ${disabled ? "cursor-not-allowed opacity-50" : ""}`}
     >
       <Checkbox
         id={id}
         checked={checked}
         onCheckedChange={onCheckedChange}
+        disabled={disabled}
         aria-label={`${checked ? "Disable" : "Enable"} ${label}`}
       />
       <span>{checked ? "Enabled" : "Disabled"}</span>
@@ -148,6 +160,17 @@ export function AdminOperationsSettings(): React.JSX.Element {
   const [explainerModel, setExplainerModel] = useState("");
   const [explainerProvider, setExplainerProvider] = useState(CUSTOM_PROVIDER_ID);
   const [explainerReasoningEffort, setExplainerReasoningEffort] = useState<ReasoningEffort | "">("");
+
+  const [loggingLevel, setLoggingLevel] = useState("");
+  const [loggingEnabled, setLoggingEnabled] = useState(true);
+  const [loggingLoaded, setLoggingLoaded] = useState(false);
+  const [syslogLevel, setSyslogLevel] = useState("");
+  const [syslogTargets, setSyslogTargets] = useState("");
+  const [syslogHostname, setSyslogHostname] = useState("");
+  const [syslogApp, setSyslogApp] = useState("");
+  const [loggingSaving, setLoggingSaving] = useState(false);
+  const [loggingSavedAt, setLoggingSavedAt] = useState("");
+  const [loggingError, setLoggingError] = useState("");
 
   // Provider/model catalog for the explainer pickers (models.dev via admin API).
   const [providers, setProviders] = useState<ExplainerProvider[]>([]);
@@ -192,7 +215,26 @@ export function AdminOperationsSettings(): React.JSX.Element {
     void loadSettings();
   }, [loadAttempt]);
 
-  // Provider catalog for the explainer pickers, fetched in the background.
+  useEffect((): void => {
+    const loadLoggingSettings = async (): Promise<void> => {
+      setLoggingLoaded(false);
+      try {
+        const response = await fetchApi("/admin/logging-settings") as { data?: { attributes?: LoggingSettings } };
+        const logging = response.data?.attributes ?? {};
+        setLoggingEnabled(logging.enabled !== false);
+        setLoggingLevel(logging["log-level"] ?? "");
+        setSyslogLevel(logging["syslog-level"] ?? "");
+        setSyslogTargets((logging["syslog-targets"] ?? []).join("\n"));
+        setSyslogHostname(logging["syslog-hostname"] ?? "");
+        setSyslogApp(logging["syslog-app"] ?? "");
+        setLoggingLoaded(true);
+      } catch (caught: unknown) {
+        setLoggingError(caught instanceof Error ? caught.message : String(caught));
+      }
+    };
+    void loadLoggingSettings();
+  }, [loadAttempt]);
+
   // The backend refreshes from models.dev with a 6h TTL; the picker is a
   // convenience and never blocks saving. Failures degrade to free-text entry.
   useEffect((): void => {
@@ -295,6 +337,43 @@ export function AdminOperationsSettings(): React.JSX.Element {
     }
   };
 
+  const saveLogging = async (): Promise<void> => {
+    if (!loggingLoaded) return;
+    setLoggingSaving(true);
+    setLoggingError("");
+    setLoggingSavedAt("");
+    const targets = syslogTargets.split(/[\r\n,]+/u).map((target): string => target.trim()).filter(Boolean);
+    try {
+      const response = await fetchApi("/admin/logging-settings", {
+        method: "PATCH",
+        body: JSON.stringify({
+          data: {
+            attributes: {
+              enabled: loggingEnabled,
+              "log-level": loggingLevel === "" ? null : loggingLevel,
+              "syslog-level": syslogLevel === "" ? null : syslogLevel,
+              "syslog-targets": targets.length === 0 ? null : targets,
+              "syslog-hostname": syslogHostname === "" ? null : syslogHostname,
+              "syslog-app": syslogApp === "" ? null : syslogApp,
+            },
+          },
+        }),
+      }) as { data?: { attributes?: LoggingSettings } };
+      const logging = response.data?.attributes ?? {};
+      setLoggingEnabled(logging.enabled !== false);
+      setLoggingLevel(logging["log-level"] ?? "");
+      setSyslogLevel(logging["syslog-level"] ?? "");
+      setSyslogTargets((logging["syslog-targets"] ?? []).join("\n"));
+      setSyslogHostname(logging["syslog-hostname"] ?? "");
+      setSyslogApp(logging["syslog-app"] ?? "");
+      setLoggingSavedAt(new Date().toLocaleTimeString());
+    } catch (caught: unknown) {
+      setLoggingError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setLoggingSaving(false);
+    }
+  };
+
   if (loading) {
     return (
       <PageShell role="status" aria-label="Loading operations settings" className="max-w-5xl">
@@ -335,6 +414,72 @@ export function AdminOperationsSettings(): React.JSX.Element {
       />
 
       <div className="space-y-5">
+        <Card>
+          <CardHeader variant="section">
+            <CardTitle>Logging and remote syslog</CardTitle>
+            <CardDescription>
+              Site Admin values override environment variables. Leave a field empty to keep its environment fallback.
+            </CardDescription>
+            <CardAction>
+              <div className="flex items-center gap-2">
+                <SettingToggle id="logging-enabled" label="remote syslog" checked={loggingEnabled} onCheckedChange={setLoggingEnabled} disabled={!loggingLoaded || loggingSaving} />
+                <Button type="button" size="sm" onClick={(): void => { void saveLogging(); }} disabled={!loggingLoaded || loggingSaving}>
+                  {loggingSaving ? "Saving…" : "Save logging"}
+                </Button>
+              </div>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor="logging-level" className="mb-1.5 block text-sm font-medium text-foreground">Local log level</label>
+                <select id="logging-level" value={loggingLevel} disabled={!loggingLoaded || loggingSaving} onChange={(event): void => { setLoggingLevel(event.currentTarget.value); }} className="h-10 w-full rounded-md border bg-background px-3 text-sm">
+                  <option value="">Environment fallback</option>
+                  <option value="error">error</option>
+                  <option value="warn">warn</option>
+                  <option value="info">info</option>
+                  <option value="debug">debug</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="syslog-level" className="mb-1.5 block text-sm font-medium text-foreground">Remote syslog level</label>
+                <select id="syslog-level" value={syslogLevel} disabled={!loggingLoaded || loggingSaving} onChange={(event): void => { setSyslogLevel(event.currentTarget.value); }} className="h-10 w-full rounded-md border bg-background px-3 text-sm">
+                  <option value="">Local level fallback</option>
+                  <option value="error">error</option>
+                  <option value="warn">warn</option>
+                  <option value="info">info</option>
+                  <option value="debug">debug</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label htmlFor="syslog-targets" className="mb-1.5 block text-sm font-medium text-foreground">Remote destinations</label>
+              <textarea
+                id="syslog-targets"
+                value={syslogTargets}
+                disabled={!loggingLoaded || loggingSaving}
+                onInput={(event): void => { setSyslogTargets(event.currentTarget.value); }}
+                placeholder="udp://collector.example.com:514\ntcp://collector.example.com:601"
+                rows={3}
+                className="w-full rounded-md border bg-background px-3 py-2 font-mono text-sm"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">One udp:// or tcp:// destination per line. An empty value uses TERRENCE_SYSLOG_TARGET(S).</p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor="syslog-hostname" className="mb-1.5 block text-sm font-medium text-foreground">Syslog hostname</label>
+                <Input id="syslog-hostname" value={syslogHostname} disabled={!loggingLoaded || loggingSaving} onInput={(event): void => { setSyslogHostname(event.currentTarget.value); }} placeholder="Environment fallback" />
+              </div>
+              <div>
+                <label htmlFor="syslog-app" className="mb-1.5 block text-sm font-medium text-foreground">Syslog app name</label>
+                <Input id="syslog-app" value={syslogApp} disabled={!loggingLoaded || loggingSaving} onInput={(event): void => { setSyslogApp(event.currentTarget.value); }} placeholder="terrence" />
+              </div>
+            </div>
+            {loggingError !== "" && <p role="alert" className="text-sm text-destructive">{loggingError}</p>}
+            {loggingSavedAt !== "" && <p className="text-sm text-success">Logging settings saved at {loggingSavedAt}.</p>}
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader variant="section">
             <CardTitle>Approval webhook</CardTitle>
@@ -567,7 +712,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
                   id="explainer-provider"
                   name="provider"
                   value={explainerProvider}
-                  options={providers.map((provider) => ({
+                  options={providers.map((provider): { id: string; label: string; hint: string } => ({
                     id: provider.id,
                     label: provider.name,
                     hint: provider.id === CUSTOM_PROVIDER_ID
@@ -594,7 +739,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
                   id="explainer-model"
                   name="model"
                   value={explainerModel}
-                  options={providerModels.map((model) => ({
+                  options={providerModels.map((model): { id: string; label: string; hint: string } => ({
                     id: model.id,
                     label: model.name,
                     hint: `${model.reasoning ? "reasoning · " : ""}${model.context !== null ? `${Math.round(model.context / 1000)}k ctx` : ""}`.replace(/^ · | $/g, ""),

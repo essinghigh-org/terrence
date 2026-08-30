@@ -12,9 +12,10 @@ import {
 } from "../db/schema";
 import { decryptSecret } from "./secrets";
 import { getGitHubAppAccessToken } from "./webhooks";
-import { firstConfiguredValue } from "./vcs-source";
+import { githubAppApiBase, normalizeGithubApiBase } from "./github-api";
 import { ingestModuleArchive, MAX_MODULE_ARCHIVE_BYTES } from "./registry-module-archive";
 import { inspectRegistryModule, type RegistryModuleMetadata } from "./registry-module-metadata";
+import { isModuleVersion, sortModuleVersionsDescending } from "./registry-version";
 import {
   currentModuleVersions,
   RegistrySyncLease,
@@ -22,19 +23,13 @@ import {
 
 const API_TIMEOUT_MS = 15_000;
 const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const MODULE_STORAGE_DIR = join(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "modules");
 
 type RegistryModule = Readonly<typeof registryModules.$inferSelect>;
 type Credentials = Readonly<{ apiUrl: string; token: string }>;
-type Candidate = Readonly<{ version: string; ref: string; sha: string; branch: string | null }>;
+export type RegistryModuleCandidate = Readonly<{ version: string; ref: string; sha: string; branch: string | null }>;
+export const REGISTRY_VERSION_IMPORT_BATCH_SIZE = 100;
 
-function githubApiUrl(value: string | null | undefined, requireHttps = false): string {
-  const raw = value === undefined || value === null || value === "" ? "https://api.github.com" : value;
-  const url = new URL(raw);
-  if ((url.protocol !== "https:" && url.protocol !== "http:") || (requireHttps && url.protocol !== "https:")) throw new Error("The VCS connection API URL is invalid");
-  return url.toString().replace(/\/$/, "");
-}
 
 async function credentialsFor(mod: RegistryModule): Promise<Credentials> {
   if (mod.vcsConnectionType === "github-app" && mod.vcsConnectionId !== null) {
@@ -47,7 +42,9 @@ async function credentialsFor(mod: RegistryModule): Promise<Credentials> {
     if (installation === undefined) throw new Error("The selected VCS connection is unavailable");
     const token = await getGitHubAppAccessToken(installation.installationId);
     if (token === null) throw new Error("The selected VCS connection could not authenticate");
-    return { apiUrl: githubApiUrl(firstConfiguredValue(process.env.GITHUB_APP_API_URL, process.env.GITHUB_API_URL), true), token };
+    const apiUrl = githubAppApiBase(true);
+    if (apiUrl === undefined) throw new Error("The VCS connection API URL is invalid");
+    return { apiUrl, token };
   }
   if (mod.vcsConnectionType === "oauth-token" && mod.vcsConnectionId !== null) {
     const tokenRow = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, mod.vcsConnectionId) });
@@ -58,7 +55,13 @@ async function credentialsFor(mod: RegistryModule): Promise<Credentials> {
     if (client === undefined || !["github", "github_enterprise"].includes(client.serviceProvider)) {
       throw new Error("This VCS provider is not yet supported for registry module ingestion");
     }
-    return { apiUrl: githubApiUrl(client.apiUrl), token: await decryptSecret(tokenRow.token) };
+    const apiUrl = normalizeGithubApiBase(
+      client.apiUrl?.trim() === "" || client.apiUrl === null || client.apiUrl === undefined
+        ? "https://api.github.com"
+        : client.apiUrl,
+    );
+    if (apiUrl === undefined) throw new Error("The VCS connection API URL is invalid");
+    return { apiUrl, token: await decryptSecret(tokenRow.token) };
   }
   throw new Error("The registry module has no valid VCS connection");
 }
@@ -79,21 +82,42 @@ async function githubJson<T>(credentials: Credentials, path: string): Promise<T>
 function tagVersion(tag: string, prefix: string): string | undefined {
   if (!tag.startsWith(prefix)) return undefined;
   const candidate = tag.slice(prefix.length).replace(/^v/, "");
-  return SEMVER_PATTERN.test(candidate) ? candidate : undefined;
+  return isModuleVersion(candidate) ? candidate : undefined;
 }
 
 export function discoverModuleVersions(
   tags: readonly Readonly<{ name: string; sha: string }>[],
   prefix: string,
-): Candidate[] {
-  const candidates = new Map<string, Candidate>();
+): RegistryModuleCandidate[] {
+  const candidates = new Map<string, RegistryModuleCandidate>();
   for (const tag of tags) {
     const version = tagVersion(tag.name, prefix);
-    if (version !== undefined && !candidates.has(version)) {
-      candidates.set(version, { version, ref: tag.name, sha: tag.sha, branch: null });
+    if (version === undefined) continue;
+    const candidate = { version, ref: tag.name, sha: tag.sha, branch: null } as const;
+    const existing = candidates.get(version);
+    // A repository should not publish the same version twice. If it does,
+    // choose a stable ref/SHA instead of depending on API response order.
+    if (
+      existing === undefined
+      || candidate.ref.localeCompare(existing.ref) < 0
+      || (candidate.ref === existing.ref && candidate.sha.localeCompare(existing.sha) < 0)
+    ) {
+      candidates.set(version, candidate);
     }
   }
-  return [...candidates.values()].slice(0, 100);
+  return sortModuleVersionsDescending([...candidates.values()]);
+}
+
+/** Select the next deterministic import batch after excluding persisted versions. */
+export function selectRegistryModuleVersionBatch(
+  candidates: readonly RegistryModuleCandidate[],
+  existingVersions: Readonly<ReadonlySet<string>>,
+  batchSize = REGISTRY_VERSION_IMPORT_BATCH_SIZE,
+): RegistryModuleCandidate[] {
+  if (!Number.isSafeInteger(batchSize) || batchSize <= 0) return [];
+  return sortModuleVersionsDescending(candidates)
+    .filter((candidate): boolean => !existingVersions.has(candidate.version))
+    .slice(0, batchSize);
 }
 
 async function branchCandidateFor(
@@ -101,9 +125,9 @@ async function branchCandidateFor(
   credentials: Credentials,
   encodedRepository: string,
   branchVersion: string | undefined,
-): Promise<Candidate[]> {
+): Promise<RegistryModuleCandidate[]> {
   if (mod.branch === null || mod.branch === "") throw new Error("Branch-based publication requires a branch");
-  if (branchVersion === undefined || !SEMVER_PATTERN.test(branchVersion)) {
+  if (branchVersion === undefined || !isModuleVersion(branchVersion)) {
     throw new Error("Branch-based publication requires a semantic module version");
   }
   const branch = await githubJson<{ commit?: { sha?: unknown } }>(
@@ -118,7 +142,7 @@ async function candidatesFor(
   mod: RegistryModule,
   credentials: Credentials,
   branchVersion?: string,
-): Promise<Candidate[]> {
+): Promise<RegistryModuleCandidate[]> {
   const repository = mod.repositoryIdentifier ?? "";
   if (!REPOSITORY_PATTERN.test(repository)) throw new Error("Repository identifier must use owner/repository format");
   const encodedRepository = repository.split("/").map(encodeURIComponent).join("/");
@@ -198,7 +222,7 @@ async function withDownloadedArchive<T>(
   }
 }
 
-type SyncResult = Readonly<{ imported: number; versions: readonly string[] }>;
+type SyncResult = Readonly<{ imported: number; versions: readonly string[]; pendingRemaining: number }>;
 const syncInFlight = new Map<string, Promise<SyncResult>>();
 
 async function synchronizeRegistryModuleOnce(
@@ -217,7 +241,9 @@ async function synchronizeRegistryModuleOnce(
     }
     const existing = await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, mod.id) });
     const existingVersions = new Set(existing.map((version): string => version.version));
-    const pending = candidates.filter((candidate): boolean => !existingVersions.has(candidate.version));
+    const outstanding = selectRegistryModuleVersionBatch(candidates, existingVersions, Number.MAX_SAFE_INTEGER);
+    const pending = outstanding.slice(0, REGISTRY_VERSION_IMPORT_BATCH_SIZE);
+    const pendingRemaining = outstanding.length - pending.length;
     const prepared: (typeof registryModuleVersions.$inferInsert)[] = [];
     for (const candidate of pending) {
       // Abort as soon as the cross-replica lease is lost: another replica
@@ -259,7 +285,7 @@ async function synchronizeRegistryModuleOnce(
         updatedAt: completedAt,
       }).where(eq(registryModules.id, mod.id));
     });
-    return { imported: prepared.length, versions: prepared.map((version): string => version.version) };
+    return { imported: prepared.length, versions: prepared.map((version): string => version.version), pendingRemaining };
   } catch (error: unknown) {
     await Promise.allSettled(createdArchives.map(async (path): Promise<void> => { await rm(path, { force: true }); }));
     const message = error instanceof Error ? error.message : "Registry module synchronization failed";
@@ -273,6 +299,14 @@ async function synchronizeRegistryModuleOnce(
   }
 }
 
+function scheduleRemainingRegistryModuleSync(mod: RegistryModule): void {
+  setTimeout((): void => {
+    void synchronizeRegistryModule(mod).catch((error: unknown): void => {
+      console.error(`[terrence] Registry module continuation failed for ${mod.id}:`, error instanceof Error ? error.message : error);
+    });
+  }, 0);
+}
+
 export async function synchronizeRegistryModule(
   mod: RegistryModule,
   branchVersion?: string,
@@ -283,25 +317,33 @@ export async function synchronizeRegistryModule(
   // process per key and the caller gets the real SyncResult.
   const existing = syncInFlight.get(key);
   if (existing !== undefined) return existing;
+  let completedResult: SyncResult | undefined;
   const operation = (async (): Promise<SyncResult> => {
     // Cross-replica mutex: only the replica that claims the lease runs the
     // sync. A non-owner returns the module's current versions without
     // double-running the (possibly in-flight) ingestion on another replica.
     const lease = await RegistrySyncLease.acquire(key);
-    if (lease === null) return { imported: 0, versions: await currentModuleVersions(mod.id) };
-    try {
-      // The lease renews itself on an interval; shouldContinue aborts the
-      // download loop as soon as the lease is lost (renewal failed or another
-      // replica reclaimed it), so ingestion never finishes writing under a
-      // lock this instance no longer owns.
-      return await synchronizeRegistryModuleOnce(mod, branchVersion, (): boolean => lease.isAlive());
-    } finally {
-      // release() clears the renewal interval and removes the lease. Errors
-      // are logged inside release() so a failed deletion cannot mask the
-      // synchronization result.
-      await lease.release();
+    if (lease === null) return { imported: 0, versions: await currentModuleVersions(mod.id), pendingRemaining: 0 };
+    // The lease renews itself on an interval; shouldContinue aborts the
+    // download loop as soon as the lease is lost (renewal failed or another
+    // replica reclaimed it), so ingestion never finishes writing under a
+    // lock this instance no longer owns.
+    const result = await (async (): Promise<SyncResult> => {
+      try {
+        return await synchronizeRegistryModuleOnce(mod, branchVersion, (): boolean => lease.isAlive());
+      } finally {
+        await lease.release();
+      }
+    })();
+    completedResult = result;
+    return result;
+  })().finally((): void => {
+    // Remove the coalescing entry before starting another bounded batch.
+    syncInFlight.delete(key);
+    if (completedResult?.pendingRemaining !== undefined && completedResult.pendingRemaining > 0) {
+      scheduleRemainingRegistryModuleSync(mod);
     }
-  })().finally((): void => { syncInFlight.delete(key); });
+  });
   syncInFlight.set(key, operation);
   return operation;
 }

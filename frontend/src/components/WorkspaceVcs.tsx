@@ -81,25 +81,29 @@ export type VcsConnection = Readonly<{
   value: string;
 }>;
 
+export const REGISTRY_SUPPORTED_VCS_PROVIDERS = ["github", "github_enterprise"] as const;
+
 // oxlint-disable-next-line react/only-export-components -- shared by the create and settings forms without adding a third file
 export async function loadOrganizationVcsConnections(
   orgName: string,
   signal?: AbortSignal,
+  options?: Readonly<{ supportedProviders?: readonly string[] }>,
 ): Promise<VcsConnection[]> {
-  const options = signal === undefined ? {} : { signal };
+  const requestOptions = signal === undefined ? {} : { signal };
   // SAFETY: both endpoints return the JSON:API envelope per contract.
   const [githubResponse, oauthResponse] = await Promise.all([
-    fetchApi(`/organizations/${encodeURIComponent(orgName)}/github-app/installations`, options),
-    fetchApi(`/organizations/${encodeURIComponent(orgName)}/oauth-clients`, options),
+    fetchApi(`/organizations/${encodeURIComponent(orgName)}/github-app/installations`, requestOptions),
+    fetchApi(`/organizations/${encodeURIComponent(orgName)}/oauth-clients`, requestOptions),
   ]) as [
     { data?: GitHubAppInstallation[] },
     { data?: OAuthClient[] },
   ];
   const installations = Array.isArray(githubResponse.data) ? githubResponse.data : [];
-  const clients = Array.isArray(oauthResponse.data) ? oauthResponse.data : [];
+  const clients = (Array.isArray(oauthResponse.data) ? oauthResponse.data : [])
+    .filter((client): boolean => options?.supportedProviders === undefined || options.supportedProviders.includes(client.attributes["service-provider"] ?? ""));
   const oauthConnections = await Promise.all(clients.map(async (client: OAuthClient): Promise<VcsConnection[]> => {
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-    const response = await fetchApi(`/oauth-clients/${encodeURIComponent(client.id)}/oauth-tokens`, options) as {
+    const response = await fetchApi(`/oauth-clients/${encodeURIComponent(client.id)}/oauth-tokens`, requestOptions) as {
       data?: OAuthToken[];
     };
     const tokens = Array.isArray(response.data) ? response.data : [];

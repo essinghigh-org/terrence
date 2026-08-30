@@ -67,6 +67,88 @@ export type RegistryModule = Readonly<{
   permissions: Readonly<{ canDelete: boolean; canResync: boolean; canRetry: boolean }>;
 }>;
 
+const REGISTRY_SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+
+type ParsedRegistryVersion = Readonly<{
+  major: string;
+  minor: string;
+  patch: string;
+  prerelease: readonly string[];
+}>;
+
+function parsedRegistryVersion(value: string): ParsedRegistryVersion | null {
+  const match = REGISTRY_SEMVER_PATTERN.exec(value);
+  if (match === null) return null;
+  const prerelease = match[4] === undefined ? [] : match[4].split(".");
+  if (prerelease.some((identifier): boolean =>
+    /^\d+$/u.test(identifier) && identifier !== "0" && identifier.startsWith("0"))) return null;
+  return {
+    major: match[1] ?? "0",
+    minor: match[2] ?? "0",
+    patch: match[3] ?? "0",
+    prerelease,
+  };
+}
+
+function isNumericIdentifier(value: string): boolean {
+  return /^0$|^[1-9]\d*$/u.test(value);
+}
+
+function compareNumericIdentifiers(left: string, right: string): number {
+  const length = left.length - right.length;
+  if (length !== 0) return length;
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+function comparePrerelease(left: readonly string[], right: readonly string[]): number {
+  if (left.length === 0 && right.length === 0) return 0;
+  if (left.length === 0) return 1;
+  if (right.length === 0) return -1;
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = left[index];
+    const rightPart = right[index];
+    if (leftPart === undefined) return -1;
+    if (rightPart === undefined) return 1;
+    if (leftPart === rightPart) continue;
+    const leftNumeric = isNumericIdentifier(leftPart);
+    const rightNumeric = isNumericIdentifier(rightPart);
+    if (leftNumeric && rightNumeric) return compareNumericIdentifiers(leftPart, rightPart);
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+    return leftPart.localeCompare(rightPart);
+  }
+  return 0;
+}
+
+/** Compare in ascending semantic-version precedence for browser-side sorting. */
+export function compareRegistryVersions(left: string, right: string): number {
+  const leftParsed = parsedRegistryVersion(left);
+  const rightParsed = parsedRegistryVersion(right);
+  if (leftParsed === null || rightParsed === null) {
+    if (leftParsed !== null) return 1;
+    if (rightParsed !== null) return -1;
+    return left.localeCompare(right);
+  }
+  const major = compareNumericIdentifiers(leftParsed.major, rightParsed.major);
+  if (major !== 0) return major;
+  const minor = compareNumericIdentifiers(leftParsed.minor, rightParsed.minor);
+  if (minor !== 0) return minor;
+  const patch = compareNumericIdentifiers(leftParsed.patch, rightParsed.patch);
+  if (patch !== 0) return patch;
+  const prerelease = comparePrerelease(leftParsed.prerelease, rightParsed.prerelease);
+  if (prerelease !== 0) return prerelease;
+  return left.localeCompare(right);
+}
+
+export function highestUsableRegistryVersion<T extends Readonly<{ version: string; status: string; revoked: boolean }>>(
+  versions: readonly T[],
+): T | undefined {
+  return [...versions]
+    .filter((version): boolean => version.status === "ok" && !version.revoked)
+    .sort((left, right): number => compareRegistryVersions(right.version, left.version))[0];
+}
+
 /** View an unknown value as a record, or {} when it is not an object. */
 function asRecord(value: unknown): JsonObject {
   if (!isRecord(value)) return {};
@@ -107,7 +189,7 @@ export function registryModuleFromResource(resource: unknown): RegistryModule {
         deprecated: version["deprecated"] === true,
         revoked: version["revoked"] === true,
       }] : [];
-    }),
+    }).sort((left, right): number => compareRegistryVersions(right.version, left.version)),
     vcsRepo: vcsRepo === null ? null : {
       identifier: isString(vcsRepo["identifier"]) ? vcsRepo["identifier"] : null,
       displayIdentifier: isString(vcsRepo["display-identifier"]) ? vcsRepo["display-identifier"] : null,

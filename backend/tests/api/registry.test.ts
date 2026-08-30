@@ -206,12 +206,20 @@ describe("Private Module & Provider Registries API contract", () => {
 
     // 2. Add provider version and platform in DB
     const provVerId = `provver-${suffix}`;
+    const higherProvVerId = `provver-higher-${suffix}`;
     await db.insert(registryProviderVersions).values({
       id: provVerId,
       providerId,
       version: "2.1.0",
       protocols: ["5.0"],
       createdAt: Date.now(),
+    });
+    await db.insert(registryProviderVersions).values({
+      id: higherProvVerId,
+      providerId,
+      version: "10.0.0",
+      protocols: ["5.0"],
+      createdAt: Date.now() - 1_000,
     });
 
     const platId = `plat-${suffix}`;
@@ -230,7 +238,7 @@ describe("Private Module & Provider Registries API contract", () => {
     const provVerRes = await request(`/api/registry/v1/providers/${orgName}/customcloud/versions`);
     expect(provVerRes.status).toBe(200);
     const provVerBody = await provVerRes.json();
-    expect(provVerBody.versions[0].version).toBe("2.1.0");
+    expect(provVerBody.versions[0].version).toBe("10.0.0");
 
     // 4. Download binary metadata via standard protocol
     const dlPlatRes = await request(`/api/registry/v1/providers/${orgName}/customcloud/2.1.0/download/linux/amd64`);
@@ -248,7 +256,7 @@ describe("Private Module & Provider Registries API contract", () => {
     const mirrorIndexRes = await request(`${mirrorPath}/index.json`);
     expect(mirrorIndexRes.status).toBe(200);
     expect(mirrorIndexRes.headers.get("Content-Type")).toContain("application/json");
-    expect(await mirrorIndexRes.json()).toEqual({ versions: { "2.1.0": {} } });
+    expect(await mirrorIndexRes.json()).toEqual({ versions: { "10.0.0": {}, "2.1.0": {} } });
 
     const mirrorPackagesRes = await request(`${mirrorPath}/2.1.0.json`);
     expect(mirrorPackagesRes.status).toBe(200);
@@ -264,7 +272,7 @@ describe("Private Module & Provider Registries API contract", () => {
 
     // Clean up
     await db.delete(registryProviderPlatforms).where(eq(registryProviderPlatforms.id, platId));
-    await db.delete(registryProviderVersions).where(eq(registryProviderVersions.id, provVerId));
+    await db.delete(registryProviderVersions).where(inArray(registryProviderVersions.id, [provVerId, higherProvVerId]));
     await db.delete(registryProviders).where(eq(registryProviders.id, providerId));
   });
 });

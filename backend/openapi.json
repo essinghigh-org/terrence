@@ -16406,6 +16406,58 @@
         }
       }
     },
+    "/api/v2/admin/logging-settings": {
+      "get": {
+        "operationId": "get-api-v2-admin-logging-settings",
+        "tags": [
+          "admin"
+        ],
+        "summary": "GET /api/v2/admin/logging-settings",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "patch-api-v2-admin-logging-settings",
+        "tags": [
+          "admin"
+        ],
+        "summary": "PATCH /api/v2/admin/logging-settings",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
     "/api/v2/admin/cost-estimation-settings": {
       "get": {
         "operationId": "get-api-v2-admin-cost-estimation-settings",
