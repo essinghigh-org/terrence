@@ -24,6 +24,24 @@ describe("syslog target parsing", (): void => {
     });
   });
 
+  it("parses bracketed IPv6 targets and rejects unsafe URL forms", (): void => {
+    expect(parseSyslogTarget("udp://[2001:db8::10]:514")).toEqual({
+      transport: "udp",
+      host: "2001:db8::10",
+      port: 514,
+      family: 6,
+    });
+    expect(parseSyslogTarget("tcp://[::1]:601")).toEqual({
+      transport: "tcp",
+      host: "::1",
+      port: 601,
+      family: 6,
+    });
+    expect(parseSyslogTarget("udp://user:pass@[::1]:514")).toBeNull();
+    expect(parseSyslogTarget("udp://[::1]:514/path")).toBeNull();
+    expect(parseSyslogTarget("udp://[::1]:514?query")).toBeNull();
+  });
+
   it("rejects malformed targets", (): void => {
     expect(parseSyslogTarget(undefined)).toBeNull();
     expect(parseSyslogTarget("")).toBeNull();

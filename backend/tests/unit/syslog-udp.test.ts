@@ -56,6 +56,38 @@ describe("syslog UDP transport end to end", (): void => {
     expect(got).toBe(frame);
   }, 5_000);
 
+  it("delivers an IPv6 target through a UDP6 socket", async (): Promise<void> => {
+    const port = await new Promise<number>((resolve, reject): void => {
+      const socket = createSocket("udp6");
+      probe = socket;
+      socket.on("error", reject);
+      socket.bind(0, "::1", (): void => {
+        resolve((socket.address() as { port: number }).port);
+      });
+    });
+    const target = parseSyslogTarget(`udp://[::1]:${port}`);
+    if (target === null) throw new Error("unreachable");
+    const received = new Promise<string>((resolve): void => {
+      probe?.once("message", (message: Buffer): void => {
+        resolve(message.toString("utf8"));
+      });
+    });
+    const frame = formatSyslogMessage(
+      { timestamp: "2026-08-26T03:00:00.000Z", level: "info", message: "ipv6 syslog" },
+      { hostname: "test-host", appName: "terrence", procId: "7" },
+    );
+    sendSyslogFrame(target, frame);
+    const got = await Promise.race([
+      received,
+      new Promise<string>((_, reject): void => {
+        setTimeout((): void => {
+          reject(new Error("IPv6 collector never received the frame"));
+        }, 3_000);
+      }),
+    ]);
+    expect(got).toBe(frame);
+  }, 5_000);
+
   it("truncates oversized UDP payloads at 1024 bytes (RFC 5426)", (): void => {
     // Transport-level contract; verified via formatter + frame size math
     // without needing a second collector assertion.
