@@ -21,17 +21,20 @@ export function distributedFixedWindowContext(bucketPrefix: string): RateLimitCo
 
   return {
     init(options): void {
-      duration = options.duration;
+      if (typeof options.duration === "number" && Number.isFinite(options.duration) && options.duration > 0) {
+        duration = options.duration;
+      }
     },
-    async increment(key: string): Promise<{ count: number; nextReset: Date }> {
+    async increment(key: string, requestDuration?: number, requestTime?: number): Promise<{ count: number; nextReset: Date; start: number }> {
+      const effectiveDuration = requestDuration ?? duration;
+      const now = requestTime ?? Date.now();
       const bucket = `${bucketPrefix}:${key}`;
-      const now = Date.now();
-      const windowStart = now - (now % duration);
-      const nextReset = new Date(windowStart + duration);
+      const windowStart = now - (now % effectiveDuration);
+      const nextReset = new Date(windowStart + effectiveDuration);
 
       // SQLite has no cross-replica concern; this path is never called there,
       // but if it is, degrade to a single count rather than failing the request.
-      if (!isPostgres) return { count: 1, nextReset };
+      if (!isPostgres) return { count: 1, nextReset, start: windowStart };
 
       try {
         // Single upsert: bump count within the current window, or start a new
@@ -49,17 +52,17 @@ export function distributedFixedWindowContext(bucketPrefix: string): RateLimitCo
           RETURNING count
         `);
         const count = Number(rows[0]?.count ?? 1);
-        return { count, nextReset };
+        return { count, nextReset, start: windowStart };
       } catch {
         // DB unavailable: fail open (allow the request) rather than hard-failing
         // the API. Rate limiting is a defense, not a gate.
-        return { count: 1, nextReset };
+        return { count: 1, nextReset, start: windowStart };
       } finally {
         // Opportunistic expiry, rate-limited to one prune per window per
         // bucketPrefix so every limited request does not pay for a table scan.
         if (lastPrunedWindowStart !== windowStart) {
           lastPrunedWindowStart = windowStart;
-          const staleBefore = windowStart - duration * 10;
+          const staleBefore = windowStart - effectiveDuration * 10;
           try {
             const { db: db2 } = await import("../db");
             await (db2 as unknown as { execute: (q: unknown) => Promise<unknown> }).execute(

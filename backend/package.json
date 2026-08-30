@@ -27,7 +27,7 @@
     "@xmldom/xmldom": "^0.9.10",
     "drizzle-orm": "^0.45.2",
     "elysia": "^1.4.30",
-    "elysia-rate-limit": "3.2.2",
+    "elysia-rate-limit": "4.6.3",
     "jsonwebtoken": "^9.0.3",
     "ldapts": "^9.0.0",
     "xml-crypto": "^6.1.2"

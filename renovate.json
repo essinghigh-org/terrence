@@ -38,6 +38,11 @@
       "matchPackageNames": ["typescript"],
       "matchUpdateTypes": ["major"],
       "labels": ["needs-manual-verification"]
+    },
+    {
+      "description": "elysia-rate-limit v5 requires Elysia 2; stay on the latest Elysia 1-compatible release until the framework is upgraded.",
+      "matchPackageNames": ["elysia-rate-limit"],
+      "allowedVersions": "<5.0.0"
     }
   ]
 }

@@ -156,21 +156,17 @@ type ParseContext = Readonly<{
 }>;
 
 type OptionsContext = Readonly<{
-  set: Readonly<{ status: number }>;
+  set: unknown;
 }>;
 
 type ErrorContext = Readonly<{
-  code: string;
+  code: unknown;
   error: unknown;
-  set: SetObject;
+  set: unknown;
 }>;
 
-export function handleAppError({
-  code,
-  error,
-  set,
-  request,
-}: ErrorContext & { request: { url: string } }): { errors: { status: string; title: string; detail?: string }[] } | string | undefined {
+export function handleAppError(context: ErrorContext & { request: { url: string } }): { errors: { status: string; title: string; detail?: string }[] } | string | undefined {
+  const { code, error, set, request } = context;
   const mutableSet = set as { status?: number | string; headers: Record<string, string | number> };
   const pathname = new URL(request.url).pathname;
   // Elysia wraps onParse failures in its own ParseError; the original is
@@ -246,7 +242,7 @@ type PasswordGuardContext = Readonly<{
 }>;
 
 type RateLimitServer = Readonly<{
-  readonly requestIP?: (request: CustomRequest) => Readonly<{ readonly address?: string }> | null;
+  readonly requestIP?: (request: Request) => Readonly<{ readonly address?: string }> | null;
 }>;
 
 /** Parse a positive-integer env override, falling back to the default. */
@@ -294,22 +290,30 @@ function fixedWindowContext(): RateLimitContext {
   let duration = SENSITIVE_RATE_DURATION_MS;
   let resetAt = Date.now() + duration;
 
-  const resetExpiredWindow = (): void => {
-    if (Date.now() < resetAt) return;
+  const resetExpiredWindow = (now: number): void => {
+    if (now < resetAt) return;
     counts.clear();
-    resetAt = Date.now() + duration;
+    resetAt = now + duration;
   };
 
   return {
     init(options): void {
-      duration = options.duration;
+      duration = typeof options.duration === "number" && Number.isFinite(options.duration) && options.duration > 0
+        ? options.duration
+        : SENSITIVE_RATE_DURATION_MS;
       resetAt = Date.now() + duration;
     },
-    increment(key): { count: number; nextReset: Date } {
-      resetExpiredWindow();
+    increment(key, requestDuration, requestTime): { count: number; nextReset: Date; start: number } {
+      const now = requestTime ?? Date.now();
+      if (requestDuration !== undefined && requestDuration !== duration) {
+        duration = requestDuration;
+        resetAt = now + duration;
+        counts.clear();
+      }
+      resetExpiredWindow(now);
       const count = (counts.get(key) ?? 0) + 1;
       counts.set(key, count);
-      return { count, nextReset: new Date(resetAt) };
+      return { count, nextReset: new Date(resetAt), start: resetAt - duration };
     },
     decrement(key): void {
       const count = counts.get(key);
@@ -329,7 +333,7 @@ function fixedWindowContext(): RateLimitContext {
   };
 }
 
-function ipRateLimitKey(request: CustomRequest, server: RateLimitServer | null): string {
+function ipRateLimitKey(request: Request, server: RateLimitServer | null): string {
   // When the admin has opted into trusting forwarded headers (behind Cloudflare
   // etc.), key rate limits on the real client IP instead of the proxy peer.
   const directAddress = typeof server?.requestIP === "function"
@@ -346,9 +350,14 @@ function ipRateLimitKey(request: CustomRequest, server: RateLimitServer | null):
   return `ip:${address}`;
 }
 
-function principalRateLimitKey(request: CustomRequest, server: RateLimitServer | null): string {
+function principalRateLimitKey(request: Request, server: RateLimitServer | null): string {
   return authenticatedRateLimitKey(request) ?? ipRateLimitKey(request, server);
 }
+
+const RATE_LIMIT_ERROR_RESPONSE = new Response(
+  JSON.stringify({ errors: [{ detail: "You have exceeded the API's rate limit.", status: "429", title: "Too Many Requests" }] }),
+  { headers: { "content-type": "application/vnd.api+json" }, status: 429 },
+);
 
 
 
@@ -408,7 +417,7 @@ export const app = new Elysia()
   .use(rateLimit({
     max: RATE_LIMIT_MAX,
     duration: 1000,
-    generator: (request: CustomRequest, server: Readonly<{ readonly requestIP?: (req: CustomRequest) => Readonly<{ readonly address?: string }> | null }> | null): string => {
+    generator: (request: Request, server: RateLimitServer | null): string => {
       return principalRateLimitKey(request, server);
     },
     // Static content (SPA shell, hashed /assets/* chunks, favicon) is exempt:
@@ -424,64 +433,40 @@ export const app = new Elysia()
     context: distributedOrLocal("workspace-run-history"),
     duration: WORKSPACE_RUN_HISTORY_DURATION_MS,
     max: WORKSPACE_RUN_HISTORY_RATE_LIMIT,
-    generator: (request: CustomRequest, server: RateLimitServer | null): string => {
+    generator: (request: Request, server: RateLimitServer | null): string => {
       return `workspace-run-history:${principalRateLimitKey(request, server)}`;
     },
-    responseMessage: {
-      errors: [{
-        detail: "You have exceeded the API's rate limit.",
-        status: "429",
-        title: "Too Many Requests",
-      }],
-    },
+    errorResponse: RATE_LIMIT_ERROR_RESPONSE,
     skip: (request: CustomRequest): boolean => workspaceRunHistoryPath(request) === undefined,
   }))
   .use(rateLimit({
     context: distributedOrLocal("sensitive"),
     duration: SENSITIVE_RATE_DURATION_MS,
     max: SENSITIVE_RATE_LIMIT,
-    generator: (request: CustomRequest, server: RateLimitServer | null): string => {
+    generator: (request: Request, server: RateLimitServer | null): string => {
       return `sensitive:${sensitivePath(request) ?? "unknown"}:${principalRateLimitKey(request, server)}`;
     },
-    responseMessage: {
-      errors: [{
-        detail: "You have exceeded the API's rate limit.",
-        status: "429",
-        title: "Too Many Requests",
-      }],
-    },
+    errorResponse: RATE_LIMIT_ERROR_RESPONSE,
     skip: (request: CustomRequest): boolean => sensitivePath(request) === undefined,
   }))
   .use(rateLimit({
     context: distributedOrLocal("sso-get"),
     duration: SENSITIVE_RATE_DURATION_MS,
     max: SSO_GET_RATE_LIMIT,
-    generator: (request: CustomRequest, server: RateLimitServer | null): string => {
+    generator: (request: Request, server: RateLimitServer | null): string => {
       return `sso-get:${sensitiveSsoPath(request) ?? "unknown"}:${principalRateLimitKey(request, server)}`;
     },
-    responseMessage: {
-      errors: [{
-        detail: "You have exceeded the API's rate limit.",
-        status: "429",
-        title: "Too Many Requests",
-      }],
-    },
+    errorResponse: RATE_LIMIT_ERROR_RESPONSE,
     skip: (request: CustomRequest): boolean => sensitiveSsoPath(request) === undefined,
   }))
   .use(rateLimit({
     context: distributedOrLocal("scim-settings"),
     duration: 1_000,
     max: SCIM_SETTINGS_RATE_LIMIT,
-    generator: (request: CustomRequest, server: RateLimitServer | null): string => {
+    generator: (request: Request, server: RateLimitServer | null): string => {
       return `scim-settings:${scimSettingsPath(request) ?? "unknown"}:${principalRateLimitKey(request, server)}`;
     },
-    responseMessage: {
-      errors: [{
-        detail: "You have exceeded the API's rate limit.",
-        status: "429",
-        title: "Too Many Requests",
-      }],
-    },
+    errorResponse: RATE_LIMIT_ERROR_RESPONSE,
     skip: (request: CustomRequest): boolean => scimSettingsPath(request) === undefined,
   }))
   // SCIM limiters are distributed on Postgres (shared bucket table) so all
@@ -491,16 +476,10 @@ export const app = new Elysia()
     context: distributedOrLocal("scim-mapping"),
     duration: 60_000,
     max: SCIM_MAPPING_RATE_LIMIT,
-    generator: (request: CustomRequest, server: RateLimitServer | null): string => {
+    generator: (request: Request, server: RateLimitServer | null): string => {
       return `scim-mapping:${principalRateLimitKey(request, server)}`;
     },
-    responseMessage: {
-      errors: [{
-        detail: "You have exceeded the API's rate limit.",
-        status: "429",
-        title: "Too Many Requests",
-      }],
-    },
+    errorResponse: RATE_LIMIT_ERROR_RESPONSE,
     skip: (request: CustomRequest): boolean => scimMappingPath(request) === undefined,
   }))
   .use(rateLimit({
@@ -508,8 +487,8 @@ export const app = new Elysia()
     context: distributedOrLocal("metrics"),
     duration: 60_000,
     max: envPositiveInt("RATE_LIMIT_METRICS_MAX", 30),
-    generator: (request: CustomRequest, server: RateLimitServer | null): string => `metrics:${principalRateLimitKey(request, server)}`,
-    responseMessage: { errors: [{ detail: "You have exceeded the API's rate limit.", status: "429", title: "Too Many Requests" }] },
+    generator: (request: Request, server: RateLimitServer | null): string => `metrics:${principalRateLimitKey(request, server)}`,
+    errorResponse: RATE_LIMIT_ERROR_RESPONSE,
     skip: (request: CustomRequest): boolean => {
       const p = new URL(request.url).pathname;
       return p !== "/metrics";
@@ -650,15 +629,20 @@ export const app = new Elysia()
     if ((pathname === "/api" || pathname.startsWith("/api/")) && isJsonDocument) {
       headers["Content-Type"] = "application/vnd.api+json";
     }
-    const limit = set.headers["RateLimit-Limit"];
-    const remaining = set.headers["RateLimit-Remaining"];
-    if (limit !== undefined) headers["X-RateLimit-Limit"] = limit;
-    if (remaining !== undefined) headers["X-RateLimit-Remaining"] = remaining;
+    const responseHeaders = response instanceof Response ? response.headers : null;
+    const limit = responseHeaders?.get("RateLimit-Limit") ?? set.headers["RateLimit-Limit"];
+    const remaining = responseHeaders?.get("RateLimit-Remaining") ?? set.headers["RateLimit-Remaining"];
+    if (limit !== undefined && limit !== null) headers["X-RateLimit-Limit"] = limit;
+    if (remaining !== undefined && remaining !== null) headers["X-RateLimit-Remaining"] = remaining;
     // 461/462: standardize Retry-After + legacy X-RateLimit-Reset on 429; honor any explicit Retry-After already set.
+    const responseRetryAfter = responseHeaders?.get("Retry-After");
+    if (responseRetryAfter !== undefined && responseRetryAfter !== null && headers["Retry-After"] === undefined) {
+      headers["Retry-After"] = responseRetryAfter;
+    }
     if ((set.status === 429 || String(set.status) === "429") && headers["Retry-After"] === undefined) {
-      const reset = set.headers["RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset-At"];
+      const reset = responseHeaders?.get("RateLimit-Reset") ?? set.headers["RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset"] ?? set.headers["X-RateLimit-Reset-At"];
       let seconds: number | null = null;
-      if (reset !== undefined) {
+      if (reset !== undefined && reset !== null) {
         const asNum = Number(reset);
         if (Number.isFinite(asNum) && asNum > 0) {
           seconds = asNum > 1_000_000_000 ? Math.max(1, Math.ceil((asNum - Date.now()) / 1000)) : Math.max(1, Math.ceil(asNum));
@@ -668,7 +652,7 @@ export const app = new Elysia()
         }
       }
       headers["Retry-After"] = String(seconds ?? 60);
-      if (headers["X-RateLimit-Reset"] === undefined && reset !== undefined) headers["X-RateLimit-Reset"] = String(reset);
+      if (headers["X-RateLimit-Reset"] === undefined && reset !== undefined && reset !== null) headers["X-RateLimit-Reset"] = String(reset);
     }
     // Always clear the internal precondition marker — it is server-internal state, never a client header.
     // 452-454: ETag + conditional request handling.
