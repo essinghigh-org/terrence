@@ -3,7 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import jwt from "jsonwebtoken";
 import { authPlugin } from "../auth";
 import { db, isPostgres } from "../db";
-import { apiTokens, githubAppInstallations, oauthTokens, organizations, type users } from "../db/schema";
+import { apiTokens, githubAppInstallations, oauthClients, oauthTokens, organizations, type users } from "../db/schema";
 import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission } from "../lib/utils";
 import { decryptSecret } from "../lib/secrets";
 import { getGitHubAppAccessToken } from "../lib/webhooks";
@@ -181,6 +181,312 @@ function githubApiBase(): string {
   return GITHUB_API_BASE;
 }
 
+type RepositoryProvider = "github" | "gitlab" | "bitbucket";
+type RepositoryRecord = Readonly<Record<string, unknown>>;
+type RepositoryResource = { id: string; type: string; attributes: { identifier: string; name: string; owner: string } };
+type RepositoryPage = Readonly<{
+  records: readonly RepositoryRecord[];
+  rawCount: number;
+  nextUrl: string | null;
+}>;
+
+const REPOSITORY_PAGE_SIZE = 100;
+const MAX_REPOSITORY_PAGES = 20;
+const MAX_BITBUCKET_WORKSPACES = 100;
+const MAX_BITBUCKET_REQUESTS = 100;
+
+function repositoryProvider(serviceProvider: string): RepositoryProvider | null {
+  if (serviceProvider === "github" || serviceProvider === "github_enterprise") return "github";
+  if (["gitlab", "gitlab_ce", "gitlab_ee"].includes(serviceProvider)) return "gitlab";
+  if (serviceProvider === "bitbucket") return "bitbucket";
+  return null;
+}
+
+function validRepositoryApiUrl(value: string): URL | null {
+  try {
+    const url = new URL(value);
+    if (
+      (url.protocol !== "https:" && url.protocol !== "http:")
+      || url.username !== ""
+      || url.password !== ""
+      || url.search !== ""
+      || url.hash !== ""
+    ) return null;
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function appendApiPath(base: URL, suffix: string): URL {
+  const url = new URL(base.toString());
+  url.pathname = `${url.pathname.replace(/\/$/, "")}${suffix}`;
+  return url;
+}
+
+function repositoryApiTarget(client: Readonly<typeof oauthClients.$inferSelect>): { base: URL; provider: RepositoryProvider } | null {
+  const provider = repositoryProvider(client.serviceProvider);
+  if (provider === null) return null;
+
+  const configuredApiUrl = client.apiUrl?.trim() ?? "";
+  if (configuredApiUrl !== "") {
+    const base = validRepositoryApiUrl(configuredApiUrl);
+    return base === null ? null : { base, provider };
+  }
+
+  const configuredHttpUrl = client.httpUrl?.trim() ?? "";
+  if (configuredHttpUrl !== "") {
+    const httpUrl = validRepositoryApiUrl(configuredHttpUrl);
+    if (httpUrl === null) return null;
+    return {
+      base: appendApiPath(
+        httpUrl,
+        provider === "github" ? "/api/v3" : provider === "gitlab" ? "/api/v4" : "/2.0",
+      ),
+      provider,
+    };
+  }
+
+  const defaultApiUrl = provider === "github"
+    ? client.serviceProvider === "github" ? "https://api.github.com" : null
+    : provider === "gitlab"
+      ? client.serviceProvider === "gitlab" ? "https://gitlab.com/api/v4" : null
+      : "https://api.bitbucket.org/2.0";
+  if (defaultApiUrl === null) return null;
+  const base = validRepositoryApiUrl(defaultApiUrl);
+  return base === null ? null : { base, provider };
+}
+
+function repositoryEndpoint(base: URL, path: string, parameters: Readonly<Record<string, string>>): URL {
+  const url = new URL(base.toString());
+  url.pathname = `${url.pathname.replace(/\/$/, "")}/${path.replace(/^\/+/, "")}`;
+  url.search = "";
+  for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, value);
+  return url;
+}
+
+function repositoryPageUrl(base: URL, provider: RepositoryProvider, page: number): URL {
+  return provider === "github"
+    ? repositoryEndpoint(base, "user/repos", { per_page: String(REPOSITORY_PAGE_SIZE), sort: "updated", page: String(page) })
+    : repositoryEndpoint(base, "projects", { membership: "true", per_page: String(REPOSITORY_PAGE_SIZE), order_by: "last_activity_at", sort: "desc", page: String(page) });
+}
+
+function safeNextRepositoryUrl(value: string | null, base: URL): URL | null {
+  if (value === null || value.trim() === "") return null;
+  try {
+    const url = new URL(value, base);
+    if (
+      url.origin !== base.origin
+      || url.username !== ""
+      || url.password !== ""
+      || url.hash !== ""
+    ) return null;
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function nextLink(headers: Headers): string | null {
+  const link = headers.get("link");
+  if (link === null) return null;
+  for (const part of link.split(",")) {
+    const match = /<([^>]+)>\s*;\s*rel=["']?next["']?/i.exec(part);
+    if (match?.[1] !== undefined) return match[1];
+  }
+  return null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+function recordValue(value: unknown): RepositoryRecord | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as RepositoryRecord
+    : null;
+}
+
+function normalizedRepository(record: RepositoryRecord, provider: RepositoryProvider): RepositoryResource | null {
+  const namespace = recordValue(record.namespace);
+  const ownerRecord = recordValue(record.owner);
+  const fullName = provider === "gitlab"
+    ? stringValue(record.path_with_namespace)
+      ?? (stringValue(namespace?.full_path) === null || stringValue(record.path) === null
+        ? null
+        : `${stringValue(namespace?.full_path)}/${stringValue(record.path)}`)
+    : stringValue(record.full_name);
+  if (fullName === null) return null;
+
+  const name = stringValue(record.name) ?? fullName.split("/").at(-1) ?? fullName;
+  const owner = provider === "github"
+    ? stringValue(ownerRecord?.login)
+    : provider === "bitbucket"
+      ? stringValue(ownerRecord?.display_name) ?? stringValue(ownerRecord?.nickname) ?? stringValue(ownerRecord?.username)
+      : null;
+  const pathOwner = fullName.split("/").slice(0, -1).join("/");
+  return {
+    id: fullName,
+    type: "vcs-repositories",
+    attributes: { identifier: fullName, name, owner: owner ?? pathOwner },
+  };
+}
+
+function repositoryPage(body: unknown, provider: RepositoryProvider): RepositoryPage | null {
+  if (provider === "bitbucket") {
+    const container = recordValue(body);
+    const values = container?.values;
+    if (!Array.isArray(values)) return null;
+    return {
+      nextUrl: stringValue(container?.next),
+      rawCount: values.length,
+      records: values.flatMap((value): RepositoryRecord[] => {
+        const record = recordValue(value);
+        return record === null ? [] : [record];
+      }),
+    };
+  }
+  if (!Array.isArray(body)) return null;
+  return {
+    nextUrl: null,
+    rawCount: body.length,
+    records: body.flatMap((value): RepositoryRecord[] => {
+      const record = recordValue(value);
+      return record === null ? [] : [record];
+    }),
+  };
+}
+
+async function fetchRepositoryPage(url: URL, token: string): Promise<{ body: unknown; headers: Headers } | null> {
+  try {
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+    });
+    if (!response.ok) return null;
+    return { body: await response.json() as unknown, headers: response.headers };
+  } catch {
+    return null;
+  }
+}
+
+function workspaceSlug(record: RepositoryRecord): string | null {
+  return stringValue(recordValue(record.workspace)?.slug);
+}
+
+async function discoverBitbucketRepositories(
+  base: URL,
+  token: string,
+  serviceProviderUser: string | null,
+): Promise<RepositoryResource[]> {
+  const requestBudget = { remaining: MAX_BITBUCKET_REQUESTS };
+  const workspaceSlugs = new Set<string>();
+  let workspaceUrl = repositoryEndpoint(base, "user/workspaces", { pagelen: String(REPOSITORY_PAGE_SIZE) });
+  const seenWorkspaceUrls = new Set<string>();
+  for (let requestCount = 0; requestCount < MAX_REPOSITORY_PAGES; requestCount += 1) {
+    if (requestBudget.remaining === 0) break;
+    const urlKey = workspaceUrl.toString();
+    if (seenWorkspaceUrls.has(urlKey)) break;
+    seenWorkspaceUrls.add(urlKey);
+    requestBudget.remaining -= 1;
+    const response = await fetchRepositoryPage(workspaceUrl, token);
+    if (response === null) break;
+    const parsed = repositoryPage(response.body, "bitbucket");
+    if (parsed === null) break;
+    for (const record of parsed.records) {
+      const slug = workspaceSlug(record);
+      if (slug !== null && workspaceSlugs.size < MAX_BITBUCKET_WORKSPACES) workspaceSlugs.add(slug);
+    }
+    if (workspaceSlugs.size >= MAX_BITBUCKET_WORKSPACES) break;
+    const next = safeNextRepositoryUrl(parsed.nextUrl, base);
+    if (next === null) break;
+    workspaceUrl = next;
+  }
+  if (workspaceSlugs.size === 0) {
+    const fallbackWorkspace = stringValue(serviceProviderUser);
+    if (fallbackWorkspace !== null) workspaceSlugs.add(fallbackWorkspace);
+  }
+
+  const repositories = new Map<string, RepositoryResource>();
+  for (const workspace of workspaceSlugs) {
+    if (requestBudget.remaining === 0) break;
+    let url = repositoryEndpoint(base, `repositories/${encodeURIComponent(workspace)}`, {
+      pagelen: String(REPOSITORY_PAGE_SIZE),
+      sort: "-updated_on",
+    });
+    const seenUrls = new Set<string>();
+    for (let requestCount = 0; requestCount < MAX_REPOSITORY_PAGES; requestCount += 1) {
+      if (requestBudget.remaining === 0) break;
+      const urlKey = url.toString();
+      if (seenUrls.has(urlKey)) break;
+      seenUrls.add(urlKey);
+      requestBudget.remaining -= 1;
+      const response = await fetchRepositoryPage(url, token);
+      if (response === null) break;
+      const parsed = repositoryPage(response.body, "bitbucket");
+      if (parsed === null) break;
+      for (const record of parsed.records) {
+        const repository = normalizedRepository(record, "bitbucket");
+        if (repository !== null) repositories.set(repository.id, repository);
+      }
+      const next = safeNextRepositoryUrl(parsed.nextUrl, base);
+      if (next === null) break;
+      url = next;
+    }
+  }
+  return [...repositories.values()];
+}
+
+async function discoverOAuthRepositories(
+  client: Readonly<typeof oauthClients.$inferSelect>,
+  token: string,
+  serviceProviderUser: string | null,
+): Promise<RepositoryResource[]> {
+  const target = repositoryApiTarget(client);
+  if (target === null) return [];
+  if (target.provider === "bitbucket") return discoverBitbucketRepositories(target.base, token, serviceProviderUser);
+
+  let page = 1;
+  let url = repositoryPageUrl(target.base, target.provider, page);
+  const seenUrls = new Set<string>();
+  const repositories: RepositoryResource[] = [];
+
+  for (let requestCount = 0; requestCount < MAX_REPOSITORY_PAGES; requestCount += 1) {
+    const urlKey = url.toString();
+    if (seenUrls.has(urlKey)) break;
+    seenUrls.add(urlKey);
+    const response = await fetchRepositoryPage(url, token);
+    if (response === null) break;
+    const parsed = repositoryPage(response.body, target.provider);
+    if (parsed === null) break;
+    for (const record of parsed.records) {
+      const repository = normalizedRepository(record, target.provider);
+      if (repository !== null) repositories.push(repository);
+    }
+
+    if (target.provider === "github") {
+      const next = safeNextRepositoryUrl(nextLink(response.headers), target.base);
+      if (next !== null) {
+        url = next;
+        continue;
+      }
+    } else {
+      const nextPageText = response.headers.get("x-next-page")?.trim() ?? "";
+      const nextPage = /^[1-9]\d*$/.test(nextPageText) ? Number(nextPageText) : null;
+      if (nextPage !== null && Number.isSafeInteger(nextPage)) {
+        page = nextPage;
+        url = repositoryPageUrl(target.base, target.provider, page);
+        continue;
+      }
+    }
+
+    if (parsed.rawCount < REPOSITORY_PAGE_SIZE) break;
+    page += 1;
+    url = repositoryPageUrl(target.base, target.provider, page);
+  }
+  return repositories;
+}
+
 async function fetchInstallation(
   config: Readonly<GitHubAppConfig>,
   installationId: number,
@@ -293,32 +599,29 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
           }
         } catch {}
       }
+      return { data: repos };
     } else {
-      // 2. Check if connection is OAuth Token
+      // 2. Resolve OAuth token -> OAuth client inside this organization before
+      // decrypting the token or contacting any provider API. The token ID is a
+      // client-controlled path parameter and must not be looked up globally.
       const oauthToken = await db.query.oauthTokens.findFirst({
         where: eq(oauthTokens.id, connectionId),
       });
-      if (oauthToken !== undefined) {
-        try {
-          const tokenStr = await decryptSecret(oauthToken.token);
-          const res = await fetch(`${githubApiBase()}/user/repos?per_page=100&sort=updated`, {
-            headers: { Authorization: `Bearer ${tokenStr}`, Accept: "application/vnd.github.v3+json" },
+      const oauthClient = oauthToken === undefined
+        ? undefined
+        : await db.query.oauthClients.findFirst({
+            where: and(eq(oauthClients.id, oauthToken.oauthClientId), eq(oauthClients.orgId, org.id)),
           });
-          if (res.ok) {
-            const body = await res.json() as { full_name?: string; name?: string }[]; // eslint-disable-line @typescript-eslint/naming-convention
-            if (Array.isArray(body)) {
-              for (const repo of body) {
-                if (typeof repo.full_name === "string" && repo.full_name !== "") {
-                  repos.push({
-                    id: repo.full_name,
-                    type: "vcs-repositories",
-                    attributes: { identifier: repo.full_name, name: repo.name ?? repo.full_name, owner: repo.full_name.split("/")[0] ?? "" },
-                  });
-                }
-              }
-            }
-          }
-        } catch {}
+      if (oauthToken === undefined || oauthClient === undefined) {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
+      }
+      try {
+        const tokenStr = await decryptSecret(oauthToken.token);
+        repos.push(...await discoverOAuthRepositories(oauthClient, tokenStr, oauthToken.serviceProviderUser));
+      } catch {
+        // Preserve the existing discovery behavior for provider/decryption
+        // failures: the connection is valid, but currently has no results.
       }
     }
 
