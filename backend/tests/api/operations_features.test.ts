@@ -25,6 +25,7 @@ import {
 } from "../../src/lib/operations";
 import { deletePlanJsonArtifact, writePlanJsonArtifact } from "../../src/lib/plan-json";
 import { _resetModelCatalogCache, parseModelCatalog } from "../../src/lib/model-catalog";
+import { decryptSecret, isEncryptedSecret } from "../../src/lib/secrets";
 
 // Seed for the explainer provider/model catalog endpoints (keeps the API
 // tests hermetic: no live models.dev fetch, deterministic openrouter entry).
@@ -803,6 +804,39 @@ describe("admin operations settings surface", () => {
     expect(patched.data.attributes["approval-webhook"].secret).toBeUndefined();
     expect(patched.data.attributes["maintenance-windows"].enabled).toBe(true);
     expect(patched.data.attributes["maintenance-windows"].windows).toHaveLength(1);
+    const storedApproval = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "approval-webhook") });
+    const storedApprovalSecret = storedApproval?.values.secret;
+    expect(typeof storedApprovalSecret).toBe("string");
+    expect(isEncryptedSecret(storedApprovalSecret as string)).toBeTrue();
+    expect(await decryptSecret(storedApprovalSecret as string)).toBe("new-secret");
+  });
+
+  it("reads legacy plaintext settings and upgrades them on the next write", async () => {
+    const original = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "approval-webhook") });
+    try {
+      await setSettings("approval-webhook", { enabled: true, url: "https://legacy.example.com/approval", secret: "legacy-approval-secret" });
+      expect((await getSettings("approval-webhook")).secret).toBe("legacy-approval-secret");
+      const rawBeforeWrite = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "approval-webhook") });
+      expect(rawBeforeWrite?.values.secret).toBe("legacy-approval-secret");
+
+      const response = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: { type: "operations-settings", attributes: { "approval-webhook": { enabled: true } } },
+        }),
+      }));
+      expect(response.status).toBe(200);
+      const rawAfterWrite = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "approval-webhook") });
+      const storedSecret = rawAfterWrite?.values.secret;
+      expect(typeof storedSecret).toBe("string");
+      expect(isEncryptedSecret(storedSecret as string)).toBeTrue();
+      expect(await decryptSecret(storedSecret as string)).toBe("legacy-approval-secret");
+    } finally {
+      if (original === undefined) await db.delete(adminSettings).where(eq(adminSettings.id, "approval-webhook"));
+      else await db.update(adminSettings).set({ values: original.values, updatedAt: original.updatedAt }).where(eq(adminSettings.id, "approval-webhook"));
+      invalidateSettingsCache();
+    }
   });
 
   it("redacts stored secrets from the read surface", async () => {

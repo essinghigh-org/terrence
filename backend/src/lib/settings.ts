@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { adminSettings, organizations } from "../db/schema";
 import { CUSTOM_PROVIDER_ID, getCatalogProviderModels } from "./model-catalog";
+import { decryptSecret, encryptSecret, isEncryptedSecret } from "./secrets";
 
 export type Settings = Record<string, unknown>;
 
@@ -20,6 +21,56 @@ const settingDefaults: Record<string, Settings> = {
   "maintenance-windows": { enabled: false, windows: [] },
   "plan-explainer": { enabled: false, provider: null, "base-url": null, "api-key": null, model: null, "reasoning-effort": null },
 };
+
+const encryptedSettingKeys: Readonly<Record<string, readonly string[]>> = {
+  cost: ["infracost-api-key", "aws-secret-key", "gcp-credentials", "azure-client-secret"],
+  smtp: ["password"],
+  twilio: ["auth-token"],
+  oidc: ["client-secret"],
+  ldap: ["bind-password"],
+  "approval-webhook": ["secret"],
+  "plan-explainer": ["api-key"],
+};
+
+function secretKeysForGroup(group: string): ReadonlySet<string> {
+  return new Set(encryptedSettingKeys[group] ?? []);
+}
+
+async function decryptSettingsValues(group: string, storedValues: Readonly<Settings>): Promise<Settings> {
+  const secretKeys = secretKeysForGroup(group);
+  const entries = await Promise.all(Object.entries(storedValues).map(async ([key, value]): Promise<[string, unknown]> => {
+    if (!secretKeys.has(key) || typeof value !== "string") return [key, value];
+    const encrypted = isEncryptedSecret(value);
+    const decrypted = await decryptSecret(value);
+    // GCP credentials are accepted as a JSON object by the admin API. Objects
+    // written before encryption remain objects; encrypted object values are
+    // serialized as JSON and restored to that same runtime shape here.
+    if (group === "cost" && key === "gcp-credentials" && encrypted) {
+      try {
+        return [key, JSON.parse(decrypted) as unknown];
+      } catch {
+        // Preserve an encrypted non-JSON string for backwards compatibility.
+      }
+    }
+    return [key, decrypted];
+  }));
+  return Object.fromEntries(entries);
+}
+
+export async function encryptSettingsValues(group: string, values: Readonly<Settings>): Promise<Settings> {
+  const secretKeys = secretKeysForGroup(group);
+  const storedValues: Settings = { ...values };
+  for (const key of secretKeys) {
+    const value = storedValues[key];
+    if (typeof value === "string") {
+      storedValues[key] = await encryptSecret(value, { force: true });
+    } else if (value !== null && typeof value === "object") {
+      const serialized = JSON.stringify(value);
+      if (serialized !== undefined) storedValues[key] = await encryptSecret(serialized);
+    }
+  }
+  return storedValues;
+}
 
 const SETTINGS_CACHE_TTL_MS = 1_000;
 const settingsCache = new Map<string, { values: Settings; fetchedAt: number }>();
@@ -40,7 +91,7 @@ export async function getSettings(group: string): Promise<Settings> {
   await db.insert(adminSettings).values({ id: group, values: {}, updatedAt: Date.now() })
     .onConflictDoNothing();
   const row = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, group) });
-  const values = row?.values ?? {};
+  const values = await decryptSettingsValues(group, row?.values ?? {});
   settingsCache.set(group, { values, fetchedAt: Date.now() });
   return { ...defaults, ...values };
 }

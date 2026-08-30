@@ -1220,7 +1220,8 @@ async function executeRunTasks(
     });
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (typeof task.hmacKey === "string" && task.hmacKey !== "") {
-      headers["X-Tfc-Task-Signature"] = createHmac("sha512", task.hmacKey).update(payload).digest("hex");
+      const hmacKey = await decryptSecret(task.hmacKey);
+      headers["X-Tfc-Task-Signature"] = createHmac("sha512", hmacKey).update(payload).digest("hex");
     }
 
     let status = "running";

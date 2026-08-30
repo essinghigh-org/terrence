@@ -440,6 +440,7 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
     } = await import("./src/db/schema.ts");
     const { app } = await import("./src/app.ts");
     const { executeRun } = await import("./src/worker.ts");
+    const { encryptSecret } = await import("./src/lib/secrets.ts");
 
     const received = [];
     let planJsonAccessStatus;
@@ -480,6 +481,7 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
     });
     const endpoint = server.url.toString().replace(/\\/$/, "");
     const hmacKey = "worker-task-secret";
+    const encryptedHmacKey = await encryptSecret(hmacKey);
 
     await db.insert(organizations).values([
       { id: "org", name: "org" },
@@ -493,15 +495,15 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
     });
     await db.insert(runTasks).values([
       { id: "pre-task", orgId: "org", name: "pre", url: endpoint + "/pre", hmacKey },
-      { id: "post-task", orgId: "org", name: "post", url: endpoint + "/post", hmacKey },
-      { id: "pre-apply-task", orgId: "org", name: "pre-apply", url: endpoint + "/pre-apply", hmacKey },
-      { id: "post-apply-task", orgId: "org", name: "post-apply", url: endpoint + "/post-apply", hmacKey },
+      { id: "post-task", orgId: "org", name: "post", url: endpoint + "/post", hmacKey: encryptedHmacKey },
+      { id: "pre-apply-task", orgId: "org", name: "pre-apply", url: endpoint + "/pre-apply", hmacKey: encryptedHmacKey },
+      { id: "post-apply-task", orgId: "org", name: "post-apply", url: endpoint + "/post-apply", hmacKey: encryptedHmacKey },
       {
         id: "global-task",
         orgId: "org",
         name: "global",
         url: endpoint + "/global",
-        hmacKey,
+        hmacKey: encryptedHmacKey,
         globalConfiguration: { enabled: true, stages: ["pre_apply", "post_apply"], enforcementLevel: "mandatory" },
       },
       {
@@ -509,7 +511,7 @@ test("runs signed pre-plan and post-plan tasks around cost and policy stages", a
         orgId: "org",
         name: "overlap",
         url: endpoint + "/overlap",
-        hmacKey,
+        hmacKey: encryptedHmacKey,
         globalConfiguration: { enabled: true, stages: ["pre_apply"], enforcementLevel: "advisory" },
       },
       {

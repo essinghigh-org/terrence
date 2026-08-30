@@ -423,7 +423,7 @@ async function smtpNotificationSettings(
     host,
     port: typeof smtp.port === "number" ? smtp.port : 25,
     username: typeof smtp.username === "string" && smtp.username !== "" ? smtp.username : null,
-    password: typeof smtp.password === "string" ? await decryptSecret(smtp.password) : null,
+    password: typeof smtp.password === "string" ? smtp.password : null,
     senderEmail,
     auth: smtp.auth === "none" || smtp.auth === "login" || smtp.auth === "plain" ? smtp.auth : "plain",
   };
