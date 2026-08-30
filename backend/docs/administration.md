@@ -60,6 +60,16 @@ The versions section shows the installed Terraform and OpenTofu binaries. The pr
 
 The audit section queries the audit log. See [Audit trail](audit-trail).
 
+## Settings updates
+
+Site-admin settings are stored as one JSON object per settings group. Every
+read-modify-write update is serialized by group: SQLite uses an in-process
+queue, and PostgreSQL also uses the shared lease-backed `locks` table so the
+same guarantee holds across backend replicas. Different keys in concurrent
+PATCH requests are merged from the latest committed group state. If concurrent
+requests change the same key, the last request to acquire the group lock wins.
+Cache invalidation occurs after the group write commits.
+
 ## API surface
 
 - `GET /api/v2/admin/users`

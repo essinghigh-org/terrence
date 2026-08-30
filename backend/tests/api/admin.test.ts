@@ -279,6 +279,51 @@ describe("Admin Operations API contract", () => {
     await db.delete(users).where(eq(users.id, targetId));
   });
 
+  it("preserves unrelated concurrent site settings patches", async () => {
+    const original = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "site") });
+    const settingsQuery = db.query.adminSettings as unknown as {
+      findFirst: (config?: unknown) => Promise<typeof original>;
+    };
+    const originalFindFirst = settingsQuery.findFirst;
+    let siteReads = 0;
+    let releaseSecondRead!: () => void;
+    const secondRead = new Promise<void>((resolve): void => { releaseSecondRead = resolve; });
+    settingsQuery.findFirst = async (config?: unknown): Promise<typeof original> => {
+      const row = await originalFindFirst.call(settingsQuery, config);
+      if (row?.id !== "site") return row;
+      siteReads += 1;
+      if (siteReads === 1) await Promise.race([secondRead, Bun.sleep(100)]);
+      else if (siteReads === 2) releaseSecondRead();
+      return row;
+    };
+    try {
+      const initialValues = { ...(original?.values ?? {}), "concurrency-base": "base" };
+      await db.insert(adminSettings).values({ id: "site", values: initialValues, updatedAt: Date.now() })
+        .onConflictDoUpdate({ target: adminSettings.id, set: { values: initialValues, updatedAt: Date.now() } });
+      invalidateSettingsCache();
+      const [left, right] = await Promise.all([
+        request("/api/v2/admin/settings", "PATCH", { data: { attributes: { "concurrency-left": "left" } } }),
+        request("/api/v2/admin/settings", "PATCH", { data: { attributes: { "concurrency-right": "right" } } }),
+      ]);
+      expect(left.status).toBe(200);
+      expect(right.status).toBe(200);
+      invalidateSettingsCache();
+      const stored = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "site") });
+      expect(stored?.values["concurrency-base"]).toBe("base");
+      expect(stored?.values["concurrency-left"]).toBe("left");
+      expect(stored?.values["concurrency-right"]).toBe("right");
+    } finally {
+      settingsQuery.findFirst = originalFindFirst;
+      if (original === undefined) {
+        await db.delete(adminSettings).where(eq(adminSettings.id, "site"));
+      } else {
+        await db.update(adminSettings).set({ values: original.values, updatedAt: original.updatedAt })
+          .where(eq(adminSettings.id, "site"));
+      }
+      invalidateSettingsCache();
+    }
+  });
+
   it("never returns cost, Twilio, or SMTP credential material from admin settings", async () => {
     const originalCost = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "cost") });
     const originalTwilio = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "twilio") });
