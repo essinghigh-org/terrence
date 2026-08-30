@@ -86,9 +86,24 @@ function effectiveSettings(group: string, defaults: Readonly<Settings>, values: 
   return merged;
 }
 
+async function readPersistedSettings(group: string): Promise<Settings> {
+  // Initialization writes an empty map: unset keys keep inheriting the
+  // current defaults, so future default changes apply without a rewrite.
+  await db.insert(adminSettings).values({ id: group, values: {}, updatedAt: Date.now() })
+    .onConflictDoNothing();
+  const row = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, group) });
+  return decryptSettingsValues(group, row?.values ?? {});
+}
+
 /** Force the next getSettings(group) to hit the database (after admin writes). */
 export function invalidateSettingsCache(): void {
   settingsCache.clear();
+}
+
+/** Read the latest persisted settings without using the process-local cache. */
+export async function getSettingsFresh(group: string): Promise<Settings> {
+  const defaults = settingDefaults[group] ?? {};
+  return effectiveSettings(group, defaults, await readPersistedSettings(group));
 }
 
 export async function getSettings(group: string): Promise<Settings> {
@@ -97,12 +112,7 @@ export async function getSettings(group: string): Promise<Settings> {
   if (cached !== undefined && cached.fetchedAt + SETTINGS_CACHE_TTL_MS > Date.now()) {
     return effectiveSettings(group, defaults, cached.values);
   }
-  // Initialization writes an empty map: unset keys keep inheriting the
-  // current defaults, so future default changes apply without a rewrite.
-  await db.insert(adminSettings).values({ id: group, values: {}, updatedAt: Date.now() })
-    .onConflictDoNothing();
-  const row = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, group) });
-  const values = await decryptSettingsValues(group, row?.values ?? {});
+  const values = await readPersistedSettings(group);
   settingsCache.set(group, { values, fetchedAt: Date.now() });
   return effectiveSettings(group, defaults, values);
 }

@@ -1,10 +1,10 @@
 // Generic cross-replica mutex backed by the `locks` table.
 //
 // Used where a read-modify-write (or any non-reentrant) operation must not run
-// concurrently across instances — today the auth-settings update path
-// (admin/helpers.ts withAuthSettingsLock). A single-process deployment gets the
-// same serialization from the in-process Promise queue kept there; this lock
-// adds correctness when the postgres backend runs as multiple replicas.
+// concurrently across instances. Settings updates use a per-group name, while
+// other callers use a resource-specific name. A single-process deployment can
+// add its own in-process serialization; this lock adds correctness when the
+// PostgreSQL backend runs as multiple replicas.
 //
 // Claim mirrors durable_jobs / registry-sync-lease: INSERT ... ON CONFLICT DO
 // UPDATE SET ... WHERE the prior lease has expired, then read back ownership.

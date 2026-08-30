@@ -4,7 +4,7 @@ import type { users, organizations, workspaces, runs} from "../../db/schema";
 import { registryPartnerships, samlSettings, adminSettings } from "../../db/schema";
 import { eq } from "drizzle-orm";
 import { AvatarService } from "../../lib/avatars";
-import { type Settings, encryptSettingsValues, getSettings, invalidateSettingsCache, normalizePlanExplainerBaseUrl } from "../../lib/settings";
+import { type Settings, encryptSettingsValues, getSettings, getSettingsFresh, invalidateSettingsCache, normalizePlanExplainerBaseUrl } from "../../lib/settings";
 import { type DeepReadonly, apiURL } from "../../lib/utils";
 import { withDbLock } from "../../lib/db-lock";
 import type { SetObj } from "./types";
@@ -118,37 +118,55 @@ export const SAML_DEFAULTS = {
   ssoApiTokenSessionTimeout: 1_209_600,
   updatedAt: 0,
 } satisfies typeof samlSettings.$inferInsert;
-// ponytail (resolved): the in-process queue below serializes settings writes
-// within one Bun process (the original single-instance deployment model). For
-// the postgres backend, which may run as multiple replicas, the operation also
-// runs under a database-backed mutex (src/lib/db-lock.ts) so a concurrent
-// read-modify-write on another replica cannot lose updates. SQLite stays on the
-// in-process queue alone: it is the single-process deployment model, and the
-// extra DB round-trip is unnecessary there.
-let authSettingsQueue = Promise.resolve();
-export async function withAuthSettingsLock<T>(operation: () => Promise<T>): Promise<T> {
-  const previous = authSettingsQueue;
+// Serialize settings read-modify-write operations per group in one process. The
+// PostgreSQL path adds the same group key to the shared lease-backed mutex, so
+// separate replicas cannot read the same stale JSON object and overwrite one
+// another. Same-key conflicts are last-writer-wins in lock-acquisition order.
+const settingsQueues = new Map<string, Promise<void>>();
+
+async function withQueuedSettingsLock<T>(name: string, operation: () => Promise<T>): Promise<T> {
+  const previous = settingsQueues.get(name) ?? Promise.resolve();
   let release!: () => void;
-  authSettingsQueue = new Promise<void>((resolve): void => { release = resolve; });
+  const current = new Promise<void>((resolve): void => { release = resolve; });
+  settingsQueues.set(name, current);
   await previous;
   try {
-    return isPostgres
-      ? await withDbLock("auth-settings", operation)
-      : await operation();
+    return await operation();
   } finally {
     release();
+    if (settingsQueues.get(name) === current) settingsQueues.delete(name);
   }
 }
+
+/** Run a settings update while holding the lock for its settings group. */
+export async function withSettingsLock<T>(group: string, operation: () => Promise<T>): Promise<T> {
+  const name = `settings:${group}`;
+  return withQueuedSettingsLock(name, async (): Promise<T> => isPostgres
+    ? withDbLock(name, operation)
+    : operation());
+}
+
+/** Serialize authentication configuration checks across all auth providers. */
+export async function withAuthSettingsLock<T>(operation: () => Promise<T>): Promise<T> {
+  return withQueuedSettingsLock("auth-settings", async (): Promise<T> => isPostgres
+    ? withDbLock("auth-settings", operation)
+    : operation());
+}
+
 export async function updateSettings(group: string, attrs: Settings): Promise<Settings> {
-  const current = await getSettings(group);
-  const values = { ...current };
-  for (const key of Object.keys(attrs)) {
-    if (attrs[key] !== undefined) values[key] = attrs[key];
-  }
-  const storedValues = await encryptSettingsValues(group, values);
-  await db.insert(adminSettings).values({ id: group, values: storedValues, updatedAt: Date.now() }).onConflictDoUpdate({ target: adminSettings.id, set: { values: storedValues, updatedAt: Date.now() } });
-  invalidateSettingsCache();
-  return values;
+  return withSettingsLock(group, async (): Promise<Settings> => {
+    const current = await getSettingsFresh(group);
+    // A null-prototype target prevents a JSON attribute named `__proto__` from
+    // invoking Object.prototype's setter during the read-modify-write merge.
+    const values = Object.assign(Object.create(null) as Settings, current);
+    for (const key of Object.keys(attrs)) {
+      if (attrs[key] !== undefined) values[key] = attrs[key];
+    }
+    const storedValues = await encryptSettingsValues(group, values);
+    await db.insert(adminSettings).values({ id: group, values: storedValues, updatedAt: Date.now() }).onConflictDoUpdate({ target: adminSettings.id, set: { values: storedValues, updatedAt: Date.now() } });
+    invalidateSettingsCache();
+    return values;
+  });
 }
 export function settingResource(id: string, values: Settings): Record<string, unknown> {
   return { data: { id, type: id === "settings" ? "settings" : id, attributes: values } };

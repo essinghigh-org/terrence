@@ -14,7 +14,8 @@ import {
   adminSettings,
   user2FA,
 } from "../../src/db/schema";
-import { invalidateSettingsCache } from "../../src/lib/settings";
+import { getSettings, invalidateSettingsCache } from "../../src/lib/settings";
+import { updateSettings } from "../../src/routes/admin/helpers";
 import { decryptSecret, isEncryptedSecret } from "../../src/lib/secrets";
 
 describe("Admin Operations API contract", () => {
@@ -277,6 +278,103 @@ describe("Admin Operations API contract", () => {
     expect(issued?.expiresAt).toBeGreaterThan(Date.now());
     await db.delete(apiTokens).where(eq(apiTokens.token, tokenHash));
     await db.delete(users).where(eq(users.id, targetId));
+  });
+
+  it("preserves unrelated concurrent site settings patches", async () => {
+    const original = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "site") });
+    const settingsQuery = db.query.adminSettings as unknown as {
+      findFirst: (config?: unknown) => Promise<typeof original>;
+    };
+    const originalFindFirst = settingsQuery.findFirst;
+    let siteReads = 0;
+    let releaseSecondRead!: () => void;
+    const secondRead = new Promise<void>((resolve): void => { releaseSecondRead = resolve; });
+    settingsQuery.findFirst = async (config?: unknown): Promise<typeof original> => {
+      const row = await originalFindFirst.call(settingsQuery, config);
+      if (row?.id !== "site") return row;
+      siteReads += 1;
+      if (siteReads === 1) await Promise.race([secondRead, Bun.sleep(100)]);
+      else if (siteReads === 2) releaseSecondRead();
+      return row;
+    };
+    try {
+      const initialValues = { ...(original?.values ?? {}), "concurrency-base": "base" };
+      await db.insert(adminSettings).values({ id: "site", values: initialValues, updatedAt: Date.now() })
+        .onConflictDoUpdate({ target: adminSettings.id, set: { values: initialValues, updatedAt: Date.now() } });
+      invalidateSettingsCache();
+      const [left, right] = await Promise.all([
+        request("/api/v2/admin/settings", "PATCH", { data: { attributes: { "concurrency-left": "left" } } }),
+        request("/api/v2/admin/settings", "PATCH", { data: { attributes: { "concurrency-right": "right" } } }),
+      ]);
+      expect(left.status).toBe(200);
+      expect(right.status).toBe(200);
+      invalidateSettingsCache();
+      const stored = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "site") });
+      expect(stored?.values["concurrency-base"]).toBe("base");
+      expect(stored?.values["concurrency-left"]).toBe("left");
+      expect(stored?.values["concurrency-right"]).toBe("right");
+    } finally {
+      settingsQuery.findFirst = originalFindFirst;
+      if (original === undefined) {
+        await db.delete(adminSettings).where(eq(adminSettings.id, "site"));
+      } else {
+        await db.update(adminSettings).set({ values: original.values, updatedAt: original.updatedAt })
+          .where(eq(adminSettings.id, "site"));
+      }
+      invalidateSettingsCache();
+    }
+  });
+
+  it("merges settings from persisted state when the local cache is stale", async () => {
+    const original = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "site") });
+    try {
+      const initialValues = { ...(original?.values ?? {}), "concurrency-cache-base": "base" };
+      await db.insert(adminSettings).values({ id: "site", values: initialValues, updatedAt: Date.now() })
+        .onConflictDoUpdate({ target: adminSettings.id, set: { values: initialValues, updatedAt: Date.now() } });
+      invalidateSettingsCache();
+      await getSettings("site");
+
+      // Simulate another backend replica committing a change after this
+      // process populated its one-second settings cache.
+      const externalValues = { ...initialValues, "concurrency-external": "external" };
+      await db.update(adminSettings).set({ values: externalValues, updatedAt: Date.now() })
+        .where(eq(adminSettings.id, "site"));
+
+      const response = await request("/api/v2/admin/settings", "PATCH", {
+        data: { attributes: { "concurrency-local": "local" } },
+      });
+      expect(response.status).toBe(200);
+      invalidateSettingsCache();
+      const stored = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "site") });
+      expect(stored?.values["concurrency-external"]).toBe("external");
+      expect(stored?.values["concurrency-local"]).toBe("local");
+    } finally {
+      if (original === undefined) {
+        await db.delete(adminSettings).where(eq(adminSettings.id, "site"));
+      } else {
+        await db.update(adminSettings).set({ values: original.values, updatedAt: original.updatedAt })
+          .where(eq(adminSettings.id, "site"));
+      }
+      invalidateSettingsCache();
+    }
+  });
+
+  it("does not let prototype keys alter merged settings", async () => {
+    const original = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "site") });
+    try {
+      const attributes = JSON.parse("{\"__proto__\":{\"polluted\":true},\"concurrency-safe\":\"safe\"}") as Record<string, unknown>;
+      const updated = await updateSettings("site", attributes);
+      expect("polluted" in updated).toBeFalse();
+      expect(updated["concurrency-safe"]).toBe("safe");
+    } finally {
+      if (original === undefined) {
+        await db.delete(adminSettings).where(eq(adminSettings.id, "site"));
+      } else {
+        await db.update(adminSettings).set({ values: original.values, updatedAt: original.updatedAt })
+          .where(eq(adminSettings.id, "site"));
+      }
+      invalidateSettingsCache();
+    }
   });
 
   it("never returns cost, Twilio, or SMTP credential material from admin settings", async () => {
