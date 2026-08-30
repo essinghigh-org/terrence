@@ -23,7 +23,7 @@ function changeInput(element: HTMLElement, value: string): void {
 
 function LocationProbe(): React.JSX.Element {
   const location = useLocation();
-  return <span>{location.pathname}{location.search}</span>;
+  return <span data-testid="location">{location.pathname}{location.search}</span>;
 }
 
 const moduleResource = (canManage = false) => ({
@@ -130,7 +130,12 @@ test("browses and filters registry cards with distinct module permissions", asyn
     expect(latest.searchParams.get("filter[provider]")).toBe("aws");
     expect(latest.searchParams.get("filter[publishing_mechanism]")).toBe("vcs");
     expect(latest.searchParams.get("sort")).toBe("name");
-    expect(view.getByText("/app/acme/registry?q=net&provider=aws&publishing=vcs&sort=name")).toBeTruthy();
+    const location = new URL(view.getByTestId("location").textContent ?? "", "http://localhost");
+    expect(location.pathname).toBe("/app/acme/registry");
+    expect(location.searchParams.get("q")).toBe("net");
+    expect(location.searchParams.get("provider")).toBe("aws");
+    expect(location.searchParams.get("publishing")).toBe("vcs");
+    expect(location.searchParams.get("sort")).toBe("name");
   });
   fireEvent.click(view.getByRole("button", { name: "Next" }));
   await waitFor((): void => { expect(requests.some((url): boolean => url.includes("page%5Bnumber%5D=2"))).toBeTrue(); });
@@ -203,7 +208,7 @@ test("suppresses provider browse controls for a confirmed empty collection", asy
   const view = render(<MemoryRouter initialEntries={["/app/acme/registry?tab=providers"]}><Routes><Route path="/app/:orgName/registry" element={<Registry />} /></Routes></MemoryRouter>);
   await view.findByText("No private providers");
   expect(view.queryByRole("searchbox", { name: "Search registry" })).toBeNull();
-  expect(view.queryByRole("section", { name: "Registry browse controls" })).toBeNull();
+  expect(view.queryByRole("region", { name: "Registry browse controls" })).toBeNull();
 });
 
 test("renders version-specific module documentation, usage, lifecycle, and keyboard tabs", async () => {

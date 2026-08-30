@@ -273,6 +273,19 @@ function SearchControl({
   onChange: (value: string) => void;
   onClear: () => void;
 }>): React.JSX.Element {
+  const [draft, setDraft] = useState(value);
+
+  useEffect((): void => {
+    setDraft(value);
+  }, [value]);
+
+  useEffect((): (() => void) => {
+    const timeout = window.setTimeout((): void => {
+      if (draft !== value) onChange(draft);
+    }, 250);
+    return (): void => { window.clearTimeout(timeout); };
+  }, [draft, onChange, value]);
+
   return (
     <div className="relative min-w-0 flex-1">
       <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -281,17 +294,17 @@ function SearchControl({
         className="h-10 pl-10 pr-10"
         placeholder={activeTab === "modules" ? "Search modules, providers, or namespaces" : "Search providers"}
         type="search"
-        value={value}
-        onInput={(event): void => { onChange(event.currentTarget.value); }}
+        value={draft}
+        onInput={(event): void => { setDraft(event.currentTarget.value); }}
       />
-      {value !== "" && (
+      {draft !== "" && (
         <Button
           aria-label="Clear registry search"
           className="absolute right-2 top-1/2 -translate-y-1/2"
           size="icon-xs"
           type="button"
           variant="ghost"
-          onClick={onClear}
+          onClick={(): void => { setDraft(""); onClear(); }}
         >
           <X aria-hidden="true" />
         </Button>
