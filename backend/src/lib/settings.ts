@@ -10,7 +10,7 @@ const settingDefaults: Record<string, Settings> = {
   general: { "local-auth-enabled": true, "limit-user-organization-creation": false, "api-rate-limiting-enabled": false, "api-rate-limit": 30, "plan-timeout": 3600, "apply-timeout": 3600, "send-passing-statuses-for-untriggered-speculative-plans": false, "allow-speculative-plans-on-pull-requests-from-forks": false, "default-remote-state-access": false, "trusted-client-ip-headers": [] },
   retention: { "delete-older-than-n-days": null },
   cost: { enabled: false, "infracost-api-key": null, "aws-access-key-id": null, "aws-secret-key": null, "gcp-credentials": null, "azure-client-id": null, "azure-client-secret": null, "azure-subscription-id": null, "azure-tenant-id": null },
-  smtp: { enabled: false, host: null, port: 25, username: null, password: null, "sender-email": null, auth: "plain" },
+  smtp: { enabled: false, host: null, port: 25, username: null, password: null, "sender-email": null, auth: "plain", encryption: "starttls" },
   twilio: { enabled: false, "account-sid": null, "auth-token": null, "from-number": null },
   customization: { "support-email-address": null, "login-help": null, footer: null },
   saml: { "link-by-email": false },
@@ -75,6 +75,17 @@ export async function encryptSettingsValues(group: string, values: Readonly<Sett
 const SETTINGS_CACHE_TTL_MS = 1_000;
 const settingsCache = new Map<string, { values: Settings; fetchedAt: number }>();
 
+function effectiveSettings(group: string, defaults: Readonly<Settings>, values: Readonly<Settings>): Settings {
+  const merged = { ...defaults, ...values };
+  // Older SMTP rows have no encryption key. Keep port 465's established
+  // implicit-TLS behavior while making every other legacy configuration
+  // require STARTTLS instead of silently downgrading.
+  if (group === "smtp" && (values.encryption === undefined || values.encryption === null)) {
+    merged.encryption = merged.port === 465 ? "tls" : "starttls";
+  }
+  return merged;
+}
+
 /** Force the next getSettings(group) to hit the database (after admin writes). */
 export function invalidateSettingsCache(): void {
   settingsCache.clear();
@@ -84,7 +95,7 @@ export async function getSettings(group: string): Promise<Settings> {
   const defaults = settingDefaults[group] ?? {};
   const cached = settingsCache.get(group);
   if (cached !== undefined && cached.fetchedAt + SETTINGS_CACHE_TTL_MS > Date.now()) {
-    return { ...defaults, ...cached.values };
+    return effectiveSettings(group, defaults, cached.values);
   }
   // Initialization writes an empty map: unset keys keep inheriting the
   // current defaults, so future default changes apply without a rewrite.
@@ -93,7 +104,7 @@ export async function getSettings(group: string): Promise<Settings> {
   const row = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, group) });
   const values = await decryptSettingsValues(group, row?.values ?? {});
   settingsCache.set(group, { values, fetchedAt: Date.now() });
-  return { ...defaults, ...values };
+  return effectiveSettings(group, defaults, values);
 }
 
 /** Resolve the one effective cost-estimation gate used by API and workers. */

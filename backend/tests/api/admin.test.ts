@@ -355,6 +355,39 @@ describe("Admin Operations API contract", () => {
     }
   });
 
+  it("requires an explicit SMTP transport policy and preserves port-465 TLS defaults", async () => {
+    const originalSmtp = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "smtp") });
+    try {
+      await db.delete(adminSettings).where(eq(adminSettings.id, "smtp"));
+      invalidateSettingsCache();
+
+      const defaults = await request("/api/v2/admin/smtp-settings");
+      expect(defaults.status).toBe(200);
+      expect((await defaults.json()).data.attributes.encryption).toBe("starttls");
+
+      const invalid = await request("/api/v2/admin/smtp-settings", "PATCH", {
+        data: { attributes: { encryption: "opportunistic" } },
+      });
+      expect(invalid.status).toBe(422);
+
+      const plaintext = await request("/api/v2/admin/smtp-settings", "PATCH", {
+        data: { attributes: { encryption: "plain" } },
+      });
+      expect(plaintext.status).toBe(200);
+      expect((await plaintext.json()).data.attributes.encryption).toBe("plain");
+
+      await db.update(adminSettings).set({ values: { port: 465 }, updatedAt: Date.now() }).where(eq(adminSettings.id, "smtp"));
+      invalidateSettingsCache();
+      const legacyPort465 = await request("/api/v2/admin/smtp-settings");
+      expect(legacyPort465.status).toBe(200);
+      expect((await legacyPort465.json()).data.attributes.encryption).toBe("tls");
+    } finally {
+      if (originalSmtp === undefined) await db.delete(adminSettings).where(eq(adminSettings.id, "smtp"));
+      else await db.update(adminSettings).set({ values: originalSmtp.values, updatedAt: originalSmtp.updatedAt }).where(eq(adminSettings.id, "smtp"));
+      invalidateSettingsCache();
+    }
+  });
+
   it("gives a site admin full access without an organization membership", async () => {
     const list = await request("/api/v2/organizations", "GET", undefined, unscopedAdminToken);
     expect(list.status).toBe(200);

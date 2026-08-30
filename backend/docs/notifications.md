@@ -23,9 +23,25 @@ Configure SMTP in the administration settings:
 | Setting | Purpose |
 |---|---|
 | Host and port | The SMTP server |
-| TLS mode | StartTLS or implicit TLS |
+| Encryption | `starttls`, implicit `tls`, or explicitly insecure `plain` |
 | Username and password | Authentication |
 | From address | The sender shown to recipients |
+
+`starttls` is the default for non-465 ports. Terrence sends `STARTTLS` after
+the initial `EHLO` and fails delivery if the server does not accept the
+upgrade; it never sends `AUTH` after a rejected or unsupported STARTTLS
+response. `tls` starts an encrypted connection before the SMTP greeting and is
+the normal choice for port 465.
+
+`plain` disables STARTTLS and sends the SMTP session without transport
+encryption. It is an explicit insecure opt-in for trusted local relays only;
+credentials are not protected in transit. Existing settings without an
+encryption value retain implicit TLS on port 465 and use required STARTTLS on
+other ports.
+
+For anonymous relays, select `None` as the authentication type. Terrence then
+sends no `AUTH` command, while the transport still requires STARTTLS unless
+`plain` is explicitly selected.
 
 A test message confirms the configuration.
 
@@ -57,6 +73,8 @@ Notifications are queued and delivered asynchronously. A failed delivery logs th
 
 ## API surface
 
+- `GET /api/v2/admin/smtp-settings`
+- `PATCH /api/v2/admin/smtp-settings`
 - `GET /api/v2/organizations/:org_name/notification-configurations`
 - `POST /api/v2/organizations/:org_name/notification-configurations`
 - `PATCH /api/v2/notification-configurations/:id`

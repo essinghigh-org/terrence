@@ -18,12 +18,18 @@ type SmtpAttributes = {
   password?: string | null;
   "sender-email"?: string | null;
   auth?: string | null;
+  encryption?: string | null;
 };
 
 const AUTH_OPTIONS: readonly Readonly<{ value: string; label: string }>[] = [
   { value: "none", label: "None" },
   { value: "plain", label: "Plain" },
   { value: "login", label: "Login" },
+];
+const ENCRYPTION_OPTIONS: readonly Readonly<{ value: string; label: string }>[] = [
+  { value: "starttls", label: "STARTTLS (required)" },
+  { value: "tls", label: "Implicit TLS" },
+  { value: "plain", label: "Plaintext (insecure)" },
 ];
 
 export function AdminSmtpSettings(): React.JSX.Element {
@@ -35,6 +41,7 @@ export function AdminSmtpSettings(): React.JSX.Element {
   const [port, setPort] = useState("25");
   const [senderEmail, setSenderEmail] = useState("");
   const [auth, setAuth] = useState("plain");
+  const [encryption, setEncryption] = useState("starttls");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [testEmail, setTestEmail] = useState("");
@@ -58,10 +65,17 @@ export function AdminSmtpSettings(): React.JSX.Element {
       const attrs = response.data?.attributes;
       setEnabled(attrs?.enabled === true);
       setHost(isString(attrs?.host) ? attrs.host : "");
-      setPort(attrs !== undefined && isNumber(attrs.port) ? String(attrs.port) : "25");
+      const loadedPort = attrs !== undefined && isNumber(attrs.port) ? attrs.port : 25;
+      setPort(String(loadedPort));
       const senderEmail = attrs?.["sender-email"];
       setSenderEmail(isString(senderEmail) ? senderEmail : "");
       setAuth(isString(attrs?.auth) && attrs.auth !== "" ? attrs.auth : "plain");
+      const loadedEncryption = attrs?.encryption;
+      setEncryption(
+        isString(loadedEncryption) && ENCRYPTION_OPTIONS.some((option): boolean => option.value === loadedEncryption)
+          ? loadedEncryption
+          : loadedPort === 465 ? "tls" : "starttls",
+      );
       setUsername(isString(attrs?.username) ? attrs.username : "");
       setPassword("");
       setTestEmail("");
@@ -99,6 +113,7 @@ export function AdminSmtpSettings(): React.JSX.Element {
         port: portNumber,
         "sender-email": senderEmail.trim(),
         auth,
+        encryption,
         username: username.trim(),
         ...(password.trim() !== "" ? { password } : undefined),
       };
@@ -195,6 +210,15 @@ export function AdminSmtpSettings(): React.JSX.Element {
                   </Select>
                 </div>
                 <div className="space-y-2">
+                  <label className="text-sm font-medium" htmlFor="smtp-encryption">Encryption</label>
+                  <Select id="smtp-encryption" name="encryption" value={encryption} onValueChange={setEncryption}>
+                    {ENCRYPTION_OPTIONS.map((option): React.JSX.Element => (
+                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                    ))}
+                  </Select>
+                  <p className="text-xs text-muted-foreground">STARTTLS is required by default. Use implicit TLS for port 465.</p>
+                </div>
+                <div className="space-y-2">
                   <label className="text-sm font-medium" htmlFor="smtp-username">Username</label>
                   <Input id="smtp-username" name="username" autoComplete="username" value={username} onChange={(e): void => { setUsername(e.target.value); }} placeholder="SMTP username" />
                 </div>
@@ -208,6 +232,11 @@ export function AdminSmtpSettings(): React.JSX.Element {
                 </div>
               </div>
 
+              {encryption === "plain" && (
+                <div role="alert" className="rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning-foreground">
+                  Plaintext SMTP is insecure. Use this only with a trusted local relay; credentials are not protected in transit.
+                </div>
+              )}
               {saveError !== "" && <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{saveError}</div>}
               {testError !== "" && <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{testError}</div>}
               {saved && <div role="status" aria-live="polite" className="text-sm text-success">Saved</div>}

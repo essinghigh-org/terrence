@@ -22,7 +22,7 @@ import { fetchResolvedExternalUrl, resolveExternalUrl } from "./url-safety";
 import { decryptSecret } from "./secrets";
 import { _resetSharedDeliveryState as resetSharedStateImpl, sharedBreakerRecordFailure, sharedBreakerRecordSuccess, sharedDedupRecord, sharedDedupSuppressed } from "./notification-state";
 import { getSettings } from "./settings";
-import { sendEmail } from "./smtp";
+import { isSmtpEncryption, sendEmail } from "./smtp";
 
 type NotificationConfiguration = Readonly<
   Omit<typeof notificationConfigurations.$inferSelect, "triggers">
@@ -426,6 +426,7 @@ async function smtpNotificationSettings(
     password: typeof smtp.password === "string" ? smtp.password : null,
     senderEmail,
     auth: smtp.auth === "none" || smtp.auth === "login" || smtp.auth === "plain" ? smtp.auth : "plain",
+    encryption: isSmtpEncryption(smtp.encryption) ? smtp.encryption : null,
   };
 }
 
