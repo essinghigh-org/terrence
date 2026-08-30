@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 import { RegistrySettingsRedirect } from "../src/App";
-import { ProviderIcon } from "../src/components/ProviderIcon";
+import { clearProviderIconCacheForTests, ProviderIcon } from "../src/components/ProviderIcon";
 import { Registry } from "../src/views/Registry";
 import { RegistryModuleDetail } from "../src/views/RegistryModuleDetail";
 import { isString } from "../src/lib/type-guards";
@@ -33,6 +33,7 @@ const moduleResource = (canManage = false) => ({
     name: "network",
     namespace: "acme",
     provider: "aws",
+    "provider-source": "hashicorp/aws",
     description: "Reusable network foundations.",
     status: "setup_complete",
     "publishing-mechanism": "vcs",
@@ -91,6 +92,7 @@ const versionResource = (id: string, version: string, readme: string) => ({
 
 afterEach((): void => {
   cleanup();
+  clearProviderIconCacheForTests();
   globalThis.fetch = originalFetch;
 });
 
@@ -117,6 +119,10 @@ test("browses and filters registry cards with distinct module permissions", asyn
   expect(view.getByText("Git tag")).toBeTruthy();
   expect(view.getByText(/Ready · Synced/)).toBeTruthy();
   await waitFor((): void => { expect(view.getByAltText("aws provider logo")).toBeTruthy(); });
+  const moduleIconRequest = requests.find((url): boolean => url.startsWith("/api/v2/provider-icons?"));
+  const moduleIconNames = new URL(moduleIconRequest ?? "", "http://terrence.test").searchParams.getAll("provider-name");
+  expect(moduleIconNames).toContain("hashicorp/aws");
+  expect(moduleIconNames).not.toContain("aws");
   expect(view.queryByRole("button", { name: "Publish module" })).toBeNull();
   expect(view.getByRole("option", { name: "azurerm" })).toBeTruthy();
 
@@ -169,6 +175,58 @@ test("renders the provider icon fallback after artwork loading fails", async () 
   const image = await view.findByAltText("widget provider logo");
   fireEvent.error(image);
   await waitFor((): void => { expect(view.getByTestId("provider-icon-fallback")).toBeTruthy(); });
+});
+
+test("uses provider dependency sources without guessing namespaces", async () => {
+  const requests: string[] = [];
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    requests.push(url);
+    if (url.startsWith("/api/v2/provider-icons?")) {
+      const parsed = new URL(url, "http://terrence.test");
+      const names = parsed.searchParams.getAll("provider-name");
+      return json({ data: names.map((name) => ({
+        id: name,
+        type: "provider-icons",
+        attributes: {
+          "icon-url": name.startsWith("registry.opentofu.org/")
+            ? null
+            : `/api/v2/provider-icons/${name.startsWith("registry.terraform.io/") ? name : `registry.terraform.io/${name}`}`,
+        },
+      })) });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const view = render(
+    <div>
+      <ProviderIcon alt="cloudflare provider logo" providerName="  REGISTRY.TERRAFORM.IO/Cloudflare/Cloudflare  " />
+      <ProviderIcon alt="github provider logo" providerName="registry.terraform.io/integrations/github" />
+      <ProviderIcon alt="tfe provider logo" providerName="registry.terraform.io/hashicorp/tfe" />
+      <ProviderIcon alt="community provider logo" providerName="acme/widgets" />
+      <ProviderIcon alt="opentofu provider logo" providerName="registry.opentofu.org/acme/widgets" />
+    </div>,
+  );
+
+  await waitFor((): void => { expect(requests).toHaveLength(1); });
+  const requestUrl = new URL(requests[0] ?? "", "http://terrence.test");
+  expect(requestUrl.searchParams.getAll("provider-name").sort()).toEqual([
+    "acme/widgets",
+    "registry.opentofu.org/acme/widgets",
+    "registry.terraform.io/cloudflare/cloudflare",
+    "registry.terraform.io/hashicorp/tfe",
+    "registry.terraform.io/integrations/github",
+  ]);
+  expect(requests[0]).not.toContain("hashicorp%2Fcloudflare");
+  expect(requests[0]).not.toContain("hashicorp%2Fgithub");
+
+  await waitFor((): void => {
+    expect(view.getByAltText("cloudflare provider logo").getAttribute("src")).toBe("/api/v2/provider-icons/registry.terraform.io/cloudflare/cloudflare");
+    expect(view.getByAltText("github provider logo").getAttribute("src")).toBe("/api/v2/provider-icons/registry.terraform.io/integrations/github");
+    expect(view.getByAltText("tfe provider logo").getAttribute("src")).toBe("/api/v2/provider-icons/registry.terraform.io/hashicorp/tfe");
+    expect(view.getByAltText("community provider logo").getAttribute("src")).toBe("/api/v2/provider-icons/registry.terraform.io/acme/widgets");
+  });
+  expect(view.queryByAltText("opentofu provider logo")).toBeNull();
 });
 
 test("shows loading, retryable errors, and an honest empty state", async () => {

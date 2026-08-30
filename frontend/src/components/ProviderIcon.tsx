@@ -5,14 +5,9 @@ const iconCache = new Map<string, string | null>();
 let inflight: Promise<void> | null = null;
 const pending = new Set<string>();
 
-function normalizeProvider(providerName: string | null | undefined): string | null {
-  if (typeof providerName !== "string" || providerName === "") return null;
-  const parts = providerName.trim().split("/").filter((p): boolean => p !== "");
-  if (parts.length < 2) return null;
-  const name = parts[parts.length - 1];
-  const ns = parts[parts.length - 2];
-  if (name === undefined || ns === undefined || !/^[a-z0-9][a-z0-9-_]{0,63}$/i.test(ns) || !/^[a-z0-9][a-z0-9-_]{0,63}$/i.test(name)) return null;
-  return `${ns.toLowerCase()}/${name.toLowerCase()}`;
+function providerKey(providerName: string | null | undefined): string | null {
+  const key = providerName?.trim().toLowerCase() ?? "";
+  return key === "" ? null : key;
 }
 
 async function flushPending(): Promise<void> {
@@ -25,9 +20,8 @@ async function flushPending(): Promise<void> {
       data?: { id: string; attributes: { "icon-url": string | null } }[];
     };
     for (const item of res.data ?? []) {
-      const key = item.id.toLowerCase();
-      const url = item.attributes["icon-url"] ?? null;
-      iconCache.set(key, url);
+      const key = providerKey(item.id);
+      if (key !== null) iconCache.set(key, item.attributes["icon-url"] ?? null);
     }
     for (const key of batch) {
       if (!iconCache.has(key)) iconCache.set(key, null);
@@ -66,7 +60,7 @@ function scheduleFetch(key: string): void {
 }
 
 export function useProviderIcon(providerName: string | null | undefined): string | null | undefined {
-  const key = normalizeProvider(providerName);
+  const key = providerKey(providerName);
   const [url, setUrl] = useState<string | null | undefined>((): string | null | undefined => (key === null ? null : iconCache.get(key)));
 
   useEffect((): (() => void) | undefined => {

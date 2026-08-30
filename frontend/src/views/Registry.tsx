@@ -139,11 +139,6 @@ function moduleRepositoryLabel(module: RegistryModule): string {
     ?? (module.publishingMechanism === "manual" ? "Terrence API" : "Repository pending");
 }
 
-function providerIconName(provider: string): string {
-  const value = provider.trim();
-  return value.includes("/") ? value : `hashicorp/${value}`;
-}
-
 function ModuleCard({ orgName, module }: Readonly<{ orgName: string; module: RegistryModule }>): React.JSX.Element {
   const latest = module.versions.find((version): boolean => version.status === "ok" && !version.revoked);
   const repositoryLabel = moduleRepositoryLabel(module);
@@ -164,7 +159,7 @@ function ModuleCard({ orgName, module }: Readonly<{ orgName: string; module: Reg
                 <ProviderIcon
                   alt={`${module.provider} provider logo`}
                   fallback={<Package aria-hidden="true" />}
-                  providerName={providerIconName(module.provider)}
+                  providerName={module.providerSource}
                   size={24}
                 />
               </div>

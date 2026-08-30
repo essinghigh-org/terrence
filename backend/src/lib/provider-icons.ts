@@ -1,25 +1,31 @@
-// Provider icons (registry.terraform.io -> same-origin avatar proxy)
+// Provider icons (registry.terraform.io -> dedicated same-origin image route)
 //
 // TFE shows a provider logo left of each resource in the plan. The public
 // registry is the source: `GET /v1/providers/{ns}/{name}` returns
 // `logo_url` (often `/images/providers/aws.png` or an absolute github avatar
-// URL). We reuse the hardened AvatarService for the image fetch + cache so
-// the browser never loads a third-party URL and no new CSP host is needed.
+// URL). We reuse the hardened AvatarService internally for the image fetch and
+// cache so the browser never loads a third-party URL and no new CSP host is
+// needed. The browser-facing URL remains /api/v2/provider-icons/<hostname>/<ns>/<name>;
+// it must not expose the generic avatar endpoint as the provider icon API.
 //
-// Flow: normalize provider_name ("registry.terraform.io/hashicorp/aws" ->
-// "hashicorp/aws") -> registry API (4s timeout, 24h memo) -> absolute logo
-// URL -> AvatarService.resolveUrl("provider-icon", url) -> same-origin
-// `/api/v2/avatars/<key>` that the existing avatar handler serves.
+// Flow: parse the provider source (two-part sources use Terraform's documented
+// default registry; explicit hostnames are retained) -> Terraform Registry API
+// (4s timeout, 24h memo) -> absolute logo URL -> AvatarService cache. The
+// provider-icon image handler delegates to that cache without changing the
+// public route identity.
 import { AvatarService } from "./avatars";
+import {
+  DEFAULT_PROVIDER_REGISTRY_HOST,
+  normalizeProviderSource,
+  parseProviderSource,
+  type ProviderSource,
+} from "./provider-source";
 
-const REGISTRY = "https://registry.terraform.io";
+const REGISTRY = `https://${DEFAULT_PROVIDER_REGISTRY_HOST}`;
 const FETCH_TIMEOUT_MS = 4_000;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const NEGATIVE_TTL_MS = 10 * 60 * 1000; // transient fetch failures: retry soon
 const MAX_CACHE_ENTRIES = 512;
-const NS_RE = /^[a-z0-9][a-z0-9-_]{0,63}$/i;
-const NAME_RE = /^[a-z0-9][a-z0-9-_]{0,63}$/i;
-
 type CacheEntry = Readonly<{ url: string | null; expiresAt: number }>;
 const cache = new Map<string, CacheEntry>();
 const inflightByKey = new Map<string, Promise<string | null>>();
@@ -60,23 +66,16 @@ function setCache(key: string, url: string | null, ttlMs: number): void {
   }
 }
 
+/** Public compatibility name retained for the provider-icons route/tests. */
 export function normalizeProvider(providerName: string | null | undefined): string | null {
-  if (typeof providerName !== "string" || providerName === "") return null;
-  const trimmed = providerName.trim();
-  if (trimmed === "") return null;
-  // Take last two path segments so both "hashicorp/aws" and
-  // "registry.terraform.io/hashicorp/aws" map to "hashicorp/aws".
-  const parts = trimmed.split("/").filter((p): boolean => p !== "");
-  if (parts.length === 0) return null;
-  if (parts.length === 1) {
-    const name = parts[0]!;
-    if (!NAME_RE.test(name)) return null;
-    return null; // single label without namespace is not a registry provider
-  }
-  const name = parts[parts.length - 1]!;
-  const namespace = parts[parts.length - 2]!;
-  if (!NS_RE.test(namespace) || !NAME_RE.test(name)) return null;
-  return `${namespace.toLowerCase()}/${name.toLowerCase()}`;
+  return normalizeProviderSource(providerName);
+}
+
+/** Build the browser-facing URL for one canonical provider source. */
+export function providerIconPath(providerName: string | null | undefined): string | null {
+  const source = parseProviderSource(providerName);
+  if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
+  return `/api/v2/provider-icons/${encodeURIComponent(source.hostname)}/${encodeURIComponent(source.namespace)}/${encodeURIComponent(source.name)}`;
 }
 
 function absoluteLogoUrl(logoUrl: string): string | null {
@@ -93,31 +92,31 @@ function absoluteLogoUrl(logoUrl: string): string | null {
   }
 }
 
-async function fetchLogoUrl(nsName: string): Promise<string | null> {
+async function fetchLogoUrl(source: ProviderSource): Promise<string | null> {
+  if (source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
   await acquireRegistrySlot();
   try {
-  const [ns, name] = nsName.split("/") as [string, string];
-  const url = `${REGISTRY}/v1/providers/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`;
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      headers: { Accept: "application/json", "User-Agent": "terrence/provider-icons" },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-  } catch {
-    return null;
-  }
-  if (!res.ok) return null;
-  let body: unknown;
-  try {
-    body = await res.json();
-  } catch {
-    return null;
-  }
-  if (body === null || typeof body !== "object") return null;
-  const rec = body as Record<string, unknown>;
-  const raw = rec.logo_url ?? rec["logo-url"];
-  if (typeof raw !== "string") return null;
+    const url = `${REGISTRY}/v1/providers/${encodeURIComponent(source.namespace)}/${encodeURIComponent(source.name)}`;
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { Accept: "application/json", "User-Agent": "terrence/provider-icons" },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+    } catch {
+      return null;
+    }
+    if (!res.ok) return null;
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      return null;
+    }
+    if (body === null || typeof body !== "object") return null;
+    const rec = body as Record<string, unknown>;
+    const raw = rec.logo_url ?? rec["logo-url"];
+    if (typeof raw !== "string") return null;
     return absoluteLogoUrl(raw);
   } finally {
     releaseRegistrySlot();
@@ -125,8 +124,9 @@ async function fetchLogoUrl(nsName: string): Promise<string | null> {
 }
 
 export async function resolveProviderIconUrl(providerName: string | null | undefined): Promise<string | null> {
-  const key = normalizeProvider(providerName);
-  if (key === null) return null;
+  const source = parseProviderSource(providerName);
+  if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
+  const key = `${source.hostname}/${source.namespace}/${source.name}`;
   const now = Date.now();
   const hit = cache.get(key);
   if (hit !== undefined && now < hit.expiresAt) {
@@ -136,7 +136,7 @@ export async function resolveProviderIconUrl(providerName: string | null | undef
   const existing = inflightByKey.get(key);
   if (existing !== undefined) return existing;
   const run = (async (): Promise<string | null> => {
-    const logoUrl = await fetchLogoUrl(key);
+    const logoUrl = await fetchLogoUrl(source);
     const avatarUrl = logoUrl === null ? null : AvatarService.resolveUrl("provider-icon", logoUrl);
     // Transient miss (fetch failed / no logo) gets a short TTL so we retry soon.
     const ttl = avatarUrl === null && logoUrl === null ? NEGATIVE_TTL_MS : CACHE_TTL_MS;
@@ -168,5 +168,7 @@ export function clearProviderIconCache(): void {
 
 /** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function primeProviderIconCache(key: string, url: string | null): void {
-  setCache(key.toLowerCase(), url, CACHE_TTL_MS);
+  const source = parseProviderSource(key);
+  if (source === null) return;
+  setCache(`${source.hostname}/${source.namespace}/${source.name}`, url, CACHE_TTL_MS);
 }

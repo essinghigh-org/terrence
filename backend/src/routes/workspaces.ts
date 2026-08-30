@@ -909,8 +909,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
 
               let provider = "hashicorp/provider";
               if (typeof rObj.provider === "string") {
-                const match = /provider\["[^"]*\/([^"]+)"\]/.exec(rObj.provider)
-                  ?? /provider\["([^"]+)"\]/.exec(rObj.provider);
+                const match = /provider\["([^"]+)"\]/.exec(rObj.provider);
                 const providerName = match?.[1];
                 if (typeof providerName === "string" && providerName !== "") provider = providerName;
               }

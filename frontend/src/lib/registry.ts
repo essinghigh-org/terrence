@@ -45,6 +45,7 @@ export type RegistryModule = Readonly<{
   name: string;
   namespace: string;
   provider: string;
+  providerSource: string | null;
   description: string | null;
   status: string;
   publishingMechanism: "manual" | "vcs";
@@ -90,6 +91,7 @@ export function registryModuleFromResource(resource: unknown): RegistryModule {
     name: isString(value["name"]) ? value["name"] : "",
     namespace: isString(value["namespace"]) ? value["namespace"] : "",
     provider: isString(value["provider"]) ? value["provider"] : "",
+    providerSource: isString(value["provider-source"]) ? value["provider-source"] : null,
     description: isString(value["description"]) ? value["description"] : null,
     status: isString(value["status"]) ? value["status"] : "pending",
     publishingMechanism: value["publishing-mechanism"] === "vcs" ? "vcs" : "manual",

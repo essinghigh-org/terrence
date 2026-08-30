@@ -52,7 +52,7 @@ describe("openapi contract", () => {
       const m = route.method.toLowerCase();
       const oasPath = toOasPath(route.path);
       const pathEntry = paths[oasPath];
-      if (pathEntry === undefined || pathEntry[m] === undefined) {
+      if (pathEntry?.[m] === undefined) {
         missing.push(`${route.method} ${route.path} -> ${oasPath}`);
       }
     }
@@ -70,6 +70,16 @@ describe("openapi contract", () => {
     } | undefined;
     expect(operation?.responses?.["201"]).toBeDefined();
     expect(operation?.responses?.["200"]).toBeUndefined();
+  });
+
+  it("documents provider artwork as an image response", () => {
+    const operation = paths["/api/v2/provider-icons/{hostname}/{namespace}/{name}"]?.get as {
+      responses?: Record<string, { content?: Record<string, unknown> }>;
+    } | undefined;
+    expect(operation?.responses?.["200"]?.content?.["image/svg+xml"]).toEqual({
+      schema: { type: "string", format: "binary" },
+    });
+    expect(operation?.responses?.["200"]?.content?.["application/vnd.api+json"]).toBeUndefined();
   });
 
   it("has no frontend catch-alls in the contract", () => {
