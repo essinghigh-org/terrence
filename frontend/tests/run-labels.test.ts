@@ -13,6 +13,6 @@ test("recognizes legacy VCS run sources consistently", (): void => {
   expect(isVcsRunSource("github")).toBe(true);
   expect(isVcsRunSource("tfe-configuration-version", "push")).toBe(true);
   expect(isVcsRunSource("tfe-configuration-version", "manual")).toBe(false);
-  expect(formatRunSource("tfe-configuration-version", "pull_request")).toBe("GitHub");
+  expect(formatRunSource("tfe-configuration-version", "pull_request")).toBe("VCS");
   expect(formatRunSource("tfe-api")).toBe("API");
 });

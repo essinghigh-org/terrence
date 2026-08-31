@@ -63,7 +63,7 @@ export function isVcsRunSource(source: string | undefined, triggerReason?: strin
 
 export function formatRunSource(source: string | undefined, triggerReason?: string): string {
   if (source === undefined || source === "") return "Unknown source";
-  if (isVcsRunSource(source, triggerReason) && source === "tfe-configuration-version") return "GitHub";
+  if (isVcsRunSource(source, triggerReason) && source === "tfe-configuration-version") return "VCS";
   const label = Object.prototype.hasOwnProperty.call(RUN_SOURCE_LABELS, source)
     ? RUN_SOURCE_LABELS[source as keyof typeof RUN_SOURCE_LABELS]
     : undefined;
