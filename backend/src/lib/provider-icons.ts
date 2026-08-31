@@ -1,18 +1,19 @@
 // Provider icons (registry.terraform.io -> dedicated same-origin image route)
 //
 // TFE shows a provider logo left of each resource in the plan. The public
-// registry is the source: `GET /v1/providers/{ns}/{name}` returns
-// `logo_url` (often `/images/providers/aws.png` or an absolute github avatar
-// URL). We reuse the hardened AvatarService internally for the image fetch and
-// cache so the browser never loads a third-party URL and no new CSP host is
-// needed. The browser-facing URL remains /api/v2/provider-icons/<hostname>/<ns>/<name>;
-// it must not expose the generic avatar endpoint as the provider icon API.
+// registry's supported provider collection API is the source:
+// `GET /v2/providers?filter[namespace]=...&filter[name]=...` returns JSON:API
+// attributes including `logo-url`. We reuse the hardened AvatarService
+// internally for the image fetch and cache so the browser never loads a
+// third-party URL and no new CSP host is needed. The browser-facing URL remains
+// /api/v2/provider-icons/<hostname>/<ns>/<name>; it must not expose the generic
+// avatar endpoint as the provider icon API.
 //
 // Flow: parse the provider source (two-part sources use Terraform's documented
-// default registry; explicit hostnames are retained) -> Terraform Registry API
-// (4s timeout, 24h memo) -> absolute logo URL -> AvatarService cache. The
-// provider-icon image handler delegates to that cache without changing the
-// public route identity.
+// default registry; explicit hostnames are retained) -> Terraform Registry v2
+// API (4s timeout, 24h memo) -> exact provider's absolute logo URL ->
+// AvatarService cache. The provider-icon image handler delegates to that cache
+// without changing the public route identity.
 import { AvatarService } from "./avatars";
 import {
   DEFAULT_PROVIDER_REGISTRY_HOST,
@@ -71,20 +72,26 @@ export function normalizeProvider(providerName: string | null | undefined): stri
   return normalizeProviderSource(providerName);
 }
 
+/** Extract the opaque avatar key used as the browser cache version. */
+export function providerIconVersion(avatarUrl: string | null | undefined): string | null {
+  if (typeof avatarUrl !== "string") return null;
+  return /^\/api\/v2\/avatars\/([0-9a-f]{64})$/.exec(avatarUrl)?.[1] ?? null;
+}
+
 /** Build the browser-facing URL for one canonical provider source. */
-export function providerIconPath(providerName: string | null | undefined): string | null {
+export function providerIconPath(providerName: string | null | undefined, version?: string | null): string | null {
   const source = parseProviderSource(providerName);
   if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
-  return `/api/v2/provider-icons/${encodeURIComponent(source.hostname)}/${encodeURIComponent(source.namespace)}/${encodeURIComponent(source.name)}`;
+  const path = `/api/v2/provider-icons/${encodeURIComponent(source.hostname)}/${encodeURIComponent(source.namespace)}/${encodeURIComponent(source.name)}`;
+  return typeof version === "string" && /^[0-9a-f]{64}$/.test(version) ? `${path}?v=${version}` : path;
 }
 
 function absoluteLogoUrl(logoUrl: string): string | null {
   if (typeof logoUrl !== "string" || logoUrl === "") return null;
   const trimmed = logoUrl.trim();
   if (trimmed === "") return null;
-  if (trimmed.startsWith("/")) return `${REGISTRY}${trimmed}`;
   try {
-    const parsed = new URL(trimmed);
+    const parsed = new URL(trimmed, `${REGISTRY}/`);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
     return parsed.toString();
   } catch {
@@ -92,15 +99,70 @@ function absoluteLogoUrl(logoUrl: string): string | null {
   }
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function matchesOptionalProviderAttribute(value: unknown, expected: string): boolean {
+  return value === undefined || (typeof value === "string" && value.toLowerCase() === expected);
+}
+
+function hasExactProviderParts(namespace: unknown, name: unknown, source: ProviderSource): boolean {
+  return typeof namespace === "string"
+    && typeof name === "string"
+    && namespace.toLowerCase() === source.namespace
+    && name.toLowerCase() === source.name;
+}
+
+function hasExactProviderFullName(value: unknown, source: ProviderSource): boolean {
+  if (typeof value !== "string") return false;
+  const lower = value.toLowerCase();
+  const expectedShortName = `${source.namespace}/${source.name}`;
+  const expectedFullName = `${source.hostname}/${expectedShortName}`;
+  return lower === expectedShortName || lower === expectedFullName;
+}
+
+function exactProviderAttributes(value: unknown, source: ProviderSource): Record<string, unknown> | null {
+  const entry = asRecord(value);
+  const attributes = asRecord(entry?.attributes);
+  if (attributes === null) return null;
+
+  const namespace = attributes.namespace;
+  const name = attributes.name;
+  const fullName = attributes["full-name"];
+  if (!matchesOptionalProviderAttribute(namespace, source.namespace)) return null;
+  if (!matchesOptionalProviderAttribute(name, source.name)) return null;
+  const hasExactParts = hasExactProviderParts(namespace, name, source);
+  const hasExactFullName = hasExactProviderFullName(fullName, source);
+  if (fullName !== undefined && !hasExactFullName) return null;
+  return hasExactParts || hasExactFullName ? attributes : null;
+}
+
+function exactRegistryLogoUrl(body: unknown, source: ProviderSource): string | null {
+  const response = asRecord(body);
+  const data = response?.data;
+  if (!Array.isArray(data)) return null;
+  for (const entry of data) {
+    const attributes = exactProviderAttributes(entry, source);
+    if (attributes === null) continue;
+    const logoUrl = attributes["logo-url"];
+    return typeof logoUrl === "string" ? absoluteLogoUrl(logoUrl) : null;
+  }
+  return null;
+}
+
 async function fetchLogoUrl(source: ProviderSource): Promise<string | null> {
   if (source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
   await acquireRegistrySlot();
   try {
-    const url = `${REGISTRY}/v1/providers/${encodeURIComponent(source.namespace)}/${encodeURIComponent(source.name)}`;
+    const url = new URL("/v2/providers", REGISTRY);
+    url.searchParams.set("filter[namespace]", source.namespace);
+    url.searchParams.set("filter[name]", source.name);
     let res: Response;
     try {
-      res = await fetch(url, {
-        headers: { Accept: "application/json", "User-Agent": "terrence/provider-icons" },
+      res = await fetch(url.toString(), {
+        headers: { Accept: "application/vnd.api+json", "User-Agent": "terrence/provider-icons" },
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
     } catch {
@@ -113,11 +175,7 @@ async function fetchLogoUrl(source: ProviderSource): Promise<string | null> {
     } catch {
       return null;
     }
-    if (body === null || typeof body !== "object") return null;
-    const rec = body as Record<string, unknown>;
-    const raw = rec.logo_url ?? rec["logo-url"];
-    if (typeof raw !== "string") return null;
-    return absoluteLogoUrl(raw);
+    return exactRegistryLogoUrl(body, source);
   } finally {
     releaseRegistrySlot();
   }
