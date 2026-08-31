@@ -13,6 +13,7 @@ async function runScript(script: string, env: Readonly<Record<string, string>> =
         DATABASE_URL: `file:${join(testDirectory, "terrence.db")}`,
         STORAGE_DIR: join(testDirectory, "storage"),
         NODE_ENV: "test",
+        TERRENCE_ENABLE_LOCAL_SIGNUP: "true",
         SIMULATED_RUNS: "true",
         ...env,
       },
@@ -64,7 +65,7 @@ test("schedules eligible assessments separately from runs and records drift, che
       runs,
       workspaces,
     } = await import("./src/db/schema.ts");
-    const { _dedup, deliverAssessmentNotifications } = await import("./src/lib/notifications.ts");
+    const { resetDedupForTests, deliverAssessmentNotifications } = await import("./src/lib/notifications.ts");
     const { enqueueDueAssessments, pollAssessmentQueue } = await import("./src/worker.ts");
 
     const now = 2_000_000_000_000;
@@ -130,7 +131,7 @@ test("schedules eligible assessments separately from runs and records drift, che
       // 7.9 dedup state here: this test's explicit calls validate the payload
       // shape, not duplicate suppression (which notifications_breaker_dedup
       // covers directly).
-      _dedup(true);
+      resetDedupForTests(true);
       await deliverAssessmentNotifications(completed[0].id, "assessment:drifted");
       await deliverAssessmentNotifications(completed[0].id, "assessment:check_failure");
     } finally {
