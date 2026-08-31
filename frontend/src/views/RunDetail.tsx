@@ -23,7 +23,7 @@ import { Breadcrumbs } from "../components/Breadcrumbs";
 import { DegradedBanner } from "../components/DegradedBanner";
 import { DiagnosticsBanner } from "../components/DiagnosticsBanner";
 import { extractDiagnostics, type TerraformDiagnostic } from "../lib/diagnostics";
-import { formatDateTime, formatRelativeTime } from "@/lib/utils";
+import { copyTextToClipboard, formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { ApplyOutput } from "../components/ApplyOutput";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
@@ -673,14 +673,13 @@ export function RunDetail({
   const runPermalink = `${window.location.origin}${orgPath}/workspaces/${encodeURIComponent(workspaceName)}/runs/${encodeURIComponent(runId)}`;
 
   async function copyRunPermalink(): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(runPermalink);
+    if (await copyTextToClipboard(runPermalink)) {
       setCopiedPermalink(true);
       toast.add({ title: "Run permalink copied", type: "success" });
       window.setTimeout((): void => { setCopiedPermalink(false); }, 2000);
-    } catch {
-      toast.add({ title: "Could not copy link", type: "error" });
+      return;
     }
+    toast.add({ title: "Could not copy link", type: "error" });
   }
 
   useEffect((): void => {

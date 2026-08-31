@@ -24,6 +24,7 @@ import {
   type ResourceChange,
 } from "../lib/plan-operations";
 import { isNumber, isRecord, isString } from "../lib/type-guards";
+import { copyTextToClipboard } from "../lib/utils";
 import type { JsonObject } from "@/lib/json";
 
 type PlanJson = {
@@ -245,13 +246,11 @@ function ApplyResourceRow({
   const handleCopy = (event: React.MouseEvent): void => {
     event.preventDefault();
     event.stopPropagation();
-    const clipboard = typeof navigator === "undefined"
-      ? undefined
-      : Reflect.get(navigator, "clipboard") as Clipboard | undefined;
-    if (clipboard === undefined) return;
-    void clipboard.writeText(resource.address);
-    setCopied(true);
-    setTimeout((): void => { setCopied(false); }, 1500);
+    void copyTextToClipboard(resource.address).then((didCopy): void => {
+      if (!didCopy) return;
+      setCopied(true);
+      setTimeout((): void => { setCopied(false); }, 1500);
+    });
   };
 
   return (
