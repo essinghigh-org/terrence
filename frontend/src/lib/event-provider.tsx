@@ -89,7 +89,7 @@ export function useTerrenceEvent(
   handlerRef.current = handler;
 
   useEffect((): (() => void) => {
-    if (context === null) return () => {};
+    if (context === null) return (): void => undefined;
     return context.subscribe((event: SseEvent): void => {
       if (event.name !== eventName) return;
       const data = event.data as Readonly<JsonObject>;

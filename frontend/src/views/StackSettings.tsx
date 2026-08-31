@@ -183,7 +183,7 @@ export function StackSettings(): React.JSX.Element {
       const loadConfiguration = async (stack: Stack): Promise<void> => {
         try {
           const response = await fetchApi(`/stacks/${encodeURIComponent(stack.id)}/stack-configurations?page[size]=1`) as { data: StackConfiguration[] };
-          configurations[stack.id] = response.data?.[0] ?? null;
+          configurations[stack.id] = response.data[0] ?? null;
         } catch {
           configurations[stack.id] = "error";
         }
@@ -339,7 +339,7 @@ export function StackSettings(): React.JSX.Element {
     setError("");
     try {
       const response = await fetchApi(`/stacks/${stack.id}/stack-configurations?source=manual`, { method: "POST", body: JSON.stringify({ data: { attributes: { speculative: stack.attributes["speculative-enabled"] === true } } }) }) as { data: StackConfiguration };
-      setLatestConfigurations((previous) => ({ ...previous, [stack.id]: response.data }));
+      setLatestConfigurations((previous): Record<string, LatestConfiguration> => ({ ...previous, [stack.id]: response.data }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Failed to prepare stack configuration.");
     } finally {
@@ -451,7 +451,7 @@ export function StackSettings(): React.JSX.Element {
                       ? <span>Loading…</span>
                       : latest === "error"
                       ? <span>Unavailable</span>
-                      : latest === null || latest === undefined
+                      : latest === null
                         ? canManage
                           ? <Button variant="outline" size="sm" onClick={(): void => { void prepareConfiguration(stack); }} disabled={busyStackIds.has(stack.id)}>Prepare</Button>
                           : <span>—</span>

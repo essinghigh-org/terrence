@@ -121,30 +121,32 @@ export function WorkspaceVariables({
   const [attachError, setAttachError] = useState("");
   const [busySetId, setBusySetId] = useState<string | null>(null);
 
-  // Shared cancellation guard: invalidated on unmount or workspaceId change so
-  // stale refreshes (initial load, attach, detach) cannot update this view.
-  const activeRef = useRef({ value: true });
+  // Generation guard: invalidated on unmount, workspaceId change, or a newer
+  // attach/detach refresh so stale variable-set responses cannot update this view.
+  const attachedLoadGeneration = useRef(0);
 
   const loadAttachedSets = useCallback((): void => {
-    const active = activeRef.current;
+    const generation = attachedLoadGeneration.current + 1;
+    attachedLoadGeneration.current = generation;
+    const isCurrent = (): boolean => attachedLoadGeneration.current === generation;
     setSetsLoading(true);
     setSetsError("");
     fetchAllApiPages<VariableSet>(`/workspaces/${workspaceId}/varsets?page[size]=100`)
       .then(async (attached: VariableSet[]): Promise<void> => {
-        if (!active.value) return;
+        if (!isCurrent()) return;
         const varsBySet = await Promise.all(attached.map(async (set: VariableSet): Promise<[string, VariableSetVariable[]]> => {
           const vars = await fetchAllApiPages<VariableSetVariable>(`/varsets/${set.id}/relationships/vars?page[size]=100`);
           return [set.id, vars];
         }));
-        if (!active.value) return;
+        if (!isCurrent()) return;
         setSets(attached);
         setSetsVars(Object.fromEntries(varsBySet));
       })
-      .catch((error): void => {
-        if (active.value) setSetsError(messageFrom(error, "Failed to load variable sets"));
+      .catch((error: unknown): void => {
+        if (isCurrent()) setSetsError(messageFrom(error, "Failed to load variable sets"));
       })
       .finally((): void => {
-        if (active.value) setSetsLoading(false);
+        if (isCurrent()) setSetsLoading(false);
       });
   }, [workspaceId]);
 
@@ -162,7 +164,7 @@ export function WorkspaceVariables({
         if (signal.aborted) return;
         setVariables(data);
       })
-      .catch((error): void => {
+      .catch((error: unknown): void => {
         if (signal.aborted) return;
         setPageError(messageFrom(error, "Failed to load workspace variables"));
       })
@@ -174,6 +176,7 @@ export function WorkspaceVariables({
 
     return (): void => {
       controller.abort();
+      attachedLoadGeneration.current += 1;
     };
   }, [workspaceId, loadAttachedSets]);
 
@@ -185,7 +188,7 @@ export function WorkspaceVariables({
     setAttachOpen(true);
     fetchAllApiPages<VariableSet>(`/organizations/${encodeURIComponent(orgName)}/varsets?page[size]=100`)
       .then((orgSets: VariableSet[]): void => { setAllSets(orgSets); })
-      .catch((error): void => {
+      .catch((error: unknown): void => {
         setAttachError(messageFrom(error, "Failed to load organization variable sets"));
       })
       .finally((): void => {

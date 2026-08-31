@@ -10,7 +10,7 @@ import { isRecord, isString } from "../lib/type-guards";
  */
 export type TablePreferences = Readonly<{
   density: TableDensity;
-  visibleColumns: string[];
+  visibleColumns: readonly string[];
 }>;
 
 const TABLE_PREFS_PREFIX = "terrence-table-prefs:";
@@ -27,18 +27,19 @@ export function getTablePreferences(viewId: string): TablePreferences | null {
     // field-validated below before any value is used.
     const parsed = JSON.parse(raw) as Partial<TablePreferences>;
     if (!isRecord(parsed)) return null;
-    const density: TableDensity = parsed.density === "dense" ? "dense" : "comfortable";
-    const visibleColumns = Array.isArray(parsed.visibleColumns)
-      ? parsed.visibleColumns.filter((value): value is string => isString(value))
+    const density: TableDensity = parsed["density"] === "dense" ? "dense" : "comfortable";
+    const rawVisibleColumns = parsed["visibleColumns"];
+    const visibleColumns = Array.isArray(rawVisibleColumns)
+      ? rawVisibleColumns.filter((value): value is string => isString(value))
       : [];
-    if (visibleColumns.length === 0 && parsed.density === undefined) return null;
+    if (visibleColumns.length === 0 && parsed["density"] === undefined) return null;
     return { density, visibleColumns };
   } catch {
     return null;
   }
 }
 
-export function setTablePreferences(viewId: string, preferences: TablePreferences): void {
+export function setTablePreferences(viewId: string, preferences: Readonly<TablePreferences>): void {
   try {
     window.localStorage.setItem(storeKey(viewId), JSON.stringify(preferences));
   } catch {

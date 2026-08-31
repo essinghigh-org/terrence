@@ -1,20 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Filter, Trash2 } from "lucide-react";
+import { ChevronDown, Filter } from "lucide-react";
 import { Badge } from "./ui/badge";
-
-export type Operation = "create" | "update" | "delete" | "replace" | "read" | "import" | "move" | "remove" | "no-op";
-
-const operationConfig = {
-  create: { symbol: "+", className: "text-success" },
-  update: { symbol: "~", className: "text-primary" },
-  delete: { icon: Trash2, className: "text-destructive" },
-  replace: { symbol: "±", className: "text-warning" },
-  read: { symbol: "◎", className: "text-primary" },
-  import: { symbol: "&", className: "text-foreground" },
-  move: { symbol: "→", className: "text-foreground/85" },
-  remove: { icon: Trash2, className: "text-muted-foreground/70" },
-  "no-op": { symbol: "·", className: "text-muted-foreground/70" },
-} satisfies Record<Operation, Readonly<{ symbol?: string; icon?: typeof Trash2; className: string }>>;
+import { operationConfig, type Operation } from "../lib/plan-operations";
 
 export function OperationFilterDropdown({
   options,
@@ -32,10 +19,10 @@ export function OperationFilterDropdown({
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  useEffect((): (() => void) | undefined => {
     if (!open) return;
     const handleClickOutside = (event: MouseEvent): void => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      if (containerRef.current !== null && !containerRef.current.contains(event.target as Node)) {
         setOpen(false);
       }
     };
@@ -46,13 +33,13 @@ export function OperationFilterDropdown({
     };
     document.addEventListener("mousedown", handleClickOutside);
     document.addEventListener("keydown", handleKeyDown);
-    return () => {
+    return (): void => {
       document.removeEventListener("mousedown", handleClickOutside);
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [open]);
 
-  const allSelected = options.every((op) => selectedOps.has(op));
+  const allSelected = options.every((op): boolean => selectedOps.has(op));
   const noneSelected = selectedOps.size === 0;
 
   const toggleOp = (op: Operation): void => {
@@ -84,7 +71,7 @@ export function OperationFilterDropdown({
         aria-haspopup="true"
         aria-expanded={open}
         aria-label="Filter operations"
-        onClick={(): void => { setOpen((prev) => !prev); }}
+        onClick={(): void => { setOpen((prev): boolean => !prev); }}
         className="inline-flex h-8 items-center gap-2 rounded-md border border-input bg-background px-3 text-xs font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
       >
         <Filter className="size-3.5 text-muted-foreground" aria-hidden="true" />
@@ -114,7 +101,7 @@ export function OperationFilterDropdown({
       >
         <option value="all">All operations</option>
         <option value="default">Default operations</option>
-        {options.map((op) => {
+        {options.map((op): React.JSX.Element => {
           const label = op === "remove" ? "Remove" : op === "replace" ? "Replace" : op.charAt(0).toUpperCase() + op.slice(1);
           return (
             <option key={op} value={op}>
@@ -161,7 +148,7 @@ export function OperationFilterDropdown({
           </div>
 
           <div className="py-1">
-            {options.map((op) => {
+            {options.map((op): React.JSX.Element => {
               const count = opCounts[op] ?? 0;
               const checked = selectedOps.has(op);
               const config = operationConfig[op];
@@ -175,7 +162,7 @@ export function OperationFilterDropdown({
                     type="checkbox"
                     className="size-3.5 rounded border-input accent-primary"
                     checked={checked}
-                    onChange={() => { toggleOp(op); }}
+                    onChange={(): void => { toggleOp(op); }}
                   />
                   <span className={`inline-flex items-center justify-center font-semibold ${config.className}`}>
                     {"icon" in config ? (

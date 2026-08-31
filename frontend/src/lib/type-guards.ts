@@ -29,7 +29,7 @@ export function isRecord(value: unknown): value is JsonObject {
 }
 
 /** True when the value is callable. */
-export function isFunction(value: unknown): value is (...args: unknown[]) => unknown {
+export function isFunction(value: unknown): value is (...args: readonly unknown[]) => unknown {
   return typeof value === "function";
 }
 

@@ -378,7 +378,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
       };
       setLocalAuthEnabled(res.data.attributes["local-auth-enabled"] !== false);
       const trusted = res.data.attributes["trusted-client-ip-headers"];
-      setTrustedClientIpHeaders(Array.isArray(trusted) ? trusted.join(", ") : "");
+      setTrustedClientIpHeaders(Array.isArray(trusted) ? trusted.filter(isString).join(", ") : "");
     } catch (err: unknown) {
       setGeneralError(err instanceof Error ? err.message : "Failed to load general settings");
     } finally {
@@ -847,8 +847,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
               <div className="space-y-2 text-sm">
                 {workloadIdentityKeys.length === 0 ? <p className="text-muted-foreground">No signing keys have been generated yet.</p> : workloadIdentityKeys.map((key): React.JSX.Element => (
                   <div key={key.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-border/70 px-3 py-2">
-                    <code className="text-xs">{String(key.attributes?.["key-id"] ?? key.id)}</code>
-                    <span className="text-muted-foreground">{String(key.attributes?.status ?? "unknown")}</span>
+                    <code className="text-xs">{attrString(key.attributes, "key-id", key.id)}</code>
+                    <span className="text-muted-foreground">{attrString(key.attributes, "status", "unknown")}</span>
                   </div>
                 ))}
               </div>

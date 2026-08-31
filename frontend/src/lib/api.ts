@@ -89,7 +89,7 @@ export class ApiError extends Error {
  * surfaced so UIs can render per-field feedback instead of a single blob
  * (26.9). Unparsable pointers are dropped.
  */
-export function extractFieldErrors(rawErrors: readonly Readonly<JsonObject>[]) {
+export function extractFieldErrors(rawErrors: readonly Readonly<JsonObject>[]): Record<string, string> {
   const fieldErrors: Record<string, string> = {};
   for (const entry of rawErrors) {
     const source = entry["source"];
@@ -326,13 +326,13 @@ export async function fetchAllApiPages<T>(endpoint: string, signal?: Readonly<Ab
     visited.add(pageEndpoint);
     // SAFETY: list endpoints return the JSON:API collection envelope; the
     // data array and pagination meta fields are checked below.
-    const response = (await fetchApi(
-      pageEndpoint,
-      signal === undefined ? {} : { signal },
-    )) as {
+    const response = await fetchApi<{
       data?: T[];
       meta?: { pagination?: JsonObject };
-    };
+    }>(
+      pageEndpoint,
+      signal === undefined ? {} : { signal },
+    );
     if (Array.isArray(response.data)) data.push(...response.data);
 
     const nextPage = response.meta?.pagination?.["next-page"];
@@ -369,7 +369,7 @@ function reasoningEffortValue(value: unknown): ReasoningEffort | null {
 }
 
 /** Parse a JSON:API error document from a failed response, or [] when it is not JSON. */
-async function parseErrorBody(response: Response): Promise<readonly JsonObject[]> {
+async function parseErrorBody(response: ReadonlyResponse): Promise<readonly JsonObject[]> {
   const errorBody = asRecordOrNull(await response.json().catch((): null => null));
   const rawErrors = errorBody !== null ? errorBody["errors"] : undefined;
   // SAFETY: Array.isArray is the boundary check; entries are only read via
@@ -403,7 +403,7 @@ export async function fetchExplanation(runId: string, kind: ExplainKind): Promis
     throw caught;
   }
   const data = (resp as { data?: { attributes?: Record<string, unknown> } } | null)?.data?.attributes;
-  if (data === undefined || data === null || typeof data !== "object") return null;
+  if (data === undefined) return null;
   const d = data;
   if (typeof d["explanation"] === "string" && d["explanation"] !== "") {
     return { explanation: d["explanation"], model: typeof d["model"] === "string" ? d["model"] : "", reasoningEffort: reasoningEffortValue(d["reasoning-effort"]), generatedAt: typeof d["generated-at"] === "string" ? d["generated-at"] : new Date().toISOString(), cached: d["cached"] === true };
@@ -418,11 +418,11 @@ export async function fetchExplanation(runId: string, kind: ExplainKind): Promis
 export async function enqueueExplanation(runId: string, kind: ExplainKind): Promise<{ status: string; jobId?: string | undefined }> {
   // SAFETY: the endpoint contract returns this envelope; the autofix stripped
   // a redundant cast that also carried the type for the narrowing below.
-  const resp = (await fetchApi(
+  const resp = await fetchApi<{ data?: { attributes?: Record<string, unknown> } }>(
     `/runs/${encodeURIComponent(runId)}/explain`,
     { method: "POST", body: JSON.stringify({ data: { type: "plan-explanations", attributes: { kind } } }) },
-  )) as { data?: { attributes?: Record<string, unknown> } };
-  const attrs = resp?.data?.attributes;
+  );
+  const attrs = resp.data?.attributes;
   if (attrs !== undefined && typeof attrs["status"] === "string") return { status: attrs["status"], jobId: typeof attrs["job-id"] === "string" ? attrs["job-id"] : undefined };
   if (attrs !== undefined && typeof attrs["explanation"] === "string") return { status: "succeeded" };
   return { status: "queued" };

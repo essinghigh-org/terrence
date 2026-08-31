@@ -5,6 +5,7 @@ import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom
 import { Layout } from "../src/components/Layout";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { isString } from "../src/lib/type-guards";
+import { formatDateTime } from "../src/lib/utils";
 import type { JsonObject, JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
@@ -156,6 +157,7 @@ test("ignores an aborted workspace response after the route changes", async () =
 });
 
 test("renders before the latest run finishes and ignores an aborted run response", async () => {
+  const createdAt = new Date(Date.now() - 5 * 60_000).toISOString();
   const productionRun = deferred<Response>();
   const stagingRun = deferred<Response>();
   let productionRunSignal: AbortSignal | null = null;
@@ -211,12 +213,18 @@ test("renders before the latest run finishes and ignores an aborted run response
 
   await act(async (): Promise<void> => {
     stagingRun.resolve(json({
-      data: [{ id: "run-staging", attributes: { status: "planned_and_finished" } }],
+      data: [{
+        id: "run-staging",
+        attributes: { status: "planned_and_finished", "created-at": createdAt },
+      }],
     }));
   });
   await waitFor((): void => {
     expect(view.getByRole("link", { name: "Latest run: Planned and finished" })).toBeTruthy();
   });
+  const latestRunTime = view.getByText("5 minutes ago");
+  expect(latestRunTime.getAttribute("dateTime")).toBe(createdAt);
+  expect(latestRunTime.getAttribute("title")).toBe(formatDateTime(createdAt));
 
   await act(async (): Promise<void> => {
     productionRun.resolve(json({
@@ -466,6 +474,12 @@ test("renders controlled workspace sections with current resources and project c
             name: "production",
             locked: false,
             "terraform-version": "1.9.3",
+            "vcs-repo": {
+              identifier: "acme/infrastructure",
+              "github-app-installation-id": "ghain-1",
+            },
+            "working-directory": "modules/network",
+            "iac-binary": "tofu",
             permissions: {
               "can-queue-run": true,
               "can-read-state-versions": true,
@@ -528,6 +542,10 @@ test("renders controlled workspace sections with current resources and project c
     .toBe("/app/acme/workspaces");
   expect(view.getByRole("link", { name: "New run" }).getAttribute("href"))
     .toBe("/app/acme/workspaces/production/runs?new-run=true");
+  expect(view.getByRole("link", { name: "Open GitHub repository acme/infrastructure" }).getAttribute("href"))
+    .toBe("https://github.com/acme/infrastructure");
+  expect(view.getByText("modules/network")).toBeTruthy();
+  expect(view.getByText("OpenTofu")).toBeTruthy();
   expect(view.getByText("Loading project…")).toBeTruthy();
   await act(async (): Promise<void> => {
     project.resolve(json({ data: { id: "prj-1", attributes: { name: "Platform foundation" } } }));

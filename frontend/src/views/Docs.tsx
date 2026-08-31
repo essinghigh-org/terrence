@@ -33,29 +33,29 @@ export function Docs(): React.JSX.Element {
   const selectedSlug = slug ?? index?.[0]?.slug;
   const selected = selectedSlug === undefined ? undefined : details.get(selectedSlug);
 
-  useEffect(() => {
+  useEffect((): (() => void) | undefined => {
     // A failed detail fetch (unknown slug, network error) must not stick:
     // navigating to another slug clears the error and retries.
     setDetailError(false);
     if (selectedSlug === undefined || details.has(selectedSlug)) return;
     let cancelled = false;
-    void fetchApi<{ data?: unknown }>(`/docs/${encodeURIComponent(selectedSlug)}`).then((result) => {
+    void fetchApi<{ data?: unknown }>(`/docs/${encodeURIComponent(selectedSlug)}`).then((result): void => {
       if (cancelled) return;
       const parsed = parseDocDetail(result);
       if (parsed === null) {
         setDetailError(true);
         return;
       }
-      setDetails((previous) => new Map(previous).set(selectedSlug, parsed));
-    }).catch(() => {
+      setDetails((previous): Map<string, DocDetail> => new Map(previous).set(selectedSlug, parsed));
+    }).catch((): void => {
       if (!cancelled) setDetailError(true);
     });
-    return () => {
+    return (): void => {
       cancelled = true;
     };
   }, [selectedSlug, details]);
 
-  const groups = useMemo(() => groupDocsByCategory(index ?? []), [index]);
+  const groups = useMemo((): ReturnType<typeof groupDocsByCategory> => groupDocsByCategory(index ?? []), [index]);
 
   const { previous, next } = useMemo((): { previous: DocSummary | undefined; next: DocSummary | undefined } => {
     if (selected === undefined) return { previous: undefined, next: undefined };

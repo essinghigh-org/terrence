@@ -179,8 +179,8 @@ export function WorkspaceResources({
       `/workspaces/${encodeURIComponent(workspaceId)}/readme`,
       signal === undefined ? {} : { signal },
     ).then(
-      (value: JsonValue) => ({ status: "fulfilled", value } as const),
-      (reason: JsonValue) => ({ status: "rejected", reason } as const),
+      (value: JsonValue): { status: "fulfilled"; value: JsonValue } => ({ status: "fulfilled", value }),
+      (reason: unknown): { status: "rejected"; reason: unknown } => ({ status: "rejected", reason }),
     );
     const [resourceResult, outputResult, dependencyGraphResult] = await stateResults;
     if (isAborted(signal)) return;
@@ -253,7 +253,7 @@ export function WorkspaceResources({
     (): Output[] => outputs.filter((output): boolean => needle === "" || output.attributes.name.toLowerCase().includes(needle)),
     [needle, outputs],
   );
-  const resourceDetails = useMemo(() => {
+  const resourceDetails = useMemo((): Record<string, ResourceDetails> => {
     const details: Record<string, ResourceDetails> = {};
     resources.forEach((resource): void => {
       const entry: MutableResourceDetails = {};
@@ -273,11 +273,11 @@ export function WorkspaceResources({
   const activeError = tab === "resources" ? resourceError : tab === "outputs" ? outputError : dependencyGraphError;
 
   useEffect((): void => {
-    if (pages[tab] > pageCount) setPages((current) => ({ ...current, [tab]: pageCount }));
+    if (pages[tab] > pageCount) setPages((current): Readonly<Record<Tab, number>> => ({ ...current, [tab]: pageCount }));
   }, [pageCount, pages, tab]);
 
   const setPage = (nextPage: number): void => {
-    setPages((current) => ({ ...current, [tab]: nextPage }));
+    setPages((current): Readonly<Record<Tab, number>> => ({ ...current, [tab]: nextPage }));
   };
 
   return (

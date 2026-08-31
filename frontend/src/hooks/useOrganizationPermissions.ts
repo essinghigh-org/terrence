@@ -13,24 +13,7 @@ import { fetchApi } from "../lib/api";
  * `has(...)`. Permission names are the snake_case keys returned by the API,
  * e.g. "can-manage-workspaces".
  */
-export type OrganizationPermissionName =
-  | "can-manage-workspaces"
-  | "can-manage-projects"
-  | "can-manage-policies"
-  | "can-read-policies"
-  | "can-manage-agent-pools"
-  | "can-manage-vcs-settings"
-  | "can-manage-providers"
-  | "can-manage-modules"
-  | "can-manage-auditing"
-  | "can-queue-plan"
-  | "can-run"
-  | "can-apply"
-  | "can-lock"
-  | "can-read-state-versions"
-  | "can-read-variables"
-  | "can-manage-organization"
-  | string;
+export type OrganizationPermissionName = string;
 
 export type OrganizationPermissions = Readonly<{
   permissions: Readonly<Record<string, boolean>> | undefined;
@@ -46,12 +29,12 @@ export function useOrganizationPermissions(orgName: string | undefined): Organiz
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect((): (() => void) => {
+  useEffect((): (() => void) | undefined => {
     if (orgName === undefined || orgName === "") {
       setPermissions(undefined);
       setLoaded(false);
       setError(null);
-      return () => {};
+      return undefined;
     }
     const controller = new AbortController();
     setError(null);
@@ -61,7 +44,7 @@ export function useOrganizationPermissions(orgName: string | undefined): Organiz
     void fetchApi(
       `/organizations/${encodeURIComponent(orgName)}`,
       { signal: controller.signal },
-    ).then((result) => {
+    ).then((result): void => {
       if (controller.signal.aborted) return;
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const attributes = (result as {
@@ -69,7 +52,7 @@ export function useOrganizationPermissions(orgName: string | undefined): Organiz
       }).data?.attributes;
       setPermissions(attributes?.permissions);
       setLoaded(true);
-    }).catch((caught) => {
+    }).catch((caught: unknown): void => {
       if (controller.signal.aborted) return;
       setPermissions(undefined);
       setLoaded(true);

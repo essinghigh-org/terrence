@@ -19,7 +19,7 @@ export function useSyncedSearchParam(
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Read the initial value from the URL once, falling back to `initialValue`.
-  const [value, setValue] = useState<string>(() => {
+  const [value, setValue] = useState<string>((): string => {
     if (paramName === undefined) return initialValue;
     const fromUrl = searchParams.get(paramName);
     return fromUrl ?? initialValue;
@@ -36,10 +36,9 @@ export function useSyncedSearchParam(
     if (paramName === undefined) return;
     const fromUrl = searchParams.get(paramName);
     setValue(fromUrl ?? initialValue);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, paramName]);
+  }, [initialValue, searchParams, paramName]);
 
-  const currentParam = useMemo(() => paramName, [paramName]);
+  const currentParam = useMemo((): string | undefined => paramName, [paramName]);
 
   const setFilter = useCallback((next: string): void => {
     setValue(next);

@@ -20,11 +20,11 @@ import {
 import type { DeepReadonly } from "./utils";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./url-safety";
 import { decryptSecret } from "./secrets";
-import { _resetSharedDeliveryState as resetSharedStateImpl, sharedBreakerRecordFailure, sharedBreakerRecordSuccess, sharedDedupRecord, sharedDedupSuppressed } from "./notification-state";
+import { resetSharedDeliveryStateForTests as resetSharedStateImpl, sharedBreakerRecordFailure, sharedBreakerRecordSuccess, sharedDedupRecord, sharedDedupSuppressed } from "./notification-state";
 import { getSettings } from "./settings";
 import { isSmtpEncryption, sendEmail } from "./smtp";
 
-type NotificationConfiguration = Readonly<
+type NotificationConfiguration = DeepReadonly<
   Omit<typeof notificationConfigurations.$inferSelect, "triggers">
   & { triggers: readonly string[] }
 >;
@@ -96,7 +96,7 @@ function responseHeaders(headers: Readonly<Headers>): Record<string, string[]> {
 }
 
 /** Test seam for the redaction decision table. */
-export function _redactedHeaderNamesForTests(): ReadonlySet<string> {
+export function redactedHeaderNamesForTests(): ReadonlySet<string> {
   return REDACTED_RESPONSE_HEADERS;
 }
 
@@ -120,7 +120,7 @@ type BreakerState = Readonly<{ failures: number; openedAfterSample: number | nul
 const breakers = new Map<string, BreakerState>();
 
 /** Only exported for tests. */
-export function _breakerState(configurationId: string): Readonly<{ open: boolean; remainingMs: number; failures: number }> {
+export function breakerStateForTests(configurationId: string): Readonly<{ open: boolean; remainingMs: number; failures: number }> {
   const state = breakers.get(configurationId);
   if (state === undefined) return { open: false, remainingMs: 0, failures: 0 };
   const open = state.openedAfterSample !== null && Date.now() < state.openedAfterSample + BREAKER_OPEN_MS;
@@ -175,13 +175,13 @@ const DEDUP_WINDOW_MS = 5_000;
 const emittedKeys = new Map<string, number>();
 
 /** Only exported for tests. */
-export function _dedup(reset?: boolean): void {
+export function resetDedupForTests(reset?: boolean): void {
   if (reset === true) emittedKeys.clear();
 }
 
 /** Only exported for tests: clear the replica-shared delivery state so a
  * test's breaker/dedup sequence starts from a clean slate. */
-export async function _resetSharedDeliveryState(): Promise<void> {
+export async function resetSharedDeliveryStateForTests(): Promise<void> {
   return resetSharedDeliveryState();
 }
 
@@ -524,11 +524,25 @@ type NotificationSummary = {
   status?: string;
 }
 
+function safeJson(value: unknown, fallback: string): string {
+  try {
+    return JSON.stringify(value) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function stringify(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "boolean") return value ? "yes" : "no";
-  if (typeof value === "object" && Array.isArray(value)) return value.length === 0 ? "" : String(value.length);
-  return String(value);
+  if (typeof value === "object") {
+    if (Array.isArray(value)) return value.length === 0 ? "" : String(value.length);
+    return safeJson(value, "");
+  }
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "bigint" || typeof value === "symbol") return value.toString();
+  if (typeof value === "function") return value.name;
+  return "";
 }
 
 function firstUrl(payload: Readonly<Record<string, unknown>>): string {
@@ -661,7 +675,7 @@ export function renderPayloadForDestination(
   if (configuration.destinationType === "microsoft-teams") {
     return { body: renderTeams(payload), contentType: "application/json" };
   }
-  return { body: JSON.stringify(payload), contentType: "application/json" };
+  return { body: safeJson(payload, "{}"), contentType: "application/json" };
 }
 
 // ---------------------------------------------------------------------------
@@ -688,7 +702,7 @@ const OWNERSHIP_VERIFIED_TTL_MS = 30 * 60 * 1_000; // 30 minutes
 const ownershipVerified = new Map<string, number>();
 
 /** Only exported for tests. */
-export function _ownershipVerified(configurationId: string): boolean {
+export function isOwnershipVerified(configurationId: string): boolean {
   const ts = ownershipVerified.get(configurationId);
   if (ts === undefined) return false;
   if (Date.now() - ts < OWNERSHIP_VERIFIED_TTL_MS) return true;
@@ -748,7 +762,7 @@ export async function verifyDestinationOwnership(
   // weaker proof (a generic echo server echoes anything, including our token)
   // and is not sufficient on its own.
   const boundedBody = await response.arrayBuffer().then(
-    (buffer: ArrayBuffer): string => new TextDecoder().decode(buffer).slice(0, 4096),
+    (buffer): string => new TextDecoder().decode(buffer).slice(0, 4096),
   ).catch(() => "");
   const headerEcho = response.headers.get("x-terrence-ownership-challenge") ?? "";
   const bodyLacksEcho = !boundedBody.includes(challenge);

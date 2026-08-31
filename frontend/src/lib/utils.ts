@@ -4,7 +4,7 @@ import { resolveDisplayTimeZone } from "./display-timezone";
 import { resolveDisplayTimeFormat } from "./display-time-format";
 import { isString } from "../lib/type-guards";
 
-type DeepReadonly<T> = T extends null | undefined
+export type DeepReadonly<T> = T extends null | undefined
   ? T
   : T extends (infer R)[]
   ? readonly DeepReadonly<R>[]
@@ -29,7 +29,7 @@ export function cn(...inputs: readonly DeepReadonly<ClassValue>[]): string {
  */
 const BARE_ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-function toDisplayDate(value: Date | string | number | null | undefined, timeZone?: string): Date {
+function toDisplayDate(value: Readonly<Date> | string | number | null | undefined, timeZone?: string): Date {
   if (value instanceof Date) return value;
   if (value == null || value === "") return new Date(NaN);
   if (isString(value)) {
@@ -62,7 +62,7 @@ function toDisplayDate(value: Date | string | number | null | undefined, timeZon
  * Older than a week falls back to formatDate; pass the exact value to the
  * element's title attribute for precision (review item 14.23).
  */
-export function formatRelativeTime(value: Date | string | number | null | undefined, now: Date = new Date()): string {
+export function formatRelativeTime(value: Readonly<Date> | string | number | null | undefined, now: Readonly<Date> = new Date()): string {
   if (value === null || value === undefined || value === "") return "—";
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
@@ -86,7 +86,7 @@ export function formatRelativeTime(value: Date | string | number | null | undefi
   return past ? `${text} ago` : `in ${text}`;
 }
 
-export function formatDate(value: Date | string | number | null | undefined, fallback = "—", timeZone = resolveDisplayTimeZone()): string {
+export function formatDate(value: Readonly<Date> | string | number | null | undefined, fallback = "—", timeZone = resolveDisplayTimeZone()): string {
   const date = toDisplayDate(value, timeZone);
   return Number.isNaN(date.valueOf()) ? fallback : date.toLocaleDateString(undefined, timeZone !== undefined ? { timeZone } : undefined);
 }
@@ -99,7 +99,7 @@ export function formatDate(value: Date | string | number | null | undefined, fal
  * locales default to.
  */
 export function formatDateTime(
-  value: Date | string | number | null | undefined,
+  value: Readonly<Date> | string | number | null | undefined,
   fallback = "—",
   timeZone = resolveDisplayTimeZone(),
   timeFormat: "12" | "24" = resolveDisplayTimeFormat(),
@@ -119,7 +119,7 @@ export function formatDateTime(
  * need exact values, e.g. relative-time tooltips (review item 14.23).
  * Renders a canonical ISO-8601 UTC string; invalid input returns "Unknown".
  */
-export function formatDateTimeExact(value: Date | string | number): string {
+export function formatDateTimeExact(value: Readonly<Date> | string | number): string {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.valueOf())) return "Unknown";
   return date.toISOString();

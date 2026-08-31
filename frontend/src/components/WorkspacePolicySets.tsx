@@ -47,7 +47,7 @@ export function WorkspacePolicySets({
         const data = response.data;
         setPolicySets(Array.isArray(data) ? data : []);
       })
-      .catch((caught): void => {
+      .catch((caught: unknown): void => {
         if (active) {
           setError(caught instanceof Error ? caught.message : "Failed to load policy sets");
         }

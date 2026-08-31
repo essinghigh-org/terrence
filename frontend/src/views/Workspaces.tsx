@@ -39,6 +39,7 @@ import { getPinnedWorkspaces, isWorkspacePinned, setWorkspacePinned } from "@/li
 import { deleteView, getSavedViews, saveView, type SavedView } from "@/lib/saved-views";
 import { cn, formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { PageHeader, PageShell } from "@/components/PageHeader";
+import { WorkspaceRepositoryLink } from "@/components/WorkspaceRepositoryLink";
 import { isNumber } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
 
@@ -57,7 +58,7 @@ function defaultVisibleColumns(): string[] {
   const prefs = getTablePreferences("workspaces");
   // Any stored value, including an empty array (all optional columns hidden),
   // wins over the defaults; only a missing preference falls back.
-  if (prefs !== null) return prefs.visibleColumns;
+  if (prefs !== null) return [...prefs.visibleColumns];
   return WORKSPACE_TABLE_COLUMNS.map((column): string => column.id);
 }
 type Organization = Readonly<{
@@ -75,7 +76,10 @@ type Workspace = Readonly<{
     locked?: boolean;
     permissions?: Readonly<{ "can-update"?: boolean }>;
     "tag-names"?: readonly string[];
-    "vcs-repo"?: Readonly<{ identifier: string }> | null;
+    "vcs-repo"?: Readonly<{
+      identifier: string;
+      "github-app-installation-id"?: string | null;
+    }> | null;
   }>;
   relationships?: Readonly<{
     project?: Readonly<{ data: Readonly<{ id: string }> | null }>;
@@ -126,7 +130,7 @@ async function fetchWorkspacePages(
     };
     if (Array.isArray(response.data)) workspaces.push(...response.data);
     if (Array.isArray(response.included)) {
-      runs.push(...response.included.filter((item): boolean => item.type === "runs"));
+      runs.push(...response.included);
     }
 
     const nextPage = response.meta?.pagination?.["next-page"];
@@ -157,6 +161,11 @@ const runStatusFilters = {
   "on-hold": ["planned", "planned_and_saved"],
   completed: ["applied", "planned_and_finished", "discarded", "canceled"],
 };
+
+function statusesForFilter(filter: string): readonly string[] | undefined {
+  if (!Object.prototype.hasOwnProperty.call(runStatusFilters, filter)) return undefined;
+  return runStatusFilters[filter as keyof typeof runStatusFilters];
+}
 
 export function Workspaces(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
@@ -202,7 +211,7 @@ export function Workspaces(): React.JSX.Element {
     setCanManageWorkspaces(false);
     try {
       // SAFETY: unknown filter keys yield undefined, treated as "no filter" below.
-      const statuses = runStatusFilters[statusFilter as keyof typeof runStatusFilters];
+      const statuses = statusesForFilter(statusFilter);
       const query = statuses === undefined
         ? "?page%5Bsize%5D=100&include=current_run"
         : `?page%5Bsize%5D=100&include=current_run&filter%5Bcurrent-run%5D%5Bstatus%5D=${encodeURIComponent(statuses.join(","))}`;
@@ -215,8 +224,8 @@ export function Workspaces(): React.JSX.Element {
           : fetchWorkspacePages(`/organizations/${encodeURIComponent(orgName)}/workspaces?page%5Bsize%5D=100&include=current_run`, signal)
             .catch((): null => null),
         fetchAllApiPages<Project>(`/organizations/${encodeURIComponent(orgName)}/projects?page%5Bsize%5D=100`, signal)
-          .then((data) => ({ data, failed: false }))
-          .catch(() => ({ data: [], failed: true })),
+          .then((data): { data: Project[]; failed: false } => ({ data, failed: false }))
+          .catch((): { data: Project[]; failed: true } => ({ data: [], failed: true })),
         fetchApi(
           `/organizations/${encodeURIComponent(orgName)}`,
           signal === undefined ? {} : { signal },
@@ -362,12 +371,9 @@ export function Workspaces(): React.JSX.Element {
 
   const activeRunsCount = useMemo((): number => {
     let count = 0;
-    const runningStatuses = runStatusFilters.running;
-    if (runningStatuses !== undefined) {
-      for (const run of latestRuns.values()) {
-        if (runningStatuses.includes(run.attributes.status)) {
-          count++;
-        }
+    for (const run of latestRuns.values()) {
+      if (runStatusFilters.running.includes(run.attributes.status)) {
+        count++;
       }
     }
     return count;
@@ -375,15 +381,12 @@ export function Workspaces(): React.JSX.Element {
 
   const attentionNeededCount = useMemo((): number => {
     let count = 0;
-    const attentionStatuses = runStatusFilters.attention;
-    if (attentionStatuses !== undefined) {
-      for (const run of latestRuns.values()) {
-        if (
-          attentionStatuses.includes(run.attributes.status) ||
-          run.attributes.status === "errored"
-        ) {
-          count++;
-        }
+    for (const run of latestRuns.values()) {
+      if (
+        runStatusFilters.attention.includes(run.attributes.status) ||
+        run.attributes.status === "errored"
+      ) {
+        count++;
       }
     }
     return count;
@@ -468,6 +471,7 @@ export function Workspaces(): React.JSX.Element {
   };
 
   const hasFilters = search !== "" || statusFilter !== "" || projectFilter !== "";
+  const tableColumnCount = WORKSPACE_TABLE_COLUMNS.filter((column): boolean => visibleColumns.includes(column.id)).length + 2;
 
   return (
     <PageShell className="max-w-7xl">
@@ -679,16 +683,16 @@ export function Workspaces(): React.JSX.Element {
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={7} className="p-0"><TableSkeleton rows={4} cols={7} /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={tableColumnCount} className="p-0"><TableSkeleton rows={4} cols={tableColumnCount} /></TableCell></TableRow>
             ) : loadError !== "" && workspaces.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-12 text-center text-muted-foreground">
+                <TableCell colSpan={tableColumnCount} className="py-12 text-center text-muted-foreground">
                   Workspace data is unavailable. Use Try again above to retry.
                 </TableCell>
               </TableRow>
             ) : visibleWorkspaces.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-4 text-center text-muted-foreground">
+                <TableCell colSpan={tableColumnCount} className="py-4 text-center text-muted-foreground">
                   <EmptyState
                     compact
                     title={hasFilters ? "No workspaces match the current filters" : "No workspaces yet"}
@@ -741,7 +745,7 @@ export function Workspaces(): React.JSX.Element {
                   </div>
                 </TableCell>
                 {visibleColumns.includes("repository") && (
-                  <TableCell className="max-w-64 truncate">{workspace.attributes["vcs-repo"]?.identifier ?? "None"}</TableCell>
+                  <TableCell className="max-w-64"><WorkspaceRepositoryLink repo={workspace.attributes["vcs-repo"]} /></TableCell>
                 )}
                 {visibleColumns.includes("tags") && (
                   <TableCell>

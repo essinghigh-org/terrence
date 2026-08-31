@@ -22,7 +22,7 @@ export function EmptyState(props: Readonly<{
   const footerVisible = hasAction || docsHref !== undefined;
   const Heading = headingLevel;
   return (
-    <div className={`text-center text-muted-foreground ${compact ? "p-6" : "p-12"}`}>
+    <div className={`text-center text-muted-foreground ${compact === true ? "p-6" : "p-12"}`}>
       <Heading className="font-medium text-foreground">{title}</Heading>
       {description !== undefined && (
         <p className={`mx-auto mt-1 max-w-md text-sm ${footerVisible ? "mb-4" : ""}`}>{description}</p>

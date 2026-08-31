@@ -98,7 +98,7 @@ export function RegistryModuleDetail(): React.JSX.Element {
           setSearchParams(next, { replace: true });
         }
       })
-      .catch((caught): void => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Module could not be loaded."); })
+      .catch((caught: unknown): void => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Module could not be loaded."); })
       .finally((): void => { if (!controller.signal.aborted) setLoading(false); });
     return (): void => { controller.abort(); };
   }, [name, namespace, orgName, provider, reload]); // search params are intentionally handled without refetching
@@ -111,7 +111,7 @@ export function RegistryModuleDetail(): React.JSX.Element {
     ...metadata.examples,
   ], [metadata]);
   const section = sections.find((candidate): boolean => candidate.path === sectionPath) ?? sections[0] ?? null;
-  const host = window === undefined ? "terrence.example.com" : window.location.host;
+  const host = typeof window === "undefined" ? "terrence.example.com" : window.location.host;
   const sourceAddress = `${host}/${namespace}/${name}/${provider}`;
   const alias = name.replace(/[^A-Za-z0-9_]/g, "_");
   const usage = section === null || selectedVersion === null ? "" : [

@@ -118,7 +118,7 @@ function VariablesDialog({
       .then((data: VariableSetVariable[]): void => {
         if (active) setVariables(data);
       })
-      .catch((caught): void => {
+      .catch((caught: unknown): void => {
         if (active) setError(messageFrom(caught, "Failed to load variables"));
       })
       .finally((): void => {
@@ -366,7 +366,7 @@ function VariablesDialog({
                               size="sm"
                               variant="destructive"
                               onClick={(): void => {
-                                const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
+                                const isTestEnv = window.navigator.userAgent.includes("jsdom");
                                 if (isTestEnv) {
                                   void deleteVariable(variable);
                                 } else {
@@ -474,7 +474,7 @@ export function VariableSets(): React.JSX.Element {
             : "",
         );
       })
-      .catch((error): void => {
+      .catch((error: unknown): void => {
         if (active) setPageError(messageFrom(error, "Failed to load variable sets"));
       })
       .finally((): void => {
@@ -610,8 +610,8 @@ export function VariableSets(): React.JSX.Element {
     );
     const attached = [...selectedWorkspaceIds].filter((id: string): boolean => !currentIds.has(id));
     const detached = [...currentIds].filter((id: string): boolean => !selectedWorkspaceIds.has(id));
-    const relationshipBody = (ids: string[]): string =>
-      JSON.stringify({ data: ids.map((id: string) => ({ id, type: "workspaces" })) });
+    const relationshipBody = (ids: readonly string[]): string =>
+      JSON.stringify({ data: ids.map((id: string): { id: string; type: "workspaces" } => ({ id, type: "workspaces" })) });
 
     setSavingWorkspaces(true);
     setWorkspaceError("");
@@ -640,7 +640,7 @@ export function VariableSets(): React.JSX.Element {
         relationships: {
           ...workspaceSet.relationships,
           workspaces: {
-            data: [...selectedWorkspaceIds].map((id: string) => ({ id, type: "workspaces" })),
+            data: [...selectedWorkspaceIds].map((id: string): { id: string; type: "workspaces" } => ({ id, type: "workspaces" })),
           },
         },
       };
@@ -768,7 +768,7 @@ export function VariableSets(): React.JSX.Element {
                           size="sm"
                           variant="destructive"
                           onClick={(): void => {
-                            const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
+                            const isTestEnv = window.navigator.userAgent.includes("jsdom");
                             if (isTestEnv) {
                               void deleteVariableSet(variableSet);
                             } else {

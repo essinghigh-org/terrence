@@ -19,6 +19,7 @@ export type SseEvent = Readonly<{
 }>;
 
 export type EventStreamHandle = Readonly<{ close: () => void }>;
+type EventHandler = (event: Readonly<{ name: string; data: Readonly<JsonObject> }>) => void;
 
 /**
  * Authenticated Server-Sent Events subscription (10.20). Connects to
@@ -27,13 +28,14 @@ export type EventStreamHandle = Readonly<{ close: () => void }>;
  * Closing the handle or aborting the signal stops the loop.
  */
 export function subscribeEvents(
-  onEvent: (event: SseEvent) => void,
+  onEvent: EventHandler,
   signal?: Readonly<AbortSignal>,
 ): EventStreamHandle {
   const controller = new AbortController();
   let closed = false;
   let retryMs = 1000;
   let timer: number | undefined;
+  const shouldStop = (): boolean => closed || controller.signal.aborted;
 
   const close = (): void => {
     if (closed) return;
@@ -53,20 +55,20 @@ export function subscribeEvents(
   signal?.addEventListener("abort", outerAbort, { once: true });
 
   const open = async (): Promise<void> => {
-    if (closed || controller.signal.aborted) return;
+    if (shouldStop()) return;
     let token: string | null = null;
     try {
       token = await prepareAuthToken();
     } catch {
       token = null;
     }
-    if (closed || controller.signal.aborted) return;
+    if (shouldStop()) return;
     try {
       const response = await fetch("/api/v2/events", {
         headers: token !== null && token !== "" ? { Authorization: `Bearer ${token}` } : {},
         signal: controller.signal,
       });
-      if (closed) return;
+      if (shouldStop()) return;
       if (response.status === 401 || response.status === 403) {
         // Authentication failures are terminal: retrying cannot help and
         // would only spin against a revoked session.
@@ -100,7 +102,7 @@ export function subscribeEvents(
     } catch {
       // Stream ended or failed; reconnect below unless the caller closed.
     }
-    if (!closed && !controller.signal.aborted) {
+    if (!shouldStop()) {
       timer = window.setTimeout((): void => { void open(); }, retryMs);
       retryMs = Math.min(retryMs * 2, 30_000);
     }

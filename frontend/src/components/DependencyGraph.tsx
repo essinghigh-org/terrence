@@ -143,7 +143,7 @@ function buildGraphModel(resources: readonly DependencyGraphResource[]): GraphMo
   const nodeAddresses = new Set(nodes.map((node): string => node.address));
   const edges = nodes.flatMap((node): readonly Readonly<{ from: string; to: string }>[] => node.dependencies
     .filter((dependency): boolean => nodeAddresses.has(dependency))
-    .map((dependency) => ({ from: dependency, to: node.address })));
+    .map((dependency): Readonly<{ from: string; to: string }> => ({ from: dependency, to: node.address })));
   if (nodes.length < 2 || edges.length === 0) return null;
 
   const levels = new Map<string, number>();
@@ -222,8 +222,11 @@ function providerTypeFrom(address: string, details: ResourceDetails | undefined)
 }
 
 function colorFor(provider: string): string {
+  const color = Object.prototype.hasOwnProperty.call(PROVIDER_COLORS, provider)
+    ? PROVIDER_COLORS[provider as keyof typeof PROVIDER_COLORS]
+    : undefined;
   // SAFETY: unknown provider names fall through to DEFAULT_PROVIDER_COLOR below.
-  return PROVIDER_COLORS[provider as keyof typeof PROVIDER_COLORS] ?? DEFAULT_PROVIDER_COLOR;
+  return color ?? DEFAULT_PROVIDER_COLOR;
 }
 
 function iconFor(providerType: string): LucideIcon {
@@ -288,7 +291,7 @@ function toFlowEdges(model: GraphModel, dark: boolean): FlowEdge[] {
 
 function useDarkMode(): boolean {
   const [dark, setDark] = useState((): boolean =>
-    document !== undefined && document.documentElement.classList.contains("dark"));
+    typeof document !== "undefined" && document.documentElement.classList.contains("dark"));
   useEffect((): (() => void) => {
     const root = document.documentElement;
     const observer = new MutationObserver((): void => {

@@ -37,7 +37,6 @@ import {
   type ColumnStorageMode,
   type DrizzleColumnMode,
   type IndexDef,
-  type SourceSchema,
   type TableDef,
 } from "./ddl";
 import {
@@ -267,17 +266,22 @@ export function freshSteps(): WizardStep[] {
  * max: 1 — the migration is a single-operator, sequential maintenance
  * operation, and Bun.SQL only permits manual transaction control (BEGIN /
  * ROLLBACK, used by the schema-writable probe) on single-connection pools. */
-export async function openPostgres(url: string): Promise<Bun.SQL> {
+type MigrationSql = {
+  readonly unsafe: <T = unknown>(query: string, values?: readonly unknown[]) => Promise<T[]>;
+  readonly end: (options?: { readonly timeout?: number }) => Promise<void>;
+}
+
+export async function openPostgres(url: string): Promise<MigrationSql> {
   return new Bun.SQL({ url, max: 1 });
 }
 
 /** Test a PostgreSQL connection and report server/database/latency. */
 export async function testConnection(url: string): Promise<ConnectionTestResult> {
   const started = performance.now();
-  let sql: Bun.SQL | null = null;
+  let sql: MigrationSql | null = null;
   try {
     sql = await openPostgres(url);
-    const rows = await sql.unsafe("SELECT version() AS version, current_database() AS database");
+    const rows = await sql.unsafe<PostgresVersionRow>("SELECT version() AS version, current_database() AS database");
     const version = typeof rows[0]?.version === "string" ? rows[0].version : null;
     const database = typeof rows[0]?.database === "string" ? rows[0].database : null;
     return { ok: true, version, database, latencyMs: Math.round(performance.now() - started), error: null };
@@ -303,8 +307,11 @@ function parsePostgresVersion(version: string): number {
 }
 
 type CompatibilityCheck = { name: string; ok: boolean; detail: string };
+type PostgresVersionRow = Readonly<{ version?: unknown; database?: unknown }>;
+type PostgresCountRow = Readonly<{ n?: string | number }>;
+type MigrationJournalRow = Readonly<{ hash: unknown; createdAt: unknown }>;
 
-async function checkTemporaryTableWritable(sql: Bun.SQL): Promise<CompatibilityCheck> {
+async function checkTemporaryTableWritable(sql: MigrationSql): Promise<CompatibilityCheck> {
   try {
     await sql.unsafe("CREATE TEMP TABLE _terrence_probe (id integer)");
     await sql.unsafe("DROP TABLE _terrence_probe");
@@ -318,7 +325,7 @@ async function checkTemporaryTableWritable(sql: Bun.SQL): Promise<CompatibilityC
   }
 }
 
-async function checkSchemaWritable(sql: Bun.SQL): Promise<CompatibilityCheck> {
+async function checkSchemaWritable(sql: MigrationSql): Promise<CompatibilityCheck> {
   try {
     await sql.unsafe("BEGIN; CREATE TABLE _terrence_schema_probe (id integer); ROLLBACK");
     return { name: "schema-writable", ok: true, detail: "Schema creation works in this database" };
@@ -331,7 +338,7 @@ async function checkSchemaWritable(sql: Bun.SQL): Promise<CompatibilityCheck> {
   }
 }
 
-async function checkReplicaRoleWritable(sql: Bun.SQL): Promise<CompatibilityCheck> {
+async function checkReplicaRoleWritable(sql: MigrationSql): Promise<CompatibilityCheck> {
   try {
     // The copy disables FK enforcement with session_replication_role, which
     // requires superuser (or the SET privilege); the check mirrors the copy
@@ -351,10 +358,10 @@ async function checkReplicaRoleWritable(sql: Bun.SQL): Promise<CompatibilityChec
 /** Check the target is empty, recent enough, and writable. */
 export async function checkCompatibility(url: string): Promise<CompatibilityResult> {
   const checks: CompatibilityCheck[] = [];
-  let sql: Bun.SQL | null = null;
+  let sql: MigrationSql | null = null;
   try {
     sql = await openPostgres(url);
-    const versionRow = await sql.unsafe("SELECT version() AS version");
+    const versionRow = await sql.unsafe<PostgresVersionRow>("SELECT version() AS version");
     const version = typeof versionRow[0]?.version === "string" ? versionRow[0].version : "unknown";
     const major = parsePostgresVersion(version);
     const versionSupported = major >= MIN_POSTGRES_VERSION;
@@ -366,11 +373,11 @@ export async function checkCompatibility(url: string): Promise<CompatibilityResu
         : `PostgreSQL ${major} is older than the supported minimum (${MIN_POSTGRES_VERSION})`,
     });
 
-    const tableRow = await sql.unsafe(
+    const tableRow = await sql.unsafe<PostgresCountRow>(
       "SELECT count(*)::bigint AS n FROM information_schema.tables WHERE table_schema = 'public'",
     );
     const tableCount = Number(tableRow[0]?.n ?? 0);
-    const journalRow = await sql.unsafe(
+    const journalRow = await sql.unsafe<PostgresCountRow>(
       "SELECT count(*)::bigint AS n FROM information_schema.tables WHERE table_schema = 'drizzle'",
     );
     const journalTables = Number(journalRow[0]?.n ?? 0);
@@ -432,6 +439,12 @@ type TablePlan = Readonly<{
   fkNames: readonly string[];
 }>;
 
+type ReadonlySourceSchema = Readonly<{
+  tables: readonly TableDef[];
+  indexes: readonly IndexDef[];
+  triggers: readonly Readonly<{ name: string; sql: string }>[];
+}>;
+
 function copyMode(declaredType: string, drizzleMode: DrizzleColumnMode | undefined): ColumnStorageMode {
   if (drizzleMode === "boolean") return "boolean";
   if (drizzleMode === "json") return "json";
@@ -454,7 +467,7 @@ function copyMode(declaredType: string, drizzleMode: DrizzleColumnMode | undefin
   }
 }
 
-function buildTablePlan(table: TableDef, modes: ReadonlyMap<string, DrizzleColumnMode>): TablePlan {
+function buildTablePlan(table: TableDef, modes: Readonly<ReadonlyMap<string, DrizzleColumnMode>>): TablePlan {
   const pkColumns = table.compositePk !== null && table.compositePk.length > 0
     ? table.compositePk
     : table.columns.filter((column): boolean => column.primaryKey).map((column): string => column.name);
@@ -472,7 +485,7 @@ function buildTablePlan(table: TableDef, modes: ReadonlyMap<string, DrizzleColum
   return { def: table, copy, fkNames };
 }
 
-function planTables(schema: SourceSchema): TablePlan[] {
+function planTables(schema: ReadonlySourceSchema): TablePlan[] {
   const modes = collectDrizzleModes(schemaModule);
   return schema.tables
     .filter((table): boolean => !METADATA_TABLES.has(table.name))
@@ -558,8 +571,8 @@ function stepIndex(state: WizardState, key: WizardStepKey): number {
 
 type JobContext = Readonly<{
   state: WizardState;
-  target: Bun.SQL;
-  source: Database;
+  target: MigrationSql;
+  source: Readonly<Database> | null;
   setState: (next: WizardState) => void;
 }>;
 
@@ -568,7 +581,7 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
   let source: Database | null = null;
   try {
     let state = initial;
-    const run = async (stepKey: WizardStepKey, fn: (ctx: JobContext) => Promise<void>): Promise<void> => {
+    const run = async (stepKey: WizardStepKey, fn: (ctx: Readonly<JobContext>) => Promise<void>): Promise<void> => {
       if (cancelRequested) throw new WizardAbortError();
       const index = stepIndex(state, stepKey);
       const startedAt = new Date().toISOString();
@@ -578,7 +591,7 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
           i === index ? { ...step, status: "running", startedAt, error: null } : step),
       });
       try {
-        await fn({ state, target, source: source!, setState: (next): void => { state = next; } });
+        await fn({ state, target, source, setState: (next): void => { state = next; } });
         state = saveWizardState({
           ...state,
           steps: state.steps.map((step, i): WizardStep =>
@@ -631,12 +644,12 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
     await run("checkpoint", async (): Promise<void> => {
       await checkpointWithRetries();
     });
-    source = openSourceSnapshot();
-    if (source === null) throw new WizardError("Source database unavailable");
+    const sourceSnapshot = openSourceSnapshot();
+    source = sourceSnapshot;
     let plans: TablePlan[] = [];
     let report = emptyReport();
     await run("schema", async (ctx): Promise<void> => {
-      const schema = inspectSourceSchema(source!);
+      const schema = inspectSourceSchema(sourceSnapshot);
       for (const table of schema.tables) assertNoUnparsedColumns(table);
       cachedIndexes = schema.indexes;
       plans = planTables(schema);
@@ -687,8 +700,7 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
         const fkStatements = generateForeignKeySql(plan.def);
         if (fkStatements.length > 0) await target.unsafe(fkStatements.join("\n"));
       }
-      if (source === null) throw new WizardError("Source database unavailable");
-      await seedMigrationJournal(source, target);
+      await seedMigrationJournal(sourceSnapshot, target);
       ctx.setState({ ...ctx.state, report });
     });
     await run("copy", async (ctx): Promise<void> => {
@@ -707,8 +719,7 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
           if (plan === undefined) continue;
           const startedAt = Date.now();
           try {
-            if (source === null) throw new WizardError("Source database unavailable");
-            await copyTable(source, target, plan.copy, {
+            await copyTable(sourceSnapshot, target, plan.copy, {
               isCancelled: (): boolean => cancelRequested,
               onBatch: (batch): void => {
                 const now = Date.now();
@@ -773,15 +784,13 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
       const verification: TableVerifyResult[] = [];
       const fkNames = new Map(plans.map((plan): [string, readonly string[]] => [plan.def.name, plan.fkNames]));
       for (const plan of plans) {
-        if (source === null) throw new WizardError("Source database unavailable");
-        const sourceCount = Number((source.query(`SELECT COUNT(*) AS n FROM "${plan.def.name}"`).get() as { n: number }).n);
-        const targetCountRow = await target.unsafe(`SELECT count(*)::bigint AS n FROM "${plan.def.name}"`);
+        const sourceCount = (sourceSnapshot.query(`SELECT COUNT(*) AS n FROM "${plan.def.name}"`).get() as { n: number }).n;
+        const targetCountRow = await target.unsafe<PostgresCountRow>(`SELECT count(*)::bigint AS n FROM "${plan.def.name}"`);
         const targetCount = Number(targetCountRow[0]?.n ?? 0);
         let digestMatch: boolean | null = null;
         let digestSkipped: string | null = null;
         if (plan.copy.pkColumns.length > 0) {
-          if (source === null) throw new WizardError("Source database unavailable");
-          const sourceDigest = digestTableSource(source, plan.copy);
+          const sourceDigest = digestTableSource(sourceSnapshot, plan.copy);
           const targetDigest = await digestTableTarget(target, plan.copy);
           digestMatch = sourceDigest.digest === targetDigest.digest && sourceDigest.rows === targetDigest.rows;
           if (!digestMatch) {
@@ -799,9 +808,8 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
           digestSkipped,
         });
       }
-      if (source === null) throw new WizardError("Source database unavailable");
       const violations = await validateForeignKeys(target, plans.map((plan): CopyTable => plan.copy), fkNames);
-      const journalMatch = await verifyJournal(source, target);
+      const journalMatch = await verifyJournal(sourceSnapshot, target);
       report = { ...report, fkViolations: violations, journalMatch };
       const mismatches = verification.filter((row): boolean => !row.countMatch || row.digestMatch === false);
       if (mismatches.length > 0 || violations.length > 0 || !journalMatch) {
@@ -871,7 +879,7 @@ function openSourceSnapshot(): Database {
   return client;
 }
 
-function closeSourceSnapshot(client: Database): void {
+function closeSourceSnapshot(client: Readonly<Database>): void {
   try { client.run("ROLLBACK"); } catch { /* best effort */ }
   try { client.close(); } catch { /* best effort */ }
 }
@@ -893,7 +901,7 @@ async function checkpointWithRetries(): Promise<void> {
   }
 }
 
-async function waitForDrain(ctx: JobContext): Promise<void> {
+async function waitForDrain(ctx: Readonly<JobContext>): Promise<void> {
   if (envEnabled(process.env.MIGRATION_SKIP_DRAIN)) {
     ctx.setState({
       ...ctx.state,
@@ -911,9 +919,9 @@ async function waitForDrain(ctx: JobContext): Promise<void> {
       db.select({ n: count() }).from(agentJobs).where(eq(agentJobs.status, "claimed")),
       db.select({ n: count() }).from(assessmentResults).where(eq(assessmentResults.status, "running")),
     ]);
-    const active = Number(activeRuns[0]?.n ?? 0);
-    const claimed = Number(claimedAgentJobs[0]?.n ?? 0);
-    const assessments = Number(runningAssessments[0]?.n ?? 0);
+    const active = activeRuns[0]?.n ?? 0;
+    const claimed = claimedAgentJobs[0]?.n ?? 0;
+    const assessments = runningAssessments[0]?.n ?? 0;
     if (active === 0 && claimed === 0 && assessments === 0) {
       ctx.setState({
         ...ctx.state,
@@ -944,9 +952,9 @@ async function waitForDrain(ctx: JobContext): Promise<void> {
 // source so the app's PG migrator sees every migration as already applied and
 // boots without re-running DDL (which would conflict with the copied schema).
 // ---------------------------------------------------------------------------
-async function seedMigrationJournal(source: Database, target: Bun.SQL): Promise<void> {
-  const rows = source.query(`SELECT hash, created_at FROM "__drizzle_migrations" ORDER BY id`).all() as
-    readonly { hash: unknown; created_at: unknown }[];
+async function seedMigrationJournal(source: Readonly<Database>, target: MigrationSql): Promise<void> {
+  const rows = source.query(`SELECT hash, created_at AS "createdAt" FROM "__drizzle_migrations" ORDER BY id`).all() as
+    readonly MigrationJournalRow[];
   await target.unsafe("CREATE SCHEMA IF NOT EXISTS drizzle");
   await target.unsafe(
     `CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
@@ -961,7 +969,7 @@ async function seedMigrationJournal(source: Database, target: Bun.SQL): Promise<
     const groups: string[] = [];
     for (const row of rows) {
       const hash = typeof row.hash === "string" ? row.hash : "";
-      const createdAt = Number(row.created_at ?? 0);
+      const createdAt = Number(row.createdAt ?? 0);
       params.push(hash, Number.isFinite(createdAt) ? Math.round(createdAt) : 0);
       groups.push(`($${params.length - 1}, $${params.length})`);
     }
@@ -972,15 +980,15 @@ async function seedMigrationJournal(source: Database, target: Bun.SQL): Promise<
   }
 }
 
-async function verifyJournal(source: Database, target: Bun.SQL): Promise<boolean> {
-  const sourceRows = source.query(`SELECT hash, created_at FROM "__drizzle_migrations" ORDER BY id`).all() as
-    readonly { hash: unknown; created_at: unknown }[];
-  const targetRows = await target.unsafe(
-    "SELECT hash, created_at::bigint AS created_at FROM drizzle.__drizzle_migrations ORDER BY id",
+async function verifyJournal(source: Readonly<Database>, target: MigrationSql): Promise<boolean> {
+  const sourceRows = source.query(`SELECT hash, created_at AS "createdAt" FROM "__drizzle_migrations" ORDER BY id`).all() as
+    readonly MigrationJournalRow[];
+  const targetRows = await target.unsafe<MigrationJournalRow>(
+    "SELECT hash, created_at::bigint AS \"createdAt\" FROM drizzle.__drizzle_migrations ORDER BY id",
   );
   if (sourceRows.length !== targetRows.length) return false;
   return sourceRows.every((row, index): boolean =>
-    row.hash === targetRows[index]?.hash && Number(row.created_at ?? 0) === Number(targetRows[index]?.created_at ?? 0));
+    row.hash === targetRows[index]?.hash && Number(row.createdAt ?? 0) === Number(targetRows[index]?.createdAt ?? 0));
 }
 
 function emptyReport(): MigrationReport {

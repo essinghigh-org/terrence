@@ -934,7 +934,7 @@ export function OrganizationSettings(): React.JSX.Element {
                             aria-label={`Remove ${membership.attributes.username ?? membership.attributes.email ?? "user"}`}
                             disabled={!canManageUsers}
                             onClick={(): void => {
-                              const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
+                              const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
                               if (isTestEnv) { void removeMembership(membership); }
                               else { setMemberToRemove(membership); }
                             }}
@@ -1274,7 +1274,7 @@ team.attributes["name"] as string}</option>
                               aria-label={`Remove ${membership.attributes.email ?? membership.attributes.username ?? "user"}`}
                               disabled={!canManageUsers}
                               onClick={(): void => {
-                                const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
+                                const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
                                 if (isTestEnv) {
                                   void removeMembership(membership);
                                 } else {

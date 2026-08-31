@@ -40,11 +40,12 @@ import { WorkspaceDestruction } from "../components/WorkspaceDestruction";
 import { RunDetail } from "./RunDetail";
 import { RunList } from "./RunList";
 import { StateHistory } from "./StateHistory";
-import { ArrowUpRight, Play, Lock, LockOpen, Info, CheckCircle2, Copy } from "lucide-react";
+import { Play, Lock, LockOpen, Info, CheckCircle2, Copy } from "lucide-react";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { cn } from "../lib/utils";
-import { formatDate, formatDateTime } from "../lib/utils";
+import { formatDate, formatDateTime, formatRelativeTime } from "../lib/utils";
 import { formatRunSource, formatRunStatus } from "../lib/run-labels";
+import { WorkspaceRepositoryLink } from "../components/WorkspaceRepositoryLink";
 import { isNumber, isString } from "../lib/type-guards";
 import type { JsonValue } from "@/lib/json";
 
@@ -123,19 +124,6 @@ type RunSummary = {
     status: string;
     [key: string]: JsonValue;
   };
-}
-
-type WorkspaceVcsRepo = NonNullable<Workspace["attributes"]["vcs-repo"]>;
-
-const GITHUB_REPOSITORY_PART = /^(?!\.{1,2}$)[A-Za-z0-9.][A-Za-z0-9_.-]*$/;
-
-function githubRepositoryUrl(repo: WorkspaceVcsRepo | null | undefined): string | null {
-  if (!isString(repo?.["github-app-installation-id"]) || repo["github-app-installation-id"] === "") return null;
-  const identifier = repo.identifier?.trim();
-  if (identifier === undefined) return null;
-  const parts = identifier.split("/");
-  if (parts.length !== 2 || parts.some((part): boolean => !GITHUB_REPOSITORY_PART.test(part))) return null;
-  return `https://github.com/${parts.map((part): string => encodeURIComponent(part)).join("/")}`;
 }
 
 export function WorkspaceDetail({
@@ -360,9 +348,6 @@ export function WorkspaceDetail({
   const latestRunCounts = latestRun?.attributes;
   const latestRunSource = latestRun?.attributes.source;
   const latestRunTriggerReason = latestRun?.attributes["trigger-reason"];
-  const vcsRepo = workspace.attributes["vcs-repo"];
-  const repositoryIdentifier = vcsRepo?.identifier;
-  const repositoryUrl = githubRepositoryUrl(vcsRepo);
   const workingDirectory = workspace.attributes["working-directory"];
   const displayedWorkingDirectory = isString(workingDirectory) && workingDirectory.trim() !== ""
     ? workingDirectory.trim()
@@ -695,8 +680,8 @@ export function WorkspaceDetail({
                       </p>
                       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
                         {isString(latestRunCreatedAt) && latestRunCreatedAt !== "" && (
-                          <time dateTime={latestRunCreatedAt}>
-                            {formatDateTime(latestRunCreatedAt)}
+                          <time dateTime={latestRunCreatedAt} title={formatDateTime(latestRunCreatedAt)}>
+                            {formatRelativeTime(latestRunCreatedAt)}
                           </time>
                         )}
                         {latestRunSource !== undefined && (
@@ -750,22 +735,7 @@ export function WorkspaceDetail({
                   <div>
                     <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Repository</div>
                     <div className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium text-foreground">
-                      {isString(repositoryIdentifier) && repositoryIdentifier.trim() !== "" ? (
-                        repositoryUrl === null ? (
-                          <code className="break-all">{repositoryIdentifier}</code>
-                        ) : (
-                          <a
-                            href={repositoryUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex min-w-0 items-center gap-1 text-primary hover:underline"
-                            aria-label={`Open GitHub repository ${repositoryIdentifier}`}
-                          >
-                            <span className="break-all">{repositoryIdentifier}</span>
-                            <ArrowUpRight className="size-3.5 shrink-0" aria-hidden="true" />
-                          </a>
-                        )
-                      ) : "Not configured"}
+                      <WorkspaceRepositoryLink repo={workspace.attributes["vcs-repo"]} />
                     </div>
                   </div>
                   <div>

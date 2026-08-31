@@ -277,14 +277,14 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
         const current = new Set(isGlobal ? attachedExclusionIds : attachedWorkspaceIds);
         const toAdd = [...selectedWorkspaces].filter((id): boolean => !current.has(id));
         const toRemove = [...current].filter((id): boolean => !selectedWorkspaces.has(id));
-        if (toAdd.length > 0) await fetchApi(endpoint, { method: "POST", body: JSON.stringify({ data: toAdd.map((id) => ({ id, type: "workspaces" })) }) });
-        if (toRemove.length > 0) await fetchApi(endpoint, { method: "DELETE", body: JSON.stringify({ data: toRemove.map((id) => ({ id, type: "workspaces" })) }) });
+        if (toAdd.length > 0) await fetchApi(endpoint, { method: "POST", body: JSON.stringify({ data: toAdd.map((id): { id: string; type: string } => ({ id, type: "workspaces" })) }) });
+        if (toRemove.length > 0) await fetchApi(endpoint, { method: "DELETE", body: JSON.stringify({ data: toRemove.map((id): { id: string; type: string } => ({ id, type: "workspaces" })) }) });
       } else {
         const current = new Set(attachedProjectIds);
         const toAdd = [...selectedProjects].filter((id): boolean => !current.has(id));
         const toRemove = [...current].filter((id): boolean => !selectedProjects.has(id));
-        if (toAdd.length > 0) await fetchApi(endpoint, { method: "POST", body: JSON.stringify({ data: toAdd.map((id) => ({ id, type: "projects" })) }) });
-        if (toRemove.length > 0) await fetchApi(endpoint, { method: "DELETE", body: JSON.stringify({ data: toRemove.map((id) => ({ id, type: "projects" })) }) });
+        if (toAdd.length > 0) await fetchApi(endpoint, { method: "POST", body: JSON.stringify({ data: toAdd.map((id): { id: string; type: string } => ({ id, type: "projects" })) }) });
+        if (toRemove.length > 0) await fetchApi(endpoint, { method: "DELETE", body: JSON.stringify({ data: toRemove.map((id): { id: string; type: string } => ({ id, type: "projects" })) }) });
       }
       if (requestedSet.current !== setId) return;
       setAttachWorkspaceOpen(false);

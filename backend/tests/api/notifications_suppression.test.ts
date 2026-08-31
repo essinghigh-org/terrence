@@ -12,7 +12,7 @@ import {
   users,
   workspaces,
 } from "../../src/db/schema";
-import { _dedup, deliverRunNotifications } from "../../src/lib/notifications";
+import { resetDedupForTests, deliverRunNotifications } from "../../src/lib/notifications";
 
 describe("Notification suppression (kanban 7.8 / NOT-012)", () => {
   const suffix = crypto.randomUUID();
@@ -50,7 +50,7 @@ describe("Notification suppression (kanban 7.8 / NOT-012)", () => {
     await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId));
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.delete(users).where(eq(users.username, userId));
-    _dedup(true);
+    resetDedupForTests(true);
     if (priorAllowPrivateUrls === undefined) {
       delete process.env.TERRENCE_ALLOW_PRIVATE_URLS;
     } else {
@@ -79,7 +79,7 @@ describe("Notification suppression (kanban 7.8 / NOT-012)", () => {
         createdBy: userId,
         createdAt: Date.now(),
       });
-      _dedup(true);
+      resetDedupForTests(true);
       const deliveries = await deliverRunNotifications(runId, "run:completed", "completed");
       expect(deliveries).toEqual([]);
     } finally {
@@ -117,7 +117,7 @@ describe("Notification suppression (kanban 7.8 / NOT-012)", () => {
         createdAt: Date.now(),
         configurationVersionId: cvId,
       });
-      _dedup(true);
+      resetDedupForTests(true);
       const deliveries = await deliverRunNotifications(runId, "run:completed", "completed");
       expect(deliveries).toEqual([]);
     } finally {
@@ -156,7 +156,7 @@ describe("Notification suppression (kanban 7.8 / NOT-012)", () => {
         createdAt: Date.now(),
         configurationVersionId: cvId,
       });
-      _dedup(true);
+      resetDedupForTests(true);
       // Delivery should be attempted (the destination is unreachable, but a
       // delivery object is returned rather than an empty array). The run is
       // remote-execution and non-speculative, so the new suppression guards

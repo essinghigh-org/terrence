@@ -107,7 +107,7 @@ export function OidcConfigurations(): React.JSX.Element {
     }
   };
 
-  const buildAttributes = () => {
+  const buildAttributes = (): Readonly<Record<string, string>> => {
     switch (configType) {
       case "aws-oidc-configurations":
         return { "role-arn": roleArn.trim() };
@@ -210,7 +210,9 @@ export function OidcConfigurations(): React.JSX.Element {
                 </TableRow>
               ) : configs.map((config): React.JSX.Element => {
                 // SAFETY: unknown config types fall back to the raw type string.
-                const typeLabel = TYPE_LABELS[config.type as keyof typeof TYPE_LABELS] ?? config.type;
+                const typeLabel = Object.prototype.hasOwnProperty.call(TYPE_LABELS, config.type)
+                  ? TYPE_LABELS[config.type as keyof typeof TYPE_LABELS]
+                  : config.type;
                 return (
                 <TableRow key={config.id}>
                   <TableCell className="font-medium">

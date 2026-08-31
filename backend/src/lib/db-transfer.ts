@@ -153,6 +153,7 @@ export type TransferTarget = {
 /** All Drizzle tables of the Terrence schema, in definition order. */
 const TABLE_NAME = Symbol.for("drizzle:Name");
 const TABLE_COLUMNS = Symbol.for("drizzle:Columns");
+const SQLITE_FOREIGN_KEYS_COLUMN = "foreign_keys";
 
 export function schemaTables(): readonly TransferTable[] {
   const out: TransferTable[] = [];
@@ -218,8 +219,10 @@ function normalizeText(value: unknown): string {
   if (typeof value === "number" || typeof value === "bigint") return String(value);
   if (typeof value === "boolean") return value ? "1" : "0";
   if (value instanceof Date) return value.toISOString();
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
+  if (typeof value === "object") return JSON.stringify(value) ?? "";
+  if (typeof value === "symbol") return value.toString();
+  if (typeof value === "function") return value.name;
+  return "";
 }
 
 export function normalizeValue(value: unknown, column: TransferColumn): unknown {
@@ -276,7 +279,7 @@ export function toColumnMode(column: TransferColumn): ColumnMode {
  * agree regardless of physical row order.
  */
 export async function digestTable(
-  source: Digestable,
+  source: Readonly<Digestable>,
   table: TransferTable,
   options: { readonly fullDigestLimit?: number; readonly sampleLimit?: number } = {},
 ): Promise<{ readonly digest: string; readonly rows: number }> {
@@ -334,7 +337,8 @@ export function topologicalOrder(tables: readonly string[], edges: readonly Fore
   const ready = tables.filter((name) => (parentCount.get(name) ?? 0) === 0);
   const ordered: string[] = [];
   while (ready.length > 0) {
-    const name = ready.shift()!;
+    const name = ready.shift();
+    if (name === undefined) break;
     ordered.push(name);
     for (const child of childrenOf.get(name) ?? []) {
       const remaining = (parentCount.get(child) ?? 0) - 1;
@@ -360,7 +364,7 @@ export class SqliteTransferTarget implements TransferTarget {
   readonly #path: string;
   #finished = false;
 
-  private constructor(client: Database, path: string) {
+  private constructor(client: Readonly<Database>, path: string) {
     this.#client = client;
     this.#path = path;
   }
@@ -370,7 +374,7 @@ export class SqliteTransferTarget implements TransferTarget {
    * pragmas and, by default, the full Drizzle migration schema so a fresh
    * Terrence instance can boot against the finished file.
    */
-  static create(path: string, options: SqliteTargetOptions = {}): SqliteTransferTarget {
+  public static create(path: string, options: SqliteTargetOptions = {}): SqliteTransferTarget {
     const client = new Database(path, { create: true });
     client.run("PRAGMA journal_mode = WAL;");
     client.run("PRAGMA busy_timeout = 5000;");
@@ -426,11 +430,11 @@ export class SqliteTransferTarget implements TransferTarget {
     return new SqliteTransferTarget(client, path);
   }
 
-  get path(): string {
+  public get path(): string {
     return this.#path;
   }
 
-  async listForeignKeys(): Promise<readonly ForeignKeyEdge[]> {
+  public async listForeignKeys(): Promise<readonly ForeignKeyEdge[]> {
     const tables = this.#client.query(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != '__drizzle_migrations'",
     ).all() as { name: string }[];
@@ -442,27 +446,27 @@ export class SqliteTransferTarget implements TransferTarget {
     return edges;
   }
 
-  async listUniqueIndexes(): Promise<readonly UniqueIndex[]> {
+  public async listUniqueIndexes(): Promise<readonly UniqueIndex[]> {
     const indexes = this.#client.query(
-      "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL AND upper(sql) LIKE '%UNIQUE%'",
-    ).all() as { name: string; tbl_name: string; sql: string }[];
+      "SELECT name, tbl_name AS tableName, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL AND upper(sql) LIKE '%UNIQUE%'",
+    ).all() as { name: string; tableName: string; sql: string }[];
     const out: UniqueIndex[] = [];
     for (const index of indexes) {
       const cols = this.#client.query(`PRAGMA index_info("${index.name}")`).all() as { name: string | null }[];
       const names = cols.map((c) => c.name).filter((c): c is string => c !== null);
-      if (names.length > 0) out.push({ name: index.name, table: index.tbl_name, columns: names });
+      if (names.length > 0) out.push({ name: index.name, table: index.tableName, columns: names });
     }
     return out;
   }
 
-  async beginTable(name: string): Promise<void> {
+  public async beginTable(name: string): Promise<void> {
     // Idempotent retry: a re-run of a partially copied table starts clean.
     // Each insert batch runs in its own small transaction, so a failed batch
     // rolls back alone; a retried transfer wipes the table first via DELETE.
     this.#client.run(`DELETE FROM "${name}"`);
   }
 
-  async insertRows(
+  public async insertRows(
     name: string,
     columns: readonly TransferColumn[],
     rows: readonly (readonly unknown[])[],
@@ -475,7 +479,12 @@ export class SqliteTransferTarget implements TransferTarget {
     this.#client.run("BEGIN");
     try {
       for (const row of rows) {
-        statement.run(...(row.map((value, i) => normalizeValue(value, columns[i]!)) as never[]));
+        const normalized = row.map((value, i): unknown => {
+          const column = columns[i];
+          if (column === undefined) throw new Error(`Row for table "${name}" has more values than columns`);
+          return normalizeValue(value, column);
+        });
+        statement.run(...(normalized as never[]));
       }
       this.#client.run("COMMIT");
     } catch (error) {
@@ -484,16 +493,16 @@ export class SqliteTransferTarget implements TransferTarget {
     }
   }
 
-  async commitTable(_name: string): Promise<void> {
+  public async commitTable(_name: string): Promise<void> {
     // Per-batch transactions make a table-level commit a no-op.
   }
 
-  async count(name: string): Promise<number> {
+  public async count(name: string): Promise<number> {
     const row = this.#client.query(`SELECT COUNT(*) AS n FROM "${name}"`).get() as { n: number } | null;
     return row?.n ?? 0;
   }
 
-  async queryDistinctCount(name: string, columns: readonly string[]): Promise<number> {
+  public async queryDistinctCount(name: string, columns: readonly string[]): Promise<number> {
     const quoted = columns.map((c) => `"${c}"`).join(",");
     const row = this.#client.query(`SELECT COUNT(*) AS n FROM (SELECT DISTINCT ${quoted} FROM "${name}")`).get() as
       | { n: number }
@@ -501,7 +510,7 @@ export class SqliteTransferTarget implements TransferTarget {
     return row?.n ?? 0;
   }
 
-  async streamRows(
+  public async streamRows(
     name: string,
     columns: readonly TransferColumn[],
     batchSize: number,
@@ -510,7 +519,7 @@ export class SqliteTransferTarget implements TransferTarget {
     await streamSqliteRows(this.#client, name, columns, batchSize, onBatch);
   }
 
-  async readSampleRows(
+  public async readSampleRows(
     name: string,
     columns: readonly TransferColumn[],
     orderColumns: readonly string[],
@@ -525,7 +534,7 @@ export class SqliteTransferTarget implements TransferTarget {
     return rows.map((row) => columns.map((c) => row[c.name]));
   }
 
-  async runForeignKeysCheck(): Promise<
+  public async runForeignKeysCheck(): Promise<
     readonly { table: string; rowid: number | null; parent: string; fkid: number }[]
   > {
     return this.#client.query("PRAGMA foreign_key_check").all() as {
@@ -536,12 +545,12 @@ export class SqliteTransferTarget implements TransferTarget {
     }[];
   }
 
-  async foreignKeysEnabled(): Promise<boolean> {
-    const row = this.#client.query("PRAGMA foreign_keys").get() as { foreign_keys: number } | null;
-    return row?.foreign_keys === 1;
+  public async foreignKeysEnabled(): Promise<boolean> {
+    const row = this.#client.query("PRAGMA foreign_keys").get() as Record<string, number> | null;
+    return row?.[SQLITE_FOREIGN_KEYS_COLUMN] === 1;
   }
 
-  async finishAndClose(): Promise<void> {
+  public async finishAndClose(): Promise<void> {
     if (this.#finished) return;
     this.#finished = true;
     try {
@@ -557,8 +566,8 @@ export class SqliteTransferTarget implements TransferTarget {
         throw new Error(`WAL checkpoint left ${checkpoint.busy} frame(s) busy; exported database may be incomplete`);
       }
       this.#client.run("PRAGMA foreign_keys = ON;");
-      const fk = this.#client.query("PRAGMA foreign_keys").get() as { foreign_keys: number } | null;
-      if (fk?.foreign_keys !== 1) {
+      const fk = this.#client.query("PRAGMA foreign_keys").get() as Record<string, number> | null;
+      if (fk?.[SQLITE_FOREIGN_KEYS_COLUMN] !== 1) {
         throw new Error("Failed to re-enable foreign key enforcement on the exported database");
       }
     } finally {
@@ -574,7 +583,7 @@ export class SqliteTransferTarget implements TransferTarget {
 
 /** Stream rows from a bun:sqlite connection with keyset/offset pagination. */
 async function streamSqliteRows(
-  client: Database,
+  client: Readonly<Database>,
   name: string,
   columns: readonly TransferColumn[],
   batchSize: number,
@@ -583,19 +592,21 @@ async function streamSqliteRows(
   const quotedCols = columns.map((c) => `"${c.name}"`).join(",");
   const primaryKey = columns.filter((c) => c.primary).map((c) => c.name);
   if (primaryKey.length === 1) {
+    const primaryColumn = primaryKey[0];
+    if (primaryColumn === undefined) return;
     // Keyset pagination: stable for tables mutated during the copy and
     // memory-bounded regardless of table size.
     let last: unknown = null;
     let started = false;
     for (;;) {
       const rows = (started
-        ? client.query(`SELECT ${quotedCols} FROM "${name}" WHERE "${primaryKey[0]}" > ? ORDER BY "${primaryKey[0]}" LIMIT ${batchSize}`)
-        : client.query(`SELECT ${quotedCols} FROM "${name}" ORDER BY "${primaryKey[0]}" LIMIT ${batchSize}`))
+        ? client.query(`SELECT ${quotedCols} FROM "${name}" WHERE "${primaryColumn}" > ? ORDER BY "${primaryColumn}" LIMIT ${batchSize}`)
+        : client.query(`SELECT ${quotedCols} FROM "${name}" ORDER BY "${primaryColumn}" LIMIT ${batchSize}`))
         .all(...(started ? [last as string | number | bigint | null] : [])) as Record<string, unknown>[];
       if (rows.length === 0) return;
       await onBatch(rows.map((row) => columns.map((c) => row[c.name])));
       started = true;
-      last = rows[rows.length - 1]?.[primaryKey[0]!] ?? null;
+      last = rows[rows.length - 1]?.[primaryColumn] ?? null;
     }
   }
   // No single-column PK: offset pagination (join tables are small).
@@ -617,30 +628,30 @@ export class SqliteTransferSource implements TransferSource {
     this.#client = new Database(path, { create: false, readonly: true });
   }
 
-  async ping(): Promise<void> {
+  public async ping(): Promise<void> {
     this.#client.query("SELECT 1").get();
   }
 
-  async hasTable(name: string): Promise<boolean> {
+  public async hasTable(name: string): Promise<boolean> {
     const row = this.#client.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) as
       | Record<string, unknown>
       | null;
     return row !== null && row !== undefined;
   }
 
-  async count(name: string): Promise<number> {
+  public async count(name: string): Promise<number> {
     const row = this.#client.query(`SELECT COUNT(*) AS n FROM "${name}"`).get() as { n: number } | null;
     return row?.n ?? 0;
   }
 
-  async countWhere(name: string, condition: string, params: readonly (string | number | bigint | null)[]): Promise<number> {
+  public async countWhere(name: string, condition: string, params: readonly (string | number | bigint | null)[]): Promise<number> {
     const row = this.#client.query(`SELECT COUNT(*) AS n FROM "${name}" WHERE ${condition}`).get(...params) as
       | { n: number }
       | null;
     return row?.n ?? 0;
   }
 
-  async queryDistinctCount(name: string, columns: readonly string[]): Promise<number> {
+  public async queryDistinctCount(name: string, columns: readonly string[]): Promise<number> {
     const quoted = columns.map((c) => `"${c}"`).join(",");
     const row = this.#client.query(`SELECT COUNT(*) AS n FROM (SELECT DISTINCT ${quoted} FROM "${name}")`).get() as
       | { n: number }
@@ -648,7 +659,7 @@ export class SqliteTransferSource implements TransferSource {
     return row?.n ?? 0;
   }
 
-  async streamRows(
+  public async streamRows(
     name: string,
     columns: readonly TransferColumn[],
     batchSize: number,
@@ -657,7 +668,7 @@ export class SqliteTransferSource implements TransferSource {
     await streamSqliteRows(this.#client, name, columns, batchSize, onBatch);
   }
 
-  async readSampleRows(
+  public async readSampleRows(
     name: string,
     columns: readonly TransferColumn[],
     orderColumns: readonly string[],
@@ -672,11 +683,11 @@ export class SqliteTransferSource implements TransferSource {
     return rows.map((row) => columns.map((c) => row[c.name]));
   }
 
-  async beginSnapshot(): Promise<void> {
+  public async beginSnapshot(): Promise<void> {
     // Read-only connection; no explicit snapshot needed.
   }
 
-  async endSnapshot(): Promise<void> {
+  public async endSnapshot(): Promise<void> {
     this.#client.close();
   }
 }
@@ -688,12 +699,19 @@ export class SqliteTransferSource implements TransferSource {
 /** Minimal structural typing for the Bun.SQL client (bun-types covers the module). */
 export type BunSqlConnection = {
   unsafe<T = unknown>(query: string, values?: readonly unknown[]): Promise<readonly T[]>;
-  end(options?: { timeout?: number }): Promise<void>;
+  end(options?: { readonly timeout?: number }): Promise<void>;
 }
 
 type BunSqlClientConstructor = new (options: { url: string; max?: number }) => BunSqlConnection
 
-const SqlClient = (Bun as unknown as { SQL: BunSqlClientConstructor }).SQL;
+const BUN_SQL_CLIENT_PROPERTY = "SQL";
+function loadBunSqlClient(): BunSqlClientConstructor {
+  const client = (Bun as unknown as Record<string, BunSqlClientConstructor>)[BUN_SQL_CLIENT_PROPERTY];
+  if (client === undefined) throw new Error("Bun SQL client is unavailable");
+  return client;
+}
+
+const bunSqlClient = loadBunSqlClient();
 
 export class PgTransferSource implements TransferSource {
   readonly #connection: BunSqlConnection;
@@ -703,18 +721,18 @@ export class PgTransferSource implements TransferSource {
     this.#url = url;
     // max: 1 so the read-only snapshot (BEGIN ... READ ONLY) is legal: Bun's
     // sql client only permits manual transaction control on a single connection.
-    this.#connection = new SqlClient({ url, max: 1 });
+    this.#connection = new bunSqlClient({ url, max: 1 });
   }
 
-  get url(): string {
+  public get url(): string {
     return this.#url;
   }
 
-  async ping(): Promise<void> {
+  public async ping(): Promise<void> {
     await this.#connection.unsafe("SELECT 1");
   }
 
-  async hasTable(name: string): Promise<boolean> {
+  public async hasTable(name: string): Promise<boolean> {
     const rows = await this.#connection.unsafe<{ exists: boolean }>(
       "SELECT to_regclass($1) IS NOT NULL AS exists",
       [name],
@@ -722,12 +740,12 @@ export class PgTransferSource implements TransferSource {
     return rows[0]?.exists === true;
   }
 
-  async count(name: string): Promise<number> {
+  public async count(name: string): Promise<number> {
     const rows = await this.#connection.unsafe<{ n: string | number }>(`SELECT COUNT(*) AS n FROM "${name}"`);
     return Number(rows[0]?.n ?? 0);
   }
 
-  async countWhere(name: string, condition: string, params: readonly (string | number | bigint | null)[]): Promise<number> {
+  public async countWhere(name: string, condition: string, params: readonly (string | number | bigint | null)[]): Promise<number> {
     // Bun's sql client does not support `?` placeholders (it rejects them with
     // a server-side syntax error); rewrite them to $1..$n positionally. The
     // condition itself comes from callers written against the sqlite dialect.
@@ -740,7 +758,7 @@ export class PgTransferSource implements TransferSource {
     return Number(rows[0]?.n ?? 0);
   }
 
-  async queryDistinctCount(name: string, columns: readonly string[]): Promise<number> {
+  public async queryDistinctCount(name: string, columns: readonly string[]): Promise<number> {
     const quoted = columns.map((c) => `"${c}"`).join(",");
     const rows = await this.#connection.unsafe<{ n: string | number }>(
       `SELECT COUNT(*) AS n FROM (SELECT DISTINCT ${quoted} FROM "${name}") AS distinct_rows`,
@@ -748,7 +766,7 @@ export class PgTransferSource implements TransferSource {
     return Number(rows[0]?.n ?? 0);
   }
 
-  async streamRows(
+  public async streamRows(
     name: string,
     columns: readonly TransferColumn[],
     batchSize: number,
@@ -757,12 +775,14 @@ export class PgTransferSource implements TransferSource {
     const quotedCols = columns.map((c) => `"${c.name}"`).join(",");
     const primaryKey = columns.filter((c) => c.primary).map((c) => c.name);
     if (primaryKey.length === 1) {
+      const primaryColumn = primaryKey[0];
+      if (primaryColumn === undefined) return;
       let last: unknown = null;
       let started = false;
       for (;;) {
         const sql = started
-          ? `SELECT ${quotedCols} FROM "${name}" WHERE "${primaryKey[0]}" > $1 ORDER BY "${primaryKey[0]}" LIMIT $2`
-          : `SELECT ${quotedCols} FROM "${name}" ORDER BY "${primaryKey[0]}" LIMIT $1`;
+          ? `SELECT ${quotedCols} FROM "${name}" WHERE "${primaryColumn}" > $1 ORDER BY "${primaryColumn}" LIMIT $2`
+          : `SELECT ${quotedCols} FROM "${name}" ORDER BY "${primaryColumn}" LIMIT $1`;
         let rows: readonly Record<string, unknown>[];
         try {
           rows = await this.#connection.unsafe<Record<string, unknown>>(
@@ -776,7 +796,7 @@ export class PgTransferSource implements TransferSource {
         if (rows.length === 0) return;
         await onBatch(rows.map((row) => columns.map((c) => row[c.name])));
         started = true;
-        last = rows[rows.length - 1]?.[primaryKey[0]!] ?? null;
+        last = rows[rows.length - 1]?.[primaryColumn] ?? null;
       }
     }
     let offset = 0;
@@ -791,7 +811,7 @@ export class PgTransferSource implements TransferSource {
     }
   }
 
-  async readSampleRows(
+  public async readSampleRows(
     name: string,
     columns: readonly TransferColumn[],
     orderColumns: readonly string[],
@@ -806,13 +826,13 @@ export class PgTransferSource implements TransferSource {
     return rows.map((row) => columns.map((c) => row[c.name]));
   }
 
-  async beginSnapshot(): Promise<void> {
+  public async beginSnapshot(): Promise<void> {
     // One consistent snapshot for the whole copy: concurrent writers cannot
     // leak into the export, and the source database is never modified.
     await this.#connection.unsafe("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
   }
 
-  async endSnapshot(): Promise<void> {
+  public async endSnapshot(): Promise<void> {
     try {
       await this.#connection.unsafe("COMMIT");
     } catch {
@@ -858,8 +878,8 @@ export type TransferOptions = {
 
 /** Copy every schema table from source to target, parents before children. */
 export async function transferDatabase(
-  source: TransferSource,
-  target: TransferTarget,
+  source: Readonly<TransferSource>,
+  target: Readonly<TransferTarget>,
   options: TransferOptions = {},
 ): Promise<TransferReport> {
   const tables = schemaTables();
@@ -958,8 +978,8 @@ const SAMPLE_LIMIT_DEFAULT = 1000;
  * which invariant broke.
  */
 export async function verifyTransfer(
-  source: TransferSource,
-  target: TransferTarget,
+  source: Readonly<TransferSource>,
+  target: Readonly<TransferTarget>,
   options: VerifyOptions = {},
 ): Promise<VerificationReport> {
   const tables = schemaTables();
