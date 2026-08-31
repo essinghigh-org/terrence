@@ -732,7 +732,7 @@ export const healthRoutes = new Elysia({ name: "health" })
       sso: { saml: sso.samlEnabled, oidc: sso.oidcEnabled, ldap: sso.ldapEnabled },
     };
   })
-  .get("/api/v2/meta", (): {
+  .get("/api/v2/meta", ({ user, set }: MetricsCtx): {
     data: {
       "run-sandbox": {
         enabled: boolean;
@@ -743,7 +743,11 @@ export const healthRoutes = new Elysia({ name: "health" })
         docs: string;
       };
     };
-  } => {
+  } | { errors: { status: string; title: string }[] } => {
+    if (user === null) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized" }] };
+    }
     const sandboxRequired = runSandboxRequired();
     const abi = probeLandlockAbi();
     let reason: string | null = null;

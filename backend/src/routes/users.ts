@@ -989,6 +989,10 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: tokenResource(token) };
   })
   .post("/api/v2/organizations/:org_name/authentication-token", async ({ params, request, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
+    if (currentTokenScopes() !== null) {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot mint unscoped organization tokens" }] };
+    }
     const orgName = params.org_name ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || (orgId !== org.id && !(await checkOrgPermission(user?.id, org.id, "owner")))) {

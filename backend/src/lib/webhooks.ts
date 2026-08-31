@@ -18,7 +18,9 @@ import {
 import { decryptSecret } from "./secrets";
 import { matchesPolicySetWebhook, synchronizeVcsPolicySet } from "./policy-sync";
 import { synchronizeRegistryModule } from "./registry-module-sync";
-import { auditLog , type DeepReadonly } from "./utils";
+import { auditLog, type DeepReadonly } from "./utils";
+import { envEnabled } from "./env";
+import { fetchResolvedExternalUrl, fetchResolvedExternalUrlStream, resolveExternalUrl } from "./url-safety";
 import {
   providerForServiceProvider,
   sourceIdentityForConnection,
@@ -73,6 +75,66 @@ const DOWNLOAD_TIMEOUT_MS = 30_000;
 const OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const REPOSITORY_PATTERN = /^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/;
 const COMMIT_SHA_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+type VcsFetchInit = Readonly<{
+  method?: string;
+  headers?: Readonly<Record<string, string>>;
+  body?: string;
+  timeoutMs?: number;
+  maxResponseBytes?: number;
+}>;
+
+/** Resolve and pin every provider request before sending credentials. */
+function normalizedVcsFetchInit(init: VcsFetchInit): {
+  method: string;
+  timeoutMs: number;
+  maxResponseBytes: number;
+  headers?: Readonly<Record<string, string>>;
+  body?: string;
+} {
+  return {
+    method: init.method ?? "GET",
+    timeoutMs: init.timeoutMs ?? DOWNLOAD_TIMEOUT_MS,
+    maxResponseBytes: init.maxResponseBytes ?? 16 * 1024 * 1024,
+    ...(init.headers === undefined ? {} : { headers: init.headers }),
+    ...(init.body === undefined ? {} : { body: init.body }),
+  };
+}
+
+async function fetchVcsUrl(url: string, init: VcsFetchInit = {}): Promise<Response> {
+  const destination = await resolveExternalUrl(url, envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS));
+  if ("error" in destination) return new Response(destination.error, { status: 422 });
+  return fetchResolvedExternalUrl(destination.target, normalizedVcsFetchInit(init));
+}
+
+async function fetchVcsUrlStream(url: string, init: VcsFetchInit = {}): Promise<Response> {
+  const allowPrivate = envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS);
+  const requestInit = normalizedVcsFetchInit(init);
+  const destination = await resolveExternalUrl(url, allowPrivate);
+  if ("error" in destination) return new Response(destination.error, { status: 422 });
+  const response = await fetchResolvedExternalUrlStream(destination.target, requestInit);
+  if (!REDIRECT_STATUSES.has(response.status)) return response;
+  const location = response.headers.get("location");
+  if (location === null) return response;
+  if (response.body !== null) await response.body.cancel().catch((): undefined => undefined);
+
+  let redirectUrl: URL;
+  try {
+    redirectUrl = new URL(location, destination.target.url);
+  } catch {
+    return new Response("Invalid redirect URL", { status: 422 });
+  }
+  const redirected = await resolveExternalUrl(redirectUrl.toString(), allowPrivate);
+  if ("error" in redirected) return new Response(redirected.error, { status: 422 });
+
+  const redirectedHeaders = new Headers(requestInit.headers);
+  if (new URL(destination.target.url).origin !== redirectUrl.origin) redirectedHeaders.delete("authorization");
+  return fetchResolvedExternalUrlStream(redirected.target, {
+    ...requestInit,
+    headers: Object.fromEntries(redirectedHeaders.entries()),
+  });
+}
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" ? value as Record<string, unknown> : undefined;
@@ -572,10 +634,9 @@ export async function getGitHubAppAccessToken(installationId: number): Promise<s
     }, key, { algorithm: "RS256" });
     const apiUrl = githubAppApiUrl();
     if (apiUrl === undefined) return null;
-    const response = await fetch(`${apiUrl}/app/installations/${String(installationId)}/access_tokens`, {
+    const response = await fetchVcsUrl(`${apiUrl}/app/installations/${String(installationId)}/access_tokens`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json" },
-      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
     });
     if (!response.ok) {
       console.error("[terrence] Failed to fetch access token:", await response.text());
@@ -752,9 +813,8 @@ async function fetchGithubPrFilesPage(credentials: ProviderCredentials, repoFull
   for (let page = 0; page < MAX_GITHUB_PR_FILE_PAGES; page += 1) {
     if (visited.has(url)) return undefined;
     visited.add(url);
-    const response = await fetch(url, {
+    const response = await fetchVcsUrl(url, {
       headers: { Authorization: `Bearer ${credentials.token}`, Accept: "application/vnd.github+json" },
-      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
     });
     if (!response.ok) return undefined;
     const pageFiles = extractGithubPrFilenames(await response.json() as unknown);
@@ -819,11 +879,10 @@ function gitlabNextPage(value: string | null): number | null | undefined {
 }
 
 async function fetchGitlabMrFilesPage(credentials: ProviderCredentials, repoFullName: string, pullRequestNumber: number, page: number): Promise<{ files: Set<string>; nextPage: string | null } | undefined> {
-  const response = await fetch(
+  const response = await fetchVcsUrl(
     `${credentials.apiUrl}/projects/${encodeURIComponent(repoFullName)}/merge_requests/${String(pullRequestNumber)}/diffs?per_page=100&page=${page}`,
     {
       headers: { Authorization: `Bearer ${credentials.token}`, Accept: "application/json" },
-      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
     },
   );
   if (!response.ok) return undefined;
@@ -888,9 +947,16 @@ function extractBitbucketDiffstatPaths(body: unknown, files: Set<string>): boole
   return true;
 }
 
-function resolveBitbucketNextUrl(body: unknown): string | null {
+export function resolveBitbucketNextUrl(body: unknown, baseUrl: string): string | null | undefined {
   const next = asRecord(body)?.next;
-  return typeof next === "string" && next !== "" ? next : null;
+  if (next === undefined || next === null || next === "") return null;
+  if (typeof next !== "string") return undefined;
+  try {
+    const nextUrl = new URL(next);
+    return nextUrl.origin === new URL(baseUrl).origin ? nextUrl.toString() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function bitbucketCloudDiffstatFiles(
@@ -902,12 +968,14 @@ async function bitbucketCloudDiffstatFiles(
   let receivedPage = false;
   const MAX_PAGES = 10;
   for (let page = 1; cloudUrl !== null && page <= MAX_PAGES; page += 1) {
-    const response = await fetch(cloudUrl, { headers: auth, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+    const response = await fetchVcsUrl(cloudUrl, { headers: auth });
     if (!response.ok) return { files: undefined, receivedPage };
     receivedPage = true;
     const body = await response.json() as unknown;
     if (!extractBitbucketDiffstatPaths(body, files)) return { files: undefined, receivedPage };
-    cloudUrl = resolveBitbucketNextUrl(body);
+    const next = resolveBitbucketNextUrl(body, initialUrl);
+    if (next === undefined) return { files: undefined, receivedPage };
+    cloudUrl = next;
     if (cloudUrl === null) return { files, receivedPage };
   }
   return { files: undefined, receivedPage };
@@ -953,7 +1021,7 @@ async function bitbucketDataCenterPullRequestFiles(
   const pullRequest = String(pullRequestNumber);
   let dcUrl: string | null = `${apiUrl}/rest/api/1.0/projects/${encodedOwner}/repos/${encodedRepo}/pull-requests/${pullRequest}/changes?limit=100`;
   for (let page = 1; dcUrl !== null && page <= 10; page += 1) {
-    const dcResponse = await fetch(dcUrl, { headers: auth, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+    const dcResponse = await fetchVcsUrl(dcUrl, { headers: auth });
     if (!dcResponse.ok) return undefined;
     const dcBody = await dcResponse.json() as unknown;
     const dcValues = asRecord(dcBody)?.values;
@@ -1017,7 +1085,7 @@ async function reportUntriggeredSpeculativeStatus(
     if (!validRepository(details.repoFullName, "github") || !COMMIT_SHA_PATTERN.test(details.commitSha)) return;
     const credentials = await githubCredentials(workspace, installationTokens);
     if (credentials === undefined) return;
-    const response = await fetch(
+    const response = await fetchVcsUrl(
       `${credentials.apiUrl}/repos/${details.repoFullName.split("/").map(encodeURIComponent).join("/")}/statuses/${encodeURIComponent(details.commitSha)}`,
       {
         method: "POST",
@@ -1032,8 +1100,7 @@ async function reportUntriggeredSpeculativeStatus(
           description: "No Terraform changes matched this workspace",
           target_url: details.commitUrl,
         }),
-        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-      },
+        },
     );
     if (!response.ok) console.error(`[terrence] Failed to report passing GitHub status for workspace ${workspace.id}: ${String(response.status)}`);
   } catch (error) {
@@ -1188,7 +1255,7 @@ async function aggregatedGithubStatus(context: RunVcsStatusContext, initialState
 
 async function postGithubStatus(context: RunVcsStatusContext, status: GithubStatusDetails): Promise<Response> {
   const url = `${context.credentials.apiUrl}/repos/${context.repoFullName.split("/").map(encodeURIComponent).join("/")}/statuses/${encodeURIComponent(context.commitSha)}`;
-  return fetch(url, {
+  return fetchVcsUrl(url, {
     method: "POST",
     headers: {
       Accept: "application/vnd.github+json",
@@ -1196,12 +1263,11 @@ async function postGithubStatus(context: RunVcsStatusContext, status: GithubStat
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ state: status.state, context: status.context, description: status.description, ...(context.targetUrl === undefined ? {} : { target_url: context.targetUrl }) }),
-    signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
   });
 }
 
 async function postGitlabStatus(context: RunVcsStatusContext, state: VcsCommitState): Promise<Response> {
-  return fetch(
+  return fetchVcsUrl(
     `${context.credentials.apiUrl}/projects/${encodeURIComponent(context.repoFullName)}/statuses/${encodeURIComponent(context.commitSha)}`,
     {
       method: "POST",
@@ -1212,15 +1278,14 @@ async function postGitlabStatus(context: RunVcsStatusContext, state: VcsCommitSt
       body: new URLSearchParams({
         state: state === "failure" ? "failed" : state,
         name: context.baseContext,
-      }),
-      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+      }).toString(),
     },
   );
 }
 
 async function postBitbucketStatus(context: RunVcsStatusContext, state: VcsCommitState, runStatus: string): Promise<Response> {
   const bitbucketState = state === "pending" ? "INPROGRESS" : state === "success" ? "SUCCESSFUL" : "FAILED";
-  return fetch(
+  return fetchVcsUrl(
     `${context.credentials.apiUrl}/repositories/${context.repoFullName.split("/").map(encodeURIComponent).join("/")}/commit/${encodeURIComponent(context.commitSha)}/statuses/build`,
     {
       method: "POST",
@@ -1234,7 +1299,6 @@ async function postBitbucketStatus(context: RunVcsStatusContext, state: VcsCommi
         name: context.baseContext,
         description: `Terraform run ${runStatus}`,
       }),
-      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
     },
   );
 }
@@ -1332,9 +1396,9 @@ async function githubAppDefaultBranch(
   if (token === null) return undefined;
   const apiUrl = githubAppApiBase(true);
   if (apiUrl === undefined) return undefined;
-  const response = await fetch(`${apiUrl}/repos/${encodedPath}`, {
+  const response = await fetchVcsUrl(`${apiUrl}/repos/${encodedPath}`, {
     headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json" },
-    signal: AbortSignal.timeout(10_000),
+    timeoutMs: 10_000,
   });
   if (!response.ok) return undefined;
   const body = await response.json() as Record<string, unknown>;
@@ -1366,9 +1430,9 @@ async function oauthDefaultBranch(
       ? `${apiUrl}/projects/${encodeURIComponent(identifier)}`
       : `${apiUrl}/repositories/${encodeURIComponent(identifier)}`;
   const accept = provider === "github" ? "application/vnd.github.v3+json" : "application/json";
-  const response = await fetch(url, {
+  const response = await fetchVcsUrl(url, {
     headers: { Authorization: "Bearer " + secret, Accept: accept },
-    signal: AbortSignal.timeout(10_000),
+    timeoutMs: 10_000,
   });
   if (!response.ok) return undefined;
   return defaultBranchFromBody(provider, await response.json() as Record<string, unknown>);
@@ -1416,9 +1480,9 @@ async function githubAppLatestCommit(
   const apiUrl = githubAppApiBase(true);
   if (apiUrl === undefined) return undefined;
   const url = `${apiUrl}/repos/${encodedPath}/commits?sha=${encodeURIComponent(branch)}&per_page=1`;
-  const response = await fetch(url, {
+  const response = await fetchVcsUrl(url, {
     headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json" },
-    signal: AbortSignal.timeout(10_000),
+    timeoutMs: 10_000,
   });
   if (response.ok) {
     const body = await response.json() as Record<string, unknown>[];
@@ -1458,9 +1522,9 @@ async function oauthLatestCommit(
       ? `${apiUrl}/projects/${encodeURIComponent(identifier)}/repository/commits?ref_name=${encodeURIComponent(branch)}&per_page=1`
       : `${apiUrl}/repositories/${encodeURIComponent(identifier)}/refs/branches/${encodeURIComponent(branch)}`;
   const accept = provider === "github" ? "application/vnd.github.v3+json" : "application/json";
-  const response = await fetch(url, {
+  const response = await fetchVcsUrl(url, {
     headers: { Authorization: "Bearer " + secret, Accept: accept },
-    signal: AbortSignal.timeout(10_000),
+    timeoutMs: 10_000,
   });
   if (!response.ok) return undefined;
   const body = await response.json() as Record<string, unknown> | Record<string, unknown>[];
@@ -2036,9 +2100,9 @@ async function fetchProviderPolicyArchive(
 ): Promise<Uint8Array> {
   const request = providerTarballRequest(credentials, repoFullName, commitSha);
   if (request === undefined) throw new Error("Invalid repository or commit SHA");
-  const response = await fetch(request.url, {
+  const response = await fetchVcsUrlStream(request.url, {
     headers: request.headers,
-    signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    maxResponseBytes: MAX_TARBALL_BYTES,
   });
   if (!response.ok || response.body === null) {
     throw new Error(`Failed to download ${credentials.provider} policy archive`);
@@ -2119,9 +2183,9 @@ async function downloadAndSaveTarball(
   const temporaryPath = join(storageDirectory, `.${provider}-${crypto.randomUUID()}.tar.gz`);
   try {
     await mkdir(storageDirectory, { recursive: true });
-    const response = await fetch(url, {
+    const response = await fetchVcsUrlStream(url, {
       headers,
-      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+      maxResponseBytes: MAX_TARBALL_BYTES,
     });
     if (!response.ok || response.body === null) throw new Error(`Failed to download ${provider} tarball`);
 

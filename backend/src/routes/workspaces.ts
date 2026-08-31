@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db, isPostgres, rawQueryAll } from "../db";
-import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, runs, configurationVersions, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, variableSets, variableSetWorkspaces, type users } from "../db/schema";
+import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, runs, configurationVersions, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, variableSets, variableSetWorkspaces, sshKeys, type users } from "../db/schema";
 import { eq, and, asc, desc, count, inArray, isNull, like, notInArray, or, sql } from "drizzle-orm";
 import {
   workspaceResource,
@@ -361,8 +361,34 @@ async function maybeAttachOutputs(
   return { data: dataWithRels, included: outputs };
 }
 
-export const workspaceRoutes = new Elysia({ name: "workspaces" })
+function isRelationshipIdentifier(value: unknown, expectedType: string): value is { id: string; type: string } {
+  return value !== null
+    && typeof value === "object"
+    && typeof (value as Record<string, unknown>).id === "string"
+    && (value as Record<string, unknown>).id !== ""
+    && (value as Record<string, unknown>).type === expectedType;
+}
 
+async function validatedRemoteStateConsumerIds(
+  workspaceId: string,
+  orgId: string,
+  items: readonly unknown[],
+): Promise<string[] | null> {
+  const ids: string[] = [];
+  for (const item of items) {
+    if (!isRelationshipIdentifier(item, "workspaces")) return null;
+    ids.push(item.id);
+  }
+  const uniqueIds = [...new Set(ids)];
+  if (uniqueIds.length === 0) return [];
+  const candidates = await db.query.workspaces.findMany({
+    where: inArray(workspaces.id, uniqueIds),
+    columns: { id: true, orgId: true },
+  });
+  const byId = new Map(candidates.map((candidate): [string, Readonly<{ id: string; orgId: string }>] => [candidate.id, candidate]));
+  return uniqueIds.every((id): boolean => id !== workspaceId && byId.get(id)?.orgId === orgId) ? uniqueIds : null;
+}
+export const workspaceRoutes = new Elysia({ name: "workspaces" })
   .use(authPlugin)
   // --- Organization Workspaces ---
   .get("/api/v2/organizations/:org_name/workspaces", async ({ params, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -1409,52 +1435,70 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const consumers = await db.query.remoteStateConsumers.findMany({ where: eq(remoteStateConsumers.workspaceId, workspaceId) });
     return { data: consumers.map((c: Readonly<{ consumerWorkspaceId: string }>): Record<string, string> => ({ id: c.consumerWorkspaceId, type: "workspaces" })) };
   })
-  .post("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .post("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
     const workspaceId = params.workspace_id ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const items = payload.data;
     const list = Array.isArray(items) ? items : (items !== null && items !== undefined ? [items] : []);
-    const batch: { id: string; workspaceId: string; consumerWorkspaceId: string }[] = [];
-    for (const item of list) {
-      if (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string") {
-        const consumerWorkspaceId = (item as Record<string, unknown>).id as string;
-        batch.push({ id: `rsc-${crypto.randomUUID()}`, workspaceId, consumerWorkspaceId });
-      }
+    const consumerWorkspaceIds = await validatedRemoteStateConsumerIds(workspaceId, ws.orgId, list);
+    if (consumerWorkspaceIds === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote state consumers must reference existing workspaces in the same organization" }] };
     }
+    const batch = consumerWorkspaceIds.map((consumerWorkspaceId: string): { id: string; workspaceId: string; consumerWorkspaceId: string } => ({
+      id: `rsc-${crypto.randomUUID()}`,
+      workspaceId,
+      consumerWorkspaceId,
+    }));
     if (batch.length > 0) await db.insert(remoteStateConsumers).values(batch).onConflictDoNothing();
     (set as { status: number }).status = 204;
     return {};
   })
-  .patch("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .patch("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
     const workspaceId = params.workspace_id ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(remoteStateConsumers).where(eq(remoteStateConsumers.workspaceId, workspaceId));
+    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const items = payload.data;
+    if (!Array.isArray(items)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote state consumers must be an array" }] };
+    }
+    const list = items;
+    const consumerWorkspaceIds = await validatedRemoteStateConsumerIds(workspaceId, ws.orgId, list);
+    if (consumerWorkspaceIds === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote state consumers must reference existing workspaces in the same organization" }] };
+    }
+    const batch = consumerWorkspaceIds.map((consumerWorkspaceId: string): { id: string; workspaceId: string; consumerWorkspaceId: string } => ({
+      id: `rsc-${crypto.randomUUID()}`,
+      workspaceId,
+      consumerWorkspaceId,
+    }));
+    await db.transaction(async (tx: unknown): Promise<void> => {
+      const t = tx as typeof db;
+      await t.delete(remoteStateConsumers).where(eq(remoteStateConsumers.workspaceId, workspaceId));
+      if (batch.length > 0) await t.insert(remoteStateConsumers).values(batch).onConflictDoNothing();
+    });
+    (set as { status: number }).status = 204;
+    return {};
+  })
+  .delete("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
+    const workspaceId = params.workspace_id ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const items = payload.data;
     const list = Array.isArray(items) ? items : (items !== null && items !== undefined ? [items] : []);
-    const batch: { id: string; workspaceId: string; consumerWorkspaceId: string }[] = [];
-    for (const item of list) {
-      if (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string") {
-        const consumerWorkspaceId = (item as Record<string, unknown>).id as string;
-        batch.push({ id: `rsc-${crypto.randomUUID()}`, workspaceId, consumerWorkspaceId });
-      }
+    const consumerWorkspaceIds = await validatedRemoteStateConsumerIds(workspaceId, ws.orgId, list);
+    if (consumerWorkspaceIds === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote state consumers must reference existing workspaces in the same organization" }] };
     }
-    if (batch.length > 0) await db.insert(remoteStateConsumers).values(batch).onConflictDoNothing();
-    (set as { status: number }).status = 204;
-    return {};
-  })
-  .delete("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const workspaceId = params.workspace_id ?? "";
-    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
-    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload.data;
-    if (Array.isArray(items)) {
-      const ids = items.map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>).id === "string") ? (i as Record<string, unknown>).id as string : "").filter((s: string): boolean => s !== "");
-      if (ids.length > 0) await db.delete(remoteStateConsumers).where(and(eq(remoteStateConsumers.workspaceId, workspaceId), inArray(remoteStateConsumers.consumerWorkspaceId, ids)));
+    if (consumerWorkspaceIds.length > 0) {
+      await db.delete(remoteStateConsumers).where(and(eq(remoteStateConsumers.workspaceId, workspaceId), inArray(remoteStateConsumers.consumerWorkspaceId, consumerWorkspaceIds)));
     }
     (set as { status: number }).status = 204;
     return {};
@@ -1549,8 +1593,22 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const sshKeyData = payload.data as Record<string, unknown> | undefined;
-    const sshKeyId = typeof sshKeyData?.id === "string" ? sshKeyData.id : null;
+    const rawSshKeyData = payload.data;
+    let sshKeyId: string | null = null;
+    if (rawSshKeyData !== null) {
+      if (!isRelationshipIdentifier(rawSshKeyData, "ssh-keys")) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "SSH key must be a valid ssh-keys resource identifier" }] };
+      }
+      const sshKey = await db.query.sshKeys.findFirst({
+        where: and(eq(sshKeys.id, rawSshKeyData.id), eq(sshKeys.orgId, ws.orgId)),
+      });
+      if (sshKey === undefined) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "SSH key does not belong to the organization" }] };
+      }
+      sshKeyId = rawSshKeyData.id;
+    }
     await db.update(workspaces).set({ sshKeyId }).where(eq(workspaces.id, workspaceId));
     return { data: { id: workspaceId, type: "workspaces", relationships: { "ssh-key": { data: sshKeyId !== null ? { id: sshKeyId, type: "ssh-keys" } : null } } } };
   });

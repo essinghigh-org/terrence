@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { eq } from "drizzle-orm";
 import { app } from "../src/app";
 import { db } from "../src/db";
+import { setExternalUrlTransportForTests } from "../src/lib/url-safety";
 import { clearDefaultBranchCacheForTests, reportRunVcsStatus } from "../src/lib/webhooks";
 import {
   apiTokens,
@@ -41,10 +42,12 @@ const originalPrivateKey = process.env.GITHUB_APP_PRIVATE_KEY;
 const originalAppApiUrl = process.env.GITHUB_APP_API_URL;
 const originalFetch = globalThis.fetch;
 let tarballFetches = 0;
+let redirectTarball = false;
 let paginatePullRequestFiles = false;
 let pullRequestFileRequests = 0;
 let defaultBranchResponse = "main";
 const tarballRequests: { url: string; authorization: string | null }[] = [];
+const redirectedTarballRequests: { url: string; authorization: string | null }[] = [];
 const commitStatuses: Record<string, unknown>[] = [];
 
 const pushPayload = {
@@ -169,9 +172,14 @@ describe("GitHub Webhooks", () => {
         });
       }
       if (url.endsWith("/repos/hashicorp/terraform")) return Response.json({ default_branch: defaultBranchResponse });
+      if (url.includes("codeload.example")) {
+        redirectedTarballRequests.push({ url, authorization: new Headers(init?.headers).get("authorization") });
+        return new Response(new Uint8Array([1, 2, 3]));
+      }
       if (url.includes("/tarball/")) {
         tarballFetches += 1;
         tarballRequests.push({ url, authorization: new Headers(init?.headers).get("authorization") });
+        if (redirectTarball) return new Response(null, { status: 302, headers: { Location: "https://codeload.example/hashicorp/terraform.tar.gz" } });
         return new Response(new Uint8Array([1, 2, 3]));
       }
       if (url.includes("/statuses/")) {
@@ -183,6 +191,12 @@ describe("GitHub Webhooks", () => {
       }
       throw new Error(`Unexpected outbound request: ${url}`);
     };
+    setExternalUrlTransportForTests(async (target, init): Promise<Response> => {
+      const requestInit: RequestInit = { method: init.method };
+      if (init.headers !== undefined) requestInit.headers = init.headers;
+      if (init.body !== undefined) requestInit.body = init.body;
+      return mockFetch(target.url, requestInit);
+    });
     globalThis.fetch = Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
 
     await db.delete(users).where(eq(users.id, userId));
@@ -218,10 +232,12 @@ describe("GitHub Webhooks", () => {
 
   beforeEach(async () => {
     tarballFetches = 0;
+    redirectTarball = false;
     paginatePullRequestFiles = false;
     pullRequestFileRequests = 0;
     defaultBranchResponse = "main";
     tarballRequests.length = 0;
+    redirectedTarballRequests.length = 0;
     commitStatuses.length = 0;
     await db.delete(githubWebhookDeliveries);
     await db.delete(runs).where(eq(runs.id, crossProviderRunId));
@@ -253,6 +269,7 @@ describe("GitHub Webhooks", () => {
   });
 
   afterAll(async () => {
+    setExternalUrlTransportForTests(undefined);
     globalThis.fetch = originalFetch;
     process.env.GITHUB_WEBHOOK_SECRET = originalSecret;
     process.env.GITHUB_APP_ID = originalAppId;
@@ -834,6 +851,18 @@ describe("GitHub Webhooks", () => {
       if (previousApiUrl === undefined) delete process.env.GITHUB_APP_API_URL;
       else process.env.GITHUB_APP_API_URL = previousApiUrl;
     }
+  });
+
+  test("follows one archive redirect and strips credentials across origins", async () => {
+    redirectTarball = true;
+    const deliveryId = crypto.randomUUID();
+    await sendWebhook("push", pushPayload, deliveryId);
+    await waitForDelivery(deliveryId);
+
+    expect(tarballFetches).toBe(1);
+    expect(tarballRequests[0]?.authorization).toBe("Bearer test-token");
+    expect(redirectedTarballRequests).toHaveLength(1);
+    expect(redirectedTarballRequests[0]?.authorization).toBeNull();
   });
 
   test("missing token leaves the run and marks its configuration version errored", async () => {

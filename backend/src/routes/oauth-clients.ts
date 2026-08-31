@@ -5,7 +5,7 @@ import { agentPools, oauthClientProjects, oauthClients, oauthTokens, organizatio
 import { and, asc, count, eq, inArray, sql } from "drizzle-orm";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "../lib/secrets";
 import { organizationName } from "../lib/response";
-import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission, pageRequest, pagination, serviceProviderDisplayName } from "../lib/utils";
+import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission, pageRequest, pagination, serviceProviderDisplayName, validateExternalUrl } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail, type VcsIntegrationUsage } from "../lib/vcs-integration-usage";
 import { cachedOrgByName } from "../lib/cached-lookups";
@@ -38,6 +38,7 @@ async function storedClientSecret(value: string): Promise<string> {
 }
 
 async function oauthFetch(oc: OcItem, url: string, init?: RequestInit): Promise<Response> {
+  if (!oauthUrlProtocolAllowed(url)) return new Response("OAuth endpoints must use HTTPS", { status: 422 });
   if (oc.agentPoolId !== null) return forwardFetch(oc.agentPoolId, url, init);
   const destination = await resolveExternalUrl(url, envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS));
   if ("error" in destination) return new Response(destination.error, { status: 422 });
@@ -147,6 +148,56 @@ function endpoint(base: string, suffix: string): URL | null {
   }
 }
 
+function insecureOAuthUrlsAllowed(): boolean {
+  return process.env.NODE_ENV === "test"
+    || (process.env.NODE_ENV === "development" && envEnabled(process.env.TERRENCE_ALLOW_INSECURE_OAUTH_URLS));
+}
+
+function oauthUrlProtocolAllowed(value: string | URL): boolean {
+  try {
+    const protocol = typeof value === "string" ? new URL(value).protocol : value.protocol;
+    return protocol === "https:" || (protocol === "http:" && insecureOAuthUrlsAllowed());
+  } catch {
+    return false;
+  }
+}
+
+function configuredExternalUrlError(value: unknown, field: string): string | undefined {
+  if (value === null || value === undefined || value === "") return undefined;
+  if (typeof value !== "string") return `${field} must be a valid HTTP or HTTPS URL`;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return `${field} must be a valid HTTP or HTTPS URL`;
+  }
+  if (parsed.username !== "" || parsed.password !== "") return `${field} must not contain embedded credentials`;
+  if (!oauthUrlProtocolAllowed(parsed)) return `${field} must use HTTPS`;
+  const reason = validateExternalUrl(value, envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS));
+  return reason === null ? undefined : `${field} is unsafe: ${reason}`;
+}
+
+function configuredVcsUrlError(apiUrl: unknown, httpUrl: unknown): string | undefined {
+  return configuredExternalUrlError(apiUrl, "api-url") ?? configuredExternalUrlError(httpUrl, "http-url");
+}
+
+function normalizedConfiguredUrl(value: unknown): unknown {
+  return value === "" ? null : value;
+}
+
+function configuredUrlOrigin(value: unknown): string | null {
+  if (typeof value !== "string" || value === "") return null;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
+function configuredUrlOriginChanged(previous: unknown, next: unknown): boolean {
+  return configuredUrlOrigin(previous) !== configuredUrlOrigin(next);
+}
+
 function oauth2Endpoints(oc: OcItem): OAuth2Endpoints | null {
   if (oc.serviceProvider === "github" || oc.serviceProvider === "github_enterprise") {
     const httpUrl = oc.httpUrl ?? (oc.serviceProvider === "github" ? "https://github.com" : "");
@@ -155,6 +206,9 @@ function oauth2Endpoints(oc: OcItem): OAuth2Endpoints | null {
     const token = endpoint(httpUrl, "/login/oauth/access_token");
     const user = endpoint(apiUrl, "/user");
     return authorization !== null && token !== null && user !== null
+      && oauthUrlProtocolAllowed(authorization)
+      && oauthUrlProtocolAllowed(token)
+      && oauthUrlProtocolAllowed(user)
       ? { authorization, token, user, scope: "repo user:email" }
       : null;
   }
@@ -165,6 +219,9 @@ function oauth2Endpoints(oc: OcItem): OAuth2Endpoints | null {
     const token = endpoint(httpUrl, "/oauth/token");
     const user = endpoint(apiUrl, "/user");
     return authorization !== null && token !== null && user !== null
+      && oauthUrlProtocolAllowed(authorization)
+      && oauthUrlProtocolAllowed(token)
+      && oauthUrlProtocolAllowed(user)
       ? { authorization, token, user, scope: "api" }
       : null;
   }
@@ -173,6 +230,9 @@ function oauth2Endpoints(oc: OcItem): OAuth2Endpoints | null {
     const token = endpoint(oc.httpUrl ?? "https://bitbucket.org", "/site/oauth2/access_token");
     const user = endpoint(oc.apiUrl ?? "https://api.bitbucket.org/2.0", "/user");
     return authorization !== null && token !== null && user !== null
+      && oauthUrlProtocolAllowed(authorization)
+      && oauthUrlProtocolAllowed(token)
+      && oauthUrlProtocolAllowed(user)
       ? { authorization, token, user, basicTokenAuth: true }
       : null;
   }
@@ -186,6 +246,10 @@ function oauth1Endpoints(oc: OcItem): OAuth1Endpoints | null {
   const accessToken = endpoint(oc.httpUrl, "/plugins/servlet/oauth/access-token");
   const user = endpoint(oc.httpUrl, "/plugins/servlet/applinks/whoami");
   return requestToken !== null && authorization !== null && accessToken !== null && user !== null
+    && oauthUrlProtocolAllowed(requestToken)
+    && oauthUrlProtocolAllowed(authorization)
+    && oauthUrlProtocolAllowed(accessToken)
+    && oauthUrlProtocolAllowed(user)
     ? { requestToken, authorization, accessToken, user }
     : null;
 }
@@ -592,8 +656,14 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     if (typeof agentPoolId === "string" && !(await validAgentPool(agentPoolId, org.id))) {
       return unprocessable(set, "Agent pool does not belong to the organization");
     }
-    const apiUrl = typeof attributes["api-url"] === "string" ? attributes["api-url"] : null;
-    const httpUrl = typeof attributes["http-url"] === "string" ? attributes["http-url"] : null;
+    const rawApiUrl = attributes["api-url"];
+    const rawHttpUrl = attributes["http-url"];
+    const apiUrlValue = normalizedConfiguredUrl(rawApiUrl);
+    const httpUrlValue = normalizedConfiguredUrl(rawHttpUrl);
+    const urlError = configuredVcsUrlError(apiUrlValue ?? null, httpUrlValue ?? null);
+    if (urlError !== undefined) return unprocessable(set, urlError);
+    const apiUrl = typeof apiUrlValue === "string" ? apiUrlValue : null;
+    const httpUrl = typeof httpUrlValue === "string" ? httpUrlValue : null;
     const key = typeof attributes.key === "string" ? attributes.key : null;
     const secret = typeof attributes.secret === "string" ? attributes.secret : null;
     const rsaPublicKey = typeof attributes["rsa-public-key"] === "string" ? attributes["rsa-public-key"] : null;
@@ -653,12 +723,24 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
       return unprocessable(set, "Agent pool does not belong to the organization");
     }
     if (agentPoolId !== undefined) updates.agentPoolId = agentPoolId;
-    if (attributes["api-url"] !== undefined) updates.apiUrl = typeof attributes["api-url"] === "string" ? attributes["api-url"] : null;
-    if (attributes["http-url"] !== undefined) updates.httpUrl = typeof attributes["http-url"] === "string" ? attributes["http-url"] : null;
+    const requestedApiUrl = attributes["api-url"] !== undefined ? normalizedConfiguredUrl(attributes["api-url"]) : oc.apiUrl;
+    const requestedHttpUrl = attributes["http-url"] !== undefined ? normalizedConfiguredUrl(attributes["http-url"]) : oc.httpUrl;
+    const urlError = configuredVcsUrlError(requestedApiUrl, requestedHttpUrl);
+    if (urlError !== undefined) return unprocessable(set, urlError);
+    if (attributes["api-url"] !== undefined) updates.apiUrl = typeof requestedApiUrl === "string" ? requestedApiUrl : null;
+    if (attributes["http-url"] !== undefined) updates.httpUrl = typeof requestedHttpUrl === "string" ? requestedHttpUrl : null;
     if (attributes.key !== undefined) updates.key = typeof attributes.key === "string" ? attributes.key : null;
     if (attributes.secret !== undefined) updates.secret = typeof attributes.secret === "string" ? await encryptSecret(attributes.secret) : null;
     if (attributes["rsa-public-key"] !== undefined) updates.rsaPublicKey = typeof attributes["rsa-public-key"] === "string" ? attributes["rsa-public-key"] : null;
-    if (Object.keys(updates).length > 0) await db.update(oauthClients).set(updates).where(eq(oauthClients.id, ocId));
+    const endpointOriginChanged = configuredUrlOriginChanged(oc.apiUrl, requestedApiUrl)
+      || configuredUrlOriginChanged(oc.httpUrl, requestedHttpUrl);
+    if (endpointOriginChanged && attributes.secret === undefined) updates.secret = null;
+    if (endpointOriginChanged || Object.keys(updates).length > 0) {
+      await db.transaction(async (tx): Promise<void> => {
+        if (endpointOriginChanged) await tx.delete(oauthTokens).where(eq(oauthTokens.oauthClientId, ocId));
+        if (Object.keys(updates).length > 0) await tx.update(oauthClients).set(updates).where(eq(oauthClients.id, ocId));
+      });
+    }
     if (projectIds !== undefined) await replaceProjectScope(ocId, projectIds);
     const updated = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }

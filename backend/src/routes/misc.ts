@@ -30,6 +30,7 @@ type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
   body?: unknown;
   user?: Readonly<typeof users.$inferSelect> | null;
+  token?: Readonly<{ id: string; orgId: string | null; teamId: string | null; tokenType?: string; scopes?: string | null }> | null;
   orgId: string | null;
   teamId: string | null;
   request?: Readonly<{ url: string }>;
@@ -235,25 +236,36 @@ async function auditTrailResources(logsList: readonly AuditLogItem[]): Promise<R
   });
 }
 
-async function auditLogsForUser(user: Readonly<typeof users.$inferSelect>): Promise<AuditLogItem[]> {
+async function auditLogsForPrincipal(
+  user: Readonly<typeof users.$inferSelect> | null | undefined,
+  token: Readonly<{ id: string; orgId: string | null; teamId: string | null; tokenType?: string; scopes?: string | null }> | null | undefined,
+): Promise<AuditLogItem[] | null> {
   let orgIds: string[];
-  if (user.isSiteAdmin === true) {
-    orgIds = (await db.query.organizations.findMany({ columns: { id: true } })).map((org): string => org.id);
+  if (user === null || user === undefined) {
+    // The dedicated organization audit-trails token intentionally has no user
+    // principal. It is scoped to exactly one organization by the token row.
+    if (token?.orgId === null || token?.orgId === undefined || token.teamId !== null || token.tokenType !== "audit-trails") return null;
+    orgIds = [token.orgId];
   } else {
+    const scopes = currentTokenScopes();
     const memberships = await db.query.organizationMemberships.findMany({
       where: and(eq(organizationMemberships.userId, user.id), eq(organizationMemberships.status, "active")),
-      columns: { orgId: true },
+      columns: { orgId: true, role: true },
     });
-    orgIds = memberships.map(({ orgId }): string => orgId);
+    if (scopes !== null) {
+      const candidateOrgIds = user.isSiteAdmin === true
+        ? (await db.query.organizations.findMany({ columns: { id: true } })).map((org): string => org.id)
+        : memberships.map(({ orgId }): string => orgId);
+      orgIds = candidateOrgIds.filter((orgId): boolean => scopeCoversOrg(scopes, orgId) && scopeGrants(scopes, "audit-logs:read"));
+    } else if (user.isSiteAdmin === true || user.isSiteAuditor === true) {
+      orgIds = (await db.query.organizations.findMany({ columns: { id: true } })).map((org): string => org.id);
+    } else {
+      orgIds = memberships.filter((membership): boolean => membership.role === "owner").map(({ orgId }): string => orgId);
+    }
   }
-  // These aliases span every organization the user can reach; a fine-grained
-  // token must not widen them beyond the audit-logs:read grant per org.
-  const scopes = currentTokenScopes();
-  if (scopes !== null) {
-    orgIds = orgIds.filter((orgId): boolean => scopeCoversOrg(scopes, orgId) && scopeGrants(scopes, "audit-logs:read"));
-  }
-  if (orgIds.length === 0) return [];
-  return db.query.auditLogs.findMany({ where: inArray(auditLogs.orgId, orgIds), limit: 100, orderBy: [desc(auditLogs.createdAt)] });
+  const uniqueOrgIds = [...new Set(orgIds)];
+  if (uniqueOrgIds.length === 0) return user === null || user === undefined ? null : [];
+  return db.query.auditLogs.findMany({ where: inArray(auditLogs.orgId, uniqueOrgIds), limit: 100, orderBy: [desc(auditLogs.createdAt)] });
 }
 
 const webhookAcknowledged = {
@@ -655,13 +667,21 @@ export const miscRoutes = new Elysia({ name: "misc" })
       },
     };
   })
-  .get("/api/v2/organization-audit-trailers", async ({ user, set }: ParamCtx): Promise<unknown> => {
-    if (user === null || user === undefined) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
-    return { data: await auditTrailResources(await auditLogsForUser(user)) };
+  .get("/api/v2/organization-audit-trailers", async ({ user, token, set }: ParamCtx): Promise<unknown> => {
+    const logs = await auditLogsForPrincipal(user, token);
+    if (logs === null) {
+      (set as { status: number }).status = user === null || user === undefined ? 401 : 403;
+      return { errors: [{ status: String((set as { status: number }).status), title: user === null || user === undefined ? "Unauthorized" : "Forbidden" }] };
+    }
+    return { data: await auditTrailResources(logs) };
   })
-  .get("/api/v2/audit-trails", async ({ user, set }: ParamCtx): Promise<unknown> => {
-    if (user === null || user === undefined) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
-    return { data: await auditTrailResources(await auditLogsForUser(user)) };
+  .get("/api/v2/audit-trails", async ({ user, token, set }: ParamCtx): Promise<unknown> => {
+    const logs = await auditLogsForPrincipal(user, token);
+    if (logs === null) {
+      (set as { status: number }).status = user === null || user === undefined ? 401 : 403;
+      return { errors: [{ status: String((set as { status: number }).status), title: user === null || user === undefined ? "Unauthorized" : "Forbidden" }] };
+    }
+    return { data: await auditTrailResources(logs) };
   })
   // --- Cost Estimation ---
   .get("/api/v2/runs/:run_id/cost-estimate", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -720,7 +740,11 @@ export const miscRoutes = new Elysia({ name: "misc" })
     const sourceable = rels.sourceable as Record<string, unknown> | undefined;
     const srcData = typeof sourceable?.data === "object" && sourceable.data !== null ? (sourceable.data as Record<string, unknown>) : undefined;
     const srcId = typeof srcData?.id === "string" ? srcData.id : "";
-    const srcWs = srcId !== "" ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, srcId) }) : undefined;
+    if (srcData?.type !== "workspaces" || srcId === "") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Sourceable workspace must be a workspace resource identifier" }] };
+    }
+    const srcWs = await db.query.workspaces.findFirst({ where: eq(workspaces.id, srcId) });
     if (srcWs === undefined || srcWs.orgId !== ws.orgId) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Sourceable workspace must belong to the same organization" }] }; }
     if (srcId === workspaceId) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Sourceable workspace cannot be the workspace itself" }] }; }
     const id = `rt-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
@@ -746,23 +770,44 @@ export const miscRoutes = new Elysia({ name: "misc" })
     (set as { status: number }).status = 204;
     return {};
   })
-  .post("/api/v2/workspaces/:workspace_id/relationships/run-triggers", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .post("/api/v2/workspaces/:workspace_id/relationships/run-triggers", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
     const workspaceId = params.workspace_id ?? "";
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (ws === undefined || (await findAuthorizedWorkspace(ws.id, user?.id, tokenOrgId, tokenTeamId, "admin")) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const items = payload.data;
-    if (Array.isArray(items)) {
-      for (const item of items) {
-        if (item !== null && typeof item === "object") {
-          const i = item as Record<string, unknown>;
-          const attrs = typeof i.attributes === "object" && i.attributes !== null ? (i.attributes as Record<string, unknown>) : undefined;
-          const srcId = typeof i.id === "string" ? i.id : (typeof attrs?.["source-workspace-id"] === "string" ? attrs["source-workspace-id"] : "");
-          if (srcId !== "") {
-            await db.insert(runTriggers).values({ id: `rt-${crypto.randomUUID()}`, workspaceId, sourceWorkspaceId: srcId }).onConflictDoNothing();
-          }
-        }
+    if (!Array.isArray(items)) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Run trigger relationships must be an array of workspace resource identifiers" }] };
+    }
+    const sourceIds: string[] = [];
+    for (const item of items) {
+      if (item === null || typeof item !== "object") {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Run trigger source must be a workspace resource identifier" }] };
       }
+      const identifier = item as Record<string, unknown>;
+      if (identifier.type !== "workspaces" || typeof identifier.id !== "string" || identifier.id === "") {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Run trigger source must be a workspace resource identifier" }] };
+      }
+      sourceIds.push(identifier.id);
+    }
+    const uniqueSourceIds = [...new Set(sourceIds)];
+    const sourceWorkspaces = uniqueSourceIds.length === 0
+      ? []
+      : await db.query.workspaces.findMany({ where: inArray(workspaces.id, uniqueSourceIds), columns: { id: true, orgId: true } });
+    const validSources = new Set(sourceWorkspaces.filter((source): boolean => source.orgId === ws.orgId && source.id !== workspaceId).map((source): string => source.id));
+    if (validSources.size !== uniqueSourceIds.length) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Sourceable workspace must belong to the same organization and cannot be the workspace itself" }] };
+    }
+    if (uniqueSourceIds.length > 0) {
+      await db.insert(runTriggers).values(uniqueSourceIds.map((sourceWorkspaceId: string): typeof runTriggers.$inferInsert => ({
+        id: `rt-${crypto.randomUUID()}`,
+        workspaceId,
+        sourceWorkspaceId,
+      }))).onConflictDoNothing();
     }
     (set as { status: number }).status = 204;
     return {};

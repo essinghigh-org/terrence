@@ -28,9 +28,7 @@ jobs:
           # Raises the tofu release-lookup ceiling from 60/hr (per shared
           # runner IP) to 5000/hr when both matrix jobs run e2e downloads.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # Some historical fixtures still use plaintext tokens; scope the
-        # migration compatibility flag to that test process only.
-        run: cd backend && TERRENCE_ALLOW_LEGACY_TOKENS=1 bun test --bail=5
+        run: cd backend && bun test --bail=5
 
   backend-postgres:
     name: Backend (Postgres)
@@ -64,9 +62,7 @@ jobs:
         env:
           DATABASE_URL: postgres://terrence:terrence@localhost:5432/terrence_test
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # Some historical fixtures still use plaintext tokens; scope the
-        # migration compatibility flag to that test process only.
-        run: cd backend && TERRENCE_ALLOW_LEGACY_TOKENS=1 bun test --bail=5
+        run: cd backend && bun test --bail=5
 
   frontend:
     name: Frontend
@@ -211,8 +207,6 @@ jobs:
       - name: Build frontend for API contract fixtures
         run: cd frontend && bun run build
       - name: Run focused CLI and API compatibility contracts
-        env:
-          TERRENCE_ALLOW_LEGACY_TOKENS: "1"
         run: |
           set -euo pipefail
           cd backend
@@ -225,12 +219,10 @@ jobs:
       - name: Run provider E2E with Terraform
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TERRENCE_ALLOW_LEGACY_TOKENS: "1"
           TERRENCE_E2E_CLI: terraform
         run: bun test --bail=5 --max-concurrency=1 --no-orphans backend/tests/e2e/provider_e2e.test.ts
       - name: Run provider E2E with OpenTofu
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TERRENCE_ALLOW_LEGACY_TOKENS: "1"
           TERRENCE_E2E_CLI: tofu
         run: bun test --bail=5 --max-concurrency=1 --no-orphans backend/tests/e2e/provider_e2e.test.ts

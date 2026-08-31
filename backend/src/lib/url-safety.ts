@@ -302,6 +302,11 @@ export async function resolveExternalUrl(
   const cleanHostname = parsed.hostname.replace(/^\[|\]$/g, "");
   const literalError = checkLiteralPrivate(parsed.hostname, allowPrivate, allowlist);
   if (literalError !== null) return { error: literalError };
+  // Tests may inject a transport for deterministic fake provider hosts. Keep
+  // syntax and credential checks above, but avoid depending on public DNS.
+  if (process.env.NODE_ENV === "test" && externalUrlTransportForTests !== undefined) {
+    return { target: { address: "127.0.0.1", url: parsed.toString() } };
+  }
   const addressesOrError = await resolveExternalAddresses(cleanHostname, resolve);
   if (typeof addressesOrError === "string") return { error: addressesOrError };
   const addresses = addressesOrError;
@@ -314,7 +319,7 @@ export async function resolveExternalUrl(
   return { target: { address, url: parsed.toString() } };
 }
 
-type ExternalRequestInit = Readonly<{
+export type ExternalRequestInit = Readonly<{
   method: string;
   headers?: Readonly<Record<string, string>>;
   body?: string;
@@ -322,23 +327,34 @@ type ExternalRequestInit = Readonly<{
   maxResponseBytes?: number;
 }>;
 
-/** HTTP(S) request pinned to the validated address. Redirects are not followed. */
-export async function fetchResolvedExternalUrl(target: ResolvedExternalUrl, init: ExternalRequestInit): Promise<Response> {
-  return new Promise((resolvePromise, rejectPromise): void => {
-    const { address } = target;
-    const url = new URL(target.url);
-    const secure = url.protocol === "https:";
-    const defaultPort = secure ? 443 : 80;
-    const port = url.port === "" ? defaultPort : Number(url.port);
-    const hostname = url.hostname.replace(/^\[|\]$/g, "");
-    const hostHeader = `${hostname.includes(":") ? `[${hostname}]` : hostname}${port === defaultPort ? "" : `:${port}`}`;
-    const headers = new Headers(init.headers);
-    headers.set("Host", hostHeader);
-    headers.set("Accept-Encoding", "identity");
-    if (init.body !== undefined) headers.set("Content-Length", String(Buffer.byteLength(init.body)));
-    const request = (secure ? https : http).request({
+export type ExternalUrlTransportForTests = (target: ResolvedExternalUrl, init: ExternalRequestInit) => Promise<Response>;
+let externalUrlTransportForTests: ExternalUrlTransportForTests | undefined;
+
+/** Test-only transport override; the default always uses the pinned Node transport. */
+export function setExternalUrlTransportForTests(transport: ExternalUrlTransportForTests | undefined): void {
+  if (process.env.NODE_ENV !== "test") throw new Error("setExternalUrlTransportForTests is test-only");
+  externalUrlTransportForTests = transport;
+}
+
+function pinnedRequestOptions(target: ResolvedExternalUrl, init: ExternalRequestInit): Readonly<{
+  secure: boolean;
+  options: http.RequestOptions & { servername?: string | undefined };
+}> {
+  const url = new URL(target.url);
+  const secure = url.protocol === "https:";
+  const defaultPort = secure ? 443 : 80;
+  const port = url.port === "" ? defaultPort : Number(url.port);
+  const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  const hostHeader = `${hostname.includes(":") ? `[${hostname}]` : hostname}${port === defaultPort ? "" : `:${port}`}`;
+  const headers = new Headers(init.headers);
+  headers.set("Host", hostHeader);
+  headers.set("Accept-Encoding", "identity");
+  if (init.body !== undefined) headers.set("Content-Length", String(Buffer.byteLength(init.body)));
+  return {
+    secure,
+    options: {
       protocol: url.protocol,
-      hostname: address,
+      hostname: target.address,
       port,
       path: `${url.pathname}${url.search}`,
       method: init.method,
@@ -348,9 +364,20 @@ export async function fetchResolvedExternalUrl(target: ResolvedExternalUrl, init
       // credentials must arrive as explicit headers, not URL components.
       auth: undefined,
       signal: AbortSignal.timeout(init.timeoutMs),
-    // Node stream callbacks expose mutable transport objects by design.
-    // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
-    }, (response: http.IncomingMessage): void => {
+    },
+  };
+}
+
+/** HTTP(S) request pinned to the validated address. Redirects are not followed. */
+export async function fetchResolvedExternalUrl(target: ResolvedExternalUrl, init: ExternalRequestInit): Promise<Response> {
+  if (process.env.NODE_ENV === "test" && externalUrlTransportForTests !== undefined) return externalUrlTransportForTests(target, init);
+  return new Promise((resolvePromise, rejectPromise): void => {
+    const { secure, options } = pinnedRequestOptions(target, init);
+    const request = (secure ? https : http).request(
+      options,
+      // Node stream callbacks expose mutable transport objects by design.
+      // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+      (response: http.IncomingMessage): void => {
       const chunks: Readonly<Uint8Array>[] = [];
       const maxBytes = init.maxResponseBytes ?? 1024 * 1024;
       let total = 0;
@@ -389,6 +416,93 @@ export async function fetchResolvedExternalUrl(target: ResolvedExternalUrl, init
     });
     request.on("error", (error: Readonly<Error>): void => {
       rejectPromise(error);
+    });
+    if (init.body !== undefined) request.write(init.body);
+    request.end();
+  });
+}
+
+/** HTTP(S) request that resolves after headers and streams the body. */
+export async function fetchResolvedExternalUrlStream(target: ResolvedExternalUrl, init: ExternalRequestInit): Promise<Response> {
+  if (process.env.NODE_ENV === "test" && externalUrlTransportForTests !== undefined) return externalUrlTransportForTests(target, init);
+  return new Promise((resolvePromise, rejectPromise): void => {
+    const { secure, options } = pinnedRequestOptions(target, init);
+    let responseStarted = false;
+    let failResponseStream: ((error: Readonly<Error>) => void) | undefined;
+    const request = (secure ? https : http).request(
+      options,
+      // Node stream callbacks expose mutable transport objects by design.
+      // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+      (response: http.IncomingMessage): void => {
+      responseStarted = true;
+      let total = 0;
+      let closed = false;
+      const maxBytes = init.maxResponseBytes ?? 1024 * 1024;
+      const declaredLength = Number(response.headers["content-length"]);
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller): void {
+          failResponseStream = (error: Readonly<Error>): void => {
+            if (closed) return;
+            closed = true;
+            controller.error(error);
+          };
+          if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+            closed = true;
+            response.destroy();
+            request.destroy();
+            controller.error(new Error(`Response exceeds ${maxBytes} byte limit`));
+            return;
+          }
+          // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+          response.on("data", (chunk: Uint8Array): void => {
+            if (closed) return;
+            total += chunk.length;
+            if (total > maxBytes) {
+              closed = true;
+              response.destroy();
+              request.destroy();
+              controller.error(new Error(`Response exceeds ${maxBytes} byte limit`));
+              return;
+            }
+            controller.enqueue(chunk);
+            if (controller.desiredSize !== null && controller.desiredSize <= 0) response.pause();
+          });
+          response.on("end", (): void => {
+            if (closed) return;
+            closed = true;
+            controller.close();
+          });
+          response.on("error", (error: Readonly<Error>): void => {
+            failResponseStream?.(error);
+          });
+          response.on("close", (): void => {
+            if (closed || response.complete || response.readableEnded) return;
+            failResponseStream?.(new Error("External response closed before completing"));
+          });
+        },
+        pull(): void {
+          if (!closed) response.resume();
+        },
+        cancel(reason: unknown): void {
+          closed = true;
+          response.destroy(reason instanceof Error ? reason : undefined);
+          request.destroy();
+        },
+      });
+      const responseHeaders = new Headers();
+      for (const [name, value] of Object.entries(response.headers)) {
+        for (const entry of Array.isArray(value) ? value : [value]) {
+          if (entry !== undefined) responseHeaders.append(name, entry);
+        }
+      }
+      resolvePromise(new Response(stream, {
+        status: response.statusCode ?? 502,
+        headers: responseHeaders,
+      }));
+    });
+    request.on("error", (error: Readonly<Error>): void => {
+      if (!responseStarted) rejectPromise(error);
+      else failResponseStream?.(error);
     });
     if (init.body !== undefined) request.write(init.body);
     request.end();

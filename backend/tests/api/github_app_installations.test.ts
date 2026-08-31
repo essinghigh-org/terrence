@@ -16,6 +16,7 @@ import {
   workspaces,
 } from "../../src/db/schema";
 import { legacyHashAuthenticationToken } from "../../src/lib/token-service";
+import { setExternalUrlTransportForTests } from "../../src/lib/url-safety";
 
 const suffix = crypto.randomUUID();
 const orgId = `org-github-app-${suffix}`;
@@ -125,6 +126,12 @@ beforeAll(async () => {
       target_type: "Organization",
     });
   };
+  setExternalUrlTransportForTests(async (target, init): Promise<Response> => {
+    const requestInit: RequestInit = { method: init.method };
+    if (init.headers !== undefined) requestInit.headers = init.headers;
+    if (init.body !== undefined) requestInit.body = init.body;
+    return mockFetch(target.url, requestInit);
+  });
   globalThis.fetch = Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
 
   await db.insert(organizations).values({ id: orgId, name: orgName });
@@ -190,6 +197,7 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
+  setExternalUrlTransportForTests(undefined);
   globalThis.fetch = originalFetch;
   restoreEnvironment();
   await db.delete(githubAppInstallations).where(eq(githubAppInstallations.orgId, orgId));

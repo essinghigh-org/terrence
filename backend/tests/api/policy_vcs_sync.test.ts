@@ -18,6 +18,7 @@ import {
   users,
 } from "../../src/db/schema";
 import { encryptSecret } from "../../src/lib/secrets";
+import { setExternalUrlTransportForTests } from "../../src/lib/url-safety";
 import { handleBitbucketWebhook, handleGithubWebhook, handleGitlabWebhook } from "../../src/lib/webhooks";
 
 const suffix = crypto.randomUUID();
@@ -304,10 +305,17 @@ describe("VCS-backed policy set synchronization", () => {
         headers: { "content-length": String(archive.byteLength) },
       });
     };
+    setExternalUrlTransportForTests(async (target, init): Promise<Response> => {
+      const requestInit: RequestInit = { method: init.method };
+      if (init.headers !== undefined) requestInit.headers = init.headers;
+      if (init.body !== undefined) requestInit.body = init.body;
+      return mockFetch(target.url, requestInit);
+    });
     globalThis.fetch = Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
   });
 
   afterAll(async () => {
+    setExternalUrlTransportForTests(undefined);
     globalThis.fetch = originalFetch;
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.delete(users).where(eq(users.id, userId));

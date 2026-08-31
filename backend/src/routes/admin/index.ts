@@ -13,11 +13,15 @@ import { dbExportRoutes } from "./db-export";
 import { dbMigrationRoutes } from "./db-migration";
 import { systemApiTokenAdminRoutes } from "./system-api-tokens";
 import { authPlugin } from "../../auth";
+import { isImpersonationTokenId } from "../../lib/impersonation";
 
 // Admin API split into domain modules (24.3).
 export const adminRoutes = new Elysia({ name: "admin" })
   .use(authPlugin)
-  .onBeforeHandle(({ user, set }) => {
+  .onBeforeHandle(({ request, token, user, set }) => {
+    const isUnimpersonation = new URL(request.url).pathname === "/api/v2/admin/users/actions/unimpersonate";
+    const isImpersonationSession = isImpersonationTokenId(token?.id);
+    if (isUnimpersonation && isImpersonationSession && user?.isSiteAdmin !== true) return undefined;
     if ((user as Readonly<{ isSiteAdmin?: boolean | null }> | null | undefined)?.isSiteAdmin === true) return undefined;
     set.status = 404;
     return { errors: [{ status: "404", title: "Not Found" }] };
