@@ -8,6 +8,7 @@ import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
+const originalClipboard = navigator.clipboard;
 
 function json(data: JsonValue, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -29,6 +30,7 @@ function CurrentLocation(): React.JSX.Element {
 afterEach((): void => {
   cleanup();
   globalThis.fetch = originalFetch;
+  Object.defineProperty(navigator, "clipboard", { value: originalClipboard, configurable: true });
 });
 
 test("separates phase logs and only renders backend-authorized run actions", async () => {
@@ -199,6 +201,10 @@ test("separates phase logs and only renders backend-authorized run actions", asy
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = fetchMock;
+  const writeText = mock(async (text: string): Promise<void> => {
+    expect(text).toBe("run-polished");
+  });
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-polished"]}>
@@ -257,7 +263,10 @@ test("separates phase logs and only renders backend-authorized run actions", asy
   expect(view.getByRole("link", { name: "New run" }).getAttribute("href"))
     .toBe("/app/acme/workspaces/production/runs?new-run=true");
   expect(view.getAllByRole("navigation", { name: "Breadcrumb" })).toHaveLength(1);
-  expect(view.getByLabelText("Copy workspace ID")).toBeTruthy();
+  expect(view.getByLabelText("Copy run ID")).toBeTruthy();
+  expect(view.getByText("Run ID:")).toBeTruthy();
+  fireEvent.click(view.getByLabelText("Copy run ID"));
+  await waitFor((): void => { expect(writeText).toHaveBeenCalledWith("run-polished"); });
   expect(view.queryByRole("button", { name: "Discard run" })).toBeNull();
   expect(view.queryByRole("button", { name: "Cancel run" })).toBeNull();
   expect(view.queryByRole("button", { name: "Force cancel" })).toBeNull();

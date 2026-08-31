@@ -49,6 +49,7 @@ import { useTerrenceEvent } from "../lib/event-provider";
 import { CAPABILITY_PLAN_EXPLAINER, useCapability } from "../lib/capabilities";
 import { useUnsavedChangesWarning } from "../lib/use-unsaved-changes";
 import { isBigInt, isBoolean, isNumber, isObjectLike, isString } from "../lib/type-guards";
+import { formatRunSource, formatRunStatus, isVcsRunSource } from "../lib/run-labels";
 import type { JsonObject } from "@/lib/json";
 
 type RunActions = {
@@ -244,42 +245,6 @@ const APPLY_PHASE_STATUSES = new Set([
 type AuxKind = "logs" | "plan" | "apply" | "cost" | "policy" | "assessments" | "events" | "comments";
 const ALL_AUX_KINDS: readonly AuxKind[] = ["logs", "plan", "apply", "cost", "policy", "assessments", "events", "comments"];
 
-const STATUS_LABELS = {
-  pending: "Pending",
-  fetching: "Fetching configuration",
-  fetching_completed: "Configuration fetched",
-  pre_plan_running: "Running pre-plan tasks",
-  pre_plan_completed: "Pre-plan tasks completed",
-  queuing: "Queuing plan",
-  plan_queued: "Plan queued",
-  planning: "Planning",
-  planned: "Needs confirmation",
-  cost_estimating: "Estimating cost",
-  cost_estimated: "Cost estimated",
-  policy_checking: "Checking policies",
-  policy_override: "Policy override required",
-  policy_checked: "Policy checks passed",
-  policy_soft_failed: "Policy override required",
-  post_plan_running: "Running post-plan tasks",
-  post_plan_completed: "Post-plan tasks completed",
-  planned_and_finished: "Planned and finished",
-  planned_and_saved: "Plan saved",
-  confirmed: "Confirmed",
-  apply_queued: "Apply queued",
-  applying: "Applying",
-  applied: "Applied",
-  errored: "Errored",
-  failed: "Failed",
-  canceled: "Canceled",
-  discarded: "Discarded",
-  force_canceled: "Force canceled",
-  unreachable: "Unreachable",
-  manual: "Manual",
-  pull_request: "Pull request",
-  push: "Push",
-  tag: "Tag",
-};
-
 const RUN_EVENT_LABELS = {
   apply: "Run confirmed",
   cancel: "Run canceled",
@@ -288,27 +253,6 @@ const RUN_EVENT_LABELS = {
   "force-cancel": "Run force canceled",
   "override-policy": "Policy check overridden",
 };
-
-function statusLabel(status: string): string {
-  // SAFETY: unknown statuses fall through to the underscore-replaced label below.
-  return STATUS_LABELS[status as keyof typeof STATUS_LABELS] ?? status.replace(/_/g, " ");
-}
-
-function sourceLabel(source: string | undefined): string {
-  if (source === undefined || source === "") return "Unknown source";
-  const labels = {
-    bitbucket: "Bitbucket",
-    github: "GitHub",
-    gitlab: "GitLab",
-    "tfe-api": "API",
-    "tfe-cli": "CLI",
-    "tfe-configuration-version": "VCS",
-    "tfe-no-code": "No-code module",
-    "tfe-ui": "UI",
-  };
-  // SAFETY: unknown sources fall through to the raw source label below.
-  return labels[source as keyof typeof labels] ?? statusLabel(source);
-}
 
 function formatDate(value: string | undefined): string {
   if (value === undefined || value === "") return "—";
@@ -1559,9 +1503,9 @@ export function RunDetail({
               variant={["errored", "failed", "unreachable"].includes(status) ? "destructive" : "secondary"}
               className={successfulStatus ? "rounded bg-success/10 text-success" : "rounded"}
             >
-              {statusLabel(status)}
+              {formatRunStatus(status)}
             </Badge>
-            <span aria-live="polite" className="sr-only">Run status: {statusLabel(status)}</span>
+            <span aria-live="polite" className="sr-only">Run status: {formatRunStatus(status)}</span>
             {attributes["plan-only"] === true && <Badge variant="outline" className="rounded">Plan only</Badge>}
             {attributes["is-destroy"] === true && <Badge variant="destructive" className="rounded">Destroy</Badge>}
             {attributes["refresh-only"] === true && <Badge variant="outline" className="rounded text-primary border-primary/30 bg-primary/10">Refresh only</Badge>}
@@ -1571,9 +1515,9 @@ export function RunDetail({
             {attributes.message ?? "Manual run"}
           </h2>
           <p className="mt-2 text-[13px] text-muted-foreground">
-            {sourceLabel(attributes.source)} · Created {formatDate(attributes["created-at"])}
+            {formatRunSource(attributes.source, attributes["trigger-reason"])} · Created {formatDate(attributes["created-at"])}
           </p>
-          {(attributes["trigger-reason"] === "vcs" || attributes.source === "github" || attributes.source === "gitlab" || attributes.source === "bitbucket") && (
+          {isVcsRunSource(attributes.source, attributes["trigger-reason"]) && (
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               <span>{isString(attributes.branch) ? attributes.branch : "Default branch"}</span>
               {attributes["commit-sha"] !== undefined && attributes["commit-sha"] !== null && attributes["commit-sha"] !== "" && (
@@ -1703,7 +1647,7 @@ export function RunDetail({
         <dl className="grid gap-4 border-t border-border px-5 py-4 text-[13px] sm:grid-cols-2 lg:grid-cols-5">
           <div>
             <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</dt>
-            <dd className="mt-1 font-medium text-foreground">{statusLabel(status)}</dd>
+            <dd className="mt-1 font-medium text-foreground">{formatRunStatus(status)}</dd>
           </div>
           {creatorUsername !== "" && (
             <div>
@@ -1732,7 +1676,7 @@ export function RunDetail({
           </div>
           <div>
             <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Operation</dt>
-            <dd className="mt-1 capitalize text-foreground">{statusLabel(attributes.operation ?? "plan_and_apply")}</dd>
+            <dd className="mt-1 capitalize text-foreground">{formatRunStatus(attributes.operation ?? "plan_and_apply")}</dd>
           </div>
           <div>
             <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Auto apply</dt>
@@ -2253,7 +2197,7 @@ export function RunDetail({
                   const eventSource = event.attributes.details?.source;
                   const triggerReason = event.attributes.details?.triggerReason;
                   // SAFETY: unknown event actions fall through to the status label fallback.
-                  const eventLabel = RUN_EVENT_LABELS[event.attributes.action as keyof typeof RUN_EVENT_LABELS] ?? statusLabel(event.attributes.action);
+                  const eventLabel = RUN_EVENT_LABELS[event.attributes.action as keyof typeof RUN_EVENT_LABELS] ?? formatRunStatus(event.attributes.action);
                   return (
                     <li key={event.id} className="flex gap-3 px-5 py-3">
                       <Avatar className="size-8 rounded-full">
@@ -2280,12 +2224,12 @@ export function RunDetail({
                         </div>
                         {fromStatus !== undefined && toStatus !== undefined && (
                           <p className="mt-0.5 text-xs text-muted-foreground">
-                            {statusLabel(fromStatus)} → {statusLabel(toStatus)}
+                            {formatRunStatus(fromStatus)} → {formatRunStatus(toStatus)}
                           </p>
                         )}
                         {event.attributes.action === "create" && eventSource !== undefined && (
                           <p className="mt-0.5 text-xs text-muted-foreground">
-                            {statusLabel(triggerReason ?? "manual")} from {sourceLabel(eventSource)}
+                            {formatRunStatus(triggerReason ?? "manual")} from {formatRunSource(eventSource, triggerReason)}
                           </p>
                         )}
                       </div>

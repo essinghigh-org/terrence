@@ -28,6 +28,7 @@ import {
   type VcsSourceIdentity,
 } from "./vcs-source";
 import { githubAppApiBase } from "./github-api";
+import { newRunId } from "./run-id";
 
 type WebhookPayload = Readonly<Record<string, unknown>>;
 type VcsRepo = DeepReadonly<NonNullable<typeof workspaces.$inferSelect.vcsRepo>>;
@@ -1742,7 +1743,7 @@ async function createWebhookRun(
   if (!isSpeculative && workspace.autoApplyRunTrigger !== true && workspace.queueAllRuns !== true) return undefined;
   const credentials = await resolveCredentials();
   const configurationVersionId = `cv-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
-  const runId = `run-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
+  const runId = newRunId();
   await persistWebhookRun(provider, kind, details, workspace, credentials, configurationVersionId, runId, isSpeculative);
   if (credentials !== undefined) void reportRunVcsStatus(runId, "pending");
   return { configurationVersionId, credentials };

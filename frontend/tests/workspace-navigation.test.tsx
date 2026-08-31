@@ -215,7 +215,7 @@ test("renders before the latest run finishes and ignores an aborted run response
     }));
   });
   await waitFor((): void => {
-    expect(view.getByRole("link", { name: "Latest run: planned and finished" })).toBeTruthy();
+    expect(view.getByRole("link", { name: "Latest run: Planned and finished" })).toBeTruthy();
   });
 
   await act(async (): Promise<void> => {
@@ -224,7 +224,7 @@ test("renders before the latest run finishes and ignores an aborted run response
     }));
     await new Promise<void>((resolve): void => { window.setTimeout(resolve, 0); });
   });
-  expect(view.getByRole("link", { name: "Latest run: planned and finished" })).toBeTruthy();
+  expect(view.getByRole("link", { name: "Latest run: Planned and finished" })).toBeTruthy();
   expect(view.queryByRole("link", { name: "Latest run: applied" })).toBeNull();
 });
 

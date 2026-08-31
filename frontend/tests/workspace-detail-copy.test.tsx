@@ -89,3 +89,44 @@ test("shows an error toast when copying the workspace id fails", async () => {
 
   await waitFor((): void => { expect(view.getByText("Could not copy workspace ID")).toBeTruthy(); });
 });
+
+test("links the configured GitHub repository and shows its working directory", async () => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations/acme/workspaces/production") {
+      return json({
+        data: {
+          id: "ws-1",
+          attributes: {
+            name: "production",
+            "vcs-repo": {
+              identifier: "acme/infrastructure",
+              "github-app-installation-id": "ghain-1",
+            },
+            "working-directory": "environments/production",
+            "iac-binary": "tofu",
+            "terraform-version": "1.9.3",
+            locked: false,
+          },
+        },
+      });
+    }
+    if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") return json({ data: [] });
+    throw new Error(`Unexpected request: ${url}`);
+  }) as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
+      <Routes>
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
+  const repositoryLink = view.getByRole("link", { name: "Open GitHub repository acme/infrastructure" });
+  expect(repositoryLink.getAttribute("href")).toBe("https://github.com/acme/infrastructure");
+  expect(repositoryLink.getAttribute("target")).toBe("_blank");
+  expect(view.getByText("environments/production")).toBeTruthy();
+  expect(view.getByText("OpenTofu")).toBeTruthy();
+});

@@ -27,6 +27,7 @@ import { fetchApi } from "../lib/api";
 import { useTerrenceEvent } from "../lib/event-provider";
 import { isNumber, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
+import { formatRunSource, formatRunStatus, isVcsRunSource } from "../lib/run-labels";
 
 type RunItem = {
   id: string;
@@ -65,42 +66,6 @@ type IncludedUser = {
   };
 };
 
-const STATUS_LABELS = {
-  pending: "Pending",
-  fetching: "Fetching configuration",
-  fetching_completed: "Configuration fetched",
-  pre_plan_running: "Running pre-plan tasks",
-  pre_plan_completed: "Pre-plan tasks completed",
-  queuing: "Queuing plan",
-  plan_queued: "Plan queued",
-  planning: "Planning",
-  planned: "Needs confirmation",
-  cost_estimating: "Estimating cost",
-  cost_estimated: "Cost estimated",
-  policy_checking: "Checking policies",
-  policy_override: "Policy override required",
-  policy_checked: "Policy checks passed",
-  policy_soft_failed: "Policy override required",
-  post_plan_running: "Running post-plan tasks",
-  post_plan_completed: "Post-plan tasks completed",
-  planned_and_finished: "Planned and finished",
-  planned_and_saved: "Plan saved",
-  confirmed: "Confirmed",
-  apply_queued: "Apply queued",
-  applying: "Applying",
-  applied: "Applied",
-  errored: "Errored",
-  failed: "Failed",
-  canceled: "Canceled",
-  discarded: "Discarded",
-  force_canceled: "Force canceled",
-  unreachable: "Unreachable",
-  manual: "Manual",
-  pull_request: "Pull request",
-  push: "Push",
-  tag: "Tag",
-};
-
 type RunType = "empty" | "plan" | "refresh" | "standard";
 
 const RUN_TYPE_DESCRIPTIONS = {
@@ -116,11 +81,6 @@ const RUN_TYPE_LABELS = {
   plan: "Plan only",
   empty: "Allow empty apply",
 };
-
-function statusLabel(status: string): string {
-  // SAFETY: unknown statuses fall through to the underscore-replaced label below.
-  return STATUS_LABELS[status as keyof typeof STATUS_LABELS] ?? status.replace(/_/g, " ");
-}
 
 /**
  * Split a comma/space-separated address input into individual resource
@@ -325,7 +285,7 @@ export function RunList({
         run.id,
         run.attributes.message,
         run.attributes.status,
-        statusLabel(run.attributes.status),
+        formatRunStatus(run.attributes.status),
         run.attributes.source,
         run.attributes["trigger-reason"],
         creatorName,
@@ -510,27 +470,8 @@ export function RunList({
                 const creatorUser = creatorId !== undefined ? usersMap.get(creatorId) : undefined;
                 const username = creatorUser?.attributes.username ?? run.attributes["triggered-by"] ?? "System";
                 const avatarUrl = creatorUser?.attributes["avatar-url"] ?? run.attributes["triggered-by-avatar-url"] ?? "";
-                // tfe-configuration-version is the historical VCS source emitted by
-                // older backends (see response.ts normalizedSource); treat it as
-                // external VCS so existing runs still render as GitHub/VCS instead
-                // of falling through to "UI".
-                const isVcsSource = (["github", "gitlab", "bitbucket"] as readonly (string | undefined)[]).includes(run.attributes.source)
-                  || (run.attributes.source === "tfe-configuration-version" && ["push", "pull_request", "tag"].includes(run.attributes["trigger-reason"] ?? ""));
-                const sourceLabel = run.attributes.source === "github"
-                  ? "GitHub"
-                  : run.attributes.source === "gitlab"
-                    ? "GitLab"
-                    : run.attributes.source === "bitbucket"
-                      ? "Bitbucket"
-                      : isVcsSource
-                        ? "GitHub"
-                        : run.attributes.source === "tfe-cli"
-                          ? "CLI"
-                          : run.attributes.source === "tfe-ui" || run.attributes["trigger-reason"] === "manual"
-                            ? "UI"
-                            : run.attributes.source === "tfe-api" || run.attributes.source === undefined
-                              ? "API"
-                              : "UI";
+                const isVcsSource = isVcsRunSource(run.attributes.source, run.attributes["trigger-reason"]);
+                const sourceLabel = formatRunSource(run.attributes.source, run.attributes["trigger-reason"]);
 // SAFETY: the fixed source list matches the VCS source union the UI renders.
                 const externalSource = isVcsSource;
                 return (

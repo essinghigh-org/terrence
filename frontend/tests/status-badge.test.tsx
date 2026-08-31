@@ -19,14 +19,14 @@ describe("StatusBadge", (): void => {
     expect(container.textContent).toBe("—");
   });
 
-  it("formats an underscored status into a title-cased label", (): void => {
+  it("uses the shared run status label", (): void => {
     const { container } = render(<StatusBadge status="planned_and_finished" />);
-    expect(container.textContent).toContain("Planned And Finished");
+    expect(container.textContent).toContain("Planned and finished");
   });
 
-  it("keeps Needs Confirmation as a special label", (): void => {
+  it("formats needs confirmation consistently", (): void => {
     const { container } = render(<StatusBadge status="needs_confirmation" />);
-    expect(container.textContent).toContain("Needs Confirmation");
+    expect(container.textContent).toContain("Needs confirmation");
   });
 
   it("styles running/planning statuses as active", (): void => {

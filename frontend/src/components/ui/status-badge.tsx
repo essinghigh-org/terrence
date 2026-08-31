@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { Badge } from "./badge";
 import { cn } from "@/lib/utils";
+import { formatRunStatus } from "@/lib/run-labels";
 
 export type RunStatusType =
   | "pending"
@@ -32,13 +33,6 @@ export type RunStatusType =
   | "needs_confirmation"
   | string;
 
-function formatStatusLabel(status: string): string {
-  if (status === "needs_confirmation") return "Needs Confirmation";
-  return status
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (char): string => char.toUpperCase());
-}
-
 export function StatusBadge({
   status,
   className,
@@ -50,7 +44,7 @@ export function StatusBadge({
     return <span className="text-muted-foreground">—</span>;
   }
 
-  const label = formatStatusLabel(status);
+  const label = formatRunStatus(status);
 
   // Active running / planning / applying states
   if (["planning", "applying", "fetching", "cost_estimating", "policy_checking", "pending"].includes(status)) {
