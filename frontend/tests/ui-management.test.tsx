@@ -693,6 +693,35 @@ test("toggles dense table density and persists the preference", async () => {
   window.localStorage.removeItem("terrence-table-prefs:workspaces");
 });
 
+test("sizes workspace placeholders to the recognized visible columns", async () => {
+  window.localStorage.setItem(
+    "terrence-table-prefs:workspaces",
+    JSON.stringify({ density: "comfortable", visibleColumns: ["stale-column"] }),
+  );
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    if (url.startsWith("/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100")) return json({ data: [] });
+    if (url.startsWith("/api/v2/organizations/acme/projects?")) return json({ data: [] });
+    if (url.endsWith("/api/v2/organizations/acme")) {
+      return json({ data: { attributes: { name: "acme", permissions: {} } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme"]}>
+      <Routes><Route path="/app/:orgName" element={<Workspaces />} /></Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("No workspaces yet")).toBeTruthy(); });
+  expect(view.getByRole("cell").getAttribute("colspan")).toBe("2");
+  expect(view.queryByRole("columnheader", { name: "Repository" })).toBeNull();
+
+  window.localStorage.removeItem("terrence-table-prefs:workspaces");
+});
+
 test("pins a workspace (star) and sorts it to the top", async () => {
   window.localStorage.removeItem("terrence-pinned-workspaces");
   const workspaces = [
@@ -844,7 +873,15 @@ test("column chooser hides and restores table columns with persistence", async (
   window.localStorage.removeItem("terrence-table-prefs:workspaces");
   const workspace = {
     id: "workspace-1",
-    attributes: { name: "production", locked: false, "tag-names": [], "vcs-repo": { identifier: "acme/terraform-aws" } },
+    attributes: {
+      name: "production",
+      locked: false,
+      "tag-names": [],
+      "vcs-repo": {
+        identifier: "acme/terraform-aws",
+        "github-app-installation-id": "ghain-1",
+      },
+    },
     relationships: { project: { data: { id: "project-default", type: "projects" } } },
   };
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
@@ -870,6 +907,9 @@ test("column chooser hides and restores table columns with persistence", async (
   expect(view.getByRole("columnheader", { name: "Repository" })).toBeTruthy();
   expect(view.getByRole("columnheader", { name: "Status" })).toBeTruthy();
   expect(view.getByText("acme/terraform-aws")).toBeTruthy();
+  const repositoryLink = view.getByRole("link", { name: "Open GitHub repository acme/terraform-aws" });
+  expect(repositoryLink.getAttribute("href")).toBe("https://github.com/acme/terraform-aws");
+  expect(repositoryLink.getAttribute("target")).toBe("_blank");
 
   await act(async (): Promise<void> => {
     fireEvent.mouseDown(view.getByRole("button", { name: "Choose visible columns" }));

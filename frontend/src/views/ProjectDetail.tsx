@@ -33,6 +33,7 @@ import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { useAgentPools } from "@/hooks/useAgentPools";
 import type { AgentPoolResource } from "@/hooks/useAgentPools";
 import { WorkspaceNotifications } from "@/components/WorkspaceNotifications";
+import { WorkspaceRepositoryLink } from "@/components/WorkspaceRepositoryLink";
 
 /** Read the data array from a JSON:API list envelope, or [] when absent. */
 function dataArray<T>(response: unknown): T[] {
@@ -78,7 +79,10 @@ type Workspace = Readonly<{
   attributes: Readonly<{
     name: string;
     locked?: boolean;
-    "vcs-repo"?: Readonly<{ identifier: string }> | null;
+    "vcs-repo"?: Readonly<{
+      identifier: string;
+      "github-app-installation-id"?: string | null;
+    }> | null;
     "tag-names"?: readonly string[];
   }>;
 }>;
@@ -534,7 +538,7 @@ export function ProjectDetail({
                             </Link>
                             {workspace.attributes.locked === true && <Badge variant="outline" className="ml-2">Locked</Badge>}
                           </TableCell>
-                          <TableCell className="text-muted-foreground">{workspace.attributes["vcs-repo"]?.identifier ?? "None"}</TableCell>
+                          <TableCell><WorkspaceRepositoryLink repo={workspace.attributes["vcs-repo"]} /></TableCell>
                           <TableCell>
                             {latestRuns.get(workspace.id) === undefined ? (
                               <span className="text-muted-foreground">—</span>
@@ -596,7 +600,7 @@ export function ProjectDetail({
                           </Link>
                           {workspace.attributes.locked === true && <Badge variant="outline" className="ml-2">Locked</Badge>}
                         </TableCell>
-                        <TableCell className="text-muted-foreground">{workspace.attributes["vcs-repo"]?.identifier ?? "None"}</TableCell>
+                        <TableCell><WorkspaceRepositoryLink repo={workspace.attributes["vcs-repo"]} /></TableCell>
                         <TableCell>
                           {latestRuns.get(workspace.id) === undefined ? (
                             <span className="text-muted-foreground">—</span>

@@ -39,6 +39,7 @@ import { getPinnedWorkspaces, isWorkspacePinned, setWorkspacePinned } from "@/li
 import { deleteView, getSavedViews, saveView, type SavedView } from "@/lib/saved-views";
 import { cn, formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { PageHeader, PageShell } from "@/components/PageHeader";
+import { WorkspaceRepositoryLink } from "@/components/WorkspaceRepositoryLink";
 import { isNumber } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
 
@@ -75,7 +76,10 @@ type Workspace = Readonly<{
     locked?: boolean;
     permissions?: Readonly<{ "can-update"?: boolean }>;
     "tag-names"?: readonly string[];
-    "vcs-repo"?: Readonly<{ identifier: string }> | null;
+    "vcs-repo"?: Readonly<{
+      identifier: string;
+      "github-app-installation-id"?: string | null;
+    }> | null;
   }>;
   relationships?: Readonly<{
     project?: Readonly<{ data: Readonly<{ id: string }> | null }>;
@@ -468,6 +472,7 @@ export function Workspaces(): React.JSX.Element {
   };
 
   const hasFilters = search !== "" || statusFilter !== "" || projectFilter !== "";
+  const tableColumnCount = WORKSPACE_TABLE_COLUMNS.filter((column): boolean => visibleColumns.includes(column.id)).length + 2;
 
   return (
     <PageShell className="max-w-7xl">
@@ -679,16 +684,16 @@ export function Workspaces(): React.JSX.Element {
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={7} className="p-0"><TableSkeleton rows={4} cols={7} /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={tableColumnCount} className="p-0"><TableSkeleton rows={4} cols={tableColumnCount} /></TableCell></TableRow>
             ) : loadError !== "" && workspaces.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-12 text-center text-muted-foreground">
+                <TableCell colSpan={tableColumnCount} className="py-12 text-center text-muted-foreground">
                   Workspace data is unavailable. Use Try again above to retry.
                 </TableCell>
               </TableRow>
             ) : visibleWorkspaces.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-4 text-center text-muted-foreground">
+                <TableCell colSpan={tableColumnCount} className="py-4 text-center text-muted-foreground">
                   <EmptyState
                     compact
                     title={hasFilters ? "No workspaces match the current filters" : "No workspaces yet"}
@@ -741,7 +746,7 @@ export function Workspaces(): React.JSX.Element {
                   </div>
                 </TableCell>
                 {visibleColumns.includes("repository") && (
-                  <TableCell className="max-w-64 truncate">{workspace.attributes["vcs-repo"]?.identifier ?? "None"}</TableCell>
+                  <TableCell className="max-w-64"><WorkspaceRepositoryLink repo={workspace.attributes["vcs-repo"]} /></TableCell>
                 )}
                 {visibleColumns.includes("tags") && (
                   <TableCell>

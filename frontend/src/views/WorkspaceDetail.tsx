@@ -45,6 +45,7 @@ import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { cn } from "../lib/utils";
 import { formatDate, formatDateTime } from "../lib/utils";
 import { formatRunSource, formatRunStatus } from "../lib/run-labels";
+import { githubRepositoryUrl } from "../lib/github-repository-url";
 import { isNumber, isString } from "../lib/type-guards";
 import type { JsonValue } from "@/lib/json";
 
@@ -123,19 +124,6 @@ type RunSummary = {
     status: string;
     [key: string]: JsonValue;
   };
-}
-
-type WorkspaceVcsRepo = NonNullable<Workspace["attributes"]["vcs-repo"]>;
-
-const GITHUB_REPOSITORY_PART = /^(?!\.{1,2}$)[A-Za-z0-9.][A-Za-z0-9_.-]*$/;
-
-function githubRepositoryUrl(repo: WorkspaceVcsRepo | null | undefined): string | null {
-  if (!isString(repo?.["github-app-installation-id"]) || repo["github-app-installation-id"] === "") return null;
-  const identifier = repo.identifier?.trim();
-  if (identifier === undefined) return null;
-  const parts = identifier.split("/");
-  if (parts.length !== 2 || parts.some((part): boolean => !GITHUB_REPOSITORY_PART.test(part))) return null;
-  return `https://github.com/${parts.map((part): string => encodeURIComponent(part)).join("/")}`;
 }
 
 export function WorkspaceDetail({

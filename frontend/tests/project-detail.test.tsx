@@ -2,7 +2,7 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
-import { ProjectDetail } from "../src/views/ProjectDetail";
+import { ProjectDetail, type ProjectSection } from "../src/views/ProjectDetail";
 import { Toaster } from "../src/components/ui/toast";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
@@ -44,7 +44,7 @@ const baseFetchMock = (overrides: Readonly<Record<string, (init?: RequestInit) =
     throw new Error(`Unexpected request: ${method} ${url}`);
   });
 
-function renderProject(section: "settings" | "variable-sets"): ReturnType<typeof render> {
+function renderProject(section: ProjectSection): ReturnType<typeof render> {
   return render(
     <MemoryRouter initialEntries={["/app/acme/projects/prj-1"]}>
       <Routes>
@@ -57,6 +57,29 @@ function renderProject(section: "settings" | "variable-sets"): ReturnType<typeof
     </MemoryRouter>,
   );
 }
+
+test("links GitHub App-backed repositories in project workspace tables", async () => {
+  const workspace = {
+    id: "ws-1",
+    attributes: {
+      name: "production",
+      locked: false,
+      "vcs-repo": {
+        identifier: "acme/infrastructure",
+        "github-app-installation-id": "ghain-1",
+      },
+    },
+  };
+  const fetchMock = baseFetchMock({
+    "GET /api/v2/organizations/acme/workspaces?page%5Bsize%5D=100&filter%5Bproject%5D%5Bid%5D=prj-1": () => json({ data: [workspace] }),
+  });
+  globalThis.fetch = fetchMock;
+
+  const view = renderProject("workspaces");
+  const repositoryLink = await view.findByRole("link", { name: "Open GitHub repository acme/infrastructure" });
+  expect(repositoryLink.getAttribute("href")).toBe("https://github.com/acme/infrastructure");
+  expect(repositoryLink.getAttribute("target")).toBe("_blank");
+});
 
 test("creates a project variable set from the project detail settings", async () => {
   let postedBody: unknown;
