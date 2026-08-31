@@ -2253,7 +2253,15 @@ async function executeApplyImpl(runId: string): Promise<void> {
     }
     if (savedPlanRequired) await cleanupSavedPlan(runId);
   } catch (error: unknown) {
-    if (await runWasCanceled(runId)) return;
+    if (await runWasCanceled(runId)) {
+      applyCanceled = true;
+      if (applyStarted) {
+        await captureInterruptedApplyState(runId).catch((captureError: unknown): void => {
+          log.error("Could not capture state after canceled apply", { runId, error: captureError });
+        });
+      }
+      return;
+    }
     const errMsg = error instanceof Error ? error.message : String(error);
     log.error("Run apply failed", { runId, error });
     await writeLog(runId, "apply", `[terrence ERROR] ${errMsg}`);

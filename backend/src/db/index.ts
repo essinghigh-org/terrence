@@ -5,7 +5,7 @@ import { migrate as sqliteMigrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { reconcileSparseMigrationJournal, sparseJournalReconcilePlan, readBundledMigrationJournal } from './reconcile';
 import { SQL as BunSQL } from 'bun';
 import { drizzle as pgDrizzle } from 'drizzle-orm/bun-sql';
-import { type SQL } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
 import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -42,6 +42,59 @@ let sqliteTransactionCompletion: Promise<void> | null = null;
 let prepareSqliteStatement: ((sqlText: string, ...params: unknown[]) => unknown) | null = null;
 const gatedSqliteQueryMethods = new Set(["run", "all", "get", "values"]);
 const sqliteTransactionContext = new AsyncLocalStorage<symbol>();
+
+type TerrenceSQLiteTransaction = SQLiteBunTransaction<Record<string, unknown>, never>;
+type SQLiteTransactionInternals = TerrenceSQLiteTransaction & {
+  readonly dialect: SQLiteSyncDialect;
+  readonly schema: unknown;
+  readonly session: SQLiteBunSession<Record<string, unknown>, never>;
+  readonly nestedIndex: number;
+};
+type NestedSQLiteTransactionCallback<T> = (tx: TerrenceSQLiteTransaction) => T;
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) return false;
+  return typeof Reflect.get(value, "then") === "function";
+}
+
+function patchNestedSqliteTransaction(tx: TerrenceSQLiteTransaction): TerrenceSQLiteTransaction {
+  const transaction = tx as SQLiteTransactionInternals;
+  const transactionWithPatchedMethod = tx as unknown as {
+    transaction: <T>(callback: NestedSQLiteTransactionCallback<T>) => T;
+  };
+  transactionWithPatchedMethod.transaction = <T>(callback: NestedSQLiteTransactionCallback<T>): T => {
+    const savepointName = `sp${transaction.nestedIndex}`;
+    const nestedTx = patchNestedSqliteTransaction(new SQLiteBunTransaction(
+      "sync",
+      transaction.dialect,
+      transaction.session,
+      transaction.schema as never,
+      transaction.nestedIndex + 1,
+    ));
+    transaction.session.run(sql.raw(`savepoint ${savepointName}`));
+    try {
+      const result = callback(nestedTx);
+      if (isPromiseLike(result)) {
+        return Promise.resolve(result).then(
+          (value: unknown): unknown => {
+            transaction.session.run(sql.raw(`release savepoint ${savepointName}`));
+            return value;
+          },
+          (error: unknown): never => {
+            transaction.session.run(sql.raw(`rollback to savepoint ${savepointName}`));
+            throw error;
+          },
+        ) as T;
+      }
+      transaction.session.run(sql.raw(`release savepoint ${savepointName}`));
+      return result;
+    } catch (error: unknown) {
+      transaction.session.run(sql.raw(`rollback to savepoint ${savepointName}`));
+      throw error;
+    }
+  };
+  return tx;
+}
 
 function gateSqlitePreparedQuery<T extends object>(query: T): T {
   return new Proxy(query, {
@@ -309,12 +362,12 @@ if (!isPostgres) {
         mainInternals.dialect,
         mainInternals.schema as never,
       );
-      const tx = new SQLiteBunTransaction<Record<string, unknown>, never>(
+      const tx = patchNestedSqliteTransaction(new SQLiteBunTransaction<Record<string, unknown>, never>(
         'sync',
         mainInternals.dialect,
         transactionSession as unknown as SQLiteSession<'sync', void, Record<string, unknown>, never>,
         mainInternals.schema as never,
-      );
+      ));
       const behavior = config?.behavior !== undefined ? ` ${config.behavior.toUpperCase()}` : '';
       const transactionStart = poolTransactionStart();
       let began = false;

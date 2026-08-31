@@ -47,3 +47,37 @@ sqliteTest("plain statements cannot observe an uncommitted async transaction", a
     await db.delete(organizations).where(eq(organizations.id, organizationId));
   }
 }, 10000);
+
+sqliteTest("nested async sqlite transactions roll back rejected savepoints", async () => {
+  const outerOrganizationId = `sqlite-nested-outer-${crypto.randomUUID()}`;
+  const nestedOrganizationId = `sqlite-nested-inner-${crypto.randomUUID()}`;
+
+  try {
+    await db.transaction(async (tx) => {
+      await tx.insert(organizations).values({ id: outerOrganizationId, name: "outer" });
+      await expect(
+        Promise.resolve(tx.transaction(async (nestedTx) => {
+          await nestedTx.insert(organizations).values({ id: nestedOrganizationId, name: "nested" });
+          throw new Error("nested rollback probe");
+        })),
+      ).rejects.toThrow("nested rollback probe");
+
+      const nestedRow = await tx.query.organizations.findFirst({
+        where: eq(organizations.id, nestedOrganizationId),
+      });
+      expect(nestedRow).toBeUndefined();
+      await tx.insert(organizations).values({ id: `${outerOrganizationId}-after`, name: "outer after" });
+    });
+
+    const outerRow = await db.query.organizations.findFirst({ where: eq(organizations.id, outerOrganizationId) });
+    const outerAfterRow = await db.query.organizations.findFirst({ where: eq(organizations.id, `${outerOrganizationId}-after`) });
+    const nestedRow = await db.query.organizations.findFirst({ where: eq(organizations.id, nestedOrganizationId) });
+    expect(outerRow).toBeDefined();
+    expect(outerAfterRow).toBeDefined();
+    expect(nestedRow).toBeUndefined();
+  } finally {
+    await db.delete(organizations).where(eq(organizations.id, nestedOrganizationId));
+    await db.delete(organizations).where(eq(organizations.id, `${outerOrganizationId}-after`));
+    await db.delete(organizations).where(eq(organizations.id, outerOrganizationId));
+  }
+}, 10000);
