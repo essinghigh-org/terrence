@@ -38,7 +38,7 @@ export function WorkspaceRetention({ workspaceId }: Readonly<{ workspaceId: stri
         setCount(data.attributes["state-versions-count"] ?? 0);
         setDays(data.attributes["delete-older-than-n-days"] ?? 0);
       })
-      .catch((caught): void => {
+      .catch((caught: unknown): void => {
         if (active && !(caught instanceof Error && caught.message.includes("404"))) {
           setError(caught instanceof Error ? caught.message : "Could not load retention policy");
         }

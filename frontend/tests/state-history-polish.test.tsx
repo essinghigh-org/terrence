@@ -1,5 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { StateHistory } from "../src/views/StateHistory";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
@@ -149,4 +150,34 @@ test("falls back to the raw state payload when the fetched state JSON cannot be 
     const dialog = view.getByRole("dialog");
     expect(dialog.textContent).toContain("{not-valid-json");
   });
+});
+
+test("uses the canonical run status label in state history", async () => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+    expect(requestUrl(input)).toBe("/api/v2/workspaces/ws-1/state-versions");
+    return json({
+      data: [{
+        id: "sv-run",
+        attributes: {
+          serial: 1,
+          status: "finalized",
+          "run-message": "Awaiting confirmation",
+          "run-status": "planned",
+        },
+        relationships: { run: { data: { id: "run-1", type: "runs" } } },
+      }],
+      meta: { pagination: { "next-page": null } },
+    });
+  });
+
+  const view = render(
+    <MemoryRouter>
+      <StateHistory workspaceId="ws-1" orgName="acme" workspaceName="production" />
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByText("Needs confirmation")).toBeTruthy();
+  });
+  expect(view.queryByText("Planned")).toBeNull();
 });

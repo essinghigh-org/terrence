@@ -1,6 +1,18 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 import { ApiError } from "@/lib/api";
+import { isString } from "@/lib/type-guards";
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (isString(error)) return error;
+  try {
+    const serialized: unknown = JSON.stringify(error);
+    return isString(serialized) ? serialized : "";
+  } catch {
+    return "";
+  }
+}
 
 /**
  * Renders field-level 422 details from an ApiError (26.9). Each entry is a
@@ -25,10 +37,8 @@ export function FieldErrorList({
           className,
         )}
       >
-        {entries.map(([field, message], index) => (
-          // field name is stable across renders
-          // eslint-disable-next-line react/no-array-index-key
-          <li key={`${field}-${index}`}>
+        {entries.map(([field, message]): React.JSX.Element => (
+          <li key={field}>
             <span className="font-medium">{field}:</span> {message}
           </li>
         ))}
@@ -36,7 +46,7 @@ export function FieldErrorList({
     );
   }
 
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   if (message === "") return null;
   return (
     <p role="alert" data-slot="field-error-list" className={cn("my-1 text-sm text-destructive", className)}>

@@ -65,7 +65,7 @@ export function RegistryProviderDetail(): React.JSX.Element {
       if (!controller.signal.aborted) setVersions(loaded);
     };
     void load()
-      .catch((caught): void => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Provider could not be loaded."); })
+      .catch((caught: unknown): void => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : "Provider could not be loaded."); })
       .finally((): void => { if (!controller.signal.aborted) setLoading(false); });
     return (): void => { controller.abort(); };
   }, [name, namespace, orgName]);

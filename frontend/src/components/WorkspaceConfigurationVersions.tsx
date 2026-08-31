@@ -20,8 +20,8 @@ export function WorkspaceConfigurationVersions({ workspaceId }: Readonly<{ works
     const response = await fetchApi(`/workspaces/${workspaceId}/configuration-versions?page[size]=50`) as { data?: ConfigurationVersion[] };
     setVersions(Array.isArray(response.data) ? response.data : []);
   };
-  useEffect(() => { void load().catch((caught) => { setError(caught instanceof Error ? caught.message : "Could not load configuration versions"); }).finally(() => { setLoading(false); }); }, [workspaceId]);
-  const retryLoad = (): void => { setError(""); setLoading(true); void load().catch((caught) => { setError(caught instanceof Error ? caught.message : "Could not load configuration versions"); }).finally(() => { setLoading(false); }); };
+  useEffect(() => { void load().catch((caught: unknown) => { setError(caught instanceof Error ? caught.message : "Could not load configuration versions"); }).finally(() => { setLoading(false); }); }, [workspaceId]);
+  const retryLoad = (): void => { setError(""); setLoading(true); void load().catch((caught: unknown) => { setError(caught instanceof Error ? caught.message : "Could not load configuration versions"); }).finally(() => { setLoading(false); }); };
   const createVersion = async (): Promise<void> => {
     setCreating(true); setError("");
     try {

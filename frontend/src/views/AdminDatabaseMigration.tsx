@@ -206,7 +206,10 @@ export function AdminDatabaseMigration(): React.JSX.Element {
       const parsed = (await response.json().catch((): null => null)) as { errors?: { detail?: string }[] } | null;
       throw new Error(parsed?.errors?.[0]?.detail ?? `Request failed (${response.status})`);
     }
-    return response.json();
+    // SAFETY: this legacy response branch is decoded as the same JSON value
+    // returned by fetchApi above.
+    const parsed = await response.json() as JsonValue;
+    return parsed;
   }, []);
 
   const runAction = useCallback(async (path: string, method: string, body?: JsonValue, thenLoad = true): Promise<void> => {
@@ -293,7 +296,9 @@ export function AdminDatabaseMigration(): React.JSX.Element {
                 <ul className="space-y-1">
                   {wizard.steps.map((step): React.JSX.Element => {
                     // SAFETY: unknown migration steps fall back to the raw step key below.
-                    const stepLabel = STEP_LABELS[step.key as keyof typeof STEP_LABELS] ?? step.key;
+                    const stepLabel = Object.prototype.hasOwnProperty.call(STEP_LABELS, step.key)
+                      ? STEP_LABELS[step.key as keyof typeof STEP_LABELS]
+                      : step.key;
                     return (
                     <li key={step.key} className="flex items-center gap-2 text-sm">
                       {stepSymbol(step.status)}
@@ -444,7 +449,7 @@ export function AdminDatabaseMigration(): React.JSX.Element {
                         const result = (body as { data: { ok?: boolean; detail?: string } }).data;
                         setTestResult(result.ok === false ? `Connection failed: ${result.detail ?? "unknown error"}` : "Connection OK");
                       })
-                      .catch((err): void => {
+                      .catch((err: unknown): void => {
                         setError(err instanceof Error ? err.message : String(err));
                       })
                       .finally((): void => { setBusy(null); });
@@ -464,7 +469,7 @@ export function AdminDatabaseMigration(): React.JSX.Element {
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
                         setCompatResult((body as { data: { ok: boolean; checks: { name: string; ok: boolean; detail: string }[] } }).data);
                       })
-                      .catch((err): void => {
+                      .catch((err: unknown): void => {
                         setError(err instanceof Error ? err.message : String(err));
                       })
                       .finally((): void => { setBusy(null); });

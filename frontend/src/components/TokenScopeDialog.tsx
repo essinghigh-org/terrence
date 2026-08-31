@@ -237,7 +237,7 @@ function resourceOptions(
   data: { id: string; attributes?: JsonObject }[],
   nameKey = "name",
 ): { id: string; name: string }[] {
-  return data.map((item) => {
+  return data.map((item): { id: string; name: string } => {
     const attributes = (item.attributes ?? {});
     const rawName = attributes[nameKey];
     return { id: item.id, name: isString(rawName) ? rawName : item.id };
@@ -329,7 +329,7 @@ export function TokenScopeDialog({
   };
 
   const toggleGrant = (key: string): void => {
-    setGranted((prev) => {
+    setGranted((prev): Record<string, boolean> => {
       const next = { ...prev };
       next[key] = !(prev[key] ?? false);
       return next;
@@ -363,8 +363,8 @@ export function TokenScopeDialog({
   };
 
   const toggleGroupGrants = (groupGrants: readonly { readonly key: string }[]): void => {
-    const allActive = groupGrants.every((g) => granted[g.key] === true);
-    setGranted((prev) => {
+    const allActive = groupGrants.every((g): boolean => granted[g.key] === true);
+    setGranted((prev): Record<string, boolean> => {
       const next = { ...prev };
       for (const grant of groupGrants) {
         next[grant.key] = !allActive;
@@ -501,24 +501,24 @@ export function TokenScopeDialog({
     }
   };
 
-  const filteredProjects = useMemo(() => {
+  const filteredProjects = useMemo((): ProjectOption[] => {
     const q = projectSearch.trim().toLowerCase();
     if (q === "") return projects;
-    return projects.filter((p) => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
+    return projects.filter((p): boolean => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
   }, [projects, projectSearch]);
 
-  const filteredWorkspaces = useMemo(() => {
+  const filteredWorkspaces = useMemo((): WorkspaceOption[] => {
     const q = workspaceSearch.trim().toLowerCase();
     if (q === "") return workspaces;
-    return workspaces.filter((w) => w.name.toLowerCase().includes(q) || w.id.toLowerCase().includes(q));
+    return workspaces.filter((w): boolean => w.name.toLowerCase().includes(q) || w.id.toLowerCase().includes(q));
   }, [workspaces, workspaceSearch]);
 
-  const filteredPermissionGroups = useMemo(() => {
+  const filteredPermissionGroups = useMemo((): readonly (typeof PERMISSION_GROUPS)[number][] => {
     const q = permissionSearch.trim().toLowerCase();
     if (q === "") return PERMISSION_GROUPS;
-    return PERMISSION_GROUPS.map((group) => {
+    return PERMISSION_GROUPS.map((group): (typeof PERMISSION_GROUPS)[number] | null => {
       const matchingGrants = group.grants.filter(
-        (g) => g.label.toLowerCase().includes(q) || g.key.toLowerCase().includes(q),
+        (g): boolean => g.label.toLowerCase().includes(q) || g.key.toLowerCase().includes(q),
       );
       if (matchingGrants.length > 0 || group.label.toLowerCase().includes(q)) {
         return {
@@ -531,7 +531,7 @@ export function TokenScopeDialog({
   }, [permissionSearch]);
 
   const totalGrantedCount = useMemo(
-    () => Object.values(granted).filter(Boolean).length,
+    (): number => Object.values(granted).filter(Boolean).length,
     [granted],
   );
 
@@ -760,7 +760,7 @@ export function TokenScopeDialog({
                         <button
                           type="button"
                           aria-label="Select all projects"
-                          onClick={(): void => { setSelectedProjects(new Set(projects.map((p) => p.id))); }}
+                          onClick={(): void => { setSelectedProjects(new Set(projects.map((p): string => p.id))); }}
                           className="text-primary hover:underline"
                         >
                           All
@@ -769,7 +769,7 @@ export function TokenScopeDialog({
                         <button
                           type="button"
                           aria-label="Clear selected projects"
-                          onClick={() => { setSelectedProjects(new Set()); }}
+                          onClick={(): void => { setSelectedProjects(new Set()); }}
                           className="text-muted-foreground hover:underline"
                         >
                           Clear
@@ -784,8 +784,8 @@ export function TokenScopeDialog({
                       <Input
                         placeholder="Filter projects…"
                         value={projectSearch}
-                        onChange={(e) => { setProjectSearch(e.target.value); }}
-                        onInput={(e: React.SyntheticEvent<HTMLInputElement>) => { setProjectSearch(e.currentTarget.value); }}
+                        onChange={(e): void => { setProjectSearch(e.target.value); }}
+                        onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setProjectSearch(e.currentTarget.value); }}
                         className="h-7 pl-7 text-xs"
                       />
                     </div>
@@ -831,7 +831,7 @@ export function TokenScopeDialog({
                         <button
                           type="button"
                           aria-label="Select all workspaces"
-                          onClick={() => { setSelectedWorkspaces(new Set(workspaces.map((w) => w.id))); }}
+                          onClick={(): void => { setSelectedWorkspaces(new Set(workspaces.map((w): string => w.id))); }}
                           className="text-primary hover:underline"
                         >
                           All
@@ -840,7 +840,7 @@ export function TokenScopeDialog({
                         <button
                           type="button"
                           aria-label="Clear selected workspaces"
-                          onClick={() => { setSelectedWorkspaces(new Set()); }}
+                          onClick={(): void => { setSelectedWorkspaces(new Set()); }}
                           className="text-muted-foreground hover:underline"
                         >
                           Clear
@@ -855,8 +855,8 @@ export function TokenScopeDialog({
                       <Input
                         placeholder="Filter workspaces…"
                         value={workspaceSearch}
-                        onChange={(e) => { setWorkspaceSearch(e.target.value); }}
-                        onInput={(e: React.SyntheticEvent<HTMLInputElement>) => { setWorkspaceSearch(e.currentTarget.value); }}
+                        onChange={(e): void => { setWorkspaceSearch(e.target.value); }}
+                        onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setWorkspaceSearch(e.currentTarget.value); }}
                         className="h-7 pl-7 text-xs"
                       />
                     </div>
@@ -961,15 +961,15 @@ export function TokenScopeDialog({
                   <Input
                     placeholder="Search permissions by action or resource…"
                     value={permissionSearch}
-                    onChange={(e) => { setPermissionSearch(e.target.value); }}
-                    onInput={(e: React.SyntheticEvent<HTMLInputElement>) => { setPermissionSearch(e.currentTarget.value); }}
+                    onChange={(e): void => { setPermissionSearch(e.target.value); }}
+                    onInput={(e: React.SyntheticEvent<HTMLInputElement>): void => { setPermissionSearch(e.currentTarget.value); }}
                     className="h-8 pl-8 text-xs"
                   />
                 </div>
 
                 <div className="grid max-h-72 grid-cols-1 gap-2.5 overflow-y-auto pr-1 md:grid-cols-2">
                   {filteredPermissionGroups.map((group): React.JSX.Element => {
-                    const activeInGroup = group.grants.filter((g) => granted[g.key] === true).length;
+                    const activeInGroup = group.grants.filter((g): boolean => granted[g.key] === true).length;
                     return (
                       <div key={group.id} className="rounded-md border border-border/70 bg-background p-2.5 shadow-xs">
                         <div className="mb-1.5 flex items-center justify-between">
@@ -980,7 +980,7 @@ export function TokenScopeDialog({
                             </Badge>
                             <button
                               type="button"
-                              onClick={() => { toggleGroupGrants(group.grants); }}
+                              onClick={(): void => { toggleGroupGrants(group.grants); }}
                               className="text-[10px] text-primary hover:underline ml-1"
                             >
                               {activeInGroup === group.grants.length ? "none" : "all"}

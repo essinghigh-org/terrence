@@ -81,6 +81,31 @@ test("links GitHub App-backed repositories in project workspace tables", async (
   expect(repositoryLink.getAttribute("target")).toBe("_blank");
 });
 
+test("renders project latest changes as relative time with an exact tooltip", async () => {
+  const createdAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const workspace = {
+    id: "ws-1",
+    attributes: { name: "production", locked: false },
+  };
+  const fetchMock = baseFetchMock({
+    "GET /api/v2/organizations/acme/workspaces?page%5Bsize%5D=100&filter%5Bproject%5D%5Bid%5D=prj-1": () => json({ data: [workspace] }),
+    "GET /api/v2/organizations/acme/runs?page%5Bsize%5D=100": () => json({
+      data: [{
+        id: "run-1",
+        attributes: { "created-at": createdAt, message: "Apply network", status: "applied" },
+        relationships: { workspace: { data: { id: "ws-1" } } },
+      }],
+    }),
+  });
+  globalThis.fetch = fetchMock;
+
+  const view = renderProject("workspaces");
+  await view.findByText("Apply network");
+
+  const relativeTime = await view.findByText(/minutes? ago/);
+  expect(relativeTime.getAttribute("title")).not.toBeNull();
+});
+
 test("creates a project variable set from the project detail settings", async () => {
   let postedBody: unknown;
   const fetchMock = baseFetchMock({

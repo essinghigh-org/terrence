@@ -1,45 +1,27 @@
 /* eslint-disable @typescript-eslint/naming-convention -- Terraform plan JSON fields are snake_case. */
 import { useEffect, useRef, useState } from "react";
 import {
-    Check,
+  Check,
   ChevronRight,
   Copy,
-  Trash2,
 } from "lucide-react";
 import { ApiError, fetchApi } from "../lib/api";
 import { ProviderIcon } from "./ProviderIcon";
 import { useTerrenceEvent } from "../lib/event-provider";
 import { Spinner } from "./ui/spinner";
 import { OperationFilterDropdown } from "./OperationFilterDropdown";
+import {
+  DEFAULT_SELECTED_OPS,
+  OPERATION_OPTIONS,
+  operationConfig,
+  operationFor,
+  operationForResource,
+  type Change,
+  type Operation,
+  type ResourceChange,
+} from "../lib/plan-operations";
 import { isBoolean, isNumber, isRecord, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
-
-type Change = {
-  actions: string[];
-  before: unknown;
-  after: unknown;
-  after_unknown?: unknown;
-  before_sensitive?: unknown;
-  after_sensitive?: unknown;
-  replace_paths?: readonly (readonly (string | number)[])[];
-  importing?: {
-    id?: string;
-    unknown?: boolean;
-  };
-};
-
-type ResourceChange = {
-  address: string;
-  deposed?: string;
-  module_address?: string;
-  mode?: string;
-  type: string;
-  name?: string;
-  previous_address?: string;
-  provider_name?: string;
-  action_reason?: string;
-  change: Change;
-};
 
 type ActionInvocation = {
   address?: string;
@@ -62,15 +44,6 @@ type PlanJson = {
   terraform_version?: string;
   format_version?: string;
 };
-
-type Operation = "create" | "update" | "delete" | "replace" | "read" | "import" | "move" | "remove" | "no-op";
-
-const OPERATION_OPTIONS: readonly Operation[] = ["create", "update", "delete", "replace", "move", "import", "remove", "read"];
-// Reads are data-source refreshes, not real changes; everything else is
-// selected by default.
-const DEFAULT_SELECTED_OPS: ReadonlySet<Operation> = new Set(
-  OPERATION_OPTIONS.filter((op): boolean => op !== "read"),
-);
 
 type DiffRow = Readonly<{
   path: string;
@@ -111,18 +84,6 @@ const PLANLESS_TERMINAL_STATUSES = new Set([
   "force_canceled",
   "unreachable",
 ]);
-
-const operationConfig = {
-  create: { symbol: "+", className: "text-success" },
-  update: { symbol: "~", className: "text-primary" },
-  delete: { icon: Trash2, className: "text-destructive" },
-  replace: { symbol: "±", className: "text-warning" },
-  read: { symbol: "◎", className: "text-primary" },
-  import: { symbol: "&", className: "text-foreground" },
-  move: { symbol: "→", className: "text-foreground/85" },
-  remove: { icon: Trash2, className: "text-muted-foreground/70" },
-  "no-op": { symbol: "·", className: "text-muted-foreground/70" },
-} satisfies Record<Operation, Readonly<{ symbol?: string; icon?: typeof Trash2; className: string }>>;
 
 function isChange(value: unknown): value is Change {
   if (!isRecord(value)
@@ -192,28 +153,6 @@ function parsePlanJson(value: unknown): PlanJson | null {
   if (value["terraform_version"] !== undefined && !isString(value["terraform_version"])) return null;
   if (value["format_version"] !== undefined && !isString(value["format_version"])) return null;
   return value;
-}
-
-function operationFor(actions: readonly string[], actionReason?: string): Operation {
-  if (actions.includes("create") && actions.includes("delete")) return "replace";
-  if (actions.includes("create")) return "create";
-  if (actions.includes("delete")) {
-    if (actionReason === "delete_because_no_resource_config" || actionReason === "removed_from_state") {
-      return "remove";
-    }
-    return "delete";
-  }
-  if (actions.includes("update")) return "update";
-  if (actions.includes("read")) return "read";
-  return "no-op";
-}
-
-function operationForResource(resource: ResourceChange): Operation {
-  const operation = operationFor(resource.change.actions, resource.action_reason);
-  if (operation !== "no-op") return operation;
-  if (resource.change.importing !== undefined) return "import";
-  if (resource.previous_address !== undefined) return "move";
-  return "no-op";
 }
 
 function collectionKeys(values: readonly unknown[]): readonly (string | number)[] {
@@ -1024,7 +963,7 @@ export function PlanOutput({
         });
       }
     };
-    loadRef.current = load;
+    loadRef.current = (): void => { void load(); };
 
     if (readyRunId.current !== runId) void load();
     return (): void => {

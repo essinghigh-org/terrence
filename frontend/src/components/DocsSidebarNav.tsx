@@ -28,7 +28,7 @@ export function DocsSidebarNav({
   const activeCategory = groups.find((group): boolean =>
     group.docs.some((doc): boolean => doc.slug === selectedSlug),
   )?.category;
-  const [expanded, setExpanded] = useState<Set<string>>(() =>
+  const [expanded, setExpanded] = useState<Set<string>>((): Set<string> =>
     new Set(activeCategory === undefined ? [] : [activeCategory]),
   );
   const activeRef = useRef<HTMLAnchorElement | null>(null);

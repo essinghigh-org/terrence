@@ -118,6 +118,41 @@ test("renders workspace variables and attached variable sets as separate section
   expect(view.getByText(/2 workspaces/)).toBeTruthy();
 });
 
+test("ignores an attached variable-set response from the previous workspace", async () => {
+  let resolveStale: ((response: Response) => void) | undefined;
+  const staleResponse = new Promise<Response>((resolve): void => {
+    resolveStale = resolve;
+  });
+  let staleRequested = false;
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
+    const path = new URL(url, "http://terrence.local").pathname;
+    if (path.endsWith("/vars")) return json({ data: [] });
+    if (path === "/api/v2/workspaces/ws-1/varsets") {
+      staleRequested = true;
+      return staleResponse;
+    }
+    if (path === "/api/v2/workspaces/ws-2/varsets") return json({ data: [] });
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock;
+
+  const view = render(<WorkspaceVariables workspaceId="ws-1" orgName="essighigh" canUpdate />);
+  await waitFor((): void => { expect(staleRequested).toBe(true); });
+  view.rerender(<WorkspaceVariables workspaceId="ws-2" orgName="essighigh" canUpdate />);
+  await waitFor((): void => {
+    expect(fetchMock.mock.calls.some(([input]) => {
+      const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
+      return new URL(url, "http://terrence.local").pathname === "/api/v2/workspaces/ws-2/varsets";
+    })).toBe(true);
+  });
+
+  resolveStale?.(json({ data: [variableSet("vs-stale", "stale-set")] }));
+  await waitFor((): void => {
+    expect(view.queryByText("stale-set")).toBeNull();
+  });
+});
+
 test("attaches and detaches variable sets from the workspace", async () => {
   let attached = [variableSet("vs-1", "github-provider", { workspaceCount: 2, varCount: 2 })];
   const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {

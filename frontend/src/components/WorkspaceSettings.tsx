@@ -245,7 +245,7 @@ export function WorkspaceSettings({
         ].sort().join(","),
       );
       setRemoteStateLoadState("ready");
-    }).catch((caught): void => {
+    }).catch((caught: unknown): void => {
       if (controller.signal.aborted) return;
       setRemoteStateLoadState("error");
       setRemoteStateLoadError(
@@ -338,7 +338,7 @@ export function WorkspaceSettings({
             body: JSON.stringify({
               data: [...remoteStateConsumerIds]
                 .sort()
-                .map((id) => ({ id, type: "workspaces" })),
+                .map((id): { id: string; type: string } => ({ id, type: "workspaces" })),
             }),
           });
           setSavedConsumerKeys([...remoteStateConsumerIds].sort().join(","));

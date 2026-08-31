@@ -316,7 +316,7 @@ export function AgentPools(): React.JSX.Element {
                           size="sm"
                           variant="destructive"
                           onClick={(): void => {
-                            const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
+                            const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
                             if (isTestEnv) {
                               void handleDeletePool(pool);
                             } else {
@@ -454,7 +454,7 @@ export function AgentPools(): React.JSX.Element {
                           size="sm"
                           variant="destructive"
                           onClick={(): void => {
-                            const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
+                            const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
                             if (isTestEnv) {
                               void handleRevokeToken(token);
                             } else {

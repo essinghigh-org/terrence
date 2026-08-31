@@ -466,6 +466,12 @@ test("renders controlled workspace sections with current resources and project c
             name: "production",
             locked: false,
             "terraform-version": "1.9.3",
+            "vcs-repo": {
+              identifier: "acme/infrastructure",
+              "github-app-installation-id": "ghain-1",
+            },
+            "working-directory": "modules/network",
+            "iac-binary": "tofu",
             permissions: {
               "can-queue-run": true,
               "can-read-state-versions": true,
@@ -528,6 +534,10 @@ test("renders controlled workspace sections with current resources and project c
     .toBe("/app/acme/workspaces");
   expect(view.getByRole("link", { name: "New run" }).getAttribute("href"))
     .toBe("/app/acme/workspaces/production/runs?new-run=true");
+  expect(view.getByRole("link", { name: "Open GitHub repository acme/infrastructure" }).getAttribute("href"))
+    .toBe("https://github.com/acme/infrastructure");
+  expect(view.getByText("modules/network")).toBeTruthy();
+  expect(view.getByText("OpenTofu")).toBeTruthy();
   expect(view.getByText("Loading project…")).toBeTruthy();
   await act(async (): Promise<void> => {
     project.resolve(json({ data: { id: "prj-1", attributes: { name: "Platform foundation" } } }));

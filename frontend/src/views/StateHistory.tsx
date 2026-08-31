@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/utils";
+import { formatRunStatus } from "@/lib/run-labels";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Upload } from "lucide-react";
@@ -30,13 +31,13 @@ function stateStatus(value: unknown): string {
     pending: "Pending",
     finalized: "Finalized",
   };
+  const label = Object.prototype.hasOwnProperty.call(labels, value)
+    ? labels[value as keyof typeof labels]
+    : undefined;
   // SAFETY: unknown state values fall through to the title-cased label below.
-  return labels[value as keyof typeof labels] ?? value.replace(/_/g, " ").replace(/\b\w/g, (c: string): string => c.toUpperCase());
+  return label ?? value.replace(/_/g, " ").replace(/\b\w/g, (c: string): string => c.toUpperCase());
 }
 
-function runStatusLabel(value: string): string {
-  return value.replace(/_/g, " ").replace(/\b\w/g, (c: string): string => c.toUpperCase());
-}
 
 type StateHistoryProps = {
   workspaceId: string;
@@ -71,7 +72,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
       .then((states: StateItem[]): void => {
         if (!controller.signal.aborted) setLoadState({ kind: "ready", states });
       })
-      .catch((error): void => {
+      .catch((error: unknown): void => {
         if (!controller.signal.aborted) {
           setLoadState({
             kind: "error",
@@ -257,7 +258,7 @@ s.attributes["serial"] as number}</p>
                       </Link>
                       <span className="text-[11px] text-muted-foreground">
                         {isString(s.attributes["run-status"])
-                          ? runStatusLabel(s.attributes["run-status"])
+                          ? formatRunStatus(s.attributes["run-status"])
                           : "Run Status Unknown"}
                       </span>
                       <span className="text-[11px] text-muted-foreground">{stateStatus(s.attributes["status"])}</span>

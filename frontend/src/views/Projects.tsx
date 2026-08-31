@@ -274,7 +274,7 @@ export function Projects(): React.JSX.Element {
                           size="icon-sm"
                           aria-label={`Delete ${project.attributes.name}`}
                           onClick={(): void => {
-                            const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
+                            const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
                             if (isTestEnv) {
                               void deleteProject(project);
                             } else {

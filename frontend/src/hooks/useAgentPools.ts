@@ -50,7 +50,7 @@ export function useAgentPools(
       if (controller.signal.aborted) return;
       setPools(Array.isArray(response.data) ? response.data : []);
       setLoading(false);
-    }).catch((reason): void => {
+    }).catch((reason: unknown): void => {
       if (controller.signal.aborted) return;
       setLoading(false);
       setError(

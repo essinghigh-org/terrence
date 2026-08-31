@@ -345,7 +345,7 @@ export function VcsIntegrations({
       }) as { data: OAuthClient };
       if (currentOrgNameRef.current !== actionOrgName) return;
       setClients((prev: readonly OAuthClient[]): OAuthClient[] => [...prev, res.data]);
-      setOauthTokensByClient((previous) => ({
+      setOauthTokensByClient((previous): Record<string, readonly OAuthToken[]> => ({
         ...previous,
         [res.data.id]: [],
       }));
@@ -607,7 +607,7 @@ export function VcsIntegrations({
                             size="sm"
                             variant="destructive"
                             onClick={(): void => {
-                              const isTestEnv = window !== undefined && window.navigator.userAgent.includes("jsdom");
+                              const isTestEnv = typeof window !== "undefined" && window.navigator.userAgent.includes("jsdom");
                               if (isTestEnv) {
                                 void handleDelete(client);
                               } else {

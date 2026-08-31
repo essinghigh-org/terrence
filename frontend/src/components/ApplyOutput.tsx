@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/naming-convention -- Terraform plan/apply JSON fields are snake_case. */
 import { useEffect, useState } from "react";
 import {
-    Trash2,
   Check,
   CheckCircle2,
   ChevronRight,
@@ -15,36 +14,17 @@ import { Spinner } from "./ui/spinner";
 import { Badge } from "./ui/badge";
 import { ProviderIcon } from "./ProviderIcon";
 import { AttributeDiff } from "./PlanOutput";
-import { OperationFilterDropdown, type Operation } from "./OperationFilterDropdown";
+import { OperationFilterDropdown } from "./OperationFilterDropdown";
+import {
+  APPLY_OPERATION_OPTIONS,
+  DEFAULT_APPLY_OPS,
+  operationConfig,
+  operationForResource,
+  type Operation,
+  type ResourceChange,
+} from "../lib/plan-operations";
 import { isNumber, isRecord, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
-
-type Change = {
-  actions: string[];
-  before: unknown;
-  after: unknown;
-  after_unknown?: unknown;
-  before_sensitive?: unknown;
-  after_sensitive?: unknown;
-  replace_paths?: readonly (readonly (string | number)[])[];
-  importing?: {
-    id?: string;
-    unknown?: boolean;
-  };
-};
-
-type ResourceChange = {
-  address: string;
-  deposed?: string;
-  module_address?: string;
-  mode?: string;
-  type: string;
-  name?: string;
-  previous_address?: string;
-  provider_name?: string;
-  action_reason?: string;
-  change: Change;
-};
 
 type PlanJson = {
   resource_changes?: ResourceChange[];
@@ -55,9 +35,6 @@ type PlanJson = {
 // Reads are data-source refreshes, not real changes: they never execute
 // during an apply, so they are excluded from the apply resource list and
 // from the operation filter entirely.
-const APPLY_OPERATION_OPTIONS: readonly Operation[] = ["create", "update", "delete", "replace", "move", "import", "remove"];
-const DEFAULT_APPLY_OPS: ReadonlySet<Operation> = new Set(APPLY_OPERATION_OPTIONS);
-
 type ExecutionState =
   | "pending"
   | "creating"
@@ -89,40 +66,6 @@ type LoadState =
   | Readonly<{ kind: "unavailable" }>
   | Readonly<{ kind: "error"; message: string }>
   | Readonly<{ kind: "ready"; plan: PlanJson }>;
-
-const operationConfig = {
-  create: { symbol: "+", className: "text-success" },
-  update: { symbol: "~", className: "text-primary" },
-  delete: { icon: Trash2, className: "text-destructive" },
-  replace: { symbol: "±", className: "text-warning" },
-  read: { symbol: "◎", className: "text-primary" },
-  import: { symbol: "&", className: "text-foreground" },
-  move: { symbol: "→", className: "text-foreground/85" },
-  remove: { icon: Trash2, className: "text-muted-foreground/70" },
-  "no-op": { symbol: "·", className: "text-muted-foreground/70" },
-} satisfies Record<Operation, Readonly<{ symbol?: string; icon?: typeof Trash2; className: string }>>;
-
-function operationFor(actions: readonly string[], actionReason?: string): Operation {
-  if (actions.includes("create") && actions.includes("delete")) return "replace";
-  if (actions.includes("create")) return "create";
-  if (actions.includes("delete")) {
-    if (actionReason === "delete_because_no_resource_config" || actionReason === "removed_from_state") {
-      return "remove";
-    }
-    return "delete";
-  }
-  if (actions.includes("update")) return "update";
-  if (actions.includes("read")) return "read";
-  return "no-op";
-}
-
-function operationForResource(resource: ResourceChange): Operation {
-  const operation = operationFor(resource.change.actions, resource.action_reason);
-  if (operation !== "no-op") return operation;
-  if (resource.change.importing !== undefined) return "import";
-  if (resource.previous_address !== undefined) return "move";
-  return "no-op";
-}
 
 function parseApplyLogsToExecMap(
   logs: string,
@@ -303,12 +246,9 @@ function ApplyResourceRow({
     event.preventDefault();
     event.stopPropagation();
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-    const clipboard = navigator.clipboard;
-    if (clipboard !== undefined) {
-      void clipboard.writeText(resource.address);
-      setCopied(true);
-      setTimeout((): void => { setCopied(false); }, 1500);
-    }
+    void navigator.clipboard.writeText(resource.address);
+    setCopied(true);
+    setTimeout((): void => { setCopied(false); }, 1500);
   };
 
   return (
@@ -368,7 +308,7 @@ export function ApplyOutput({
 }>): React.JSX.Element {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
   const [search, setSearch] = useState("");
-  const [selectedOps, setSelectedOps] = useState<ReadonlySet<Operation>>(new Set(APPLY_OPERATION_OPTIONS));
+  const [selectedOps, setSelectedOps] = useState<ReadonlySet<Operation>>(new Set(DEFAULT_APPLY_OPS));
 
   useEffect((): (() => void) => {
     let cancelled = false;

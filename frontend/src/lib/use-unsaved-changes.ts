@@ -8,6 +8,14 @@ import type { JsonValue } from "@/lib/json";
  */
 type NavGuard = (nextUrl: string) => boolean;
 
+type DeepReadonly<T> = T extends null | undefined
+  ? T
+  : T extends (infer R)[]
+    ? readonly DeepReadonly<R>[]
+    : T extends object
+      ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+      : T;
+
 const activeGuards = new Set<NavGuard>();
 
 let historyPatched = false;
@@ -19,7 +27,7 @@ function installHistoryPatch(): void {
   const originalPushState = window.history.pushState.bind(window.history);
   const originalReplaceState = window.history.replaceState.bind(window.history);
 
-  const guardUrl = (url: string | URL | null | undefined): string => {
+  const guardUrl = (url: DeepReadonly<string | URL | null | undefined>): string => {
     if (url === undefined || url === null) return window.location.href;
     try {
       return new URL(String(url), window.location.href).href;
@@ -37,23 +45,25 @@ function installHistoryPatch(): void {
   };
 
   window.history.pushState = function (
-    this: History,
-    data: JsonValue,
-    unused: string,
-    url?: string | URL | null,
+    this: Readonly<History>,
+    data: DeepReadonly<JsonValue>,
+    unused: Readonly<string>,
+    url?: DeepReadonly<string | URL | null>,
   ): void {
     if (!runGuards(guardUrl(url))) return;
-    originalPushState.call(this, data, unused, url);
+    const historyUrl = url === null || url === undefined ? url : String(url);
+    originalPushState.call(this, data, unused, historyUrl);
   };
 
   window.history.replaceState = function (
-    this: History,
-    data: JsonValue,
-    unused: string,
-    url?: string | URL | null,
+    this: Readonly<History>,
+    data: DeepReadonly<JsonValue>,
+    unused: Readonly<string>,
+    url?: DeepReadonly<string | URL | null>,
   ): void {
     if (!runGuards(guardUrl(url))) return;
-    originalReplaceState.call(this, data, unused, url);
+    const historyUrl = url === null || url === undefined ? url : String(url);
+    originalReplaceState.call(this, data, unused, historyUrl);
   };
 }
 
@@ -83,7 +93,7 @@ export function useUnsavedChangesWarning(active: boolean, message?: string): voi
   const activeRef = useRef(active);
   activeRef.current = active;
 
-  useEffect(() => {
+  useEffect((): (() => void) | undefined => {
     if (!active) return;
 
     const guard: NavGuard = (): boolean => {
@@ -91,7 +101,7 @@ export function useUnsavedChangesWarning(active: boolean, message?: string): voi
       return window.confirm(text);
     };
 
-    const handleBeforeUnload = (event: BeforeUnloadEvent): void => {
+    const handleBeforeUnload = (event: Readonly<Pick<BeforeUnloadEvent, "preventDefault">>): void => {
       // Required by the spec for the browser to show its own confirmation
       // dialog on unload; the exact message is ignored by modern browsers.
       event.preventDefault();
@@ -100,7 +110,7 @@ export function useUnsavedChangesWarning(active: boolean, message?: string): voi
     activeGuards.add(guard);
     window.addEventListener("beforeunload", handleBeforeUnload);
 
-    return () => {
+    return (): void => {
       activeGuards.delete(guard);
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };

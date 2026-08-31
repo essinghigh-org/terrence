@@ -267,9 +267,10 @@ export function Layout({
     location.pathname === "/app/docs" || location.pathname.startsWith("/app/docs/");
   // The docs sidebar mirrors the view's default: the first document of the
   // index is highlighted when the route has no slug yet.
-  const docsSlug = inDocs && location.pathname.startsWith("/app/docs/")
-    ? readableRouteParam(location.pathname.slice("/app/docs/".length).split("/")[0]) || undefined
+  const docsPathSlug = inDocs && location.pathname.startsWith("/app/docs/")
+    ? readableRouteParam(location.pathname.slice("/app/docs/".length).split("/")[0])
     : undefined;
+  const docsSlug = docsPathSlug === undefined || docsPathSlug === "" ? undefined : docsPathSlug;
   const selectedDocsSlug = docsSlug ?? docsIndex.index?.[0]?.slug;
   const orgPath = hasOrg ? `/app/${encodeURIComponent(orgName)}` : "/app";
 

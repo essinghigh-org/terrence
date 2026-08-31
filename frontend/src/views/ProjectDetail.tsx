@@ -29,11 +29,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { toast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { fetchApi, fetchAllApiPages } from "@/lib/api";
-import { cn, formatDate, formatDateTime } from "@/lib/utils";
+import { cn, formatDate, formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { useAgentPools } from "@/hooks/useAgentPools";
 import type { AgentPoolResource } from "@/hooks/useAgentPools";
 import { WorkspaceNotifications } from "@/components/WorkspaceNotifications";
 import { WorkspaceRepositoryLink } from "@/components/WorkspaceRepositoryLink";
+import { isString } from "@/lib/type-guards";
 
 /** Read the data array from a JSON:API list envelope, or [] when absent. */
 function dataArray<T>(response: unknown): T[] {
@@ -114,9 +115,19 @@ const runStatusFilters = {
   completed: ["applied", "planned_and_finished", "discarded", "canceled"],
 };
 
-function runDate(value: string | undefined): string {
-  const date = new Date(value ?? "");
-  return formatDateTime(date, "");
+function LatestChange({ run }: Readonly<{ run: RunSummary | undefined }>): React.JSX.Element {
+  if (run === undefined) return <span className="text-muted-foreground">—</span>;
+  const createdAt = run.attributes["created-at"];
+  return (
+    <div className="max-w-56">
+      <p className="truncate text-sm">{run.attributes.message ?? "Manual run"}</p>
+      {createdAt !== undefined && createdAt !== "" && (
+        <p className="text-xs text-muted-foreground" title={formatDateTime(createdAt, "")}>
+          {formatRelativeTime(createdAt)}
+        </p>
+      )}
+    </div>
+  );
 }
 
 export function ProjectDetail({
@@ -228,7 +239,7 @@ export function ProjectDetail({
 
   const saveProject = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
-    if (!canUpdate || project === null || projectId === undefined) return;
+    if (project === null || !canUpdate || !isString(projectId)) return;
     if (name.trim() === "") {
       setFormError("Name is required");
       return;
@@ -539,18 +550,7 @@ export function ProjectDetail({
                             {workspace.attributes.locked === true && <Badge variant="outline" className="ml-2">Locked</Badge>}
                           </TableCell>
                           <TableCell><WorkspaceRepositoryLink repo={workspace.attributes["vcs-repo"]} /></TableCell>
-                          <TableCell>
-                            {latestRuns.get(workspace.id) === undefined ? (
-                              <span className="text-muted-foreground">—</span>
-                            ) : (
-                              <div className="max-w-56">
-                                <p className="truncate text-sm">{latestRuns.get(workspace.id)?.attributes.message ?? "Manual run"}</p>
-                                {runDate(latestRuns.get(workspace.id)?.attributes["created-at"]) !== "" && (
-                                  <p className="text-xs text-muted-foreground">{runDate(latestRuns.get(workspace.id)?.attributes["created-at"])}</p>
-                                )}
-                              </div>
-                            )}
-                          </TableCell>
+                          <TableCell><LatestChange run={latestRuns.get(workspace.id)} /></TableCell>
                           <TableCell>
                             {latestRuns.get(workspace.id) === undefined
                               ? <span className="text-muted-foreground">No runs</span>
@@ -601,18 +601,7 @@ export function ProjectDetail({
                           {workspace.attributes.locked === true && <Badge variant="outline" className="ml-2">Locked</Badge>}
                         </TableCell>
                         <TableCell><WorkspaceRepositoryLink repo={workspace.attributes["vcs-repo"]} /></TableCell>
-                        <TableCell>
-                          {latestRuns.get(workspace.id) === undefined ? (
-                            <span className="text-muted-foreground">—</span>
-                          ) : (
-                            <div className="max-w-56">
-                              <p className="truncate text-sm">{latestRuns.get(workspace.id)?.attributes.message ?? "Manual run"}</p>
-                              {runDate(latestRuns.get(workspace.id)?.attributes["created-at"]) !== "" && (
-                                <p className="text-xs text-muted-foreground">{runDate(latestRuns.get(workspace.id)?.attributes["created-at"])}</p>
-                              )}
-                            </div>
-                          )}
-                        </TableCell>
+                        <TableCell><LatestChange run={latestRuns.get(workspace.id)} /></TableCell>
                         <TableCell>
                           {latestRuns.get(workspace.id) === undefined
                             ? <span className="text-muted-foreground">No runs</span>
