@@ -427,7 +427,7 @@ export function Registry(): React.JSX.Element {
           </Button>
         ) : undefined}
         description="Discover and publish trusted Terraform and OpenTofu building blocks."
-        eyebrow={<span className="font-mono uppercase tracking-[0.18em]">Private infrastructure / catalog</span>}
+        eyebrow="Private infrastructure / catalog"
         title="Private registry"
       />
       {canPublish && <PublishModuleDialog open={publishOpen} orgName={orgName} onOpenChange={setPublishOpen} />}
