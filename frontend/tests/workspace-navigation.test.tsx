@@ -5,6 +5,7 @@ import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom
 import { Layout } from "../src/components/Layout";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { isString } from "../src/lib/type-guards";
+import { formatDateTime } from "../src/lib/utils";
 import type { JsonObject, JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
@@ -156,6 +157,7 @@ test("ignores an aborted workspace response after the route changes", async () =
 });
 
 test("renders before the latest run finishes and ignores an aborted run response", async () => {
+  const createdAt = new Date(Date.now() - 5 * 60_000).toISOString();
   const productionRun = deferred<Response>();
   const stagingRun = deferred<Response>();
   let productionRunSignal: AbortSignal | null = null;
@@ -211,12 +213,18 @@ test("renders before the latest run finishes and ignores an aborted run response
 
   await act(async (): Promise<void> => {
     stagingRun.resolve(json({
-      data: [{ id: "run-staging", attributes: { status: "planned_and_finished" } }],
+      data: [{
+        id: "run-staging",
+        attributes: { status: "planned_and_finished", "created-at": createdAt },
+      }],
     }));
   });
   await waitFor((): void => {
     expect(view.getByRole("link", { name: "Latest run: Planned and finished" })).toBeTruthy();
   });
+  const latestRunTime = view.getByText("5 minutes ago");
+  expect(latestRunTime.getAttribute("dateTime")).toBe(createdAt);
+  expect(latestRunTime.getAttribute("title")).toBe(formatDateTime(createdAt));
 
   await act(async (): Promise<void> => {
     productionRun.resolve(json({

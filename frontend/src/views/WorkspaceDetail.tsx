@@ -43,7 +43,7 @@ import { StateHistory } from "./StateHistory";
 import { Play, Lock, LockOpen, Info, CheckCircle2, Copy } from "lucide-react";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { cn } from "../lib/utils";
-import { formatDate, formatDateTime } from "../lib/utils";
+import { formatDate, formatDateTime, formatRelativeTime } from "../lib/utils";
 import { formatRunSource, formatRunStatus } from "../lib/run-labels";
 import { WorkspaceRepositoryLink } from "../components/WorkspaceRepositoryLink";
 import { isNumber, isString } from "../lib/type-guards";
@@ -680,8 +680,8 @@ export function WorkspaceDetail({
                       </p>
                       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
                         {isString(latestRunCreatedAt) && latestRunCreatedAt !== "" && (
-                          <time dateTime={latestRunCreatedAt}>
-                            {formatDateTime(latestRunCreatedAt)}
+                          <time dateTime={latestRunCreatedAt} title={formatDateTime(latestRunCreatedAt)}>
+                            {formatRelativeTime(latestRunCreatedAt)}
                           </time>
                         )}
                         {latestRunSource !== undefined && (
