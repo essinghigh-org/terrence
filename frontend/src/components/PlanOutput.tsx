@@ -21,6 +21,7 @@ import {
   type ResourceChange,
 } from "../lib/plan-operations";
 import { isBoolean, isNumber, isRecord, isString } from "../lib/type-guards";
+import { copyTextToClipboard } from "../lib/utils";
 import type { JsonObject } from "@/lib/json";
 
 type ActionInvocation = {
@@ -679,13 +680,11 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
   const handleCopy = (event: React.MouseEvent): void => {
     event.preventDefault();
     event.stopPropagation();
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-    const clipboard = navigator.clipboard;
-    if (clipboard !== undefined) {
-      void clipboard.writeText(resource.address);
+    void copyTextToClipboard(resource.address).then((didCopy): void => {
+      if (!didCopy) return;
       setCopied(true);
       setTimeout((): void => { setCopied(false); }, 1500);
-    }
+    });
   };
 
   return (
@@ -1108,14 +1107,11 @@ export function PlanOutput({
             title={summaryCopied ? "Copied!" : "Copy plan summary as markdown"}
             className="rounded border border-border bg-background p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             onClick={(): void => {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-              const clipboard = navigator.clipboard;
-              if (clipboard !== undefined) {
-                void clipboard.writeText(planSummaryMarkdown({ ...counts, importCount })).then((): void => {
-                  setSummaryCopied(true);
-                  window.setTimeout((): void => { setSummaryCopied(false); }, 2_000);
-                });
-              }
+              void copyTextToClipboard(planSummaryMarkdown({ ...counts, importCount })).then((didCopy): void => {
+                if (!didCopy) return;
+                setSummaryCopied(true);
+                window.setTimeout((): void => { setSummaryCopied(false); }, 2_000);
+              });
             }}
           >
             {summaryCopied

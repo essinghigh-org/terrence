@@ -42,7 +42,7 @@ import { RunList } from "./RunList";
 import { StateHistory } from "./StateHistory";
 import { Play, Lock, LockOpen, Info, CheckCircle2, Copy } from "lucide-react";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
-import { cn } from "../lib/utils";
+import { cn, copyTextToClipboard } from "../lib/utils";
 import { formatDate, formatDateTime, formatRelativeTime } from "../lib/utils";
 import { formatRunSource, formatRunStatus } from "../lib/run-labels";
 import { WorkspaceRepositoryLink } from "../components/WorkspaceRepositoryLink";
@@ -305,12 +305,12 @@ export function WorkspaceDetail({
   }
 
   async function handleCopyIdentifier(identifier: string, label: "Workspace ID" | "Run ID"): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(identifier);
+    const didCopy = await copyTextToClipboard(identifier);
+    if (didCopy) {
       toast.add({ title: `${label} copied`, type: "success" });
-    } catch {
-      toast.add({ title: `Could not copy ${label.charAt(0).toLocaleLowerCase()}${label.slice(1)}`, type: "error" });
+      return;
     }
+    toast.add({ title: `Could not copy ${label.charAt(0).toLocaleLowerCase()}${label.slice(1)}`, type: "error" });
   }
 
   if (loading) return (

@@ -21,6 +21,32 @@ export function cn(...inputs: readonly DeepReadonly<ClassValue>[]): string {
   return twMerge(clsx(inputs));
 }
 
+type ClipboardWriter = {
+  readonly writeText: (text: string) => Promise<void>;
+};
+
+function isClipboardWriter(value: unknown): value is ClipboardWriter {
+  if (typeof value !== "object" || value === null || !("writeText" in value)) return false;
+  return typeof value.writeText === "function";
+}
+
+/**
+ * Copy text when the browser exposes a usable Clipboard API. The capability
+ * check is deliberately runtime-based because TypeScript's DOM declaration
+ * does not reflect browsers, permissions, or non-secure contexts.
+ */
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (typeof navigator === "undefined") return false;
+  try {
+    const clipboard: unknown = Reflect.get(navigator, "clipboard");
+    if (!isClipboardWriter(clipboard)) return false;
+    await clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Parse a displayable date from tolerant input. Bare ISO calendar strings
  * ("YYYY-MM-DD") are constructed as LOCAL calendar dates so they render on

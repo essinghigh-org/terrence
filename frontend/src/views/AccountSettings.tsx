@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useLocation, useOutletContext, useSearchParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import type { LayoutOutletContext } from "../components/Layout";
-import { formatDateTime } from "../lib/utils";
+import { copyTextToClipboard, formatDateTime } from "../lib/utils";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "../components/ui/card";
@@ -11,6 +11,7 @@ import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
 import { Check, Copy, Globe2, KeyRound, Lock, MonitorSmartphone, Palette, Plus, ShieldCheck, Trash2, User, X } from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
+import { toast } from "../components/ui/toast";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { QrCodeImage } from "../components/QrCodeImage";
 import { TokenScopeDialog } from "../components/TokenScopeDialog";
@@ -861,9 +862,14 @@ export function AccountSettings(): React.JSX.Element {
                     variant="outline"
                     className="h-7 text-xs gap-1 bg-background text-foreground"
                     onClick={(): void => {
-                      void navigator.clipboard?.writeText(createdTokenSecret);
-                      setCopiedToken(true);
-                      setTimeout((): void => { setCopiedToken(false); }, 2000);
+                      void copyTextToClipboard(createdTokenSecret).then((didCopy): void => {
+                        if (didCopy) {
+                          setCopiedToken(true);
+                          setTimeout((): void => { setCopiedToken(false); }, 2000);
+                          return;
+                        }
+                        toast.add({ title: "Could not copy token", type: "error" });
+                      });
                     }}
                   >
                     {copiedToken ? <Check className="w-3.5 h-3.5 text-primary" /> : <Copy className="w-3.5 h-3.5" />}

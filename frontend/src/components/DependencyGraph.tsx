@@ -42,7 +42,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { cn, formatDateTime } from "@/lib/utils";
+import { cn, copyTextToClipboard, formatDateTime } from "@/lib/utils";
 
 export type DependencyGraphResource = Readonly<{
   address: string;
@@ -403,10 +403,11 @@ function NodeDetailsPanel({
 }>): React.JSX.Element {
   const [copied, setCopied] = useState(false);
   const copy = useCallback((): void => {
-    void navigator.clipboard.writeText(node.id).then((): void => {
+    void copyTextToClipboard(node.id).then((didCopy): void => {
+      if (!didCopy) return;
       setCopied(true);
       window.setTimeout((): void => { setCopied(false); }, 1200);
-    }).catch((): void => { /* Clipboard unavailable. */ });
+    });
   }, [node.id]);
 
   return (

@@ -22,7 +22,7 @@ import {
   type RegistryModuleSection,
   type RegistryModuleVersion,
 } from "../lib/registry";
-import { cn } from "../lib/utils";
+import { cn, copyTextToClipboard } from "../lib/utils";
 import { isString } from "../lib/type-guards";
 import type { JsonValue } from "@/lib/json";
 
@@ -139,9 +139,15 @@ export function RegistryModuleDetail(): React.JSX.Element {
   };
 
   const copy = async (value: string, kind: "config" | "credentials"): Promise<void> => {
-    await navigator.clipboard.writeText(value);
-    setCopied(kind);
-    window.setTimeout((): void => { setCopied(null); }, 1500);
+    if (await copyTextToClipboard(value)) {
+      setCopied(kind);
+      window.setTimeout((): void => { setCopied(null); }, 1500);
+      return;
+    }
+    toast.add({
+      title: `Could not copy ${kind === "config" ? "configuration" : "credentials"}`,
+      type: "error",
+    });
   };
 
   const updateSelectedVersion = (version: string): void => {

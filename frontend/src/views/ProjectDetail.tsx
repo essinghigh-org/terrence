@@ -29,7 +29,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { toast } from "@/components/ui/toast";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { fetchApi, fetchAllApiPages } from "@/lib/api";
-import { cn, formatDate, formatDateTime, formatRelativeTime } from "@/lib/utils";
+import { cn, copyTextToClipboard, formatDate, formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { useAgentPools } from "@/hooks/useAgentPools";
 import type { AgentPoolResource } from "@/hooks/useAgentPools";
 import { WorkspaceNotifications } from "@/components/WorkspaceNotifications";
@@ -348,12 +348,11 @@ export function ProjectDetail({
 
   const copyProjectId = async (): Promise<void> => {
     if (project === null) return;
-    try {
-      await navigator.clipboard.writeText(project.id);
+    if (await copyTextToClipboard(project.id)) {
       toast.add({ title: "Project ID copied", type: "success" });
-    } catch {
-      toast.add({ title: "Could not copy project ID", type: "error" });
+      return;
     }
+    toast.add({ title: "Could not copy project ID", type: "error" });
   };
 
   const tabs: readonly { readonly id: ProjectSection; readonly label: string }[] = [

@@ -26,6 +26,7 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { fetchAllApiPages, fetchApi } from "../lib/api";
+import { copyTextToClipboard } from "../lib/utils";
 import { getRecentWorkspaces, subscribeWorkspaceShortcuts } from "../lib/workspace-shortcuts";
 
 type CommandItemType = {
@@ -281,7 +282,7 @@ export function CommandPalette({
                         ) as { data?: { id?: string } };
                         const wsId = response.data?.id;
                         if (wsId !== undefined) {
-                          await navigator.clipboard.writeText(wsId);
+                          await copyTextToClipboard(wsId);
                         }
                       } catch {
                         // clipboard copy is best-effort; ignore non-fatal failures

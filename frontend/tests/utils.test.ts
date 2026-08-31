@@ -1,5 +1,11 @@
-import { expect, test } from "bun:test";
-import { cn } from "../src/lib/utils";
+import { afterEach, expect, mock, test } from "bun:test";
+import { cn, copyTextToClipboard } from "../src/lib/utils";
+
+const originalClipboard = navigator.clipboard;
+
+afterEach((): void => {
+  Object.defineProperty(navigator, "clipboard", { value: originalClipboard, configurable: true });
+});
 
 test("cn returns a merged className string", () => {
   expect(cn("text-sm", "font-bold")).toBe("text-sm font-bold");
@@ -26,4 +32,30 @@ test("cn handles objects and arrays from clsx", () => {
   expect(result).toContain("gap-2");
   expect(result).toContain("bg-red-500");
   expect(result).not.toContain("bg-blue-500");
+});
+
+test("copyTextToClipboard reports successful writes", async () => {
+  const writeText = mock(async (text: string): Promise<void> => {
+    expect(text).toBe("workspace-123");
+  });
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+
+  expect(await copyTextToClipboard("workspace-123")).toBe(true);
+  expect(writeText).toHaveBeenCalledTimes(1);
+});
+
+test("copyTextToClipboard fails closed when clipboard is unavailable", async () => {
+  Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+
+  expect(await copyTextToClipboard("workspace-123")).toBe(false);
+});
+
+test("copyTextToClipboard reports rejected writes as failures", async () => {
+  const writeText = mock(async (): Promise<void> => {
+    throw new Error("Clipboard blocked");
+  });
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+
+  expect(await copyTextToClipboard("workspace-123")).toBe(false);
+  expect(writeText).toHaveBeenCalledTimes(1);
 });
