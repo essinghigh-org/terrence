@@ -4,7 +4,7 @@ import { resolveDisplayTimeZone } from "./display-timezone";
 import { resolveDisplayTimeFormat } from "./display-time-format";
 import { isString } from "../lib/type-guards";
 
-type DeepReadonly<T> = T extends null | undefined
+export type DeepReadonly<T> = T extends null | undefined
   ? T
   : T extends (infer R)[]
   ? readonly DeepReadonly<R>[]

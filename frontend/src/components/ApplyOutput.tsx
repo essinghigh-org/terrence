@@ -245,8 +245,11 @@ function ApplyResourceRow({
   const handleCopy = (event: React.MouseEvent): void => {
     event.preventDefault();
     event.stopPropagation();
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-    void navigator.clipboard.writeText(resource.address);
+    const clipboard = typeof navigator === "undefined"
+      ? undefined
+      : Reflect.get(navigator, "clipboard") as Clipboard | undefined;
+    if (clipboard === undefined) return;
+    void clipboard.writeText(resource.address);
     setCopied(true);
     setTimeout((): void => { setCopied(false); }, 1500);
   };

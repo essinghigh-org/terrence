@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { WorkspaceVariables } from "../src/components/WorkspaceVariables";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
@@ -147,7 +147,9 @@ test("ignores an attached variable-set response from the previous workspace", as
     })).toBe(true);
   });
 
-  resolveStale?.(json({ data: [variableSet("vs-stale", "stale-set")] }));
+  await act(async (): Promise<void> => {
+    resolveStale?.(json({ data: [variableSet("vs-stale", "stale-set")] }));
+  });
   await waitFor((): void => {
     expect(view.queryByText("stale-set")).toBeNull();
   });

@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/naming-convention -- Terraform plan/apply JSON fields are snake_case. */
 import { Trash2 } from "lucide-react";
+import type { DeepReadonly } from "@/lib/utils";
 
 export type Change = {
   actions: string[];
@@ -29,14 +30,6 @@ export type ResourceChange = {
 };
 
 export type Operation = "create" | "update" | "delete" | "replace" | "read" | "import" | "move" | "remove" | "no-op";
-
-type DeepReadonly<T> = T extends null | undefined
-  ? T
-  : T extends (infer R)[]
-    ? readonly DeepReadonly<R>[]
-    : T extends object
-      ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
-      : T;
 
 export const OPERATION_OPTIONS: readonly Operation[] = ["create", "update", "delete", "replace", "move", "import", "remove", "read"];
 export const APPLY_OPERATION_OPTIONS: readonly Operation[] = ["create", "update", "delete", "replace", "move", "import", "remove"];

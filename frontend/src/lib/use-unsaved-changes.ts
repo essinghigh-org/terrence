@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { JsonValue } from "@/lib/json";
+import type { DeepReadonly } from "@/lib/utils";
 
 /**
  * Registry of active navigation guards. A guard returns true when navigation
@@ -7,14 +8,6 @@ import type { JsonValue } from "@/lib/json";
  * actually changes.
  */
 type NavGuard = (nextUrl: string) => boolean;
-
-type DeepReadonly<T> = T extends null | undefined
-  ? T
-  : T extends (infer R)[]
-    ? readonly DeepReadonly<R>[]
-    : T extends object
-      ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
-      : T;
 
 const activeGuards = new Set<NavGuard>();
 
