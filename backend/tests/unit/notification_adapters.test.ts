@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { renderPayloadForDestination, verifyDestinationOwnership, _ownershipVerified } from "../../src/lib/notifications";
+import { renderPayloadForDestination, verifyDestinationOwnership, isOwnershipVerified } from "../../src/lib/notifications";
 
 // Only destinationType and token are consulted by renderPayloadForDestination;
 // the remaining fields are type-fixed placeholders. NotificationConfiguration
@@ -63,6 +63,13 @@ describe("Notification rich destination adapters (kanban 7.11)", () => {
     expect(body).toContain("acme");
     expect(body).toContain("*Triggered by:*");
     expect(body).toContain("henry");
+  });
+
+  it("serializes structured notification values without object coercion", () => {
+    const payload = { ...runPayload, run_message: { resources: 2 } };
+    const card = JSON.parse(renderPayloadForDestination(config("microsoft-teams"), payload).body) as { text?: string };
+    expect(card.text).toBe('{"resources":2}');
+    expect(card.text).not.toContain("[object Object]");
   });
 
   it("microsoft-teams destinations render a MessageCard with facts and an action", () => {
@@ -138,7 +145,7 @@ describe("Notification destination ownership verification (kanban 7.7)", () => {
       expect(outcome.successful).toBeFalse();
       expect(outcome.bodyLacksEcho).toBeFalse();
       expect(outcome.headerLacksEcho).toBeTrue();
-      expect(_ownershipVerified(cfg.id)).toBeFalse();
+      expect(isOwnershipVerified(cfg.id)).toBeFalse();
     } finally {
       await server.stop(true);
     }
@@ -176,7 +183,7 @@ describe("Notification destination ownership verification (kanban 7.7)", () => {
       expect(outcome.successful).toBeFalse();
       expect(outcome.bodyLacksEcho).toBeTrue();
       expect(outcome.headerLacksEcho).toBeTrue();
-      expect(_ownershipVerified(cfg.id)).toBeFalse();
+      expect(isOwnershipVerified(cfg.id)).toBeFalse();
     } finally {
       await server.stop(true);
     }
@@ -195,16 +202,16 @@ describe("Notification destination ownership verification (kanban 7.7)", () => {
     });
     try {
       const cfg = config("generic", server.url.toString());
-      expect(_ownershipVerified(cfg.id)).toBeFalse();
+      expect(isOwnershipVerified(cfg.id)).toBeFalse();
       await verifyDestinationOwnership(cfg);
-      expect(_ownershipVerified(cfg.id)).toBeTrue();
+      expect(isOwnershipVerified(cfg.id)).toBeTrue();
 
       // A later failed echo does not wipe the earlier verified record; the
       // operator is not forced to re-verify on every transient blip.
       echo = false;
       const retry = await verifyDestinationOwnership(cfg);
       expect(retry.successful).toBeFalse();
-      expect(_ownershipVerified(cfg.id)).toBeTrue();
+      expect(isOwnershipVerified(cfg.id)).toBeTrue();
     } finally {
       await server.stop(true);
     }

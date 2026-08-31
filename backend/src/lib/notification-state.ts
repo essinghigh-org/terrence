@@ -141,7 +141,7 @@ export async function sweepSharedDeliveryState(): Promise<void> {
 }
 
 /** Only exported for tests: full shared state dump. */
-export async function _sharedDeliveryStateRows(): Promise<readonly {
+export async function sharedDeliveryStateRowsForTests(): Promise<readonly {
   kind: string;
   stateKey: string;
   value: number;
@@ -159,7 +159,7 @@ export async function _sharedDeliveryStateRows(): Promise<readonly {
 }
 
 /** Only exported for tests: clear all shared delivery state. */
-export async function _resetSharedDeliveryState(): Promise<void> {
+export async function resetSharedDeliveryStateForTests(): Promise<void> {
   await db.delete(notificationDeliveryState);
 }
 

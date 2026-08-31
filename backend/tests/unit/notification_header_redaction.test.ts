@@ -17,25 +17,25 @@ import { describe, expect, it } from "bun:test";
 // redaction decision table itself by importing the private function through
 // the module's test export.
 
-import { _redactedHeaderNamesForTests } from "../../src/lib/notifications";
+import { redactedHeaderNamesForTests } from "../../src/lib/notifications";
 
 describe("notification response header redaction (kanban 17)", () => {
   it("covers credential-bearing headers", (): void => {
-    const names = _redactedHeaderNamesForTests();
+    const names = redactedHeaderNamesForTests();
     for (const required of ["set-cookie", "authorization", "proxy-authorization", "www-authenticate", "cookie"]) {
       expect(names.has(required)).toBeTrue();
     }
   });
 
   it("covers topology-revealing headers", (): void => {
-    const names = _redactedHeaderNamesForTests();
+    const names = redactedHeaderNamesForTests();
     for (const required of ["server", "x-powered-by", "forwarded", "via"]) {
       expect(names.has(required)).toBeTrue();
     }
   });
 
   it("is lowercase-normalized", (): void => {
-    const names = _redactedHeaderNamesForTests();
+    const names = redactedHeaderNamesForTests();
     for (const name of names) {
       expect(name).toBe(name.toLowerCase());
     }

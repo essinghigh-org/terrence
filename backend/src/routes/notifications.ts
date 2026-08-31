@@ -12,7 +12,7 @@ import {
   type users,
   workspaces,
 } from "../db/schema";
-import { _ownershipVerified, postNotification, verifyDestinationOwnership, type NotificationDelivery } from "../lib/notifications";
+import { isOwnershipVerified, postNotification, verifyDestinationOwnership, type NotificationDelivery } from "../lib/notifications";
 import { checkOrganizationPermission, checkOrgPermission, findAuthorizedWorkspace, notFound } from "../lib/utils";
 import { isNotificationDestination, isNotificationTrigger, RUN_NOTIFICATION_TRIGGERS } from "../lib/constants";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "../lib/secrets";
@@ -584,11 +584,11 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     }
     if (typeof attributes["email-all-members"] === "boolean") updates.emailAllMembers = attributes["email-all-members"];
     const relationshipIds = relationshipUserIds(body);
-    const recipientIds = relationshipIds !== undefined
-      ? relationshipIds
-      : attributes["email-user-ids"] === undefined
+    const recipientIds = relationshipIds ?? (
+      attributes["email-user-ids"] === undefined
         ? undefined
-        : notificationUserIds(body, attributes);
+        : notificationUserIds(body, attributes)
+    );
     if (recipientIds === false) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "users must contain valid user resource identifiers" }] };
@@ -751,5 +751,5 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
   .get("/api/v2/notification-configurations/:nc_id/ownership-verified", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const configuration = await authorizedConfiguration(params.nc_id ?? "", user?.id, tokenOrgId, tokenTeamId, "read");
     if (configuration === undefined) return notFound(set);
-    return { data: { id: configuration.id, ownership_verified: _ownershipVerified(configuration.id) } };
+    return { data: { id: configuration.id, ownership_verified: isOwnershipVerified(configuration.id) } };
   });

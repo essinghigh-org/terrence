@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
-  _resetSharedDeliveryState,
-  _sharedDeliveryStateRows,
+  resetSharedDeliveryStateForTests,
+  sharedDeliveryStateRowsForTests,
   sharedBreakerRefuses,
   sharedBreakerRecordFailure,
   sharedBreakerRecordSuccess,
@@ -16,7 +16,7 @@ import {
 // Postgres.
 
 afterEach(async (): Promise<void> => {
-  await _resetSharedDeliveryState();
+  await resetSharedDeliveryStateForTests();
 });
 
 describe("shared notification delivery state (kanban 15/16)", () => {
@@ -62,7 +62,7 @@ describe("shared notification delivery state (kanban 15/16)", () => {
   it("persists rows in the database (replica-shared by construction)", async (): Promise<void> => {
     await sharedBreakerRecordFailure("cfg-persist");
     await sharedDedupRecord("run", "run-persist:key");
-    const rows = await _sharedDeliveryStateRows();
+    const rows = await sharedDeliveryStateRowsForTests();
     expect(rows.length).toBe(2);
     expect(rows.map((r) => r.kind).sort()).toEqual(["breaker", "dedup"]);
   });
