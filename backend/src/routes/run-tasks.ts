@@ -445,6 +445,26 @@ const detachWorkspaceRunTask = async ({ params, user, orgId: tokenOrgId, teamId:
   return {};
 };
 
+const overrideTaskStage = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  const stageId = params.task_stage_id ?? "";
+  const stage = await db.query.taskStages.findFirst({ where: eq(taskStages.id, stageId) });
+  if (stage === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  const authorized = await findAuthorizedRun(stage.runId, user?.id, tokenOrgId, tokenTeamId ?? null);
+  if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (!(await checkOrganizationPermission(authorized.workspace.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) {
+    (set as { status: number }).status = 403;
+    return { errors: [{ status: "403", title: "Forbidden" }] };
+  }
+  if (!["failed", "awaiting_override", "errored"].includes(stage.status)) {
+    (set as { status: number }).status = 409;
+    return { errors: [{ status: "409", title: "Conflict", detail: "Task stage cannot be overridden in current status" }] };
+  }
+  const timestamps = { ...(stage.statusTimestamps ?? {}), "overridden-at": new Date().toISOString() };
+  const updated = await db.update(taskStages).set({ status: "passed", statusTimestamps: timestamps }).where(and(eq(taskStages.id, stage.id), eq(taskStages.status, stage.status))).returning({ id: taskStages.id });
+  if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Task stage changed before it could be overridden" }] }; }
+  return { data: { id: stage.id, type: "task-stages", attributes: { stage: stage.stage, status: "passed", "status-timestamps": timestamps } } };
+};
+
 export const runTaskRoutes = new Elysia({ name: "runTasks" })
   .patch("/api/v2/task-results/:task_result_id/callback", async ({ params, body, request, set }: CallbackCtx): Promise<unknown> => {
     const resultId = params.task_result_id ?? "";
@@ -547,54 +567,8 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
       },
     };
   })
-  .patch("/api/v2/task-stages/:task_stage_id/actions/override", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const stageId = params.task_stage_id ?? "";
-    const stage = await db.query.taskStages.findFirst({ where: eq(taskStages.id, stageId) });
-    if (stage === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const authorized = await findAuthorizedRun(stage.runId, user?.id, tokenOrgId, tokenTeamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkOrganizationPermission(authorized.workspace.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden" }] };
-    }
-    if (!["failed", "awaiting_override", "errored"].includes(stage.status)) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Task stage cannot be overridden in current status" }] };
-    }
-    const timestamps = { ...(stage.statusTimestamps ?? {}), "overridden-at": new Date().toISOString() };
-    const updated = await db.update(taskStages).set({ status: "passed", statusTimestamps: timestamps }).where(and(eq(taskStages.id, stage.id), eq(taskStages.status, stage.status))).returning({ id: taskStages.id });
-    if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Task stage changed before it could be overridden" }] }; }
-    return {
-      data: {
-        id: stage.id,
-        type: "task-stages",
-        attributes: {
-          stage: stage.stage,
-          status: "passed",
-          "status-timestamps": timestamps,
-        },
-      },
-    };
-  })
-  .post("/api/v2/task-stages/:task_stage_id/actions/override", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const stageId = params.task_stage_id ?? "";
-    const stage = await db.query.taskStages.findFirst({ where: eq(taskStages.id, stageId) });
-    if (stage === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const authorized = await findAuthorizedRun(stage.runId, user?.id, tokenOrgId, tokenTeamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if (!(await checkOrganizationPermission(authorized.workspace.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden" }] };
-    }
-    if (!["failed", "awaiting_override", "errored"].includes(stage.status)) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "Task stage cannot be overridden in current status" }] };
-    }
-    const timestamps = { ...(stage.statusTimestamps ?? {}), "overridden-at": new Date().toISOString() };
-    const updated = await db.update(taskStages).set({ status: "passed", statusTimestamps: timestamps }).where(and(eq(taskStages.id, stage.id), eq(taskStages.status, stage.status))).returning({ id: taskStages.id });
-    if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Task stage changed before it could be overridden" }] }; }
-    return { data: { id: stage.id, type: "task-stages", attributes: { stage: stage.stage, status: "passed", "status-timestamps": timestamps } } };
-  })
+  .patch("/api/v2/task-stages/:task_stage_id/actions/override", overrideTaskStage)
+  .post("/api/v2/task-stages/:task_stage_id/actions/override", overrideTaskStage)
   .get("/api/v2/organizations/:org_name/run-tasks", listOrgRunTasks)
   .get("/api/v2/organizations/:org_name/tasks", listOrgRunTasks)
   .post("/api/v2/organizations/:org_name/run-tasks", createOrgRunTask)
