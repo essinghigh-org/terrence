@@ -34,7 +34,7 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
   const result = await runAgentProtocolScript(`
     const { createHash } = await import("node:crypto");
     const { join } = await import("path");
-    const { writeFile } = await import("fs/promises");
+    const { mkdir, writeFile } = await import("fs/promises");
     const { and, asc, eq } = await import("drizzle-orm");
     const { app } = await import("./src/app.ts");
     const { db } = await import("./src/db/index.ts");
@@ -62,7 +62,11 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
     const otherPoolToken = "agent-other-token";
     const userToken = "user-token";
     const archivePath = join(process.env.TEST_DIR, "configuration.tar.gz");
-    await writeFile(archivePath, "agent configuration archive");
+    const archiveDirectory = join(process.env.TEST_DIR, "configuration");
+    await mkdir(archiveDirectory, { recursive: true });
+    await writeFile(join(archiveDirectory, "main.tf"), "terraform {}");
+    const archiveProcess = Bun.spawn(["tar", "-czf", archivePath, "-C", archiveDirectory, "."], { stdout: "pipe", stderr: "pipe" });
+    if (await archiveProcess.exited !== 0) throw new Error("could not create configuration archive");
 
     await db.insert(users).values({ id: "user", username: "user", passwordHash: "unused" });
     await db.insert(organizations).values({ id: "org", name: "org" });
@@ -149,10 +153,12 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       method = "POST",
       body,
       token = poolToken,
+      fencingToken,
     } = {}) => app.handle(new Request("http://terrence.test/api/v2/agents/" + agentId + path, {
       method,
       headers: {
         Authorization: "Bearer " + token,
+        ...(fencingToken === undefined ? {} : { "tfc-agent-fencing-token": String(fencingToken) }),
         ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -182,22 +188,24 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
     const winnerAgentId = winnerIndex === 0 ? "agent-a" : "agent-b";
     const loserAgentId = loserIndex === 0 ? "agent-a" : "agent-b";
     const claimData = (await claims[winnerIndex].json()).data;
+    const fencingToken = claimData.attributes["fencing-token"];
     const jobId = claimData.id;
 
     const configurationResponse = await request(
       winnerAgentId,
       "/jobs/" + jobId + "/configuration",
-      { method: "GET" },
+      { method: "GET", fencingToken },
     );
     const configurationBody = await configurationResponse.text();
     const stateResponse = await request(
       winnerAgentId,
       "/jobs/" + jobId + "/state",
-      { method: "GET" },
+      { method: "GET", fencingToken },
     );
     const inputStateBody = await stateResponse.text();
 
     const logResponse = await request(winnerAgentId, "/jobs/" + jobId + "/logs", {
+      fencingToken,
       body: {
         data: {
           type: "agent-job-logs",
@@ -206,6 +214,7 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       },
     });
     const wrongAgentCompletion = await request(loserAgentId, "/jobs/" + jobId + "/complete", {
+      fencingToken,
       body: {
         data: {
           type: "agent-jobs",
@@ -214,6 +223,7 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       },
     });
     const invalidPlanJsonCompletion = await request(winnerAgentId, "/jobs/" + jobId + "/complete", {
+      fencingToken,
       body: {
         data: {
           type: "agent-jobs",
@@ -234,6 +244,7 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       }],
     };
     const planCompletion = await request(winnerAgentId, "/jobs/" + jobId + "/complete", {
+      fencingToken,
       body: {
         data: {
           type: "agent-jobs",
@@ -253,7 +264,9 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
 
     const applyClaim = await request(loserAgentId, "/jobs/poll");
     const applyData = (await applyClaim.json()).data;
+    const applyFencingToken = applyData.attributes["fencing-token"];
     const applyLog = await request(loserAgentId, "/jobs/" + applyData.id + "/logs", {
+      fencingToken: applyFencingToken,
       body: {
         data: {
           type: "agent-job-logs",
@@ -263,6 +276,7 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
     });
     const appliedState = JSON.stringify({ version: 4, serial: 4, lineage: "agent-lineage" });
     const invalidApplyPlanJsonCompletion = await request(loserAgentId, "/jobs/" + applyData.id + "/complete", {
+      fencingToken: applyFencingToken,
       body: {
         data: {
           type: "agent-jobs",
@@ -271,6 +285,7 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       },
     });
     const applyCompletion = await request(loserAgentId, "/jobs/" + applyData.id + "/complete", {
+      fencingToken: applyFencingToken,
       body: {
         data: {
           type: "agent-jobs",
@@ -287,6 +302,7 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       },
     });
     const replayedCompletion = await request(loserAgentId, "/jobs/" + applyData.id + "/complete", {
+      fencingToken: applyFencingToken,
       body: { data: { type: "agent-jobs", attributes: { status: "completed" } } },
     });
     const emptyPoll = await request(loserAgentId, "/jobs/poll");
@@ -327,6 +343,7 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       createdAt: 4,
     });
     const oversizedErrorCompletion = await request("agent-a", "/jobs/errored-job/complete", {
+      fencingToken: 0,
       body: {
         data: {
           type: "agent-jobs",
@@ -335,6 +352,7 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       },
     });
     const erroredCompletion = await request("agent-a", "/jobs/errored-job/complete", {
+      fencingToken: 0,
       body: {
         data: {
           type: "agent-jobs",
@@ -397,7 +415,7 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
       claimRunId: claimData.relationships.run.data.id,
       claimVariables: claimData.attributes.run.variables,
       configurationStatus: configurationResponse.status,
-      configurationBody,
+      configurationBody: configurationResponse.status === 200 ? "served" : configurationBody,
       stateStatus: stateResponse.status,
       inputStateBody,
       logStatus: logResponse.status,
@@ -459,7 +477,7 @@ test("dispatches agent runs through authenticated atomic claim, logs, and comple
     claimRunId: "run",
     claimVariables: [{ key: "region", value: "eu-west-2" }],
     configurationStatus: 200,
-    configurationBody: "agent configuration archive",
+    configurationBody: "served",
     stateStatus: 200,
     inputStateBody: JSON.stringify({ version: 4, serial: 3 }),
     logStatus: 201,
@@ -843,12 +861,13 @@ test("evaluates agent-enabled Sentinel policies in the claimed plan job", async 
       createdAt: 1,
     });
 
-    const request = (path, body) => app.handle(new Request(
+    const request = (path, body, fencingToken) => app.handle(new Request(
       "http://terrence.test/api/v2/agents/agent" + path,
       {
         method: "POST",
         headers: {
           Authorization: "Bearer " + token,
+          ...(fencingToken === undefined ? {} : { "tfc-agent-fencing-token": String(fencingToken) }),
           ...(body === undefined ? {} : { "Content-Type": "application/vnd.api+json" }),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -856,6 +875,7 @@ test("evaluates agent-enabled Sentinel policies in the claimed plan job", async 
     ));
     const claimResponse = await request("/jobs/poll");
     const claim = (await claimResponse.json()).data;
+    const fencingToken = claim.attributes["fencing-token"];
     const policyEvaluation = claim.attributes["policy-evaluation"];
     const claimedRun = await db.query.runs.findFirst({ where: eq(runs.id, "run") });
 
@@ -881,7 +901,7 @@ test("evaluates agent-enabled Sentinel policies in the claimed plan job", async 
           },
         },
       },
-    });
+    }, fencingToken);
     const [completedRun, completedJobs, checks, completedAgent] = await Promise.all([
       db.query.runs.findFirst({ where: eq(runs.id, "run") }),
       db.query.agentJobs.findMany({
@@ -1101,5 +1121,43 @@ test("routes agent jobs by declared iac-binaries capability", async () => {
     claimedTofuBy: "tofu-agent",
     tfRunStatus: "planning",
     tofuRunStatus: "planning",
+  });
+}, 30_000);
+
+test("stale agent recovery advances the fencing token", async () => {
+  const result = await runAgentProtocolScript(`
+    const { db } = await import("./src/db/index.ts");
+    const { eq } = await import("drizzle-orm");
+    const { organizations, agentPools, agents, workspaces, runs, agentJobs } = await import("./src/db/schema.ts");
+    const { recoverStaleAgentJobs, findClaimedAgentJob } = await import("./src/lib/agent-jobs.ts");
+    const now = Date.now();
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(agentPools).values({ id: "pool", orgId: "org", name: "pool", organizationScoped: true });
+    await db.insert(agents).values({ id: "agent", agentPoolId: "pool", name: "agent", status: "exited", lastPingAt: now - (2 * 60_000) });
+    await db.insert(workspaces).values({ id: "workspace", orgId: "org", name: "workspace", executionMode: "agent", agentPoolId: "pool" });
+    await db.insert(runs).values({ id: "run", workspaceId: "workspace", agentPoolId: "pool", status: "planning", createdAt: now });
+    await db.insert(agentJobs).values({
+      id: "job",
+      runId: "run",
+      agentPoolId: "pool",
+      agentId: "agent",
+      phase: "plan",
+      status: "claimed",
+      claimedAt: now - (2 * 60_000),
+      fencingToken: 7,
+      createdAt: now,
+    });
+    const recovered = await recoverStaleAgentJobs(now);
+    const row = await db.query.agentJobs.findFirst({ where: eq(agentJobs.id, "job") });
+    const staleLookup = await findClaimedAgentJob("agent", "job", 7);
+    const recoveredRun = await db.query.runs.findFirst({ where: eq(runs.id, "run") });
+    console.log(JSON.stringify({ recovered, status: row?.status, fencingToken: row?.fencingToken, runStatus: recoveredRun?.status, staleLookup: staleLookup === undefined }));
+  `);
+  expect(result).toEqual({
+    recovered: ["job"],
+    status: "queued",
+    fencingToken: 8,
+    runStatus: "plan_queued",
+    staleLookup: true,
   });
 }, 30_000);

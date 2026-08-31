@@ -2,7 +2,7 @@ import { app, systemApiApp } from "./src/app";
 import { bootstrapInitialAdmin } from "./src/lib/bootstrap";
 import { refreshTrustedClientIpHeaders } from "./src/lib/client-ip";
 import { applyPgMigrations, isPostgres } from "./src/db";
-import { reconcileInterruptedLocalRuns, stopWorkerQueue, waitForWorkerDrain } from "./src/worker";
+import { reconcileInterruptedLocalRuns, stopWorkerQueue, terminateActiveRunExecutions, waitForWorkerDrain } from "./src/worker";
 import { shutdownLogging } from "./src/lib/log";
 import { markControlPlaneNodeDraining, startControlPlaneHeartbeat } from "./src/routes/health";
 
@@ -165,7 +165,8 @@ async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
     // process exits anyway; startup reconciliation repairs the aftermath.
     const drained = await drain;
     if (!drained) {
-      console.warn("[terrence] Worker drain deadline exceeded; in-flight executions will be terminated by exit");
+      console.warn("[terrence] Worker drain deadline exceeded; terminating in-flight executions before exit");
+      terminateActiveRunExecutions();
     }
     checkpointWal();
   } catch (error: unknown) {

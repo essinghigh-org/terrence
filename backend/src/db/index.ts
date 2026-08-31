@@ -406,6 +406,16 @@ if (!isPostgres) {
     client.run("PRAGMA foreign_keys = ON;");
   }
 
+  // Agent claim fencing is an additive compatibility column. Keep it in the
+  // boot repair path rather than a generated migration because the historical
+  // snapshot still contains the intentionally preserved query_runs table.
+  const agentJobColumns = new Set(
+    (client.query("PRAGMA table_info(agent_jobs)").all() as { name: string }[]).map((row): string => row.name),
+  );
+  if (!agentJobColumns.has("fencing_token")) {
+    client.run("ALTER TABLE agent_jobs ADD COLUMN fencing_token INTEGER NOT NULL DEFAULT 0");
+  }
+
   // Reconcile a sparse/forward-dated journal before the app serves traffic
   // (2026-08-23 prod incident, sqlite parity with applyPgMigrations): stamp
   // journal rows and run any missing statements for migrations whose objects
@@ -695,6 +705,9 @@ export async function applyPgMigrations(): Promise<void> {
     });
     if (stampedPg > 0) console.warn(`[terrence] sparse migration journal reconciled (pg): reconciled ${stampedPg} migration(s) outside the migrator`);
     await migrate(instance, { migrationsFolder: join(import.meta.dir, "../../drizzle/pg") });
+    // Agent claim fencing is additive and intentionally kept idempotent here;
+    // the generated journal also sees the preserved legacy query_runs snapshot.
+    await pg.unsafe("ALTER TABLE agent_jobs ADD COLUMN IF NOT EXISTS fencing_token bigint NOT NULL DEFAULT 0");
     await pg.unsafe("UPDATE organizations SET default_iac_binary = 'terraform' WHERE default_iac_binary = 'tofu'");
     await pg.unsafe("UPDATE team_projects SET organization_id = projects.org_id FROM projects WHERE team_projects.organization_id IS NULL AND projects.id = team_projects.project_id");
     // Hot-path query indexes (benchmarked: queue scan 200x, workspace run

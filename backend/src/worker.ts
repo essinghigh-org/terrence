@@ -72,7 +72,14 @@ import { encryptStatePayload } from "./lib/validation";
 import { log } from "./lib/log";
 export type { ExecutionPhase } from "./worker/phases";
 export { executorBackendFromEnv, type ExecutorBackend, EXECUTOR_BACKENDS } from "./worker/executor-policy";
-import { assertArchiveExpandedSize, assertArchiveLogicalSize, assertArchiveMemberCount } from "./lib/archive";
+import {
+  assertArchiveExpandedSize,
+  assertArchiveLogicalSize,
+  assertArchiveMemberCount,
+  tarMemberIsForbiddenSpecial,
+  tarMemberPathUnsafe,
+} from "./lib/archive";
+export { tarMemberIsForbiddenSpecial, tarMemberPathUnsafe } from "./lib/archive";
 import { startDurableJobWorker } from "./lib/durable-jobs";
 import { handleVcsWebhookJob } from "./lib/webhook-jobs";
 import { runModuleTestJob } from "./lib/module-test-worker";
@@ -158,7 +165,7 @@ export function executorPolicyAllowsLocal(
 }
 
 /** Resolve the run workdir (tmpdir-based; the sandbox allow-lists it per run). */
-function runWorkDir(runId: string): string {
+export function runWorkDir(runId: string): string {
   return runSandbox !== null ? runSandbox.workDirFor(runId) : join(tmpdir(), "terrence", "runs", runId);
 }
 
@@ -175,6 +182,18 @@ function savedPlanDirectory(runId: string): string {
 
 export async function cleanupSavedPlan(runId: string): Promise<void> {
   await rm(savedPlanDirectory(runId), { recursive: true, force: true });
+}
+
+export async function cleanupRunWorkDir(runId: string): Promise<void> {
+  if (runSandbox !== null) await removeSandboxWorkDir(runId);
+  else await rm(runWorkDir(runId), { recursive: true, force: true });
+}
+
+export function scheduleRunWorkDirCleanup(runId: string, delayMs = 6_000): void {
+  const timer = setTimeout((): void => {
+    void cleanupRunWorkDir(runId).catch((): void => undefined);
+  }, delayMs);
+  timer.unref?.();
 }
 
 function savedPlanFile(runId: string): string {
@@ -385,8 +404,7 @@ export function cancelRunExecution(runId: string, force = false): void {
   // that escape process-group termination. Process-group signals still fire
   // as the primary path; the cgroup kill is the backstop, and only escalates
   // immediately on force.
-  const groupPath = activeRunCgroups.get(runId);
-  if (force && groupPath !== undefined) {
+  if (force) {
     killRunCgroup(runId);
   }
   for (const child of activeRunProcesses.get(runId) ?? []) {
@@ -412,6 +430,17 @@ export function cancelRunExecution(runId: string, force = false): void {
         if (activeRunCgroups.get(runId) !== undefined) killRunCgroup(runId);
       }, 5_000);
     }
+  }
+}
+
+export function terminateActiveRunExecutions(): void {
+  const runIds = new Set([...activeRunProcesses.keys(), ...activeRunCgroups.keys()]);
+  for (const runId of runIds) {
+    for (const child of activeRunProcesses.get(runId) ?? []) {
+      terminateProcessGroup(child.pid, "SIGKILL");
+      try { child.kill("SIGKILL"); } catch {}
+    }
+    if (activeRunCgroups.has(runId)) killRunCgroup(runId);
   }
 }
 
@@ -652,7 +681,8 @@ function parseJsonObject(raw: string): JsonObject {
 async function readPlanJson(
   runId: string,
   executionDir: string,
-  planBinaryPath?: string,
+  planBinaryPath: string | undefined,
+  timeoutMs: number,
 ): Promise<JsonObject | undefined> {
   const tfplanPath = join(executionDir, "tfplan");
   if (!(await exists(tfplanPath))) return undefined;
@@ -673,11 +703,11 @@ async function readPlanJson(
         },
         runSandbox,
       );
-      const [exitCode, stdout] = await Promise.all([
-        process.exited,
+      const output = Promise.all([
         new Response(process.stdout).text(),
         new Response(process.stderr).text(),
       ]);
+      const [exitCode, [stdout]] = await waitForTrackedProcess(runId, "plan", process, output, timeoutMs);
       if (exitCode === 0) return parseJsonObject(stdout);
     } catch {}
   }
@@ -780,11 +810,11 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
         stderr: "pipe",
       },
     );
-    const [exitCode, stdout, stderr] = await Promise.all([
-      costProcess.exited,
+    const costOutput = Promise.all([
       new Response(costProcess.stdout).text(),
       new Response(costProcess.stderr).text(),
     ]);
+    const [exitCode, [stdout, stderr]] = await waitForTrackedProcess(runId, "cost-estimate", costProcess, costOutput, await executionTimeoutMs("plan"));
     if (exitCode !== 0) {
       const detail = stderr.trim().slice(0, 2_000);
       throw new Error(`Infracost exited with code ${exitCode}${detail === "" ? "" : `: ${detail}`}`);
@@ -836,6 +866,62 @@ function assessmentResourceCounts(planJson: JsonObject): { drifted: number; undr
     }
   }
   return { drifted, undrifted };
+}
+
+async function waitForTrackedProcess<T>(
+  runId: string,
+  phase: string,
+  child: TrackedRunProcess,
+  output: Promise<T>,
+  timeoutMs: number,
+): Promise<readonly [number, T]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cancelEscalationTimer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  let cancellationRequested = false;
+  const requestCancellation = (force: boolean): void => {
+    if (cancellationRequested && !force) return;
+    cancellationRequested = true;
+    const signal = force ? "SIGKILL" : "SIGINT";
+    terminateProcessGroup(child.pid, signal);
+    try { child.kill(signal); } catch {}
+    if (force) killRunCgroup(runId);
+    if (!force && cancelEscalationTimer === undefined) {
+      cancelEscalationTimer = setTimeout((): void => {
+        terminateProcessGroup(child.pid, "SIGKILL");
+        try { child.kill("SIGKILL"); } catch {}
+        killRunCgroup(runId);
+      }, 5_000);
+    }
+  };
+  const cancellationPoller = setInterval((): void => {
+    void db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { status: true } }).then((run): void => {
+      if (run?.status === "force_canceled") requestCancellation(true);
+      else if (run?.status === "canceled") requestCancellation(false);
+    }).catch((): void => undefined);
+  }, 250);
+  cancellationPoller.unref?.();
+  const completed = Promise.all([child.exited, output]);
+  const timeout = new Promise<never>((_, reject): void => {
+    timer = setTimeout((): void => {
+      timedOut = true;
+      reject(new Error(`${phase} process timed out after ${String(timeoutMs)} ms`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([completed, timeout]);
+  } catch (error: unknown) {
+    if (!timedOut) throw error;
+    terminateProcessGroup(child.pid, "SIGKILL");
+    try { child.kill("SIGKILL"); } catch {}
+    if (activeRunCgroups.has(runId)) killRunCgroup(runId);
+    await Promise.allSettled([child.exited, output]);
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (cancelEscalationTimer !== undefined) clearTimeout(cancelEscalationTimer);
+    clearInterval(cancellationPoller);
+  }
 }
 
 async function streamLog(
@@ -1004,26 +1090,6 @@ export async function executionVariables(
   }
 
   return [...effective.values()];
-}
-
-/** True when a tar member name is dangerous to extract: absolute path or any
- * `..` substring (conservative — also rejects `a..b`-style names). Extracted
- * so the archive guard can be fuzz-tested directly (kanban 22.6). */
-export function tarMemberPathUnsafe(member: string): boolean {
-  return member.startsWith("/") || member.includes("..");
-}
-
-/** True when a tar verbose-listing type char denotes a link or special file
- * (l=link, h=hard link, c=char device, b=block device, p=fifo, s=sparse/
- * socket). Regular files (f/-/0) and directories (d) are allowed. Extracted
- * so the archive guard can be fuzz-tested directly (kanban 22.6). */
-export function tarMemberIsForbiddenSpecial(firstChar: string): boolean {
-  return firstChar === "l"
-    || firstChar === "h"
-    || firstChar === "c"
-    || firstChar === "b"
-    || firstChar === "p"
-    || firstChar === "s";
 }
 
 async function extractTarArchive(
@@ -1403,7 +1469,7 @@ async function waitForVcsConfigurationDownload(
 /** Tracked wrapper: shutdown drain waits for in-flight run executions. */
 export async function executeRun(runId: string): Promise<void> {
   prepareRunCgroup(runId);
-  return trackLocalExecution(
+  return trackLocalRunExecution(runId, () => trackLocalExecution(
     executeRunImpl(runId)
       .catch(async (error: unknown): Promise<void> => {
         if (!(await runWasCanceled(runId))) {
@@ -1429,7 +1495,7 @@ export async function executeRun(runId: string): Promise<void> {
         // Cgroup teardown retries are cheap: rmdir only succeeds on empty groups.
         cleanupRunCgroup(runId);
       }),
-  );
+  ));
 }
 
 async function executeRunImpl(runId: string): Promise<void> {
@@ -1477,7 +1543,6 @@ async function executeRunImpl(runId: string): Promise<void> {
   }
 
   const workDir = runWorkDir(runId);
-  let keepPlan = false;
   let durablePlan: SavedPlanMetadata | undefined;
   let plannedAgainstState: { id: string | null; serial: number } = { id: null, serial: 0 };
 
@@ -1621,6 +1686,7 @@ async function executeRunImpl(runId: string): Promise<void> {
     }
     const resolved = isSimulatedAllowed ? null : await ensureBinary(requestedTool, requestedVersion);
 
+    const planTimeoutMs = await executionTimeoutMs("plan");
     if (resolved !== null && hasTfFiles) {
       await db.update(runs).set({ terraformVersion: resolved.version }).where(eq(runs.id, runId));
       const binary = resolved.binaryPath;
@@ -1643,11 +1709,11 @@ async function executeRunImpl(runId: string): Promise<void> {
         runSandbox,
       );
 
-      const [initExit] = await Promise.all([
-        initProc.exited,
+      const initOutput = Promise.all([
         streamLog(runId, "plan", initProc.stdout),
         streamLog(runId, "plan", initProc.stderr),
       ]);
+      const [initExit] = await waitForTrackedProcess(runId, "plan", initProc, initOutput, planTimeoutMs);
 
       if (await runWasCanceled(runId)) return;
       if (initExit !== 0) {
@@ -1689,11 +1755,11 @@ async function executeRunImpl(runId: string): Promise<void> {
         runSandbox,
       );
 
-      const [planExit] = await Promise.all([
-        planProc.exited,
+      const planOutput = Promise.all([
         streamLog(runId, "plan", planProc.stdout),
         streamLog(runId, "plan", planProc.stderr),
       ]);
+      const [planExit] = await waitForTrackedProcess(runId, "plan", planProc, planOutput, planTimeoutMs);
 
       if (await runWasCanceled(runId)) return;
       if (planExit !== 0) {
@@ -1710,7 +1776,7 @@ async function executeRunImpl(runId: string): Promise<void> {
 
     const planJson = isSimulatedAllowed
       ? parseJsonObject(process.env.SIMULATED_PLAN_JSON ?? "{}")
-      : await readPlanJson(runId, executionDir, resolved?.binaryPath);
+      : await readPlanJson(runId, executionDir, resolved?.binaryPath, planTimeoutMs);
     if (planJson !== undefined) {
       await writePlanJsonArtifact(runId, planJson);
       // The structured plan is persisted: tell SSE clients to fetch it once
@@ -1786,7 +1852,6 @@ async function executeRunImpl(runId: string): Promise<void> {
         await updateRunStatus(runId, "policy_soft_failed");
         await writeLog(runId, "plan", `[terrence] Run requires policy override before apply.`);
       }
-      keepPlan = true;
     } else {
       await updateRunStatus(runId, "policy_checked");
       if (await runWasCanceled(runId)) return;
@@ -1821,15 +1886,12 @@ async function executeRunImpl(runId: string): Promise<void> {
           await updateRunStatus(runId, "planned");
           queueRunNotification(runId, "run:needs_attention", "planned");
           await persistPlanForLater();
-          keepPlan = true;
         } else {
-          keepPlan = true;
           await executeApply(runId);
         }
       } else if (run.savePlan) {
         await persistPlanForLater();
         await updateRunStatus(runId, "planned_and_saved");
-        keepPlan = true;
       } else if (run.planOnly) {
         await updateRunStatus(runId, "planned_and_finished");
       } else if (run.autoApply === true) {
@@ -1845,7 +1907,6 @@ async function executeRunImpl(runId: string): Promise<void> {
           await updateRunStatus(runId, "planned");
           queueRunNotification(runId, "run:needs_attention", "planned");
           await persistPlanForLater();
-          keepPlan = true;
         } else {
           await writeLog(
             runId,
@@ -1854,7 +1915,6 @@ async function executeRunImpl(runId: string): Promise<void> {
               ? `[terrence] Plan has no resource changes and no drift. Automatically applying to update workspace state.`
               : `[terrence] Cost estimate, policies, and run tasks passed. Proceeding to apply.`,
           );
-          keepPlan = true;
           await executeApply(runId);
         }
       } else if (hasNoResourceChanges && !hasDrift && !run.allowEmptyApply) {
@@ -1864,7 +1924,6 @@ async function executeRunImpl(runId: string): Promise<void> {
         await updateRunStatus(runId, "planned");
         queueRunNotification(runId, "run:needs_attention", "planned");
         await persistPlanForLater();
-        keepPlan = true;
       }
     }
   } catch (error: unknown) {
@@ -1880,15 +1939,11 @@ async function executeRunImpl(runId: string): Promise<void> {
     }
     throw error;
   } finally {
-    if (!keepPlan) {
-      try {
-        if (runSandbox !== null) {
-          await removeSandboxWorkDir(runId);
-        } else {
-          await rm(workDir, { recursive: true, force: true });
-        }
-      } catch {}
-    }
+    try {
+      // Saved plans live under storage/saved-plans; never retain the execution
+      // directory, which contains tfvars, state, provider caches, and tokens.
+      await cleanupRunWorkDir(runId);
+    } catch {}
   }
 }
 
@@ -1896,7 +1951,7 @@ async function executeRunImpl(runId: string): Promise<void> {
 export async function executeApply(runId: string): Promise<void> {
   const ownsCgroup = getRunCgroup(runId) === null;
   if (ownsCgroup) prepareRunCgroup(runId);
-  return trackLocalExecution(
+  return trackLocalRunExecution(runId, () => trackLocalExecution(
     executeApplyImpl(runId).catch(async (error: unknown): Promise<void> => {
       if (!(await runWasCanceled(runId))) {
         try {
@@ -1916,7 +1971,7 @@ export async function executeApply(runId: string): Promise<void> {
     }).finally((): void => {
       if (ownsCgroup) cleanupRunCgroup(runId);
     }),
-  );
+  ));
 }
 
 /** Claim the workspace lock for the apply itself, so a manual lock acquired
@@ -2168,6 +2223,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
       };
 
       applyStarted = true;
+      const applyTimeoutMs = await executionTimeoutMs("apply");
       const applyProc = spawnRunProcess(
         runId,
         applyArgs,
@@ -2180,11 +2236,11 @@ async function executeApplyImpl(runId: string): Promise<void> {
         runSandbox,
       );
 
-      const [applyExit] = await Promise.all([
-        applyProc.exited,
+      const applyOutput = Promise.all([
         streamLog(runId, "apply", applyProc.stdout),
         streamLog(runId, "apply", applyProc.stderr),
       ]);
+      const [applyExit] = await waitForTrackedProcess(runId, "apply", applyProc, applyOutput, applyTimeoutMs);
 
       if (await runWasCanceled(runId)) {
         applyCanceled = true;
@@ -2343,10 +2399,11 @@ export async function runPolicyChecks(
     parametersBySet.set(parameter.policySetId, current);
   }
 
+  const planTimeoutMs = await executionTimeoutMs("plan");
   const generatedPlanJson = preloadedPlanJson ?? (
     executionDir === undefined || executionDir === ""
       ? undefined
-      : await readPlanJson(runId, executionDir, planBinaryPath)
+      : await readPlanJson(runId, executionDir, planBinaryPath, planTimeoutMs)
   );
   const planJsonPayload = generatedPlanJson === undefined ? null : JSON.stringify(generatedPlanJson);
 
@@ -2420,11 +2477,11 @@ export async function runPolicyChecks(
             stderr: "pipe",
           },
         );
-        const [opaExit, opaStdout] = await Promise.all([
-          opaProc.exited,
+        const opaOutput = Promise.all([
           new Response(opaProc.stdout).text(),
-          new Response(opaProc.stderr).text().catch((): string => ""),
+          new Response(opaProc.stderr).text(),
         ]);
+        const [opaExit, [opaStdout]] = await waitForTrackedProcess(runId, "policy", opaProc, opaOutput, planTimeoutMs);
         if (opaExit === 0) {
           checkResult = JSON.parse(opaStdout !== "" ? opaStdout : "{}") as Record<string, unknown>;
           const resultList = checkResult.result as Record<string, unknown>[] | undefined;
@@ -2483,11 +2540,11 @@ export async function runPolicyChecks(
           },
           runSandbox,
         );
-        const [sentinelExit, sentinelStdout, sentinelStderr] = await Promise.all([
-          sentinelProc.exited,
+        const sentinelOutput = Promise.all([
           new Response(sentinelProc.stdout).text(),
           new Response(sentinelProc.stderr).text(),
         ]);
+        const [sentinelExit, [sentinelStdout, sentinelStderr]] = await waitForTrackedProcess(runId, "policy", sentinelProc, sentinelOutput, planTimeoutMs);
         let sentinel: Record<string, unknown>;
         try {
           const parsed = JSON.parse(sentinelStdout) as unknown;
@@ -2583,18 +2640,18 @@ export async function runPolicyChecks(
 type CapturedProcess = Readonly<{ exitCode: number; output: string; stdout: string }>;
 
 async function captureProcess(
+  runId: string,
   args: readonly string[],
   cwd: string,
   env: Readonly<Record<string, string>>,
+  timeoutMs: number,
 ): Promise<CapturedProcess> {
-  const child = runSandbox !== null
-    ? runSandbox.spawn([...args], { cwd, env })
-    : spawn([...args], { cwd, env, stdout: "pipe", stderr: "pipe" });
-  const [exitCode, stdout, stderr] = await Promise.all([
-    child.exited,
+  const child = spawnRunProcess(runId, args, { cwd, env, stdout: "pipe", stderr: "pipe" }, runSandbox);
+  const output = Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
   ]);
+  const [exitCode, [stdout, stderr]] = await waitForTrackedProcess(runId, "assessment", child, output, timeoutMs);
   return { exitCode, output: `${stdout}${stderr}`, stdout };
 }
 
@@ -2876,6 +2933,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
       const variables = await executionVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
       const project = workspace.projectId === null ? undefined : await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) });
       const settings = await db.query.adminGeneralSettings.findFirst({ where: eq(adminGeneralSettings.id, "general") });
+      const assessmentTimeoutMs = timeoutSeconds(settings?.planTimeout, 7_200) * 1_000;
       const identity = await workspaceIdentityEnvironment({
         organizationId: organization?.id ?? workspace.orgId,
         organizationName: organization?.name ?? workspace.orgId,
@@ -2912,9 +2970,11 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
         await runSandbox.prepareWorkDir(`assessment-${assessmentResultId}`);
       }
       const init = await captureProcess(
+        `assessment-${assessmentResultId}`,
         [resolved.binaryPath, "init", "-reconfigure", "-no-color", "-input=false"],
         executionDir,
         environment,
+        assessmentTimeoutMs,
       );
       appendOutput(init.output);
       if (init.exitCode !== 0) throw new Error(`${resolved.tool} init failed with exit code ${String(init.exitCode)}`);
@@ -2934,20 +2994,28 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
           planArgs.push(`-var=${variable.key}=${variable.hcl ? variable.value : JSON.stringify(variable.value)}`);
         }
       }
-      const plan = await captureProcess(planArgs, executionDir, environment);
+      const plan = await captureProcess(
+        `assessment-${assessmentResultId}`,
+        planArgs,
+        executionDir,
+        environment,
+        assessmentTimeoutMs,
+      );
       appendOutput(plan.output);
       if (plan.exitCode !== 0 && plan.exitCode !== 2) {
         throw new Error(`${resolved.tool} assessment plan failed with exit code ${String(plan.exitCode)}`);
       }
 
-      const generatedPlan = await readPlanJson(assessmentResultId, executionDir, resolved.binaryPath);
+      const generatedPlan = await readPlanJson(assessmentResultId, executionDir, resolved.binaryPath, assessmentTimeoutMs);
       if (generatedPlan === undefined) throw new Error("Unable to read assessment plan JSON.");
       planJson = generatedPlan;
 
       const schema = await captureProcess(
+        `assessment-${assessmentResultId}`,
         [resolved.binaryPath, "providers", "schema", "-json"],
         executionDir,
         environment,
+        assessmentTimeoutMs,
       );
       if (schema.exitCode === 0) providerSchema = parseJsonObject(schema.stdout);
       else appendOutput(`[terrence] Provider schema unavailable: ${schema.output}`);
@@ -3276,6 +3344,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
           // execution (the tfc-agent contract); the org default only
           // applies to locally executed runs.
           iacBinary: workspace.iacBinary ?? "terraform",
+          fencingToken: 0,
           status: "queued",
           createdAt: Date.now(),
         });
@@ -3331,17 +3400,29 @@ export async function pollWorkerQueue(): Promise<string[]> {
       }
     }
 
-    // Claim local and remote runs atomically by moving them into the first execution stage.
-    const claimed = await db.update(runs)
-      .set({ status: "fetching" })
-      .where(claimWhere)
-      .returning({ id: runs.id });
+    let localReservationHeld = workspace.executionMode !== "agent" && reserveLocalRunExecution(run.id);
+    if (!localReservationHeld && workspace.executionMode !== "agent") continue;
 
-    if (claimed.length > 0) {
-      claimedRunIds.push(run.id);
-      claimedWorkspaceIds.add(run.workspaceId);
-      // Advance through plan_queued then dispatch to planning
-      executeRun(run.id).catch((err: unknown): void => { log.error("Worker error on run", { runId: run.id, error: err }); });
+    // Claim local and remote runs atomically by moving them into the first execution stage.
+    try {
+      const claimed = await db.update(runs)
+        .set({ status: "fetching" })
+        .where(claimWhere)
+        .returning({ id: runs.id });
+
+      if (claimed.length > 0) {
+        claimedRunIds.push(run.id);
+        claimedWorkspaceIds.add(run.workspaceId);
+        // Advance through plan_queued then dispatch to planning
+        executeRun(run.id).catch((err: unknown): void => { log.error("Worker error on run", { runId: run.id, error: err }); });
+        localReservationHeld = false;
+      } else if (localReservationHeld) {
+        releaseLocalRunReservation(run.id);
+        localReservationHeld = false;
+      }
+    } catch (error: unknown) {
+      if (localReservationHeld) releaseLocalRunReservation(run.id);
+      throw error;
     }
   }
   }
@@ -3440,6 +3521,8 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
       }
       // Atomic claim: only the poll that flips confirmed -> apply_queued
       // may dispatch; concurrent polls see zero rows and skip.
+      const localReservation = reserveLocalRunExecution(run.id);
+      if (!localReservation) continue;
       const claimed = await db.update(runs).set({
         status: "apply_queued",
         statusTimestamps: {
@@ -3447,7 +3530,10 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
           "apply-queued-at": new Date().toISOString(),
         },
       }).where(and(eq(runs.id, run.id), eq(runs.status, "confirmed"))).returning({ id: runs.id });
-      if (claimed.length === 0) continue;
+      if (claimed.length === 0) {
+        releaseLocalRunReservation(run.id);
+        continue;
+      }
       // Fire-and-forget like the manual-apply dispatch: the poll cycle must
       // keep moving; executeApply owns its own lifecycle and errors are
       // logged, with the claim already taken so nothing re-dispatches.
@@ -3456,6 +3542,7 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
       });
       applied.push(run.id);
     } catch (error: unknown) {
+      if (localRunReservations.has(run.id)) releaseLocalRunReservation(run.id);
       log.error("Scheduled apply failed", { runId: run.id, error });
       // Keep the run confirmed so a transient failure retries next poll.
       await db.update(runs).set({ status: "confirmed" }).where(and(eq(runs.id, run.id), eq(runs.status, "apply_queued"))).catch((): void => {});
@@ -3509,6 +3596,9 @@ const ASSESSMENT_POLL_INTERVAL_MS = pollIntervalMs(process.env.TERRENCE_ASSESSME
 // the safety net for executions that could NOT finish (SIGKILL, power loss).
 let draining = false;
 let activeLocalExecutions = 0;
+const activeLocalRunExecutions = new Map<string, number>();
+const localRunReservations = new Set<string>();
+const localRunWaiters: (() => void)[] = [];
 let executionIdleCallback: (() => void) | null = null;
 
 /** Stop the background scheduler from claiming new work (graceful shutdown).
@@ -3565,6 +3655,72 @@ async function trackLocalExecution<T>(promise: Promise<T>): Promise<T> {
   );
 }
 
+function localRunConcurrencyLimit(): number {
+  const configured = Number(process.env.TERRENCE_RUN_CONCURRENCY ?? 5);
+  return Number.isSafeInteger(configured) && configured > 0 ? configured : 5;
+}
+
+function localRunCapacityUsed(): number {
+  return activeLocalRunExecutions.size + localRunReservations.size;
+}
+
+function reserveLocalRunExecution(runId: string): boolean {
+  if (activeLocalRunExecutions.has(runId) || localRunReservations.has(runId)) return true;
+  if (localRunCapacityUsed() >= localRunConcurrencyLimit()) return false;
+  localRunReservations.add(runId);
+  return true;
+}
+
+function releaseLocalRunReservation(runId: string): void {
+  if (!localRunReservations.delete(runId)) return;
+  localRunWaiters.shift()?.();
+}
+
+function acquireLocalRunExecutionSlot(runId: string): Promise<void> {
+  const activeCount = activeLocalRunExecutions.get(runId);
+  if (activeCount !== undefined) {
+    activeLocalRunExecutions.set(runId, activeCount + 1);
+    return Promise.resolve();
+  }
+  if (!localRunReservations.has(runId)) {
+    return (async (): Promise<void> => {
+      while (localRunCapacityUsed() >= localRunConcurrencyLimit()) {
+        await new Promise<void>((resolve): void => { localRunWaiters.push(resolve); });
+      }
+      localRunReservations.add(runId);
+      localRunReservations.delete(runId);
+      activeLocalRunExecutions.set(runId, 1);
+    })();
+  }
+  localRunReservations.delete(runId);
+  activeLocalRunExecutions.set(runId, 1);
+  return Promise.resolve();
+}
+
+function releaseLocalRunExecutionSlot(runId: string): void {
+  const activeCount = activeLocalRunExecutions.get(runId);
+  if (activeCount === undefined) return;
+  if (activeCount > 1) {
+    activeLocalRunExecutions.set(runId, activeCount - 1);
+    return;
+  }
+  activeLocalRunExecutions.delete(runId);
+  localRunWaiters.shift()?.();
+}
+
+async function trackLocalRunExecution<T>(runId: string, work: () => Promise<T>): Promise<T> {
+  await acquireLocalRunExecutionSlot(runId);
+  try {
+    return await work();
+  } finally {
+    releaseLocalRunExecutionSlot(runId);
+  }
+}
+
+export function activeLocalRunExecutionCount(): number {
+  return activeLocalRunExecutions.size;
+}
+
 /**
  * Ephemeral per-run credentials (the reference format run-token model). Runs execute with a
  * local backend, so the CLI never sees the user's credentials file; the run
@@ -3605,13 +3761,24 @@ function registryHostname(): string {
   return hostname;
 }
 
-function timeoutSeconds(value: string | null | undefined, fallback: number): number {
+function timeoutSeconds(value: unknown, fallback: number): number {
   // Settings accept unitless seconds; clamp valid values to one minute and 24 hours.
+  if (typeof value === "number") return Number.isFinite(value) && value > 0 ? Math.min(86_400, Math.max(60, Math.floor(value))) : fallback;
   const match = typeof value === "string" ? /^(\d+(?:\.\d+)?)(s|m|h|d)?$/.exec(value.trim().toLowerCase()) : null;
   if (match === null) return fallback;
   const amount = Number(match[1]);
   const multiplier = match[2] === "d" ? 86_400 : match[2] === "h" ? 3_600 : match[2] === "m" ? 60 : 1;
   return Number.isFinite(amount) && amount > 0 ? Math.min(86_400, Math.max(60, Math.floor(amount * multiplier))) : fallback;
+}
+
+async function executionTimeoutMs(phase: "plan" | "apply"): Promise<number> {
+  const settings = await db.query.adminGeneralSettings.findFirst({
+    where: eq(adminGeneralSettings.id, "general"),
+    columns: { planTimeout: true, applyTimeout: true },
+  });
+  const raw = phase === "plan" ? settings?.planTimeout : settings?.applyTimeout;
+  const fallback = phase === "plan" ? 7_200 : 86_400;
+  return timeoutSeconds(raw, fallback) * 1_000;
 }
 
 async function runTerraformEnv(

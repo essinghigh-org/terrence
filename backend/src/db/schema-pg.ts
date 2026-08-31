@@ -134,6 +134,7 @@ export const agentJobs = pgTable("agent_jobs", {
     result: jsonb("result"),
     errorMessage: text("error_message"),
     requeueAttempts: bigint("requeue_attempts", { mode: "number" }).notNull().default(0),
+    fencingToken: bigint("fencing_token", { mode: "number" }).notNull().default(0),
     claimedAt: bigint("claimed_at", { mode: "number" }),
     completedAt: bigint("completed_at", { mode: "number" }),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.agentJobs.createdAt.defaultFn!()),

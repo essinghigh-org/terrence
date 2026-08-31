@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, it } from "bun:test";
-import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, open, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { assertArchiveExpandedSize, assertArchiveLogicalSize, assertArchiveMemberCount } from "../../src/lib/archive";
+import { assertArchiveExpandedSize, assertArchiveLogicalSize, assertArchiveMemberCount, assertSafeTarArchive, tarMemberPathUnsafe } from "../../src/lib/archive";
 
 const directory = await mkdtemp(join(tmpdir(), "terrence-archive-limit-"));
 const archive = join(directory, "archive.tar.gz");
@@ -34,6 +34,23 @@ describe("archive expansion limit", () => {
     expect(() => {
       assertArchiveMemberCount(new Array(10_001));
     }).toThrow("too many members");
+  });
+
+  it("rejects archives containing links before extraction", async () => {
+    const source = await mkdtemp(join(directory, "unsafe-source-"));
+    const unsafeArchive = join(directory, "unsafe.tar.gz");
+    try {
+      expect(tarMemberPathUnsafe("main..backup.tf")).toBe(true);
+      expect(tarMemberPathUnsafe("dir/../outside.tf")).toBe(true);
+      expect(tarMemberPathUnsafe(String.raw`dir\\..\\outside.tf`)).toBe(true);
+      await writeFile(join(source, "main.tf"), "terraform {}\n");
+      await symlink("main.tf", join(source, "link.tf"));
+      const tar = Bun.spawn(["tar", "-czf", unsafeArchive, "-C", source, "."], { stdout: "pipe", stderr: "pipe" });
+      expect(await tar.exited).toBe(0);
+      await expect(assertSafeTarArchive(unsafeArchive)).rejects.toThrow("forbidden link");
+    } finally {
+      await rm(source, { recursive: true, force: true });
+    }
   });
 
   it("counts sparse members by logical size before extraction", async () => {

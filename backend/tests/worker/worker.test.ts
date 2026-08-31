@@ -385,10 +385,11 @@ test("finishes plan-only runs without applying even when the workspace auto-appl
 test("keeps a pending plan durable so apply can recover after the work directory is gone", async () => {
   const result = await runWorkerScript(`
     const { exists, readFile } = await import("fs/promises");
+    const { tmpdir } = await import("os");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
     const { organizations, runs, workspaces } = await import("./src/db/schema.ts");
-    const { executeApply, executeRun } = await import("./src/worker.ts");
+    const { executeApply, executeRun, runWorkDir } = await import("./src/worker.ts");
 
     await db.insert(organizations).values({ id: "org", name: "org" });
     await db.insert(workspaces).values({ id: "workspace", name: "workspace", orgId: "org", autoApply: false });
@@ -409,6 +410,7 @@ test("keeps a pending plan durable so apply can recover after the work directory
     console.log(JSON.stringify({
       plannedStatus: planned?.status,
       hasSavedPlan,
+      runWorkDirPresent: await exists(runWorkDir("run")),
       artifactEncrypted: artifact.startsWith("enc:v1:"),
       hashRecorded: planned?.statusTimestamps?.["saved-plan-sha256"] === metadata.sha256,
       appliedStatus: applied?.status,
@@ -419,6 +421,7 @@ test("keeps a pending plan durable so apply can recover after the work directory
   expect(result).toEqual({
     plannedStatus: "planned",
     hasSavedPlan: true,
+    runWorkDirPresent: false,
     artifactEncrypted: true,
     hashRecorded: true,
     appliedStatus: "applied",

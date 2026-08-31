@@ -1,5 +1,8 @@
 import { describe, expect, test, beforeAll } from "bun:test";
 import { app } from "../../src/app";
+import { db } from "../../src/db";
+import { eq } from "drizzle-orm";
+import { agentJobs, agentPools, organizations, stackAgentJobs, stackRecords, stackStateLocks, stacks, runs } from "../../src/db/schema";
 
 describe("the reference format API v2 - Agent Pools & Agents", () => {
   let userToken: string;
@@ -335,6 +338,32 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
     expect(missingResponse.status).toBe(404);
   });
 
+  test("should reject deleting an agent with a claimed job", async () => {
+    const runId = `claimed-agent-run-${crypto.randomUUID()}`;
+    const jobId = `claimed-agent-job-${crypto.randomUUID()}`;
+    const now = Date.now();
+    await db.insert(runs).values({ id: runId, workspaceId, agentPoolId: poolId, status: "planning", createdAt: now });
+    await db.insert(agentJobs).values({
+      id: jobId,
+      runId,
+      agentPoolId: poolId,
+      agentId,
+      phase: "plan",
+      status: "claimed",
+      fencingToken: 1,
+      claimedAt: now,
+      createdAt: now,
+    });
+    const response = await app.handle(new Request(`http://localhost/api/v2/agents/${agentId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${userToken}` },
+    }));
+    expect(response.status).toBe(409);
+    expect((await db.query.agentJobs.findFirst({ where: eq(agentJobs.id, jobId) }))?.status).toBe("claimed");
+    await db.delete(agentJobs).where(eq(agentJobs.id, jobId));
+    await db.delete(runs).where(eq(runs.id, runId));
+  });
+
   test("should delete agent and decrease agent-count", async () => {
     const delRes = await app.handle(
       new Request(`http://localhost/api/v2/agents/${agentId}`, {
@@ -434,6 +463,60 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
     );
     expect(showRes.status).toBe(200);
     expect((await showRes.json()).data.attributes["iac-binaries"]).toEqual(["tofu", "terraform"]);
+  });
+
+  test("deleting a pool fails active stack runs and releases their state locks", async () => {
+    const stackPoolId = `stack-delete-pool-${crypto.randomUUID()}`;
+    const stackRecordId = `stack-delete-stack-${crypto.randomUUID()}`;
+    const deploymentRunId = `stack-delete-run-${crypto.randomUUID()}`;
+    const stepId = `stack-delete-step-${crypto.randomUUID()}`;
+    const stackJobId = `stack-delete-job-${crypto.randomUUID()}`;
+    const lockId = `stack-delete-lock-${crypto.randomUUID()}`;
+    const now = Date.now();
+    const organization = await db.query.organizations.findFirst({ where: eq(organizations.name, orgName) });
+    if (organization === undefined) throw new Error("Agent test organization was not created");
+    await db.insert(agentPools).values({ id: stackPoolId, orgId: organization.id, name: stackPoolId, organizationScoped: true, createdAt: now });
+    await db.insert(stacks).values({ id: stackRecordId, orgId: organization.id, agentPoolId: stackPoolId, executionMode: "agent", name: stackRecordId, createdAt: now, updatedAt: now });
+    await db.insert(stackRecords).values([
+      { id: deploymentRunId, stackId: stackRecordId, parentId: null, recordType: "stack-deployment-runs", name: "active", status: "applying", payload: {}, createdAt: now, updatedAt: now },
+      { id: stepId, stackId: stackRecordId, parentId: deploymentRunId, recordType: "stack-deployment-steps", name: "component", status: "running", payload: {}, createdAt: now, updatedAt: now },
+    ]);
+    await db.insert(stackAgentJobs).values({
+      id: stackJobId,
+      stackId: stackRecordId,
+      deploymentRunId,
+      stepId,
+      agentPoolId: stackPoolId,
+      agentId: null,
+      phase: "apply",
+      status: "claimed",
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.insert(stackStateLocks).values({
+      id: lockId,
+      stackId: stackRecordId,
+      deployment: "default",
+      runId: deploymentRunId,
+      fencingToken: 1,
+      acquiredAt: now,
+      leaseExpiresAt: now + 60_000,
+      updatedAt: now,
+    });
+
+    const response = await app.handle(new Request(`http://localhost/api/v2/agent-pools/${stackPoolId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${userToken}` },
+    }));
+    expect(response.status).toBe(204);
+    expect((await db.query.stackRecords.findFirst({ where: eq(stackRecords.id, deploymentRunId) }))?.status).toBe("failed");
+    expect((await db.query.stackRecords.findFirst({ where: eq(stackRecords.id, stepId) }))?.status).toBe("failed");
+    expect((await db.query.stackStateLocks.findFirst({ where: eq(stackStateLocks.id, lockId) }))?.runId).toBeNull();
+    const detachedStack = await db.query.stacks.findFirst({ where: eq(stacks.id, stackRecordId) });
+    expect(detachedStack?.agentPoolId).toBeNull();
+    expect(detachedStack?.executionMode).toBe("remote");
+    expect(await db.query.stackAgentJobs.findFirst({ where: eq(stackAgentJobs.id, stackJobId) })).toBeUndefined();
+    await db.delete(stacks).where(eq(stacks.id, stackRecordId));
   });
 
   test("agent registration rejects invalid iac-binaries", async () => {

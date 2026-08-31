@@ -187,6 +187,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     }));
     out.claimStatus = res.status;
     const job = await res.json();
+    const fencingToken = String(job.data.fencing_token);
     out.jobType = job.type;
     out.jobId = job.job_id;
     out.operation = job.data.operation;
@@ -237,7 +238,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
 
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/plan-json\`, {
       method: "PUT",
-      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "content-type": "application/json" },
+      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "tfc-agent-fencing-token": fencingToken, "content-type": "application/json" },
       body: JSON.stringify({
         format_version: "1.2",
         planned_values: { outputs: {} },
@@ -248,21 +249,21 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
 
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/plan-json-redacted\`, {
       method: "PUT",
-      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "content-type": "application/json" },
+      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "tfc-agent-fencing-token": fencingToken, "content-type": "application/json" },
       body: JSON.stringify({ redacted: true }),
     }));
     out.redactedPutStatus = res.status;
 
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/provider-schemas\`, {
       method: "PUT",
-      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "content-type": "application/json" },
+      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "tfc-agent-fencing-token": fencingToken, "content-type": "application/json" },
       body: JSON.stringify({ "registry.terraform.io/hashicorp/null": {} }),
     }));
     out.schemasPutStatus = res.status;
 
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/log\`, {
       method: "PATCH",
-      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "content-type": "application/json" },
+      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "tfc-agent-fencing-token": fencingToken, "content-type": "application/json" },
       body: "\\u001b[1m\\u001b[32mTerraform v1.9.5\\u001b[0m\\nInitializing...\\n\\u001b[33mWarning: deprecated\\u001b[0m",
     }));
     out.logPatchStatus = res.status;
@@ -271,7 +272,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
 
     // configuration version download (no archive file yet -> 404)
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/configuration-version\`, {
-      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id },
+      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "tfc-agent-fencing-token": fencingToken },
     }));
     out.configVersionStatus = res.status;
 
@@ -288,7 +289,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
       .set({ archivePath: join(cvDir, "config-cv1.tar.gz") })
       .where(eq(configurationVersions.id, "cv1"));
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/configuration-version\`, {
-      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id },
+      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "tfc-agent-fencing-token": fencingToken },
     }));
     out.configVersionServedStatus = res.status;
     const flattenedDir = join(process.env.TEST_DIR, "flattened-check");
@@ -300,12 +301,12 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     // filesystem round-trip
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/filesystem\`, {
       method: "PUT",
-      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "content-type": "application/gzip" },
+      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "tfc-agent-fencing-token": fencingToken, "content-type": "application/gzip" },
       body: "fs-archive-bytes",
     }));
     out.fsPutStatus = res.status;
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/filesystem\`, {
-      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id },
+      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "tfc-agent-fencing-token": fencingToken },
     }));
     out.fsGetStatus = res.status;
     out.fsGetBytes = await res.text();
@@ -316,6 +317,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
       headers: {
         authorization: \`Bearer \${agentToken}\`,
         "tfc-agent-id": reg.id,
+        "tfc-agent-fencing-token": fencingToken,
         "tfc-agent-message-index": "8",
         "content-type": "application/json",
       },
@@ -430,13 +432,14 @@ test("modern agent protocol: errored completion and apply job payload", async ()
       headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "tfc-agent-accept": "plan,apply" },
     }));
     const job = await res.json();
+    const fencingToken = String(job.data.fencing_token);
     out.applyContainerAbsent = job.apply === undefined;
     out.planContainerPresent = job.plan !== undefined;
 
     // errored completion -> run errored
     res = await app.fetch(new Request(\`\${base}/api/agent/status\`, {
       method: "PUT",
-      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "content-type": "application/json" },
+      headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "tfc-agent-fencing-token": fencingToken, "content-type": "application/json" },
       body: JSON.stringify({
         status: "idle",
         job: { type: "plan", status: "errored", error: "failed running terraform plan (exit 1)", data: { operation: "plan", run_id: "run1", run_type: "plan" } },

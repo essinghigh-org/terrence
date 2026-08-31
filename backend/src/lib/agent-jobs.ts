@@ -34,6 +34,15 @@ export const MAX_AGENT_RESULT_BYTES = 64 * 1024;
 export const MAX_AGENT_RESULT_DEPTH = 8;
 export const MAX_AGENT_RESULT_KEYS = 500;
 
+export function parseAgentFencingToken(value: unknown): number | undefined {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string" && /^\d+$/.test(value)
+      ? Number(value)
+      : Number.NaN;
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 function isLargeString(value: unknown): boolean {
   return typeof value === "string" && value.length > 16_384;
 }
@@ -425,6 +434,7 @@ export async function recoverStaleAgentJobs(now = Date.now()): Promise<string[]>
       claimedAt: null,
       completedAt: null,
       errorMessage: null,
+      fencingToken: sql`${agentJobs.fencingToken} + 1`,
     }).where(and(
       eq(agentJobs.id, job.id),
       eq(agentJobs.status, "claimed"),
@@ -588,7 +598,12 @@ async function findCandidateJob(agent: Agent, acceptedPhases: readonly string[],
 
 async function tryClaimCandidate(candidate: AgentJobRow, agent: Agent): Promise<AgentJobRow | undefined> {
   const now = Date.now();
-  const claimed = await db.update(agentJobs).set({ agentId: agent.id, status: "claimed", claimedAt: now }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "queued"))).returning();
+  const claimed = await db.update(agentJobs).set({
+    agentId: agent.id,
+    status: "claimed",
+    claimedAt: now,
+    fencingToken: sql`${agentJobs.fencingToken} + 1`,
+  }).where(and(eq(agentJobs.id, candidate.id), eq(agentJobs.status, "queued"))).returning();
   const claimedJob = claimed[0];
   if (claimedJob !== undefined) return claimedJob;
   return undefined;
@@ -684,18 +699,22 @@ export function stripAnsiEscape(text: string): string {
 export async function appendAgentJobLog(
   agentId: string,
   jobId: string,
+  fencingToken: number,
   outputText: string,
 ): Promise<boolean> {
-  const job = await db.query.agentJobs.findFirst({
-    where: and(
+  return db.transaction(async (transaction): Promise<boolean> => {
+    const database = transaction as unknown as Database;
+    const claimed = await database.update(agentJobs).set({ status: "claimed" }).where(and(
       eq(agentJobs.id, jobId),
       eq(agentJobs.agentId, agentId),
+      eq(agentJobs.fencingToken, fencingToken),
       eq(agentJobs.status, "claimed"),
-    ),
+    )).returning({ phase: agentJobs.phase, runId: agentJobs.runId });
+    const job = claimed[0];
+    if (job === undefined) return false;
+    await insertAgentJobLog(database, job, stripAnsiEscape(outputText), Date.now());
+    return true;
   });
-  if (job === undefined) return false;
-  await insertAgentJobLog(db, job, stripAnsiEscape(outputText), Date.now());
-  return true;
 }
 
 async function insertAgentJobLog(
@@ -718,11 +737,13 @@ async function insertAgentJobLog(
 export async function findClaimedAgentJob(
   agentId: string,
   jobId: string,
+  fencingToken: number,
 ): Promise<ClaimedAgentJob | undefined> {
   const job = await db.query.agentJobs.findFirst({
     where: and(
       eq(agentJobs.id, jobId),
       eq(agentJobs.agentId, agentId),
+      eq(agentJobs.fencingToken, fencingToken),
       eq(agentJobs.status, "claimed"),
     ),
   });
@@ -761,6 +782,7 @@ export async function insertAgentApplyJobTx(
     errorMessage: null,
     claimedAt: null,
     completedAt: null,
+    fencingToken: 0,
     createdAt: Date.now(),
     requeueAttempts: 0,
   };
@@ -814,6 +836,7 @@ async function requeueInvalidCompletion(
   }).where(and(
     eq(agentJobs.id, job.id),
     eq(agentJobs.agentId, agentId),
+    eq(agentJobs.fencingToken, job.fencingToken),
     eq(agentJobs.status, "claimed"),
   )).returning({ id: agentJobs.id });
   if (updatedJobs.length === 0) return;
@@ -906,6 +929,7 @@ async function persistAgentJobCompletion(
   }).where(and(
     eq(agentJobs.id, job.id),
     eq(agentJobs.agentId, agentId),
+    eq(agentJobs.fencingToken, job.fencingToken),
     eq(agentJobs.status, "claimed"),
   )).returning();
   return updatedJobs[0];
@@ -928,6 +952,7 @@ async function determineCompletionOutcome(
   run: AgentRunRow,
   completion: AgentJobCompletion,
   now: number,
+  applyGateReason: string | null,
 ): Promise<CompletionOutcome> {
   if (completion.status !== "completed") {
     return { policyOutcome: UNEVALUATED_POLICY_OUTCOME, runStatus: "errored" };
@@ -946,7 +971,11 @@ async function determineCompletionOutcome(
     completion.result,
     now,
   );
-  return { policyOutcome, runStatus: resolvePlanStatus(policyOutcome, run) };
+  const runStatus = resolvePlanStatus(policyOutcome, run);
+  if (runStatus === "apply_queued" && applyGateReason !== null) {
+    return { policyOutcome, runStatus: "planned" };
+  }
+  return { policyOutcome, runStatus };
 }
 
 function completionStatusTimestamps(
@@ -1057,11 +1086,17 @@ async function enqueueApplyAfterPlan(
   now: number,
 ): Promise<void> {
   if (completion.status !== "completed" || job.phase !== "plan" || runStatus !== "apply_queued") return;
+  const workspace = await database.query.workspaces.findFirst({
+    where: eq(workspaces.id, run.workspaceId),
+    columns: { iacBinary: true },
+  });
   await database.insert(agentJobs).values({
     id: `ajob-${crypto.randomUUID()}`,
     runId: run.id,
     agentPoolId: job.agentPoolId,
     phase: "apply",
+    iacBinary: workspace?.iacBinary ?? "terraform",
+    fencingToken: 0,
     status: "queued",
     createdAt: now,
   });
@@ -1073,12 +1108,15 @@ async function completeAgentJobInTransaction(
   database: Database,
   agentId: string,
   jobId: string,
+  fencingToken: number,
   completion: AgentJobCompletion,
+  applyGateReason: string | null,
 ): Promise<CompletionResult | undefined> {
   const job = await database.query.agentJobs.findFirst({
     where: and(
       eq(agentJobs.id, jobId),
       eq(agentJobs.agentId, agentId),
+      eq(agentJobs.fencingToken, fencingToken),
       eq(agentJobs.status, "claimed"),
     ),
   });
@@ -1090,7 +1128,7 @@ async function completeAgentJobInTransaction(
   const preparation = await prepareAgentCompletion(job, run, completion);
   const updatedJob = await persistAgentJobCompletion(database, agentId, job, completion, preparation.now);
   if (updatedJob === undefined) return undefined;
-  const outcome = await determineCompletionOutcome(database, job, run, completion, preparation.now);
+  const outcome = await determineCompletionOutcome(database, job, run, completion, preparation.now, applyGateReason);
   await persistRunCompletion(
     database,
     job,
@@ -1112,10 +1150,25 @@ async function completeAgentJobInTransaction(
 export async function completeAgentJob(
   agentId: string,
   jobId: string,
+  fencingToken: number,
   completion: AgentJobCompletion,
 ): Promise<Readonly<{ job: AgentJob; runStatus: string }> | undefined> {
+  const claimedJob = completion.status === "completed"
+    ? await db.query.agentJobs.findFirst({
+        where: and(
+          eq(agentJobs.id, jobId),
+          eq(agentJobs.agentId, agentId),
+          eq(agentJobs.fencingToken, fencingToken),
+          eq(agentJobs.status, "claimed"),
+        ),
+        columns: { phase: true },
+      })
+    : undefined;
+  const applyGateReason = claimedJob?.phase === "plan"
+    ? await import("./operations").then(({ applyGateBlockReason }): Promise<string | null> => applyGateBlockReason(new Date()))
+    : null;
   const outcome = await db.transaction(async (transaction): Promise<CompletionResult | undefined> =>
-    completeAgentJobInTransaction(transaction as unknown as Database, agentId, jobId, completion));
+    completeAgentJobInTransaction(transaction as unknown as Database, agentId, jobId, fencingToken, completion, applyGateReason));
   if (outcome !== undefined) notifyRunStatus(outcome.job.runId, outcome.runStatus);
   return outcome;
 }

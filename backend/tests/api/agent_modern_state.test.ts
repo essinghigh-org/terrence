@@ -53,6 +53,7 @@ test("modern agent completion persists apply state payloads", async () => {
       headers: {
         authorization: \`Bearer \${token}\`,
         "tfc-agent-id": "agent-1",
+        "tfc-agent-fencing-token": "0",
         "content-type": "application/json",
       },
       body: JSON.stringify({

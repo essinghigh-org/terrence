@@ -10,6 +10,7 @@ import {
   githubAppInstallations,
   oauthClients,
   oauthTokens,
+  adminGeneralSettings,
   stackAgentJobs,
   durableJobs,
   stackRecords,
@@ -39,6 +40,24 @@ export function isStackStoragePath(path: string): boolean {
 }
 
 type SourceCredentials = Readonly<{ provider: string; apiUrl: string | null; token: string | null }>;
+
+function timeoutSeconds(value: unknown, fallback: number): number {
+  if (typeof value === "number") return Number.isFinite(value) && value > 0 ? Math.min(86_400, Math.max(60, Math.floor(value))) : fallback;
+  const match = typeof value === "string" ? /^(\d+(?:\.\d+)?)(s|m|h|d)?$/.exec(value.trim().toLowerCase()) : null;
+  if (match === null) return fallback;
+  const amount = Number(match[1]);
+  const multiplier = match[2] === "m" ? 60 : match[2] === "h" ? 3_600 : match[2] === "d" ? 86_400 : 1;
+  return Number.isFinite(amount) && amount > 0 ? Math.min(86_400, Math.max(60, Math.floor(amount * multiplier))) : fallback;
+}
+
+async function stackExecutionTimeoutMs(operation: "plan" | "apply"): Promise<number> {
+  const settings = await db.query.adminGeneralSettings.findFirst({
+    where: eq(adminGeneralSettings.id, "general"),
+    columns: { planTimeout: true, applyTimeout: true },
+  });
+  const raw = operation === "plan" ? settings?.planTimeout : settings?.applyTimeout;
+  return timeoutSeconds(raw, operation === "plan" ? 7_200 : 86_400) * 1_000;
+}
 
 function payloadId(job: Job, key: string): string {
   const value = job.payload[key];
@@ -339,10 +358,14 @@ async function command(
   heartbeat?: () => Promise<boolean>,
 ): Promise<Readonly<{ code: number; output: string; heartbeatLost: boolean }>> {
   const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", LANG: "C" };
+  const operation = args[1] === "apply" ? "apply" : "plan";
+  const timeoutMs = await stackExecutionTimeoutMs(operation);
   const child = sandbox === null
     ? spawn([...args], { cwd, env, stdout: "pipe", stderr: "pipe" })
     : sandbox.spawn([...args], { cwd, env });
   let heartbeatLost = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   const interval = heartbeat === undefined ? undefined : setInterval((): void => {
     void heartbeat().then((owned): void => {
       if (!owned) {
@@ -351,10 +374,28 @@ async function command(
       }
     }).catch((): void => { heartbeatLost = true; child.kill(); });
   }, 10_000);
+  const output = Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  const completed = Promise.all([child.exited, output]);
+  const timeout = new Promise<never>((_, reject): void => {
+    timer = setTimeout((): void => {
+      timedOut = true;
+      try { child.kill("SIGKILL"); } catch {}
+      reject(new Error(`Stack ${operation} process timed out after ${String(timeoutMs)} ms`));
+    }, timeoutMs);
+  });
   try {
-    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    const [code, [stdout, stderr]] = await Promise.race([completed, timeout]);
     return { code, output: [stdout.trim(), stderr.trim()].filter(Boolean).join("\n"), heartbeatLost };
+  } catch (error: unknown) {
+    try { child.kill("SIGKILL"); } catch {}
+    if (!timedOut) throw error;
+    await Promise.allSettled([child.exited, output]);
+    throw error;
   } finally {
+    if (timer !== undefined) clearTimeout(timer);
     if (interval !== undefined) clearInterval(interval);
   }
 }
@@ -537,7 +578,6 @@ async function startTerraformComponentExecution(request: ComponentExecutionReque
   const stateExists = await Bun.file(statePath).exists();
   if (stateExists) await copyFile(statePath, join(executionDirectory, "terraform.tfstate"));
   const planArgs = [resolved.binaryPath, "plan", "-detailed-exitcode", "-no-color", "-input=false", ...(destroy ? ["-destroy"] : []), "-out", planPath];
-  if (stateExists) planArgs.push("-state", statePath, "-state-out", `${statePath}.next`);
   const commandResult = await runTerraformComponentOperation(operation, planArgs, planArtifactPath, executionDirectory, workDirectory, sandbox, heartbeat, resolved.binaryPath);
   if (await context.canceled()) return { hasChanges: false, deferredChanges: false, output: "", statePath: null };
   if (commandResult.heartbeatLost || !await heartbeat()) throw new Error(`Stack ${operation} lost its execution lease`);

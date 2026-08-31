@@ -49,12 +49,15 @@ test("downloads a verified binary once and reuses the cached copy", async () => 
       };
 
       const { ensureBinary } = await import("./src/binaryManager.ts");
-      const first = await ensureBinary("tofu", "1.2.3");
-      const second = await ensureBinary("tofu", "1.2.3");
+      const [first, second] = await Promise.all([
+        ensureBinary("tofu", "1.2.3"),
+        ensureBinary("tofu", "1.2.3"),
+      ]);
+      const third = await ensureBinary("tofu", "1.2.3");
       const installed = await readFile(first.binaryPath, "utf8");
       const executable = (await stat(first.binaryPath)).mode & 0o111;
 
-      console.log(JSON.stringify({ first, second, requests, installed, executable }));
+      console.log(JSON.stringify({ first, second, third, requests, installed, executable }));
     `], {
       cwd: join(import.meta.dir, "../.."),
       env: {
@@ -78,6 +81,7 @@ test("downloads a verified binary once and reuses the cached copy", async () => 
     const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
 
     expect(result.first).toEqual(result.second);
+    expect(result.first).toEqual(result.third);
     expect(result.first).toMatchObject({ tool: "tofu", version: "1.2.3" });
     expect(result.requests).toHaveLength(2);
     expect(result.requests.filter((url: string) => url.endsWith(".zip"))).toHaveLength(1);
