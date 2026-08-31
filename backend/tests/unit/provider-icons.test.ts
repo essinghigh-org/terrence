@@ -103,6 +103,97 @@ test("returns dedicated provider-icon URLs instead of generic avatar URLs", asyn
   expect(body.data.every((item): boolean => !item.attributes["icon-url"]?.includes("/api/v2/avatars/"))).toBeTrue();
 });
 
+test("resolves exact provider artwork through the Terraform Registry v2 API", async () => {
+  fixtureDirectory = await mkdtemp(join("/tmp", "terrence-provider-icons-"));
+  setFixtureStorage(fixtureDirectory);
+
+  const originalFetch = globalThis.fetch;
+  const requestedUrls: string[] = [];
+  const expectedArtworkUrl = "https://registry.terraform.io/images/providers/cloudflare.svg";
+  const expectedAvatarKey = AvatarService.cacheKey("provider-icon", expectedArtworkUrl);
+  globalThis.fetch = (async (input: string | Request): Promise<Response> => {
+    const requestUrl = typeof input === "string" ? input : input.url;
+    requestedUrls.push(requestUrl);
+    const parsed = new URL(requestUrl);
+    expect(parsed.pathname).toBe("/v2/providers");
+    expect(parsed.searchParams.get("filter[namespace]")).toBe("cloudflare");
+    expect(parsed.searchParams.get("filter[name]")).toBe("cloudflare");
+    return new Response(JSON.stringify({
+      data: [
+        {
+          attributes: {
+            namespace: "other",
+            name: "cloudflare",
+            "full-name": "other/cloudflare",
+            "logo-url": "https://registry.terraform.io/images/providers/wrong.svg",
+          },
+        },
+        {
+          attributes: {
+            namespace: "cloudflare",
+            name: "cloudflare",
+            "full-name": "cloudflare/cloudflare",
+            "logo-url": "images/providers/cloudflare.svg",
+          },
+        },
+      ],
+    }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
+  }) as unknown as typeof fetch;
+
+  try {
+    const avatarUrl = await resolveProviderIconUrl("registry.terraform.io/cloudflare/cloudflare");
+    expect(avatarUrl).toBe(`/api/v2/avatars/${expectedAvatarKey}`);
+    const metadata = await AvatarService.readMeta(expectedAvatarKey);
+    expect(metadata?.url).toBe(expectedArtworkUrl);
+    expect(requestedUrls).toHaveLength(1);
+    expect(requestedUrls[0]).not.toContain("/v1/providers/");
+
+    const response = await app.handle(new Request(
+      "http://terrence.test/api/v2/provider-icons?provider-name=registry.terraform.io%2Fcloudflare%2Fcloudflare",
+    ));
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      data: { attributes: { "icon-url": string | null } }[];
+    };
+    expect(body.data[0]?.attributes["icon-url"]).toBe(
+      `/api/v2/provider-icons/registry.terraform.io/cloudflare/cloudflare?v=${expectedAvatarKey}`,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("returns no artwork when the v2 response has no exact provider identity", async () => {
+  const originalFetch = globalThis.fetch;
+  const requestedUrls: string[] = [];
+  globalThis.fetch = (async (input: string | Request): Promise<Response> => {
+    const requestUrl = typeof input === "string" ? input : input.url;
+    requestedUrls.push(requestUrl);
+    return new Response(JSON.stringify({
+      data: [{
+        attributes: {
+          namespace: "other",
+          name: "widgets",
+          "full-name": "other/widgets",
+          "logo-url": "/images/providers/wrong.svg",
+        },
+      }],
+    }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
+  }) as unknown as typeof fetch;
+
+  try {
+    expect(await resolveProviderIconUrl("registry.terraform.io/acme/widgets")).toBeNull();
+    expect(requestedUrls).toHaveLength(1);
+    const parsed = new URL(requestedUrls[0]!);
+    expect(parsed.pathname).toBe("/v2/providers");
+    expect(parsed.searchParams.get("filter[namespace]")).toBe("acme");
+    expect(parsed.searchParams.get("filter[name]")).toBe("widgets");
+    expect(requestedUrls[0]).not.toContain("/v1/providers/");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("serves cached artwork through the provider-icon image route", async () => {
   fixtureDirectory = await mkdtemp(join("/tmp", "terrence-provider-icons-"));
   setFixtureStorage(fixtureDirectory);

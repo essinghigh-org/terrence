@@ -5,6 +5,7 @@ import {
   batchResolveProviderIconUrls,
   providerIconPath,
   normalizeProvider,
+  providerIconVersion,
   resolveProviderIconUrl,
 } from "../lib/provider-icons";
 import { DEFAULT_PROVIDER_REGISTRY_HOST, parseProviderSource } from "../lib/provider-source";
@@ -100,7 +101,7 @@ export const providerIconRoutes = new Elysia()
           "provider-name": key,
           "icon-url": resolved === null
             ? null
-            : providerIconPath(key),
+            : providerIconPath(key, providerIconVersion(resolved)),
         },
       };
     });
