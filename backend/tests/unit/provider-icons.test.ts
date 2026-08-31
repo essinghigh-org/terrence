@@ -163,6 +163,84 @@ test("resolves exact provider artwork through the Terraform Registry v2 API", as
   }
 });
 
+test("resolves legacy GitHub slug artwork through the Registry owner avatar", async () => {
+  fixtureDirectory = await mkdtemp(join("/tmp", "terrence-provider-icons-"));
+  setFixtureStorage(fixtureDirectory);
+
+  const originalFetch = globalThis.fetch;
+  const requestedUrls: string[] = [];
+  const expectedArtworkUrl = "https://avatars.githubusercontent.com/u/314135?v=4";
+  const expectedAvatarKey = AvatarService.cacheKey("provider-icon", expectedArtworkUrl);
+  globalThis.fetch = (async (input: string | Request): Promise<Response> => {
+    const requestUrl = typeof input === "string" ? input : input.url;
+    requestedUrls.push(requestUrl);
+    const parsed = new URL(requestUrl);
+    if (parsed.pathname === "/v2/providers") {
+      expect(parsed.searchParams.get("filter[namespace]")).toBe("cloudflare");
+      expect(parsed.searchParams.get("filter[name]")).toBe("cloudflare");
+      return new Response(JSON.stringify({
+        data: [{
+          attributes: {
+            namespace: "cloudflare",
+            name: "cloudflare",
+            "full-name": "cloudflare/cloudflare",
+            "logo-url": "https://avatars3.githubusercontent.com/cloudflare",
+          },
+        }],
+      }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
+    }
+    expect(parsed.pathname).toBe("/github/users/cloudflare");
+    return new Response(JSON.stringify({
+      login: "cloudflare",
+      avatar_url: expectedArtworkUrl,
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as unknown as typeof fetch;
+
+  try {
+    const avatarUrl = await resolveProviderIconUrl("registry.terraform.io/cloudflare/cloudflare");
+    expect(avatarUrl).toBe(`/api/v2/avatars/${expectedAvatarKey}`);
+    const metadata = await AvatarService.readMeta(expectedAvatarKey);
+    expect(metadata?.url).toBe(expectedArtworkUrl);
+    expect(requestedUrls).toHaveLength(2);
+    expect(requestedUrls[0]).not.toContain("/v1/providers/");
+    expect(requestedUrls[1]).toBe("https://registry.terraform.io/github/users/cloudflare");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("does not use a legacy GitHub slug when the Registry owner lookup fails", async () => {
+  const originalFetch = globalThis.fetch;
+  const requestedUrls: string[] = [];
+  globalThis.fetch = (async (input: string | Request): Promise<Response> => {
+    const requestUrl = typeof input === "string" ? input : input.url;
+    requestedUrls.push(requestUrl);
+    const parsed = new URL(requestUrl);
+    if (parsed.pathname === "/v2/providers") {
+      return new Response(JSON.stringify({
+        data: [{
+          attributes: {
+            namespace: "cloudflare",
+            name: "cloudflare",
+            "full-name": "cloudflare/cloudflare",
+            "logo-url": "https://avatars3.githubusercontent.com/cloudflare",
+          },
+        }],
+      }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
+    }
+    expect(parsed.pathname).toBe("/github/users/cloudflare");
+    return new Response(null, { status: 404 });
+  }) as unknown as typeof fetch;
+
+  try {
+    expect(await resolveProviderIconUrl("registry.terraform.io/cloudflare/cloudflare")).toBeNull();
+    expect(requestedUrls).toHaveLength(2);
+    expect(requestedUrls.every((url): boolean => !url.includes("/v1/providers/"))).toBeTrue();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("returns no artwork when the v2 response has no exact provider identity", async () => {
   const originalFetch = globalThis.fetch;
   const requestedUrls: string[] = [];
