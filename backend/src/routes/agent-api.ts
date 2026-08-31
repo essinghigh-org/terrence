@@ -35,6 +35,7 @@ import {
 import { revokeRunTokens } from "../lib/run-token";
 import { persistUploadBody } from "../lib/upload-body";
 import { log } from "../lib/log";
+import { validSignedApiURL } from "../lib/utils";
 
 const MAX_AGENT_BODY_BYTES = 16 * 1024 * 1024;
 // The public listener's native request cap is 100 MiB. Keep the endpoint's
@@ -163,12 +164,12 @@ async function stackAgentPayload(details: ClaimedStackAgentJob, baseUrl: string)
 }
 
 /**
- * Artifact auth for the modern protocol. The tfc-agent fetches and uploads
- * job artifacts with NO credentials (verified against 1.30.1); TFC protects
- * them with signed expiring URLs. Terrence mirrors the same trust model:
- * the job id is a random UUID, and artifact endpoints accept either a valid
- * agent token for the job's pool or no credentials at all, scoped strictly
- * to a job that is currently claimed.
+ * Authenticate an artifact request against the currently claimed job.
+ *
+ * The agent protocol normally sends its pool token. Embedded URLs are also
+ * signed so bearerless fetches remain safe when the agent follows a URL
+ * directly. An absent or malformed credential is never treated as anonymous
+ * access.
  */
 async function claimedJobForArtifact(
   ctx: AgentCtx,
@@ -176,22 +177,38 @@ async function claimedJobForArtifact(
 ): Promise<ClaimedAgentJob | undefined> {
   if (jobId === "") return undefined;
   const auth = ctx.request.headers.get("authorization");
-  if (typeof auth === "string" && auth.startsWith("Bearer agent-")) {
-    const pool = await poolForToken(bearerToken(auth) ?? "");
-    if (pool === undefined) return undefined;
-    const job = await db.query.agentJobs.findFirst({
-      where: and(eq(agentJobs.id, jobId), eq(agentJobs.status, "claimed")),
-    });
-    if (job?.agentId === null || job?.agentId === undefined) return undefined;
-    const agent = await db.query.agents.findFirst({ where: eq(agents.id, job.agentId) });
-    if (agent === undefined || agent.agentPoolId !== pool.poolId) return undefined;
-    return findClaimedAgentJob(agent.id, jobId);
+  const token = bearerToken(auth ?? "");
+  if (token !== undefined) {
+    const pool = await poolForToken(token);
+    if (pool !== undefined) {
+      const job = await db.query.agentJobs.findFirst({
+        where: and(eq(agentJobs.id, jobId), eq(agentJobs.status, "claimed")),
+      });
+      if (job?.agentId === null || job?.agentId === undefined) return undefined;
+      const agent = await db.query.agents.findFirst({ where: eq(agents.id, job.agentId) });
+      if (agent === undefined || agent.agentPoolId !== pool.poolId) return undefined;
+      return findClaimedAgentJob(agent.id, jobId);
+    }
   }
+
+  const path = new URL(ctx.request.url).pathname;
+  const signed = validSignedApiURL(ctx.request, path, ctx.request.method)
+    || validSignedApiURL(ctx.request, path, "*");
+  if (!signed) return undefined;
   const job = await db.query.agentJobs.findFirst({
     where: and(eq(agentJobs.id, jobId), eq(agentJobs.status, "claimed")),
   });
   if (job?.agentId === null || job?.agentId === undefined) return undefined;
   return findClaimedAgentJob(job.agentId, jobId);
+}
+
+async function acknowledgeArtifact(ctx: AgentCtx): Promise<unknown> {
+  const set = ctx.set as { status?: number };
+  if (await claimedJobForArtifact(ctx, ctx.params.job_id ?? "") === undefined) {
+    set.status = 401;
+    return { errors: [{ status: "401", title: "Unauthorized" }] };
+  }
+  return {};
 }
 
 function storageRoot(): string {
@@ -826,24 +843,19 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
 
   // Accepted for protocol completeness; Terrence does not consume these.
   .put("/api/agent/jobs/:job_id/raw-plan", async (ctx: AgentCtx): Promise<unknown> => {
-    (ctx.set as { status?: number }).status = 200;
-    return {};
+    return acknowledgeArtifact(ctx);
   })
   .put("/api/agent/jobs/:job_id/upload", async (ctx: AgentCtx): Promise<unknown> => {
-    (ctx.set as { status?: number }).status = 200;
-    return {};
+    return acknowledgeArtifact(ctx);
   })
   .post("/api/agent/jobs/:job_id/outcomes/:kind", async (ctx: AgentCtx): Promise<unknown> => {
-    (ctx.set as { status?: number }).status = 200;
-    return {};
+    return acknowledgeArtifact(ctx);
   })
   .put("/api/agent/jobs/:job_id/apply-description", async (ctx: AgentCtx): Promise<unknown> => {
-    (ctx.set as { status?: number }).status = 200;
-    return {};
+    return acknowledgeArtifact(ctx);
   })
   .put("/api/agent/jobs/:job_id/state-description", async (ctx: AgentCtx): Promise<unknown> => {
-    (ctx.set as { status?: number }).status = 200;
-    return {};
+    return acknowledgeArtifact(ctx);
   });
 
 async function appendLog(ctx: AgentCtx): Promise<unknown> {

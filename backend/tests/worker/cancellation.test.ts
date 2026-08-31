@@ -139,3 +139,80 @@ test("cancel terminates the IaC subprocess and the run cannot publish success", 
   expect(result.status).toBe("canceled");
   expect(result.applied).toBe(false);
 }, { timeout: 30000 });
+
+test("cancel captures partial apply state before deleting the work directory", async () => {
+  const result = await runCancellationScript(`
+    const { chmod, exists, mkdir, readFile, rm, writeFile } = await import("fs/promises");
+    const { join } = await import("path");
+    const { db } = await import("./src/db/index.ts");
+    const { eq } = await import("drizzle-orm");
+    const { organizations, projects, workspaces, configurationVersions, runs } = await import("./src/db/schema.ts");
+    const { executeRun, cancelRunExecution } = await import("./src/worker.ts");
+
+    const testDir = process.env.TEST_DIR;
+    const recordDir = join(testDir, "record");
+    const binaryDir = join(process.env.STORAGE_DIR, "binaries", "tofu", "1.2.3");
+    const binaryPath = join(binaryDir, "tofu");
+    const applyPidFile = join(recordDir, "apply-pid");
+    const runId = "cancel-state-run";
+    await mkdir(recordDir, { recursive: true });
+    await mkdir(binaryDir, { recursive: true });
+
+    // Write a valid-looking partial state before blocking. Cancellation must
+    // preserve this file even though the apply never reaches success output.
+    await writeFile(binaryPath, [
+      "#!/bin/sh",
+      "case \\\"$1\\\" in",
+      '  init) : ;;',
+      '  plan) echo "Plan: 1 to add, 0 to change, 0 to destroy."; : > tfplan ;;',
+      '  show) echo "{}" ;;',
+      '  apply) printf "%s" partial-state > terraform.tfstate; echo "$$" > "' + applyPidFile + '"; while :; do sleep 30; done ;;',
+      "  *) exit 2 ;;",
+      "esac",
+    ].join("\\n"));
+    await chmod(binaryPath, 0o755);
+
+    const configDir = join(testDir, "config");
+    const archivePath = join(testDir, "config.tar.gz");
+    await mkdir(configDir);
+    await writeFile(join(configDir, "main.tf"), 'output "x" { value = "y" }');
+    const tar = Bun.spawn(["tar", "-czf", archivePath, "-C", configDir, "."]);
+    if (await tar.exited !== 0) throw new Error("tar failed");
+
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(projects).values({ id: "project", orgId: "org", name: "project" });
+    await db.insert(workspaces).values({
+      id: "workspace", name: "workspace", orgId: "org", projectId: "project",
+      iacBinary: "tofu", terraformVersion: "1.2.3", autoApply: true,
+    });
+    await db.insert(configurationVersions).values({
+      id: "configuration", workspaceId: "workspace", status: "uploaded", archivePath,
+    });
+    await db.insert(runs).values({
+      id: runId, workspaceId: "workspace", configurationVersionId: "configuration",
+      status: "pending", autoApply: true, terraformVersion: "1.2.3", createdAt: Date.now(),
+    });
+
+    const runPromise = executeRun(runId);
+    let attempts = 0;
+    while (attempts++ < 1000 && !(await exists(applyPidFile))) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (!(await exists(applyPidFile))) throw new Error("apply subprocess did not start");
+
+    await db.update(runs).set({ status: "canceled" }).where(eq(runs.id, runId));
+    cancelRunExecution(runId);
+    await runPromise.catch(() => undefined);
+
+    const recoveryPath = join(process.env.STORAGE_DIR, "recovery", runId, "terraform.tfstate");
+    const recovery = await readFile(recoveryPath, "utf8").catch(() => "");
+    const marker = await exists(join(process.env.STORAGE_DIR, "recovery", runId, ".recovered"));
+    const final = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { status: true } });
+    process.stdout.write(JSON.stringify({ status: final?.status, encrypted: recovery.startsWith("enc:v1:"), marker }) + "\\n");
+    await rm(join(process.env.STORAGE_DIR, "recovery", runId), { recursive: true, force: true });
+  `);
+
+  expect(result.status).toBe("canceled");
+  expect(result.encrypted).toBe(true);
+  expect(result.marker).toBe(true);
+}, { timeout: 30000 });

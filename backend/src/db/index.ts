@@ -1,6 +1,5 @@
 import { Database } from 'bun:sqlite';
-import { drizzle as sqliteDrizzle, SQLiteBunTransaction, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
-import type { SQLiteBunSession } from 'drizzle-orm/bun-sqlite';
+import { drizzle as sqliteDrizzle, SQLiteBunSession, SQLiteBunTransaction, type BunSQLiteDatabase } from 'drizzle-orm/bun-sqlite';
 import type { SQLiteSession, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { migrate as sqliteMigrate } from 'drizzle-orm/bun-sqlite/migrator';
 import { reconcileSparseMigrationJournal, sparseJournalReconcilePlan, readBundledMigrationJournal } from './reconcile';
@@ -9,6 +8,7 @@ import { drizzle as pgDrizzle } from 'drizzle-orm/bun-sql';
 import { type SQL } from 'drizzle-orm';
 import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { join } from 'path';
 import * as schema from './schema';
 import { envEnabled } from '../lib/env';
@@ -38,6 +38,29 @@ let queryLogEnabled = envEnabled(process.env.TERRENCE_QUERY_LOG);
 // terrence's multi-GB RSS growth).
 // ---------------------------------------------------------------------------
 let sqliteClient: Database | null = null;
+let sqliteTransactionCompletion: Promise<void> | null = null;
+let prepareSqliteStatement: ((sqlText: string, ...params: unknown[]) => unknown) | null = null;
+const gatedSqliteQueryMethods = new Set(["run", "all", "get", "values"]);
+const sqliteTransactionContext = new AsyncLocalStorage<symbol>();
+
+function gateSqlitePreparedQuery<T extends object>(query: T): T {
+  return new Proxy(query, {
+    get(target: T, property: string | symbol, receiver: unknown): unknown {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function" || !gatedSqliteQueryMethods.has(String(property))) return value;
+      return (...args: unknown[]): unknown => {
+        const execute = (): unknown => Reflect.apply(value, target, args);
+        const completion = sqliteTransactionCompletion;
+        if (completion === null) return execute();
+        if (sqliteTransactionContext.getStore() !== undefined) {
+          throw new Error("SQLite transaction callbacks must use their tx handle instead of the outer db handle");
+        }
+        return completion.then(execute);
+      };
+    },
+  }) as T;
+}
+
 if (!isPostgres) {
   const dbUrl = databaseUrl;
   sqliteClient = new Database(dbUrl === ':memory:' ? ':memory:' : dbUrl.replace(/^file:/, ''), { create: true });
@@ -48,15 +71,18 @@ if (!isPostgres) {
   // explicitly so referential integrity holds (drizzle's migrate() does not set it).
   client.run('PRAGMA foreign_keys = ON;');
 
-  if (envEnabled(process.env.TERRENCE_QUERY_COUNT)) {
-    const originalPrepare = client.prepare.bind(client);
-    // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types, @typescript-eslint/explicit-function-return-type -- mirrors bun:sqlite's generic prepare() signature that an explicit return type cannot widen.
-    client.prepare = ((sqlText: string, ...params: unknown[]) => {
+  const originalPrepare = client.prepare.bind(client);
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- mirrors bun:sqlite's generic prepare() signature that an explicit return type cannot widen.
+  prepareSqliteStatement = (sqlText: string, ...params: unknown[]): unknown => {
+    if (envEnabled(process.env.TERRENCE_QUERY_COUNT)) {
       queryCount += 1;
       if (queryLogEnabled) queryLog.push(sqlText);
-      return originalPrepare(sqlText, ...(params as [never]));
-    });
-  }
+    }
+    return originalPrepare(sqlText, ...(params as [never]));
+  };
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types, @typescript-eslint/explicit-function-return-type -- mirrors bun:sqlite's generic prepare() signature that an explicit return type cannot widen.
+  client.prepare = ((sqlText: string, ...params: unknown[]) =>
+    prepareSqliteStatement!(sqlText, ...params)) as typeof client.prepare;
 }
 
 // ---------------------------------------------------------------------------
@@ -243,37 +269,68 @@ if (!isPostgres) {
   // bun:sqlite's native transaction() rolls back only when its callback throws
   // synchronously; drizzle-orm/bun-sqlite delegates transaction() straight to it, so
   // an async callback that throws would silently COMMIT partial writes. Wrap it with
-  // explicit BEGIN/COMMIT/ROLLBACK that awaits the callback instead. Queue callbacks
-  // because every async transaction shares this one native connection.
-  const session = (db as unknown as { session: SQLiteBunSession<Record<string, unknown>, never> }).session;
+  // explicit BEGIN/COMMIT/ROLLBACK that awaits the callback instead. Plain
+  // statements are gated while a transaction is active, so an async callback
+  // cannot yield the shared connection to an unrelated request.
   let transactionTail = Promise.resolve();
-  (session as unknown as { transaction: unknown }).transaction = async function (
+  const sharedDatabase = db as unknown as { session: SQLiteBunSession<Record<string, unknown>, never> };
+  const mainSession = sharedDatabase.session;
+  const mainInternals = mainSession as unknown as { dialect: SQLiteSyncDialect; schema: unknown };
+  const originalPrepareQuery = mainSession.prepareQuery.bind(mainSession);
+  (mainSession as unknown as { prepareQuery: (...args: never[]) => unknown }).prepareQuery = (...args: never[]): unknown =>
+    gateSqlitePreparedQuery(Reflect.apply(originalPrepareQuery, mainSession, args) as object);
+  const rawClient = new Proxy(client, {
+    get(target: Database, property: string | symbol, receiver: unknown): unknown {
+      const value = Reflect.get(target, property, receiver);
+      if (property === "prepare" && typeof value === "function") {
+        return (...args: unknown[]): unknown => prepareSqliteStatement!(...(args as [string, ...unknown[]]));
+      }
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  (sharedDatabase.session as unknown as { transaction: unknown }).transaction = async function (
     // The callback signature mirrors drizzle's own session.transaction type.
     // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
     fn: (tx: SQLiteBunTransaction<Record<string, unknown>, never>) => Promise<unknown>,
     // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
     config?: { behavior?: 'deferred' | 'immediate' | 'exclusive' },
   ): Promise<unknown> {
-    const sess = this as unknown as { dialect: SQLiteSyncDialect; schema: unknown };
+    if (sqliteTransactionContext.getStore() !== undefined) {
+      throw new Error("Nested db.transaction calls are not supported; use the current tx handle");
+    }
     const run = async (): Promise<unknown> => {
+      let finishTransaction!: () => void;
+      const completion = new Promise<void>((resolve) => {
+        finishTransaction = resolve;
+      });
+      sqliteTransactionCompletion = completion;
+      const transactionSession = new SQLiteBunSession(
+        rawClient,
+        mainInternals.dialect,
+        mainInternals.schema as never,
+      );
       const tx = new SQLiteBunTransaction<Record<string, unknown>, never>(
         'sync',
-        sess.dialect,
-        this as unknown as SQLiteSession<'sync', void, Record<string, unknown>, never>,
-        sess.schema as never,
+        mainInternals.dialect,
+        transactionSession as unknown as SQLiteSession<'sync', void, Record<string, unknown>, never>,
+        mainInternals.schema as never,
       );
       const behavior = config?.behavior !== undefined ? ` ${config.behavior.toUpperCase()}` : '';
-      client.run(`BEGIN${behavior}`);
       const transactionStart = poolTransactionStart();
+      let began = false;
       try {
-        const result = await fn(tx);
+        client.run(`BEGIN${behavior}`);
+        began = true;
+        const result = await sqliteTransactionContext.run(Symbol("sqlite-transaction"), () => fn(tx));
         client.run('COMMIT');
         return result;
       } catch (err) {
-        client.run('ROLLBACK');
+        if (began) client.run('ROLLBACK');
         throw err;
       } finally {
         poolTransactionEnd(transactionStart);
+        if (sqliteTransactionCompletion === completion) sqliteTransactionCompletion = null;
+        finishTransaction();
       }
     };
     const transaction = transactionTail.then(run, run);
@@ -586,7 +643,6 @@ export async function applyPgMigrations(): Promise<void> {
     if (stampedPg > 0) console.warn(`[terrence] sparse migration journal reconciled (pg): reconciled ${stampedPg} migration(s) outside the migrator`);
     await migrate(instance, { migrationsFolder: join(import.meta.dir, "../../drizzle/pg") });
     await pg.unsafe("UPDATE organizations SET default_iac_binary = 'terraform' WHERE default_iac_binary = 'tofu'");
-    await pg.unsafe("UPDATE policy_sets SET overridable = false WHERE overridable = true");
     await pg.unsafe("UPDATE team_projects SET organization_id = projects.org_id FROM projects WHERE team_projects.organization_id IS NULL AND projects.id = team_projects.project_id");
     // Hot-path query indexes (benchmarked: queue scan 200x, workspace run
     // lists 36x, calendar range 17x faster). Fresh installs get them from the

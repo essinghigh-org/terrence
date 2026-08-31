@@ -192,6 +192,14 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     out.environment = JSON.stringify(job.data.environment);
     out.hasPlanJsonUrl = String(job.data.json_plan_url).includes("/api/agent/jobs/ajob1/plan-json");
 
+    // Embedded artifact URLs are bearerless but must carry a valid signature.
+    res = await app.fetch(new Request(String(job.data.json_plan_url), {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ signed: true }),
+    }));
+    out.signedArtifactStatus = res.status;
+
     // re-claim returns the same claimed job (idempotent re-claim)
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs\`, {
       headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-id": reg.id, "tfc-agent-accept": "plan,apply" },
@@ -203,7 +211,8 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     const runAfterClaim = await db.query.runs.findFirst({ where: eq(runs.id, "run1") });
     out.runStatusAfterClaim = runAfterClaim.status;
 
-    // artifact uploads (no agent credentials -> URL-secrecy model, job must be claimed)
+    // Invalid or absent credentials are rejected; a claimed job is not itself
+    // a bearer credential.
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/plan-json\`, {
       method: "PUT",
       headers: { authorization: "Bearer nope", "content-type": "application/json" },
@@ -343,7 +352,8 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
   expect(result.secondClaimStatus).toBe(200);
   expect(result.secondClaimJobId).toBe("ajob1");
   expect(result.runStatusAfterClaim).toBe("planning");
-  expect(result.artifactUnauthStatus).toBe(200);
+  expect(result.signedArtifactStatus).toBe(200);
+  expect(result.artifactUnauthStatus).toBe(401);
   expect(result.planJsonPutStatus).toBe(200);
   expect(result.redactedPutStatus).toBe(200);
   expect(result.schemasPutStatus).toBe(200);

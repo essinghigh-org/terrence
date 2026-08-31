@@ -56,6 +56,13 @@ async function withStateSerialRetry<T>(operation: () => Promise<T>): Promise<T> 
   throw new Error("State serial allocation failed");
 }
 
+class StateSerialConflictError extends Error {
+  constructor() {
+    super("State serial must advance the current workspace state");
+    this.name = "StateSerialConflictError";
+  }
+}
+
 type BodyTextResult = Readonly<{ ok: true; text: string } | { ok: false; reason: "too-large" | "empty" }>;
 
 async function requestBodyText(
@@ -792,7 +799,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
       orderBy: [desc(stateVersions.serial)],
     });
-    if (latestState !== undefined && runId === null && serial <= latestState.serial) {
+    if (latestState !== undefined && serial <= latestState.serial) {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] };
     }
     if (parsedTerraformState !== null && latestState?.statePayload !== null && latestState?.statePayload !== undefined) {
@@ -805,19 +812,40 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }] };
     }
     const id = crypto.randomUUID();
-    await db.insert(stateVersions).values({
-      id,
-      workspaceId,
-      serial,
-      runId,
-      statePayload: await encryptStatePayload(statePayload),
-      jsonState: await encryptStatePayload(jsonState ?? statePayload),
-      jsonStateOutputs: await encryptStatePayload(jsonStateOutputs),
-      intermediate,
-      status: statePayload === null ? "pending" : "finalized",
-      createdAt: Date.now(),
-    });
-    await insertStateOutputIndex(db, id, workspaceId, jsonState, statePayload);
+    try {
+      await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<void> => {
+        const t = tx as typeof db;
+        // Re-check inside the same transaction as the insert. This closes the
+        // race between two writers that both observed the same latest serial,
+        // and includes pending/intermediate rows hidden by the finalized-only
+        // validation query above.
+        const latestAny = await t.query.stateVersions.findFirst({
+          where: eq(stateVersions.workspaceId, workspaceId),
+          orderBy: [desc(stateVersions.serial)],
+          columns: { serial: true },
+        });
+        if (latestAny !== undefined && serial <= latestAny.serial) throw new StateSerialConflictError();
+        await t.insert(stateVersions).values({
+          id,
+          workspaceId,
+          serial,
+          runId,
+          statePayload: await encryptStatePayload(statePayload),
+          jsonState: await encryptStatePayload(jsonState ?? statePayload),
+          jsonStateOutputs: await encryptStatePayload(jsonStateOutputs),
+          intermediate,
+          status: statePayload === null ? "pending" : "finalized",
+          createdAt: Date.now(),
+        });
+        await insertStateOutputIndex(t, id, workspaceId, jsonState, statePayload);
+      }));
+    } catch (error: unknown) {
+      if (error instanceof StateSerialConflictError || isUniqueConstraintError(error)) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] };
+      }
+      throw error;
+    }
     scheduleExplorerInventory(workspaceId);
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, id) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
