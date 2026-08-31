@@ -40,10 +40,11 @@ import { WorkspaceDestruction } from "../components/WorkspaceDestruction";
 import { RunDetail } from "./RunDetail";
 import { RunList } from "./RunList";
 import { StateHistory } from "./StateHistory";
-import { Play, Lock, LockOpen, Info, CheckCircle2, Copy } from "lucide-react";
+import { ArrowUpRight, Play, Lock, LockOpen, Info, CheckCircle2, Copy } from "lucide-react";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { cn } from "../lib/utils";
 import { formatDate, formatDateTime } from "../lib/utils";
+import { formatRunSource, formatRunStatus } from "../lib/run-labels";
 import { isNumber, isString } from "../lib/type-guards";
 import type { JsonValue } from "@/lib/json";
 
@@ -72,6 +73,11 @@ type Workspace = {
   id: string;
   attributes: {
     name: string;
+    "vcs-repo"?: {
+      identifier?: string | null;
+      "github-app-installation-id"?: string | null;
+    } | null;
+    "working-directory"?: string | null;
     locked?: boolean;
     "locked-reason"?: string | null;
     description?: string | null;
@@ -113,9 +119,23 @@ type RunSummary = {
     "resource-changes"?: number;
     "resource-destructions"?: number;
     source?: string;
+    "trigger-reason"?: string;
     status: string;
     [key: string]: JsonValue;
   };
+}
+
+type WorkspaceVcsRepo = NonNullable<Workspace["attributes"]["vcs-repo"]>;
+
+const GITHUB_REPOSITORY_PART = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+
+function githubRepositoryUrl(repo: WorkspaceVcsRepo | null | undefined): string | null {
+  if (!isString(repo?.["github-app-installation-id"]) || repo["github-app-installation-id"] === "") return null;
+  const identifier = repo.identifier?.trim();
+  if (identifier === undefined) return null;
+  const parts = identifier.split("/");
+  if (parts.length !== 2 || parts.some((part): boolean => !GITHUB_REPOSITORY_PART.test(part))) return null;
+  return `https://github.com/${parts.map((part): string => encodeURIComponent(part)).join("/")}`;
 }
 
 export function WorkspaceDetail({
@@ -296,12 +316,12 @@ export function WorkspaceDetail({
     }
   }
 
-  async function handleCopyWorkspaceId(): Promise<void> {
+  async function handleCopyIdentifier(identifier: string, label: "Workspace ID" | "Run ID"): Promise<void> {
     try {
-      await navigator.clipboard.writeText(workspace?.id ?? "");
-      toast.add({ title: "Workspace ID copied", type: "success" });
+      await navigator.clipboard.writeText(identifier);
+      toast.add({ title: `${label} copied`, type: "success" });
     } catch {
-      toast.add({ title: "Could not copy workspace ID", type: "error" });
+      toast.add({ title: `Could not copy ${label.charAt(0).toLocaleLowerCase()}${label.slice(1)}`, type: "error" });
     }
   }
 
@@ -331,10 +351,22 @@ export function WorkspaceDetail({
   }
 
   const createdAt = workspace.attributes["created-at"];
-  const latestRunStatus = latestRun?.attributes.status.replace(/_/g, " ");
-  const latestRunSucceeded = latestRunStatus === "applied" || latestRunStatus === "planned and finished";
+  const latestRunStatusValue = latestRun?.attributes.status;
+  const latestRunStatus = latestRunStatusValue === undefined
+    ? undefined
+    : formatRunStatus(latestRunStatusValue);
+  const latestRunSucceeded = latestRunStatusValue === "applied" || latestRunStatusValue === "planned_and_finished";
   const latestRunCreatedAt = latestRun?.attributes["created-at"];
   const latestRunCounts = latestRun?.attributes;
+  const latestRunSource = latestRun?.attributes.source;
+  const latestRunTriggerReason = latestRun?.attributes["trigger-reason"];
+  const vcsRepo = workspace.attributes["vcs-repo"];
+  const repositoryIdentifier = vcsRepo?.identifier;
+  const repositoryUrl = githubRepositoryUrl(vcsRepo);
+  const workingDirectory = workspace.attributes["working-directory"];
+  const displayedWorkingDirectory = isString(workingDirectory) && workingDirectory.trim() !== ""
+    ? workingDirectory.trim()
+    : "Repository root";
   const orgPath = `/app/${encodeURIComponent(orgName ?? "")}`;
   const workspacePath = `${orgPath}/workspaces/${encodeURIComponent(workspaceName ?? "")}`;
   const latestRunPath = latestRun?.id === undefined
@@ -362,6 +394,7 @@ export function WorkspaceDetail({
     : workspace.attributes.permissions?.["can-lock"] === true;
   const executionMode = workspace.attributes["execution-mode"] ?? "remote";
   const iacBinary = workspace.attributes["iac-binary"] ?? "tofu";
+  const iacBinaryLabel = iacBinary === "tofu" ? "OpenTofu" : iacBinary;
   const engineVersion = workspace.attributes["terraform-version"] ?? "latest";
   const isSettingsSection = [
     "health",
@@ -450,14 +483,16 @@ export function WorkspaceDetail({
             {workspace.attributes.description ?? "No description provided."}
           </p>
           <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-            <span>ID:</span>
-            <code className="select-all font-mono">{workspace.id}</code>
+            <span>{isRunDetail ? "Run ID:" : "Workspace ID:"}</span>
+            <code className="select-all font-mono">{isRunDetail ? runId ?? "" : workspace.id}</code>
             <Button
               type="button"
               variant="ghost"
               size="icon-xs"
-              aria-label="Copy workspace ID"
-              onClick={(): void => { void handleCopyWorkspaceId(); }}
+              aria-label={isRunDetail ? "Copy run ID" : "Copy workspace ID"}
+              onClick={(): void => {
+                void handleCopyIdentifier(isRunDetail ? runId ?? "" : workspace.id, isRunDetail ? "Run ID" : "Workspace ID");
+              }}
             >
               <Copy aria-hidden="true" />
             </Button>
@@ -664,8 +699,8 @@ export function WorkspaceDetail({
                             {formatDateTime(latestRunCreatedAt)}
                           </time>
                         )}
-                        {latestRun.attributes.source !== undefined && (
-                          <span>{latestRun.attributes.source}</span>
+                        {latestRunSource !== undefined && (
+                          <span>via {formatRunSource(latestRunSource, latestRunTriggerReason)}</span>
                         )}
                         {isNumber(latestRunCounts?.["resource-additions"])
                           && isNumber(latestRunCounts["resource-changes"])
@@ -713,6 +748,31 @@ export function WorkspaceDetail({
                     </div>
                   </div>
                   <div>
+                    <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Repository</div>
+                    <div className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium text-foreground">
+                      {isString(repositoryIdentifier) && repositoryIdentifier.trim() !== "" ? (
+                        repositoryUrl === null ? (
+                          <code className="break-all">{repositoryIdentifier}</code>
+                        ) : (
+                          <a
+                            href={repositoryUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex min-w-0 items-center gap-1 text-primary hover:underline"
+                            aria-label={`Open GitHub repository ${repositoryIdentifier}`}
+                          >
+                            <span className="break-all">{repositoryIdentifier}</span>
+                            <ArrowUpRight className="size-3.5 shrink-0" aria-hidden="true" />
+                          </a>
+                        )
+                      ) : "Not configured"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Working directory</div>
+                    <div className="break-all font-mono text-[13px] text-foreground">{displayedWorkingDirectory}</div>
+                  </div>
+                  <div>
                     <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1">
                       Execution mode
                       <HelpTooltip icon="info" content="Execution mode determines whether Terraform or OpenTofu runs execute remotely in Terrence agent pools or locally on your CLI." />
@@ -727,7 +787,7 @@ export function WorkspaceDetail({
                       <HelpTooltip icon="info" content="The Infrastructure-as-Code tool (Terraform or OpenTofu) and version constraint configured for this workspace." />
                     </div>
                     <div className="text-[13px] text-foreground flex items-center gap-1.5">
-                       <span className="capitalize">{iacBinary}</span> {engineVersion}
+                       <span>{iacBinaryLabel}</span> {engineVersion}
                        {engineVersion === "latest" && (
                          <span className="text-xs bg-muted text-foreground px-1.5 py-0.5 rounded border border-border">Latest</span>
                        )}

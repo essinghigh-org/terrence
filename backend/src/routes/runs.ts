@@ -19,6 +19,7 @@ import { AvatarService } from "../lib/avatars";
 import { cachedOrgByName } from "../lib/cached-lookups";
 import { scheduleExplorerInventory } from "../lib/explorer-inventory";
 import { runExecutionDurationMilliseconds } from "../lib/run-duration";
+import { newRunId } from "../lib/run-id";
 
 type SetObj = { status?: number | string; headers: Record<string, string | number> };
 
@@ -479,7 +480,7 @@ export async function createRun(
     }
   }
   if (workspace.iacBinary === null) { await db.update(workspaces).set({ iacBinary: "terraform" }).where(eq(workspaces.id, workspace.id)); }
-  const id = `run-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+  const id = newRunId();
   const createdAt = Date.now();
   const logToken = crypto.randomUUID();
   const planOnly = requestedPlanOnly ?? configurationVersion?.speculative ?? false;

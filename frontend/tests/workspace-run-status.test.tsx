@@ -62,7 +62,7 @@ test("shows the latest run status instead of treating an unlocked workspace as a
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("Policy Soft Failed")).toBeTruthy(); });
+  await waitFor((): void => { expect(view.getByText("Policy override required")).toBeTruthy(); });
   expect(view.queryByText("Available")).toBeNull();
   expect(view.queryByRole("button", { name: "New workspace" })).toBeNull();
   fireEvent.change(view.getByLabelText("Project filter"), { target: { value: "project-1" } });
@@ -168,7 +168,7 @@ test("KPI totals stay org-wide when a status filter is active", async () => {
   );
   fireEvent.change(view.getByLabelText("Status filter"), { target: { value: "running" } });
 
-  await waitFor((): void => { expect(view.getByText("Post Plan Running")).toBeTruthy(); });
+  await waitFor((): void => { expect(view.getByText("Running post-plan tasks")).toBeTruthy(); });
   const totalCard = view.getByText("Total Workspaces").parentElement!;
   const lockedCard = view.getByText("Locked Workspaces").parentElement!;
   expect(totalCard.textContent).toContain("2");

@@ -79,6 +79,7 @@ import { runModuleTestJob } from "./lib/module-test-worker";
 import { runStackConfigurationJob, runStackDeploymentJob } from "./lib/stack-worker";
 import { runPlanExplanationJob } from "./lib/plan-explainer-worker";
 import { purgeExpiredForwardedRequests } from "./lib/agent-forwarding";
+import { newRunId } from "./lib/run-id";
 import { runExplorerCatalogJob, runExplorerInventoryJob, scheduleExplorerInventory } from "./lib/explorer-inventory";
 import { revokeWorkloadIdentityTokens, workspaceIdentityEnvironment } from "./lib/workload-identity";
 import { costEstimationEnabledForOrganization, getSettings } from "./lib/settings";
@@ -2634,7 +2635,7 @@ export async function enqueueDueAutoDestroyRuns(now = Date.now()): Promise<strin
     const inactive = duration !== undefined && activityAt + duration <= now;
     if (!scheduled && !inactive) continue;
 
-    const runId = `run-${crypto.randomUUID()}`;
+    const runId = newRunId();
     await db.transaction(async (tx): Promise<void> => {
       await tx.insert(runs).values({
         id: runId,

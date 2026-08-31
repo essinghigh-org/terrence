@@ -58,6 +58,8 @@ async function createRun(message = "test run"): Promise<string> {
     },
   });
   const body = await res.json();
+  expect(body.data.id).toMatch(/^run-[a-f0-9]{14}$/);
+  expect(body.data.id).toHaveLength(18);
   return body.data.id;
 }
 
