@@ -5,6 +5,7 @@ import { formatRunSource, formatRunStatus, isVcsRunSource } from "../src/lib/run
 test("uses the same human-readable status labels across run views", (): void => {
   expect(formatRunStatus("planned")).toBe("Needs confirmation");
   expect(formatRunStatus("planned_and_finished")).toBe("Planned and finished");
+  expect(formatRunStatus("policy_hard_failed")).toBe("Policy check failed");
   expect(formatRunStatus("unknown_status")).toBe("unknown status");
   expect(formatRunStatus("toString")).toBe("toString");
 });

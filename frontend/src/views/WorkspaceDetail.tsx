@@ -127,7 +127,7 @@ type RunSummary = {
 
 type WorkspaceVcsRepo = NonNullable<Workspace["attributes"]["vcs-repo"]>;
 
-const GITHUB_REPOSITORY_PART = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+const GITHUB_REPOSITORY_PART = /^(?!\.{1,2}$)[A-Za-z0-9.][A-Za-z0-9_.-]*$/;
 
 function githubRepositoryUrl(repo: WorkspaceVcsRepo | null | undefined): string | null {
   if (!isString(repo?.["github-app-installation-id"]) || repo["github-app-installation-id"] === "") return null;

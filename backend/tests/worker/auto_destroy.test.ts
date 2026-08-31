@@ -59,7 +59,7 @@ describe("automatic workspace destruction scheduler", () => {
     void (await enqueueWithMaintenanceWait(NOW));
     const ourRun = await db.query.runs.findFirst({ where: eq(runs.workspaceId, workspaceId) });
     expect(ourRun).toBeDefined();
-    expect(ourRun?.id).toMatch(/^run-[A-Za-z0-9]{14}$/);
+    expect(ourRun?.id).toMatch(/^run-[a-f0-9]{14}$/);
     expect(ourRun?.id).toHaveLength(18);
     expect(ourRun).toMatchObject({
       workspaceId,

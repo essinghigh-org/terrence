@@ -9,6 +9,7 @@ const RUN_STATUS_LABELS = {
   planning: "Planning",
   planned: "Needs confirmation",
   needs_confirmation: "Needs confirmation",
+  policy_hard_failed: "Policy check failed",
   cost_estimating: "Estimating cost",
   cost_estimated: "Cost estimated",
   policy_checking: "Checking policies",
