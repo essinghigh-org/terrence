@@ -139,17 +139,59 @@ function exactProviderAttributes(value: unknown, source: ProviderSource): Record
   return hasExactParts || hasExactFullName ? attributes : null;
 }
 
-function exactRegistryLogoUrl(body: unknown, source: ProviderSource): string | null {
+function exactRegistryProviderAttributes(body: unknown, source: ProviderSource): Record<string, unknown> | null {
   const response = asRecord(body);
   const data = response?.data;
   if (!Array.isArray(data)) return null;
   for (const entry of data) {
     const attributes = exactProviderAttributes(entry, source);
-    if (attributes === null) continue;
-    const logoUrl = attributes["logo-url"];
-    return typeof logoUrl === "string" ? absoluteLogoUrl(logoUrl) : null;
+    if (attributes !== null) return attributes;
   }
   return null;
+}
+
+function isLegacyGithubSlugAvatar(logoUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(logoUrl);
+  } catch {
+    return false;
+  }
+  return parsed.protocol === "https:"
+    && /^avatars\d*\.githubusercontent\.com$/i.test(parsed.hostname)
+    && /^\/[A-Za-z0-9-]+\/?$/.test(parsed.pathname);
+}
+
+async function fetchGithubOwnerAvatarUrl(login: string): Promise<string | null> {
+  const url = new URL(`/github/users/${encodeURIComponent(login)}`, `${REGISTRY}/`);
+  let res: Response;
+  try {
+    res = await fetch(url.toString(), {
+      headers: { Accept: "application/json", "User-Agent": "terrence/provider-icons" },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    return null;
+  }
+  const avatarUrl = asRecord(body)?.avatar_url;
+  return typeof avatarUrl === "string" ? absoluteLogoUrl(avatarUrl) : null;
+}
+
+async function resolveRegistryLogoUrl(attributes: Readonly<Record<string, unknown>>, source: ProviderSource): Promise<string | null> {
+  const logoUrl = attributes["logo-url"];
+  if (typeof logoUrl !== "string") return null;
+  // The v2 record can retain the Registry's legacy GitHub slug URL. GitHub
+  // serves that form as its default Octocat, while the Registry UI resolves
+  // the provider namespace through /github/users/:login first.
+  if (isLegacyGithubSlugAvatar(logoUrl)) return fetchGithubOwnerAvatarUrl(source.namespace);
+  return absoluteLogoUrl(logoUrl);
 }
 
 async function fetchLogoUrl(source: ProviderSource): Promise<string | null> {
@@ -175,7 +217,9 @@ async function fetchLogoUrl(source: ProviderSource): Promise<string | null> {
     } catch {
       return null;
     }
-    return exactRegistryLogoUrl(body, source);
+    const attributes = exactRegistryProviderAttributes(body, source);
+    if (attributes === null) return null;
+    return await resolveRegistryLogoUrl(attributes, source);
   } finally {
     releaseRegistrySlot();
   }
