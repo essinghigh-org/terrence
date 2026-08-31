@@ -125,6 +125,11 @@ test("browses and filters registry cards with distinct module permissions", asyn
   }) as typeof fetch;
 
   const view = render(<MemoryRouter initialEntries={["/app/acme/registry"]}><Routes><Route path="/app/:orgName/registry" element={<><Registry /><LocationProbe /></>} /></Routes></MemoryRouter>);
+  const eyebrow = view.getByText("Private infrastructure / catalog");
+  expect(eyebrow.className).toContain("text-xs");
+  expect(eyebrow.className).not.toContain("font-mono");
+  expect(eyebrow.className).not.toContain("uppercase");
+  expect(eyebrow.className).not.toContain("tracking-[0.18em]");
   const title = await view.findByText("network");
   expect(title.closest("a")?.getAttribute("href")).toBe("/app/acme/registry/modules/acme/network/aws");
   expect(view.getByText("acme/terraform-network")).toBeTruthy();
