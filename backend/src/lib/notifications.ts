@@ -524,12 +524,20 @@ type NotificationSummary = {
   status?: string;
 }
 
+function safeJson(value: unknown, fallback: string): string {
+  try {
+    return JSON.stringify(value) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function stringify(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "boolean") return value ? "yes" : "no";
   if (typeof value === "object") {
     if (Array.isArray(value)) return value.length === 0 ? "" : String(value.length);
-    return JSON.stringify(value) ?? "";
+    return safeJson(value, "");
   }
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "bigint" || typeof value === "symbol") return value.toString();
@@ -667,7 +675,7 @@ export function renderPayloadForDestination(
   if (configuration.destinationType === "microsoft-teams") {
     return { body: renderTeams(payload), contentType: "application/json" };
   }
-  return { body: JSON.stringify(payload), contentType: "application/json" };
+  return { body: safeJson(payload, "{}"), contentType: "application/json" };
 }
 
 // ---------------------------------------------------------------------------

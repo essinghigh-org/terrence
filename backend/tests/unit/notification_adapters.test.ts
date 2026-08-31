@@ -72,6 +72,22 @@ describe("Notification rich destination adapters (kanban 7.11)", () => {
     expect(card.text).not.toContain("[object Object]");
   });
 
+  it("keeps destination rendering alive for non-JSON payload values", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const payload = {
+      ...runPayload,
+      run_message: { nested: BigInt(1) },
+      arbitrary: cyclic,
+    };
+
+    expect(() => renderPayloadForDestination(config("generic"), payload)).not.toThrow();
+    expect(renderPayloadForDestination(config("generic"), payload).body).toBe("{}");
+
+    const teams = renderPayloadForDestination(config("microsoft-teams"), payload);
+    expect(() => JSON.parse(teams.body)).not.toThrow();
+  });
+
   it("microsoft-teams destinations render a MessageCard with facts and an action", () => {
     const render = renderPayloadForDestination(config("microsoft-teams"), runPayload);
     const card = JSON.parse(render.body) as {
