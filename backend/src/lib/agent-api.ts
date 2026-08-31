@@ -3,7 +3,7 @@ import type { configurationVersions, runs, workspaces } from "../db/schema";
 import { availableVersions, resolveLatestVersion, validateVersion } from "../binaryManager";
 import { mintRunToken } from "./run-token";
 import { executionVariables } from "../worker";
-import type { DeepReadonly } from "../lib/utils";
+import { signedApiURL, type DeepReadonly } from "../lib/utils";
 import type { AgentJob } from "./agent-jobs";
 
 /**
@@ -21,6 +21,28 @@ const AGENT_FS_DIR = resolve(
   process.env.STORAGE_DIR ?? new URL("../../storage", import.meta.url).pathname,
   "agent-filesystems",
 );
+const AGENT_ARTIFACT_URL_TTL_SECONDS = 60 * 60 + 10 * 60;
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
+}
+
+function validateAgentArtifactBaseUrl(baseUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error("PUBLIC_URL must be a valid http(s) URL");
+  }
+  const isInsecureLoopback = parsed.protocol === "http:"
+    && (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test")
+    && isLoopbackHostname(parsed.hostname);
+  if (parsed.protocol !== "https:" && !isInsecureLoopback) {
+    throw new Error("Agent artifact URLs require HTTPS outside verified loopback development/test environments");
+  }
+  return parsed.origin;
+}
 
 export function agentFilesystemPath(runId: string): string {
   return resolve(AGENT_FS_DIR, `${runId}.tar.gz`);
@@ -29,24 +51,13 @@ export function agentFilesystemPath(runId: string): string {
 /** Public base URL for the job's absolute artifact URLs (caddy reverse proxy aware). */
 export function agentApiBaseUrl(request: { readonly headers: { readonly get: (name: string) => string | null } }): string {
   const configured = process.env.PUBLIC_URL?.trim();
-  if (configured) {
-    let parsed: URL;
-    try {
-      parsed = new URL(configured);
-    } catch {
-      throw new Error("PUBLIC_URL must be a valid http(s) URL");
-    }
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new Error("PUBLIC_URL must use http or https");
-    }
-    return parsed.origin;
-  }
+  if (configured) return validateAgentArtifactBaseUrl(configured);
   // A Host header is attacker-controlled. Only use a loopback host for local
   // development/test; deployed instances must configure their public origin.
   if (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test") {
     const host = request.headers.get("host") ?? "localhost";
-    if (/^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/.test(host)) return `http://${host}`;
-    return "http://localhost";
+    if (/^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/.test(host)) return validateAgentArtifactBaseUrl(`http://${host}`);
+    return validateAgentArtifactBaseUrl("http://localhost");
   }
   throw new Error("PUBLIC_URL must be configured for agent artifact URLs");
 }
@@ -182,7 +193,16 @@ export async function buildAgentJobPayload(
   const { job, run, workspace, organizationName } = details;
   const phase = job.phase;
   const jobPath = `/api/agent/jobs/${job.id}`;
-  const configurationUrl = `${baseUrl}${jobPath}/configuration-version`;
+  const validatedBaseUrl = validateAgentArtifactBaseUrl(baseUrl);
+  // Artifact URLs must remain valid for the full one-hour job plus time for
+  // final uploads and status callbacks.
+  const artifactUrl = (suffix: string): string => signedApiURL(
+    { url: validatedBaseUrl },
+    `${jobPath}${suffix}`,
+    "*",
+    AGENT_ARTIFACT_URL_TTL_SECONDS,
+  );
+  const configurationUrl = artifactUrl("/configuration-version");
   const isDestroy = run.isDestroy === true;
 
   const data: Record<string, unknown> = {
@@ -197,14 +217,14 @@ export async function buildAgentJobPayload(
     working_directory: workspace.workingDirectory ?? "",
     parallelism: 10,
     configuration_version_url: configurationUrl,
-    filesystem_url: `${baseUrl}${jobPath}/filesystem`,
+    filesystem_url: artifactUrl("/filesystem"),
     terraform_url: terraformInfo.url,
     terraform_checksum: terraformInfo.checksum,
-    terraform_log_url: `${baseUrl}${jobPath}/log`,
-    json_provider_schemas_url: `${baseUrl}${jobPath}/provider-schemas`,
-    json_plan_url: `${baseUrl}${jobPath}/plan-json`,
-    json_redacted_plan_url: `${baseUrl}${jobPath}/plan-json-redacted`,
-    sanitized_plan_url: `${baseUrl}${jobPath}/plan-json-sanitized`,
+    terraform_log_url: artifactUrl("/log"),
+    json_provider_schemas_url: artifactUrl("/provider-schemas"),
+    json_plan_url: artifactUrl("/plan-json"),
+    json_redacted_plan_url: artifactUrl("/plan-json-redacted"),
+    sanitized_plan_url: artifactUrl("/plan-json-sanitized"),
     token: runToken,
     timeout: "1h",
     // Process environment for the agent's terraform invocation (env-category
@@ -222,7 +242,7 @@ export async function buildAgentJobPayload(
     refresh_only: run.refreshOnly === true,
     target_addrs: run.targetAddrs ?? [],
     replace_addrs: run.replaceAddrs ?? [],
-    api_address: baseUrl,
+    api_address: validatedBaseUrl,
     tfvars: {},
   };
 
@@ -232,18 +252,18 @@ export async function buildAgentJobPayload(
       ...commonContainer,
       plan_mode: "plan",
       source_directory: "",
-      raw_plan_url: `${baseUrl}${jobPath}/raw-plan`,
+      raw_plan_url: artifactUrl("/raw-plan"),
       description: run.message ?? "",
-      api_address: baseUrl,
+      api_address: validatedBaseUrl,
       access_token: runToken,
       organization_id: workspace.orgId,
-      agent_host_url: baseUrl,
+      agent_host_url: validatedBaseUrl,
       source_bundle_download_url: configurationUrl,
-      plan_description_url: `${baseUrl}${jobPath}/plan-description`,
-      upload_url: `${baseUrl}${jobPath}/upload`,
+      plan_description_url: artifactUrl("/plan-description"),
+      upload_url: artifactUrl("/upload"),
       outcome_upload_urls: {
-        plan: `${baseUrl}${jobPath}/outcomes/plan`,
-        apply: `${baseUrl}${jobPath}/outcomes/apply`,
+        plan: artifactUrl("/outcomes/plan"),
+        apply: artifactUrl("/outcomes/apply"),
       },
     };
   } else {
@@ -253,11 +273,11 @@ export async function buildAgentJobPayload(
       refresh_only: run.refreshOnly === true,
       target_addrs: run.targetAddrs ?? [],
       replace_addrs: run.replaceAddrs ?? [],
-      plan_file: `${baseUrl}${jobPath}/raw-plan`,
-      apply_description_url: `${baseUrl}${jobPath}/apply-description`,
-      state_description_url: `${baseUrl}${jobPath}/state-description`,
+      plan_file: artifactUrl("/raw-plan"),
+      apply_description_url: artifactUrl("/apply-description"),
+      state_description_url: artifactUrl("/state-description"),
       outcome_upload_urls: {
-        apply: `${baseUrl}${jobPath}/outcomes/apply`,
+        apply: artifactUrl("/outcomes/apply"),
       },
     };
   }

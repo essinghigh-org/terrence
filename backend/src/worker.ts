@@ -2046,6 +2046,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
 
   let applySuccess = false;
   let applyStarted = false;
+  let applyCanceled = false;
 
   try {
     const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
@@ -2185,7 +2186,21 @@ async function executeApplyImpl(runId: string): Promise<void> {
         streamLog(runId, "apply", applyProc.stderr),
       ]);
 
-      if (await runWasCanceled(runId)) return;
+      if (await runWasCanceled(runId)) {
+        applyCanceled = true;
+        const captured = await captureInterruptedApplyState(runId).catch((captureError: unknown): boolean => {
+          log.error("Could not capture state after canceled apply", { runId, error: captureError });
+          return false;
+        });
+        await writeLog(
+          runId,
+          "apply",
+          captured
+            ? "[terrence] Apply was canceled; encrypted recovery state was captured before cleanup."
+            : "[terrence] Apply was canceled; no local state file was available to capture.",
+        );
+        return;
+      }
       if (applyExit !== 0) {
         // Failed applies still record partial state (anything that applied
         // successfully), so a follow-up run does not recreate existing
@@ -2238,7 +2253,15 @@ async function executeApplyImpl(runId: string): Promise<void> {
     }
     if (savedPlanRequired) await cleanupSavedPlan(runId);
   } catch (error: unknown) {
-    if (await runWasCanceled(runId)) return;
+    if (await runWasCanceled(runId)) {
+      applyCanceled = true;
+      if (applyStarted) {
+        await captureInterruptedApplyState(runId).catch((captureError: unknown): void => {
+          log.error("Could not capture state after canceled apply", { runId, error: captureError });
+        });
+      }
+      return;
+    }
     const errMsg = error instanceof Error ? error.message : String(error);
     log.error("Run apply failed", { runId, error });
     await writeLog(runId, "apply", `[terrence ERROR] ${errMsg}`);
@@ -2254,7 +2277,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
         }
       } catch {}
     } else {
-      if (applyStarted) {
+      if (applyStarted && !applyCanceled) {
         await writeLog(runId, "apply", `[terrence] Apply failed; partial state was journaled before cleaning the execution directory.`);
       }
       try {

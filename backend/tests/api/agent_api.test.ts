@@ -37,6 +37,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     const { writeFile, mkdir } = await import("fs/promises");
     const { and, eq } = await import("drizzle-orm");
     const { app } = await import("./src/app.ts");
+    const { agentApiBaseUrl } = await import("./src/lib/agent-api.ts");
     const { db } = await import("./src/db/index.ts");
     const {
       agentJobs,
@@ -115,6 +116,19 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
 
     const out: Record<string, unknown> = {};
 
+    const originalPublicUrl = process.env.PUBLIC_URL;
+    process.env.PUBLIC_URL = "http://public.example";
+    try {
+      agentApiBaseUrl({ headers: { get: () => "public.example" } });
+      out.insecurePublicUrlRejected = false;
+    } catch {
+      out.insecurePublicUrlRejected = true;
+    }
+    process.env.PUBLIC_URL = "https://public.example";
+    out.httpsPublicUrl = agentApiBaseUrl({ headers: { get: () => "public.example" } });
+    if (originalPublicUrl === undefined) delete process.env.PUBLIC_URL;
+    else process.env.PUBLIC_URL = originalPublicUrl;
+
     // register (new agent)
     let res = await app.fetch(new Request(\`\${base}/api/agent/register\`, {
       method: "POST",
@@ -191,6 +205,15 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     out.planVariables = JSON.stringify(job.plan.variables);
     out.environment = JSON.stringify(job.data.environment);
     out.hasPlanJsonUrl = String(job.data.json_plan_url).includes("/api/agent/jobs/ajob1/plan-json");
+    out.artifactTtlSeconds = Number(new URL(String(job.data.json_plan_url)).searchParams.get("expires")) - Math.floor(Date.now() / 1000);
+
+    // Embedded artifact URLs are bearerless but must carry a valid signature.
+    res = await app.fetch(new Request(String(job.data.json_plan_url), {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ signed: true }),
+    }));
+    out.signedArtifactStatus = res.status;
 
     // re-claim returns the same claimed job (idempotent re-claim)
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs\`, {
@@ -203,7 +226,8 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     const runAfterClaim = await db.query.runs.findFirst({ where: eq(runs.id, "run1") });
     out.runStatusAfterClaim = runAfterClaim.status;
 
-    // artifact uploads (no agent credentials -> URL-secrecy model, job must be claimed)
+    // Invalid or absent credentials are rejected; a claimed job is not itself
+    // a bearer credential.
     res = await app.fetch(new Request(\`\${base}/api/agent/jobs/ajob1/plan-json\`, {
       method: "PUT",
       headers: { authorization: "Bearer nope", "content-type": "application/json" },
@@ -331,6 +355,9 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
   expect(result.workingDirectory).toBe("");
   expect(result.tokenStarts).toBe(true);
   expect(result.timeout).toBe("1h");
+  expect(result.insecurePublicUrlRejected).toBe(true);
+  expect(result.httpsPublicUrl).toBe("https://public.example");
+  expect(result.artifactTtlSeconds).toBeGreaterThan(300);
   expect(result.hasConfigurationUrl).toBe(true);
   expect(result.hasFilesystemUrl).toBe(true);
   expect(result.hasLogUrl).toBe(true);
@@ -343,7 +370,8 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
   expect(result.secondClaimStatus).toBe(200);
   expect(result.secondClaimJobId).toBe("ajob1");
   expect(result.runStatusAfterClaim).toBe("planning");
-  expect(result.artifactUnauthStatus).toBe(200);
+  expect(result.signedArtifactStatus).toBe(200);
+  expect(result.artifactUnauthStatus).toBe(401);
   expect(result.planJsonPutStatus).toBe(200);
   expect(result.redactedPutStatus).toBe(200);
   expect(result.schemasPutStatus).toBe(200);
