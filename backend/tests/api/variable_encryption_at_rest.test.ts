@@ -117,7 +117,7 @@ describe("sensitive variable encryption at rest", () => {
     const createRes = await request(`/api/v2/varsets/${varsetId}/relationships/vars`, "POST", {
       data: { type: "vars", attributes: { key: "set_key", value: SECRET, category: "terraform", sensitive: true, hcl: false } },
     });
-    expect([200, 201]).toContain(createRes.status);
+    expect(createRes.status).toBe(201);
     const varId = ((await createRes.json()) as { data: { id: string } }).data.id;
     const row = await db.query.variableSetVariables.findFirst({ where: eq(variableSetVariables.id, varId) });
     expect(row!.value).toBe("");

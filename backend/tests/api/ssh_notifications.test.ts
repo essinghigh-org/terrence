@@ -277,10 +277,11 @@ describe("SSH Keys & Notification Configurations API contract", () => {
       // are not the run deliveries under test, so drop them before delivering.
       payloads.length = 0;
 
-      const projectList = await request(`/api/v2/projects/${projectId}/notification-configurations`);
+      const projectList = await request(`/api/v2/projects/${projectId}/notification-configurations?page%5Bsize%5D=1`);
       expect(projectList.status).toBe(200);
       const projectListBody = await projectList.json();
       expect(projectListBody.data).toHaveLength(1);
+      expect(projectListBody.meta.pagination).toMatchObject({ "page-size": 1, "total-count": 1, "total-pages": 1 });
       expect(projectListBody.data[0].relationships.subscribable.data).toEqual({
         id: projectId,
         type: "projects",

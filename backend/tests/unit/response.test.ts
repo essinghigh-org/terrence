@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { applyResource, planResource, userResource } from "../../src/lib/response";
+import { applyResource, planResource, userResource, variableSetVariableResource, workspaceVariableResource } from "../../src/lib/response";
 
 describe("userResource", () => {
   it("serializes a full user", () => {
@@ -163,5 +163,41 @@ describe("run phase resources", () => {
     expect((applyResource(failedPlan, request).attributes as Record<string, unknown>).status).toBe("pending");
     expect((planResource(failedApply, request).attributes as Record<string, unknown>).status).toBe("finished");
     expect((applyResource(failedApply, request).attributes as Record<string, unknown>).status).toBe("errored");
+  });
+});
+
+describe("variable resources", () => {
+  it("uses consistent self links for workspace and variable-set vars", () => {
+    const variableSetVariable = variableSetVariableResource({
+      id: "var-from-set",
+      variableSetId: "varset-1",
+      key: "REGION",
+      value: "us-east-1",
+      valueEncrypted: null,
+      sensitive: false,
+      hcl: false,
+      category: "terraform",
+      description: null,
+    });
+    const workspaceVariable = workspaceVariableResource({
+      id: "var-from-workspace",
+      workspaceId: "workspace-1",
+      key: "REGION",
+      value: "us-east-1",
+      valueEncrypted: null,
+      sensitive: false,
+      hcl: false,
+      category: "terraform",
+      description: null,
+    });
+
+    expect(variableSetVariable.type).toBe("vars");
+    expect(variableSetVariable.links).toEqual({
+      self: "/api/v2/varsets/varset-1/relationships/vars/var-from-set",
+    });
+    expect(workspaceVariable.type).toBe("vars");
+    expect(workspaceVariable.links).toEqual({
+      self: "/api/v2/workspaces/workspace-1/vars/var-from-workspace",
+    });
   });
 });

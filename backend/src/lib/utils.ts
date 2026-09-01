@@ -1,4 +1,4 @@
-import { db } from "../db";
+import { db, isPostgres } from "../db";
 import {
   users, workspaces,
   runs, stateVersions, workspaceVariables, workspaceTags,
@@ -8,7 +8,7 @@ import {
   organizations, registryPartnerships, teams, teamMemberships, teamWorkspaces,
   organizationMembershipRoles, organizationRoles,
 } from "../db/schema";
-import { and, desc, eq, exists, gte, inArray, isNull, like, lt, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, exists, gte, ilike, inArray, isNull, like, lt, notInArray, or, sql } from "drizzle-orm";
 import { timingSafeEqual, createHash, createHmac, randomBytes } from "node:crypto";
 import { access, rm } from "node:fs/promises";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -1586,10 +1586,29 @@ function addCommitSearchFilter(conditions: readonly RunWhereCondition[], commitS
     .where(sql`COALESCE(${jsonExtract(configurationVersions.ingressAttributes, '$.commitSha')}, '') LIKE ${`%${commitSearch}%`}`))];
 }
 
-export function workspaceRunHistoryWhere(request: RequestWithUrl, workspaceId: string): ReturnType<typeof and> {
+function addWorkspaceNameFilter(conditions: readonly RunWhereCondition[], name: string | null): RunWhereConditions {
+  const trimmed = name?.trim();
+  if (trimmed === undefined || trimmed === "") return conditions;
+  const matchingWorkspaces = db.select({ id: workspaces.id }).from(workspaces)
+    .where(isPostgres ? ilike(workspaces.name, `%${trimmed}%`) : like(workspaces.name, `%${trimmed}%`));
+  return [...conditions, inArray(runs.workspaceId, matchingWorkspaces)];
+}
+
+function addWorkspaceNamesFilter(conditions: readonly RunWhereCondition[], names: string[] | undefined): RunWhereConditions {
+  if (names === undefined || names.length === 0) return conditions;
+  const matchingWorkspaces = db.select({ id: workspaces.id }).from(workspaces)
+    .where(or(...names.map((name: string) => isPostgres ? ilike(workspaces.name, `%${name}%`) : like(workspaces.name, `%${name}%`))));
+  return [...conditions, inArray(runs.workspaceId, matchingWorkspaces)];
+}
+
+function runHistoryCsv(params: URLSearchParams, name: string): string[] | undefined {
+  return params.get(name)?.split(",").map((value: string): string => value.trim()).filter((s: string): boolean => s !== "");
+}
+
+function runHistoryWhere(request: RequestWithUrl, initial: RunWhereConditions): ReturnType<typeof and> {
   const params = new URL(request.url).searchParams;
-  const csv = (name: string): string[] | undefined => params.get(name)?.split(",").map((value: string): string => value.trim()).filter((s: string): boolean => s !== "");
-  let conditions: RunWhereConditions = [eq(runs.workspaceId, workspaceId)];
+  const csv = (name: string): string[] | undefined => runHistoryCsv(params, name);
+  let conditions: RunWhereConditions = initial;
   conditions = addStatusFilter(conditions, csv);
   conditions = addOperationFilter(conditions, csv);
   conditions = addSourceFilter(conditions, csv);
@@ -1600,6 +1619,20 @@ export function workspaceRunHistoryWhere(request: RequestWithUrl, workspaceId: s
   conditions = addAgentPoolFilter(conditions, csv);
   conditions = addCommitSearchFilter(conditions, params.get("search[commit]")?.trim());
   return and(...conditions);
+}
+
+export function workspaceRunHistoryWhere(request: RequestWithUrl, workspaceId: string): ReturnType<typeof and> {
+  return runHistoryWhere(request, [eq(runs.workspaceId, workspaceId)]);
+}
+
+/** Build the same filtered run-history predicate for an authorized organization scope. */
+export function organizationRunHistoryWhere(request: RequestWithUrl, workspaceIds: readonly string[]): ReturnType<typeof and> {
+  const params = new URL(request.url).searchParams;
+  let conditions: RunWhereConditions = [inArray(runs.workspaceId, [...workspaceIds])];
+  conditions = addWorkspaceNamesFilter(conditions, runHistoryCsv(params, "filter[workspace_names]"));
+  conditions = addWorkspaceNameFilter(conditions, params.get("filter[workspace][name]"));
+  conditions = addWorkspaceNameFilter(conditions, params.get("search[name]"));
+  return runHistoryWhere(request, conditions);
 }
 
 export const FINAL_RUN_STATUSES = [

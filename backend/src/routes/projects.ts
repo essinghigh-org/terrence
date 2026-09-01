@@ -8,6 +8,7 @@ import { agentPoolAllowsProject } from "../lib/agent-pool-scope";
 import { isExecutionMode } from "../lib/constants";
 import { authPlugin } from "../auth";
 import { cachedOrgByName } from "../lib/cached-lookups";
+import { isUniqueConstraintError } from "../lib/validation";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -271,7 +272,13 @@ export const projectRoutes = new Elysia({ name: "projects" })
       ...settings.value,
       createdAt: Date.now(),
     };
-    await db.insert(projects).values(newProj);
+    try {
+      await db.insert(projects).values(newProj);
+    } catch (error: unknown) {
+      if (!isUniqueConstraintError(error)) throw error;
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "A project with this name already exists in the organization" }] };
+    }
     const created = await db.query.projects.findFirst({ where: eq(projects.id, id) });
     if (created === undefined) throw new Error("Unable to create project");
     (set as { status: number }).status = 201;
@@ -306,41 +313,47 @@ export const projectRoutes = new Elysia({ name: "projects" })
     if (attributes.description !== undefined) updates.description = typeof attributes.description === "string" ? attributes.description : null;
     Object.assign(updates, settings.value);
     const projectWorkspaces = await db.query.workspaces.findMany({ where: eq(workspaces.projectId, projectId) });
-    await db.transaction(async (tx): Promise<void> => {
-      await tx.update(projects).set(updates).where(eq(projects.id, projectId));
-      // Batch the per-workspace setting fan-out: workspaces that resolve to the
-      // same resulting update are written with one query keyed by an IN clause,
-      // instead of updating each workspace one-by-one.
-      const updatesById = new Map<string, Partial<typeof workspaces.$inferInsert>>();
-      for (const workspace of projectWorkspaces) {
-        const workspaceUpdates: Partial<typeof workspaces.$inferInsert> = {};
-        const overwrites = workspace.settingOverwrites ?? {};
-        if (overwrites["execution-mode"] !== true) {
-          workspaceUpdates.executionMode = settings.value.defaultExecutionMode;
-          if (settings.value.defaultExecutionMode !== "agent") {
-            workspaceUpdates.agentPoolId = null;
-          } else if (overwrites["agent-pool"] !== true) {
-            workspaceUpdates.agentPoolId = settings.value.defaultAgentPoolId;
+    try {
+      await db.transaction(async (tx): Promise<void> => {
+        await tx.update(projects).set(updates).where(eq(projects.id, projectId));
+        // Batch the per-workspace setting fan-out: workspaces that resolve to the
+        // same resulting update are written with one query keyed by an IN clause,
+        // instead of updating each workspace one-by-one.
+        const updatesById = new Map<string, Partial<typeof workspaces.$inferInsert>>();
+        for (const workspace of projectWorkspaces) {
+          const workspaceUpdates: Partial<typeof workspaces.$inferInsert> = {};
+          const overwrites = workspace.settingOverwrites ?? {};
+          if (overwrites["execution-mode"] !== true) {
+            workspaceUpdates.executionMode = settings.value.defaultExecutionMode;
+            if (settings.value.defaultExecutionMode !== "agent") {
+              workspaceUpdates.agentPoolId = null;
+            } else if (overwrites["agent-pool"] !== true) {
+              workspaceUpdates.agentPoolId = settings.value.defaultAgentPoolId;
+            }
+          }
+          if (workspace.inheritsProjectAutoDestroy) {
+            workspaceUpdates.autoDestroyActivityDuration = settings.value.autoDestroyActivityDuration;
+          }
+          if (Object.keys(workspaceUpdates).length > 0) {
+            updatesById.set(workspace.id, workspaceUpdates);
           }
         }
-        if (workspace.inheritsProjectAutoDestroy) {
-          workspaceUpdates.autoDestroyActivityDuration = settings.value.autoDestroyActivityDuration;
+        const groups = new Map<string, { ids: string[]; update: Partial<typeof workspaces.$inferInsert> }>();
+        for (const [workspaceId, update] of updatesById) {
+          const key = JSON.stringify(update);
+          const group = groups.get(key);
+          if (group === undefined) groups.set(key, { ids: [workspaceId], update });
+          else group.ids.push(workspaceId);
         }
-        if (Object.keys(workspaceUpdates).length > 0) {
-          updatesById.set(workspace.id, workspaceUpdates);
+        for (const group of groups.values()) {
+          await tx.update(workspaces).set(group.update).where(inArray(workspaces.id, group.ids));
         }
-      }
-      const groups = new Map<string, { ids: string[]; update: Partial<typeof workspaces.$inferInsert> }>();
-      for (const [workspaceId, update] of updatesById) {
-        const key = JSON.stringify(update);
-        const group = groups.get(key);
-        if (group === undefined) groups.set(key, { ids: [workspaceId], update });
-        else group.ids.push(workspaceId);
-      }
-      for (const group of groups.values()) {
-        await tx.update(workspaces).set(group.update).where(inArray(workspaces.id, group.ids));
-      }
-    });
+      });
+    } catch (error: unknown) {
+      if (!isUniqueConstraintError(error)) throw error;
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "A project with this name already exists in the organization" }] };
+    }
     const updated = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const updatedCounts = (await countsByProject([projectId])).get(projectId) ?? { workspaceCount: projectWorkspaces.length, teamCount: 0 };

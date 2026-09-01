@@ -39,7 +39,7 @@ describe("workspace transfer authorization", () => {
       method,
       headers: {
         ...(token !== undefined ? { Authorization: `Bearer ${token}` } : {}),
-        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(body !== undefined ? { "Content-Type": "application/vnd.api+json" } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     }));

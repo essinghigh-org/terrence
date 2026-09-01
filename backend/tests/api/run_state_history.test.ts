@@ -21,6 +21,7 @@ describe("workspace run history and state metadata", () => {
   const orgId = `org-${suffix}`;
   const workspaceId = `workspace-${suffix}`;
   const otherWorkspaceId = `other-workspace-${suffix}`;
+  const orgName = `run-state-${suffix}`;
   const token = `token-${suffix}`;
   const runIds = {
     planned: `run-planned-${suffix}`,
@@ -29,6 +30,7 @@ describe("workspace run history and state metadata", () => {
     old: `run-old-${suffix}`,
     speculative: `run-speculative-${suffix}`,
   };
+  const otherWorkspaceRunId = `run-other-${suffix}`;
   const stateId = `state-${suffix}`;
   const now = Date.now();
   const currentYear = new Date(now).getUTCFullYear();
@@ -68,6 +70,9 @@ describe("workspace run history and state metadata", () => {
   const runHistory = (query: Record<string, string>) => request(
     `/api/v2/workspaces/${workspaceId}/runs?${new URLSearchParams(query)}`,
   );
+  const organizationRunHistory = (query: Record<string, string>) => request(
+    `/api/v2/organizations/${orgName}/runs?${new URLSearchParams(query)}`,
+  );
 
   beforeAll(async () => {
     await db.insert(users).values({
@@ -75,7 +80,7 @@ describe("workspace run history and state metadata", () => {
       username: `run-state-${suffix}`,
       passwordHash: "unused",
     });
-    await db.insert(organizations).values({ id: orgId, name: `run-state-${suffix}` });
+    await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({
       id: `membership-${suffix}`,
       userId,
@@ -89,8 +94,8 @@ describe("workspace run history and state metadata", () => {
       description: "run and state contract",
     });
     await db.insert(workspaces).values([
-      { id: workspaceId, name: "history", orgId },
-      { id: otherWorkspaceId, name: "other", orgId },
+      { id: workspaceId, name: "History", orgId },
+      { id: otherWorkspaceId, name: "Other", orgId },
     ]);
     await db.insert(runs).values([
       {
@@ -127,7 +132,7 @@ describe("workspace run history and state metadata", () => {
         createdAt: Date.UTC(2019, 6, 1),
       },
       {
-        id: `run-other-${suffix}`,
+        id: otherWorkspaceRunId,
         workspaceId: otherWorkspaceId,
         status: "applied",
         message: "outside workspace scope",
@@ -191,6 +196,40 @@ describe("workspace run history and state metadata", () => {
       "total-count": 3,
     });
     expect(page.links.self).toContain("filter%5Bstatus_group%5D=final");
+  });
+
+  it("applies filters to the organization run query before pagination and count", async () => {
+    const cases: [Record<string, string>, string[]][] = [
+      [{ "filter[status]": "applied" }, [runIds.applied, otherWorkspaceRunId]],
+      [{ "filter[workspace][name]": "history" }, [runIds.planned, runIds.destroy, runIds.applied, runIds.old, runIds.speculative]],
+      [{ "search[name]": "other" }, [otherWorkspaceRunId]],
+      [{ "filter[workspace_names]": "other" }, [otherWorkspaceRunId]],
+    ];
+
+    for (const [query, expected] of cases) {
+      const response = await organizationRunHistory(query);
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.data.map((run: any) => run.id).sort()).toEqual(expected.sort());
+      expect(body.meta.pagination["total-count"]).toBe(expected.length);
+    }
+
+    const filteredPage = await organizationRunHistory({
+      "filter[status]": "applied",
+      "filter[workspace][name]": "history",
+      "page[number]": "1",
+      "page[size]": "1",
+    });
+    expect(filteredPage.status).toBe(200);
+    const page = await filteredPage.json();
+    expect(page.data.map((run: any) => run.id)).toEqual([runIds.applied]);
+    expect(page.meta.pagination).toMatchObject({
+      "current-page": 1,
+      "page-size": 1,
+      "next-page": null,
+      "total-pages": 1,
+      "total-count": 1,
+    });
   });
 
   it("includes speculative/plan-only runs in the default workspace run history", async () => {

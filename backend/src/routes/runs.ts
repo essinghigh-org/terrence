@@ -2,11 +2,11 @@ import { createHash } from "node:crypto";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
-import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt } from "drizzle-orm";
+import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt, sql } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource } from "../lib/response";
-import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, cursorPagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
+import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, cursorPagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, organizationRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
-import { deleteRunLogArchive, readRunLogs } from "../lib/run-logs";
+import { deleteRunLogArchive, readRunLogs, readRunLogsPage } from "../lib/run-logs";
 import { deletePlanJsonArtifact, readPlanJsonArtifact, readPlanJsonSideArtifact, sanitizePlanJson } from "../lib/plan-json";
 import { applyGateBlockReason } from "../lib/operations";
 import { authPlugin } from "../auth";
@@ -349,6 +349,11 @@ function safeRunEventDetails(event: AuditItem): Readonly<Record<string, string>>
   );
 }
 
+function runHistoryPageOffset(page: Readonly<{ number: number; size: number }>, totalCount: number): number | null {
+  const totalPages = Math.ceil(totalCount / page.size);
+  return page.number <= totalPages ? (page.number - 1) * page.size : null;
+}
+
 async function authorizedOrgWorkspaces(
   organizationId: string,
   userId: string | undefined,
@@ -620,7 +625,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     ]);
     const { number, size } = pageRequest(request);
     if (orgWorkspaces.length === 0) { return { data: [], ...pagination(request, number, size, 0) }; }
-    const where = inArray(runs.workspaceId, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id));
+    const where = organizationRunHistoryWhere(request, orgWorkspaces.map((w: Readonly<{ readonly id: string }>): string => w.id));
     const [orgRuns, countRows] = await Promise.all([
       db.query.runs.findMany({ where, orderBy: parseRunSort(request), limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(runs).where(where),
@@ -836,38 +841,79 @@ export const runRoutes = new Elysia({ name: "runs" })
     (set.headers as Record<string, string>) .Location = location;
     return {};
   })
-  .get("/api/v2/runs/:run_id/run-events", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id/run-events", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const events = await db.query.auditLogs.findMany({
-      where: and(eq(auditLogs.resourceType, "runs"), eq(auditLogs.resourceId, runId)),
-      orderBy: [asc(auditLogs.createdAt), asc(auditLogs.id)],
-    });
-    const comments = await db.query.runComments.findMany({
-      where: eq(runComments.runId, runId),
-      orderBy: [asc(runComments.createdAt), asc(runComments.id)],
-    });
+    const page = pageRequest(request);
+    const eventWhere = and(eq(auditLogs.resourceType, "runs"), eq(auditLogs.resourceId, runId));
+    const commentWhere = eq(runComments.runId, runId);
+    const [[eventCountRow], [commentCountRow]] = await Promise.all([
+      db.select({ total: count() }).from(auditLogs).where(eventWhere),
+      db.select({ total: count() }).from(runComments).where(commentWhere),
+    ]);
+    const totalCount = (eventCountRow?.total ?? 0) + (commentCountRow?.total ?? 0);
+    const offset = runHistoryPageOffset(page, totalCount);
+    const historyRows: readonly { id: string; kind: string; createdAt: number }[] = offset === null
+      ? []
+      : await (async (): Promise<readonly { id: string; kind: string; createdAt: number }[]> => {
+        const eventIndex = db.select({
+          id: auditLogs.id,
+          kind: sql<string>`'event'`.as("kind"),
+          createdAt: auditLogs.createdAt,
+        }).from(auditLogs).where(eventWhere);
+        const commentIndex = db.select({
+          id: runComments.id,
+          kind: sql<string>`'comment'`.as("kind"),
+          createdAt: runComments.createdAt,
+        }).from(runComments).where(commentWhere);
+        const history = eventIndex.unionAll(commentIndex).as("run_history");
+        return db.select({ id: history.id, kind: history.kind, createdAt: history.createdAt })
+          .from(history)
+          .orderBy(asc(history.createdAt), asc(history.id))
+          .limit(page.size)
+          .offset(offset);
+      })();
+    const eventIds = historyRows.filter((row): boolean => row.kind === "event").map((row): string => row.id);
+    const commentIds = historyRows.filter((row): boolean => row.kind === "comment").map((row): string => row.id);
+    const [events, comments] = await Promise.all([
+      eventIds.length === 0
+        ? Promise.resolve([] as AuditItem[])
+        : db.query.auditLogs.findMany({ where: and(eventWhere, inArray(auditLogs.id, eventIds)) }),
+      commentIds.length === 0
+        ? Promise.resolve([] as CommentItem[])
+        : db.query.runComments.findMany({ where: and(commentWhere, inArray(runComments.id, commentIds)) }),
+    ]);
     const usernames = await usernamesById([
       ...events.map((event: AuditItem): string | null => event.userId),
       ...comments.map((comment: CommentItem): string | null => comment.userId),
     ]);
-    const eventResources = [
-      ...events.map((event: AuditItem): Record<string, unknown> => ({
-        id: event.id,
-        type: "run-events",
-        createdAt: event.createdAt,
-        attributes: {
-          action: event.action,
-          "created-at": new Date(event.createdAt).toISOString(),
-          "actor-username": event.userId === null ? safeRunEventDetails(event).actorUsername ?? null : usernames.get(event.userId)?.username ?? null,
-          "actor-avatar-url": event.userId === null
-            ? AvatarService.resolveVcsUrl(safeRunEventDetails(event).actorProviderId, safeRunEventDetails(event).actorAvatarUrl ?? null)
-            : gravatarUrl(usernames.get(event.userId)?.email ?? null),
-          details: safeRunEventDetails(event),
-        },
-      })),
-      ...comments.map((comment: CommentItem): Record<string, unknown> => ({
+    const eventById = new Map(events.map((event): [string, AuditItem] => [event.id, event]));
+    const commentById = new Map(comments.map((comment): [string, CommentItem] => [comment.id, comment]));
+    const eventResources = historyRows.flatMap((row): Record<string, unknown>[] => {
+      if (row.kind === "event") {
+        const event = eventById.get(row.id);
+        if (event === undefined) return [];
+        const details = safeRunEventDetails(event);
+        return [{
+          id: event.id,
+          type: "run-events",
+          createdAt: event.createdAt,
+          attributes: {
+            action: event.action,
+            "created-at": new Date(event.createdAt).toISOString(),
+            "actor-username": event.userId === null ? details.actorUsername ?? null : usernames.get(event.userId)?.username ?? null,
+            "actor-avatar-url": event.userId === null
+              ? AvatarService.resolveVcsUrl(details.actorProviderId, details.actorAvatarUrl ?? null)
+              : gravatarUrl(usernames.get(event.userId)?.email ?? null),
+            details,
+          },
+        }];
+      }
+      if (row.kind !== "comment") return [];
+      const comment = commentById.get(row.id);
+      if (comment === undefined) return [];
+      return [{
         id: `re-${comment.id}`,
         type: "run-events",
         createdAt: comment.createdAt,
@@ -879,13 +925,13 @@ export const runRoutes = new Elysia({ name: "runs" })
           details: { "comment-id": comment.id },
         },
         relationships: { comment: { data: { id: comment.id, type: "comments" } } },
-      })),
-    ].sort((left, right): number => (Number(left.createdAt) - Number(right.createdAt)) || String(left.id).localeCompare(String(right.id)))
-      .map((resource): Record<string, unknown> => Object.fromEntries(
-        Object.entries(resource).filter(([key]): boolean => key !== "createdAt"),
-      ));
+      }];
+    }).map((resource): Record<string, unknown> => Object.fromEntries(
+      Object.entries(resource).filter(([key]): boolean => key !== "createdAt"),
+    ));
     return {
       data: eventResources,
+      ...pagination(request, page.number, page.size, totalCount),
     };
   })
   .get("/api/v2/runs/:run_id/input-state-version", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -901,12 +947,16 @@ export const runRoutes = new Elysia({ name: "runs" })
     const { stateVersionResource } = await import("../lib/response");
     return { data: stateVersionResource(currentSV, request) };
   })
-  .get("/api/v2/runs/:run_id/logs", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id/logs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const runLogs = await readRunLogs(runId);
-    return { data: runLogs.map((l: LogItem): Record<string, unknown> => ({ id: l.id, type: "logs", attributes: { phase: l.phase, "output-text": l.outputText, "created-at": l.createdAt } })) };
+    const page = pageRequest(request);
+    const { logs: runLogs, totalCount } = await readRunLogsPage(runId, page);
+    return {
+      data: runLogs.map((l: LogItem): Record<string, unknown> => ({ id: l.id, type: "logs", attributes: { phase: l.phase, "output-text": l.outputText, "created-at": l.createdAt } })),
+      ...pagination(request, page.number, page.size, totalCount),
+    };
   })
   .get("/api/v2/runs/:run_id/plan/log/:log_token", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
@@ -1294,17 +1344,27 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: { id: runId, type: "runs", attributes: { status: "pending" } } };
   })
   // --- Comments ---
-  .get("/api/v2/runs/:run_id/comments", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id/comments", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const commentsList = await db.query.runComments.findMany({
-      where: eq(runComments.runId, runId),
-      orderBy: [asc(runComments.createdAt), asc(runComments.id)],
-    });
+    const page = pageRequest(request);
+    const commentWhere = eq(runComments.runId, runId);
+    const [countRow] = await db.select({ total: count() }).from(runComments).where(commentWhere);
+    const totalCount = countRow?.total ?? 0;
+    const offset = runHistoryPageOffset(page, totalCount);
+    const commentsList = offset === null
+      ? []
+      : await db.query.runComments.findMany({
+        where: commentWhere,
+        orderBy: [asc(runComments.createdAt), asc(runComments.id)],
+        limit: page.size,
+        offset,
+      });
     const enriched = await enrichCommentsWithActors(commentsList);
     return {
       data: enriched.map((comment): Record<string, unknown> => commentResource(comment)),
+      ...pagination(request, page.number, page.size, totalCount),
     };
   })
   .post("/api/v2/runs/:run_id/comments", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {

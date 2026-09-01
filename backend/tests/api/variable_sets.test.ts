@@ -175,7 +175,7 @@ describe("organization variable set API contract", () => {
         },
       },
     });
-    expect(addedVariable.status).toBe(200);
+    expect(addedVariable.status).toBe(201);
     const variableData = (await addedVariable.json()).data;
     const variableId = variableData.id as string;
     expect(variableData.attributes.value).toBeNull();
@@ -201,7 +201,7 @@ describe("organization variable set API contract", () => {
     const hclVariable = await request(`/api/v2/varsets/${variableSetId}/relationships/vars`, "POST", {
       data: { type: "vars", attributes: { key: "HCL", value: "true", hcl: true } },
     });
-    expect(hclVariable.status).toBe(200);
+    expect(hclVariable.status).toBe(201);
     const hclData = (await hclVariable.json()).data;
     expect(hclData.attributes.hcl).toBe(true);
 
@@ -266,7 +266,7 @@ describe("organization variable set API contract", () => {
 
     expect((await request(`/api/v2/varsets/${variableSetId}/relationships/vars`, "POST", {
       data: { type: "vars", attributes: { key: "CASCADE", value: "yes" } },
-    })).status).toBe(200);
+    })).status).toBe(201);
 
     // VAR-007: JSON:API empty bulk relationship arrays are no-ops, not 422s
     // (the reference format parity). Only endpoints that exist for each relation type are

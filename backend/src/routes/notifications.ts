@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import { and, count, eq, gt, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, count, eq, gt, inArray, lt, sql } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { db } from "../db";
 import {
@@ -13,7 +13,7 @@ import {
   workspaces,
 } from "../db/schema";
 import { isOwnershipVerified, postNotification, verifyDestinationOwnership, type NotificationDelivery } from "../lib/notifications";
-import { checkOrganizationPermission, checkOrgPermission, findAuthorizedWorkspace, notFound } from "../lib/utils";
+import { checkOrganizationPermission, checkOrgPermission, findAuthorizedWorkspace, notFound, pageRequest, pagination } from "../lib/utils";
 import { isNotificationDestination, isNotificationTrigger, RUN_NOTIFICATION_TRIGGERS } from "../lib/constants";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "../lib/secrets";
 
@@ -22,6 +22,7 @@ type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<stri
 type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
   body?: unknown;
+  request: Readonly<{ url: string }>;
   user?: Readonly<typeof users.$inferSelect> | null;
   orgId: string | null;
   teamId: string | null;
@@ -345,13 +346,17 @@ async function decryptedNotification(configuration: NcItem): Promise<NcItem> {
 
 export const notificationRoutes = new Elysia({ name: "notifications" })
   .use(authPlugin)
-  .get("/api/v2/workspaces/:workspace_id/notification-configurations", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/workspaces/:workspace_id/notification-configurations", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";
     if ((await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null)) === undefined) return notFound(set);
-    const configurations = await db.query.notificationConfigurations.findMany({
-      where: eq(notificationConfigurations.workspaceId, workspaceId),
-    });
-    return { data: configurations.map((configuration: NcItem): Record<string, unknown> => notificationResource(configuration)) };
+    const where = eq(notificationConfigurations.workspaceId, workspaceId);
+    const { number, size } = pageRequest(request);
+    const [configurations, countRows] = await Promise.all([
+      db.query.notificationConfigurations.findMany({ where, orderBy: [asc(notificationConfigurations.createdAt), asc(notificationConfigurations.id)], limit: size, offset: (number - 1) * size }),
+      db.select({ total: count() }).from(notificationConfigurations).where(where),
+    ]);
+    const totalCount = countRows[0]?.total ?? 0;
+    return { data: configurations.map((configuration: NcItem): Record<string, unknown> => notificationResource(configuration)), ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/workspaces/:workspace_id/notification-configurations", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";
@@ -388,14 +393,18 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     (set as { status: number }).status = 201;
     return { data: notificationResource(created ?? values as NcItem) };
   })
-  .get("/api/v2/projects/:project_id/notification-configurations", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/projects/:project_id/notification-configurations", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const projectId = params.project_id ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))) return notFound(set);
-    const configurations = await db.query.notificationConfigurations.findMany({
-      where: eq(notificationConfigurations.projectId, projectId),
-    });
-    return { data: configurations.map((configuration: NcItem): Record<string, unknown> => notificationResource(configuration)) };
+    const where = eq(notificationConfigurations.projectId, projectId);
+    const { number, size } = pageRequest(request);
+    const [configurations, countRows] = await Promise.all([
+      db.query.notificationConfigurations.findMany({ where, orderBy: [asc(notificationConfigurations.createdAt), asc(notificationConfigurations.id)], limit: size, offset: (number - 1) * size }),
+      db.select({ total: count() }).from(notificationConfigurations).where(where),
+    ]);
+    const totalCount = countRows[0]?.total ?? 0;
+    return { data: configurations.map((configuration: NcItem): Record<string, unknown> => notificationResource(configuration)), ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/projects/:project_id/notification-configurations", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const projectId = params.project_id ?? "";
@@ -432,14 +441,18 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     (set as { status: number }).status = 201;
     return { data: notificationResource(created ?? values as NcItem) };
   })
-  .get("/api/v2/teams/:team_id/notification-configurations", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/teams/:team_id/notification-configurations", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId, tokenTeamId ?? null))) return notFound(set);
-    const configurations = await db.query.notificationConfigurations.findMany({
-      where: eq(notificationConfigurations.teamId, teamId),
-    });
-    return { data: configurations.map((configuration: NcItem): Record<string, unknown> => notificationResource(configuration)) };
+    const where = eq(notificationConfigurations.teamId, teamId);
+    const { number, size } = pageRequest(request);
+    const [configurations, countRows] = await Promise.all([
+      db.query.notificationConfigurations.findMany({ where, orderBy: [asc(notificationConfigurations.createdAt), asc(notificationConfigurations.id)], limit: size, offset: (number - 1) * size }),
+      db.select({ total: count() }).from(notificationConfigurations).where(where),
+    ]);
+    const totalCount = countRows[0]?.total ?? 0;
+    return { data: configurations.map((configuration: NcItem): Record<string, unknown> => notificationResource(configuration)), ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/teams/:team_id/notification-configurations", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const teamId = params.team_id ?? "";

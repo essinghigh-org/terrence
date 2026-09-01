@@ -407,7 +407,25 @@ describe("Terraform cloud protocol contract", () => {
       { headers: authHeaders },
     );
     expect(runEventsResponse.status).toBe(200);
-    expect(await runEventsResponse.json()).toEqual({ data: [] });
+    const runEvents = await runEventsResponse.json();
+    expect(runEvents).toMatchObject({
+      data: [],
+      meta: {
+        pagination: {
+          "current-page": 1,
+          "page-size": 20,
+          "prev-page": null,
+          "next-page": null,
+          "total-pages": 0,
+          "total-count": 0,
+        },
+      },
+    });
+    expect(runEvents.links).toMatchObject({ prev: null, next: null });
+    for (const linkName of ["self", "first", "last"]) {
+      expect(runEvents.links[linkName]).toBeTypeOf("string");
+      expect(runEvents.links[linkName]).toContain(`/api/v2/runs/${runId}/run-events?`);
+    }
 
     const organizationRunsResponse = await request(
       `/api/v2/organizations/${orgName}/runs`,
