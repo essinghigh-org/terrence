@@ -66,6 +66,21 @@ describe("projects API contract", () => {
     const projectId = createBody.data.id;
     expect(createBody.data.attributes.name).toBe("Infrastructure");
 
+    // Duplicate names are a client conflict, not an unhandled database error.
+    const duplicateCreate = await request(`/api/v2/organizations/${orgName}/projects`, "POST", {
+      data: { attributes: { name: "Infrastructure" } },
+    });
+    expect(duplicateCreate.status).toBe(409);
+    expect((await duplicateCreate.json()).errors[0]).toMatchObject({ status: "409", title: "Conflict" });
+
+    const duplicateRename = await request(`/api/v2/projects/${listBody1.data[0].id}`, "PATCH", {
+      data: { attributes: { name: "Infrastructure" } },
+    });
+    expect(duplicateRename.status).toBe(409);
+    expect((await duplicateRename.json()).errors[0]).toMatchObject({ status: "409", title: "Conflict" });
+    const defaultAfterConflict = await request(`/api/v2/projects/${listBody1.data[0].id}`);
+    expect((await defaultAfterConflict.json()).data.attributes.name).toBe("Default Project");
+
     // 3. Show project
     const showRes = await request(`/api/v2/projects/${projectId}`);
     expect(showRes.status).toBe(200);
