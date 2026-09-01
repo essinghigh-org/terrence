@@ -62,6 +62,9 @@ test("uses provider defaults and saves an optional base URL without an endpoint 
 
 // SAFETY: the fixture object is read as a record; each field is typed below.
   const attributes = (savedBody?.data as JsonObject)?.attributes as JsonObject;
+  expect(Object.keys(attributes)).toEqual(["plan-explainer"]);
+  expect(attributes["approval-webhook"]).toBeUndefined();
+  expect(attributes["maintenance-windows"]).toBeUndefined();
 // SAFETY: the fixture object is read as a record; each field is typed below.
   const explainer = attributes["plan-explainer"] as JsonObject;
   expect(explainer["base-url"]).toBe("https://api.example.com/v1");
@@ -92,6 +95,16 @@ test("AdminLoggingSettings loads and saves logging configuration independently",
   await waitFor((): void => { expect(view.getByLabelText("Remote destinations")).toBeTruthy(); });
   fireEvent.click(view.getByRole("button", { name: "Save changes" }));
   await waitFor((): void => { expect(patchBody).toBeDefined(); });
+// SAFETY: the fixture object is read as a record; each field is typed below.
+  const attributes = (patchBody?.data as JsonObject)?.attributes as JsonObject;
+  expect(attributes).toEqual({
+    enabled: true,
+    "log-level": "info",
+    "syslog-level": null,
+    "syslog-targets": ["udp://syslog.local:514"],
+    "syslog-hostname": null,
+    "syslog-app": null,
+  });
   expect(view.getByText(/Logging settings saved/i)).toBeTruthy();
 });
 
@@ -116,6 +129,17 @@ test("AdminApprovalWebhook loads and saves webhook configuration independently",
   fireEvent.input(view.getByLabelText("Callback URL (optional)"), { target: { value: "https://example.com/hook" } });
   fireEvent.click(view.getByRole("button", { name: "Save changes" }));
   await waitFor((): void => { expect(patchBody).toBeDefined(); });
+// SAFETY: the fixture object is read as a record; each field is typed below.
+  const attributes = (patchBody?.data as JsonObject)?.attributes as JsonObject;
+  expect(Object.keys(attributes)).toEqual(["approval-webhook"]);
+  expect(attributes).toEqual({
+    "approval-webhook": {
+      enabled: false,
+      url: "https://example.com/hook",
+    },
+  });
+  expect(attributes["plan-explainer"]).toBeUndefined();
+  expect(attributes["maintenance-windows"]).toBeUndefined();
   expect(view.getByText(/Webhook settings saved/i)).toBeTruthy();
 });
 
@@ -141,5 +165,22 @@ test("AdminMaintenanceWindows loads and saves maintenance windows independently"
   await waitFor((): void => { expect(view.getByText("Window 1")).toBeTruthy(); });
   fireEvent.click(view.getByRole("button", { name: "Save changes" }));
   await waitFor((): void => { expect(patchBody).toBeDefined(); });
+// SAFETY: the fixture object is read as a record; each field is typed below.
+  const attributes = (patchBody?.data as JsonObject)?.attributes as JsonObject;
+  expect(Object.keys(attributes)).toEqual(["maintenance-windows"]);
+  expect(attributes).toEqual({
+    "maintenance-windows": {
+      enabled: false,
+      windows: [
+        {
+          days: [0, 6],
+          "start-time": "00:00",
+          "end-time": "04:00",
+        },
+      ],
+    },
+  });
+  expect(attributes["approval-webhook"]).toBeUndefined();
+  expect(attributes["plan-explainer"]).toBeUndefined();
   expect(view.getByText(/Maintenance settings saved/i)).toBeTruthy();
 });

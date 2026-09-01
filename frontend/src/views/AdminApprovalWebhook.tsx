@@ -62,9 +62,10 @@ export function AdminApprovalWebhook(): React.JSX.Element {
     setSaveError("");
     setSavedAt("");
     try {
+      const trimmedUrl = approvalUrl.trim();
       const payload = {
         enabled: approvalEnabled,
-        ...(approvalUrl !== "" ? { url: approvalUrl.trim() } : { url: null }),
+        ...(trimmedUrl !== "" ? { url: trimmedUrl } : { url: null }),
         ...(approvalClearSecret ? { secret: null } : approvalSecret !== "" ? { secret: approvalSecret } : {}),
       };
       await fetchApi("/admin/operations-settings", {

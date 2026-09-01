@@ -141,12 +141,15 @@ export function AdminPlanExplainer(): React.JSX.Element {
     setSaveError("");
     setSavedAt("");
     try {
+      const trimmedBaseUrl = explainerBaseUrl.trim();
+      const trimmedModel = explainerModel.trim();
+      const trimmedProvider = explainerProvider.trim();
       const payload = {
         enabled: explainerEnabled,
-        ...(explainerBaseUrl !== "" ? { "base-url": explainerBaseUrl.trim() } : { "base-url": null }),
+        ...(trimmedBaseUrl !== "" ? { "base-url": trimmedBaseUrl } : { "base-url": null }),
         ...(explainerClearApiKey ? { "api-key": null } : explainerApiKey !== "" ? { "api-key": explainerApiKey } : {}),
-        ...(explainerModel !== "" ? { model: explainerModel.trim() } : { model: null }),
-        ...(explainerProvider !== "" ? { provider: explainerProvider } : { provider: null }),
+        ...(trimmedModel !== "" ? { model: trimmedModel } : { model: null }),
+        ...(trimmedProvider !== "" ? { provider: trimmedProvider } : { provider: null }),
         "reasoning-effort": explainerReasoningEffort === "" ? null : explainerReasoningEffort,
       };
       await fetchApi("/admin/operations-settings", {

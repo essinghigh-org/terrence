@@ -215,7 +215,7 @@ export function AdminMaintenanceWindows(): React.JSX.Element {
                   </div>
                   <div className="grid gap-3 sm:grid-cols-3">
                     <div className="space-y-1">
-                      <label htmlFor={`window-${index}-start`} className="text-xs font-medium text-foreground">Start time (UTC)</label>
+                      <label htmlFor={`window-${index}-start`} className="text-xs font-medium text-foreground">Start time</label>
                       <Input
                         id={`window-${index}-start`}
                         name={`window-${index}-start-time`}
@@ -225,7 +225,7 @@ export function AdminMaintenanceWindows(): React.JSX.Element {
                       />
                     </div>
                     <div className="space-y-1">
-                      <label htmlFor={`window-${index}-end`} className="text-xs font-medium text-foreground">End time (UTC)</label>
+                      <label htmlFor={`window-${index}-end`} className="text-xs font-medium text-foreground">End time</label>
                       <Input
                         id={`window-${index}-end`}
                         name={`window-${index}-end-time`}
@@ -235,7 +235,7 @@ export function AdminMaintenanceWindows(): React.JSX.Element {
                       />
                     </div>
                     <div className="space-y-1">
-                      <label htmlFor={`window-${index}-timezone`} className="text-xs font-medium text-foreground">Timezone (optional)</label>
+                      <label htmlFor={`window-${index}-timezone`} className="text-xs font-medium text-foreground">Timezone</label>
                       <Input
                         id={`window-${index}-timezone`}
                         name={`window-${index}-timezone`}
@@ -245,6 +245,7 @@ export function AdminMaintenanceWindows(): React.JSX.Element {
                       />
                     </div>
                   </div>
+                  <p className="text-xs text-muted-foreground">Times are interpreted in the selected timezone (defaults to UTC).</p>
                 </div>
               ))}
             </div>
