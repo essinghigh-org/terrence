@@ -725,7 +725,10 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     if (agentPoolId !== undefined) updates.agentPoolId = agentPoolId;
     const requestedApiUrl = attributes["api-url"] !== undefined ? normalizedConfiguredUrl(attributes["api-url"]) : oc.apiUrl;
     const requestedHttpUrl = attributes["http-url"] !== undefined ? normalizedConfiguredUrl(attributes["http-url"]) : oc.httpUrl;
-    const urlError = configuredVcsUrlError(requestedApiUrl, requestedHttpUrl);
+    const urlError = configuredVcsUrlError(
+      attributes["api-url"] !== undefined ? requestedApiUrl : null,
+      attributes["http-url"] !== undefined ? requestedHttpUrl : null,
+    );
     if (urlError !== undefined) return unprocessable(set, urlError);
     if (attributes["api-url"] !== undefined) updates.apiUrl = typeof requestedApiUrl === "string" ? requestedApiUrl : null;
     if (attributes["http-url"] !== undefined) updates.httpUrl = typeof requestedHttpUrl === "string" ? requestedHttpUrl : null;

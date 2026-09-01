@@ -837,7 +837,16 @@ export const app = new Elysia()
   // limit hooks. The version endpoint performs outbound work and must not be
   // an unauthenticated, unbounded escape hatch from the application policy.
   .get("/openapi.json", (): unknown => openapiJson)
-  .get("/api/v2/available-versions", async ({ query, set }: Readonly<{ query: Readonly<Record<string, string>>; set: SetObject }>): Promise<unknown> => {
+  .get("/api/v2/available-versions", async ({ query, user, token, set }: Readonly<{
+    query: Readonly<Record<string, string>>;
+    user: unknown;
+    token: unknown;
+    set: SetObject;
+  }>): Promise<unknown> => {
+    if ((user === null || user === undefined) && (token === null || token === undefined)) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized" }] };
+    }
     const tool = query.tool === "terraform" ? "terraform" : "tofu";
     try {
       return { data: await availableVersions(tool) };

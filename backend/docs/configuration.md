@@ -88,6 +88,7 @@ Set variables through the container environment or an `.env` file.
 | `GITHUB_APP_API_URL` | `https://api.github.com` | GitHub App API URL for GitHub Enterprise. GitHub App calls require HTTPS. |
 | `GITHUB_API_URL` | derived | API URL used for VCS lookups. GitHub App calls require HTTPS. |
 | `TERRENCE_ALLOW_INSECURE_OAUTH_URLS` | false | Development-only opt-in for HTTP OAuth endpoint URLs; development requires this flag, while tests allow HTTP automatically. Ignored outside development. Never enable in production. |
+| `TERRENCE_ALLOW_PRIVATE_VCS_URLS` | off | Allow configured VCS URLs to target private-network addresses. Off by default; enabling it permits private-network VCS requests and increases the risk of server-side request forgery. Use only in trusted environments. |
 | `GITLAB_WEBHOOK_SECRET` | none | Secret for GitLab webhook deliveries. |
 | `BITBUCKET_WEBHOOK_SECRET` | none | Secret for Bitbucket webhook deliveries. |
 

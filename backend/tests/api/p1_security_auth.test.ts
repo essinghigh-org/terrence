@@ -39,6 +39,7 @@ const ownerToken = `p1-owner-token-${suffix}`;
 const scopedToken = `p1-scoped-token-${suffix}`;
 const scopedMemberToken = `p1-scoped-member-token-${suffix}`;
 const organizationAuditToken = `p1-organization-audit-token-${suffix}`;
+const organizationToken = `p1-organization-token-${suffix}`;
 const targetWorkspaceId = `p1-target-workspace-${suffix}`;
 const sourceWorkspaceId = `p1-source-workspace-${suffix}`;
 const otherWorkspaceId = `p1-other-workspace-${suffix}`;
@@ -123,6 +124,11 @@ beforeAll(async () => {
       orgId,
       tokenType: "audit-trails",
     },
+    {
+      id: `p1-organization-token-row-${suffix}`,
+      token: hashAuthenticationToken(organizationToken),
+      orgId,
+    },
   ]);
   await db.insert(auditLogs).values([
     {
@@ -180,6 +186,7 @@ afterAll(async () => {
 describe("P1 security and authorization regressions", () => {
   it("authenticates metadata and blocks scoped tokens from site-admin routes", async () => {
     expect((await request("/api/v2/meta", null)).status).toBe(401);
+    expect((await request("/api/v2/available-versions", null)).status).toBe(401);
     expect((await request("/api/v2/meta")).status).toBe(200);
     expect((await request("/api/v2/admin/system-info", scopedToken)).status).toBe(403);
   });
@@ -449,6 +456,9 @@ describe("P1 security and authorization regressions", () => {
     const orgTokenResponse = await request("/api/v2/audit-trails", organizationAuditToken);
     expect(orgTokenResponse.status).toBe(200);
     expect((await orgTokenResponse.json() as { data: { id: string }[] }).data.some(({ id }): boolean => id === auditOwnerId)).toBeTrue();
+
+    const regularOrgTokenResponse = await request("/api/v2/audit-trails", organizationToken);
+    expect(regularOrgTokenResponse.status).toBe(403);
 
     const scopedResponse = await request("/api/v2/audit-trails", scopedToken);
     expect(scopedResponse.status).toBe(200);

@@ -236,15 +236,21 @@ async function auditTrailResources(logsList: readonly AuditLogItem[]): Promise<R
   });
 }
 
+const AUDIT_LOG_ACCESS_DENIED = Symbol("audit-log-access-denied");
+type AuditLogResult = AuditLogItem[] | null | typeof AUDIT_LOG_ACCESS_DENIED;
+
 async function auditLogsForPrincipal(
   user: Readonly<typeof users.$inferSelect> | null | undefined,
   token: Readonly<{ id: string; orgId: string | null; teamId: string | null; tokenType?: string; scopes?: string | null }> | null | undefined,
-): Promise<AuditLogItem[] | null> {
+): Promise<AuditLogResult> {
   let orgIds: string[];
   if (user === null || user === undefined) {
     // The dedicated organization audit-trails token intentionally has no user
     // principal. It is scoped to exactly one organization by the token row.
-    if (token?.orgId === null || token?.orgId === undefined || token.teamId !== null || token.tokenType !== "audit-trails") return null;
+    if (token === null || token === undefined) return null;
+    if (token.orgId === null || token.orgId === undefined || token.teamId !== null || token.tokenType !== "audit-trails") {
+      return AUDIT_LOG_ACCESS_DENIED;
+    }
     orgIds = [token.orgId];
   } else {
     const scopes = currentTokenScopes();
@@ -673,17 +679,19 @@ export const miscRoutes = new Elysia({ name: "misc" })
   })
   .get("/api/v2/organization-audit-trailers", async ({ user, token, set }: ParamCtx): Promise<unknown> => {
     const logs = await auditLogsForPrincipal(user, token);
-    if (logs === null) {
-      (set as { status: number }).status = user === null || user === undefined ? 401 : 403;
-      return { errors: [{ status: String((set as { status: number }).status), title: user === null || user === undefined ? "Unauthorized" : "Forbidden" }] };
+    if (logs === null || logs === AUDIT_LOG_ACCESS_DENIED) {
+      const status = logs === AUDIT_LOG_ACCESS_DENIED ? 403 : 401;
+      (set as { status: number }).status = status;
+      return { errors: [{ status: String(status), title: status === 401 ? "Unauthorized" : "Forbidden" }] };
     }
     return { data: await auditTrailResources(logs) };
   })
   .get("/api/v2/audit-trails", async ({ user, token, set }: ParamCtx): Promise<unknown> => {
     const logs = await auditLogsForPrincipal(user, token);
-    if (logs === null) {
-      (set as { status: number }).status = user === null || user === undefined ? 401 : 403;
-      return { errors: [{ status: String((set as { status: number }).status), title: user === null || user === undefined ? "Unauthorized" : "Forbidden" }] };
+    if (logs === null || logs === AUDIT_LOG_ACCESS_DENIED) {
+      const status = logs === AUDIT_LOG_ACCESS_DENIED ? 403 : 401;
+      (set as { status: number }).status = status;
+      return { errors: [{ status: String(status), title: status === 401 ? "Unauthorized" : "Forbidden" }] };
     }
     return { data: await auditTrailResources(logs) };
   })
