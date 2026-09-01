@@ -448,6 +448,7 @@ export function variableSetVariableResource(variable: VarSetVariableParam): Reco
     relationships: {
       varset: { data: { id: variable.variableSetId, type: "varsets" } },
     },
+    links: { self: `/api/v2/varsets/${variable.variableSetId}/relationships/vars/${variable.id}` },
   };
 }
 
