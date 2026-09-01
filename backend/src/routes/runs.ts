@@ -13,6 +13,7 @@ import { authPlugin } from "../auth";
 import { queueRunNotification } from "../lib/notifications";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
 import { cancelAgentJobsForRun, insertAgentApplyJobTx } from "../lib/agent-jobs";
+import { revokeRunTokens } from "../lib/run-token";
 import { publish } from "../lib/event-bus";
 import { isPlanIncompleteRunStatus } from "../lib/run-status";
 import { AvatarService } from "../lib/avatars";
@@ -1122,8 +1123,10 @@ export const runRoutes = new Elysia({ name: "runs" })
       inArray(runs.status, ["pending", "planned", "planned_and_saved", "policy_soft_failed", "unreachable"]),
     )).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not discardable" }] }; }
-    const { cleanupSavedPlan } = await import("../worker");
+    await revokeRunTokens(runId);
+    const { cleanupRunWorkDir, cleanupSavedPlan } = await import("../worker");
     await cleanupSavedPlan(runId);
+    await cleanupRunWorkDir(runId);
     const commentStr = actionComment(body);
     if (commentStr !== "") await createRunComment({ runId, userId: user?.id ?? null, body: commentStr, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
     await auditLog("discard", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
@@ -1161,8 +1164,10 @@ export const runRoutes = new Elysia({ name: "runs" })
       ]),
     )).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not cancelable" }] }; }
-    const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
+    await revokeRunTokens(runId);
+    const { cancelRunExecution, cleanupSavedPlan, scheduleRunWorkDirCleanup } = await import("../worker");
     cancelRunExecution(runId);
+    scheduleRunWorkDirCleanup(runId);
     await cleanupSavedPlan(runId);
     await cancelAgentJobsForRun(runId);
     await auditLog("cancel", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
@@ -1191,8 +1196,10 @@ export const runRoutes = new Elysia({ name: "runs" })
       inArray(runs.status, ["pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed", "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated", "policy_checking", "policy_override", "policy_checked", "post_plan_running", "post_plan_completed", "confirmed", "apply_queued", "applying", "canceled"]),
     )).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is not force-cancelable" }] }; }
-    const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
+    await revokeRunTokens(runId);
+    const { cancelRunExecution, cleanupSavedPlan, scheduleRunWorkDirCleanup } = await import("../worker");
     cancelRunExecution(runId, true);
+    scheduleRunWorkDirCleanup(runId);
     await cleanupSavedPlan(runId);
     await cancelAgentJobsForRun(runId);
     await auditLog("force-cancel", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
@@ -1244,6 +1251,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (blockerCanceled.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "The blocking run changed before it could be stopped" }] }; }
     const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
     await Promise.all(blockerCanceled.map(async ({ id }): Promise<void> => {
+      await revokeRunTokens(id);
       cancelRunExecution(id, true);
       await cleanupSavedPlan(id);
       await cancelAgentJobsForRun(id);

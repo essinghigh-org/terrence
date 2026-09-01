@@ -565,7 +565,24 @@ async function systemBinaryFallback(
   }
 }
 
-export async function ensureBinary(toolInput?: string | null, versionInput?: string | null): Promise<{ binaryPath: string; tool: string; version: string } | null> {
+type BinaryResolution = { binaryPath: string; tool: string; version: string };
+const binaryInstallLocks = new Map<string, Promise<void>>();
+
+async function withBinaryInstallLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = binaryInstallLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve): void => { release = resolve; });
+  binaryInstallLocks.set(key, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (binaryInstallLocks.get(key) === current) binaryInstallLocks.delete(key);
+  }
+}
+
+export async function ensureBinary(toolInput?: string | null, versionInput?: string | null): Promise<BinaryResolution | null> {
   const tool = (toolInput?.toLowerCase() === "terraform" ? "terraform" : "tofu");
   let version = (versionInput !== null && versionInput !== undefined && versionInput !== "" ? versionInput : "latest");
 
@@ -594,7 +611,8 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
   // runs; ALLOW_TOOL_FALLBACK remains reserved for alternate-tool fallback.
   const allowSystemFallback = true;
 
-  const targetDir = join(BINARY_BASE_DIR, tool, version);
+  return withBinaryInstallLock(`${tool}:${version}`, async (): Promise<BinaryResolution | null> => {
+    const targetDir = join(BINARY_BASE_DIR, tool, version);
   const binaryPath = join(targetDir, tool);
 
   if (await exists(binaryPath)) {
@@ -765,4 +783,5 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
   }
 
   return null;
+  });
 }

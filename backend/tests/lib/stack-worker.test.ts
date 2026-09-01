@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { app } from "../../src/app";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../../src/db";
-import { agents, agentPools, organizations, stackAgentJobs, stackRecords, stackStateLocks, stacks } from "../../src/db/schema";
+import { agents, agentPoolTokens, agentPools, organizations, stackAgentJobs, stackRecords, stackStateLocks, stacks } from "../../src/db/schema";
 import { claimStackAgentJob, completeStackAgentJob, heartbeatStackAgentJob } from "../../src/lib/stack-agent-jobs";
 import { runStackDeploymentJob } from "../../src/lib/stack-worker";
 import type { DurableJob } from "../../src/lib/durable-jobs";
@@ -156,11 +158,33 @@ describe("Stack deployment worker", () => {
     if (agent === undefined || replacement === undefined) throw new Error("Stack test agents were not created");
     const claimed = await claimStackAgentJob(agent);
     if (claimed === undefined) throw new Error("Stack test job was not claimed");
+    const heartbeatToken = `agent-stack-heartbeat-${crypto.randomUUID()}`;
+    await db.insert(agentPoolTokens).values({
+      id: `stack-heartbeat-token-row-${crypto.randomUUID()}`,
+      agentPoolId: poolId,
+      token: createHash("sha256").update(heartbeatToken).digest("hex"),
+      createdAt: Date.now(),
+    });
     const staleClaimedAt = Date.now() - (16 * 60_000);
     await db.update(stackAgentJobs).set({ claimedAt: staleClaimedAt }).where(eq(stackAgentJobs.id, claimed.job.id));
+    const statusResponse = await app.handle(new Request("http://localhost/api/agent/status", {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${heartbeatToken}`,
+        "tfc-agent-id": agentId,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ status: "busy" }),
+    }));
+    expect(statusResponse.status).toBe(200);
+    const statusRenewed = await db.query.stackAgentJobs.findFirst({ where: eq(stackAgentJobs.id, claimed.job.id) });
+    expect(statusRenewed?.claimedAt).toBeGreaterThan(staleClaimedAt);
+
+    const directHeartbeatAt = statusRenewed?.claimedAt ?? staleClaimedAt;
+    await db.update(stackAgentJobs).set({ claimedAt: directHeartbeatAt }).where(eq(stackAgentJobs.id, claimed.job.id));
     expect(await heartbeatStackAgentJob(agentId, claimed.job.id)).toBe(true);
     const renewed = await db.query.stackAgentJobs.findFirst({ where: eq(stackAgentJobs.id, claimed.job.id) });
-    expect(renewed?.claimedAt).toBeGreaterThan(staleClaimedAt);
+    expect(renewed?.claimedAt).toBeGreaterThanOrEqual(directHeartbeatAt);
     expect(await claimStackAgentJob(replacement)).toBeUndefined();
 
     await db.update(stackAgentJobs).set({ claimedAt: Date.now() - (16 * 60_000) }).where(eq(stackAgentJobs.id, claimed.job.id));

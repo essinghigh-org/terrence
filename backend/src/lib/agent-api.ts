@@ -196,12 +196,16 @@ export async function buildAgentJobPayload(
   const validatedBaseUrl = validateAgentArtifactBaseUrl(baseUrl);
   // Artifact URLs must remain valid for the full one-hour job plus time for
   // final uploads and status callbacks.
-  const artifactUrl = (suffix: string): string => signedApiURL(
-    { url: validatedBaseUrl },
-    `${jobPath}${suffix}`,
-    "*",
-    AGENT_ARTIFACT_URL_TTL_SECONDS,
-  );
+  const artifactUrl = (suffix: string): string => {
+    const url = new URL(signedApiURL(
+      { url: validatedBaseUrl },
+      `${jobPath}${suffix}`,
+      "*",
+      AGENT_ARTIFACT_URL_TTL_SECONDS,
+    ));
+    url.searchParams.set("fencing_token", String(job.fencingToken));
+    return url.toString();
+  };
   const configurationUrl = artifactUrl("/configuration-version");
   const isDestroy = run.isDestroy === true;
 
@@ -209,6 +213,7 @@ export async function buildAgentJobPayload(
     organization_name: organizationName,
     workspace_name: workspace.name,
     operation: phase,
+    fencing_token: job.fencingToken,
     plan_id: run.id,
     run_id: run.id,
     // The binary the agent must execute for this job. tfc-agent ignores it
@@ -235,6 +240,7 @@ export async function buildAgentJobPayload(
 
   const commonContainer: Record<string, unknown> = {
     current_operation: phase,
+    fencing_token: job.fencingToken,
     terraform_version: terraformInfo.version,
     variables: terraformVariables,
     parallelism: 10,

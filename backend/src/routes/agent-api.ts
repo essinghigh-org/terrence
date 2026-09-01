@@ -2,9 +2,9 @@ import { Elysia } from "elysia";
 import { tokenHashCandidates } from "../lib/token-service";
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { and, asc, desc, eq, inArray, lt } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { db } from "../db";
-import { agentForwardedRequests, agentPoolTokens, agents, agentJobs, logs, organizations, runs, workspaces, stackAgentJobs } from "../db/schema";
+import { agentForwardedRequests, agentPoolTokens, agents, agentJobs, logs, organizations, runTokens, runs, workspaces, stackAgentJobs } from "../db/schema";
 import { authPlugin } from "../auth";
 import {
   isAgentResultValid,
@@ -16,6 +16,7 @@ import {
   claimAgentJob,
   completeAgentJob,
   findClaimedAgentJob,
+  parseAgentFencingToken,
   type Agent,
   type AgentJobCompletion,
   type ClaimedAgentJob,
@@ -32,10 +33,10 @@ import {
   terraformReleaseInfo,
   type AgentJobDetails,
 } from "../lib/agent-api";
-import { revokeRunTokens } from "../lib/run-token";
 import { persistUploadBody } from "../lib/upload-body";
 import { log } from "../lib/log";
 import { validSignedApiURL } from "../lib/utils";
+import { assertSafeTarArchive } from "../lib/archive";
 
 const MAX_AGENT_BODY_BYTES = 16 * 1024 * 1024;
 // The public listener's native request cap is 100 MiB. Keep the endpoint's
@@ -50,23 +51,38 @@ const AGENT_ARCHITECTURES = new Set(["amd64", "aarch64", "arm64", "386", "arm"])
 async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
   const { job, run } = claimed;
   const queuedStatus = job.phase === "plan" ? "plan_queued" : "apply_queued";
-  // Revoke before requeueing: once the job is claimable another agent can mint
-  // a fresh run token, and a later revocation would kill that new token.
-  await revokeRunTokens(run.id);
-  await db.transaction(async (tx: unknown): Promise<void> => {
-    const t = tx as typeof db;
-    await t.update(agentJobs).set({
+  const owner = job.agentId === null ? isNull(agentJobs.agentId) : eq(agentJobs.agentId, job.agentId);
+  await db.transaction(async (transaction: unknown): Promise<void> => {
+    const t = transaction as typeof db;
+    const released = await t.update(agentJobs).set({
       status: "queued",
       agentId: null,
       claimedAt: null,
       completedAt: null,
       errorMessage: null,
-    }).where(and(eq(agentJobs.id, job.id), eq(agentJobs.status, "claimed")));
-    const current = await t.query.runs.findFirst({ where: eq(runs.id, run.id), columns: { statusTimestamps: true } });
-    const timestamps: Record<string, string> = current?.statusTimestamps !== null && typeof current?.statusTimestamps === "object"
+      fencingToken: sql`${agentJobs.fencingToken} + 1`,
+    }).where(and(
+      eq(agentJobs.id, job.id),
+      owner,
+      eq(agentJobs.fencingToken, job.fencingToken),
+      eq(agentJobs.status, "claimed"),
+    )).returning({ id: agentJobs.id });
+    if (released.length === 0) return;
+
+    await t.update(runTokens).set({ revokedAt: Date.now() }).where(eq(runTokens.runId, run.id));
+    const current = await t.query.runs.findFirst({
+      where: eq(runs.id, run.id),
+      columns: { status: true, statusTimestamps: true },
+    });
+    if (current?.status !== (job.phase === "plan" ? "planning" : "applying")) return;
+    const timestamps: Record<string, string> = current.statusTimestamps !== null && typeof current.statusTimestamps === "object"
       ? { ...(current.statusTimestamps), [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() }
       : { [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() };
-    await t.update(runs).set({ status: queuedStatus, statusTimestamps: timestamps }).where(and(eq(runs.id, run.id), eq(runs.status, job.phase === "plan" ? "planning" : "applying")));
+    const updatedRuns = await t.update(runs).set({ status: queuedStatus, statusTimestamps: timestamps }).where(and(
+      eq(runs.id, run.id),
+      eq(runs.status, current.status),
+    )).returning({ id: runs.id });
+    if (updatedRuns.length === 0) return;
     if (job.phase === "apply") {
       await t.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
         eq(workspaces.locked, true),
@@ -138,6 +154,28 @@ async function agentFromRequest(ctx: AgentCtx): Promise<Agent | undefined> {
   return authenticateAgent(agentId, ctx.request.headers.get("authorization"));
 }
 
+function requestedFencingToken(ctx: AgentCtx): number | undefined {
+  const header = ctx.request.headers.get("tfc-agent-fencing-token");
+  const query = new URL(ctx.request.url).searchParams.get("fencing_token");
+  return parseAgentFencingToken(header ?? query);
+}
+
+function fencingConflict(set: { status?: number }): Record<string, unknown> {
+  set.status = 409;
+  return { errors: [{ status: "409", title: "Conflict", detail: "Agent job fencing token is missing or stale" }] };
+}
+
+async function activeStackJobForStatus(agentId: string, phase?: string): Promise<typeof stackAgentJobs.$inferSelect | undefined> {
+  return db.query.stackAgentJobs.findFirst({
+    where: and(
+      eq(stackAgentJobs.agentId, agentId),
+      eq(stackAgentJobs.status, "claimed"),
+      ...(phase === undefined ? [] : [eq(stackAgentJobs.phase, phase)]),
+    ),
+    orderBy: [asc(stackAgentJobs.claimedAt)],
+  });
+}
+
 async function stackAgentPayload(details: ClaimedStackAgentJob, baseUrl: string): Promise<Record<string, unknown>> {
   const { job, stack, deploymentRun, step, configuration } = details;
   const path = `/api/agent/stack-jobs/${job.id}`;
@@ -176,6 +214,8 @@ async function claimedJobForArtifact(
   jobId: string,
 ): Promise<ClaimedAgentJob | undefined> {
   if (jobId === "") return undefined;
+  const fencingToken = requestedFencingToken(ctx);
+  if (fencingToken === undefined) return undefined;
   const auth = ctx.request.headers.get("authorization");
   const token = bearerToken(auth ?? "");
   if (token !== undefined) {
@@ -187,7 +227,7 @@ async function claimedJobForArtifact(
       if (job?.agentId === null || job?.agentId === undefined) return undefined;
       const agent = await db.query.agents.findFirst({ where: eq(agents.id, job.agentId) });
       if (agent === undefined || agent.agentPoolId !== pool.poolId) return undefined;
-      return findClaimedAgentJob(agent.id, jobId);
+      return findClaimedAgentJob(agent.id, jobId, fencingToken);
     }
   }
 
@@ -199,7 +239,7 @@ async function claimedJobForArtifact(
     where: and(eq(agentJobs.id, jobId), eq(agentJobs.status, "claimed")),
   });
   if (job?.agentId === null || job?.agentId === undefined) return undefined;
-  return findClaimedAgentJob(job.agentId, jobId);
+  return findClaimedAgentJob(job.agentId, jobId, fencingToken);
 }
 
 async function acknowledgeArtifact(ctx: AgentCtx): Promise<unknown> {
@@ -241,25 +281,36 @@ async function configurationArchivePath(cvId: string): Promise<string> {
   return candidates[0] ?? join(root, "cv", `config-${cvId}.tar.gz`);
 }
 
-/**
- * The tfc-agent expects a flat source bundle (TFC slugs are flat). VCS
- * archives carry a top-level repo directory (git archive layout), so flatten
- * the archive once and cache it under storage/agent-cv/<cvId>.tar.gz.
- */
+async function tarOutput(args: readonly string[]): Promise<{ readonly exitCode: number; readonly stdout: string; readonly stderr: string }> {
+  const process = Bun.spawn(["tar", ...args], { stdout: "pipe", stderr: "pipe" });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    process.exited,
+    new Response(process.stdout).text(),
+    new Response(process.stderr).text(),
+  ]);
+  return { exitCode, stdout, stderr };
+}
+
+async function tarRun(args: readonly string[]): Promise<void> {
+  const result = await tarOutput(args);
+  if (result.exitCode !== 0) throw new Error(result.stderr.trim() || "tar command failed");
+}
+
 async function flattenedConfigurationArchive(cvId: string, sourcePath?: string): Promise<string> {
   const cacheDir = join(storageRoot(), "agent-cv");
   const cached = join(cacheDir, `${cvId}.tar.gz`);
   try {
-    await readFile(cached);
+    if (!(await Bun.file(cached).exists())) throw new Error("cache miss");
+    await assertSafeTarArchive(cached);
     return cached;
   } catch {
-    // not cached yet
+    await rm(cached, { force: true });
   }
-    const source = sourcePath ?? await configurationArchivePath(cvId);
+  const source = sourcePath ?? await configurationArchivePath(cvId);
+  await assertSafeTarArchive(source);
   const tmp = await mkdtemp(join(storageRoot(), ".agent-cv-"));
   try {
-    const extract = Bun.spawnSync(["tar", "-xzf", source, "-C", tmp]);
-    if (extract.exitCode !== 0) throw new Error("tar extract failed");
+    await tarRun(["-x", "-o", "-z", "-f", source, "-C", tmp]);
     const entries = await readdir(tmp, { withFileTypes: true });
     const hasTfInRoot = entries.some(
       (e): boolean => e.isFile() && (e.name.endsWith(".tf") || e.name.endsWith(".tf.json")),
@@ -274,8 +325,7 @@ async function flattenedConfigurationArchive(cvId: string, sourcePath?: string):
       await rm(inner, { recursive: true, force: true });
     }
     await mkdir(cacheDir, { recursive: true });
-    const pack = Bun.spawnSync(["tar", "-czf", cached, "-C", tmp, "."]);
-    if (pack.exitCode !== 0) throw new Error("tar pack failed");
+    await tarRun(["-c", "-z", "-f", cached, "-C", tmp, "."]);
     return cached;
   } finally {
     await rm(tmp, { recursive: true, force: true });
@@ -416,17 +466,23 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
     const operation = jobData !== null && typeof jobData.operation === "string" ? jobData.operation : null;
 
     if ((jobStatus === "finished" || jobStatus === "errored") && jobPayload !== null && runId !== null) {
+      const fencingToken = parseAgentFencingToken(
+        jobData?.fencing_token ?? ctx.request.headers.get("tfc-agent-fencing-token"),
+      );
       // Completion signal: the agent finished (or failed) its claimed job.
       const phase = operation === "apply" ? "apply" : "plan";
-      const job = await db.query.agentJobs.findFirst({
-        where: and(
-          eq(agentJobs.runId, runId),
-          eq(agentJobs.phase, phase),
-          eq(agentJobs.agentId, agent.id),
-          eq(agentJobs.status, "claimed"),
-        ),
-      });
-      if (job !== undefined) {
+      const job = fencingToken === undefined
+        ? undefined
+        : await db.query.agentJobs.findFirst({
+            where: and(
+              eq(agentJobs.runId, runId),
+              eq(agentJobs.phase, phase),
+              eq(agentJobs.agentId, agent.id),
+              eq(agentJobs.fencingToken, fencingToken),
+              eq(agentJobs.status, "claimed"),
+            ),
+          });
+      if (job !== undefined && fencingToken !== undefined) {
         const errorMessage = typeof jobPayload.error === "string" ? jobPayload.error : null;
         const result: Record<string, unknown> = {};
         if (jobData !== null) {
@@ -460,17 +516,27 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
           resourceDestructions: numberOrNull(result.resource_destructions),
           resourceImports: numberOrNull(result.resource_imports),
         };
-        await completeAgentJob(agent.id, job.id, completion);
+        const completed = await completeAgentJob(agent.id, job.id, fencingToken, completion);
+        if (completed === undefined) return fencingConflict(set);
       } else {
-        const stackJobId = jobData !== null && typeof jobData.stack_job_id === "string" ? jobData.stack_job_id : null;
-        const stackJob = stackJobId === null ? undefined : await db.query.stackAgentJobs.findFirst({
-          where: and(
-            eq(stackAgentJobs.id, stackJobId),
-            eq(stackAgentJobs.phase, phase),
-            eq(stackAgentJobs.agentId, agent.id),
-            eq(stackAgentJobs.status, "claimed"),
-          ),
-        });
+        const explicitStackJobId = jobData !== null && typeof jobData.stack_job_id === "string" ? jobData.stack_job_id : null;
+        const stackJob = explicitStackJobId !== null
+          ? await db.query.stackAgentJobs.findFirst({
+              where: and(
+                eq(stackAgentJobs.id, explicitStackJobId),
+                eq(stackAgentJobs.phase, phase),
+                eq(stackAgentJobs.agentId, agent.id),
+                eq(stackAgentJobs.status, "claimed"),
+              ),
+            })
+          : await db.query.stackAgentJobs.findFirst({
+              where: and(
+                eq(stackAgentJobs.deploymentRunId, runId),
+                eq(stackAgentJobs.phase, phase),
+                eq(stackAgentJobs.agentId, agent.id),
+                eq(stackAgentJobs.status, "claimed"),
+              ),
+            });
         if (stackJob !== undefined) {
           const result: Record<string, unknown> = {};
           if (jobData !== null) {
@@ -487,15 +553,28 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
               result[key] = value;
             }
           }
-          await completeStackAgentJob(agent.id, stackJob.id, { status: jobStatus === "finished" ? "completed" : "errored", errorMessage: typeof jobPayload.error === "string" ? jobPayload.error : null, result });
+          const completed = await completeStackAgentJob(agent.id, stackJob.id, { status: jobStatus === "finished" ? "completed" : "errored", errorMessage: typeof jobPayload.error === "string" ? jobPayload.error : null, result });
+          if (completed === undefined) return fencingConflict(set);
+        } else {
+          return fencingConflict(set);
         }
       }
       await db.update(agents).set({ status: "idle", lastPingAt: now }).where(eq(agents.id, agent.id));
     } else {
       const agentStatus = status === "busy" ? "busy" : status === "exited" ? "exited" : "idle";
       await db.update(agents).set({ status: agentStatus, lastPingAt: now }).where(eq(agents.id, agent.id));
-      const stackJobId = jobData !== null && typeof jobData.stack_job_id === "string" ? jobData.stack_job_id : null;
-      if (stackJobId !== null) await heartbeatStackAgentJob(agent.id, stackJobId);
+      const explicitStackJobId = jobData !== null && typeof jobData.stack_job_id === "string" ? jobData.stack_job_id : null;
+      const stackPhase = operation === "apply" || operation === "plan" ? operation : undefined;
+      const stackJob = explicitStackJobId === null
+        ? await activeStackJobForStatus(agent.id, stackPhase)
+        : await db.query.stackAgentJobs.findFirst({
+            where: and(
+              eq(stackAgentJobs.id, explicitStackJobId),
+              eq(stackAgentJobs.agentId, agent.id),
+              eq(stackAgentJobs.status, "claimed"),
+            ),
+          });
+      if (stackJob !== undefined) await heartbeatStackAgentJob(agent.id, stackJob.id);
     }
 
     const messageIndex = ctx.request.headers.get("tfc-agent-message-index");
@@ -876,7 +955,7 @@ async function appendLog(ctx: AgentCtx): Promise<unknown> {
       orderBy: [desc(logs.createdAt)],
     });
     if (last === undefined || last.outputText !== text) {
-      await appendAgentJobLog(details.job.agentId ?? "", details.job.id, text.slice(0, 1024 * 1024));
+      await appendAgentJobLog(details.job.agentId ?? "", details.job.id, details.job.fencingToken, text.slice(0, 1024 * 1024));
     }
   }
   return {};

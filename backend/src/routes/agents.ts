@@ -6,14 +6,20 @@ import {
   agentPoolExcludedWorkspaces,
   agentPools,
   agents,
+  agentJobs,
   agentPoolTokens,
   configurationVersions,
   projects,
+  runs,
   workspaces,
+  stackAgentJobs,
+  stackRecords,
+  stackStateLocks,
+  stacks,
   type users,
 } from "../db/schema";
-import { and, eq, inArray } from "drizzle-orm";
-import { checkOrganizationPermission, type DeepReadonly, auditLog, strictAuditEnabled } from "../lib/utils";
+import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { checkOrganizationPermission, type DeepReadonly, auditLog, strictAuditEnabled, FINAL_RUN_STATUSES } from "../lib/utils";
 import { organizationName } from "../lib/response";
 import { hashAuthenticationToken, tokenHashCandidates } from "../lib/token-service";
 import { authPlugin } from "../auth";
@@ -25,6 +31,7 @@ import {
   findClaimedAgentJob,
   isAgentResultValid,
   MAX_AGENT_RESULT_BYTES,
+  parseAgentFencingToken,
   type AgentJobCompletion,
   type ClaimedAgentJob,
 } from "../lib/agent-jobs";
@@ -34,6 +41,7 @@ import { refetchConfigurationVersion } from "../lib/webhooks";
 import type { PlanJson } from "../lib/plan-json";
 import { cachedOrgByName } from "../lib/cached-lookups";
 import { decodeStatePayload } from "../lib/validation";
+import { assertSafeTarArchive } from "../lib/archive";
 
 const MAX_AGENT_PLAN_JSON_BYTES = 16 * 1024 * 1024;
 
@@ -48,6 +56,16 @@ function getAttrs(body: unknown): Record<string, unknown> {
 type ScopeRelationship =
   | Readonly<{ value: Readonly<{ provided: boolean; ids: readonly string[] }> }>
   | Readonly<{ error: string }>;
+
+function requestedFencingToken(request: Readonly<{ headers: Readonly<{ get(name: string): string | null }> }>): number | undefined {
+  return parseAgentFencingToken(request.headers.get("tfc-agent-fencing-token"));
+}
+
+function fencingConflict(set: SetObj): Record<string, unknown> {
+  (set as { status: number }).status = 409;
+  return { errors: [{ status: "409", title: "Conflict", detail: "Agent job fencing token is missing or stale" }] };
+}
+
 
 function getRelationships(body: unknown): Record<string, unknown> {
   if (typeof body !== "object" || body === null) return {};
@@ -166,6 +184,7 @@ function agentJobResource(details: DeepReadonly<ClaimedAgentJob>): Record<string
     attributes: {
       phase: job.phase,
       status: job.status,
+      "fencing-token": job.fencingToken,
       "claimed-at": job.claimedAt === null ? null : new Date(job.claimedAt).toISOString(),
       run: {
         id: run.id,
@@ -621,7 +640,119 @@ export const agentRoutes = new Elysia({ name: "agents" })
     const poolId = params.pool_id ?? "";
     const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, poolId) });
     if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "manage-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(agentPools).where(eq(agentPools.id, poolId));
+    await db.transaction(async (transaction): Promise<void> => {
+      const tx = transaction as unknown as typeof db;
+      const poolJobs = await tx.query.agentJobs.findMany({
+        where: eq(agentJobs.agentPoolId, poolId),
+        columns: { runId: true },
+      });
+      const poolStackJobs = await tx.query.stackAgentJobs.findMany({
+        where: eq(stackAgentJobs.agentPoolId, poolId),
+        columns: { stackId: true, deploymentRunId: true, stepId: true },
+      });
+      const attachedStacks = await tx.query.stacks.findMany({
+        where: eq(stacks.agentPoolId, poolId),
+        columns: { id: true },
+      });
+      const attachedStackIds = attachedStacks.map((stack): string => stack.id);
+      const activeAttachedStackRuns = attachedStackIds.length === 0 ? [] : await tx.query.stackRecords.findMany({
+        where: and(
+          inArray(stackRecords.stackId, attachedStackIds),
+          eq(stackRecords.recordType, "stack-deployment-runs"),
+          notInArray(stackRecords.status, ["succeeded", "failed", "canceled"]),
+        ),
+        columns: { id: true },
+      });
+      const stackRunIds = [...new Set([
+        ...poolStackJobs.map((job): string => job.deploymentRunId),
+        ...activeAttachedStackRuns.map((run): string => run.id),
+      ])];
+      const activeAttachedStackSteps = stackRunIds.length === 0 ? [] : await tx.query.stackRecords.findMany({
+        where: and(
+          inArray(stackRecords.parentId, stackRunIds),
+          eq(stackRecords.recordType, "stack-deployment-steps"),
+          notInArray(stackRecords.status, ["succeeded", "failed", "canceled"]),
+        ),
+        columns: { id: true },
+      });
+      const stackStepIds = [...new Set([
+        ...poolStackJobs.map((job): string => job.stepId),
+        ...activeAttachedStackSteps.map((step): string => step.id),
+      ])];
+      const stackRecordsForRuns = stackRunIds.length === 0 ? [] : await tx.query.stackRecords.findMany({
+        where: and(inArray(stackRecords.id, stackRunIds), eq(stackRecords.recordType, "stack-deployment-runs")),
+        columns: { id: true, payload: true, status: true },
+      });
+      const stackRecordsForSteps = stackStepIds.length === 0 ? [] : await tx.query.stackRecords.findMany({
+        where: and(inArray(stackRecords.id, stackStepIds), eq(stackRecords.recordType, "stack-deployment-steps")),
+        columns: { id: true, payload: true, status: true },
+      });
+      const poolRuns = await tx.query.runs.findMany({
+        where: and(eq(runs.agentPoolId, poolId), notInArray(runs.status, FINAL_RUN_STATUSES)),
+        columns: { id: true, workspaceId: true, statusTimestamps: true },
+      });
+      const affectedRuns = new Map(poolRuns.map((run): [string, typeof run] => [run.id, run]));
+      const missingRunIds = [...new Set(
+        poolJobs.map((job): string => job.runId).filter((runId): boolean => !affectedRuns.has(runId)),
+      )];
+      if (missingRunIds.length > 0) {
+        const extraRuns = await tx.query.runs.findMany({
+          where: and(inArray(runs.id, missingRunIds), notInArray(runs.status, FINAL_RUN_STATUSES)),
+          columns: { id: true, workspaceId: true, statusTimestamps: true },
+        });
+        for (const run of extraRuns) affectedRuns.set(run.id, run);
+      }
+      const nowMs = Date.now();
+      const now = new Date(nowMs).toISOString();
+      for (const run of affectedRuns.values()) {
+        await tx.update(runs).set({
+          status: "errored",
+          agentPoolId: null,
+          agentId: null,
+          statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": now },
+        }).where(and(eq(runs.id, run.id), notInArray(runs.status, FINAL_RUN_STATUSES)));
+      }
+      for (const record of [...stackRecordsForRuns, ...stackRecordsForSteps]) {
+        if (["succeeded", "failed", "canceled"].includes(record.status)) continue;
+        await tx.update(stackRecords).set({
+          status: "failed",
+          payload: { ...(record.payload ?? {}), error: "Agent pool was deleted" },
+          updatedAt: nowMs,
+        }).where(and(eq(stackRecords.id, record.id), notInArray(stackRecords.status, ["succeeded", "failed", "canceled"])));
+      }
+      await tx.update(agentJobs).set({
+        status: "canceled",
+        agentId: null,
+        completedAt: nowMs,
+        errorMessage: "Agent pool was deleted",
+      }).where(and(eq(agentJobs.agentPoolId, poolId), inArray(agentJobs.status, ["queued", "claimed"])));
+      await tx.update(stackAgentJobs).set({
+        status: "canceled",
+        agentId: null,
+        completedAt: nowMs,
+        updatedAt: nowMs,
+        errorMessage: "Agent pool was deleted",
+      }).where(and(eq(stackAgentJobs.agentPoolId, poolId), inArray(stackAgentJobs.status, ["queued", "claimed"])));
+      if (stackRunIds.length > 0) {
+        await tx.update(stackStateLocks).set({ runId: null, leaseExpiresAt: null, releasedAt: nowMs, updatedAt: nowMs }).where(inArray(stackStateLocks.runId, stackRunIds));
+      }
+      await tx.update(stacks).set({ agentPoolId: null, executionMode: "remote", updatedAt: nowMs }).where(eq(stacks.agentPoolId, poolId));
+      const runIds = [...affectedRuns.keys()];
+      if (runIds.length > 0) {
+        await tx.update(workspaces).set({
+          locked: false,
+          lockedReason: null,
+          lockOwnerType: null,
+          lockOwnerId: null,
+        }).where(and(
+          inArray(workspaces.id, [...affectedRuns.values()].map((run): string => run.workspaceId)),
+          eq(workspaces.locked, true),
+          eq(workspaces.lockOwnerType, "agent-run"),
+          inArray(workspaces.lockOwnerId, runIds),
+        ));
+      }
+      await tx.delete(agentPools).where(eq(agentPools.id, poolId));
+    });
     (set as { status: number }).status = 204;
     return {};
   })
@@ -675,13 +806,48 @@ export const agentRoutes = new Elysia({ name: "agents" })
     if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "read-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: { id: agent.id, type: "agents", attributes: { name: agent.name, status: agent.status, "ip-address": agent.ipAddress, version: agent.version, architecture: agent.architecture, "iac-binaries": agent.iacBinaries, "last-ping-at": agent.lastPingAt !== null ? new Date(agent.lastPingAt).toISOString() : null }, relationships: { "agent-pool": { data: { id: pool.id, type: "agent-pools" } } } } };
   })
-  .delete("/api/v2/agents/:agent_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/agents/:agent_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
     const agentId = params.agent_id ?? "";
     const agent = await db.query.agents.findFirst({ where: eq(agents.id, agentId) });
     if (agent === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, agent.agentPoolId) });
     if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "manage-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await db.delete(agents).where(eq(agents.id, agentId));
+    const deletion = await db.transaction(async (transaction): Promise<"deleted" | "claimed" | "missing"> => {
+      const tx = transaction as unknown as typeof db;
+      const deleted = await tx.delete(agents).where(and(
+        eq(agents.id, agentId),
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${agentJobs}
+          WHERE ${agentJobs.agentId} = ${agentId}
+            AND ${agentJobs.status} = 'claimed'
+        )`,
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${stackAgentJobs}
+          WHERE ${stackAgentJobs.agentId} = ${agentId}
+            AND ${stackAgentJobs.status} = 'claimed'
+        )`,
+      )).returning({ id: agents.id });
+      if (deleted.length > 0) return "deleted";
+      const [claimedJob, claimedStackJob] = await Promise.all([
+        tx.query.agentJobs.findFirst({
+          where: and(eq(agentJobs.agentId, agentId), eq(agentJobs.status, "claimed")),
+          columns: { id: true },
+        }),
+        tx.query.stackAgentJobs.findFirst({
+          where: and(eq(stackAgentJobs.agentId, agentId), eq(stackAgentJobs.status, "claimed")),
+          columns: { id: true },
+        }),
+      ]);
+      return claimedJob !== undefined || claimedStackJob !== undefined ? "claimed" : "missing";
+    });
+    if (deletion === "missing") {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (deletion === "claimed") {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Cannot delete an agent while it has a claimed job" }] };
+    }
     (set as { status: number }).status = 204;
     return {};
   })
@@ -722,13 +888,15 @@ export const agentRoutes = new Elysia({ name: "agents" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
+    const fencingToken = requestedFencingToken(request);
+    if (fencingToken === undefined) return fencingConflict(set);
     const attrs = getAttrs(body);
     const outputText = typeof attrs["output-text"] === "string" ? attrs["output-text"] : "";
     if (outputText === "" || outputText.length > 1_048_576) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "output-text must contain between 1 and 1048576 characters" }] };
     }
-    if (!(await appendAgentJobLog(agent.id, jobId, outputText))) {
+    if (!(await appendAgentJobLog(agent.id, jobId, fencingToken, outputText))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -749,19 +917,21 @@ export const agentRoutes = new Elysia({ name: "agents" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
+    const fencingToken = requestedFencingToken(request);
+    if (fencingToken === undefined) return fencingConflict(set);
     const completion = completionFromBody(body);
     if (completion === undefined) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid agent job result" }] };
     }
     if (completion.planJson !== null) {
-      const claimed = await findClaimedAgentJob(agent.id, jobId);
+      const claimed = await findClaimedAgentJob(agent.id, jobId, fencingToken);
       if (claimed !== undefined && claimed.job.phase !== "plan") {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "plan-json is only valid for completed plan jobs" }] };
       }
     }
-    const completed = await completeAgentJob(agent.id, jobId, completion);
+    const completed = await completeAgentJob(agent.id, jobId, fencingToken, completion);
     if (completed === undefined) {
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Agent job is not claimed by this agent" }] };
@@ -848,6 +1018,12 @@ export const agentRoutes = new Elysia({ name: "agents" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    try {
+      await assertSafeTarArchive(archivePath);
+    } catch {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration archive failed safety validation" }] };
+    }
     (set.headers as Record<string, string>) ["Content-Type"] = "application/gzip";
     return Bun.file(archivePath);
   })
@@ -859,7 +1035,9 @@ export const agentRoutes = new Elysia({ name: "agents" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const job = await findClaimedAgentJob(agent.id, jobId);
+    const fencingToken = requestedFencingToken(request);
+    if (fencingToken === undefined) return fencingConflict(set);
+    const job = await findClaimedAgentJob(agent.id, jobId, fencingToken);
     if (job?.configuration === null || job === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -883,16 +1061,23 @@ export const agentRoutes = new Elysia({ name: "agents" })
       }
       configuration = refreshed;
     }
+    const archivePath = configuration.archivePath;
     if (
-      configuration.archivePath === null
+      archivePath === null
       || ["backing_data_soft_deleted", "backing_data_permanently_deleted"].includes(configuration.status)
-      || !(await Bun.file(configuration.archivePath).exists())
+      || !(await Bun.file(archivePath).exists())
     ) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    try {
+      await assertSafeTarArchive(archivePath);
+    } catch {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration archive failed safety validation" }] };
+    }
     (set.headers as Record<string, string>)["Content-Type"] = "application/gzip";
-    return Bun.file(configuration.archivePath);
+    return Bun.file(archivePath);
   })
   .get("/api/v2/agents/:agent_id/jobs/:job_id/state", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
     const agentId = params.agent_id ?? "";
@@ -902,7 +1087,9 @@ export const agentRoutes = new Elysia({ name: "agents" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const job = await findClaimedAgentJob(agent.id, jobId);
+    const fencingToken = requestedFencingToken(request);
+    if (fencingToken === undefined) return fencingConflict(set);
+    const job = await findClaimedAgentJob(agent.id, jobId, fencingToken);
     if (job?.inputState?.statePayload === null || job?.inputState?.statePayload === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };

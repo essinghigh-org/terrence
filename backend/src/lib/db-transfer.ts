@@ -713,9 +713,14 @@ function loadBunSqlClient(): BunSqlClientConstructor {
 
 const bunSqlClient = loadBunSqlClient();
 
+const POSTGRES_COMPATIBLE_DEFAULTS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  agent_jobs: { fencing_token: "0" },
+};
+
 export class PgTransferSource implements TransferSource {
   readonly #connection: BunSqlConnection;
   readonly #url: string;
+  readonly #columns = new Map<string, Promise<ReadonlySet<string>>>();
 
   constructor(url: string) {
     this.#url = url;
@@ -738,6 +743,42 @@ export class PgTransferSource implements TransferSource {
       [name],
     );
     return rows[0]?.exists === true;
+  }
+
+  async #sourceColumns(name: string): Promise<ReadonlySet<string>> {
+    const cached = this.#columns.get(name);
+    if (cached !== undefined) return cached;
+    const pending = this.#connection.unsafe<{ column_name: string }>(
+      `WITH resolved AS (
+        SELECT n.nspname AS table_schema, c.relname AS table_name
+        FROM pg_class AS c
+        JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE c.oid = to_regclass($1)
+      )
+      SELECT columns.column_name
+      FROM information_schema.columns AS columns
+      JOIN resolved
+        ON columns.table_schema = resolved.table_schema
+       AND columns.table_name = resolved.table_name
+      ORDER BY columns.ordinal_position`,
+      [name],
+    ).then((rows): ReadonlySet<string> => new Set(rows.map((row): string => row.column_name)));
+    this.#columns.set(name, pending);
+    return pending;
+  }
+
+  async #selectColumns(name: string, columns: readonly TransferColumn[]): Promise<string> {
+    const available = await this.#sourceColumns(name);
+    const defaults = POSTGRES_COMPATIBLE_DEFAULTS[name] ?? {};
+    const quote = (value: string): string => `"${value.replaceAll('"', '""')}"`;
+    return columns.map((column): string => {
+      if (available.has(column.name)) return quote(column.name);
+      const fallback = defaults[column.name];
+      if (fallback === undefined) {
+        throw new Error(`Source database table "${name}" is missing required column "${column.name}"`);
+      }
+      return `${fallback} AS ${quote(column.name)}`;
+    }).join(",");
   }
 
   public async count(name: string): Promise<number> {
@@ -772,7 +813,7 @@ export class PgTransferSource implements TransferSource {
     batchSize: number,
     onBatch: (rows: readonly (readonly unknown[])[]) => Promise<void> | void,
   ): Promise<void> {
-    const quotedCols = columns.map((c) => `"${c.name}"`).join(",");
+    const quotedCols = await this.#selectColumns(name, columns);
     const primaryKey = columns.filter((c) => c.primary).map((c) => c.name);
     if (primaryKey.length === 1) {
       const primaryColumn = primaryKey[0];
@@ -817,7 +858,7 @@ export class PgTransferSource implements TransferSource {
     orderColumns: readonly string[],
     limit: number,
   ): Promise<readonly (readonly unknown[])[]> {
-    const quotedCols = columns.map((c) => `"${c.name}"`).join(",");
+    const quotedCols = await this.#selectColumns(name, columns);
     const order = orderColumns.length > 0 ? ` ORDER BY ${orderColumns.map((c) => `"${c}"`).join(",")}` : "";
     const rows = await this.#connection.unsafe<Record<string, unknown>>(
       `SELECT ${quotedCols} FROM "${name}"${order} LIMIT $1`,

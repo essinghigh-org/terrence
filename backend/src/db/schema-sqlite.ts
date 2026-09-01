@@ -1586,6 +1586,7 @@ export const agentJobs = sqliteTable("agent_jobs", {
   result: text("result", { mode: "json" }).$type<Record<string, unknown>>(),
   errorMessage: text("error_message"),
   requeueAttempts: integer("requeue_attempts").notNull().default(0),
+  fencingToken: integer("fencing_token").notNull().default(0),
   claimedAt: integer("claimed_at"),
   completedAt: integer("completed_at"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
