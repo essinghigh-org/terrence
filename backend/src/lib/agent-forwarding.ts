@@ -1,6 +1,7 @@
 import { and, eq, inArray, lt } from "drizzle-orm";
 import { db } from "../db";
 import { agentForwardedRequests } from "../db/schema";
+import { resolveExternalUrl } from "./url-safety";
 
 const MAX_FORWARD_BODY_BYTES = 10 * 1024 * 1024;
 const DEFAULT_FORWARD_TIMEOUT_MS = 60_000;
@@ -124,6 +125,8 @@ export async function forwardFetch(
   init: Readonly<RequestInit> = {},
 ): Promise<Response> {
   const url = validateForwardUrl(input);
+  const destination = await resolveExternalUrl(url.toString(), false);
+  if ("error" in destination) return new Response(destination.error, { status: 422 });
   const method = validateForwardMethod(init);
   const requestHeaders = buildForwardHeaders(init);
   const bodyBytes = await readForwardBody(init);

@@ -87,7 +87,7 @@ Set variables through the container environment or an `.env` file.
 | `GITHUB_APP_HTTP_URL` | `https://github.com` | GitHub HTTP URL for GitHub Enterprise. |
 | `GITHUB_APP_API_URL` | `https://api.github.com` | GitHub App API URL for GitHub Enterprise. GitHub App calls require HTTPS. |
 | `GITHUB_API_URL` | derived | API URL used for VCS lookups. GitHub App calls require HTTPS. |
-| `TERRENCE_ALLOW_INSECURE_OAUTH_URLS` | false | Development-only opt-in for HTTP OAuth endpoint URLs; ignored outside `NODE_ENV=development`. Never enable in production. |
+| `TERRENCE_ALLOW_INSECURE_OAUTH_URLS` | false | Development-only opt-in for HTTP OAuth endpoint URLs; development requires this flag, while tests allow HTTP automatically. Ignored outside development. Never enable in production. |
 | `GITLAB_WEBHOOK_SECRET` | none | Secret for GitLab webhook deliveries. |
 | `BITBUCKET_WEBHOOK_SECRET` | none | Secret for Bitbucket webhook deliveries. |
 

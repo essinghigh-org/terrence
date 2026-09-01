@@ -20,7 +20,7 @@ import { matchesPolicySetWebhook, synchronizeVcsPolicySet } from "./policy-sync"
 import { synchronizeRegistryModule } from "./registry-module-sync";
 import { auditLog, type DeepReadonly } from "./utils";
 import { envEnabled } from "./env";
-import { fetchResolvedExternalUrl, fetchResolvedExternalUrlStream, resolveExternalUrl } from "./url-safety";
+import { fetchResolvedExternalUrl, fetchResolvedExternalUrlStream, resolveExternalUrl, type ExternalRequestInit, type ResolvedExternalUrl } from "./url-safety";
 import {
   providerForServiceProvider,
   sourceIdentityForConnection,
@@ -77,6 +77,7 @@ const OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const REPOSITORY_PATTERN = /^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/;
 const COMMIT_SHA_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_VCS_REDIRECTS = 5;
 
 type VcsFetchInit = Readonly<{
   method?: string;
@@ -103,38 +104,53 @@ function normalizedVcsFetchInit(init: VcsFetchInit): {
   };
 }
 
+type VcsResolvedFetcher = (target: ResolvedExternalUrl, init: ExternalRequestInit) => Promise<Response>;
+
+async function cancelResponseBody(response: Response): Promise<void> {
+  if (response.body !== null) await response.body.cancel().catch((): undefined => undefined);
+}
+
+async function fetchVcsUrlWithRedirects(
+  url: string,
+  init: VcsFetchInit,
+  fetcher: VcsResolvedFetcher,
+): Promise<Response> {
+  const allowPrivate = envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS);
+  const requestInit = normalizedVcsFetchInit(init);
+  let currentUrl = url;
+  const requestHeaders = new Headers(requestInit.headers);
+
+  for (let redirectCount = 0; ; redirectCount += 1) {
+    const destination = await resolveExternalUrl(currentUrl, allowPrivate);
+    if ("error" in destination) return new Response(destination.error, { status: 422 });
+    const response = await fetcher(destination.target, {
+      ...requestInit,
+      headers: Object.fromEntries(requestHeaders.entries()),
+    });
+    if (!REDIRECT_STATUSES.has(response.status)) return response;
+
+    await cancelResponseBody(response);
+    if (redirectCount >= MAX_VCS_REDIRECTS) return new Response("Too many VCS redirects", { status: 502 });
+    const location = response.headers.get("location");
+    if (location === null || location.trim() === "") return new Response("Redirect response missing Location", { status: 502 });
+
+    let redirectUrl: URL;
+    try {
+      redirectUrl = new URL(location, destination.target.url);
+    } catch {
+      return new Response("Invalid redirect URL", { status: 422 });
+    }
+    if (new URL(destination.target.url).origin !== redirectUrl.origin) requestHeaders.delete("authorization");
+    currentUrl = redirectUrl.toString();
+  }
+}
+
 async function fetchVcsUrl(url: string, init: VcsFetchInit = {}): Promise<Response> {
-  const destination = await resolveExternalUrl(url, envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS));
-  if ("error" in destination) return new Response(destination.error, { status: 422 });
-  return fetchResolvedExternalUrl(destination.target, normalizedVcsFetchInit(init));
+  return fetchVcsUrlWithRedirects(url, init, fetchResolvedExternalUrl);
 }
 
 async function fetchVcsUrlStream(url: string, init: VcsFetchInit = {}): Promise<Response> {
-  const allowPrivate = envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS);
-  const requestInit = normalizedVcsFetchInit(init);
-  const destination = await resolveExternalUrl(url, allowPrivate);
-  if ("error" in destination) return new Response(destination.error, { status: 422 });
-  const response = await fetchResolvedExternalUrlStream(destination.target, requestInit);
-  if (!REDIRECT_STATUSES.has(response.status)) return response;
-  const location = response.headers.get("location");
-  if (location === null) return response;
-  if (response.body !== null) await response.body.cancel().catch((): undefined => undefined);
-
-  let redirectUrl: URL;
-  try {
-    redirectUrl = new URL(location, destination.target.url);
-  } catch {
-    return new Response("Invalid redirect URL", { status: 422 });
-  }
-  const redirected = await resolveExternalUrl(redirectUrl.toString(), allowPrivate);
-  if ("error" in redirected) return new Response(redirected.error, { status: 422 });
-
-  const redirectedHeaders = new Headers(requestInit.headers);
-  if (new URL(destination.target.url).origin !== redirectUrl.origin) redirectedHeaders.delete("authorization");
-  return fetchResolvedExternalUrlStream(redirected.target, {
-    ...requestInit,
-    headers: Object.fromEntries(redirectedHeaders.entries()),
-  });
+  return fetchVcsUrlWithRedirects(url, init, fetchResolvedExternalUrlStream);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
