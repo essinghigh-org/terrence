@@ -676,10 +676,15 @@ async function collectTagScopedIds(scope: TokenScopes, orgId: string): Promise<r
     columns: { id: true },
   })).map((row): string => row.id);
   if (orgWorkspaceIds.length === 0) return [];
-  const tagRows = await db.query.workspaceTags.findMany({
-    where: inArray(workspaceTags.workspaceId, orgWorkspaceIds),
-    columns: { workspaceId: true, key: true, value: true },
-  });
+  const tagRows: Array<{ workspaceId: string; key: string; value: string | null }> = [];
+  for (let offset = 0; offset < orgWorkspaceIds.length; offset += DELETE_ID_CHUNK_SIZE) {
+    const chunk = orgWorkspaceIds.slice(offset, offset + DELETE_ID_CHUNK_SIZE);
+    const rows = await db.query.workspaceTags.findMany({
+      where: inArray(workspaceTags.workspaceId, chunk),
+      columns: { workspaceId: true, key: true, value: true },
+    });
+    tagRows.push(...rows);
+  }
   const tagsByWorkspace = buildTagsByWorkspace(tagRows);
   const matching: string[] = [];
   for (const workspaceId of orgWorkspaceIds) {
