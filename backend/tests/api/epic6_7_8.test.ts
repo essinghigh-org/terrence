@@ -138,6 +138,43 @@ describe("Epics 6, 7 & 8 API Features: Global Vars, Variable Sets, State & CV En
     expect(delRes.status).toBe(204);
   });
 
+  it("bounds and paginates the global vars listing", async () => {
+    await db.insert(workspaceVariables).values(Array.from({ length: 21 }, (_, index) => ({
+      id: `var-pagination-${String(index).padStart(2, "0")}`,
+      workspaceId,
+      key: `KEY_${String(index).padStart(2, "0")}`,
+      value: `value-${index}`,
+      sensitive: false,
+      hcl: false,
+      category: "terraform",
+      description: null,
+    })));
+
+    const listRes = await app.handle(
+      new Request("http://localhost/api/v2/vars?page[number]=2&page[size]=5", {
+        headers: { Authorization: `Bearer ${userToken}` },
+      }),
+    );
+    expect(listRes.status).toBe(200);
+    const listBody = await listRes.json();
+    expect(listBody.data).toHaveLength(5);
+    expect(listBody.data.map((item: { attributes: { key: string } }): string => item.attributes.key)).toEqual([
+      "KEY_05",
+      "KEY_06",
+      "KEY_07",
+      "KEY_08",
+      "KEY_09",
+    ]);
+    expect(listBody.meta.pagination).toEqual({
+      "current-page": 2,
+      "page-size": 5,
+      "prev-page": 1,
+      "next-page": 3,
+      "total-pages": 5,
+      "total-count": 21,
+    });
+  });
+
   it("supports variable set project attachments and priority attributes", async () => {
     const createVs = await app.handle(
       new Request(`http://localhost/api/v2/organizations/${orgName}/varsets`, {

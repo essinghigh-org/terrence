@@ -79,7 +79,7 @@ describe("Task Stages & Multi-Stage API", () => {
 
   test("GET /runs/:run_id/task-stages lists task stages", async () => {
     const res = await app.handle(
-      new Request(`http://localhost/api/v2/runs/${runId}/task-stages`, {
+      new Request(`http://localhost/api/v2/runs/${runId}/task-stages?page%5Bsize%5D=1`, {
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
       })
@@ -89,6 +89,7 @@ describe("Task Stages & Multi-Stage API", () => {
     const json = await res.json();
     expect(Array.isArray(json.data)).toBe(true);
     expect(json.data.length).toBeGreaterThan(0);
+    expect(json.meta.pagination).toMatchObject({ "page-size": 1, "total-count": 1, "total-pages": 1 });
   });
 
   test("GET /task-stages/:id shows stage resource", async () => {

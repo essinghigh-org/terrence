@@ -2,9 +2,9 @@ import { Elysia } from "elysia";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { envEnabled } from "../lib/env";
 import { db } from "../db";
-import { runTriggers, auditLogs, githubWebhookDeliveries, workspaces, workspaceVariables, users, organizationMemberships } from "../db/schema";
-import { eq, and, desc, inArray } from "drizzle-orm";
-import { checkOrgPermission, findAuthorizedRun, findAuthorizedWorkspace } from "../lib/utils";
+import { runTriggers, auditLogs, githubWebhookDeliveries, workspaces, workspaceVariables, users, organizationMemberships, teams } from "../db/schema";
+import { eq, and, asc, count, desc, inArray, or, type SQL } from "drizzle-orm";
+import { checkOrgPermission, findAuthorizedRun, findAuthorizedWorkspace, pageRequest, pagination, workspaceIdsForPermission } from "../lib/utils";
 import { scopeCoversOrg, scopeGrants } from "../lib/token-scopes";
 import { currentTokenScopes } from "../lib/request-scope";
 import { workspaceVariableResource } from "../lib/response";
@@ -37,6 +37,48 @@ type ParamCtx = Readonly<{
 }>;
 
 type WorkspaceVariable = Readonly<typeof workspaceVariables.$inferSelect>;
+
+async function variableAuthorizationWhere(
+  user: Readonly<typeof users.$inferSelect> | null | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null,
+): Promise<SQL | undefined> {
+  let organizationIds: string[];
+  if (tokenOrgId !== null) {
+    organizationIds = [tokenOrgId];
+  } else if (tokenTeamId !== null) {
+    const team = await db.query.teams.findFirst({ where: eq(teams.id, tokenTeamId), columns: { orgId: true } });
+    organizationIds = team === undefined ? [] : [team.orgId];
+  } else if (user?.isSiteAdmin === true) {
+    const allOrganizations = await db.query.organizations.findMany({ columns: { id: true } });
+    organizationIds = allOrganizations.map((organization): string => organization.id);
+  } else if (user !== null && user !== undefined) {
+    const memberships = await db.query.organizationMemberships.findMany({
+      where: and(eq(organizationMemberships.userId, user.id), eq(organizationMemberships.status, "active")),
+      columns: { orgId: true },
+    });
+    organizationIds = memberships.map((membership): string => membership.orgId);
+  } else {
+    organizationIds = [];
+  }
+
+  const accessConditions: SQL[] = [];
+  for (const organizationId of [...new Set(organizationIds)]) {
+    const authorizedWorkspaceIds = await workspaceIdsForPermission(
+      organizationId,
+      user?.id,
+      tokenOrgId,
+      tokenTeamId,
+      "variables-read",
+    );
+    if (authorizedWorkspaceIds === null) {
+      accessConditions.push(eq(workspaces.orgId, organizationId));
+    } else if (authorizedWorkspaceIds.length > 0) {
+      accessConditions.push(inArray(workspaceVariables.workspaceId, authorizedWorkspaceIds));
+    }
+  }
+  return accessConditions.length === 0 ? undefined : or(...accessConditions);
+}
 
 function globalVariableResource(variable: WorkspaceVariable): Record<string, unknown> {
   return {
@@ -434,19 +476,45 @@ export const miscRoutes = new Elysia({ name: "misc" })
         (set as { status: number }).status = 404;
         return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      const variables = await db.query.workspaceVariables.findMany({
-        where: eq(workspaceVariables.workspaceId, authorized.id),
-      });
-      return { data: variables.map(globalVariableResource) };
+      const where = eq(workspaceVariables.workspaceId, authorized.id);
+      const page = pageRequest(request ?? { url: "http://localhost/api/v2/vars" });
+      const [variables, countRows] = await Promise.all([
+        db.select().from(workspaceVariables)
+          .where(where)
+          .orderBy(asc(workspaceVariables.id))
+          .limit(page.size)
+          .offset((page.number - 1) * page.size),
+        db.select({ total: count() }).from(workspaceVariables).where(where),
+      ]);
+      const totalCount = countRows[0]?.total ?? 0;
+      return {
+        data: variables.map(globalVariableResource),
+        ...pagination(request ?? { url: "http://localhost/api/v2/vars" }, page.number, page.size, totalCount),
+      };
     }
 
-    const variables = await db.query.workspaceVariables.findMany();
-    const workspaceIds = [...new Set(variables.map((variable: WorkspaceVariable): string => variable.workspaceId))];
-    const authorized = await Promise.all(workspaceIds.map(async (workspaceId): Promise<string | null> =>
-      (await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "variables-read")) === undefined ? null : workspaceId,
-    ));
-    const allowed = new Set(authorized.filter((workspaceId): workspaceId is string => workspaceId !== null));
-    return { data: variables.filter((variable: WorkspaceVariable): boolean => allowed.has(variable.workspaceId)).map(globalVariableResource) };
+    const requestWithUrl = request ?? { url: "http://localhost/api/v2/vars" };
+    const where = await variableAuthorizationWhere(user, orgId, teamId);
+    const page = pageRequest(requestWithUrl);
+    if (where === undefined) return { data: [], ...pagination(requestWithUrl, page.number, page.size, 0) };
+    const [rows, countRows] = await Promise.all([
+      db.select({ variable: workspaceVariables })
+        .from(workspaceVariables)
+        .innerJoin(workspaces, eq(workspaceVariables.workspaceId, workspaces.id))
+        .where(where)
+        .orderBy(asc(workspaceVariables.id))
+        .limit(page.size)
+        .offset((page.number - 1) * page.size),
+      db.select({ total: count() })
+        .from(workspaceVariables)
+        .innerJoin(workspaces, eq(workspaceVariables.workspaceId, workspaces.id))
+        .where(where),
+    ]);
+    const totalCount = countRows[0]?.total ?? 0;
+    return {
+      data: rows.map((row): Record<string, unknown> => globalVariableResource(row.variable)),
+      ...pagination(requestWithUrl, page.number, page.size, totalCount),
+    };
   })
   .post("/api/v2/vars", async ({ body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};

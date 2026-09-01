@@ -137,4 +137,25 @@ describe("Policy & policy-set list filters (POL-001)", () => {
     expect(res.status).toBe(200);
     expect((await res.json()).data.length).toBe(2);
   });
+
+  it("policy collections honor page size and expose deterministic pagination metadata", async () => {
+    const policiesPage = await request(`/api/v2/organizations/${orgName}/policies?page%5Bsize%5D=1&page%5Bnumber%5D=2`);
+    expect(policiesPage.status).toBe(200);
+    const policiesBody = await policiesPage.json();
+    expect(policiesBody.data).toHaveLength(1);
+    expect(policiesBody.data[0].attributes.name).toBe("Sentinel Policy Alpha");
+    expect(policiesBody.meta.pagination).toMatchObject({
+      "current-page": 2,
+      "page-size": 1,
+      "total-count": 2,
+      "total-pages": 2,
+    });
+
+    const setsPage = await request(`/api/v2/organizations/${orgName}/policy-sets?page%5Bsize%5D=1`);
+    expect(setsPage.status).toBe(200);
+    const setsBody = await setsPage.json();
+    expect(setsBody.data).toHaveLength(1);
+    expect(setsBody.data[0].attributes.name).toBe("OPA Set");
+    expect(setsBody.meta.pagination).toMatchObject({ "page-size": 1, "total-count": 2, "total-pages": 2 });
+  });
 });

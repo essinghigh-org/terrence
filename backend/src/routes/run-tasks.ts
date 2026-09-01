@@ -9,7 +9,7 @@ import {
   type users,
   type workspaces,
 } from "../db/schema";
-import { eq, and, inArray, or, asc } from "drizzle-orm";
+import { eq, and, inArray, or, asc, count } from "drizzle-orm";
 import { checkOrganizationPermission, findAuthorizedRun, findAuthorizedWorkspace, pageRequest, pagination, validSignedApiURL } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { organizationName } from "../lib/response";
@@ -501,19 +501,31 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
     return {};
   })
   .use(authPlugin)
-  .get("/api/v2/runs/:run_id/run-tasks", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id/run-tasks", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, tokenOrgId, tokenTeamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const results = await db.query.runTaskResults.findMany({ where: eq(runTaskResults.runId, runId) });
-    return { data: results.map(taskResultResource) };
+    const where = eq(runTaskResults.runId, runId);
+    const page = pageRequest(request);
+    const [results, countRows] = await Promise.all([
+      db.query.runTaskResults.findMany({ where, orderBy: [asc(runTaskResults.createdAt), asc(runTaskResults.id)], limit: page.size, offset: (page.number - 1) * page.size }),
+      db.select({ total: count() }).from(runTaskResults).where(where),
+    ]);
+    const totalCount = countRows[0]?.total ?? 0;
+    return { data: results.map(taskResultResource), ...pagination(request, page.number, page.size, totalCount) };
   })
-  .get("/api/v2/run-tasks/:task_id/task-results", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/run-tasks/:task_id/task-results", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const taskId = params.task_id ?? "";
     const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
     if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const results = await db.query.runTaskResults.findMany({ where: eq(runTaskResults.runTaskId, taskId) });
-    return { data: results.map(taskResultResource) };
+    const where = eq(runTaskResults.runTaskId, taskId);
+    const page = pageRequest(request);
+    const [results, countRows] = await Promise.all([
+      db.query.runTaskResults.findMany({ where, orderBy: [asc(runTaskResults.createdAt), asc(runTaskResults.id)], limit: page.size, offset: (page.number - 1) * page.size }),
+      db.select({ total: count() }).from(runTaskResults).where(where),
+    ]);
+    const totalCount = countRows[0]?.total ?? 0;
+    return { data: results.map(taskResultResource), ...pagination(request, page.number, page.size, totalCount) };
   })
   .get("/api/v2/task-results/:task_result_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const result = await db.query.runTaskResults.findFirst({ where: eq(runTaskResults.id, params.task_result_id ?? "") });
@@ -522,11 +534,17 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: taskResultResource(result) };
   })
-  .get("/api/v2/runs/:run_id/task-stages", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id/task-stages", async ({ params, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
-    const authorized = await findAuthorizedRun(runId, user?.id, tokenOrgId, tokenTeamId ?? null);
+    const authorized = await findAuthorizedRun(runId, user?.id, tokenOrgId, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const stages = await db.query.taskStages.findMany({ where: eq(taskStages.runId, runId) });
+    const where = eq(taskStages.runId, runId);
+    const page = pageRequest(request);
+    const [stages, countRows] = await Promise.all([
+      db.query.taskStages.findMany({ where, orderBy: [asc(taskStages.createdAt), asc(taskStages.id)], limit: page.size, offset: (page.number - 1) * page.size }),
+      db.select({ total: count() }).from(taskStages).where(where),
+    ]);
+    const totalCount = countRows[0]?.total ?? 0;
     return {
       data: stages.map((s): Record<string, unknown> => ({
         id: s.id,
@@ -540,6 +558,7 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
           run: { data: { id: s.runId, type: "runs" } },
         },
       })),
+      ...pagination(request, page.number, page.size, totalCount),
     };
   })
   .get("/api/v2/task-stages/:task_stage_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {

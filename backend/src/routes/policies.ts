@@ -1,9 +1,9 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { policySets, policySetVersions, policySetWorkspaces, policySetProjects, policySetExclusions, policySetProjectExclusions, policySetTagSelectors, policySetParameters, policies, policyChecks, projects, runs, workspaces, organizations, oauthClients, oauthTokens, githubAppInstallations, type users } from "../db/schema";
-import { eq, and, inArray, asc, isNull, like, ilike } from "drizzle-orm";
+import { eq, and, inArray, asc, isNull, like, ilike, count, exists, notExists, or } from "drizzle-orm";
 import { isPostgres } from "../db/driver";
-import { checkOrganizationPermission, checkWorkspacePermission, signedApiURL, validSignedApiURL , type DeepReadonly } from "../lib/utils";
+import { checkOrganizationPermission, checkWorkspacePermission, signedApiURL, validSignedApiURL, pageRequest, pagination, type DeepReadonly } from "../lib/utils";
 import { organizationName } from "../lib/response";
 import { authPlugin } from "../auth";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
@@ -354,11 +354,22 @@ export const policyRoutes = new Elysia({ name: "policies" })
       const nameFilter = isPostgres ? ilike(policies.name, `%${searchName}%`) : like(policies.name, `%${searchName}%`);
       conditions.push(nameFilter);
     }
-    const polList = (await db.query.policies.findMany({
-      where: and(...conditions),
-      orderBy: [asc(policies.name)],
-    })) as unknown as PolicyRow[];
-    return { data: await Promise.all(polList.map(async (pol): Promise<Record<string, unknown>> => policyResource(pol, org.name))) };
+    const { number, size } = pageRequest(request);
+    const where = and(...conditions);
+    const [polList, countRows] = await Promise.all([
+      db.query.policies.findMany({
+        where,
+        orderBy: [asc(policies.name), asc(policies.id)],
+        limit: size,
+        offset: (number - 1) * size,
+      }),
+      db.select({ total: count() }).from(policies).where(where),
+    ]);
+    const totalCount = countRows[0]?.total ?? 0;
+    return {
+      data: await Promise.all((polList as unknown as PolicyRow[]).map(async (pol): Promise<Record<string, unknown>> => policyResource(pol, org.name))),
+      ...pagination(request, number, size, totalCount),
+    };
   })
   .post("/api/v2/organizations/:org_name/policies", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
@@ -462,7 +473,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return new Response(pol.source ?? "", { status: 200, headers: { "Content-Type": "application/octet-stream" } });
   })
-  .get("/api/v2/workspaces/:workspace_id/policy-sets", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/workspaces/:workspace_id/policy-sets", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";
     const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (workspace === undefined || !(await checkWorkspacePermission(workspace, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))) {
@@ -470,40 +481,43 @@ export const policyRoutes = new Elysia({ name: "policies" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
 
-    const [directLinks, projectLinks, globalSets, exclusions] = await Promise.all([
-      db.query.policySetWorkspaces.findMany({ where: eq(policySetWorkspaces.workspaceId, workspaceId) }),
+    const directMembership = exists(db.select({ id: policySetWorkspaces.id }).from(policySetWorkspaces).where(and(
+      eq(policySetWorkspaces.policySetId, policySets.id),
+      eq(policySetWorkspaces.workspaceId, workspaceId),
+    )));
+    const projectMembership = workspace.projectId === null
+      ? undefined
+      : exists(db.select({ id: policySetProjects.id }).from(policySetProjects).where(and(
+        eq(policySetProjects.policySetId, policySets.id),
+        eq(policySetProjects.projectId, workspace.projectId),
+      )));
+    const exclusion = notExists(db.select({ id: policySetExclusions.id }).from(policySetExclusions).where(and(
+      eq(policySetExclusions.policySetId, policySets.id),
+      eq(policySetExclusions.workspaceId, workspaceId),
+    )));
+    const effectiveWhere = and(
+      eq(policySets.orgId, workspace.orgId),
+      exclusion,
+      or(eq(policySets.global, true), directMembership, projectMembership),
+    );
+    const { number, size } = pageRequest(request);
+    const [effectiveSets, countRows] = await Promise.all([
+      db.select().from(policySets).where(effectiveWhere).orderBy(asc(policySets.name), asc(policySets.id)).limit(size).offset((number - 1) * size),
+      db.select({ total: count() }).from(policySets).where(effectiveWhere),
+    ]);
+    const totalCount = countRows[0]?.total ?? 0;
+    if (effectiveSets.length === 0) return { data: [], ...pagination(request, number, size, totalCount) };
+
+    const effectiveIds = effectiveSets.map((policySet: PsItem): string => policySet.id);
+    const [directLinks, projectLinks, effectivePolicies] = await Promise.all([
+      db.query.policySetWorkspaces.findMany({ where: and(eq(policySetWorkspaces.workspaceId, workspaceId), inArray(policySetWorkspaces.policySetId, effectiveIds)) }),
       workspace.projectId === null
         ? Promise.resolve([])
-        : db.query.policySetProjects.findMany({ where: eq(policySetProjects.projectId, workspace.projectId) }),
-      db.query.policySets.findMany({ where: and(eq(policySets.orgId, workspace.orgId), eq(policySets.global, true)) }),
-      db.query.policySetExclusions.findMany({ where: eq(policySetExclusions.workspaceId, workspaceId) }),
+        : db.query.policySetProjects.findMany({ where: and(eq(policySetProjects.projectId, workspace.projectId), inArray(policySetProjects.policySetId, effectiveIds)) }),
+      db.query.policies.findMany({ where: inArray(policies.policySetId, effectiveIds) }),
     ]);
     const directIds = new Set(directLinks.map((link: Readonly<{ policySetId: string }>): string => link.policySetId));
     const projectIds = new Set(projectLinks.map((link: Readonly<{ policySetId: string }>): string => link.policySetId));
-    const excludedIds = new Set(exclusions.map((link: Readonly<{ policySetId: string }>): string => link.policySetId));
-    const effectiveIds = [...new Set([
-      ...directIds,
-      ...projectIds,
-      ...globalSets.map((policySet: PsItem): string => policySet.id),
-    ])].filter((policySetId: string): boolean => !excludedIds.has(policySetId));
-    if (effectiveIds.length === 0) return { data: [] };
-
-    // The org-global sets above were already loaded in full; only re-fetch the
-    // direct/project-bound ids so we don't read the same policy_sets rows twice.
-    const globalSetIds = new Set(globalSets.map((policySet: PsItem): string => policySet.id));
-    const reFetchIds = effectiveIds.filter((policySetId: string): boolean => !globalSetIds.has(policySetId));
-    const [reFetchedSets, effectivePolicies] = await Promise.all([
-      reFetchIds.length === 0
-        ? Promise.resolve([] as PsItem[])
-        : db.query.policySets.findMany({ where: inArray(policySets.id, reFetchIds) }),
-      db.query.policies.findMany({ where: inArray(policies.policySetId, effectiveIds) }),
-    ]);
-    const setsById = new Map<string, PsItem>();
-    for (const policySet of globalSets) setsById.set(policySet.id, policySet);
-    for (const policySet of reFetchedSets) setsById.set(policySet.id, policySet);
-    const effectiveSets = effectiveIds
-      .map((policySetId: string): PsItem | undefined => setsById.get(policySetId))
-      .filter((policySet: PsItem | undefined): policySet is PsItem => policySet !== undefined);
     const policyCounts = new Map<string, number>();
     for (const policy of effectivePolicies) {
       if (policy.policySetId !== null) policyCounts.set(policy.policySetId, (policyCounts.get(policy.policySetId) ?? 0) + 1);
@@ -516,9 +530,10 @@ export const policyRoutes = new Elysia({ name: "policies" })
         attributes: {
           ...(await policySetAttributes(policySet)),
           "policy-count": policyCounts.get(policySet.id) ?? 0,
-          scope: policySet.global === true ? "global" : directIds.has(policySet.id) ? "workspace" : "project",
+          scope: policySet.global === true ? "global" : directIds.has(policySet.id) ? "workspace" : projectIds.has(policySet.id) ? "project" : "global",
         },
       }))),
+      ...pagination(request, number, size, totalCount),
     };
   })
   .get("/api/v2/organizations/:org_name/policy-sets", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -530,17 +545,28 @@ export const policyRoutes = new Elysia({ name: "policies" })
     // for backward compatibility (matches the workspaces list endpoint).
     // Policy-set kind mirrors the kind of its child policies (mixed sets
     // expose the set-level kind column).
-    const filters: (typeof policySets.$inferSelect)[] = [];
     const paramsUrl = new URL(request.url).searchParams;
     const kind = paramsUrl.get("filter[kind]");
     const searchName = paramsUrl.get("search[name]")?.trim() ?? paramsUrl.get("q")?.trim();
-    const psList = await db.query.policySets.findMany({ where: eq(policySets.orgId, org.id) });
-    for (const policySet of psList) {
-      if (kind !== null && kind !== "" && policySet.kind !== kind) continue;
-      if (searchName !== null && searchName !== undefined && !policySet.name.toLowerCase().includes(searchName.toLowerCase())) continue;
-      filters.push(policySet);
+    const conditions = [eq(policySets.orgId, org.id)];
+    if (kind !== null && kind !== "") conditions.push(eq(policySets.kind, kind));
+    if (searchName !== undefined && searchName !== "") {
+      const nameFilter = isPostgres ? ilike(policySets.name, `%${searchName}%`) : like(policySets.name, `%${searchName}%`);
+      conditions.push(nameFilter);
     }
-    if (filters.length === 0) return { data: [] };
+    const { number, size } = pageRequest(request);
+    const where = and(...conditions);
+    const [filters, countRows] = await Promise.all([
+      db.query.policySets.findMany({
+        where,
+        orderBy: [asc(policySets.name), asc(policySets.id)],
+        limit: size,
+        offset: (number - 1) * size,
+      }),
+      db.select({ total: count() }).from(policySets).where(where),
+    ]);
+    const totalCount = countRows[0]?.total ?? 0;
+    if (filters.length === 0) return { data: [], ...pagination(request, number, size, totalCount) };
     const psIds = filters.map((ps: PsItem): string => ps.id);
     // Batch the per-set relationships (workspaces/projects/exclusions/policies).
     const [wsRows, projRows, exclRows, policyRows] = await Promise.all([
@@ -586,7 +612,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
         policies: { data: (polBySet.get(ps.id) ?? []).map((p): Record<string, string> => ({ id: p.id, type: "policies" })) },
       },
     })));
-    return { data };
+    return { data, ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/organizations/:org_name/policy-sets", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
@@ -1100,13 +1126,22 @@ export const policyRoutes = new Elysia({ name: "policies" })
     return {};
   })
   // --- Policies ---
-  .get("/api/v2/policy-sets/:policy_set_id/policies", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/policy-sets/:policy_set_id/policies", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
     const policySetId = params.policy_set_id ?? "";
     const ps = await db.query.policySets.findFirst({ where: eq(policySets.id, policySetId) });
     if (ps === undefined || !(await checkOrganizationPermission(ps.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const polList = await db.query.policies.findMany({ where: eq(policies.policySetId, policySetId) });
+    const { number, size } = pageRequest(request);
+    const where = eq(policies.policySetId, policySetId);
+    const [polList, countRows] = await Promise.all([
+      db.query.policies.findMany({ where, orderBy: [asc(policies.name), asc(policies.id)], limit: size, offset: (number - 1) * size }),
+      db.select({ total: count() }).from(policies).where(where),
+    ]);
+    const totalCount = countRows[0]?.total ?? 0;
     const orgName = await organizationName(ps.orgId);
-    return { data: await Promise.all(polList.map(async (p: PolItem): Promise<Record<string, unknown>> => policyResource(p, orgName))) };
+    return {
+      data: await Promise.all(polList.map((p: PolItem): Promise<Record<string, unknown>> => policyResource(p, orgName))),
+      ...pagination(request, number, size, totalCount),
+    };
   })
   .post("/api/v2/policy-sets/:policy_set_id/policies", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const policySetId = params.policy_set_id ?? "";

@@ -2,7 +2,9 @@ import { describe, expect, it, beforeEach } from "bun:test";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { users, organizations, organizationMemberships, teams, projects, workspaces, runs, runComments, runTasks, runTaskResults, workspaceRunTasks, apiTokens, auditLogs } from "../../src/db/schema";
+import { eq } from "drizzle-orm";
+import { users, organizations, organizationMemberships, teams, projects, workspaces, runs, logs, runComments, runTasks, runTaskResults, workspaceRunTasks, apiTokens, auditLogs } from "../../src/db/schema";
+import { archiveRunLogs, deleteRunLogArchive } from "../../src/lib/run-logs";
 import { writePlanJsonArtifact } from "../../src/lib/plan-json";
 describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", () => {
   let userToken: string;
@@ -152,6 +154,89 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
       terraform_version: "1.9.8",
       resource_changes: [{ address: "terraform_data.example" }],
     });
+  });
+
+  it("paginates merged run events, comments, and logs", async () => {
+    await db.insert(auditLogs).values([
+      { id: "event-1", orgId, userId, action: "queued", resourceType: "runs", resourceId: runId, details: { source: "test" }, createdAt: 1_000 },
+      { id: "event-2", orgId, userId, action: "planned", resourceType: "runs", resourceId: runId, details: { source: "test" }, createdAt: 3_000 },
+      { id: "event-3", orgId, userId, action: "applied", resourceType: "runs", resourceId: runId, details: { source: "test" }, createdAt: 5_000 },
+      { id: "event-4", orgId, userId, action: "completed", resourceType: "runs", resourceId: runId, details: { source: "test" }, createdAt: 7_000 },
+    ]);
+    await db.insert(runComments).values([
+      { id: "comment-1", runId, userId, body: "first", createdAt: 2_000 },
+      { id: "comment-2", runId, userId, body: "second", createdAt: 4_000 },
+      { id: "comment-3", runId, userId, body: "third", createdAt: 6_000 },
+    ]);
+    await db.insert(logs).values([
+      { id: "log-1", runId, phase: "plan", outputText: "one", createdAt: 1_000 },
+      { id: "log-2", runId, phase: "plan", outputText: "two", createdAt: 2_000 },
+      { id: "log-3", runId, phase: "plan", outputText: "three", createdAt: 3_000 },
+      { id: "log-4", runId, phase: "apply", outputText: "four", createdAt: 4_000 },
+      { id: "log-5", runId, phase: "apply", outputText: "five", createdAt: 5_000 },
+      { id: "log-6", runId, phase: "apply", outputText: "six", createdAt: 6_000 },
+    ]);
+
+    const get = (path: string): Promise<Response> => app.handle(new Request(`http://localhost${path}`, {
+      headers: { Authorization: `Bearer ${userToken}` },
+    }));
+
+    const eventsPageOne = await get(`/api/v2/runs/${runId}/run-events?page[number]=1&page[size]=3`);
+    expect(eventsPageOne.status).toBe(200);
+    const eventsOneBody = await eventsPageOne.json();
+    expect(eventsOneBody.data.map((item: { id: string }): string => item.id)).toEqual([
+      "event-1",
+      "re-comment-1",
+      "event-2",
+    ]);
+    expect(eventsOneBody.meta.pagination).toMatchObject({
+      "current-page": 1,
+      "page-size": 3,
+      "next-page": 2,
+      "total-pages": 3,
+      "total-count": 7,
+    });
+
+    const eventsPageTwo = await get(`/api/v2/runs/${runId}/run-events?page[number]=2&page[size]=3`);
+    const eventsTwoBody = await eventsPageTwo.json();
+    expect(eventsTwoBody.data.map((item: { id: string }): string => item.id)).toEqual([
+      "re-comment-2",
+      "event-3",
+      "re-comment-3",
+    ]);
+
+    const commentsPage = await get(`/api/v2/runs/${runId}/comments?page[number]=2&page[size]=2`);
+    expect(commentsPage.status).toBe(200);
+    const commentsBody = await commentsPage.json();
+    expect(commentsBody.data.map((item: { id: string }): string => item.id)).toEqual(["comment-3"]);
+    expect(commentsBody.meta.pagination).toMatchObject({
+      "current-page": 2,
+      "page-size": 2,
+      "prev-page": 1,
+      "next-page": null,
+      "total-pages": 2,
+      "total-count": 3,
+    });
+
+    const logsPage = await get(`/api/v2/runs/${runId}/logs?page[number]=3&page[size]=2`);
+    expect(logsPage.status).toBe(200);
+    const logsBody = await logsPage.json();
+    expect(logsBody.data.map((item: { id: string }): string => item.id)).toEqual(["log-5", "log-6"]);
+    expect(logsBody.meta.pagination).toMatchObject({
+      "current-page": 3,
+      "page-size": 2,
+      "total-pages": 3,
+      "total-count": 6,
+    });
+
+    expect(await archiveRunLogs(runId)).toBe(true);
+    await db.delete(logs).where(eq(logs.runId, runId));
+    const archivedLogsPage = await get(`/api/v2/runs/${runId}/logs?page[number]=1&page[size]=2`);
+    expect(archivedLogsPage.status).toBe(200);
+    const archivedLogsBody = await archivedLogsPage.json();
+    expect(archivedLogsBody.data.map((item: { id: string }): string => item.id)).toEqual(["log-1", "log-2"]);
+    expect(archivedLogsBody.meta.pagination["total-count"]).toBe(6);
+    await deleteRunLogArchive(runId);
   });
 
   it("manages Team and Organization Authentication Tokens", async () => {
@@ -306,8 +391,8 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
     });
     const headers = { Authorization: `Bearer ${userToken}` };
     const [runResults, taskResults] = await Promise.all([
-      app.handle(new Request(`http://localhost/api/v2/runs/${runId}/run-tasks`, { headers })),
-      app.handle(new Request(`http://localhost/api/v2/run-tasks/${taskId}/task-results`, { headers })),
+      app.handle(new Request(`http://localhost/api/v2/runs/${runId}/run-tasks?page%5Bsize%5D=1`, { headers })),
+      app.handle(new Request(`http://localhost/api/v2/run-tasks/${taskId}/task-results?page%5Bsize%5D=1`, { headers })),
     ]);
     expect(runResults.status).toBe(200);
     expect(taskResults.status).toBe(200);
@@ -315,7 +400,9 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
       status: "passed",
       message: "Scan complete",
     });
-    expect((await taskResults.json()).data).toHaveLength(1);
+    const taskResultsBody = await taskResults.json();
+    expect(taskResultsBody.data).toHaveLength(1);
+    expect(taskResultsBody.meta.pagination).toMatchObject({ "page-size": 1, "total-count": 1, "total-pages": 1 });
   });
 
   it("returns Entitlements and Organization Audit Logs", async () => {
