@@ -7,9 +7,7 @@ import { EmptyState } from "../components/EmptyState";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
   Card,
-  CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "../components/ui/card";
@@ -38,12 +36,14 @@ import { WorkspaceVcs } from "../components/WorkspaceVcs";
 import { WorkspaceRunTasks } from "../components/WorkspaceRunTasks";
 import { WorkspaceRetention } from "../components/WorkspaceRetention";
 import { WorkspaceDestruction } from "../components/WorkspaceDestruction";
+import { Breadcrumbs, type BreadcrumbItem } from "../components/Breadcrumbs";
+import { PageShell, SettingsSection, type PageShellVariant } from "../components/PageHeader";
 import { RunDetail } from "./RunDetail";
 import { RunList } from "./RunList";
 import { StateHistory } from "./StateHistory";
 import { Play, Lock, LockOpen, Info, CheckCircle2, Copy } from "lucide-react";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
-import { cn, copyTextToClipboard } from "../lib/utils";
+import { copyTextToClipboard } from "../lib/utils";
 import { formatDate, formatDateTime, formatRelativeTime } from "../lib/utils";
 import { formatRunSource, formatRunStatus } from "../lib/run-labels";
 import { WorkspaceRepositoryLink } from "../components/WorkspaceRepositoryLink";
@@ -70,6 +70,94 @@ export type WorkspaceSection =
   | "settings"
   | "locking"
   | "destruction";
+
+/**
+ * Every settings section names itself. Previously all fourteen shared the
+ * breadcrumb "… / Settings" and the workspace name as their heading, so the
+ * page never told you which setting you had opened — only the sidebar did.
+ *
+ * `layout` is per-section rather than "settings means narrow": half of these
+ * destinations are forms and want the form measure, and half are collections
+ * of rows that want room for their columns.
+ */
+type SettingsSectionMeta = Readonly<{
+  description: string;
+  layout: PageShellVariant;
+  title: string;
+}>;
+
+const SETTINGS_SECTIONS: Partial<Record<WorkspaceSection, SettingsSectionMeta>> = {
+  settings: {
+    title: "General",
+    description: "Name, description, execution mode and remote state sharing for this workspace.",
+    layout: "form",
+  },
+  locking: {
+    title: "Locking",
+    description: "Lock the workspace to stop new plans and applies while you work on it.",
+    layout: "form",
+  },
+  retention: {
+    title: "Data retention",
+    description: "How long state versions and configuration versions are kept before deletion.",
+    layout: "form",
+  },
+  destruction: {
+    title: "Destruction and deletion",
+    description: "Queue a destroy run, or remove the workspace and its history entirely.",
+    layout: "form",
+  },
+  vcs: {
+    title: "Version control",
+    description: "Connect a repository so commits queue runs automatically.",
+    layout: "form",
+  },
+  "ssh-key": {
+    title: "SSH key",
+    description: "Private key used to clone Git-based module sources during a run.",
+    layout: "form",
+  },
+  "configuration-versions": {
+    title: "Configuration versions",
+    description: "Configuration bundles uploaded or pulled for this workspace.",
+    layout: "standard",
+  },
+  "run-triggers": {
+    title: "Run triggers",
+    description: "Queue a run here whenever another workspace finishes an apply.",
+    layout: "standard",
+  },
+  "run-tasks": {
+    title: "Run tasks",
+    description: "Call external services at set points during a run.",
+    layout: "standard",
+  },
+  "policy-sets": {
+    title: "Policies",
+    description: "Policy sets evaluated against every plan in this workspace.",
+    layout: "standard",
+  },
+  health: {
+    title: "Health assessments",
+    description: "Scheduled drift detection and continuous validation checks.",
+    layout: "standard",
+  },
+  "team-access": {
+    title: "Team access",
+    description: "Which teams can read, plan, apply or administer this workspace.",
+    layout: "standard",
+  },
+  notifications: {
+    title: "Notifications",
+    description: "Where this workspace announces run events.",
+    layout: "standard",
+  },
+  webhooks: {
+    title: "Webhooks",
+    description: "Generic HTTP endpoints called when run events fire.",
+    layout: "standard",
+  },
+};
 
 type Workspace = {
   id: string;
@@ -130,9 +218,8 @@ type RunSummary = {
 export function WorkspaceDetail({
   section,
 }: Readonly<{ readonly section?: WorkspaceSection }>): React.JSX.Element {
-  const { orgName, runId, workspaceName } = useParams<{
+  const { orgName, workspaceName } = useParams<{
     orgName: string;
-    runId: string;
     workspaceName: string;
   }>();
   const location = useLocation();
@@ -149,8 +236,8 @@ export function WorkspaceDetail({
   const [lockDialogOpen, setLockDialogOpen] = useState(false);
   const [unlockDialogOpen, setUnlockDialogOpen] = useState(false);
   const [lockReason, setLockReason] = useState("");
-  const [embeddedSection, setEmbeddedSection] = useState<WorkspaceSection>("overview");
-  const activeSection = section ?? embeddedSection;
+  const activeSection = section ?? "overview";
+  const isRunDetail = activeSection === "run-detail";
   const activeWorkspaceId = useRef<string | null>(null);
   const workspaceRequest = useRef<AbortController | null>(null);
   const latestRunRequest = useRef<AbortController | null>(null);
@@ -212,13 +299,14 @@ export function WorkspaceDetail({
     }
   }, [orgName, workspaceName]);
 
-  useEffect((): (() => void) => {
+  useEffect((): (() => void) | undefined => {
+    if (isRunDetail) return undefined;
     void loadWorkspace();
     return (): void => {
       workspaceRequest.current?.abort();
       latestRunRequest.current?.abort();
     };
-  }, [loadWorkspace]);
+  }, [isRunDetail, loadWorkspace]);
 
   useEffect((): (() => void) | undefined => {
     if (workspace === null || activeSection !== "overview") return undefined;
@@ -305,13 +393,25 @@ export function WorkspaceDetail({
     }
   }
 
-  async function handleCopyIdentifier(identifier: string, label: "Workspace ID" | "Run ID"): Promise<void> {
+  async function handleCopyWorkspaceId(identifier: string): Promise<void> {
     const didCopy = await copyTextToClipboard(identifier);
     if (didCopy) {
-      toast.add({ title: `${label} copied`, type: "success" });
+      toast.add({ title: "Workspace ID copied", type: "success" });
       return;
     }
-    toast.add({ title: `Could not copy ${label.charAt(0).toLocaleLowerCase()}${label.slice(1)}`, type: "error" });
+    toast.add({ title: "Could not copy workspace ID", type: "error" });
+  }
+
+  // A run page is a page in its own right: RunDetail already renders its own
+  // breadcrumb, heading and actions, so wrapping it in the workspace header
+  // just stacked two headers on top of each other. It also loads its own run
+  // data, so it must not wait for an unrelated workspace request.
+  if (isRunDetail) {
+    return (
+      <PageShell variant="wide">
+        <RunDetail />
+      </PageShell>
+    );
   }
 
   if (loading) return (
@@ -382,82 +482,31 @@ export function WorkspaceDetail({
   const iacBinary = workspace.attributes["iac-binary"] ?? "tofu";
   const iacBinaryLabel = iacBinary === "tofu" ? "OpenTofu" : iacBinary;
   const engineVersion = workspace.attributes["terraform-version"] ?? "latest";
-  const isSettingsSection = [
-    "health",
-    "retention",
-    "locking",
-    "notifications",
-    "webhooks",
-    "policy-sets",
-    "run-tasks",
-    "run-triggers",
-    "configuration-versions",
-    "settings",
-    "ssh-key",
-    "team-access",
-    "vcs",
-    "destruction",
-  ].includes(activeSection);
-  const isRunDetail = activeSection === "run-detail";
-  const tabs = ([
-    { id: "overview", label: "Overview" },
-    { id: "runs", label: "Runs" },
-    { id: "states", label: "States" },
-    { id: "variables", label: "Variables" },
-    { id: "team-access", label: "Team access" },
-    { id: "notifications", label: "Notifications" },
-    { id: "webhooks", label: "Webhooks" },
-    { id: "policy-sets", label: "Policy sets" },
-    { id: "run-tasks", label: "Run tasks" },
-    { id: "run-triggers", label: "Run triggers" },
-    { id: "configuration-versions", label: "Configuration versions" },
-    { id: "ssh-key", label: "SSH key" },
-    { id: "vcs", label: "VCS" },
-    { id: "health", label: "Health" },
-    { id: "retention", label: "Retention" },
-    { id: "settings", label: "Settings" },
-    { id: "destruction", label: "Destruction" },
-  ] satisfies readonly { readonly id: WorkspaceSection; readonly label: string }[])
-    .filter((tab): boolean =>
-      (tab.id !== "states" || canReadStateVersions)
-      && (tab.id !== "variables" || canReadVariable));
+  const settingsSection = SETTINGS_SECTIONS[activeSection];
+  const isSettingsSection = settingsSection !== undefined;
+
+  // Settings is a real level of the IA, not a label to collapse: the
+  // organization pages spell out "… / Settings / Agent pools" and the
+  // workspace trail reads the same way.
+  const sectionCrumbs: readonly BreadcrumbItem[] = [
+    { label: "Workspaces", to: `${orgPath}/workspaces` },
+    ...(isSettingsSection
+      ? [
+          { label: workspace.attributes.name, to: workspacePath },
+          { label: "Settings", to: `${workspacePath}/settings` },
+          { label: settingsSection.title },
+        ]
+      : [{ label: workspace.attributes.name }]),
+  ];
 
   return (
-    <div className="mx-auto w-full max-w-[1440px]">
-      {/* Breadcrumbs */}
-      <nav
-        aria-label="Breadcrumb"
-        className="mb-2 flex flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground"
-      >
-        <Link to={`${orgPath}/workspaces`} className="min-w-0 break-words hover:underline">
-          Workspaces
-        </Link>
-        <span aria-hidden="true">/</span>
-        {isSettingsSection ? (
-          <>
-            <Link to={workspacePath} className="min-w-0 break-words hover:underline">{workspace.attributes.name}</Link>
-            <span aria-hidden="true">/</span>
-            <span className="text-foreground">Settings</span>
-          </>
-        ) : isRunDetail ? (
-          <>
-            <Link to={workspacePath} className="min-w-0 break-words hover:underline">{workspace.attributes.name}</Link>
-            <span aria-hidden="true">/</span>
-            <Link to={`${workspacePath}/runs`} className="hover:underline">Runs</Link>
-            <span aria-hidden="true">/</span>
-            <span className="min-w-0 break-all font-mono text-foreground">{runId}</span>
-          </>
-        ) : (
-          <span className="text-foreground">{workspace.attributes.name}</span>
-        )}
-      </nav>
-
-      {/* Header */}
-      <div className="mb-8 flex flex-col items-start justify-between gap-4 sm:flex-row">
+    <PageShell variant={settingsSection?.layout ?? "wide"}>
+      <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-6">
         <div className="min-w-0">
-          <div className="mb-1 flex items-center gap-3">
+          <Breadcrumbs items={sectionCrumbs} />
+          <div className="flex items-center gap-3">
             <h1 className="truncate text-3xl font-bold tracking-tight text-foreground">
-              {workspace.attributes.name}
+              {isSettingsSection ? settingsSection.title : workspace.attributes.name}
             </h1>
             {workspace.attributes.locked === true && (
               <span className="flex items-center gap-1 rounded bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
@@ -465,44 +514,50 @@ export function WorkspaceDetail({
               </span>
             )}
           </div>
-          <p className="text-[15px] text-muted-foreground">
-            {workspace.attributes.description ?? "No description provided."}
+          <p className="mt-1 max-w-3xl text-pretty text-sm text-muted-foreground">
+            {isSettingsSection
+              ? settingsSection.description
+              : workspace.attributes.description ?? "No description provided."}
           </p>
-          <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-            <span>{isRunDetail ? "Run ID:" : "Workspace ID:"}</span>
-            <code className="select-all font-mono">{isRunDetail ? runId ?? "" : workspace.id}</code>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label={isRunDetail ? "Copy run ID" : "Copy workspace ID"}
-              onClick={(): void => {
-                void handleCopyIdentifier(isRunDetail ? runId ?? "" : workspace.id, isRunDetail ? "Run ID" : "Workspace ID");
-              }}
-            >
-              <Copy aria-hidden="true" />
-            </Button>
-          </div>
-          {((): React.JSX.Element | null => {
-            const ownedByType = workspace.attributes["owned-by-type"];
-            const ownedById = workspace.attributes["owned-by-id"];
-            const contactEmail = workspace.attributes["contact-email"];
-            if (ownedByType === null && ownedById === null && contactEmail === null) return null;
-            const ownerParts: string[] = [];
-            if (ownedByType !== null && ownedByType !== undefined) {
-              ownerParts.push(`${ownedByType} ${ownedById ?? ""}`.trim());
-            }
-            if (contactEmail !== null && contactEmail !== undefined) ownerParts.push(contactEmail);
-            if (ownerParts.length === 0) return null;
-            return (
-              <div className="mt-1 text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">Owner:</span> {ownerParts.join(" · ")}
+          {!isSettingsSection && (
+            <>
+              <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
+                <span>Workspace ID:</span>
+                <code className="select-all font-mono">{workspace.id}</code>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Copy workspace ID"
+                  onClick={(): void => {
+                    void handleCopyWorkspaceId(workspace.id);
+                  }}
+                >
+                  <Copy aria-hidden="true" />
+                </Button>
               </div>
-            );
-          })()}
+              {((): React.JSX.Element | null => {
+                const ownedByType = workspace.attributes["owned-by-type"];
+                const ownedById = workspace.attributes["owned-by-id"];
+                const contactEmail = workspace.attributes["contact-email"];
+                if (ownedByType === null && ownedById === null && contactEmail === null) return null;
+                const ownerParts: string[] = [];
+                if (ownedByType !== null && ownedByType !== undefined) {
+                  ownerParts.push(`${ownedByType} ${ownedById ?? ""}`.trim());
+                }
+                if (contactEmail !== null && contactEmail !== undefined) ownerParts.push(contactEmail);
+                if (ownerParts.length === 0) return null;
+                return (
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground">Owner:</span> {ownerParts.join(" · ")}
+                  </div>
+                );
+              })()}
+            </>
+          )}
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-3">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           {canToggleLock && (
             <Button variant="outline" disabled={togglingLock} onClick={handleLock}>
               {workspace.attributes.locked === true ? (
@@ -514,7 +569,7 @@ export function WorkspaceDetail({
           )}
           {activeSection !== "runs" && (
             <Link
-              to={canQueueRun && (activeSection === "overview" || isRunDetail)
+              to={canQueueRun && activeSection === "overview"
                 ? `${workspacePath}/runs?new-run=true`
                 : `${workspacePath}/runs`}
               className={buttonVariants({
@@ -522,11 +577,11 @@ export function WorkspaceDetail({
               })}
             >
               <Play data-icon="inline-start" />
-              {canQueueRun && (activeSection === "overview" || isRunDetail) ? "New run" : "View runs"}
+              {canQueueRun && activeSection === "overview" ? "New run" : "View runs"}
             </Link>
           )}
         </div>
-      </div>
+      </header>
 
       <Dialog
         open={lockDialogOpen}
@@ -603,32 +658,8 @@ export function WorkspaceDetail({
         loading={togglingLock}
       />
 
-      {section === undefined && (
-        <div className="mb-6 border-b">
-          <nav aria-label="Workspace sections" className="flex flex-wrap gap-x-6 gap-y-2">
-            {tabs.map((tab): React.JSX.Element => (
-              <button
-                type="button"
-                key={tab.id}
-                onClick={(): void => { setEmbeddedSection(tab.id); }}
-                aria-label={tab.label.toLowerCase()}
-                aria-current={activeSection === tab.id ? "page" : undefined}
-                className={cn(
-                  "rounded-sm border-b-2 pb-3 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  activeSection === tab.id
-                    ? "border-primary text-primary"
-                    : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
-                )}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
-        </div>
-      )}
-
       {/* Section content */}
-      <div className="mt-6">
+      <div>
         {activeSection === "overview" && (
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
             <div className="flex flex-col gap-6 xl:col-span-2">
@@ -720,7 +751,7 @@ export function WorkspaceDetail({
                 <div className="p-4 space-y-4">
                   <div>
                     <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Project</div>
-                    <div className="text-[13px] text-foreground font-medium">
+                    <div className="text-sm text-foreground font-medium">
                       {projectId === undefined
                         ? "No project"
                         : projectName === null
@@ -736,20 +767,20 @@ export function WorkspaceDetail({
                   </div>
                   <div>
                     <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Repository</div>
-                    <div className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium text-foreground">
+                    <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
                       <WorkspaceRepositoryLink repo={workspace.attributes["vcs-repo"]} />
                     </div>
                   </div>
                   <div>
                     <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Working directory</div>
-                    <div className="break-all font-mono text-[13px] text-foreground">{displayedWorkingDirectory}</div>
+                    <div className="break-all font-mono text-sm text-foreground">{displayedWorkingDirectory}</div>
                   </div>
                   <div>
                     <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1">
                       Execution mode
                       <HelpTooltip icon="info" content="Execution mode determines whether Terraform or OpenTofu runs execute remotely in Terrence agent pools or locally on your CLI." />
                     </div>
-                    <div className="text-[13px] text-foreground flex items-center gap-1.5">
+                    <div className="text-sm text-foreground flex items-center gap-1.5">
                        <span className="capitalize">{executionMode}</span>
                     </div>
                   </div>
@@ -758,7 +789,7 @@ export function WorkspaceDetail({
                       Execution engine
                       <HelpTooltip icon="info" content="The Infrastructure-as-Code tool (Terraform or OpenTofu) and version constraint configured for this workspace." />
                     </div>
-                    <div className="text-[13px] text-foreground flex items-center gap-1.5">
+                    <div className="text-sm text-foreground flex items-center gap-1.5">
                        <span>{iacBinaryLabel}</span> {engineVersion}
                        {engineVersion === "latest" && (
                          <span className="text-xs bg-muted text-foreground px-1.5 py-0.5 rounded border border-border">Latest</span>
@@ -767,13 +798,13 @@ export function WorkspaceDetail({
                   </div>
                   <div>
                     <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Auto-apply</div>
-                    <div className="text-[13px] text-foreground">
+                    <div className="text-sm text-foreground">
                        {workspace.attributes["auto-apply"] === true ? "Enabled" : "Disabled"}
                     </div>
                   </div>
                   <div>
                     <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Created</div>
-                    <div className="text-[13px] text-foreground">
+                    <div className="text-sm text-foreground">
                        {formatDate(createdAt)}
                     </div>
                   </div>
@@ -786,9 +817,8 @@ export function WorkspaceDetail({
         {activeSection === "runs" && (
           <RunList key={workspace.id} workspaceId={workspace.id} canStartRun={canQueueRun} />
         )}
-        {isRunDetail && <RunDetail showBreadcrumb={false} />}
         {inaccessibleDataSection && (
-          <Card className="max-w-3xl">
+          <Card>
             <CardHeader>
               <CardTitle>Workspace data access required</CardTitle>
               <CardDescription>
@@ -813,7 +843,7 @@ export function WorkspaceDetail({
           />
         )}
         {updateOnlySection && !canUpdate && (
-          <Card className="max-w-3xl">
+          <Card>
             <CardHeader>
               <CardTitle>Workspace administrator access required</CardTitle>
               <CardDescription>
@@ -890,35 +920,28 @@ export function WorkspaceDetail({
           />
         )}
         {activeSection === "locking" && (
-          <Card className="max-w-3xl">
-            <CardHeader>
-              <CardTitle>Workspace locking</CardTitle>
-              <CardDescription>
-                Lock this workspace to prevent new plans and applies while you perform maintenance.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">
-                This workspace is currently {workspace.attributes.locked === true ? "locked" : "unlocked"}.
-              </p>
-              {workspace.attributes.locked === true && isString(workspace.attributes["locked-reason"]) && (
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Reason: {workspace.attributes["locked-reason"]}
-                </p>
-              )}
-            </CardContent>
-            {canToggleLock && (
-              <CardFooter className="justify-end">
-                <Button variant="outline" disabled={togglingLock} onClick={handleLock}>
-                  {workspace.attributes.locked === true ? (
-                    <><LockOpen data-icon="inline-start" /> {togglingLock ? "Unlocking…" : "Unlock workspace"}</>
-                  ) : (
-                    <><Lock data-icon="inline-start" /> {togglingLock ? "Locking…" : "Lock workspace"}</>
-                  )}
-                </Button>
-              </CardFooter>
+          <SettingsSection
+            title="Workspace lock"
+            description="While locked, no plan or apply can start. Existing runs finish normally."
+            footer={canToggleLock && (
+              <Button variant="outline" disabled={togglingLock} onClick={handleLock}>
+                {workspace.attributes.locked === true ? (
+                  <><LockOpen data-icon="inline-start" /> {togglingLock ? "Unlocking…" : "Unlock workspace"}</>
+                ) : (
+                  <><Lock data-icon="inline-start" /> {togglingLock ? "Locking…" : "Lock workspace"}</>
+                )}
+              </Button>
             )}
-          </Card>
+          >
+            <p className="text-sm text-foreground">
+              This workspace is currently {workspace.attributes.locked === true ? "locked" : "unlocked"}.
+            </p>
+            {workspace.attributes.locked === true && isString(workspace.attributes["locked-reason"]) && (
+              <p className="mt-2 text-sm text-muted-foreground">
+                Reason: {workspace.attributes["locked-reason"]}
+              </p>
+            )}
+          </SettingsSection>
         )}
         {activeSection === "destruction" && (
           <WorkspaceDestruction
@@ -930,6 +953,6 @@ export function WorkspaceDetail({
         )}
 
       </div>
-    </div>
+    </PageShell>
   );
 }

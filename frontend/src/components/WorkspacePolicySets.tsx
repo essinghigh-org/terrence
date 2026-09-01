@@ -61,9 +61,9 @@ export function WorkspacePolicySets({
   }, [workspaceId]);
 
   return (
-    <Card className="max-w-4xl">
+    <Card>
       <CardHeader>
-        <CardTitle>Policy sets</CardTitle>
+        <CardTitle>Attached policy sets</CardTitle>
         <CardDescription>
           Effective policy sets applied directly, through the project, or across the organization.
         </CardDescription>

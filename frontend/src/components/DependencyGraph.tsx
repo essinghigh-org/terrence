@@ -323,7 +323,7 @@ function ResourceNodeComponent({ data, selected }: NodeProps<ResourceFlowNode>):
         <span className="block truncate font-mono text-xs font-medium text-foreground" title={data.address}>
           {shortAddress(data.address)}
         </span>
-        <span className="mt-0.5 block truncate text-[11px] leading-none text-muted-foreground">
+        <span className="mt-0.5 block truncate text-2xs leading-none text-muted-foreground">
           {data.providerType}
           {data.module !== "root" ? ` · ${data.module}` : ""}
         </span>
@@ -336,7 +336,7 @@ function ResourceNodeComponent({ data, selected }: NodeProps<ResourceFlowNode>):
 
 function SectionLabel({ children, className }: Readonly<{ children: React.ReactNode; className?: string }>): React.JSX.Element {
   return (
-    <p className={cn("text-[11px] font-semibold uppercase tracking-wider text-muted-foreground", className)}>
+    <p className={cn("text-2xs font-semibold uppercase tracking-wider text-muted-foreground", className)}>
       {children}
     </p>
   );
@@ -346,7 +346,7 @@ function StatTile({ label, value }: Readonly<{ label: string; value: number }>):
   return (
     <div className="rounded-lg border px-3 py-2.5">
       <p className="text-lg font-semibold leading-none tabular-nums text-foreground">{value}</p>
-      <p className="mt-1.5 text-[11px] leading-none text-muted-foreground">{label}</p>
+      <p className="mt-1.5 text-2xs leading-none text-muted-foreground">{label}</p>
     </div>
   );
 }
@@ -424,8 +424,8 @@ function NodeDetailsPanel({
         {createElement(node.data.icon, { "aria-hidden": true, className: "size-4" })}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Resource</p>
-          <p className="mt-0.5 break-all font-mono text-[13px] font-medium leading-snug text-foreground">{node.id}</p>
+          <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">Resource</p>
+          <p className="mt-0.5 break-all font-mono text-sm font-medium leading-snug text-foreground">{node.id}</p>
         </div>
         <Button variant="ghost" size="icon-sm" aria-label="Copy address" onClick={copy} className="text-muted-foreground">
           {copied ? <Check className="text-success" aria-hidden="true" /> : <Copy aria-hidden="true" />}
@@ -462,7 +462,7 @@ function NodeDetailsPanel({
           </div>
         </div>
       </div>
-      <footer className="border-t px-4 py-2.5 text-[11px] text-muted-foreground">
+      <footer className="border-t px-4 py-2.5 text-2xs text-muted-foreground">
         Click any resource in the graph to inspect it.
       </footer>
     </aside>
@@ -485,8 +485,8 @@ function EdgeDetailsPanel({
     >
       <header className="flex items-start gap-2.5 border-b px-4 py-3.5">
         <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Dependency</p>
-          <p className="mt-0.5 truncate font-mono text-[13px] font-medium text-foreground">
+          <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">Dependency</p>
+          <p className="mt-0.5 truncate font-mono text-sm font-medium text-foreground">
             {shortAddress(edge.from)} <ArrowRight className="inline size-3 text-muted-foreground" aria-hidden="true" /> {shortAddress(edge.to)}
           </p>
         </div>
@@ -497,12 +497,12 @@ function EdgeDetailsPanel({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         <div className="rounded-lg border p-3">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Source</p>
+          <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">Source</p>
           <p className="mt-1 break-all font-mono text-xs text-foreground">{edge.from}</p>
         </div>
         <ArrowRight aria-hidden="true" className="mx-auto my-2.5 size-4 text-muted-foreground" />
         <div className="rounded-lg border p-3">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Target</p>
+          <p className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">Target</p>
           <p className="mt-1 break-all font-mono text-xs text-foreground">{edge.to}</p>
         </div>
         <p className="mt-3 text-xs leading-relaxed text-muted-foreground">

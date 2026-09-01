@@ -228,9 +228,9 @@ export function WorkspaceTeamAccess({
 
   return (
     <>
-      <Card className="max-w-4xl">
+      <Card>
         <CardHeader>
-          <CardTitle>Team access</CardTitle>
+          <CardTitle>Teams with access</CardTitle>
           <CardDescription>
             Grant organization teams read, plan, write, admin, or custom permissions for this workspace.
           </CardDescription>

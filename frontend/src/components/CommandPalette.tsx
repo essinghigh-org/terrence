@@ -458,7 +458,7 @@ export function CommandPalette({
             }}
             onKeyDown={handleInputKeyDown}
           />
-          <kbd className="pointer-events-none hidden select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground opacity-100 sm:flex">
+          <kbd className="pointer-events-none hidden select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-2xs font-medium text-muted-foreground opacity-100 sm:flex">
             ESC
           </kbd>
         </div>
@@ -494,7 +494,7 @@ export function CommandPalette({
                   rows.push(
                     <div key={category} className="pt-1 first:pt-0">
                       {query === "" && (
-                        <p className="px-3 py-1 text-[10px] uppercase font-semibold tracking-wide text-muted-foreground/60">
+                        <p className="px-3 py-1 text-2xs uppercase font-semibold tracking-wide text-muted-foreground/60">
                           {category}
                         </p>
                       )}
@@ -525,7 +525,7 @@ export function CommandPalette({
                                 )}
                               </div>
                             </div>
-                            <span className="text-[10px] uppercase font-semibold text-muted-foreground/70 shrink-0">
+                            <span className="text-2xs uppercase font-semibold text-muted-foreground/70 shrink-0">
                               {item.category}
                             </span>
                           </button>
@@ -556,7 +556,7 @@ export function CommandPalette({
                         onClick={item.perform}
                       >
                         <span>{item.title}</span>
-                        <span className="text-[10px] uppercase font-semibold text-muted-foreground/70">{item.category}</span>
+                        <span className="text-2xs uppercase font-semibold text-muted-foreground/70">{item.category}</span>
                       </button>,
                     );
                   }
@@ -569,7 +569,7 @@ export function CommandPalette({
 
         <div className="border-t bg-muted/30 px-3.5 py-2 text-xs text-muted-foreground flex items-center justify-between">
           <span>Use search to quickly jump to any destination</span>
-          <span className="font-mono text-[11px]">⌘K / Ctrl+K</span>
+          <span className="font-mono text-2xs">⌘K / Ctrl+K</span>
         </div>
       </DialogContent>
     </Dialog>

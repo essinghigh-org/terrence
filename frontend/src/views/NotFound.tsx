@@ -15,7 +15,7 @@ export function NotFound(): React.JSX.Element {
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center px-4 text-center">
       <FileQuestion className="size-10 text-muted-foreground" aria-hidden="true" />
-      <h1 className="mt-4 text-2xl font-semibold">Page not found</h1>
+      <h1 className="mt-4 text-3xl font-bold tracking-tight text-foreground">Page not found</h1>
       <p className="mt-2 max-w-md text-sm text-muted-foreground">
         <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{location.pathname}</code>{" "}
         does not exist or may have moved.

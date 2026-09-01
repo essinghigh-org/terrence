@@ -4,6 +4,54 @@ import { ChevronRight, type LucideIcon } from "lucide-react";
 
 import { cn } from "../lib/utils";
 
+/**
+ * Names the thing whose navigation is on screen — an org, a project, a
+ * workspace, or the settings area you drilled into. One style, used by every
+ * sidebar branch, so the hierarchy reads the same everywhere.
+ */
+export function SidebarContextLabel({
+  children,
+  collapsed,
+  title,
+  tone = "primary",
+}: Readonly<{
+  children: React.ReactNode;
+  collapsed: boolean;
+  title?: string;
+  /** `primary` names the resource; `secondary` names the settings area inside it. */
+  tone?: "primary" | "secondary";
+}>): JSX.Element {
+  return (
+    <div
+      className={cn(
+        "truncate px-3 pb-2 pt-4 text-xs font-semibold",
+        tone === "primary" ? "text-foreground" : "text-muted-foreground",
+        collapsed && "lg:sr-only",
+      )}
+      title={title}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Divides a long nav list into scannable groups. */
+export function SidebarGroupLabel({
+  children,
+  collapsed,
+}: Readonly<{ children: React.ReactNode; collapsed: boolean }>): JSX.Element {
+  return (
+    <div
+      className={cn(
+        "px-3 pb-1 pt-4 text-2xs font-semibold uppercase tracking-[0.12em] text-muted-foreground",
+        collapsed && "lg:sr-only",
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
 export type SidebarNavLinkProps = Readonly<{
   active: boolean;
   collapsed: boolean;

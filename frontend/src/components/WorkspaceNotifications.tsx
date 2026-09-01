@@ -296,9 +296,9 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
 
   return (
     <>
-      <Card className="mx-auto max-w-5xl">
+      <Card>
         <CardHeader>
-          <CardTitle>{isWebhookMode ? "Webhooks" : "Notification configurations"}</CardTitle>
+          <CardTitle>{isWebhookMode ? "Configured webhooks" : "Notification configurations"}</CardTitle>
           <CardDescription>
             {isWebhookMode
               ? "Manage destinations for run, assessment, and automatic-destroy events."

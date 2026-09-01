@@ -261,13 +261,13 @@ s.attributes["serial"] as number}</p>
                           ? s.attributes["run-message"]
                           : "Manual run"}
                       </Link>
-                      <span className="text-[11px] text-muted-foreground">
+                      <span className="text-2xs text-muted-foreground">
                         <span className="font-medium text-foreground/70">Run</span>{" · "}
                         <span>{isString(s.attributes["run-status"])
                           ? formatRunStatusForUi(s.attributes["run-status"])
                           : "Run Status Unknown"}</span>
                       </span>
-                      <span className="text-[11px] text-muted-foreground">
+                      <span className="text-2xs text-muted-foreground">
                         <span className="font-medium text-foreground/70">State</span>{" · "}<span>{stateStatus(s.attributes["status"])}</span>
                       </span>
                     </div>

@@ -1,6 +1,7 @@
 import { AlertTriangle, Check, Copy, ExternalLink, RefreshCw, Settings2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Breadcrumbs } from "../components/Breadcrumbs";
 import { MarkdownContent } from "../components/MarkdownContent";
 import { PageShell } from "../components/PageHeader";
 import { Badge } from "../components/ui/badge";
@@ -235,9 +236,9 @@ export function RegistryModuleDetail(): React.JSX.Element {
     <PageShell>
       <div className="space-y-6">
         <div className="space-y-3">
-          <nav aria-label="Breadcrumb" className="text-sm text-muted-foreground"><Link className="hover:text-foreground" to={registryPath}>Registry</Link><span aria-hidden="true"> / </span><span>{namespace}</span><span aria-hidden="true"> / </span><span aria-current="page">{name}</span></nav>
+          <Breadcrumbs items={[{ label: "Registry", to: registryPath }, { label: namespace }, { label: name }]} />
           <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
-            <div className="space-y-2"><h1 className="text-2xl font-semibold tracking-tight">{name}</h1><p className="text-sm text-muted-foreground">Published by {namespace}</p><code className="text-sm text-muted-foreground">{namespace}/{name}/{provider}</code><div className="flex flex-wrap gap-2"><Badge variant="outline">Private</Badge><Badge variant="secondary">{provider}</Badge><Badge variant="secondary">{publishingLabel(module)}</Badge>{selectedVersion?.deprecated === true && <Badge variant="outline">Deprecated</Badge>}{selectedVersion?.revoked === true && <Badge variant="destructive">Revoked</Badge>}</div></div>
+            <div className="space-y-2"><h1 className="text-balance text-3xl font-bold tracking-tight text-foreground">{name}</h1><p className="text-sm text-muted-foreground">Published by {namespace}</p><code className="text-sm text-muted-foreground">{namespace}/{name}/{provider}</code><div className="flex flex-wrap gap-2"><Badge variant="outline">Private</Badge><Badge variant="secondary">{provider}</Badge><Badge variant="secondary">{publishingLabel(module)}</Badge>{selectedVersion?.deprecated === true && <Badge variant="outline">Deprecated</Badge>}{selectedVersion?.revoked === true && <Badge variant="destructive">Revoked</Badge>}</div></div>
             <div className="flex flex-wrap gap-2">
               {module.permissions.canResync && <Button type="button" variant="outline" disabled={busy} onClick={(): void => { void mutate(async (): Promise<unknown> => await fetchApi(`/registry-modules/${module.id}/actions/resync`, { method: "POST" }), "Registry synchronized"); }}><RefreshCw aria-hidden="true" />Resync</Button>}
               {module.permissions.canDelete && <Button type="button" variant="outline" onClick={(): void => { setSettingsOpen(true); }}><Settings2 aria-hidden="true" />Settings</Button>}

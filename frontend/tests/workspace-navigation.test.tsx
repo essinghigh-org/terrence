@@ -683,14 +683,14 @@ test("project settings sidebar marks exactly one section active", async () => {
     <MemoryRouter initialEntries={["/app/acme/projects/prj-1/settings"]}>
       <Routes>
         <Route path="/app" element={<Layout />}>
-          <Route path=":orgName/projects/:projectId/settings" element={<p>Project settings</p>} />
+          <Route path=":orgName/projects/:projectId/settings" element={<p>Project settings content</p>} />
         </Route>
       </Routes>
     </MemoryRouter>,
   );
 
   await waitFor((): void => {
-    expect(view.getByText("Project settings")).toBeTruthy();
+    expect(view.getByText("Project settings content")).toBeTruthy();
   });
   const general = view.getByRole("link", { name: "General" });
   const variableSets = view.getByRole("link", { name: "Variable sets" });

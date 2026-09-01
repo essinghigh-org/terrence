@@ -582,7 +582,7 @@ export function OrganizationSettings(): React.JSX.Element {
       <PageShell variant="form">
         <div role="alert" className="mx-auto flex max-w-lg flex-col items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-5 text-destructive">
         <div>
-          <h1 className="font-semibold">Could not load organization settings</h1>
+          <h1 className="text-lg font-semibold">Could not load organization settings</h1>
           <p className="mt-1 text-sm">{loadError !== "" ? loadError : "The organization could not be loaded."}</p>
         </div>
         <Button type="button" variant="outline" onClick={(): void => { void loadOrg(); }}>
@@ -650,7 +650,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         <option value="tofu">OpenTofu</option>
                         <option value="terraform">Terraform</option>
                       </select>
-                      <p className="text-[13px] text-muted-foreground mt-1">The engine used by default for new workspaces.</p>
+                      <p className="text-sm text-muted-foreground mt-1">The engine used by default for new workspaces.</p>
                     </div>
                     <div className="space-y-1.5">
                       <label htmlFor="org-version" className="text-sm font-semibold text-foreground flex items-center gap-1">
@@ -682,7 +682,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         placeholder="admin@example.com"
                         className="h-9"
                       />
-                      <p className="text-[13px] text-muted-foreground mt-1">Email address used for organization notifications.</p>
+                      <p className="text-sm text-muted-foreground mt-1">Email address used for organization notifications.</p>
                     </div>
                     <div className="space-y-1.5">
                       <label htmlFor="org-module-test-token-ttl" className="text-sm font-semibold text-foreground">Module test token lifetime</label>
@@ -698,7 +698,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         disabled={!canUpdateOrganization}
                         className="h-9"
                       />
-                      <p className="text-[13px] text-muted-foreground mt-1">OIDC token lifetime for private module tests, in seconds (300–1800).</p>
+                      <p className="text-sm text-muted-foreground mt-1">OIDC token lifetime for private module tests, in seconds (300–1800).</p>
                     </div>
                     <div className="space-y-2 border-t pt-4">
                       <p className="text-sm font-semibold text-foreground">VCS status checks</p>
@@ -710,7 +710,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         />
                         <span>
                           Aggregate status checks
-                          <span className="block text-[13px] font-normal text-muted-foreground mt-0.5">Send one GitHub status for all workspace runs triggered by the same VCS event.</span>
+                          <span className="block text-sm font-normal text-muted-foreground mt-0.5">Send one GitHub status for all workspace runs triggered by the same VCS event.</span>
                         </span>
                       </label>
                       {!aggregatedCommitStatusEnabled && (
@@ -722,7 +722,7 @@ export function OrganizationSettings(): React.JSX.Element {
                           />
                           <span>
                             Send passing statuses for unaffected pull requests
-                            <span className="block text-[13px] font-normal text-muted-foreground mt-0.5">Mark pull requests green when shared-repository file triggers do not start a speculative plan.</span>
+                            <span className="block text-sm font-normal text-muted-foreground mt-0.5">Mark pull requests green when shared-repository file triggers do not start a speculative plan.</span>
                           </span>
                         </label>
                       )}
@@ -736,7 +736,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         />
                         <span>
                           Workspace administrators can force delete workspaces
-                          <span className="block text-[13px] font-normal text-muted-foreground mt-0.5">When disabled, only the owners team can force delete workspaces that are locked or managing resources.</span>
+                          <span className="block text-sm font-normal text-muted-foreground mt-0.5">When disabled, only the owners team can force delete workspaces that are locked or managing resources.</span>
                         </span>
                       </label>
                       <label className="flex items-start gap-3 text-sm font-medium text-foreground">
@@ -747,7 +747,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         />
                         <span>
                           Stacks
-                          <span className="block text-[13px] font-normal text-muted-foreground mt-0.5">Enabling Stacks allows users with Project Maintainer access or higher to create Stacks within projects.</span>
+                          <span className="block text-sm font-normal text-muted-foreground mt-0.5">Enabling Stacks allows users with Project Maintainer access or higher to create Stacks within projects.</span>
                         </span>
                       </label>
                       <label className="flex items-start gap-3 text-sm font-medium text-foreground">
@@ -758,13 +758,13 @@ export function OrganizationSettings(): React.JSX.Element {
                         />
                         <span>
                           Show Terraform pre-releases
-                          <span className="block text-[13px] font-normal text-muted-foreground mt-0.5">When enabled, users in this organization will be able to select Terraform pre-releases (alphas, betas, and release candidates) in the workspace version list.</span>
+                          <span className="block text-sm font-normal text-muted-foreground mt-0.5">When enabled, users in this organization will be able to select Terraform pre-releases (alphas, betas, and release candidates) in the workspace version list.</span>
                         </span>
                       </label>
                     </div>
                     <div className="space-y-2 border-t pt-4">
                       <p className="text-sm font-semibold text-foreground">Organizational default execution mode</p>
-                      <p className="text-[13px] text-muted-foreground">Changing the execution mode discards any active runs in workspaces.</p>
+                      <p className="text-sm text-muted-foreground">Changing the execution mode discards any active runs in workspaces.</p>
                       <label className="flex items-center gap-2 text-sm font-medium text-foreground">
                         <input
                           type="radio"
@@ -776,7 +776,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         />
                         <span>
                           Remote
-                          <span className="block text-[13px] font-normal text-muted-foreground">Your plans and applies run on Terrence's infrastructure, and your team can review and collaborate on runs directly in the app.</span>
+                          <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on Terrence's infrastructure, and your team can review and collaborate on runs directly in the app.</span>
                         </span>
                       </label>
                       <label className="flex items-center gap-2 text-sm font-medium text-foreground">
@@ -790,7 +790,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         />
                         <span>
                           Local
-                          <span className="block text-[13px] font-normal text-muted-foreground">Your plans and applies run on your own machines. Terrence only stores and synchronizes state.</span>
+                          <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on your own machines. Terrence only stores and synchronizes state.</span>
                         </span>
                       </label>
                       <label className="flex items-center gap-2 text-sm font-medium text-foreground">
@@ -804,7 +804,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         />
                         <span>
                           Agent
-                          <span className="block text-[13px] font-normal text-muted-foreground">Your plans and applies run on a configured agent pool in your organization.</span>
+                          <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on a configured agent pool in your organization.</span>
                         </span>
                       </label>
                     </div>
@@ -1036,7 +1036,7 @@ team.attributes["name"] as string}</option>
                               <Users className="h-4 w-4 text-muted-foreground" />
                             </div>
                             <div>
-                              <p className="font-semibold text-[14px] text-primary">
+                              <p className="font-semibold text-sm text-primary">
                                 {teamName}
                               </p>
                               {/* SAFETY: the fixture field matches the API contract type. */}

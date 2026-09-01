@@ -88,6 +88,7 @@ const emptyForm: StackForm = {
 export function StackSettings(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
+  const orgPath = `/app/${encodeURIComponent(orgName)}`;
   const [stacks, setStacks] = useState<Stack[]>([]);
   const [latestConfigurations, setLatestConfigurations] = useState<Record<string, LatestConfiguration>>({});
   const [projects, setProjects] = useState<Project[]>([]);
@@ -368,7 +369,11 @@ export function StackSettings(): React.JSX.Element {
   return (
     <PageShell>
       <PageHeader
-        eyebrow={`${orgName} / Settings`}
+        breadcrumbs={[
+          { label: orgName, to: `${orgPath}/workspaces` },
+          { label: "Settings", to: `${orgPath}/settings` },
+          { label: "Stacks" },
+        ]}
         title="Stacks"
         description="Stacks let you manage collections of workspaces and the infrastructure they deploy."
         action={canManage ? (

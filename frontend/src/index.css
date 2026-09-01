@@ -38,6 +38,12 @@
   --color-code-background: hsl(var(--code-background));
   --color-code-foreground: hsl(var(--code-foreground));
 
+  /* The one step below text-xs, for micro-labels, kbd hints and badge text.
+   * Replaces the ad-hoc text-[10px] / text-[11px] literals that were scattered
+   * across the app as two competing sizes for the same job. */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);

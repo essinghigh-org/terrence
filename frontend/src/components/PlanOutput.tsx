@@ -656,7 +656,7 @@ export function AttributeDiff({
               ))}
             </code>
             {line.replacement && (
-              <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-warning">
+              <span className="ml-1 text-2xs font-semibold uppercase tracking-wide text-warning">
                 Forces replacement
               </span>
             )}
@@ -758,7 +758,7 @@ function ActionInvocations({ actions }: Readonly<{ actions: readonly ActionInvoc
               <span className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-xs font-semibold leading-5 text-primary">invoke</span>
               <div className="min-w-0">
                 <code className="break-all font-mono font-semibold text-foreground">{label}</code>
-                <div className="mt-1 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">
+                <div className="mt-1 flex flex-wrap gap-x-3 text-2xs text-muted-foreground">
                   {action.provider_name !== undefined && (
                     <span className="inline-flex items-center gap-1.5"><ProviderIcon providerName={action.provider_name} size={14} /><code className="font-mono text-foreground/70">{(action.provider_name.split("/").pop() ?? action.provider_name)}</code></span>
                   )}
@@ -857,7 +857,7 @@ function OutputChanges({ outputs }: Readonly<{ outputs: readonly [string, Change
         {outputs.map(([name, output]): React.JSX.Element => (
           <details key={name} className="border-b border-border/60 last:border-b-0">
             <summary className="flex cursor-pointer items-center gap-2 px-5 py-2 text-xs hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-              <span className="inline-flex items-center rounded border border-input bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium leading-5">{name}</span>
+              <span className="inline-flex items-center rounded border border-input bg-muted px-1.5 py-0.5 font-mono text-2xs font-medium leading-5">{name}</span>
               <span className="text-muted-foreground">{(() => { const op = operationFor(output.actions); return op === "delete" ? "−" : op === "no-op" ? "·" : op === "create" ? "+" : op === "update" ? "~" : op === "read" ? "◎" : op === "replace" ? "±" : op === "import" ? "&" : op === "move" ? "→" : ""; })()}</span>
             </summary>
             <AttributeDiff change={output} address={`output.${name}`} name={name} />

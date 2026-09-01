@@ -75,7 +75,7 @@ import { Button, buttonVariants } from "./ui/button";
 import { CommandPalette } from "./CommandPalette";
 import { DocsSidebarNav } from "./DocsSidebarNav";
 import { ShortcutsHelpModal } from "./ShortcutsHelpModal";
-import { SidebarNavLink } from "./SidebarNavLink";
+import { SidebarContextLabel, SidebarGroupLabel, SidebarNavLink } from "./SidebarNavLink";
 import { fetchAllApiPages, fetchApi, logoutAuthSession } from "../lib/api";
 import { applyTheme, applyThemeIfUnchanged, getThemeRevision } from "../lib/theme";
 import { usePageTitle } from "../lib/usePageTitle";
@@ -572,24 +572,12 @@ export function Layout({
             onNavigate={closeMobileNavigation}
             to="/app"
           />
-          <div
-            className={cn(
-              "px-3 pb-2 pt-4 text-xs font-semibold text-muted-foreground",
-              sidebarCollapsed && "lg:sr-only",
-            )}
-          >
+          <SidebarContextLabel collapsed={sidebarCollapsed} tone="secondary">
             Site administration
-          </div>
+          </SidebarContextLabel>
           {groups.map((group): JSX.Element => (
             <div key={group.label}>
-              <div
-                className={cn(
-                  "px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground",
-                  sidebarCollapsed && "lg:sr-only",
-                )}
-              >
-                {group.label}
-              </div>
+              <SidebarGroupLabel collapsed={sidebarCollapsed}>{group.label}</SidebarGroupLabel>
               {group.links.map((link): JSX.Element => (
                 <SidebarNavLink
                   key={link.to}
@@ -658,14 +646,9 @@ export function Layout({
             onNavigate={closeMobileNavigation}
             to="/app"
           />
-          <div
-            className={cn(
-              "px-3 pb-2 pt-4 text-xs font-semibold text-muted-foreground",
-              sidebarCollapsed && "lg:sr-only",
-            )}
-          >
+          <SidebarContextLabel collapsed={sidebarCollapsed} tone="secondary">
             Account settings
-          </div>
+          </SidebarContextLabel>
           {links.map((link): JSX.Element => (
             <SidebarNavLink
               key={link.to}
@@ -682,33 +665,35 @@ export function Layout({
     }
 
     if (hasWorkspace && inWorkspaceSettings) {
+      // Grouped by what you came here to change, not by internal subsystem:
+      // the workspace object itself, what makes its runs happen, who can
+      // reach it, and where it reports to.
       const groups = [
         {
           label: "Workspace",
           links: [
             { label: "General", to: `${settingsPath}/general`, icon: Settings },
             { label: "Locking", to: `${settingsPath}/lock`, icon: Lock },
+            { label: "Data retention", to: `${settingsPath}/retention`, icon: HistoryIcon },
+            { label: "Destruction and deletion", to: `${settingsPath}/delete`, icon: Trash2 },
           ],
         },
         {
-          label: "Execution",
+          label: "Runs",
           links: [
-            { label: "Policies", to: `${settingsPath}/policies`, icon: ShieldCheck },
-            { label: "Run tasks", to: `${settingsPath}/tasks`, icon: ListTodo },
-            { label: "Run triggers", to: `${settingsPath}/run-triggers`, icon: GitPullRequest },
+            { label: "Version control", to: `${settingsPath}/version-control`, icon: GitBranch },
             { label: "Configuration versions", to: `${settingsPath}/configuration-versions`, icon: FileCode },
+            { label: "Run triggers", to: `${settingsPath}/run-triggers`, icon: GitPullRequest },
+            { label: "Run tasks", to: `${settingsPath}/tasks`, icon: ListTodo },
+            { label: "Policies", to: `${settingsPath}/policies`, icon: ShieldCheck },
+            { label: "Health assessments", to: `${settingsPath}/health`, icon: Activity },
           ],
         },
         {
           label: "Access",
-          links: [{ label: "Team access", to: `${settingsPath}/team-access`, icon: Users }],
-        },
-        {
-          label: "Lifecycle",
           links: [
-            { label: "Health assessments", to: `${settingsPath}/health`, icon: Activity },
-            { label: "Data retention", to: `${settingsPath}/retention`, icon: HistoryIcon },
-            { label: "Destruction and deletion", to: `${settingsPath}/delete`, icon: Trash2 },
+            { label: "Team access", to: `${settingsPath}/team-access`, icon: Users },
+            { label: "SSH key", to: `${settingsPath}/ssh`, icon: KeyRound },
           ],
         },
         {
@@ -716,8 +701,6 @@ export function Layout({
           links: [
             { label: "Notifications", to: `${settingsPath}/notifications`, icon: Bell },
             { label: "Webhooks", to: `${settingsPath}/webhooks`, icon: SlidersHorizontal },
-            { label: "SSH key", to: `${settingsPath}/ssh`, icon: KeyRound },
-            { label: "Version control", to: `${settingsPath}/version-control`, icon: GitBranch },
           ],
         },
       ] as const;
@@ -732,24 +715,12 @@ export function Layout({
             onNavigate={closeMobileNavigation}
             to={workspacePath}
           />
-          <div
-            className={cn(
-              "px-3 pb-2 pt-4 text-xs font-semibold text-muted-foreground",
-              sidebarCollapsed && "lg:sr-only",
-            )}
-          >
+          <SidebarContextLabel collapsed={sidebarCollapsed} tone="secondary">
             Workspace settings
-          </div>
+          </SidebarContextLabel>
           {groups.map((group): JSX.Element => (
             <div key={group.label}>
-              <div
-                className={cn(
-                  "px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground",
-                  sidebarCollapsed && "lg:sr-only",
-                )}
-              >
-                {group.label}
-              </div>
+              <SidebarGroupLabel collapsed={sidebarCollapsed}>{group.label}</SidebarGroupLabel>
               {group.links.map((link): JSX.Element => (
                 <SidebarNavLink
                   key={link.to}
@@ -793,15 +764,9 @@ export function Layout({
             onNavigate={closeMobileNavigation}
             to={`${orgPath}/workspaces`}
           />
-          <div
-            className={cn(
-              "truncate px-3 pb-2 pt-4 text-xs font-semibold text-foreground",
-              sidebarCollapsed && "lg:sr-only",
-            )}
-            title={workspaceName}
-          >
+          <SidebarContextLabel collapsed={sidebarCollapsed} title={workspaceName}>
             {workspaceName}
-          </div>
+          </SidebarContextLabel>
           {links.map((link): JSX.Element => (
             <SidebarNavLink
               key={link.to}
@@ -876,24 +841,13 @@ export function Layout({
             onNavigate={closeMobileNavigation}
             to={`${orgPath}/projects`}
           />
-          <div
-            className={cn(
-              "truncate px-3 pb-2 pt-4 text-xs font-semibold text-foreground",
-              sidebarCollapsed && "lg:sr-only",
-            )}
-            title={projectName ?? projectId}
-          >
+          <SidebarContextLabel collapsed={sidebarCollapsed} title={projectName ?? projectId}>
             {projectName ?? projectId}
-          </div>
+          </SidebarContextLabel>
           {inProjectSettings && (
-            <div
-              className={cn(
-                "px-3 pb-2 pt-3 text-xs font-semibold text-muted-foreground",
-                sidebarCollapsed && "lg:sr-only",
-              )}
-            >
-              Project Settings
-            </div>
+            <SidebarContextLabel collapsed={sidebarCollapsed} tone="secondary">
+              Project settings
+            </SidebarContextLabel>
           )}
           {projectLinks.map((link): JSX.Element => (
             <SidebarNavLink
@@ -1021,6 +975,22 @@ export function Layout({
         && (link.label !== "OIDC" || canManagePolicies)
         && (link.label !== "Stacks" || canManageWorkspaces));
 
+      // Fourteen flat links is a wall. Group them the same way workspace and
+      // site-admin settings are grouped, and drop groups the viewer can't use.
+      const groups = ([
+        { label: "Organization", members: ["General", "Tags"] },
+        { label: "People", members: ["Users", "Teams", "Roles"] },
+        { label: "Infrastructure", members: ["Variable sets", "VCS providers", "Agent pools", "Stacks"] },
+        { label: "Policies", members: ["Policy sets", "Tag policy sets"] },
+        { label: "Security", members: ["IP allowlists", "SSH keys", "OIDC"] },
+      ] as const)
+        .map((group): { label: string; links: typeof links } => ({
+          label: group.label,
+          links: group.members.flatMap((member): typeof links =>
+            links.filter((link): boolean => link.label === member)),
+        }))
+        .filter((group): boolean => group.links.length > 0);
+
       return (
         <>
           <SidebarNavLink
@@ -1031,24 +1001,24 @@ export function Layout({
             onNavigate={closeMobileNavigation}
             to={`${orgPath}/workspaces`}
           />
-          <div
-            className={cn(
-              "px-3 pb-2 pt-4 text-xs font-semibold text-muted-foreground",
-              sidebarCollapsed && "lg:sr-only",
-            )}
-          >
+          <SidebarContextLabel collapsed={sidebarCollapsed} tone="secondary">
             Organization settings
-          </div>
-          {links.map((link): JSX.Element => (
-            <SidebarNavLink
-              key={link.to}
-              active={link.active}
-              collapsed={sidebarCollapsed}
-              icon={link.icon}
-              label={link.label}
-              onNavigate={closeMobileNavigation}
-              to={link.to}
-            />
+          </SidebarContextLabel>
+          {groups.map((group): JSX.Element => (
+            <div key={group.label}>
+              <SidebarGroupLabel collapsed={sidebarCollapsed}>{group.label}</SidebarGroupLabel>
+              {group.links.map((link): JSX.Element => (
+                <SidebarNavLink
+                  key={link.to}
+                  active={link.active}
+                  collapsed={sidebarCollapsed}
+                  icon={link.icon}
+                  label={link.label}
+                  onNavigate={closeMobileNavigation}
+                  to={link.to}
+                />
+              ))}
+            </div>
           ))}
         </>
       );
@@ -1280,7 +1250,7 @@ export function Layout({
             >
               <Search className="size-3.5" />
               <span className="text-xs">Search…</span>
-              <kbd className="pointer-events-none rounded bg-topbar-foreground/20 px-1.5 py-0.5 text-[10px] font-mono font-medium text-topbar-foreground">
+              <kbd className="pointer-events-none rounded bg-topbar-foreground/20 px-1.5 py-0.5 text-2xs font-mono font-medium text-topbar-foreground">
                 ⌘K / Ctrl+K
               </kbd>
             </Button>

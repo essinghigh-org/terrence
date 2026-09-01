@@ -331,10 +331,10 @@ export function WorkspaceVcs({
   };
 
   return (
-    <form onSubmit={save} className="mx-auto max-w-4xl">
+    <form onSubmit={save}>
       <Card>
         <CardHeader>
-          <CardTitle>Version control</CardTitle>
+          <CardTitle>Repository connection</CardTitle>
           <CardAction>
             <Badge variant={connected ? "success" : "secondary"}>
               {connected ? "Connected" : "Not connected"}

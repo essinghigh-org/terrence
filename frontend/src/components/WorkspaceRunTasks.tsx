@@ -186,9 +186,9 @@ export function WorkspaceRunTasks({
   };
 
   return (
-    <Card className="max-w-4xl">
+    <Card>
       <CardHeader>
-        <CardTitle>Run tasks</CardTitle>
+        <CardTitle>Attached run tasks</CardTitle>
         <CardDescription>
           Run external checks at defined stages in this workspace&apos;s run lifecycle.
         </CardDescription>

@@ -651,7 +651,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   if (!accountLoaded) return <p role="status" className="p-8 text-sm text-muted-foreground">Checking site administration access…</p>;
   if (!siteAdmin) return <Navigate to="/app" replace />;
   return (
-    <PageShell variant="wide" className="space-y-8">
+    <PageShell variant="wide">
       <PageHeader
         eyebrow="Administration"
         title={(

@@ -57,7 +57,7 @@ function SurfaceTable({
       <TableBody>
         {visible.map((entry): React.JSX.Element => (
           <TableRow key={entry.name}>
-            <TableCell className="font-mono text-[13px]">{entry.name}</TableCell>
+            <TableCell className="font-mono text-sm">{entry.name}</TableCell>
             <TableCell>
               {/* SAFETY: the status union covers exactly the map keys; unmatched values are handled by the surrounding fallback. */}
               <Badge variant="outline" className={// SAFETY: the rendered attribute matches the union the UI derives from the API contract.

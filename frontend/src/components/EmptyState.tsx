@@ -1,5 +1,7 @@
 import { Link } from "react-router-dom";
+
 import { Button } from "./ui/button";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "./ui/empty";
 
 /**
  * Consistent empty state (kanban 14.11): explanation, permission-aware
@@ -7,6 +9,10 @@ import { Button } from "./ui/button";
  * props on the current user's permissions (e.g. only pass onAction when the
  * user can create workspaces); DegradedBanner is the sibling component for
  * stale-data states.
+ *
+ * Built on the `Empty` primitives so that views composing those directly (the
+ * registry pages) and views using this wrapper render the same thing — before,
+ * the app had two unrelated empty-state treatments.
  */
 export function EmptyState(props: Readonly<{
   title: string;
@@ -20,22 +26,23 @@ export function EmptyState(props: Readonly<{
   const { title, description, actionLabel, onAction, docsHref, compact, headingLevel = "h2" } = props;
   const hasAction = actionLabel !== undefined && onAction !== undefined;
   const footerVisible = hasAction || docsHref !== undefined;
-  const Heading = headingLevel;
   return (
-    <div className={`text-center text-muted-foreground ${compact === true ? "p-6" : "p-12"}`}>
-      <Heading className="font-medium text-foreground">{title}</Heading>
-      {description !== undefined && (
-        <p className={`mx-auto mt-1 max-w-md text-sm ${footerVisible ? "mb-4" : ""}`}>{description}</p>
-      )}
+    <Empty className={compact === true ? "p-6" : "p-12"}>
+      <EmptyHeader>
+        {/* EmptyTitle is a div; render a real heading inside it so empty
+            states still land in the document outline. */}
+        <EmptyTitle className="text-foreground">
+          {headingLevel === "h4"
+            ? <h4>{title}</h4>
+            : headingLevel === "h3"
+              ? <h3>{title}</h3>
+              : <h2>{title}</h2>}
+        </EmptyTitle>
+        {description !== undefined && <EmptyDescription>{description}</EmptyDescription>}
+      </EmptyHeader>
       {footerVisible && (
-        <div className="mt-4 flex items-center justify-center gap-3">
-          {hasAction && (
-            <Button
-              onClick={onAction}
-            >
-              {actionLabel}
-            </Button>
-          )}
+        <EmptyContent className="max-w-none flex-row items-center justify-center gap-3">
+          {hasAction && <Button onClick={onAction}>{actionLabel}</Button>}
           {docsHref !== undefined &&
             (docsHref.startsWith("/app/") ? (
               <Link
@@ -54,8 +61,8 @@ export function EmptyState(props: Readonly<{
                 Read the docs
               </a>
             ))}
-        </div>
+        </EmptyContent>
       )}
-    </div>
+    </Empty>
   );
 }

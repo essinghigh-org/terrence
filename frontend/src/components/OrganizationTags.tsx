@@ -213,7 +213,7 @@ export function OrganizationTags({ orgName }: Readonly<{ orgName: string }>): Re
                 <Checkbox checked={disableOverrides} onCheckedChange={(checked: boolean): void => { setDisableOverrides(checked); }} />
                 <span>
                   Disable overrides
-                  <span className="block text-[13px] font-normal text-muted-foreground mt-0.5">Disables tag overrides for any tag matching this key.</span>
+                  <span className="block text-sm font-normal text-muted-foreground mt-0.5">Disables tag overrides for any tag matching this key.</span>
                 </span>
               </label>
               {formError !== "" && <p role="alert" className="text-sm text-destructive">{formError}</p>}

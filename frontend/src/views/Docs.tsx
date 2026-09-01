@@ -70,7 +70,7 @@ export function Docs(): React.JSX.Element {
 
   if (docs.error || detailError) {
     return (
-      <PageShell>
+      <PageShell variant="form">
         <PageHeader title="Documentation" description="The documentation could not be loaded." />
         <p className="text-sm text-muted-foreground">Check that the documentation bundle is present in the deployment, then reload.</p>
       </PageShell>
@@ -79,7 +79,7 @@ export function Docs(): React.JSX.Element {
 
   if (index === null) {
     return (
-      <PageShell>
+      <PageShell variant="form">
         <PageHeader title="Documentation" description="Loading documentation." />
         <div className="flex justify-center py-16"><Spinner className="size-6" /></div>
       </PageShell>
@@ -87,7 +87,7 @@ export function Docs(): React.JSX.Element {
   }
 
   return (
-    <PageShell>
+    <PageShell variant="form">
       <PageHeader
         title={selected?.title ?? "Documentation"}
         description={selected?.description ?? "Loading documentation."}
@@ -96,8 +96,10 @@ export function Docs(): React.JSX.Element {
         <div className="flex justify-center py-16"><Spinner className="size-6" /></div>
       ) : (
         <>
+          {/* A typographic measure, not a competing page width: prose stops
+              being readable much past ~80 characters a line. */}
           <div
-            className="max-w-4xl"
+            className="max-w-[80ch]"
             onClick={(event): void => {
               // Doc-to-doc links are relative ("runs" or "./runs"); route
               // them through the SPA instead of a full page reload.

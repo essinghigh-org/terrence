@@ -247,6 +247,8 @@ test("reconciles general settings before reporting a remote-state replacement fa
   await view.findByText(
     "Workspace settings were saved, but approved workspaces could not be updated: consumer update failed",
   );
+  expect(view.queryByText("Settings saved.")).toBeNull();
+  expect(view.getByRole("button", { name: "Save settings" })).toBeTruthy();
   expect(onSaved).toHaveBeenCalledTimes(1);
 });
 
@@ -309,6 +311,11 @@ test("keeps general settings usable when remote-state consumers fail to load", a
   );
 
   await view.findByText("Loading approved workspaces…");
+  // Save is dirty-gated, so edit something first: the point of this test is
+  // that a failed approved-workspaces load does not block saving the rest.
+  fireEvent.input(view.getByLabelText("Description"), {
+    target: { value: "Edited while consumers were loading" },
+  });
   expect(view.getByRole("button", { name: "Save settings" }).disabled)
     .toBe(false);
 

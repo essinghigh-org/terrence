@@ -7,7 +7,7 @@ import { expireAuthSession, getAuthToken, isRefreshableSession } from "../src/li
 import { Login } from "../src/views/Login";
 import { RunDetail } from "../src/views/RunDetail";
 import { RunList } from "../src/views/RunList";
-import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
+import { WorkspaceDetail, type WorkspaceSection } from "../src/views/WorkspaceDetail";
 import { Workspaces } from "../src/views/Workspaces";
 import { VariableSets } from "../src/views/VariableSets";
 import { isRecord, isString } from "../src/lib/type-guards";
@@ -326,14 +326,12 @@ test("creates, edits, and deletes a workspace variable", async () => {
       <Routes>
         <Route
           path="/app/:orgName/workspaces/:workspaceName"
-          element={<WorkspaceDetail />}
+          element={<WorkspaceDetail section="variables" />}
         />
       </Routes>
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
-  fireEvent.click(view.getByRole("button", { name: "variables" }));
   await waitFor((): void => { expect(view.getByText("No workspace variables have been added.")).toBeTruthy(); });
 
   fireEvent.click(view.getByRole("button", { name: "Add variable" }));
@@ -418,13 +416,12 @@ test("updates workspace execution and auto-apply settings", async () => {
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
       <Routes>
-        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail />} />
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail section="settings" />} />
       </Routes>
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
-  fireEvent.click(view.getByRole("button", { name: "settings" }));
+  await waitFor((): void => { expect(view.getByLabelText("Description")).toBeTruthy(); });
   changeInput(asElement(view.getByLabelText("Description")), "Primary production stack");
   fireEvent.change(view.getByLabelText("Execution mode"), { target: { value: "local" } });
   fireEvent.change(view.getByLabelText("Execution engine"), { target: { value: "terraform" } });
@@ -503,16 +500,15 @@ test("assigns an SSH key and enables workspace health assessments", async () => 
   });
   globalThis.fetch = fetchMock;
 
-  const view = render(
+  const tree = (section: WorkspaceSection): React.JSX.Element => (
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
       <Routes>
-        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail />} />
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail section={section} />} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+  const view = render(tree("ssh-key"));
 
-  await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
-  fireEvent.click(view.getByRole("button", { name: "ssh key" }));
   await waitFor((): void => { expect(view.getByLabelText("Assigned key")).toBeTruthy(); });
   fireEvent.change(view.getByLabelText("Assigned key"), { target: { value: "ssh-1" } });
   await act(async () => {
@@ -531,7 +527,8 @@ test("assigns an SSH key and enables workspace health assessments", async () => 
     )).toHaveLength(2);
   });
 
-  fireEvent.click(view.getByRole("button", { name: "health" }));
+  view.rerender(tree("health"));
+  await waitFor((): void => { expect(view.getByLabelText("Enable health assessments")).toBeTruthy(); });
   fireEvent.click(view.getByLabelText("Enable health assessments"));
   await act(async () => {
     const form = view.getByRole("button", { name: "Save health settings" }).closest("form");
@@ -644,16 +641,15 @@ test("manages workspace run triggers and custom team access", async () => {
   globalThis.fetch = fetchMock;
   globalThis.confirm = mock((): boolean => true);
 
-  const view = render(
+  const tree = (section: WorkspaceSection): React.JSX.Element => (
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
       <Routes>
-        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail />} />
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail section={section} />} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+  const view = render(tree("run-triggers"));
 
-  await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
-  fireEvent.click(view.getByRole("button", { name: "run triggers" }));
   await waitFor((): void => { expect(view.getByText("No upstream workspaces are configured.")).toBeTruthy(); });
   fireEvent.change(view.getByLabelText("Source workspace"), { target: { value: "ws-source" } });
   fireEvent.click(view.getByRole("button", { name: "Add trigger" }));
@@ -664,7 +660,7 @@ test("manages workspace run triggers and custom team access", async () => {
   fireEvent.click(within(triggerRow).getByRole("button", { name: "Remove" }));
   await waitFor((): void => { expect(view.getByText("No upstream workspaces are configured.")).toBeTruthy(); });
 
-  fireEvent.click(view.getByRole("button", { name: "team access" }));
+  view.rerender(tree("team-access"));
   await waitFor((): void => { expect(view.getByText("No teams have explicit access to this workspace.")).toBeTruthy(); });
   fireEvent.click(view.getByRole("button", { name: "Add team" }));
   fireEvent.change(view.getByLabelText("Team"), { target: { value: "team-1" } });
@@ -760,13 +756,11 @@ test("creates, verifies, edits, and deletes a workspace notification", async () 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
       <Routes>
-        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail />} />
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail section="notifications" />} />
       </Routes>
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
-  fireEvent.click(view.getByRole("button", { name: "notifications" }));
   await waitFor((): void => {
     expect(view.getByText("No notification configurations have been added.")).toBeTruthy();
   });
@@ -866,16 +860,15 @@ test("shows effective policy sets and manages workspace VCS settings", async () 
   globalThis.fetch = fetchMock;
   globalThis.confirm = mock((): boolean => true);
 
-  const view = render(
+  const tree = (section: WorkspaceSection): React.JSX.Element => (
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
       <Routes>
-        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail />} />
+        <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail section={section} />} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+  const view = render(tree("policy-sets"));
 
-  await waitFor((): void => { expect(view.getByText("Workspace details")).toBeTruthy(); });
-  fireEvent.click(view.getByRole("button", { name: "policy sets" }));
   const policyRow = await waitFor((): HTMLElement =>
 // SAFETY: closest() resolves to the row element that contains the queried text.
     view.getByText("Production guardrails").closest("tr") as HTMLElement,
@@ -884,7 +877,7 @@ test("shows effective policy sets and manages workspace VCS settings", async () 
   expect(within(policyRow).getByText("OPA")).toBeTruthy();
   expect(within(policyRow).getByText("2")).toBeTruthy();
 
-  fireEvent.click(view.getByRole("button", { name: "vcs" }));
+  view.rerender(tree("vcs"));
   await waitFor((): void => { expect(view.getByText("Connected")).toBeTruthy(); });
   changeInput(asElement(view.getByLabelText("VCS branch")), "release");
   changeInput(asElement(view.getByLabelText("Terraform working directory")), "environments/production");

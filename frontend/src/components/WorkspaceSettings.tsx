@@ -1,15 +1,9 @@
 import { useEffect, useState } from "react";
+import { Check } from "lucide-react";
 import type { JsonValue } from "../lib/json";
 import { useUnsavedChangesWarning } from "@/lib/use-unsaved-changes";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { SettingsSection } from "@/components/PageHeader";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Field,
@@ -29,6 +23,7 @@ import { toast } from "@/components/ui/toast";
 import { useAgentPools } from "@/hooks/useAgentPools";
 import type { AgentPoolResource } from "@/hooks/useAgentPools";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 type WorkspaceSettingsResource = {
   id: string;
@@ -183,6 +178,10 @@ export function WorkspaceSettings({
       && [...remoteStateConsumerIds].sort().join(",") !== savedConsumerKeys);
 
   useUnsavedChangesWarning(dirty);
+
+  // `saved` alone goes stale the moment the user edits again; pair it with the
+  // dirty check so the confirmation only stands while it is still true.
+  const justSaved = saved && !dirty && error === "";
 
   const agentPoolOptions: AgentPoolResource[] = agentPoolId !== ""
     && !agentPoolsState.pools.some((pool): boolean => pool.id === agentPoolId)
@@ -347,6 +346,7 @@ export function WorkspaceSettings({
           const detail = caught instanceof Error ? `: ${caught.message}` : ".";
           const message = `Workspace settings were saved, but approved workspaces could not be updated${detail}`;
           setError(message);
+          setSaved(false);
           if (response.data.attributes.name !== workspace.attributes.name) {
             toast.add({
               title: "Approved workspaces not updated",
@@ -364,15 +364,11 @@ export function WorkspaceSettings({
   };
 
   return (
-    <form onSubmit={saveSettings} noValidate className="mx-auto max-w-4xl space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>General settings</CardTitle>
-          <CardDescription>
-            Name and description for this workspace.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+    <form onSubmit={saveSettings} noValidate className="space-y-6">
+      <SettingsSection
+        title="General settings"
+        description="Name and description for this workspace."
+      >
           <FieldGroup>
             <Field data-disabled={!canUpdate} data-invalid={invalidName}>
               <FieldLabel htmlFor="workspace-name">Name</FieldLabel>
@@ -402,17 +398,12 @@ export function WorkspaceSettings({
               />
             </Field>
           </FieldGroup>
-        </CardContent>
-      </Card>
+      </SettingsSection>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Execution</CardTitle>
-          <CardDescription>
-            Configure how and where infrastructure runs execute.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <SettingsSection
+        title="Execution"
+        description="How and where infrastructure runs execute."
+      >
           <FieldGroup className="gap-5">
             <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
               <Field data-disabled={!canUpdate}>
@@ -525,17 +516,12 @@ export function WorkspaceSettings({
               </FieldDescription>
             </Field>
           </FieldGroup>
-        </CardContent>
-      </Card>
+      </SettingsSection>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>State sharing</CardTitle>
-          <CardDescription>
-            Controls which workspaces may read this workspace&apos;s outputs through remote state.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <SettingsSection
+        title="State sharing"
+        description="Which workspaces may read this workspace's outputs through remote state."
+      >
           <FieldGroup className="gap-4">
             <Field data-disabled={!canUpdate}>
               <FieldLabel htmlFor="workspace-remote-state-sharing">Remote state sharing</FieldLabel>
@@ -624,17 +610,12 @@ export function WorkspaceSettings({
               </FieldSet>
             )}
           </FieldGroup>
-        </CardContent>
-      </Card>
+      </SettingsSection>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Automatic apply</CardTitle>
-          <CardDescription>
-            Configure automatic execution behavior for plans and run triggers.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <SettingsSection
+        title="Automatic apply"
+        description="Whether successful plans apply on their own."
+      >
           <FieldGroup className="gap-3">
             <Field orientation="horizontal" data-disabled={!canUpdate}>
               <Checkbox
@@ -662,19 +643,33 @@ export function WorkspaceSettings({
                 </FieldDescription>
               </FieldContent>
             </Field>
-            <FieldError>{error}</FieldError>
           </FieldGroup>
-        </CardContent>
-        <CardFooter className="justify-between">
-          <span role="status" className="text-sm text-muted-foreground">
-            {saved ? "Settings saved." : canUpdate ? "" : "You do not have permission to update this workspace."}
-          </span>
-          <Button type="submit" disabled={saving || !canUpdate || invalidName}>
-            {saving && <Spinner data-icon="inline-start" />}
-            {saving ? "Saving…" : "Save settings"}
-          </Button>
-        </CardFooter>
-      </Card>
+      </SettingsSection>
+
+      {/* One submit saves all four sections, so the action belongs to the form
+          rather than to whichever section happens to be last. Sticky keeps it
+          reachable without scrolling back down a long page.
+
+          The button tracks the form's dirty state — `dirty` already drives the
+          navigation guard, so an enabled Save with nothing to save was the two
+          disagreeing. Pristine and just-saved both read as "nothing to do". */}
+      <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-end gap-x-4 gap-y-2 rounded-xl bg-card/95 px-4 py-3 ring-1 ring-border/80 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+        {error !== "" && <FieldError className="mr-auto">{error}</FieldError>}
+        {/* On success the button already says "Saved", so the live region goes
+            sr-only rather than repeating it on screen. It stays mounted and
+            visible for the permission message, which has no other home. */}
+        <span
+          role="status"
+          className={cn("text-sm text-muted-foreground", justSaved && "sr-only")}
+        >
+          {justSaved ? "Settings saved." : canUpdate ? "" : "You do not have permission to update this workspace."}
+        </span>
+        <Button type="submit" disabled={saving || !canUpdate || invalidName || !dirty}>
+          {saving && <Spinner data-icon="inline-start" />}
+          {justSaved && <Check data-icon="inline-start" aria-hidden="true" />}
+          {saving ? "Saving…" : justSaved ? "Saved" : "Save settings"}
+        </Button>
+      </div>
     </form>
   );
 }
