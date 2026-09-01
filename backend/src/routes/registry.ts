@@ -23,8 +23,9 @@ import {
   type users,
 } from "../db/schema";
 import type { SQL } from "drizzle-orm";
-import { eq, and, asc, count, desc, inArray, isNull, like, or, ne, sql } from "drizzle-orm";
+import { eq, and, asc, count, desc, inArray, isNull, or, ne, sql } from "drizzle-orm";
 import {
+  caseInsensitiveLike,
   checkOrganizationPermission,
   checkOrgPermission,
   checkRegistryReadPermission,
@@ -1108,7 +1109,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const searchQuery = (query?.q ?? "").trim();
     let mods: (typeof registryModules.$inferSelect)[];
     if (searchQuery !== "") {
-      mods = await db.query.registryModules.findMany({ where: or(like(registryModules.name, `%${searchQuery}%`), like(registryModules.namespace, `%${searchQuery}%`), like(registryModules.provider, `%${searchQuery}%`)), limit: 50 });
+      mods = await db.query.registryModules.findMany({ where: or(caseInsensitiveLike(registryModules.name, `%${searchQuery}%`), caseInsensitiveLike(registryModules.namespace, `%${searchQuery}%`), caseInsensitiveLike(registryModules.provider, `%${searchQuery}%`)), limit: 50 });
     } else {
       mods = await db.query.registryModules.findMany({ limit: 50 });
     }
@@ -1124,7 +1125,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const searchQuery = (query?.q ?? "").trim();
     let provs: (typeof registryProviders.$inferSelect)[];
     if (searchQuery !== "") {
-      provs = await db.query.registryProviders.findMany({ where: or(like(registryProviders.namespace, `%${searchQuery}%`), like(registryProviders.type, `%${searchQuery}%`)), limit: 50 });
+      provs = await db.query.registryProviders.findMany({ where: or(caseInsensitiveLike(registryProviders.namespace, `%${searchQuery}%`), caseInsensitiveLike(registryProviders.type, `%${searchQuery}%`)), limit: 50 });
     } else {
       provs = await db.query.registryProviders.findMany({ limit: 50 });
     }

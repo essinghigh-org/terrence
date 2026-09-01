@@ -4,7 +4,7 @@ import { db } from "../../db";
 import { users, apiTokens, refreshSessions, user2FA, emailVerificationTokens, identityLinks, organizationMemberships, teamMemberships, scimUserIdentities } from "../../db/schema";
 import type { SQL } from "drizzle-orm";
 import { eq, and, or, count, isNull, like } from "drizzle-orm";
-import { auditLog, pageRequest, pagination, sensitiveIdentifierHash, withOrganizationMembershipLocks } from "../../lib/utils";
+import { auditLog, caseInsensitiveLike, pageRequest, pagination, sensitiveIdentifierHash, withOrganizationMembershipLocks } from "../../lib/utils";
 import { isUniqueConstraintError } from "../../lib/validation";
 import { checkPasswordPolicy, loadPasswordPolicy } from "../../lib/password-policy";
 import { hashAuthenticationToken } from "../../lib/token-service";
@@ -29,7 +29,7 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     if (filterSuspended === "false") conditions.push(eq(users.isSuspended, false));
     if (q !== "") {
       const pattern = `%${q}%`;
-      conditions.push(or(like(users.username, pattern), like(users.email ?? users.username, pattern)) as SQL); // eslint-disable-line @typescript-eslint/non-nullable-type-assertion-style
+      conditions.push(or(caseInsensitiveLike(users.username, pattern), caseInsensitiveLike(users.email, pattern)) as SQL);
     }
     const where = conditions.length === 0 ? undefined : conditions.length === 1 ? conditions[0] : and(...conditions);
     const [allUsers, countRows] = await Promise.all([

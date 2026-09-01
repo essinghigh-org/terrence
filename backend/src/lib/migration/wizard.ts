@@ -23,6 +23,7 @@ import { count, eq, inArray } from "drizzle-orm";
 import { envEnabled } from "../env";
 import { db } from "../../db";
 import { checkpointWal } from "../../db";
+import { readBundledMigrationJournalRows, type MigrationJournalRow } from "../../db/reconcile";
 import { agentJobs, assessmentResults, runs } from "../../db/schema";
 import { resolveDatabaseConfig, writeBootDatabaseConfig } from "../boot-config";
 import { enterMaintenance, exitMaintenance } from "../maintenance";
@@ -309,7 +310,6 @@ function parsePostgresVersion(version: string): number {
 type CompatibilityCheck = { name: string; ok: boolean; detail: string };
 type PostgresVersionRow = Readonly<{ version?: unknown; database?: unknown }>;
 type PostgresCountRow = Readonly<{ n?: string | number }>;
-type MigrationJournalRow = Readonly<{ hash: unknown; createdAt: unknown }>;
 
 async function checkTemporaryTableWritable(sql: MigrationSql): Promise<CompatibilityCheck> {
   try {
@@ -700,7 +700,7 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
         const fkStatements = generateForeignKeySql(plan.def);
         if (fkStatements.length > 0) await target.unsafe(fkStatements.join("\n"));
       }
-      await seedMigrationJournal(sourceSnapshot, target);
+      await seedMigrationJournal(target);
       ctx.setState({ ...ctx.state, report });
     });
     await run("copy", async (ctx): Promise<void> => {
@@ -809,7 +809,7 @@ async function runMigrationJob(initial: WizardState): Promise<void> {
         });
       }
       const violations = await validateForeignKeys(target, plans.map((plan): CopyTable => plan.copy), fkNames);
-      const journalMatch = await verifyJournal(sourceSnapshot, target);
+      const journalMatch = await verifyJournal(target);
       report = { ...report, fkViolations: violations, journalMatch };
       const mismatches = verification.filter((row): boolean => !row.countMatch || row.digestMatch === false);
       if (mismatches.length > 0 || violations.length > 0 || !journalMatch) {
@@ -948,13 +948,16 @@ async function waitForDrain(ctx: Readonly<JobContext>): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Journal handling: the target's drizzle migration journal is seeded from the
-// source so the app's PG migrator sees every migration as already applied and
-// boots without re-running DDL (which would conflict with the copied schema).
+// Journal handling: seed and verify against the target dialect's bundled
+// migration journal. The source SQLite journal has different SQL hashes and
+// cannot be used to satisfy the PostgreSQL migrator.
 // ---------------------------------------------------------------------------
-async function seedMigrationJournal(source: Readonly<Database>, target: MigrationSql): Promise<void> {
-  const rows = source.query(`SELECT hash, created_at AS "createdAt" FROM "__drizzle_migrations" ORDER BY id`).all() as
-    readonly MigrationJournalRow[];
+function postgresMigrationJournalRows(): readonly MigrationJournalRow[] {
+  return readBundledMigrationJournalRows(join(import.meta.dir, "../../../drizzle/pg"));
+}
+
+async function seedMigrationJournal(target: MigrationSql): Promise<void> {
+  const rows = postgresMigrationJournalRows();
   await target.unsafe("CREATE SCHEMA IF NOT EXISTS drizzle");
   await target.unsafe(
     `CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
@@ -968,9 +971,7 @@ async function seedMigrationJournal(source: Readonly<Database>, target: Migratio
     const params: unknown[] = [];
     const groups: string[] = [];
     for (const row of rows) {
-      const hash = typeof row.hash === "string" ? row.hash : "";
-      const createdAt = Number(row.createdAt ?? 0);
-      params.push(hash, Number.isFinite(createdAt) ? Math.round(createdAt) : 0);
+      params.push(row.hash, row.createdAt);
       groups.push(`($${params.length - 1}, $${params.length})`);
     }
     await target.unsafe(
@@ -980,15 +981,14 @@ async function seedMigrationJournal(source: Readonly<Database>, target: Migratio
   }
 }
 
-async function verifyJournal(source: Readonly<Database>, target: MigrationSql): Promise<boolean> {
-  const sourceRows = source.query(`SELECT hash, created_at AS "createdAt" FROM "__drizzle_migrations" ORDER BY id`).all() as
-    readonly MigrationJournalRow[];
+async function verifyJournal(target: MigrationSql): Promise<boolean> {
+  const expectedRows = postgresMigrationJournalRows();
   const targetRows = await target.unsafe<MigrationJournalRow>(
     "SELECT hash, created_at::bigint AS \"createdAt\" FROM drizzle.__drizzle_migrations ORDER BY id",
   );
-  if (sourceRows.length !== targetRows.length) return false;
-  return sourceRows.every((row, index): boolean =>
-    row.hash === targetRows[index]?.hash && Number(row.createdAt ?? 0) === Number(targetRows[index]?.createdAt ?? 0));
+  if (expectedRows.length !== targetRows.length) return false;
+  return expectedRows.every((row, index): boolean =>
+    row.hash === targetRows[index]?.hash && row.createdAt === Number(targetRows[index]?.createdAt ?? 0));
 }
 
 function emptyReport(): MigrationReport {

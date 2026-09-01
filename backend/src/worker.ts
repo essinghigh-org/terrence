@@ -31,7 +31,7 @@ import {
   adminGeneralSettings,
   projects,
 } from "./db/schema";
-import { eq, desc, asc, and, gt, inArray, notInArray, or, sql, isNotNull, isNull } from "drizzle-orm";
+import { eq, desc, asc, and, gt, lt, like, inArray, notInArray, or, sql, isNotNull, isNull } from "drizzle-orm";
 import { spawn } from "bun";
 import { createHash, createHmac } from "node:crypto";
 import { join } from "path";
@@ -2667,77 +2667,207 @@ function autoDestroyDurationMs(value: string | null): number | undefined {
   return amount * (match[2] === "d" ? 86_400_000 : 3_600_000);
 }
 
+const AUTO_DESTROY_SCAN_PAGE_SIZE = 200;
+
+type AutoDestroyDescendingCursor = Readonly<{ createdAt: number; id: string }>;
+type AutoDestroyRunCursor = Readonly<{ workspaceId: string; createdAt: number; id: string }>;
+type AutoDestroyStateRow = Pick<typeof stateVersions.$inferSelect, "id" | "workspaceId" | "createdAt">;
+type AutoDestroyConfigurationRow = Pick<typeof configurationVersions.$inferSelect, "id" | "workspaceId" | "createdAt">;
+type AutoDestroyRunRow = Pick<typeof runs.$inferSelect, "id" | "workspaceId" | "status" | "isDestroy" | "message" | "createdAt">;
+
+type AutoDestroyRunFacts = Readonly<{
+  activeWorkspaceIds: ReadonlySet<string>;
+  lastAttemptAt: ReadonlyMap<string, number>;
+}>;
+
+async function latestAutoDestroyStateAt(workspaceIds: readonly string[]): Promise<Map<string, number>> {
+  const latest = new Map<string, number>();
+  const unresolved = new Set(workspaceIds);
+  let cursor: AutoDestroyDescendingCursor | null = null;
+  while (unresolved.size > 0) {
+    const page: AutoDestroyStateRow[] = await db.query.stateVersions.findMany({
+      where: and(
+        inArray(stateVersions.workspaceId, [...unresolved]),
+        eq(stateVersions.status, "finalized"),
+        eq(stateVersions.intermediate, false),
+        cursor === null
+          ? undefined
+          : or(
+              lt(stateVersions.createdAt, cursor.createdAt),
+              and(eq(stateVersions.createdAt, cursor.createdAt), lt(stateVersions.id, cursor.id)),
+            ),
+      ),
+      columns: { id: true, workspaceId: true, createdAt: true },
+      orderBy: [desc(stateVersions.createdAt), desc(stateVersions.id)],
+      limit: AUTO_DESTROY_SCAN_PAGE_SIZE,
+    });
+    if (page.length === 0) break;
+    for (const state of page) {
+      if (!latest.has(state.workspaceId)) {
+        latest.set(state.workspaceId, state.createdAt);
+        unresolved.delete(state.workspaceId);
+      }
+    }
+    const last = page[page.length - 1];
+    if (last === undefined) break;
+    cursor = { createdAt: last.createdAt, id: last.id };
+    if (page.length < AUTO_DESTROY_SCAN_PAGE_SIZE) break;
+  }
+  return latest;
+}
+
+async function latestAutoDestroyConfigurationIds(workspaceIds: readonly string[]): Promise<Map<string, string>> {
+  const latest = new Map<string, string>();
+  const unresolved = new Set(workspaceIds);
+  let cursor: AutoDestroyDescendingCursor | null = null;
+  while (unresolved.size > 0) {
+    const page: AutoDestroyConfigurationRow[] = await db.query.configurationVersions.findMany({
+      where: and(
+        inArray(configurationVersions.workspaceId, [...unresolved]),
+        cursor === null
+          ? undefined
+          : or(
+              lt(configurationVersions.createdAt, cursor.createdAt),
+              and(eq(configurationVersions.createdAt, cursor.createdAt), lt(configurationVersions.id, cursor.id)),
+            ),
+      ),
+      columns: { id: true, workspaceId: true, createdAt: true },
+      orderBy: [desc(configurationVersions.createdAt), desc(configurationVersions.id)],
+      limit: AUTO_DESTROY_SCAN_PAGE_SIZE,
+    });
+    if (page.length === 0) break;
+    for (const configuration of page) {
+      if (!latest.has(configuration.workspaceId)) {
+        latest.set(configuration.workspaceId, configuration.id);
+        unresolved.delete(configuration.workspaceId);
+      }
+    }
+    const last = page[page.length - 1];
+    if (last === undefined) break;
+    cursor = { createdAt: last.createdAt, id: last.id };
+    if (page.length < AUTO_DESTROY_SCAN_PAGE_SIZE) break;
+  }
+  return latest;
+}
+
+async function autoDestroyRunFacts(workspaceIds: readonly string[]): Promise<AutoDestroyRunFacts> {
+  const activeWorkspaceIds = new Set<string>();
+  const lastAttemptAt = new Map<string, number>();
+  const unresolved = new Set(workspaceIds);
+  let cursor: AutoDestroyRunCursor | null = null;
+  while (unresolved.size > 0) {
+    const page: AutoDestroyRunRow[] = await db.query.runs.findMany({
+      where: and(
+        inArray(runs.workspaceId, [...unresolved]),
+        or(
+          notInArray(runs.status, FINAL_RUN_STATUSES),
+          and(eq(runs.isDestroy, true), like(runs.message, "[auto-destroy]%")),
+        ),
+        cursor === null
+          ? undefined
+          : or(
+              gt(runs.workspaceId, cursor.workspaceId),
+              and(
+                eq(runs.workspaceId, cursor.workspaceId),
+                or(
+                  lt(runs.createdAt, cursor.createdAt),
+                  and(eq(runs.createdAt, cursor.createdAt), lt(runs.id, cursor.id)),
+                ),
+              ),
+            ),
+      ),
+      columns: { id: true, workspaceId: true, status: true, isDestroy: true, message: true, createdAt: true },
+      orderBy: [asc(runs.workspaceId), desc(runs.createdAt), desc(runs.id)],
+      limit: AUTO_DESTROY_SCAN_PAGE_SIZE,
+    });
+    if (page.length === 0) break;
+    for (const run of page) {
+      if (!FINAL_RUN_STATUSES.includes(run.status)) {
+        activeWorkspaceIds.add(run.workspaceId);
+        unresolved.delete(run.workspaceId);
+      } else if (run.isDestroy === true && run.message?.startsWith("[auto-destroy]") === true) {
+        if (!lastAttemptAt.has(run.workspaceId)) lastAttemptAt.set(run.workspaceId, run.createdAt);
+        // Keep scanning this workspace: an older non-final run may appear on
+        // a later page and must suppress a duplicate destroy run.
+      }
+    }
+    const last = page[page.length - 1];
+    if (last === undefined) break;
+    cursor = { workspaceId: last.workspaceId, createdAt: last.createdAt, id: last.id };
+    if (page.length < AUTO_DESTROY_SCAN_PAGE_SIZE) break;
+  }
+  return { activeWorkspaceIds, lastAttemptAt };
+}
+
 export async function enqueueDueAutoDestroyRuns(now = Date.now()): Promise<string[]> {
   if (isMaintenanceActive()) return [];
   if (workerQueueDraining()) return [];
-  const [allWorkspaces, allRuns, finalizedStates, configurations] = await Promise.all([
-    db.query.workspaces.findMany({ orderBy: [asc(workspaces.createdAt), asc(workspaces.id)] }),
-    db.query.runs.findMany({ orderBy: [desc(runs.createdAt)] }),
-    db.query.stateVersions.findMany({
-      where: and(eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
-      orderBy: [desc(stateVersions.createdAt)],
-    }),
-    db.query.configurationVersions.findMany({ orderBy: [desc(configurationVersions.createdAt)] }),
-  ]);
-  const latestStateAt = new Map<string, number>();
-  for (const state of finalizedStates) {
-    if (!latestStateAt.has(state.workspaceId)) latestStateAt.set(state.workspaceId, state.createdAt);
-  }
-  const latestConfigurationId = new Map<string, string>();
-  for (const configuration of configurations) {
-    if (!latestConfigurationId.has(configuration.workspaceId)) {
-      latestConfigurationId.set(configuration.workspaceId, configuration.id);
-    }
-  }
-  const workspaceRuns = new Map<string, (typeof runs.$inferSelect)[]>();
-  for (const run of allRuns) {
-    const current = workspaceRuns.get(run.workspaceId) ?? [];
-    current.push(run);
-    workspaceRuns.set(run.workspaceId, current);
-  }
 
   const created: string[] = [];
-  for (const workspace of allWorkspaces) {
-    if (workspace.locked === true) continue;
-    const runsForWorkspace = workspaceRuns.get(workspace.id) ?? [];
-    if (runsForWorkspace.some((run): boolean => !FINAL_RUN_STATUSES.includes(run.status))) continue;
-
-    const scheduledAt = workspace.autoDestroyAt === null ? Number.NaN : Date.parse(workspace.autoDestroyAt);
-    const scheduled = Number.isFinite(scheduledAt) && scheduledAt <= now;
-    const duration = autoDestroyDurationMs(workspace.autoDestroyActivityDuration);
-    const lastAttemptAt = runsForWorkspace.find((run): boolean =>
-      run.isDestroy === true && run.message?.startsWith("[auto-destroy]") === true)?.createdAt;
-    const activityAt = Math.max(
-      workspace.createdAt,
-      latestStateAt.get(workspace.id) ?? 0,
-      lastAttemptAt ?? 0,
-    );
-    const inactive = duration !== undefined && activityAt + duration <= now;
-    if (!scheduled && !inactive) continue;
-
-    const runId = newRunId();
-    await db.transaction(async (tx): Promise<void> => {
-      await tx.insert(runs).values({
-        id: runId,
-        workspaceId: workspace.id,
-        configurationVersionId: latestConfigurationId.get(workspace.id) ?? null,
-        status: "pending",
-        message: scheduled
-          ? "[auto-destroy] Scheduled workspace destruction"
-          : "[auto-destroy] Inactivity workspace destruction",
-        isDestroy: true,
-        autoApply: true,
-        statusTimestamps: { "pending-at": new Date(now).toISOString() },
-        createdAt: now,
-      });
-      if (scheduled) {
-        await tx.update(workspaces).set({ autoDestroyAt: null }).where(eq(workspaces.id, workspace.id));
-      }
+  let workspaceCursor: AutoDestroyDescendingCursor | null = null;
+  for (;;) {
+    const workspacePage: (typeof workspaces.$inferSelect)[] = await db.query.workspaces.findMany({
+      where: workspaceCursor === null
+        ? undefined
+        : or(
+            gt(workspaces.createdAt, workspaceCursor.createdAt),
+            and(eq(workspaces.createdAt, workspaceCursor.createdAt), gt(workspaces.id, workspaceCursor.id)),
+          ),
+      orderBy: [asc(workspaces.createdAt), asc(workspaces.id)],
+      limit: AUTO_DESTROY_SCAN_PAGE_SIZE,
     });
-    created.push(runId);
+    if (workspacePage.length === 0) break;
+
+    const workspaceIds = workspacePage.map((workspace): string => workspace.id);
+    const [latestStateAt, latestConfigurationId, runFacts] = await Promise.all([
+      latestAutoDestroyStateAt(workspaceIds),
+      latestAutoDestroyConfigurationIds(workspaceIds),
+      autoDestroyRunFacts(workspaceIds),
+    ]);
+
+    for (const workspace of workspacePage) {
+      if (workspace.locked === true || runFacts.activeWorkspaceIds.has(workspace.id)) continue;
+      const scheduledAt = workspace.autoDestroyAt === null ? Number.NaN : Date.parse(workspace.autoDestroyAt);
+      const scheduled = Number.isFinite(scheduledAt) && scheduledAt <= now;
+      const duration = autoDestroyDurationMs(workspace.autoDestroyActivityDuration);
+      const activityAt = Math.max(
+        workspace.createdAt,
+        latestStateAt.get(workspace.id) ?? 0,
+        runFacts.lastAttemptAt.get(workspace.id) ?? 0,
+      );
+      const inactive = duration !== undefined && activityAt + duration <= now;
+      if (!scheduled && !inactive) continue;
+
+      const runId = newRunId();
+      await db.transaction(async (tx): Promise<void> => {
+        await tx.insert(runs).values({
+          id: runId,
+          workspaceId: workspace.id,
+          configurationVersionId: latestConfigurationId.get(workspace.id) ?? null,
+          status: "pending",
+          message: scheduled
+            ? "[auto-destroy] Scheduled workspace destruction"
+            : "[auto-destroy] Inactivity workspace destruction",
+          isDestroy: true,
+          autoApply: true,
+          statusTimestamps: { "pending-at": new Date(now).toISOString() },
+          createdAt: now,
+        });
+        if (scheduled) {
+          await tx.update(workspaces).set({ autoDestroyAt: null }).where(eq(workspaces.id, workspace.id));
+        }
+      });
+      created.push(runId);
+    }
+
+    const last = workspacePage[workspacePage.length - 1];
+    if (last === undefined) break;
+    workspaceCursor = { createdAt: last.createdAt, id: last.id };
+    if (workspacePage.length < AUTO_DESTROY_SCAN_PAGE_SIZE) break;
   }
   return created;
 }
+
 
 export async function enqueueDueAssessments(now = Date.now()): Promise<string[]> {
   if (isMaintenanceActive()) return [];

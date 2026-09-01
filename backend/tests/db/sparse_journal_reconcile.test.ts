@@ -7,7 +7,7 @@ import { readdirSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { pathToFileURL } from "url";
-import { sparseJournalReconcilePlan, readBundledMigrationJournal } from "../../src/db/reconcile";
+import { sparseJournalReconcilePlan, readBundledMigrationJournal, readBundledMigrationJournalRows } from "../../src/db/reconcile";
 
 /**
  * Sparse-journal reconciliation (2026-08-23 prod incident).
@@ -20,6 +20,19 @@ import { sparseJournalReconcilePlan, readBundledMigrationJournal } from "../../s
  * grew with every release. These tests pin the reconciliation behavior.
  */
 const DRIZZLE_DIR = join(import.meta.dir, "../../drizzle");
+const PG_DRIZZLE_DIR = join(import.meta.dir, "../../drizzle/pg");
+
+test("builds migration journal rows from the selected dialect bundle", () => {
+  const sqliteEntries = readBundledMigrationJournal(DRIZZLE_DIR);
+  const postgresEntries = readBundledMigrationJournal(PG_DRIZZLE_DIR);
+  const sqliteRows = readBundledMigrationJournalRows(DRIZZLE_DIR);
+  const postgresRows = readBundledMigrationJournalRows(PG_DRIZZLE_DIR);
+
+  expect(postgresRows).toHaveLength(postgresEntries.length);
+  expect(postgresRows.at(-1)?.createdAt).toBe(postgresEntries.at(-1)?.when);
+  expect(sqliteRows).toHaveLength(sqliteEntries.length);
+  expect(postgresRows.at(-1)?.hash).not.toBe(sqliteRows.at(-1)?.hash);
+});
 
 /** Build a database whose journal stops at `maxIdx` using a truncated bundle copy. */
 async function buildSparseDatabase(dir: string, maxIdx: number): Promise<string> {
@@ -48,7 +61,7 @@ function columnExists(db: Database, table: string, column: string): boolean {
   return !!db.query(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?`).get(column);
 }
 
-test.skip("boots cleanly on the 2026-08-23 prod shape: journal at 0025 plus seven out-of-journal columns", async () => {
+test("boots cleanly on the 2026-08-23 prod shape: journal at 0025 plus seven out-of-journal columns", async () => {
   const dir = await mkdtemp(join(tmpdir(), "terrence-sparse-prod-"));
   try {
     const dbPath = await buildSparseDatabase(dir, 25);
@@ -72,6 +85,7 @@ test.skip("boots cleanly on the 2026-08-23 prod shape: journal at 0025 plus seve
         identityLinks: !!raw.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='identity_links'").get(),
         registryComponents: !!raw.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_components'").get(),
         stateOutputIndex: !!raw.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='state_output_index'").get(),
+        queryRuns: !!raw.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='query_runs'").get(),
         rateLimitBuckets: !!raw.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='rate_limit_buckets'").get(),
         actionInvocations: !!raw.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='action_invocations'").get(),
         notificationDeliveryState: !!raw.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='notification_delivery_state'").get(),
@@ -107,6 +121,7 @@ test.skip("boots cleanly on the 2026-08-23 prod shape: journal at 0025 plus seve
     for (const [table, key] of Object.entries(expectedTables)) {
       expect(result[key as keyof typeof result], `${table} must exist after boot`).toBe(true);
     }
+    expect(result.queryRuns, "the removed query_runs table must not survive migration").toBe(false);
     // The collision column was repaired once, not duplicated.
     expect(result.legacyColumns).toBe(1);
     expect(result.isProvisional).toBe(true);
@@ -201,7 +216,8 @@ test("fresh database: reconciliation is inert and the migrator still applies eve
       const raw = new Database(${JSON.stringify(dbPath)});
       const count = (raw.query("SELECT COUNT(*) c FROM __drizzle_migrations").get()).c;
       const ok = !!raw.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runs'").get();
-      console.log(JSON.stringify({ count, ok }));
+      const queryRuns: boolean = !!raw.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='query_runs'").get();
+      console.log(JSON.stringify({ count, ok, queryRuns }));
     `;
     const process = Bun.spawn([Bun.which("bun")!, "-e", script], {
       cwd: join(import.meta.dir, "../.."),
@@ -216,6 +232,123 @@ test("fresh database: reconciliation is inert and the migrator still applies eve
     const result = JSON.parse(stdout.trim().split("\n").pop()!);
     expect(result.count).toBe(bundled.entries.length);
     expect(result.ok).toBe(true);
+    expect(result.queryRuns).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test("boots when a migration index already exists outside the journal", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "terrence-sparse-index-"));
+  try {
+    const dbPath = await buildSparseDatabase(dir, 40);
+    const seed = new Database(dbPath);
+    seed.run("CREATE INDEX agents_last_ping_at_status_idx ON agents (last_ping_at, status)");
+    seed.close();
+
+    const script = `
+      await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/db/index.ts")).href)});
+      const { Database } = await import("bun:sqlite");
+      const raw = new Database(${JSON.stringify(dbPath)});
+      console.log(JSON.stringify({
+        journalCount: (raw.query("SELECT COUNT(*) c FROM __drizzle_migrations").get()).c,
+        indexCount: (raw.query("SELECT COUNT(*) c FROM sqlite_master WHERE type = 'index' AND name = 'agents_last_ping_at_status_idx'").get()).c,
+      }));
+      raw.close();
+    `;
+    const process = Bun.spawn([Bun.which("bun")!, "-e", script], {
+      cwd: join(import.meta.dir, "../.."),
+      env: { ...Bun.env, DATABASE_URL: `file:${dbPath}`, STORAGE_DIR: join(dir, "storage") },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
+    if (exitCode !== 0) console.error(stderr);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout.trim().split("\n").pop()!);
+    const bundled = JSON.parse(readFileSync(join(DRIZZLE_DIR, "meta/_journal.json"), "utf8")) as { entries: unknown[] };
+    expect(result.journalCount).toBe(bundled.entries.length);
+    expect(result.indexCount).toBe(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test("deduplicates workspace variables before enforcing the composite key", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "terrence-sparse-variable-index-"));
+  try {
+    const dbPath = await buildSparseDatabase(dir, 40);
+    const seed = new Database(dbPath);
+    seed.run(
+      "INSERT INTO workspace_variables (id, workspace_id, key, value, category) VALUES (?, ?, ?, ?, ?)",
+      ["variable-keep", "workspace-duplicate", "DUPLICATE", "first", "terraform"],
+    );
+    seed.run(
+      "INSERT INTO workspace_variables (id, workspace_id, key, value, category) VALUES (?, ?, ?, ?, ?)",
+      ["variable-drop", "workspace-duplicate", "DUPLICATE", "second", "terraform"],
+    );
+    seed.close();
+
+    const script = `
+      await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/db/index.ts")).href)});
+      const { Database } = await import("bun:sqlite");
+      const raw = new Database(${JSON.stringify(dbPath)});
+      console.log(JSON.stringify({
+        rows: raw.query("SELECT id, value FROM workspace_variables WHERE workspace_id = 'workspace-duplicate'").all(),
+        indexCount: (raw.query("SELECT COUNT(*) c FROM sqlite_master WHERE type = 'index' AND name = 'workspace_variables_workspace_key_idx'").get()).c,
+      }));
+      raw.close();
+    `;
+    const process = Bun.spawn([Bun.which("bun")!, "-e", script], {
+      cwd: join(import.meta.dir, "../.."),
+      env: { ...Bun.env, DATABASE_URL: `file:${dbPath}`, STORAGE_DIR: join(dir, "storage") },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
+    if (exitCode !== 0) console.error(stderr);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout.trim().split("\n").pop()!) as { rows: { id: string; value: string }[]; indexCount: number };
+    expect(result.rows).toEqual([{ id: "variable-keep", value: "first" }]);
+    expect(result.indexCount).toBe(1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test("reconciles a retired table that was already removed before boot", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "terrence-sparse-retired-"));
+  try {
+    const dbPath = await buildSparseDatabase(dir, 41);
+    const seed = new Database(dbPath);
+    seed.run("DROP TABLE query_runs");
+    seed.close();
+
+    const script = `
+      await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/db/index.ts")).href)});
+      const { Database } = await import("bun:sqlite");
+      const raw = new Database(${JSON.stringify(dbPath)});
+      console.log(JSON.stringify({
+        journalCount: (raw.query("SELECT COUNT(*) c FROM __drizzle_migrations").get()).c,
+        queryRuns: !!raw.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'query_runs'").get(),
+        fencingToken: !!raw.query("SELECT 1 FROM pragma_table_info('agent_jobs') WHERE name = 'fencing_token'").get(),
+      }));
+      raw.close();
+    `;
+    const process = Bun.spawn([Bun.which("bun")!, "-e", script], {
+      cwd: join(import.meta.dir, "../.."),
+      env: { ...Bun.env, DATABASE_URL: `file:${dbPath}`, STORAGE_DIR: join(dir, "storage") },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
+    if (exitCode !== 0) console.error(stderr);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout.trim().split("\n").pop()!);
+    const bundled = JSON.parse(readFileSync(join(DRIZZLE_DIR, "meta/_journal.json"), "utf8")) as { entries: unknown[] };
+    expect(result.journalCount).toBe(bundled.entries.length);
+    expect(result.queryRuns).toBe(false);
+    expect(result.fencingToken).toBe(true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -198,7 +198,9 @@ export const agents = pgTable("agents", {
     hyok: boolean("hyok").notNull().default(false),
     lastPingAt: bigint("last_ping_at", { mode: "number" }),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.agents.createdAt.defaultFn!()),
-});
+}, (table) => [
+    index("agents_last_ping_at_status_idx").on(table.lastPingAt, table.status),
+  ]);
 
 export const apiTokens = pgTable("api_tokens", {
     id: text("id").notNull().primaryKey(),
@@ -263,21 +265,10 @@ export const auditLogs = pgTable("audit_logs", {
     resourceId: text("resource_id"),
     details: jsonb("details"),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.auditLogs.createdAt.defaultFn!()),
-});
-
-export const explorerBulkActionRecords = pgTable("change_requests", {
-    id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-    subject: text("subject").notNull(),
-    message: text("message").notNull(),
-    status: text("status").notNull().default("pending"),
-    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
-    resolvedBy: text("resolved_by").references(() => users.id, { onDelete: "set null" }),
-    resolvedAt: bigint("resolved_at", { mode: "number" }),
-    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.explorerBulkActionRecords.createdAt.defaultFn!()),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.explorerBulkActionRecords.updatedAt.defaultFn!()),
 }, (table) => [
-    index("change_requests_workspace_created_idx").on(table.workspaceId, table.createdAt),
+    index("audit_logs_created_at_idx").on(table.createdAt),
+    index("audit_logs_org_created_at_idx").on(table.orgId, table.createdAt),
+    index("audit_logs_resource_idx").on(table.resourceType, table.resourceId, table.createdAt, table.id),
   ]);
 
 export const cidrRangeListAgentPools = pgTable("cidr_range_list_agent_pools", {
@@ -382,6 +373,21 @@ export const emailVerificationTokens = pgTable("email_verification_tokens", {
     usedAt: bigint("used_at", { mode: "number" }),
 }, (table) => [
     index("email_verification_tokens_user_idx").on(table.userId),
+  ]);
+
+export const explorerBulkActionRecords = pgTable("change_requests", {
+    id: text("id").notNull().primaryKey(),
+    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    subject: text("subject").notNull(),
+    message: text("message").notNull(),
+    status: text("status").notNull().default("pending"),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    resolvedBy: text("resolved_by").references(() => users.id, { onDelete: "set null" }),
+    resolvedAt: bigint("resolved_at", { mode: "number" }),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.explorerBulkActionRecords.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.explorerBulkActionRecords.updatedAt.defaultFn!()),
+}, (table) => [
+    index("change_requests_workspace_created_idx").on(table.workspaceId, table.createdAt),
   ]);
 
 export const explorerCatalogItems = pgTable("explorer_catalog_items", {
@@ -1223,7 +1229,9 @@ export const runComments = pgTable("run_comments", {
     userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
     body: text("body").notNull(),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.runComments.createdAt.defaultFn!()),
-});
+}, (table) => [
+    index("run_comments_run_created_idx").on(table.runId, table.createdAt, table.id),
+  ]);
 
 export const runExplanations = pgTable("run_explanations", {
     id: text("id").notNull().primaryKey(),
@@ -1792,7 +1800,9 @@ export const workspaceVariables = pgTable("workspace_variables", {
     hcl: boolean("hcl").default(false),
     category: text("category").notNull().default("terraform"),
     description: text("description"),
-});
+}, (table) => [
+    uniqueIndex("workspace_variables_workspace_key_idx").on(table.workspaceId, table.category, table.key),
+  ]);
 
 export const workspaces = pgTable("workspaces", {
     id: text("id").notNull().primaryKey(),

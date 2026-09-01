@@ -260,6 +260,20 @@
       "when": 1787606742715,
       "tag": "0036_luxuriant_franklin_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1788256095544,
+      "tag": "0037_little_colossus",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1788257471952,
+      "tag": "0038_remove-dead-query-runs",
+      "breakpoints": true
     }
   ]
 }

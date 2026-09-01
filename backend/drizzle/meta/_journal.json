@@ -288,6 +288,20 @@
       "when": 1787606732578,
       "tag": "0040_useful_hiroim",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1788256082278,
+      "tag": "0041_charming_spot",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "6",
+      "when": 1788257467073,
+      "tag": "0042_remove-dead-query-runs",
+      "breakpoints": true
     }
   ]
 }

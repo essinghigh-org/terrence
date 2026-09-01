@@ -5,7 +5,7 @@ import { workspaces } from "../../db/schema";
 import { eq } from "drizzle-orm";
 import type { ParamCtx } from "./types";
 import type { WsItem } from "./helpers";
-import { deleteWorkspaceData } from "../../lib/utils";
+import { deleteWorkspace } from "../../lib/utils";
 export const workspacesRoutes = new Elysia({ name: "admin-workspaces" })
   .use(authPlugin)
   .get("/api/v2/admin/workspaces", async ({ user, set }: ParamCtx): Promise<unknown> => {
@@ -42,8 +42,7 @@ export const workspacesRoutes = new Elysia({ name: "admin-workspaces" })
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await deleteWorkspaceData(wsId);
-    await db.delete(workspaces).where(eq(workspaces.id, wsId));
+    await deleteWorkspace(wsId);
     (set as { status: number }).status = 204;
     return {};
   });

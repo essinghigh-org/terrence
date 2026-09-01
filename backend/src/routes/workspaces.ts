@@ -12,7 +12,7 @@ import {
 } from "../lib/response";
 import { decodeStatePayload, validVariableAttributes } from "../lib/validation";
 import { variableValueForWrite, variableValueForRead } from "../lib/variable-crypto";
-import { validateVersion, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, parseStatePayload, auditLog, strictAuditEnabled, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspaceData, lockPrincipal, ownsWorkspaceLock, ifMatchSatisfied, type DeepReadonly } from "../lib/utils";
+import { validateVersion, caseInsensitiveLike, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, parseStatePayload, auditLog, strictAuditEnabled, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspace, lockPrincipal, ownsWorkspaceLock, ifMatchSatisfied, type DeepReadonly } from "../lib/utils";
 
 import { normalizeWorkingDirectory } from "../workspace";
 import { authPlugin } from "../auth";
@@ -408,7 +408,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         : eq(workspaces.id, "__no_authorized_workspace__"));
     }
     const search = searchParams.get("search[name]")?.trim() ?? searchParams.get("q")?.trim();
-    if (search !== undefined && search !== "") conditions.push(like(workspaces.name, `%${search}%`));
+    if (search !== undefined && search !== "") conditions.push(caseInsensitiveLike(workspaces.name, `%${search}%`));
     const tags = csv("search[tags]");
     if (tags.length > 0) {
       const tagRows = await db.query.workspaceTags.findMany({
@@ -868,8 +868,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    await deleteWorkspaceData(ws.id);
-    await db.delete(workspaces).where(eq(workspaces.id, ws.id));
+    await deleteWorkspace(ws.id);
     (set as { status: number }).status = 204;
     return {};
   })
@@ -1073,8 +1072,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
-    await deleteWorkspaceData(ws.id);
-    await db.delete(workspaces).where(eq(workspaces.id, ws.id));
+    await deleteWorkspace(ws.id);
     (set as { status: number }).status = 204;
     return {};
   })

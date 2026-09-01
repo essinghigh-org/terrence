@@ -16,13 +16,13 @@ import {
 } from "../db/schema";
 import { parseTokenScopes, type TokenScopes } from "../lib/token-scopes";
 import { currentTokenScopes } from "../lib/request-scope";
-import { eq, and, asc, desc, count, inArray, isNull, like, ne, or, sql } from "drizzle-orm";
+import { eq, and, asc, desc, count, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { userResource, orgMembershipResource, tokenResource } from "../lib/response";
 import { isUniqueConstraintError, tokenExpiry } from "../lib/validation";
 import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
 import { TOKEN_DESCRIPTION_MAX_LENGTH } from "../lib/constants";
 import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
-import { checkOrganizationPermission, checkOrgPermission, pageRequest, pagination, auditLog, sensitiveIdentifierHash, withOrganizationMembershipLocks } from "../lib/utils";
+import { caseInsensitiveLike, checkOrganizationPermission, checkOrgPermission, pageRequest, pagination, auditLog, sensitiveIdentifierHash, withOrganizationMembershipLocks } from "../lib/utils";
 import { normalizeEmail, normalizeUsername } from "../lib/identity";
 import { randomBytes } from "node:crypto";
 import { publish } from "../lib/event-bus";
@@ -73,7 +73,7 @@ export const userRoutes = new Elysia({ name: "users" })
     if (user.isSiteAdmin === true) {
       if (usernameFilter !== "") {
         allUsers = await db.query.users.findMany({
-          where: like(users.username, `%${usernameFilter}%`),
+          where: caseInsensitiveLike(users.username, `%${usernameFilter}%`),
         });
       } else {
         allUsers = await db.query.users.findMany();
@@ -92,7 +92,7 @@ export const userRoutes = new Elysia({ name: "users" })
       const sharedUserIds = [...new Set(sharedMemberships.map((m: Readonly<{ readonly userId: string }>): string => m.userId))];
       if (usernameFilter !== "") {
         allUsers = await db.query.users.findMany({
-          where: and(inArray(users.id, sharedUserIds), like(users.username, `%${usernameFilter}%`)),
+          where: and(inArray(users.id, sharedUserIds), caseInsensitiveLike(users.username, `%${usernameFilter}%`)),
         });
       } else {
         allUsers = await db.query.users.findMany({

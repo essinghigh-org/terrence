@@ -952,5 +952,5 @@ export function orderTablesForCopy(tables: readonly TableDef[]): { ordered: read
   return { ordered, cycle };
 } 
 
-/** Names never copied as regular tables (migration metadata, sequence bookkeeping). */
-export const METADATA_TABLES: ReadonlySet<string> = new Set(["__drizzle_migrations", "sqlite_sequence"]);
+/** Names never copied as regular tables (migration metadata and retired compatibility tables). */
+export const METADATA_TABLES: ReadonlySet<string> = new Set(["__drizzle_migrations", "sqlite_sequence", "query_runs"]);
