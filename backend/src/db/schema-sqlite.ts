@@ -16,8 +16,7 @@ export const users = sqliteTable("users", {
   // External identity for SAML / OIDC / LDAP provisioned accounts.
   // Both NULL for local accounts. (sso_provider, sso_subject) is unique and
   // the all-or-nothing pairing is enforced by the users_sso_identity_pair_*
-  // triggers created in migration 0058 (a table check cannot be added to an
-  // existing table portably, so the triggers are the source of truth).
+  // triggers installed by the dialect-specific boot repair in db/index.ts.
   ssoProvider: text("sso_provider"),
   ssoSubject: text("sso_subject"),
   // True when the site-admin flag was granted through the SAML site-admin
@@ -461,7 +460,9 @@ export const workspaceVariables = sqliteTable("workspace_variables", {
   hcl: integer("hcl", { mode: "boolean" }).default(false),
   category: text("category").notNull().default("terraform"), // 'terraform' or 'env'
   description: text("description"),
-});
+}, (table) => [
+  uniqueIndex("workspace_variables_workspace_key_idx").on(table.workspaceId, table.category, table.key),
+]);
 
 export const configurationVersions = sqliteTable("configuration_versions", {
   id: text("id").primaryKey(),
@@ -1370,7 +1371,9 @@ export const runComments = sqliteTable("run_comments", {
   userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
   body: text("body").notNull(),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
-});
+}, (table) => [
+  index("run_comments_run_created_idx").on(table.runId, table.createdAt, table.id),
+]);
 
 export const explorerBulkActionRecords = sqliteTable("change_requests", {
   id: text("id").primaryKey(),
@@ -1548,7 +1551,9 @@ export const agents = sqliteTable("agents", {
   hyok: integer("hyok", { mode: "boolean" }).notNull().default(false),
   lastPingAt: integer("last_ping_at"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
-});
+}, (table) => [
+  index("agents_last_ping_at_status_idx").on(table.lastPingAt, table.status),
+]);
 
 export const agentForwardedRequests = sqliteTable("agent_forwarded_requests", {
   id: text("id").primaryKey(),
@@ -1675,7 +1680,11 @@ export const auditLogs = sqliteTable("audit_logs", {
   resourceId: text("resource_id"),
   details: text("details", { mode: "json" }),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
-});
+}, (table) => [
+  index("audit_logs_created_at_idx").on(table.createdAt),
+  index("audit_logs_org_created_at_idx").on(table.orgId, table.createdAt),
+  index("audit_logs_resource_idx").on(table.resourceType, table.resourceId, table.createdAt, table.id),
+]);
 
 export const runTriggers = sqliteTable("run_triggers", {
   id: text("id").primaryKey(),

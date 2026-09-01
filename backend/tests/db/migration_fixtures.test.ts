@@ -48,7 +48,6 @@ const RUNTIME_TABLES = [
   "plan_exports",
   "cidr_range_lists",
   "cidr_ranges",
-  "query_runs",
   "team_projects",
   "admin_general_settings",
   "site_data_retention_policies",

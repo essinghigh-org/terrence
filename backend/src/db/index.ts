@@ -391,15 +391,64 @@ if (!isPostgres) {
     return transaction;
   };
 
-  // Run pending drizzle migrations. The PRAGMA dance mirrors the
-  // historical table-rebuild migrations (0022/0023) that drop/recreate
-  // parent tables while FK enforcement and trigger-body rewriting would
-  // otherwise break the rebuild. Prod is already at 41/41 and fresh DBs
-  // start from the squashed baseline, so this is now just the canonical
-  // migrator call with the safety wrapper intact.
+  // The PRAGMA dance mirrors the historical table-rebuild migrations
+  // (0022/0023) that drop/recreate parent tables while FK enforcement and
+  // trigger-body rewriting would otherwise break the rebuild. Reconcile a
+  // sparse journal BEFORE the migrator: an older boot may already have created
+  // an object through idempotent repair DDL, and a generated migration would
+  // otherwise fail on that duplicate before reconciliation gets a chance to
+  // classify it. Fresh databases have no applied rows, so reconciliation is
+  // inert and Drizzle remains the canonical bootstrap path.
+  const reconcileSqliteMigrationJournal = (): void => {
+    try {
+      const bundledFolder = join(import.meta.dir, '../../drizzle');
+      const entries = readBundledMigrationJournal(bundledFolder);
+      const appliedRows = (client.query("SELECT hash, created_at FROM __drizzle_migrations").all() as { hash: string; created_at: number }[]).map(
+        (row): { readonly hash: string; readonly createdAt: number } => ({ hash: row.hash, createdAt: row.created_at }),
+      );
+      const tables = new Set(
+        (client.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((row): string => row.name),
+      );
+      const indexes = new Set(
+        (client.query("SELECT name FROM sqlite_master WHERE type = 'index'").all() as { name: string }[]).map((row): string => row.name),
+      );
+      const columns = new Set(
+        (client.query("SELECT m.name AS tbl_name, p.name AS name FROM sqlite_master AS m, pragma_table_info(m.name) AS p WHERE m.type = 'table'").all() as { tbl_name: string; name: string }[]).map(
+          (row): string => `${row.tbl_name}.${row.name}`,
+        ),
+      );
+      const plan = sparseJournalReconcilePlan(bundledFolder, entries, { appliedRows, tables, indexes, columns });
+      for (const entry of plan) {
+        for (const statement of entry.statements) {
+          if (!statement.skip) client.run(statement.sql);
+        }
+        client.run("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)", [entry.hash, entry.when]);
+      }
+      if (plan.length > 0) console.warn(`[terrence] sparse migration journal reconciled (sqlite): reconciled ${plan.length} migration(s) before drizzle`);
+    } catch (err) {
+      // Reconciliation is a best-effort repair. Surface failures, then let
+      // the canonical migrator report any genuinely unapplied migration.
+      console.error("[terrence] sqlite journal reconciliation failed:", err);
+    }
+  };
+
   client.run("PRAGMA foreign_keys = OFF;");
   client.run("PRAGMA legacy_alter_table = ON;");
   try {
+    client.run(`CREATE TABLE IF NOT EXISTS __drizzle_migrations (
+      id SERIAL PRIMARY KEY,
+      hash text NOT NULL,
+      created_at numeric
+    )`);
+    const workspaceVariablesTable = client.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspace_variables'").get();
+    if (workspaceVariablesTable !== null && workspaceVariablesTable !== undefined) {
+      client.run(`
+        DELETE FROM workspace_variables WHERE rowid NOT IN (
+          SELECT MIN(rowid) FROM workspace_variables GROUP BY workspace_id, category, key
+        )
+      `);
+    }
+    reconcileSqliteMigrationJournal();
     sqliteMigrate(db, { migrationsFolder: join(import.meta.dir, '../../drizzle') });
   } finally {
     client.run("PRAGMA legacy_alter_table = OFF;");
@@ -416,44 +465,40 @@ if (!isPostgres) {
     client.run("ALTER TABLE agent_jobs ADD COLUMN fencing_token INTEGER NOT NULL DEFAULT 0");
   }
 
-  // Reconcile a sparse/forward-dated journal before the app serves traffic
-  // (2026-08-23 prod incident, sqlite parity with applyPgMigrations): stamp
-  // journal rows and run any missing statements for migrations whose objects
-  // already exist or were skipped. A journal whose newest row is newer than
-  // every bundled migration (a corrupted/forward-dated journal) is treated as
-  // unreliable so every bundled entry is reconsidered. The boot path is
-  // synchronous, so drive sparseJournalReconcilePlan() directly with the
-  // native client (the postgres path uses the async adapter instead).
-  try {
-    const bundledFolder = join(import.meta.dir, '../../drizzle');
-    const entries = readBundledMigrationJournal(bundledFolder);
-    const appliedRows = (client.query("SELECT hash, created_at FROM __drizzle_migrations").all() as Array<{ hash: string; created_at: number }>).map(
-      (row): { readonly hash: string; readonly createdAt: number } => ({ hash: row.hash, createdAt: row.created_at }),
-    );
-    const tables = new Set(
-      (client.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((row): string => row.name),
-    );
-    const indexes = new Set(
-      (client.query("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>).map((row): string => row.name),
-    );
-    const columns = new Set(
-      (client.query("PRAGMA table_info").all() as Array<{ tbl_name: string; name: string }>).map(
-        (row): string => `${row.tbl_name}.${row.name}`,
-      ),
-    );
-    const plan = sparseJournalReconcilePlan(bundledFolder, entries, { appliedRows, tables, indexes, columns });
-    for (const entry of plan) {
-      for (const statement of entry.statements) {
-        if (!statement.skip) client.run(statement.sql);
-      }
-      client.run("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)", [entry.hash, entry.when]);
-    }
-    if (plan.length > 0) console.warn(`[terrence] sparse migration journal reconciled (sqlite): reconciled ${plan.length} migration(s) outside the migrator`);
-  } catch (err) {
-    // Reconciliation is a best-effort repair; a failure here must not abort
-    // boot (the migrator already ran). Surface it for operators.
-    console.error("[terrence] sqlite journal reconciliation failed:", err);
-  }
+  // Hot-path indexes are declared in the canonical schema and migrations, but
+  // keep this backfill idempotent for installations whose journal skipped a
+  // migration or whose older boot created only the agent index.
+  client.run("CREATE INDEX IF NOT EXISTS agents_last_ping_at_status_idx ON agents (last_ping_at, status)");
+  client.run("CREATE INDEX IF NOT EXISTS audit_logs_created_at_idx ON audit_logs (created_at)");
+  client.run("CREATE INDEX IF NOT EXISTS audit_logs_org_created_at_idx ON audit_logs (org_id, created_at)");
+  client.run("CREATE INDEX IF NOT EXISTS audit_logs_resource_idx ON audit_logs (resource_type, resource_id, created_at, id)");
+  client.run("CREATE INDEX IF NOT EXISTS run_comments_run_created_idx ON run_comments (run_id, created_at, id)");
+  client.run("CREATE UNIQUE INDEX IF NOT EXISTS workspace_variables_workspace_key_idx ON workspace_variables (workspace_id, category, key)");
+
+  // SQLite cannot add a portable CHECK constraint to the existing users table;
+  // these idempotent triggers enforce the same invariant for all future writes.
+  client.run(`
+    CREATE TRIGGER IF NOT EXISTS users_sso_identity_pair_insert
+    BEFORE INSERT ON users
+    FOR EACH ROW
+    WHEN (NEW.sso_provider IS NULL) != (NEW.sso_subject IS NULL)
+    BEGIN
+      SELECT RAISE(ABORT, 'sso_provider and sso_subject must be set together');
+    END
+  `);
+  client.run(`
+    CREATE TRIGGER IF NOT EXISTS users_sso_identity_pair_update
+    BEFORE UPDATE OF sso_provider, sso_subject ON users
+    FOR EACH ROW
+    WHEN (NEW.sso_provider IS NULL) != (NEW.sso_subject IS NULL)
+    BEGIN
+      SELECT RAISE(ABORT, 'sso_provider and sso_subject must be set together');
+    END
+  `);
+
+  // The migration-table bootstrap above means fresh databases are also safe;
+  // the pre-migration reconciler has already handled any sparse/forward-dated
+  // journal entries before Drizzle inspected them.
 }
 
 /**
@@ -667,6 +712,19 @@ export async function applyPgMigrations(): Promise<void> {
       hash text NOT NULL,
       created_at bigint
     )`);
+    const workspaceVariablesTable = await pg.unsafe<{ exists: boolean }[]>(
+      "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'workspace_variables') AS exists",
+    );
+    if (workspaceVariablesTable[0]?.exists === true) {
+      await pg.unsafe(`
+        DELETE FROM workspace_variables AS duplicate
+        USING workspace_variables AS keeper
+        WHERE duplicate.workspace_id = keeper.workspace_id
+          AND duplicate.category = keeper.category
+          AND duplicate.key = keeper.key
+          AND keeper.id < duplicate.id
+      `);
+    }
     // SQL result rows carry snake_case columns verbatim; quote the property
     // names so they satisfy the camelCase naming rule without renaming.
     const stampedPg = await reconcileSparseMigrationJournal({
@@ -705,8 +763,28 @@ export async function applyPgMigrations(): Promise<void> {
     });
     if (stampedPg > 0) console.warn(`[terrence] sparse migration journal reconciled (pg): reconciled ${stampedPg} migration(s) outside the migrator`);
     await migrate(instance, { migrationsFolder: join(import.meta.dir, "../../drizzle/pg") });
+    // Keep the external-identity pairing invariant on PostgreSQL too. The
+    // function is replaceable and the trigger is recreated so older installs
+    // converge without a trigger migration.
+    await pg.unsafe(`
+      CREATE OR REPLACE FUNCTION users_sso_identity_pair_guard() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        IF (NEW.sso_provider IS NULL) <> (NEW.sso_subject IS NULL) THEN
+          RAISE EXCEPTION 'sso_provider and sso_subject must be set together';
+        END IF;
+        RETURN NEW;
+      END;
+      $$
+    `);
+    await pg.unsafe("DROP TRIGGER IF EXISTS users_sso_identity_pair_guard ON users");
+    await pg.unsafe(`
+      CREATE TRIGGER users_sso_identity_pair_guard
+      BEFORE INSERT OR UPDATE OF sso_provider, sso_subject ON users
+      FOR EACH ROW EXECUTE FUNCTION users_sso_identity_pair_guard()
+    `);
     // Agent claim fencing is additive and intentionally kept idempotent here;
-    // the generated journal also sees the preserved legacy query_runs snapshot.
+    // the generated journal also carries the additive fencing-column change.
     await pg.unsafe("ALTER TABLE agent_jobs ADD COLUMN IF NOT EXISTS fencing_token bigint NOT NULL DEFAULT 0");
     await pg.unsafe("UPDATE organizations SET default_iac_binary = 'terraform' WHERE default_iac_binary = 'tofu'");
     await pg.unsafe("UPDATE team_projects SET organization_id = projects.org_id FROM projects WHERE team_projects.organization_id IS NULL AND projects.id = team_projects.project_id");
@@ -731,6 +809,11 @@ export async function applyPgMigrations(): Promise<void> {
     // Agent heartbeat sweep (recoverStaleAgentJobs) filters on lastPingAt/status
     // every poll; keep it off a full table scan as agent volume grows.
     await pg.unsafe("CREATE INDEX IF NOT EXISTS agents_last_ping_at_status_idx ON agents (last_ping_at, status)");
+    await pg.unsafe("CREATE INDEX IF NOT EXISTS audit_logs_created_at_idx ON audit_logs (created_at)");
+    await pg.unsafe("CREATE INDEX IF NOT EXISTS audit_logs_org_created_at_idx ON audit_logs (org_id, created_at)");
+    await pg.unsafe("CREATE INDEX IF NOT EXISTS audit_logs_resource_idx ON audit_logs (resource_type, resource_id, created_at, id)");
+    await pg.unsafe("CREATE INDEX IF NOT EXISTS run_comments_run_created_idx ON run_comments (run_id, created_at, id)");
+    await pg.unsafe("CREATE UNIQUE INDEX IF NOT EXISTS workspace_variables_workspace_key_idx ON workspace_variables (workspace_id, category, key)");
     // Team-token legacy discriminator (see sqlite boot path): the singular
     // legacy team-token endpoints must only see the team's legacy credential.
     await pg.unsafe("ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS legacy boolean NOT NULL DEFAULT false");

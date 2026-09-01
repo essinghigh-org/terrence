@@ -15,6 +15,17 @@ const EXTRA = Symbol.for("drizzle:ExtraConfigBuilder");
 type Col = { name: string; columnType: string; notNull: boolean; primary: boolean; isUnique?: boolean };
 type ExtraRow = { config?: { name?: string; unique?: boolean; columns?: Col[] } };
 
+const REQUIRED_INDEXES: Readonly<Record<string, readonly { name: string; unique: boolean; columns: readonly string[] }[]>> = {
+  agents: [{ name: "agents_last_ping_at_status_idx", unique: false, columns: ["last_ping_at", "status"] }],
+  auditLogs: [
+    { name: "audit_logs_created_at_idx", unique: false, columns: ["created_at"] },
+    { name: "audit_logs_org_created_at_idx", unique: false, columns: ["org_id", "created_at"] },
+    { name: "audit_logs_resource_idx", unique: false, columns: ["resource_type", "resource_id", "created_at", "id"] },
+  ],
+  runComments: [{ name: "run_comments_run_created_idx", unique: false, columns: ["run_id", "created_at", "id"] }],
+  workspaceVariables: [{ name: "workspace_variables_workspace_key_idx", unique: true, columns: ["workspace_id", "category", "key"] }],
+};
+
 function dbName(table: object): string {
   return String((table as unknown as Record<PropertyKey, unknown>)[NAME]);
 }
@@ -101,6 +112,17 @@ describe("pg schema parity", () => {
       expect(runtimeFp).toEqual(staticFp.map(({ name: n, unique, columns }) => ({ name: n, unique, columnCount: columns.length })));
       const sqliteFp = indexFingerprint(sqliteTable as object);
       expect(staticFp).toEqual(sqliteFp);
+    }
+  });
+
+  test("declares the required hot-path indexes in the canonical schema", () => {
+    for (const [exportName, expectedIndexes] of Object.entries(REQUIRED_INDEXES)) {
+      const table = sqliteSchema[exportName as keyof typeof sqliteSchema];
+      expect(table, `canonical schema missing ${exportName}`).toBeDefined();
+      const actual = indexFingerprint(table as object);
+      for (const expected of expectedIndexes) {
+        expect(actual, `missing index ${expected.name}`).toContainEqual({ ...expected, columns: [...expected.columns] });
+      }
     }
   });
 

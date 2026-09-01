@@ -1,14 +1,14 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { organizations, organizationMemberships, organizationDataRetentionPolicies, reservedTagKeys, apiTokens, samlSettings, teams, workspaces, configurationVersions, stateVersions, workspaceVariables, workspaceTags, logs, runs, registryPartnerships, agentPools, type users } from "../db/schema";
-import { eq, and, asc, like, count, inArray } from "drizzle-orm";
+import { organizations, organizationMemberships, organizationDataRetentionPolicies, reservedTagKeys, samlSettings, teams, workspaces, workspaceTags, registryPartnerships, agentPools, type users } from "../db/schema";
+import { eq, and, asc, count, inArray } from "drizzle-orm";
 import { organizationResource, organizationName } from "../lib/response";
-import { applyDataRetentionGarbageCollection, auditLog, checkOrganizationPermissionsMany, checkOrgPermission, deleteWorkspaceData, pageRequest, pagination } from "../lib/utils";
+import { applyDataRetentionGarbageCollection, auditLog, caseInsensitiveLike, checkOrganizationPermissionsMany, checkOrgPermission, deleteOrganization, pageRequest, pagination } from "../lib/utils";
 import { currentTokenScopes } from "../lib/request-scope";
 import { isUniqueConstraintError } from "../lib/validation";
 import { invalidateOrganizationName } from "../lib/metadata-cache";
 import { authPlugin } from "../auth";
-import { cachedOrgByName } from "../lib/cached-lookups";
+import { cachedOrgByName, invalidateOrgLookup } from "../lib/cached-lookups";
 import { publish } from "../lib/event-bus";
 import { costEstimationEnabledForOrganization, getSiteCapabilities } from "../lib/settings";
 import { moduleTestTokenTtl as parseModuleTestTokenTtl, moduleTestTokenTtlBounds } from "../lib/workload-identity";
@@ -272,7 +272,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       return { data: [], ...pagination(request, number, size, 0) };
     }
     const scope = inArray(organizations.id, organizationIds);
-    const where = search !== "" ? and(scope, like(organizations.name, `%${search}%`)) : scope;
+    const where = search !== "" ? and(scope, caseInsensitiveLike(organizations.name, `%${search}%`)) : scope;
     const [orgs, countRows] = await Promise.all([
       db.query.organizations.findMany({ where, orderBy: [asc(organizations.name)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(organizations).where(where),
@@ -703,43 +703,12 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const organizationWorkspaces = await db.query.workspaces.findMany({
-      where: eq(workspaces.orgId, org.id),
-      columns: { id: true },
-    });
-    for (const workspace of organizationWorkspaces) {
-      await deleteWorkspaceData(workspace.id);
-    }
-    const membershipsToClose = await db.query.organizationMemberships.findMany({
-      where: eq(organizationMemberships.orgId, org.id),
-      columns: { userId: true },
-    });
-    await db.transaction(async (tx: unknown): Promise<void> => {
-      const t = tx as typeof db;
-      const orgWsList = await t.query.workspaces.findMany({ where: eq(workspaces.orgId, org.id) });
-      const wsIds = orgWsList.map((w: Readonly<{ readonly id: string }>): string => w.id);
-      if (wsIds.length > 0) {
-        const orgRuns = await t.query.runs.findMany({ where: inArray(runs.workspaceId, wsIds) });
-        const runIds = orgRuns.map((r: Readonly<{ readonly id: string }>): string => r.id);
-        if (runIds.length > 0) {
-          await t.delete(logs).where(inArray(logs.runId, runIds));
-          await t.delete(runs).where(inArray(runs.workspaceId, wsIds));
-        }
-        await t.delete(configurationVersions).where(inArray(configurationVersions.workspaceId, wsIds));
-        await t.delete(stateVersions).where(inArray(stateVersions.workspaceId, wsIds));
-        await t.delete(workspaceVariables).where(inArray(workspaceVariables.workspaceId, wsIds));
-        await t.delete(workspaceTags).where(inArray(workspaceTags.workspaceId, wsIds));
-        await t.delete(workspaces).where(eq(workspaces.orgId, org.id));
-      }
-      await t.delete(organizationMemberships).where(eq(organizationMemberships.orgId, org.id));
-      await t.delete(apiTokens).where(eq(apiTokens.orgId, org.id));
-      await t.delete(organizations).where(eq(organizations.id, org.id));
-    });
+    const membershipsToClose = await deleteOrganization(org.id);
+    invalidateOrgLookup(orgName, org.id);
     invalidateOrganizationName(org.id);
     // Members lose the org in one shot; close their event streams so their
-    // permission snapshot cannot keep the org's metadata for an hour. The
-    // member list is captured BEFORE the delete above, which removes it.
-    for (const userId of new Set(membershipsToClose.map((mem): string => mem.userId))) {
+    // permission snapshot cannot keep the org's metadata for an hour.
+    for (const userId of membershipsToClose) {
       publish("authz.changed", { "user-id": userId, "org-id": org.id });
     }
     (set as { status: number }).status = 204;

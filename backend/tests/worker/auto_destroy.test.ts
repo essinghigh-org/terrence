@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "../../src/db";
 import { organizations, runs, stateVersions, workspaces } from "../../src/db/schema";
@@ -98,6 +98,63 @@ describe("automatic workspace destruction scheduler", () => {
     expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).toHaveLength(1);
     await enqueueWithMaintenanceWait(NOW + (3 * 3_600_000));
     expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).toHaveLength(2);
+  });
+
+  test("does not duplicate a destroy run when an active run is after the scan boundary", async () => {
+    const workspaceId = await createWorkspace({ autoDestroyActivityDuration: "2h" });
+    const priorDestroyRuns = Array.from({ length: 201 }, (_, index) => ({
+      id: `run-auto-destroy-${index}-${crypto.randomUUID()}`,
+      workspaceId,
+      status: "applied",
+      isDestroy: true,
+      message: "[auto-destroy] Inactivity workspace destruction",
+      createdAt: NOW - (3 * 3_600_000) - index,
+    }));
+    for (let offset = 0; offset < priorDestroyRuns.length; offset += 50) {
+      await db.insert(runs).values(priorDestroyRuns.slice(offset, offset + 50));
+    }
+    await db.insert(runs).values({
+      id: `run-active-after-boundary-${crypto.randomUUID()}`,
+      workspaceId,
+      status: "planning",
+      createdAt: NOW - (4 * 3_600_000),
+    });
+
+    expect(await enqueueWithMaintenanceWait(NOW)).toEqual([]);
+    expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).toHaveLength(202);
+  });
+
+  test("uses bounded keyset pages for scheduler relation scans", async () => {
+    const pageCountProbe = Array.from({ length: 205 }, (_, index) => ({
+      id: `ws-page-${index}-${crypto.randomUUID()}`,
+      orgId,
+      name: `ws-page-${index}-${crypto.randomUUID()}`,
+      createdAt: NOW - (20 * 86_400_000) + index,
+    }));
+    await db.insert(workspaces).values(pageCountProbe);
+
+    const workspaceFindMany = spyOn(db.query.workspaces, "findMany");
+    const runFindMany = spyOn(db.query.runs, "findMany");
+    const stateFindMany = spyOn(db.query.stateVersions, "findMany");
+    const configurationFindMany = spyOn(db.query.configurationVersions, "findMany");
+    let relationCalls: unknown[][] = [];
+    try {
+      await enqueueWithMaintenanceWait(NOW);
+      relationCalls = [
+        ...workspaceFindMany.mock.calls,
+        ...runFindMany.mock.calls,
+        ...stateFindMany.mock.calls,
+        ...configurationFindMany.mock.calls,
+      ] as unknown[][];
+    } finally {
+      workspaceFindMany.mockRestore();
+      runFindMany.mockRestore();
+      stateFindMany.mockRestore();
+      configurationFindMany.mockRestore();
+    }
+
+    expect(relationCalls.length).toBeGreaterThanOrEqual(8);
+    expect(relationCalls.every((call): boolean => (call[0] as { limit?: unknown } | undefined)?.limit === 200)).toBe(true);
   });
 
   test("does not queue for recent activity, invalid duration, locks, or an active run", async () => {

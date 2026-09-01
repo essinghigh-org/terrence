@@ -1,4 +1,5 @@
-import { db, isPostgres } from "../db";
+import { db } from "../db";
+import { isPostgres } from "../db/driver";
 import {
   users, workspaces,
   runs, stateVersions, workspaceVariables, workspaceTags,
@@ -6,12 +7,14 @@ import {
   auditLogs, dataRetentionPolicies, organizationDataRetentionPolicies, remoteStateConsumers,
   agentPools, workspaceRunTasks, logs, organizationMemberships, projectTags, reservedTagKeys,
   organizations, registryPartnerships, teams, teamMemberships, teamWorkspaces,
-  organizationMembershipRoles, organizationRoles,
+  organizationMembershipRoles, organizationRoles, apiTokens, stackStateLocks, workloadIdentityTokens,
 } from "../db/schema";
 import { and, desc, eq, exists, gte, ilike, inArray, isNull, like, lt, notInArray, or, sql } from "drizzle-orm";
 import { timingSafeEqual, createHash, createHmac, randomBytes } from "node:crypto";
-import { access, rm } from "node:fs/promises";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { access, appendFile, rm } from "node:fs/promises";
+import { createReadStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { recordFailure } from "./process-metrics";
 import { log } from "./log";
@@ -33,6 +36,13 @@ import {
 } from "./token-scopes";
 
 export { validateVersion, decodeStatePayload, parseStatePayload };
+
+export function caseInsensitiveLike(
+  column: Parameters<typeof like>[0],
+  pattern: string,
+): ReturnType<typeof like> {
+  return isPostgres ? ilike(column, pattern) : like(column, pattern);
+}
 
 export type DeepReadonly<T> =
   T extends (...args: infer _Args) => infer _Return
@@ -1562,12 +1572,12 @@ function addTimeframeFilter(conditions: readonly RunWhereCondition[], timeframe:
 
 function addBasicSearchFilter(conditions: readonly RunWhereCondition[], basic: string | undefined): RunWhereConditions {
   if (basic === undefined || basic === "") return conditions;
-  return [...conditions, or(like(runs.id, `%${basic}%`), like(runs.message, `%${basic}%`))];
+  return [...conditions, or(caseInsensitiveLike(runs.id, `%${basic}%`), caseInsensitiveLike(runs.message, `%${basic}%`))];
 }
 
 function addUserSearchFilter(conditions: readonly RunWhereCondition[], userSearch: string | undefined): RunWhereConditions {
   if (userSearch === undefined || userSearch === "") return conditions;
-  const userMatches = db.select({ id: users.id }).from(users).where(like(users.username, `%${userSearch}%`));
+  const userMatches = db.select({ id: users.id }).from(users).where(caseInsensitiveLike(users.username, `%${userSearch}%`));
   return [...conditions, inArray(runs.createdBy, userMatches)];
 }
 
@@ -1590,14 +1600,14 @@ function addWorkspaceNameFilter(conditions: readonly RunWhereCondition[], name: 
   const trimmed = name?.trim();
   if (trimmed === undefined || trimmed === "") return conditions;
   const matchingWorkspaces = db.select({ id: workspaces.id }).from(workspaces)
-    .where(isPostgres ? ilike(workspaces.name, `%${trimmed}%`) : like(workspaces.name, `%${trimmed}%`));
+    .where(caseInsensitiveLike(workspaces.name, `%${trimmed}%`));
   return [...conditions, inArray(runs.workspaceId, matchingWorkspaces)];
 }
 
 function addWorkspaceNamesFilter(conditions: readonly RunWhereCondition[], names: string[] | undefined): RunWhereConditions {
   if (names === undefined || names.length === 0) return conditions;
   const matchingWorkspaces = db.select({ id: workspaces.id }).from(workspaces)
-    .where(or(...names.map((name: string) => isPostgres ? ilike(workspaces.name, `%${name}%`) : like(workspaces.name, `%${name}%`))));
+    .where(or(...names.map((name: string) => caseInsensitiveLike(workspaces.name, `%${name}%`))));
   return [...conditions, inArray(runs.workspaceId, matchingWorkspaces)];
 }
 
@@ -1668,34 +1678,216 @@ const DISCARDABLE_RUN_STATUSES = [
   "post_plan_completed",
 ];
 
+type WorkspaceDeletionArtifact = Readonly<{
+  kind: "run" | "configuration";
+  value: string;
+}>;
+
+const DELETE_ID_CHUNK_SIZE = 500;
+const DELETION_ARTIFACT_BATCH_SIZE = 25;
+
+async function deleteIdChunks(
+  ids: readonly string[],
+  operation: (chunk: string[]) => Promise<void>,
+): Promise<void> {
+  for (let offset = 0; offset < ids.length; offset += DELETE_ID_CHUNK_SIZE) {
+    await operation(ids.slice(offset, offset + DELETE_ID_CHUNK_SIZE));
+  }
+}
+
+function workspaceDeletionManifestPath(): string {
+  return join(tmpdir(), `terrence-workspace-deletion-${crypto.randomUUID()}.jsonl`);
+}
+
+async function appendWorkspaceDeletionArtifacts(
+  manifestPath: string,
+  runIds: readonly string[],
+  configurationArchives: readonly { readonly archivePath: string | null }[],
+): Promise<void> {
+  const entries: string[] = [];
+  for (const runId of runIds) {
+    entries.push(JSON.stringify({ kind: "run", value: runId }));
+  }
+  for (const archive of configurationArchives) {
+    if (archive.archivePath !== null) {
+      entries.push(JSON.stringify({ kind: "configuration", value: archive.archivePath }));
+    }
+  }
+  if (entries.length > 0) await appendFile(manifestPath, `${entries.join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
+}
+
+async function deleteWorkspaceDataInTransaction(
+  transaction: typeof db,
+  workspaceIds: readonly string[],
+  manifestPath: string,
+): Promise<void> {
+  const ids = [...new Set(workspaceIds)];
+  await deleteIdChunks(ids, async (chunk): Promise<void> => {
+    const runsToDelete = await transaction.query.runs.findMany({
+      where: inArray(runs.workspaceId, chunk),
+      columns: { id: true },
+    });
+    const configurationArchives = await transaction.query.configurationVersions.findMany({
+      where: inArray(configurationVersions.workspaceId, chunk),
+      columns: { archivePath: true },
+    });
+    const runIds = runsToDelete.map((run): string => run.id);
+    await appendWorkspaceDeletionArtifacts(manifestPath, runIds, configurationArchives);
+
+    // These tables intentionally do not have foreign keys to runs: tokens are
+    // independently verifiable credentials and stack locks can outlive a run.
+    // Remove them before the run rows so a failed transaction cannot leave
+    // credentials or locks pointing at deleted execution records.
+    await deleteIdChunks(runIds, async (runChunk): Promise<void> => {
+      await transaction.delete(workloadIdentityTokens).where(inArray(workloadIdentityTokens.runId, runChunk));
+      await transaction.delete(stackStateLocks).where(inArray(stackStateLocks.runId, runChunk));
+      await transaction.delete(logs).where(inArray(logs.runId, runChunk));
+    });
+    await transaction.delete(runs).where(inArray(runs.workspaceId, chunk));
+    await transaction.delete(configurationVersions).where(inArray(configurationVersions.workspaceId, chunk));
+    await transaction.delete(workspaceVariables).where(inArray(workspaceVariables.workspaceId, chunk));
+    await transaction.delete(workspaceTags).where(inArray(workspaceTags.workspaceId, chunk));
+    await transaction.delete(stateVersions).where(inArray(stateVersions.workspaceId, chunk));
+    await transaction.delete(dataRetentionPolicies).where(inArray(dataRetentionPolicies.workspaceId, chunk));
+    await transaction.delete(remoteStateConsumers).where(or(
+      inArray(remoteStateConsumers.workspaceId, chunk),
+      inArray(remoteStateConsumers.consumerWorkspaceId, chunk),
+    ));
+    await transaction.delete(workspaceRunTasks).where(inArray(workspaceRunTasks.workspaceId, chunk));
+  });
+}
+
+function isWorkspaceDeletionArtifact(value: unknown): value is WorkspaceDeletionArtifact {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as { kind?: unknown; value?: unknown };
+  return (candidate.kind === "run" || candidate.kind === "configuration") && typeof candidate.value === "string";
+}
+
+async function cleanupWorkspaceDeletionArtifacts(manifestPath: string): Promise<void> {
+  try {
+    await access(manifestPath);
+  } catch {
+    return;
+  }
+
+  const cleanupOperations: (() => Promise<void>)[] = [];
+  const flush = async (): Promise<void> => {
+    if (cleanupOperations.length === 0) return;
+    const batch = cleanupOperations.splice(0, DELETION_ARTIFACT_BATCH_SIZE);
+    const results = await Promise.allSettled(batch.map((cleanup): Promise<void> => cleanup()));
+    for (const result of results) {
+      if (result.status === "rejected") log.error("Workspace deletion artifact cleanup failed", { error: result.reason });
+    }
+  };
+
+  try {
+    const input = createReadStream(manifestPath, { encoding: "utf8" });
+    const lines = createInterface({ input, crlfDelay: Infinity });
+    try {
+      for await (const line of lines) {
+        if (line === "") continue;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(line);
+        } catch (error: unknown) {
+          log.error("Workspace deletion artifact manifest entry is invalid", { error });
+          continue;
+        }
+        if (!isWorkspaceDeletionArtifact(parsed)) {
+          log.error("Workspace deletion artifact manifest entry is unsupported");
+          continue;
+        }
+        if (parsed.kind === "configuration") {
+          cleanupOperations.push((): Promise<void> => rm(parsed.value, { force: true }));
+        } else {
+          cleanupOperations.push(async (): Promise<void> => { await deleteRunLogArchive(parsed.value); });
+          cleanupOperations.push(async (): Promise<void> => { await deletePlanJsonArtifact(parsed.value); });
+        }
+        if (cleanupOperations.length >= DELETION_ARTIFACT_BATCH_SIZE) await flush();
+      }
+    } finally {
+      lines.close();
+      input.destroy();
+    }
+    await flush();
+  } catch (error: unknown) {
+    log.error("Workspace deletion artifact manifest cleanup failed", { error });
+  } finally {
+    await rm(manifestPath, { force: true }).catch((error: unknown): void => {
+      log.error("Workspace deletion artifact manifest removal failed", { error });
+    });
+  }
+}
+
+async function withWorkspaceDeletionManifest<T>(
+  operation: (manifestPath: string) => Promise<T>,
+): Promise<T> {
+  const manifestPath = workspaceDeletionManifestPath();
+  try {
+    const result = await operation(manifestPath);
+    await cleanupWorkspaceDeletionArtifacts(manifestPath);
+    return result;
+  } catch (error: unknown) {
+    await rm(manifestPath, { force: true }).catch((cleanupError: unknown): void => {
+      log.error("Workspace deletion artifact manifest removal failed after rollback", { error: cleanupError });
+    });
+    throw error;
+  }
+}
+
 /**
- * Delete all data associated with a workspace.
- * Uses cascade-friendly approach: deletes logs, state_versions, CVs, variables, tags, etc. directly.
- * The workspace itself is deleted by the calling route.
+ * Delete all data associated with one or more workspaces in a transaction.
+ * The workspace rows themselves are deleted by the public operation that
+ * called this primitive. Files are removed only after the transaction commits.
  */
 export async function deleteWorkspaceData(workspaceId: string): Promise<void> {
-  // Runs cascade to logs, policy_checks, run_comments
-  const runsToDelete = await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId), columns: { id: true } });
-  const configurationArchives = await db.query.configurationVersions.findMany({
-    where: eq(configurationVersions.workspaceId, workspaceId),
-    columns: { archivePath: true },
+  await withWorkspaceDeletionManifest(async (manifestPath): Promise<void> => {
+    await db.transaction(async (tx: unknown): Promise<void> => {
+      await deleteWorkspaceDataInTransaction(tx as typeof db, [workspaceId], manifestPath);
+    });
   });
-  await Promise.all(configurationArchives.map(async ({ archivePath }): Promise<void> => {
-    if (archivePath !== null) await rm(archivePath, { force: true });
-  }));
-  for (const r of runsToDelete) {
-    await Promise.all([deleteRunLogArchive(r.id), deletePlanJsonArtifact(r.id)]);
-  }
-  const runIds = runsToDelete.map((r): string => r.id);
-  if (runIds.length > 0) await db.delete(logs).where(inArray(logs.runId, runIds));
-  await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
-  await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, workspaceId));
-  await db.delete(workspaceVariables).where(eq(workspaceVariables.workspaceId, workspaceId));
-  await db.delete(workspaceTags).where(eq(workspaceTags.workspaceId, workspaceId));
-  await db.delete(stateVersions).where(eq(stateVersions.workspaceId, workspaceId));
-  await db.delete(dataRetentionPolicies).where(eq(dataRetentionPolicies.workspaceId, workspaceId));
-  await db.delete(remoteStateConsumers).where(or(eq(remoteStateConsumers.workspaceId, workspaceId), eq(remoteStateConsumers.consumerWorkspaceId, workspaceId)));
-  await db.delete(workspaceRunTasks).where(eq(workspaceRunTasks.workspaceId, workspaceId));
+}
+
+/** Delete one workspace, including its parent row, atomically. */
+export async function deleteWorkspace(workspaceId: string): Promise<void> {
+  await withWorkspaceDeletionManifest(async (manifestPath): Promise<void> => {
+    await db.transaction(async (tx: unknown): Promise<void> => {
+      const transaction = tx as typeof db;
+      await deleteWorkspaceDataInTransaction(transaction, [workspaceId], manifestPath);
+      await transaction.delete(workspaces).where(eq(workspaces.id, workspaceId));
+    });
+  });
+}
+
+/**
+ * Delete an organization and all of its workspaces in one transaction.
+ * Returns member IDs captured before their membership rows are deleted so
+ * callers can invalidate permission/event-stream caches after commit.
+ */
+export async function deleteOrganization(organizationId: string): Promise<readonly string[]> {
+  return withWorkspaceDeletionManifest(async (manifestPath): Promise<readonly string[]> => {
+    return db.transaction(async (tx: unknown): Promise<readonly string[]> => {
+      const transaction = tx as typeof db;
+      const organizationWorkspaces = await transaction.query.workspaces.findMany({
+        where: eq(workspaces.orgId, organizationId),
+        columns: { id: true },
+      });
+      const memberships = await transaction.query.organizationMemberships.findMany({
+        where: eq(organizationMemberships.orgId, organizationId),
+        columns: { userId: true },
+      });
+      await deleteWorkspaceDataInTransaction(
+        transaction,
+        organizationWorkspaces.map((workspace): string => workspace.id),
+        manifestPath,
+      );
+      await transaction.delete(workspaces).where(eq(workspaces.orgId, organizationId));
+      await transaction.delete(organizationMemberships).where(eq(organizationMemberships.orgId, organizationId));
+      await transaction.delete(apiTokens).where(eq(apiTokens.orgId, organizationId));
+      await transaction.delete(organizations).where(eq(organizations.id, organizationId));
+      return [...new Set(memberships.map((membership): string => membership.userId))];
+    });
+  });
 }
 
 /**
@@ -1727,8 +1919,7 @@ export async function safeDeleteWorkspace(workspaceId: string): Promise<boolean>
       }
     }
   }
-  await deleteWorkspaceData(workspaceId);
-  await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+  await deleteWorkspace(workspaceId);
   return true;
 }
 

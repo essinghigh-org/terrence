@@ -1,11 +1,11 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { variableSets, variableSetWorkspaces, variableSetProjects, variableSetVariables, stackVariableSets, stacks, workspaces, projects, type users } from "../db/schema";
-import { eq, and, asc, like, count, inArray } from "drizzle-orm";
+import { eq, and, asc, count, inArray } from "drizzle-orm";
 import { variableSetResource, variableSetVariableResource, variableSetVariableUpdate } from "../lib/response";
 import { validVariableSetAttributes, validVariableSetVariableAttributes, isUniqueConstraintError } from "../lib/validation";
 import { variableValueForWrite } from "../lib/variable-crypto";
-import { checkOrganizationPermission, findAuthorizedVariableSet, pageRequest, pagination, workspaceRelationshipIds, projectRelationshipIds, stackRelationshipIds, variableRelationshipResources, scopeWorkspaceIdsForOrg } from "../lib/utils";
+import { caseInsensitiveLike, checkOrganizationPermission, findAuthorizedVariableSet, pageRequest, pagination, workspaceRelationshipIds, projectRelationshipIds, stackRelationshipIds, variableRelationshipResources, scopeWorkspaceIdsForOrg } from "../lib/utils";
 import { scopeCoversOrg, scopeGrants } from "../lib/token-scopes";
 import { currentTokenScopes } from "../lib/request-scope";
 import { authPlugin } from "../auth";
@@ -50,7 +50,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     }
     const scope = eq(variableSets.orgId, org.id);
     const conditions: (typeof scope)[] = [scope];
-    if (search !== "") conditions.push(like(variableSets.name, `%${search}%`));
+    if (search !== "") conditions.push(caseInsensitiveLike(variableSets.name, `%${search}%`));
     if (scopes !== null) {
       const workspaceIds = await scopeWorkspaceIdsForOrg(scopes, org.id);
       if (workspaceIds !== null) {

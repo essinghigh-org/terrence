@@ -26,13 +26,30 @@ import { join } from "path";
  */
 
 export type MigrationJournalEntry = { readonly idx: number; readonly tag: string; readonly when: number };
+export type MigrationJournalRow = { readonly hash: string; readonly createdAt: number };
 
 export function readBundledMigrationJournal(folder: string): MigrationJournalEntry[] {
   const raw = JSON.parse(readFileSync(join(folder, "meta/_journal.json"), "utf8")) as { entries?: MigrationJournalEntry[] };
   return raw.entries ?? [];
 }
 
+function migrationSqlHash(migrationSql: string): string {
+  return createHash("sha256").update(migrationSql).digest("hex");
+}
+
+/** Return the exact hashes and timestamps a dialect's migrator records. */
+export function readBundledMigrationJournalRows(folder: string): MigrationJournalRow[] {
+  return readBundledMigrationJournal(folder).map((entry): MigrationJournalRow => {
+    const migrationSql = readFileSync(join(folder, `${entry.tag}.sql`), "utf8");
+    return {
+      hash: migrationSqlHash(migrationSql),
+      createdAt: entry.when,
+    };
+  });
+}
+
 const ADD_COLUMN_RE = /ALTER TABLE [`"`]?([\w-]+)[`"`]?\s+ADD\s+(?:COLUMN\s+)?[`"`]?([\w-]+)[`"`]?/i;
+const DROP_TABLE_RE = /^DROP TABLE\s+(?:IF EXISTS\s+)?[`"`]?([\w-]+)[`"`]?/i;
 
 /** Live schema facts the planning decision needs (wholesale metadata reads per driver). */
 export type SparseJournalFacts = {
@@ -75,9 +92,10 @@ export type SparseJournalPlanEntry = {
  *     against max(created_at), which would permanently skip it).
  *
  * Statement classification covers what generated migrations emit: ADD COLUMN,
- * CREATE TABLE, CREATE [UNIQUE] INDEX. Anything else (data rewrites, DROPs)
- * always runs as-is; those remain the migrator's job for fully-absent
- * migrations, and for replays a plain rerun matches the old behavior.
+ * CREATE TABLE, CREATE [UNIQUE] INDEX, and retired-table DROP TABLE. Anything
+ * else (data rewrites, other DROPs) always runs as-is; those remain the
+ * migrator's job for fully-absent migrations, and for replays a plain rerun
+ * matches the old behavior.
  */
 export function sparseJournalReconcilePlan(
   bundledFolder: string,
@@ -106,7 +124,7 @@ export function sparseJournalReconcilePlan(
     const sqlPath = join(bundledFolder, `${entry.tag}.sql`);
     const migrationSql = readFileSync(sqlPath, "utf8");
     // Drizzle journals sha256(migration file text); compute it identically.
-    const hash = createHash("sha256").update(migrationSql).digest("hex");
+    const hash = migrationSqlHash(migrationSql);
     if (!journalForwardDated && (entry.when <= newestAppliedAt || appliedHashes.has(hash))) continue;
 
     const statements = migrationSql
@@ -117,6 +135,16 @@ export function sparseJournalReconcilePlan(
     let anyPresent = false;
 
     for (const sql of statements) {
+      // DROP TABLE is the one destructive migration emitted for a retired
+      // table. It is safe to skip when an older repair already removed it,
+      // while an existing table must be dropped before the journal advances.
+      const dropTable = DROP_TABLE_RE.exec(sql);
+      if (dropTable?.[1] !== undefined) {
+        const present = facts.tables.has(dropTable[1]);
+        planned.push({ sql, skip: !present });
+        anyPresent = true;
+        continue;
+      }
       // ADD COLUMN: skip exactly when the live column already exists.
       const addColumn = ADD_COLUMN_RE.exec(sql);
       if (addColumn !== null) {
