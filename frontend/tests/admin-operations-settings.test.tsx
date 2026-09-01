@@ -1,6 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
-import { AdminOperationsSettings } from "../src/views/AdminOperationsSettings";
+import { AdminPlanExplainer } from "../src/views/AdminPlanExplainer";
 import { isString } from "../src/lib/type-guards";
 import type { JsonObject, JsonValue } from "../src/lib/json";
 
@@ -18,8 +18,6 @@ afterEach((): void => {
 
 test("uses provider defaults and saves an optional base URL without an endpoint URL", async () => {
   const settings = {
-    "approval-webhook": { enabled: false, url: null, "secret-set": false },
-    "maintenance-windows": { enabled: false, windows: [] },
     "plan-explainer": {
       enabled: false,
       provider: "custom",
@@ -49,7 +47,7 @@ test("uses provider defaults and saves an optional base URL without an endpoint 
   });
   globalThis.fetch = fetchMock;
 
-  const view = render(<AdminOperationsSettings />);
+  const view = render(<AdminPlanExplainer />);
   await waitFor((): void => { expect(view.getByLabelText("Base URL (optional)")).toBeTruthy(); });
   const provider = view.getByLabelText("Provider");
   fireEvent.focus(provider);
@@ -59,7 +57,7 @@ test("uses provider defaults and saves an optional base URL without an endpoint 
   expect((view.getByLabelText("Base URL (optional)") as HTMLInputElement).value).toBe("");
 
   fireEvent.input(view.getByLabelText("Base URL (optional)"), { target: { value: "https://api.example.com/v1" } });
-  fireEvent.click(view.getByRole("button", { name: "Save operations settings" }));
+  fireEvent.click(view.getByRole("button", { name: "Save changes" }));
   await waitFor((): void => { expect(savedBody).toBeDefined(); });
 
 // SAFETY: the fixture object is read as a record; each field is typed below.
@@ -72,4 +70,76 @@ test("uses provider defaults and saves an optional base URL without an endpoint 
   const labels = Array.from(view.container.querySelectorAll("label")).map((label): string => label.textContent?.trim() ?? "");
   const order = ["Provider", "Model", "Reasoning effort", "Base URL (optional)"].map((label): number => labels.indexOf(label));
   expect(order.every((index, position): boolean => index >= 0 && (position === 0 || index > order[position - 1]!))).toBe(true);
+});
+
+test("AdminLoggingSettings loads and saves logging configuration independently", async () => {
+  const { AdminLoggingSettings } = await import("../src/views/AdminLoggingSettings");
+  let patchBody: JsonObject | undefined;
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/admin/logging-settings" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      patchBody = JSON.parse(init.body as string) as JsonObject;
+      return json({ data: { attributes: { enabled: true, "log-level": "debug" } } });
+    }
+    if (url === "/api/v2/admin/logging-settings") {
+      return json({ data: { attributes: { enabled: true, "log-level": "info", "syslog-targets": ["udp://syslog.local:514"] } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+
+  const view = render(<AdminLoggingSettings />);
+  await waitFor((): void => { expect(view.getByLabelText("Remote destinations")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "Save changes" }));
+  await waitFor((): void => { expect(patchBody).toBeDefined(); });
+  expect(view.getByText(/Logging settings saved/i)).toBeTruthy();
+});
+
+test("AdminApprovalWebhook loads and saves webhook configuration independently", async () => {
+  const { AdminApprovalWebhook } = await import("../src/views/AdminApprovalWebhook");
+  let patchBody: JsonObject | undefined;
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/admin/operations-settings" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      patchBody = JSON.parse(init.body as string) as JsonObject;
+      return json({ data: { attributes: { "approval-webhook": { enabled: true, url: "https://example.com/hook" } } } });
+    }
+    if (url === "/api/v2/admin/operations-settings") {
+      return json({ data: { attributes: { "approval-webhook": { enabled: false, url: null, "secret-set": false } } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+
+  const view = render(<AdminApprovalWebhook />);
+  await waitFor((): void => { expect(view.getByLabelText("Callback URL (optional)")).toBeTruthy(); });
+  fireEvent.input(view.getByLabelText("Callback URL (optional)"), { target: { value: "https://example.com/hook" } });
+  fireEvent.click(view.getByRole("button", { name: "Save changes" }));
+  await waitFor((): void => { expect(patchBody).toBeDefined(); });
+  expect(view.getByText(/Webhook settings saved/i)).toBeTruthy();
+});
+
+test("AdminMaintenanceWindows loads and saves maintenance windows independently", async () => {
+  const { AdminMaintenanceWindows } = await import("../src/views/AdminMaintenanceWindows");
+  let patchBody: JsonObject | undefined;
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/admin/operations-settings" && init?.method === "PATCH") {
+// SAFETY: the request body was JSON.stringify'd by the caller before fetch.
+      patchBody = JSON.parse(init.body as string) as JsonObject;
+      return json({ data: { attributes: { "maintenance-windows": { enabled: true, windows: [] } } } });
+    }
+    if (url === "/api/v2/admin/operations-settings") {
+      return json({ data: { attributes: { "maintenance-windows": { enabled: false, windows: [] } } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+
+  const view = render(<AdminMaintenanceWindows />);
+  await waitFor((): void => { expect(view.getByText("No maintenance windows yet")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "Add maintenance window" }));
+  await waitFor((): void => { expect(view.getByText("Window 1")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "Save changes" }));
+  await waitFor((): void => { expect(patchBody).toBeDefined(); });
+  expect(view.getByText(/Maintenance settings saved/i)).toBeTruthy();
 });
