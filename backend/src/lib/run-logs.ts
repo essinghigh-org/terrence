@@ -16,10 +16,13 @@ export function runLogArchivePath(runId: string): string {
   return join(storageDirectory, `${runId}.json.gz`);
 }
 
+const MAX_RUN_LOGS_PER_RUN = 10000;
+
 export async function archiveRunLogs(runId: string): Promise<boolean> {
   const runLogs = await db.query.logs.findMany({
     where: eq(logs.runId, runId),
     orderBy: [asc(logs.createdAt), asc(logs.id)],
+    limit: MAX_RUN_LOGS_PER_RUN,
   });
   if (runLogs.length === 0) return false;
   let temporary: string | null = null;
@@ -43,7 +46,8 @@ export async function archiveRunLogs(runId: string): Promise<boolean> {
 async function readArchivedRunLogs(runId: string): Promise<StoredRunLog[]> {
   try {
     const archived = JSON.parse(gunzipSync(await readFile(runLogArchivePath(runId))).toString()) as StoredRunLog[];
-    return Array.isArray(archived) ? archived : [];
+    if (!Array.isArray(archived)) return [];
+    return archived.length > MAX_RUN_LOGS_PER_RUN ? archived.slice(0, MAX_RUN_LOGS_PER_RUN) : archived;
   } catch {
     return [];
   }
@@ -53,6 +57,7 @@ export async function readRunLogs(runId: string, phase?: string): Promise<Stored
   const liveLogs = await db.query.logs.findMany({
     where: phase === undefined ? eq(logs.runId, runId) : and(eq(logs.runId, runId), eq(logs.phase, phase)),
     orderBy: [asc(logs.createdAt), asc(logs.id)],
+    limit: MAX_RUN_LOGS_PER_RUN,
   });
   if (liveLogs.length > 0) return liveLogs;
 
