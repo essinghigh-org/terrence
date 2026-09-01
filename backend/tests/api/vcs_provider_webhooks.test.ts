@@ -14,6 +14,7 @@ import {
   workspaces,
 } from "../../src/db/schema";
 import { encryptSecret } from "../../src/lib/secrets";
+import { setExternalUrlTransportForTests } from "../../src/lib/url-safety";
 import { refetchConfigurationVersion, reportRunVcsStatus } from "../../src/lib/webhooks";
 
 const orgId = "org-provider-webhooks";
@@ -111,6 +112,12 @@ describe("GitLab and Bitbucket webhooks", () => {
       });
       return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
     };
+    setExternalUrlTransportForTests(async (target, init): Promise<Response> => {
+      const requestInit: RequestInit = { method: init.method };
+      if (init.headers !== undefined) requestInit.headers = init.headers;
+      if (init.body !== undefined) requestInit.body = init.body;
+      return mockFetch(target.url, requestInit);
+    });
     globalThis.fetch = Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
 
     await db.delete(organizations).where(eq(organizations.id, orgId));
@@ -204,6 +211,7 @@ describe("GitLab and Bitbucket webhooks", () => {
   });
 
   afterAll(() => {
+    setExternalUrlTransportForTests(undefined);
     globalThis.fetch = originalFetch;
     process.env.GITLAB_WEBHOOK_SECRET = originalGitlabSecret;
     process.env.BITBUCKET_WEBHOOK_SECRET = originalBitbucketSecret;

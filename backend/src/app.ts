@@ -12,7 +12,7 @@ import { oauthPlugin } from "./oauth";
 import { applyLoggingSettings, log } from "./lib/log";
 import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
 import { strongDocumentEtag } from "./lib/utils";
-import { setRequestTokenScopes, setRequestSiteAdmin } from "./lib/request-scope";
+import { setRequestTokenScopes, setRequestSiteAdmin, currentTokenScopes } from "./lib/request-scope";
 import { applySecurityHeaders, HSTS_VALUE, shouldSendHsts, staticCacheControl, staticMimeFor } from "./lib/security-headers";
 import openapiJson from "../openapi.json" with { type: "json" };
 import { requestFinished, requestStarted } from "./lib/process-metrics";
@@ -426,17 +426,7 @@ const RATE_LIMIT_ERROR_RESPONSE = new Response(
 
 export const app = new Elysia()
   .use(authPlugin)
-  .get("/openapi.json", (): unknown => openapiJson)
-  .get("/api/v2/available-versions", async ({ query, set }: Readonly<{ query: Readonly<Record<string, string>>; set: SetObject }>): Promise<unknown> => {
-    const tool = query.tool === "terraform" ? "terraform" : "tofu";
-    try {
-      return { data: await availableVersions(tool) };
-    } catch {
-      (set as { status: number }).status = 503;
-      return { errors: [{ status: "503", title: "Service Unavailable", detail: "Engine versions are temporarily unavailable." }] };
-    }
-  })
-  .onBeforeHandle(({ token, user, set }: { readonly token: { readonly scopes?: string | null } | null; readonly user: { readonly id: string; readonly isSiteAdmin: boolean | null } | null; readonly set: unknown }): Record<string, unknown> | undefined => {
+  .onBeforeHandle(({ request, token, user, set }: { readonly request: Request; readonly token: { readonly scopes?: string | null } | null; readonly user: { readonly id: string; readonly isSiteAdmin: boolean | null } | null; readonly set: unknown }): Record<string, unknown> | undefined => {
     // Publish fine-grained token scopes into request-scoped storage BEFORE
     // handlers run, so permission helpers enforce them automatically. Legacy
     // tokens (scopes null/absent) resolve to null = full permissions.
@@ -457,6 +447,19 @@ export const app = new Elysia()
     // The auth derive already read the full user row; hand its site-admin flag
     // to permission helpers so they skip a duplicate users read.
     setRequestSiteAdmin(user?.id ?? null, user?.isSiteAdmin === true);
+    const pathname = new URL(request.url).pathname;
+    const siteAdminPath = pathname === "/api/v2/admin"
+      || pathname.startsWith("/api/v2/admin/")
+      || pathname === "/api/v1/diagnostics"
+      || pathname === "/api/v1/usage/bundle"
+      || pathname === "/api/v1/support/bundle-requests"
+      || pathname.startsWith("/api/v1/support/bundle-requests/")
+      || pathname === "/api/v1/support-bundle-requests"
+      || pathname.startsWith("/api/v1/support-bundle-requests/");
+    if (currentTokenScopes() !== null && siteAdminPath) {
+      (set as Record<string, unknown>).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot access site-admin routes" }] };
+    }
     return undefined;
   })
   .onBeforeHandle(({ request, user, set }: PasswordGuardContext): Record<string, unknown> | undefined => {
@@ -828,6 +831,28 @@ export const app = new Elysia()
       } catch {
         return null;
       }
+    }
+  })
+  // Keep these routes below authentication, password-change, scope, and rate
+  // limit hooks. The version endpoint performs outbound work and must not be
+  // an unauthenticated, unbounded escape hatch from the application policy.
+  .get("/openapi.json", (): unknown => openapiJson)
+  .get("/api/v2/available-versions", async ({ query, user, token, set }: Readonly<{
+    query: Readonly<Record<string, string>>;
+    user: unknown;
+    token: unknown;
+    set: SetObject;
+  }>): Promise<unknown> => {
+    if ((user === null || user === undefined) && (token === null || token === undefined)) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized" }] };
+    }
+    const tool = query.tool === "terraform" ? "terraform" : "tofu";
+    try {
+      return { data: await availableVersions(tool) };
+    } catch {
+      (set as { status: number }).status = 503;
+      return { errors: [{ status: "503", title: "Service Unavailable", detail: "Engine versions are temporarily unavailable." }] };
     }
   })
   .use(staticPlugin({

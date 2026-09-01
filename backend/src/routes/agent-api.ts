@@ -37,6 +37,7 @@ import { persistUploadBody } from "../lib/upload-body";
 import { log } from "../lib/log";
 import { validSignedApiURL } from "../lib/utils";
 import { assertSafeTarArchive } from "../lib/archive";
+import { resolveExternalUrl } from "../lib/url-safety";
 
 const MAX_AGENT_BODY_BYTES = 16 * 1024 * 1024;
 // The public listener's native request cap is 100 MiB. Keep the endpoint's
@@ -152,6 +153,26 @@ async function agentFromRequest(ctx: AgentCtx): Promise<Agent | undefined> {
   const agentId = ctx.request.headers.get("tfc-agent-id");
   if (agentId === null || agentId === "") return undefined;
   return authenticateAgent(agentId, ctx.request.headers.get("authorization"));
+}
+
+async function rejectUnsafeForwardedRequest(requestId: string, reason: string): Promise<void> {
+  await db.update(agentForwardedRequests).set({
+    status: "errored",
+    agentId: null,
+    claimedAt: null,
+    responseStatus: null,
+    responseHeaders: null,
+    responseBody: null,
+    errorMessage: `Forwarded request rejected: ${reason}`,
+    completedAt: Date.now(),
+    // Never retain credentials or a request body for a request rejected at the
+    // agent handoff boundary.
+    headers: {},
+    body: null,
+  }).where(and(
+    eq(agentForwardedRequests.id, requestId),
+    eq(agentForwardedRequests.status, "queued"),
+  ));
 }
 
 function requestedFencingToken(ctx: AgentCtx): number | undefined {
@@ -634,11 +655,30 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
         set.status = 204;
         return undefined;
       }
+      // Revalidate immediately before handing the URL to the agent. The row
+      // may have been inserted by an older producer or changed between the
+      // enqueue-time check and this dequeue, and the agent executes this URL
+      // from its own network namespace. Fail closed and keep scanning so one
+      // unsafe row cannot block later valid requests.
+      let destination: Awaited<ReturnType<typeof resolveExternalUrl>>;
+      try {
+        destination = await resolveExternalUrl(candidate.url, false);
+      } catch {
+        destination = { error: "URL could not be resolved safely" };
+      }
+      if ("error" in destination) {
+        await rejectUnsafeForwardedRequest(candidate.id, destination.error);
+        continue;
+      }
       const claimed = await db.update(agentForwardedRequests).set({
         status: "claimed",
         agentId: agent.id,
         claimedAt: Date.now(),
-      }).where(and(eq(agentForwardedRequests.id, candidate.id), eq(agentForwardedRequests.status, "queued"))).returning();
+      }).where(and(
+        eq(agentForwardedRequests.id, candidate.id),
+        eq(agentForwardedRequests.url, candidate.url),
+        eq(agentForwardedRequests.status, "queued"),
+      )).returning();
       const request = claimed[0];
       if (request === undefined) continue;
       await db.update(agents).set({ lastPingAt: Date.now() }).where(eq(agents.id, agent.id));

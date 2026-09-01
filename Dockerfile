@@ -54,10 +54,8 @@ RUN bun run build
 # does not ship one). Static glibc binary -> runs identically on any base.
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
-    && gcc -static -O2 -Wall -Wextra -o /app/backend/bin/landlock-runner \
-        /app/backend/bin/landlock-runner.c \
-    && rm -rf /var/lib/apt/lists/* \
-    && /app/backend/bin/landlock-runner --probe
+    && backend/bin/build-landlock-runner.sh \
+    && rm -rf /var/lib/apt/lists/*
 
 # ---------- Runtime: Chainguard Wolfi (glibc, near-zero CVE) ----------
 # Base pinned to an immutable digest (reviewed/immutable supply chain).

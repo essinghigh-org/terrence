@@ -12,6 +12,7 @@ import type { ParamCtx } from "./types";
 import { type UserItem, adminUserResource } from "./helpers";
 import { publish } from "../../lib/event-bus";
 import { normalizeEmail, normalizeUsername } from "../../lib/identity";
+import { IMPERSONATION_TOKEN_PREFIX, isImpersonationTokenId } from "../../lib/impersonation";
 export const usersRoutes = new Elysia({ name: "admin-users" })
   .use(authPlugin)
   .get("/api/v2/admin/users", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
@@ -351,22 +352,34 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     }
     const rawToken = `imp-${crypto.randomUUID()}-${crypto.randomUUID()}`;
     const expiresAt = Date.now() + 15 * 60 * 1000;
+    const impersonationTokenId = `${IMPERSONATION_TOKEN_PREFIX}${crypto.randomUUID()}`;
     await db.insert(apiTokens).values({
-      id: `impersonation-${crypto.randomUUID()}`,
+      id: impersonationTokenId,
       token: hashAuthenticationToken(rawToken),
       userId: target.id,
       description: `Impersonation by ${user.username}`,
       expiresAt,
     });
+    await auditLog("impersonate", "users", target.id, user.id, null, {
+      targetUserId: target.id,
+      impersonatorUserId: user.id,
+      impersonationTokenId,
+    });
     return { data: { type: "authentication-tokens", attributes: { token: rawToken, "expires-at": new Date(expiresAt).toISOString(), "user-id": target.id } } };
   })
   .post("/api/v2/admin/users/actions/unimpersonate", async ({ user, token, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) {
-      const impersonationToken = token?.id === undefined ? undefined : await db.query.apiTokens.findFirst({
-        where: and(eq(apiTokens.id, token.id), like(apiTokens.id, "impersonation-%")),
-      });
+      const tokenId = token?.id;
+      const impersonationToken = tokenId !== undefined && isImpersonationTokenId(tokenId)
+        ? await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) })
+        : undefined;
       if (impersonationToken === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
       await db.delete(apiTokens).where(eq(apiTokens.id, impersonationToken.id));
+      await auditLog("unimpersonate", "users", impersonationToken.userId, impersonationToken.userId, null, {
+        targetUserId: impersonationToken.userId,
+        impersonationTokenId: impersonationToken.id,
+        impersonationDescription: impersonationToken.description,
+      });
       (set as { status: number }).status = 204;
       return {};
     }

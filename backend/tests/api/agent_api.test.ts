@@ -392,6 +392,86 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
   expect(result.fsGetBytes).toBe("fs-archive-bytes");
 }, 30000);
 
+test("agent request forwarding rejects unsafe queued destinations before delivery", async () => {
+  const result = await runAgentApiScript(`
+    const { createHash } = await import("node:crypto");
+    const { eq } = await import("drizzle-orm");
+    const { app } = await import("./src/app.ts");
+    const { db } = await import("./src/db/index.ts");
+    const { agentForwardedRequests, agentPoolTokens, agentPools, agents, organizations } = await import("./src/db/schema.ts");
+
+    const agentToken = "agent-forwarding-token";
+    const base = "http://test.local";
+    process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS = "true";
+
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(agentPools).values({ id: "apool", orgId: "org", name: "pool", organizationScoped: true, createdAt: Date.now() });
+    await db.insert(agentPoolTokens).values({
+      id: "atok",
+      agentPoolId: "apool",
+      token: createHash("sha256").update(agentToken).digest("hex"),
+      createdAt: Date.now(),
+    });
+
+    const register = await app.fetch(new Request(base + "/api/agent/register", {
+      method: "POST",
+      headers: { authorization: "Bearer " + agentToken, "content-type": "application/json" },
+      body: JSON.stringify({ name: "forwarding-agent", request_forwarding: true }),
+    }));
+    const registered = await register.json();
+
+    await db.insert(agentForwardedRequests).values({
+      id: "unsafe",
+      agentPoolId: "apool",
+      method: "GET",
+      url: "http://127.0.0.1:8080/secret",
+      headers: { authorization: ["Bearer secret"] },
+      body: "c2VjcmV0",
+      status: "queued",
+      createdAt: 1,
+    });
+    await db.insert(agentForwardedRequests).values({
+      id: "safe",
+      agentPoolId: "apool",
+      method: "GET",
+      url: "https://8.8.8.8/health",
+      headers: {},
+      body: null,
+      status: "queued",
+      createdAt: 2,
+    });
+
+    const response = await app.fetch(new Request(base + "/api/agent/forwarded-requests", {
+      headers: { authorization: "Bearer " + agentToken, "tfc-agent-id": registered.id },
+    }));
+    const delivered = await response.json();
+    const unsafe = await db.query.agentForwardedRequests.findFirst({ where: eq(agentForwardedRequests.id, "unsafe") });
+    const safe = await db.query.agentForwardedRequests.findFirst({ where: eq(agentForwardedRequests.id, "safe") });
+    const agent = await db.query.agents.findFirst({ where: eq(agents.id, registered.id) });
+    console.log(JSON.stringify({
+      responseStatus: response.status,
+      deliveredId: delivered.id,
+      unsafeStatus: unsafe.status,
+      unsafeHeaders: unsafe.headers,
+      unsafeBody: unsafe.body,
+      unsafeError: unsafe.errorMessage,
+      safeStatus: safe.status,
+      safeAgentId: safe.agentId,
+      agentId: agent.id,
+    }));
+    process.exit(0);
+  `);
+
+  expect(result.responseStatus).toBe(200);
+  expect(result.deliveredId).toBe("safe");
+  expect(result.unsafeStatus).toBe("errored");
+  expect(result.unsafeHeaders).toEqual({});
+  expect(result.unsafeBody).toBeNull();
+  expect(result.unsafeError).toContain("private or loopback");
+  expect(result.safeStatus).toBe("claimed");
+  expect(result.safeAgentId).toBe(result.agentId);
+}, 30000);
+
 test("modern agent protocol: errored completion and apply job payload", async () => {
   const result = await runAgentApiScript(`
     const { createHash } = await import("node:crypto");

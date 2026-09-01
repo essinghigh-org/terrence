@@ -12,6 +12,7 @@ import { auditLog, checkOrganizationPermission, checkOrgPermission, checkWorkspa
 import { authPlugin } from "../auth";
 import { orgMembershipResource } from "../lib/response";
 import { cachedOrgByName } from "../lib/cached-lookups";
+import { currentTokenScopes } from "../lib/request-scope";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -550,6 +551,10 @@ export const teamRoutes = new Elysia({ name: "teams" })
   // legacy credential; the plural authentication-tokens endpoints manage
   // modern tokens. Neither may clobber the other (regression-tested).
   .post("/api/v2/teams/:team_id/authentication-token", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+    if (currentTokenScopes() !== null) {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot mint unscoped team tokens" }] };
+    }
     const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -593,6 +598,10 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return {};
   })
   .post("/api/v2/teams/:team_id/authentication-tokens", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+    if (currentTokenScopes() !== null) {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot mint unscoped team tokens" }] };
+    }
     const teamId = params.team_id ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }

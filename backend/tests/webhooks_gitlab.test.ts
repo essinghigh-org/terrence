@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
 import { db } from "../src/db";
+import { setExternalUrlTransportForTests } from "../src/lib/url-safety";
 import { handleGitlabWebhook, gitlabPushCommitListTruncated } from "../src/lib/webhooks";
 import { configurationVersions, oauthClients, oauthTokens, organizations, runs, workspaces } from "../src/db/schema";
 
@@ -92,6 +93,7 @@ describe("GitLab merge-request file trigger filtering (kanban 1.6)", () => {
       if (url.includes("/statuses/")) return Response.json({});
       throw new Error(`Unexpected outbound request: ${url}`);
     };
+    setExternalUrlTransportForTests(async (target): Promise<Response> => mockFetch(target.url));
     globalThis.fetch = Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
   });
 
@@ -106,6 +108,7 @@ describe("GitLab merge-request file trigger filtering (kanban 1.6)", () => {
   });
 
   afterAll(async () => {
+    setExternalUrlTransportForTests(undefined);
     globalThis.fetch = originalFetch;
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
     await db.delete(oauthTokens).where(eq(oauthTokens.id, oauthTokenId));

@@ -10,7 +10,7 @@ import {
   type workspaces,
 } from "../db/schema";
 import { eq, and, inArray, or, asc, count } from "drizzle-orm";
-import { checkOrganizationPermission, findAuthorizedRun, findAuthorizedWorkspace, pageRequest, pagination, validSignedApiURL } from "../lib/utils";
+import { checkOrganizationPermission, findAuthorizedRun, findAuthorizedWorkspace, pageRequest, pagination, validSignedApiURL, validateExternalUrl } from "../lib/utils";
 import { authPlugin } from "../auth";
 import { organizationName } from "../lib/response";
 import { cachedOrgByName } from "../lib/cached-lookups";
@@ -111,14 +111,28 @@ function parseGlobalConfig(value: unknown): GlobalConfig | null {
   };
 }
 
+function runTaskUrlError(url: string): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "Run task URL must be a valid HTTP or HTTPS URL";
+  }
+  if (parsed.username !== "" || parsed.password !== "") return "Run task URL must not contain embedded credentials";
+  const reason = validateExternalUrl(url, envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_URLS));
+  return reason === null ? undefined : `Run task URL is unsafe: ${reason}`;
+}
+
 function globalRunTaskUrlError(url: string, configuration: GlobalConfig | null | undefined, taskEnabled = true): string | undefined {
+  const urlError = runTaskUrlError(url);
+  if (urlError !== undefined) return urlError;
   if (configuration?.enabled !== true || taskEnabled !== true || envEnabled(process.env.TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS)) return undefined;
   try {
     return new URL(url).protocol === "https:"
       ? undefined
       : "Enabled organization-global run tasks require an HTTPS URL";
   } catch {
-    return undefined;
+    return "Run task URL must be a valid HTTP or HTTPS URL";
   }
 }
 
@@ -213,8 +227,8 @@ const updateRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: to
     updates.name = attrs.name.trim();
   }
   if (attrs.description !== undefined) updates.description = typeof attrs.description === "string" ? attrs.description : null;
-  if (typeof attrs.url === "string") {
-    if (attrs.url.trim() === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "URL is required" }] }; }
+  if (attrs.url !== undefined) {
+    if (typeof attrs.url !== "string" || attrs.url.trim() === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "URL is required" }] }; }
     updates.url = attrs.url.trim();
   }
   if (typeof attrs.category === "string" && attrs.category.trim() !== "") updates.category = attrs.category;
@@ -499,10 +513,32 @@ export const runTaskRoutes = new Elysia({ name: "runTasks" })
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict" }] };
     }
+    let resultUrl: string | null | undefined;
+    if (attrs.url !== undefined) {
+      if (attrs.url === null) {
+        resultUrl = null;
+      } else if (typeof attrs.url !== "string" || attrs.url.trim() === "") {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "url must be a valid HTTP or HTTPS URL" }] };
+      } else {
+        let parsedUrl: URL;
+        try {
+          parsedUrl = new URL(attrs.url);
+        } catch {
+          (set as { status: number }).status = 422;
+          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "url must be a valid HTTP or HTTPS URL" }] };
+        }
+        if (!["http:", "https:"].includes(parsedUrl.protocol) || parsedUrl.username !== "" || parsedUrl.password !== "") {
+          (set as { status: number }).status = 422;
+          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "url must be a valid HTTP or HTTPS URL" }] };
+        }
+        resultUrl = attrs.url.trim();
+      }
+    }
     await db.update(runTaskResults).set({
       status: String(status),
       ...(typeof attrs.message === "string" ? { message: attrs.message } : {}),
-      ...(typeof attrs.url === "string" ? { url: attrs.url } : {}),
+      ...(resultUrl !== undefined ? { url: resultUrl } : {}),
     }).where(eq(runTaskResults.id, resultId));
     (set as { status: number }).status = 200;
     return {};
