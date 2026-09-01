@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX, type ReactNode } from "react";
+import { safeHttpUrl } from "@/lib/safe-url";
 
 type RunSandboxStatus = Readonly<{
   enabled: boolean;
@@ -71,7 +72,7 @@ export function RunSandboxGate({ children }: Readonly<{ readonly children: React
                 Enable Landlock on the host kernel (see{" "}
                 <a
                   className="text-sky-400 underline hover:text-sky-300"
-                  href={status.docs}
+                  href={safeHttpUrl(status.docs) ?? "#"}
                   target="_blank"
                   rel="noreferrer"
                 >
