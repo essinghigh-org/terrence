@@ -458,7 +458,11 @@ export function WorkspaceVcs({
                     placeholder="^v\d+\.\d+\.\d+$"
                     disabled={!canUpdate}
                   />
-                  <FieldDescription>When set, only matching tag pushes trigger runs; branch pushes and pull requests are ignored.</FieldDescription>
+                  <FieldDescription>
+                    {tagsRegex.trim() !== ""
+                      ? "Tag triggering active: only matching Git tag pushes will trigger runs; branch pushes and pull requests are ignored."
+                      : "Leave blank to trigger from branch pushes and pull requests. When set, only matching Git tag pushes trigger runs."}
+                  </FieldDescription>
                 </Field>
 
                 <Field orientation="horizontal" data-disabled={!canUpdate}>
@@ -577,9 +581,9 @@ export function WorkspaceVcs({
               {saved ? "VCS settings saved." : canUpdate ? "" : "You cannot update this workspace."}
             </span>
           </div>
-          <Button type="submit" disabled={saving || !canUpdate} aria-label={connected ? "Save VCS settings" : "Connect repository"}>
+          <Button type="submit" disabled={saving || !canUpdate}>
             {saving && <Spinner data-icon="inline-start" />}
-            {saving ? "Saving" : connected ? "Save changes" : "Connect repository"}
+            {saving ? "Saving…" : connected ? "Save VCS settings" : "Connect repository"}
           </Button>
         </CardFooter>
       </Card>

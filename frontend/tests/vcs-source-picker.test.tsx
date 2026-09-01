@@ -76,8 +76,8 @@ test("creates a VCS workspace from choices listed for a manage-workspaces-only s
     />,
   );
 
-  changeInput(view.getByLabelText("Workspace Name"), "production");
-  fireEvent.change(view.getByLabelText("Workspace Source"), { target: { value: "vcs" } });
+  changeInput(view.getByLabelText(/Workspace Name/i), "production");
+  fireEvent.change(view.getByLabelText(/Workspace Source/i), { target: { value: "vcs" } });
 
   await waitFor((): void => {
     expect(view.getByRole("option", { name: "Acme GitHub — GitHub App" })).toBeTruthy();
@@ -85,7 +85,7 @@ test("creates a VCS workspace from choices listed for a manage-workspaces-only s
   expect(view.queryByLabelText(/installation id|oauth token id/i)).toBeNull();
 
   changeInput(view.getByLabelText("Repository Identifier"), "acme/infrastructure");
-  fireEvent.change(view.getByLabelText("VCS Connection"), {
+  fireEvent.change(view.getByLabelText(/VCS connection/i), {
     target: { value: "github-app:ghain-1" },
   });
   await act(async (): Promise<void> => {
@@ -245,8 +245,8 @@ test("keeps local workspace creation independent from VCS connections", async ()
       }}
     />,
   );
-  changeInput(view.getByLabelText("Workspace Name"), "local");
-  fireEvent.change(view.getByLabelText("Workspace Source"), { target: { value: "local" } });
+  changeInput(view.getByLabelText(/Workspace Name/i), "local");
+  fireEvent.change(view.getByLabelText(/Workspace Source/i), { target: { value: "local" } });
   fireEvent.click(view.getByRole("button", { name: "Create Workspace" }));
 
   await waitFor((): void => {

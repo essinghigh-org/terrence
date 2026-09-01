@@ -131,9 +131,9 @@ export function WorkspaceSshKey({
           <span role="status" className="text-sm text-muted-foreground">
             {saved ? "SSH key assignment saved." : keys.length === 0 && !loading ? "No organization SSH keys are available." : ""}
           </span>
-          <Button type="submit" disabled={loading || saving} aria-label="Save assignment">
+          <Button type="submit" disabled={loading || saving}>
             {saving && <Spinner data-icon="inline-start" />}
-            {saving ? "Saving…" : "Save changes"}
+            {saving ? "Saving…" : "Save assignment"}
           </Button>
         </CardFooter>
       </Card>
@@ -490,9 +490,9 @@ export function WorkspaceHealth({
           <span role="status" className="text-sm text-muted-foreground">
             {saved ? "Health assessment setting saved." : ""}
           </span>
-          <Button type="submit" disabled={saving || !canUpdate} aria-label="Save health settings">
+          <Button type="submit" disabled={saving || !canUpdate}>
             {saving && <Spinner data-icon="inline-start" />}
-            {saving ? "Saving…" : "Save changes"}
+            {saving ? "Saving…" : "Save health settings"}
           </Button>
         </CardFooter>
       </Card>

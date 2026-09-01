@@ -4,7 +4,7 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpRight,
-  MoreHorizontal,
+  Copy,
   Search,
 } from "lucide-react";
 import { Avatar, AvatarImage } from "../components/ui/avatar";
@@ -545,9 +545,9 @@ export function RunList({
                           size="icon-sm"
                           onClick={(): void => { cloneRunSettings(run); }}
                           aria-label="Clone run"
-                          title="More actions — clone this run's settings"
+                          title="Clone this run's settings"
                         >
-                          <MoreHorizontal className="size-4" aria-hidden="true" />
+                          <Copy className="size-4" aria-hidden="true" />
                         </Button>
                       )}
                     </div>

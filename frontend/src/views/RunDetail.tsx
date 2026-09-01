@@ -28,6 +28,7 @@ import { ApplyOutput } from "../components/ApplyOutput";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { Textarea } from "../components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -1450,7 +1451,7 @@ export function RunDetail({
   const commentForm = canComment ? (
     <form onSubmit={(event): void => { void handleCommentSubmit(event); }} className="border-t border-border p-5">
       <label htmlFor="run-comment" className="mb-2 block text-sm font-medium text-foreground">Add a comment</label>
-      <textarea
+      <Textarea
         id="run-comment"
         name="run-comment"
         autoComplete="off"
@@ -1458,7 +1459,6 @@ export function RunDetail({
         rows={3}
         value={commentBody}
         onChange={(event): void => { setCommentBody(event.target.value); }}
-            className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
         placeholder="Share context about this run"
       />
       <div className="mt-2 flex justify-end">
@@ -2129,7 +2129,7 @@ export function RunDetail({
                       <label htmlFor="run-action-comment" className="mb-2 block text-sm font-medium text-warning">
                         Optional comment
                       </label>
-                      <textarea
+                      <Textarea
                         id="run-action-comment"
                         name="run-action-comment"
                         autoComplete="off"
@@ -2138,7 +2138,7 @@ export function RunDetail({
                         autoFocus
                         value={actionComment}
                         onInput={(event): void => { setActionComment(event.currentTarget.value); }}
-                        className="w-full resize-y rounded-md border border-warning/50 bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
+                        className="border-warning/50"
                         placeholder="Add context for this decision"
                       />
                     </div>

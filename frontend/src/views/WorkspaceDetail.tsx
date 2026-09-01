@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, Link, useLocation, useNavigate } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import { Button, buttonVariants } from "../components/ui/button";
+import { Textarea } from "../components/ui/textarea";
 import { EmptyState } from "../components/EmptyState";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
@@ -548,7 +549,7 @@ export function WorkspaceDetail({
               <label htmlFor="workspace-lock-reason" className="text-sm font-medium text-foreground">
                 Reason <span className="font-normal text-muted-foreground">(Optional)</span>
               </label>
-              <textarea
+              <Textarea
                 id="workspace-lock-reason"
                 name="lock-reason"
                 autoComplete="off"
@@ -559,7 +560,6 @@ export function WorkspaceDetail({
                 value={lockReason}
                 onInput={(event): void => { setLockReason(event.currentTarget.value); }}
                 placeholder="Maintenance reason…"
-                className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
               />
               <p className="text-sm text-muted-foreground">300 characters allowed</p>
             </div>

@@ -13,6 +13,7 @@ import {
   BookOpen,
   Box,
   Building2,
+  CalendarClock,
   ChevronDown,
   Database,
   FolderGit2,
@@ -40,16 +41,18 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
   Tag,
+  Tags,
   Trash2,
+  UserCog,
   UserRound,
   Users,
   Variable,
   Layers,
-  Tags,
   Mail,
-  SlidersHorizontal,
-  UserCog,
+  Webhook,
 } from "lucide-react";
 
 import {
@@ -524,7 +527,7 @@ export function Layout({
         {
           label: "Overview",
           links: [
-            { active: location.pathname === "/app/admin", icon: ShieldCheck, label: "Security overview", to: "/app/admin" },
+            { active: location.pathname === "/app/admin", icon: ShieldCheck, label: "Site overview", to: "/app/admin" },
           ],
         },
         {
@@ -532,7 +535,7 @@ export function Layout({
           links: [
             { active: isActivePath(location.pathname, "/app/admin/users"), icon: Users, label: "Users", to: "/app/admin/users" },
             { active: isActivePath(location.pathname, "/app/admin/auth"), icon: KeyRound, label: "Authentication", to: "/app/admin/auth" },
-            { active: isActivePath(location.pathname, "/app/admin/scim"), icon: UserCog, label: "SCIM settings", to: "/app/admin/scim" },
+            { active: isActivePath(location.pathname, "/app/admin/scim"), icon: UserCog, label: "SCIM", to: "/app/admin/scim" },
           ],
         },
         {
@@ -549,8 +552,11 @@ export function Layout({
           label: "Operations",
           links: [
             { active: isActivePath(location.pathname, "/app/admin/audit"), icon: HistoryIcon, label: "Audit logs", to: "/app/admin/audit" },
+            { active: isActivePath(location.pathname, "/app/admin/logging"), icon: SlidersHorizontal, label: "Logging", to: "/app/admin/logging" },
+            { active: isActivePath(location.pathname, "/app/admin/maintenance"), icon: CalendarClock, label: "Maintenance windows", to: "/app/admin/maintenance" },
+            { active: isActivePath(location.pathname, "/app/admin/approval-webhook"), icon: Webhook, label: "Approval webhook", to: "/app/admin/approval-webhook" },
+            { active: isActivePath(location.pathname, "/app/admin/plan-explainer"), icon: Sparkles, label: "AI plan explainer", to: "/app/admin/plan-explainer" },
             { active: isActivePath(location.pathname, "/app/admin/smtp"), icon: Mail, label: "SMTP settings", to: "/app/admin/smtp" },
-            { active: isActivePath(location.pathname, "/app/admin/operations"), icon: SlidersHorizontal, label: "Operations", to: "/app/admin/operations" },
             { active: isActivePath(location.pathname, "/app/admin/database"), icon: Database, label: "Database", to: "/app/admin/database" },
           ],
         },

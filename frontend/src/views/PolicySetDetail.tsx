@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { Textarea } from "../components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
@@ -421,9 +422,8 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
             </div>
             <div className="space-y-2">
               <label htmlFor="ps-desc" className="text-sm font-medium">Description</label>
-              <textarea id="ps-desc" name="policy-set-description" autoComplete="off" spellCheck={false} rows={3} disabled={!canManage} value={overDescription}
-                onInput={(e): void => { setOverDescription(e.currentTarget.value); setOverviewDirty(true); }}
-                className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" />
+              <Textarea id="ps-desc" name="policy-set-description" autoComplete="off" spellCheck={false} rows={3} disabled={!canManage} value={overDescription}
+                onInput={(e): void => { setOverDescription(e.currentTarget.value); setOverviewDirty(true); }} />
             </div>
             <div className="flex flex-col gap-3">
               <label className="flex items-center gap-2 text-sm">
@@ -820,7 +820,7 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
               )}
               <div className="space-y-2">
                 <label className="text-sm font-medium" htmlFor="policy-code">Policy code <span className="font-normal text-muted-foreground">({policyKind === "opa" ? "Rego" : "Sentinel"})</span></label>
-                <textarea
+                <Textarea
                   id="policy-code"
                   name="policy-code"
                   rows={14}
@@ -828,7 +828,7 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
                   value={policySource}
                   onInput={(e): void => { setPolicySource(e.currentTarget.value); }}
                   placeholder={policyKind === "opa" ? "package terraform\n\ndefault allow := false" : "main = rule { true }"}
-                  className="w-full resize-y rounded-md border border-input bg-code-background px-3 py-2 font-mono text-xs leading-5 text-code-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  className="bg-code-background font-mono text-xs leading-5 text-code-foreground"
                 />
               </div>
             </div>
@@ -860,8 +860,8 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium" htmlFor="policy-param-value">Value</label>
-                <textarea id="policy-param-value" name="value" autoComplete="off" spellCheck={false} rows={3} value={paramValue} onInput={(e): void => { setParamValue(e.currentTarget.value); }}
-                  className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+                <Textarea id="policy-param-value" name="value" autoComplete="off" spellCheck={false} rows={3} value={paramValue} onInput={(e): void => { setParamValue(e.currentTarget.value); }}
+                  className="font-mono text-sm" />
               </div>
               <div className="flex flex-col gap-3">
                 <label className="flex items-center gap-2 text-sm"><Checkbox checked={paramHcl} onCheckedChange={(c: boolean | "indeterminate"): void => { setParamHcl(c === true); }} /> Parse value as HCL</label>

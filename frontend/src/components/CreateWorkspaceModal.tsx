@@ -226,7 +226,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
         </DialogHeader>
         <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4 py-2">
           <div className="flex flex-col gap-1.5">
-            <label htmlFor="ws-name" className="text-sm font-medium">Workspace Name</label>
+            <label htmlFor="ws-name" className="text-sm font-medium">Workspace name</label>
             <Input
               id="ws-name"
               name="workspace-name"
@@ -258,7 +258,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
           )}
 
           <div className="flex flex-col gap-1.5">
-            <label htmlFor="iac-tool" className="text-sm font-medium">Execution Engine</label>
+            <label htmlFor="iac-tool" className="text-sm font-medium">Execution engine</label>
             <Select
               id="iac-tool"
               name="iac-binary"
@@ -271,7 +271,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label htmlFor="tf-version" className="text-sm font-medium">Engine Version</label>
+            <label htmlFor="tf-version" className="text-sm font-medium">Engine version</label>
             <Select
               id="tf-version"
               name="terraform-version"
@@ -296,7 +296,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
 
           <div className="pt-4 border-t border-border mt-2">
             <div className="flex flex-col gap-1.5 mb-4">
-              <label htmlFor="source-type" className="text-sm font-medium">Workspace Source</label>
+              <label htmlFor="source-type" className="text-sm font-medium">Workspace source</label>
               <Select
                 id="source-type"
                 name="workspace-source"
@@ -312,7 +312,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
             {sourceType === "vcs" && (
               <div className="grid gap-4">
                 <div className="flex flex-col gap-2">
-                  <label htmlFor="vcs-connection" className="text-sm font-medium leading-none">VCS Connection</label>
+                  <label htmlFor="vcs-connection" className="text-sm font-medium leading-none">VCS connection</label>
                   <Select
                     id="vcs-connection"
                     name="vcs-connection"

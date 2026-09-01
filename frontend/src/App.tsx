@@ -209,16 +209,20 @@ function AppRoutes(): JSX.Element {
         <Route index element={<Dashboard />} />
         <Route path="admin" element={<AdminDashboard section="security" />} />
         <Route path="admin/users" element={<AdminDashboard section="users" />} />
+        <Route path="admin/auth" element={<AdminDashboard section="auth" />} />
+        <Route path="admin/scim" element={<AdminScimSettings />} />
         <Route path="admin/organizations" element={<AdminDashboard section="orgs" />} />
         <Route path="admin/workspaces" element={<AdminDashboard section="workspaces" />} />
         <Route path="admin/runs" element={<AdminDashboard section="runs" />} />
         <Route path="admin/versions" element={<AdminDashboard section="versions" />} />
         <Route path="admin/compatibility" element={<CompatibilityDashboard />} />
         <Route path="admin/audit" element={<AdminDashboard section="audit" />} />
-        <Route path="admin/auth" element={<AdminDashboard section="auth" />} />
+        <Route path="admin/logging" element={<AdminOperationsSettings section="logging" />} />
+        <Route path="admin/maintenance" element={<AdminOperationsSettings section="maintenance" />} />
+        <Route path="admin/approval-webhook" element={<AdminOperationsSettings section="approval-webhook" />} />
+        <Route path="admin/plan-explainer" element={<AdminOperationsSettings section="plan-explainer" />} />
         <Route path="admin/smtp" element={<AdminSmtpSettings />} />
-        <Route path="admin/scim" element={<AdminScimSettings />} />
-        <Route path="admin/operations" element={<AdminOperationsSettings />} />
+        <Route path="admin/operations" element={<Navigate to="/app/admin/logging" replace />} />
         <Route path="admin/database" element={<AdminDatabaseMigration />} />
         <Route path="account" element={<AccountSettings />} />
         <Route path="docs" element={<Docs />} />

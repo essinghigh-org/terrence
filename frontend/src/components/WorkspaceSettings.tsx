@@ -22,6 +22,7 @@ import {
   FieldSet,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectItem } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
@@ -389,7 +390,7 @@ export function WorkspaceSettings({
             </Field>
             <Field data-disabled={!canUpdate}>
               <FieldLabel htmlFor="workspace-description">Description</FieldLabel>
-              <textarea
+              <Textarea
                 id="workspace-description"
                 name="workspace-description"
                 autoComplete="off"
@@ -398,7 +399,6 @@ export function WorkspaceSettings({
                 value={description}
                 onInput={(event): void => { setDescription(event.currentTarget.value); }}
                 disabled={!canUpdate}
-                className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm shadow-2xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
               />
             </Field>
           </FieldGroup>
@@ -669,9 +669,9 @@ export function WorkspaceSettings({
           <span role="status" className="text-sm text-muted-foreground">
             {saved ? "Settings saved." : canUpdate ? "" : "You do not have permission to update this workspace."}
           </span>
-          <Button type="submit" disabled={saving || !canUpdate || invalidName} aria-label="Save settings">
+          <Button type="submit" disabled={saving || !canUpdate || invalidName}>
             {saving && <Spinner data-icon="inline-start" />}
-            {saving ? "Saving" : "Save changes"}
+            {saving ? "Saving…" : "Save settings"}
           </Button>
         </CardFooter>
       </Card>
