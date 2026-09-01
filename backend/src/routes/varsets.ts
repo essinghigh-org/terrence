@@ -376,6 +376,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       if (isUniqueConstraintError(error)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this set" }] }; }
       throw error;
     }
+    (set as { status: number }).status = 201;
     return { data: variableSetVariableResource(variable) };
   })
   .patch("/api/v2/varsets/:varset_id/relationships/vars", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<unknown> => {
