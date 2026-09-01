@@ -183,6 +183,11 @@ function isJsonApiRequestPath(pathname: string): boolean {
     && !pathname.endsWith("/json-outputs-upload");
 }
 
+/** Raw upload and webhook endpoints also return non-JSON:API success documents. */
+function isJsonApiResponsePath(pathname: string): boolean {
+  return isJsonApiRequestPath(pathname);
+}
+
 /** Account bootstrap/authentication endpoints intentionally work without a user. */
 function isPublicJsonApiRequestPath(pathname: string): boolean {
   return pathname === "/api/v2/users"
@@ -628,14 +633,14 @@ export const app = new Elysia()
     const configuredContentType = set.headers["Content-Type"] ?? set.headers["content-type"];
     const declaredContentType = responseHeaders?.get("content-type")
       ?? (configuredContentType === undefined ? null : String(configuredContentType));
-    const isJsonApiDocument = (isJsonApiEndpointPath(pathname) || isErrorDocument)
+    const isJsonApiDocument = (isJsonApiResponsePath(pathname) || isErrorDocument)
       && isJsonDocument
       && (declaredContentType === null || isJsonApiResponseContentType(declaredContentType));
     const isExplicitJsonApiResponse = isJsonApiResponseContentType(declaredContentType);
     const responseStatus = response instanceof Response
       ? response.status
       : typeof set.status === "number" ? set.status : Number.parseInt(String(set.status), 10) || 200;
-    const isJsonApiResponse = isJsonApiEndpointPath(pathname)
+    const isJsonApiResponse = isJsonApiResponsePath(pathname)
       && responseStatus !== 204
       && !(responseStatus >= 300 && responseStatus < 400)
       && (isJsonApiDocument || isExplicitJsonApiResponse);

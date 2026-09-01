@@ -150,6 +150,29 @@ describe("remote-workflow API global conventions", () => {
       body: JSON.stringify({ data: { type: "workspaces", attributes: { name: `valid-media-${seed.suffix}` } } }),
     });
     expect(valid.status).not.toBe(415);
+
+    // Raw policy uploads intentionally accept their wire media type and may
+    // return a generic JSON body; they must not be forced through JSON:API
+    // response negotiation.
+    const policy = await request(`/api/v2/organizations/${seed.orgName}/policies`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ data: { type: "policies", attributes: { name: `upload-media-${seed.suffix}` } } }),
+    });
+    expect(policy.status).toBe(201);
+    const policyId = (await policy.json() as { data?: { id?: string } }).data?.id;
+    expect(policyId).toBeTypeOf("string");
+    if (typeof policyId !== "string") throw new Error("Policy create response did not include an id");
+    const uploadHeaders = new Headers(headers);
+    uploadHeaders.set("Accept", "application/json");
+    uploadHeaders.set("Content-Type", "text/plain");
+    const upload = await request(`/api/v2/policies/${policyId}/upload`, {
+      method: "PUT",
+      headers: uploadHeaders,
+      body: "main = rule { true }",
+    });
+    expect(upload.status).toBe(200);
+    expect(upload.headers.get("content-type")).not.toContain("application/vnd.api+json");
   });
 
   it("shapes error documents consistently (API-006)", async () => {
