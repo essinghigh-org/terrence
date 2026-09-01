@@ -33,6 +33,8 @@ describe("JSON:API media types", () => {
     expect(acceptsJsonApi(`${JSON_API_MEDIA_TYPE};profile=\"https://example.test/profile\"`)).toBe(true);
     expect(acceptsJsonApi("*/*")).toBe(true);
     expect(acceptsJsonApi("application/*;q=0.5")).toBe(true);
+    expect(acceptsJsonApi("application/*;charset=utf-8")).toBe(false);
+    expect(acceptsJsonApi("*/*;charset=utf-8")).toBe(false);
     expect(acceptsJsonApi("text/plain, application/vnd.api+json;q=0.8")).toBe(true);
     expect(acceptsJsonApi(`${JSON_API_MEDIA_TYPE};charset=utf-8`)).toBe(false);
     expect(acceptsJsonApi(`${JSON_API_MEDIA_TYPE};ext=\"https://example.test/ext\"`)).toBe(false);

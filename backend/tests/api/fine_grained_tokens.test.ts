@@ -240,6 +240,42 @@ describe("fine-grained user tokens", () => {
     }
   });
 
+  it("does not let a site-admin scoped token read out-of-scope global variables", async () => {
+    const outsideOrgId = `fg-vars-outside-org-${s.suffix}`;
+    const outsideWorkspaceId = `fg-vars-outside-ws-${s.suffix}`;
+    const inScopeVariableId = `fg-vars-in-scope-${s.suffix}`;
+    const outsideVariableId = `fg-vars-outside-${s.suffix}`;
+    await db.update(users).set({ isSiteAdmin: true }).where(eq(users.id, s.userId));
+    await db.insert(organizations).values({ id: outsideOrgId, name: outsideOrgId });
+    await db.insert(workspaces).values({ id: outsideWorkspaceId, orgId: outsideOrgId, name: outsideWorkspaceId });
+    await db.insert(workspaceVariables).values([
+      { id: inScopeVariableId, workspaceId: s.wsA1, key: "IN_SCOPE", value: "allowed", category: "terraform", sensitive: false, hcl: false },
+      { id: outsideVariableId, workspaceId: outsideWorkspaceId, key: "OUTSIDE_SCOPE", value: "denied", category: "terraform", sensitive: false, hcl: false },
+    ]);
+    const created = await createScopedToken(s.userId, s.adminToken, {
+      scopes: {
+        version: 1,
+        orgs: [s.orgId],
+        permissions: { "variables:read": true },
+      },
+    });
+    try {
+      const response = await request("/api/v2/vars", { headers: headers(created.secret) });
+      expect(response.status).toBe(200);
+      const body = await response.json() as { data: { id: string }[] };
+      const ids = body.data.map((item): string => item.id);
+      expect(ids).toContain(inScopeVariableId);
+      expect(ids).not.toContain(outsideVariableId);
+    } finally {
+      await db.delete(apiTokens).where(eq(apiTokens.id, created.id));
+      await db.delete(workspaceVariables).where(eq(workspaceVariables.id, inScopeVariableId));
+      await db.delete(workspaceVariables).where(eq(workspaceVariables.id, outsideVariableId));
+      await db.delete(workspaces).where(eq(workspaces.id, outsideWorkspaceId));
+      await db.delete(organizations).where(eq(organizations.id, outsideOrgId));
+      await db.update(users).set({ isSiteAdmin: false }).where(eq(users.id, s.userId));
+    }
+  });
+
   it("allows a token scoped to a single workspace with workspaces:read", async () => {
     const created = await createScopedToken(s.userId, s.adminToken, {
       scopes: {

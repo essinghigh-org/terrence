@@ -146,7 +146,7 @@ export function acceptsJsonApi(value: string | null): boolean {
     const withoutQuality = new Map(
       [...parsed.parameters.entries()].filter(([name]): boolean => name !== "q"),
     );
-    if (parsed.type === "*/*" || parsed.type === "application/*") return true;
+    if ((parsed.type === "*/*" || parsed.type === "application/*") && withoutQuality.size === 0) return true;
     if (parsed.type !== JSON_API_MEDIA_TYPE) continue;
     let supported = true;
     for (const [name, parameter] of withoutQuality) {

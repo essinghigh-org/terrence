@@ -854,9 +854,9 @@ export const runRoutes = new Elysia({ name: "runs" })
     ]);
     const totalCount = (eventCountRow?.total ?? 0) + (commentCountRow?.total ?? 0);
     const offset = runHistoryPageOffset(page, totalCount);
-    const historyRows: ReadonlyArray<{ id: string; kind: string; createdAt: number }> = offset === null
+    const historyRows: readonly { id: string; kind: string; createdAt: number }[] = offset === null
       ? []
-      : await (async (): Promise<ReadonlyArray<{ id: string; kind: string; createdAt: number }>> => {
+      : await (async (): Promise<readonly { id: string; kind: string; createdAt: number }[]> => {
         const eventIndex = db.select({
           id: auditLogs.id,
           kind: sql<string>`'event'`.as("kind"),

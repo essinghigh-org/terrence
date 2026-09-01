@@ -43,7 +43,7 @@ async function variableAuthorizationWhere(
   tokenOrgId: string | null,
   tokenTeamId: string | null,
 ): Promise<SQL | undefined> {
-  if (tokenOrgId === null && tokenTeamId === null && user?.isSiteAdmin === true) return sql`true`;
+  if (currentTokenScopes() === null && tokenOrgId === null && tokenTeamId === null && user?.isSiteAdmin === true) return sql`true`;
 
   let organizationIds: string[];
   if (tokenOrgId !== null) {
