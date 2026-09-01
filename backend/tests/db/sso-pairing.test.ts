@@ -25,7 +25,13 @@ async function expectPairingError(operation: Promise<unknown>): Promise<void> {
     error = caught;
   }
   expect(error).toBeInstanceOf(Error);
-  expect((error as Error).message).toContain("sso_provider and sso_subject must be set together");
+  const messages: string[] = [];
+  let current: unknown = error;
+  while (current instanceof Error) {
+    messages.push(current.message);
+    current = (current as Error & { cause?: unknown }).cause;
+  }
+  expect(messages.some((message: string) => message.includes("sso_provider and sso_subject must be set together"))).toBeTrue();
 }
 
 afterAll(async () => {
