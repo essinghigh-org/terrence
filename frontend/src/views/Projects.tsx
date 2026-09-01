@@ -38,6 +38,7 @@ type Workspace = Readonly<{
 export function Projects(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
+  const orgPath = `/app/${encodeURIComponent(orgName)}`;
   const [projects, setProjects] = useState<Project[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [manageableOrganizationName, setManageableOrganizationName] = useState("");
@@ -202,7 +203,10 @@ export function Projects(): React.JSX.Element {
   return (
     <PageShell>
       <PageHeader
-        eyebrow={`${orgName} / Projects`}
+        breadcrumbs={[
+          { label: orgName, to: `${orgPath}/workspaces` },
+          { label: "Projects" },
+        ]}
         title="Projects"
         description={`Organize workspaces under ${orgName}.`}
         action={canManageProjects ? (

@@ -11,7 +11,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Breadcrumbs, type BreadcrumbItem } from "@/components/Breadcrumbs";
 import { EmptyState } from "@/components/EmptyState";
+import { PageShell } from "@/components/PageHeader";
 import {
   Dialog,
   DialogContent,
@@ -361,6 +363,14 @@ export function ProjectDetail({
     { id: "settings", label: "Settings" },
   ];
   const isSettings = activeSection === "settings" || activeSection === "variable-sets" || activeSection === "notifications";
+  const crumbs: readonly BreadcrumbItem[] = [
+    { label: "Projects", to: `${orgPath}/projects` },
+    ...(project === null
+      ? [{ label: "Loading…" }]
+      : isSettings
+        ? [{ label: project.attributes.name, to: projectPath }, { label: "Settings" }]
+        : [{ label: project.attributes.name }]),
+  ];
   const agentPoolOptions: AgentPoolResource[] = defaultAgentPoolId !== ""
     && !agentPoolsState.pools.some((pool): boolean => pool.id === defaultAgentPoolId)
     ? [
@@ -372,34 +382,16 @@ export function ProjectDetail({
       ]
     : agentPoolsState.pools;
 
+  // Settings sections are forms, so they take the narrower form measure —
+  // the same rule WorkspaceDetail follows, so the two detail pages don't
+  // disagree about how wide a settings form should be.
   return (
-    <div className="w-full max-w-full">
-      {/* Breadcrumbs */}
-      <nav
-        aria-label="Breadcrumb"
-        className="mb-2 flex flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground"
-      >
-        <Link to={`${orgPath}/projects`} className="min-w-0 break-words hover:underline">
-          Projects
-        </Link>
-        <span aria-hidden="true">/</span>
-        {project === null ? (
-          <span className="text-foreground">Loading…</span>
-        ) : isSettings ? (
-          <>
-            <Link to={projectPath} className="min-w-0 break-words hover:underline">{project.attributes.name}</Link>
-            <span aria-hidden="true">/</span>
-            <span className="text-foreground">Settings</span>
-          </>
-        ) : (
-          <span className="min-w-0 break-words text-foreground">{project.attributes.name}</span>
-        )}
-      </nav>
-
+    <PageShell variant={isSettings ? "form" : "wide"}>
       {/* Header */}
-      <div className="mb-8 flex flex-col items-start justify-between gap-4 sm:flex-row">
+      <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-6">
         <div className="min-w-0">
-          <div className="mb-1 flex items-center gap-3">
+          <Breadcrumbs items={crumbs} />
+          <div className="flex items-center gap-3">
             <h1 className="truncate text-3xl font-bold tracking-tight text-foreground">
               {project === null ? "Project" : project.attributes.name}
             </h1>
@@ -407,7 +399,7 @@ export function ProjectDetail({
               <Badge variant="secondary">{project.attributes["workspace-count"]} workspace{project.attributes["workspace-count"] === 1 ? "" : "s"}</Badge>
             )}
           </div>
-          <p className="text-[15px] text-muted-foreground">
+          <p className="mt-1 max-w-3xl text-pretty text-sm text-muted-foreground">
             {project?.attributes.description ?? "No description provided."}
           </p>
           {project !== null && (
@@ -426,7 +418,7 @@ export function ProjectDetail({
             </div>
           )}
         </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-3">
+        <div className="flex shrink-0 items-center gap-2">
           {canUpdate && activeSection !== "settings" && (
             <Button
               variant="outline"
@@ -446,10 +438,10 @@ export function ProjectDetail({
             View workspaces
           </Link>
         </div>
-      </div>
+      </header>
 
       {sectionProp === undefined && (
-        <div className="mb-6 border-b">
+        <div className="border-b">
           <nav aria-label="Project sections" className="flex flex-wrap gap-x-6 gap-y-2">
             {tabs.map((tab): React.JSX.Element => (
               <button
@@ -480,7 +472,7 @@ export function ProjectDetail({
         </div>
       )}
 
-      <div className="mt-6">
+      <div>
         {loading ? (
           <Spinner className="mx-auto my-12" />
         ) : loadError !== "" && project === null ? (
@@ -880,7 +872,7 @@ export function ProjectDetail({
           </form>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageShell>
   );
 }
 

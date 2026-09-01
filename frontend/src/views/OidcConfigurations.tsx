@@ -41,6 +41,7 @@ function displayValue(config: OidcConfig): string {
 export function OidcConfigurations(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
+  const orgPath = `/app/${encodeURIComponent(orgName)}`;
   const [configs, setConfigs] = useState<OidcConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -165,7 +166,11 @@ export function OidcConfigurations(): React.JSX.Element {
   return (
     <PageShell>
       <PageHeader
-        eyebrow={`${orgName} / Settings`}
+        breadcrumbs={[
+          { label: orgName, to: `${orgPath}/workspaces` },
+          { label: "Settings", to: `${orgPath}/settings` },
+          { label: "OIDC configurations" },
+        ]}
         title="OIDC configurations"
         description="Identity provider configurations used by the organization&apos;s runs to authenticate with cloud providers."
         action={canManage ? (

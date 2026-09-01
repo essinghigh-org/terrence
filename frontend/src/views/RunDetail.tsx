@@ -7,9 +7,11 @@ import {
   ChevronRight,
   Circle,
   Clock,
+  Copy,
   History,
   Link2,
   Maximize2,
+  Play,
   RotateCcw,
   MessageSquare,
   Sparkles,
@@ -23,11 +25,11 @@ import { Breadcrumbs } from "../components/Breadcrumbs";
 import { DegradedBanner } from "../components/DegradedBanner";
 import { DiagnosticsBanner } from "../components/DiagnosticsBanner";
 import { extractDiagnostics, type TerraformDiagnostic } from "../lib/diagnostics";
-import { copyTextToClipboard, formatDateTime, formatRelativeTime } from "@/lib/utils";
+import { cn, copyTextToClipboard, formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { ApplyOutput } from "../components/ApplyOutput";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
-import { Button } from "../components/ui/button";
+import { Button, buttonVariants } from "../components/ui/button";
 import { Textarea } from "../components/ui/textarea";
 import {
   Dialog,
@@ -681,6 +683,17 @@ export function RunDetail({
       return;
     }
     toast.add({ title: "Could not copy link", type: "error" });
+  }
+
+  // The bare run ID (not the permalink) is what people paste into tickets and
+  // the CLI. It used to live in the workspace header that wrapped this page;
+  // now that a run is its own page, the affordance belongs here.
+  async function copyRunId(): Promise<void> {
+    if (await copyTextToClipboard(runId)) {
+      toast.add({ title: "Run ID copied", type: "success" });
+      return;
+    }
+    toast.add({ title: "Could not copy run ID", type: "error" });
   }
 
   useEffect((): void => {
@@ -1510,12 +1523,27 @@ export function RunDetail({
             {attributes["refresh-only"] === true && <Badge variant="outline" className="rounded text-primary border-primary/30 bg-primary/10">Refresh only</Badge>}
             {attributes["allow-empty-apply"] === true && <Badge variant="outline" className="rounded text-primary border-primary/30 bg-primary/10">Allow empty apply</Badge>}
           </div>
-          <h2 className="break-words text-3xl font-bold tracking-tight text-foreground">
+          {/* A run page is now its own page rather than a panel nested under the
+              workspace header, so its title is the document's h1. */}
+          <h1 className="break-words text-3xl font-bold tracking-tight text-foreground">
             {attributes.message ?? "Manual run"}
-          </h2>
-          <p className="mt-2 text-[13px] text-muted-foreground">
+          </h1>
+          <p className="mt-2 text-sm text-muted-foreground">
             {formatRunSource(attributes.source, attributes["trigger-reason"])} · Created {formatDate(attributes["created-at"])}
           </p>
+          <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+            <span>Run ID:</span>
+            <code className="select-all font-mono">{runId}</code>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Copy run ID"
+              onClick={(): void => { void copyRunId(); }}
+            >
+              <Copy aria-hidden="true" />
+            </Button>
+          </div>
           {isVcsRunSource(attributes.source, attributes["trigger-reason"]) && (
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               <span>{isString(attributes.branch) ? attributes.branch : "Default branch"}</span>
@@ -1550,6 +1578,16 @@ export function RunDetail({
             <Link2 className="size-3.5" aria-hidden="true" />
             {copiedPermalink ? "Copied" : "Copy link"}
           </Button>
+          {/* Starting a fresh run used to come from the workspace header that
+              wrapped this page. Re-run is permission-gated, so keep an
+              unconditional route to the new-run form. */}
+          <Link
+            to={`${workspacePath}/runs?new-run=true`}
+            className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1.5")}
+          >
+            <Play className="size-3.5" aria-hidden="true" />
+            New run
+          </Link>
           {canRerun && (
             <Button
               variant="outline"
@@ -1643,7 +1681,7 @@ export function RunDetail({
         <summary className="cursor-pointer px-5 py-3 text-sm font-semibold text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
           Run details
         </summary>
-        <dl className="grid gap-4 border-t border-border px-5 py-4 text-[13px] sm:grid-cols-2 lg:grid-cols-5">
+        <dl className="grid gap-4 border-t border-border px-5 py-4 text-sm sm:grid-cols-2 lg:grid-cols-5">
           <div>
             <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</dt>
             <dd className="mt-1 font-medium text-foreground">{formatRunStatus(status)}</dd>
@@ -1656,7 +1694,7 @@ export function RunDetail({
                   {creatorAvatarUrl !== "" ? (
                     <AvatarImage src={creatorAvatarUrl} alt={creatorUsername} className="rounded-full object-cover" />
                   ) : (
-                    <AvatarFallback className="rounded-full bg-muted text-[10px] text-muted-foreground">
+                    <AvatarFallback className="rounded-full bg-muted text-2xs text-muted-foreground">
                       {creatorUsername.slice(0, 2).toUpperCase()}
                     </AvatarFallback>
                   )}
@@ -1880,7 +1918,7 @@ export function RunDetail({
                           </div>
                           {check.attributes["policy-name"] !== null
                             && check.attributes["policy-name"] !== undefined && (
-                            <code className="text-[11px] text-muted-foreground">{check.id}</code>
+                            <code className="text-2xs text-muted-foreground">{check.id}</code>
                           )}
                         </TableCell>
                         <TableCell className="whitespace-normal">{policyResultText(check.attributes.result)}</TableCell>

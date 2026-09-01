@@ -97,10 +97,10 @@ export function WorkspaceSshKey({
   };
 
   return (
-    <form onSubmit={saveAssignment} className="mx-auto max-w-3xl">
+    <form onSubmit={saveAssignment}>
       <Card>
         <CardHeader>
-          <CardTitle>SSH key</CardTitle>
+          <CardTitle>Key assignment</CardTitle>
           <CardDescription>
             Assign an organization SSH key for private Git module sources used by this workspace.
           </CardDescription>
@@ -253,9 +253,9 @@ export function WorkspaceRunTriggers({
   };
 
   return (
-    <Card className="max-w-4xl">
+    <Card>
       <CardHeader>
-        <CardTitle>Run triggers</CardTitle>
+        <CardTitle>Source workspaces</CardTitle>
         <CardDescription>
           Queue a run in this workspace after a successful apply in an upstream workspace.
         </CardDescription>
@@ -432,7 +432,7 @@ export function WorkspaceHealth({
   };
 
   return (
-    <div className="max-w-4xl space-y-5">
+    <div className="space-y-5">
       <Card>
         <CardHeader>
           <CardTitle>Latest health result</CardTitle>
@@ -462,7 +462,7 @@ export function WorkspaceHealth({
       <form onSubmit={save}>
       <Card>
         <CardHeader>
-          <CardTitle>Health assessments</CardTitle>
+          <CardTitle>Assessment schedule</CardTitle>
           <CardDescription>
             Configure drift detection and continuous validation checks for this workspace.
           </CardDescription>

@@ -158,7 +158,11 @@ export function PolicySets(): React.JSX.Element {
   return (
     <PageShell>
       <PageHeader
-        eyebrow={`${orgName} / Settings`}
+        breadcrumbs={[
+          { label: orgName, to: `${orgPath}/workspaces` },
+          { label: "Settings", to: `${orgPath}/settings` },
+          { label: "Policy sets" },
+        ]}
         title={
           <span className="flex items-center gap-2">
             Policy sets

@@ -230,9 +230,12 @@ export function AdminDatabaseMigration(): React.JSX.Element {
   const terminalFailed = phase === "failed" || phase === "aborted" || phase === "interrupted";
 
   return (
-    <PageShell variant="wide">
+    <PageShell variant="form">
       <PageHeader
-        eyebrow="Admin · Operations"
+        breadcrumbs={[
+          { label: "Admin", to: "/app/admin" },
+          { label: "Database" },
+        ]}
         title="Database"
         description="Migrate the backend database from SQLite to PostgreSQL. The source database stays untouched as the rollback image; the switch is a single boot-config write followed by a restart."
       />

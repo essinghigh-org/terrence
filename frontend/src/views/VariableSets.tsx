@@ -415,6 +415,7 @@ function VariablesDialog({
 export function VariableSets(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
+  const orgPath = `/app/${encodeURIComponent(orgName)}`;
   const [variableSets, setVariableSets] = useState<VariableSet[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [manageableOrganizationName, setManageableOrganizationName] = useState("");
@@ -671,7 +672,11 @@ export function VariableSets(): React.JSX.Element {
   return (
     <PageShell>
       <PageHeader
-        eyebrow={`${orgName} / Settings`}
+        breadcrumbs={[
+          { label: orgName, to: `${orgPath}/workspaces` },
+          { label: "Settings", to: `${orgPath}/settings` },
+          { label: "Variable sets" },
+        ]}
         title="Variable sets"
         description="Reuse configuration across workspaces in this organization."
         action={(

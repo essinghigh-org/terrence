@@ -76,7 +76,7 @@ export function OperationFilterDropdown({
       >
         <Filter className="size-3.5 text-muted-foreground" aria-hidden="true" />
         <span>Operations</span>
-        <Badge variant="secondary" className="px-1.5 py-0 text-[10px] font-semibold">
+        <Badge variant="secondary" className="px-1.5 py-0 text-2xs font-semibold">
           {allSelected ? "All" : noneSelected ? "0" : selectedOps.size}
         </Badge>
         <ChevronDown
@@ -123,7 +123,7 @@ export function OperationFilterDropdown({
               <button
                 type="button"
                 onClick={selectAll}
-                className="text-[11px] font-medium text-primary hover:underline focus-visible:outline-none"
+                className="text-2xs font-medium text-primary hover:underline focus-visible:outline-none"
               >
                 All
               </button>
@@ -131,7 +131,7 @@ export function OperationFilterDropdown({
               <button
                 type="button"
                 onClick={clearAll}
-                className="text-[11px] font-medium text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-none"
+                className="text-2xs font-medium text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-none"
               >
                 Clear
               </button>
@@ -139,7 +139,7 @@ export function OperationFilterDropdown({
               <button
                 type="button"
                 onClick={resetDefault}
-                className="text-[11px] font-medium text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-none"
+                className="text-2xs font-medium text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-none"
                 title="Reset to default"
               >
                 Reset
@@ -172,7 +172,7 @@ export function OperationFilterDropdown({
                     )}
                   </span>
                   <span className="flex-1 font-medium text-foreground">{label}</span>
-                  <span className="font-mono text-[11px] text-muted-foreground">({count})</span>
+                  <span className="font-mono text-2xs text-muted-foreground">({count})</span>
                 </label>
               );
             })}

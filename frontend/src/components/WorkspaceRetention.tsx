@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { SettingsSection } from "@/components/PageHeader";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -78,32 +78,31 @@ export function WorkspaceRetention({ workspaceId }: Readonly<{ workspaceId: stri
   if (loading) return <div role="status" className="py-8 text-sm text-muted-foreground">Loading retention policy…</div>;
 
   return (
-    <form onSubmit={save} className="mx-auto max-w-3xl">
-      <Card>
-        <CardHeader>
-          <CardTitle>Data retention</CardTitle>
-          <CardDescription>Automatically clean up old state versions while keeping the current version available.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="retention-count">Keep state versions</FieldLabel>
-              <Input id="retention-count" name="state-versions-count" type="number" inputMode="numeric" min="0" value={count} onChange={(event): void => { setCount(Number(event.target.value)); }} />
-              <FieldDescription>Set to 0 to use age-based retention only.</FieldDescription>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="retention-days">Delete versions older than (days)</FieldLabel>
-              <Input id="retention-days" name="delete-older-than-days" type="number" inputMode="numeric" min="0" value={days} onChange={(event): void => { setDays(Number(event.target.value)); }} />
-              <FieldDescription>Set to 0 to retain state indefinitely by age.</FieldDescription>
-            </Field>
-            <FieldError>{error}</FieldError>
-          </FieldGroup>
-        </CardContent>
-        <CardFooter className="justify-between">
-          <span role="status" className="text-sm text-muted-foreground">{notice || (policy === null ? "No policy configured." : "")}</span>
-          <Button type="submit" disabled={saving}>{saving && <Spinner data-icon="inline-start" />}{saving ? "Saving…" : "Save policy"}</Button>
-        </CardFooter>
-      </Card>
+    <form onSubmit={save}>
+      <SettingsSection
+        title="State version retention"
+        description="Automatically clean up old state versions while keeping the current version available."
+        footer={(
+          <>
+            <span role="status" className="mr-auto text-sm text-muted-foreground">{notice || (policy === null ? "No policy configured." : "")}</span>
+            <Button type="submit" disabled={saving}>{saving && <Spinner data-icon="inline-start" />}{saving ? "Saving…" : "Save policy"}</Button>
+          </>
+        )}
+      >
+        <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
+          <Field>
+            <FieldLabel htmlFor="retention-count">Keep state versions</FieldLabel>
+            <Input id="retention-count" name="state-versions-count" type="number" inputMode="numeric" min="0" value={count} onChange={(event): void => { setCount(Number(event.target.value)); }} />
+            <FieldDescription>Set to 0 to use age-based retention only.</FieldDescription>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="retention-days">Delete versions older than (days)</FieldLabel>
+            <Input id="retention-days" name="delete-older-than-days" type="number" inputMode="numeric" min="0" value={days} onChange={(event): void => { setDays(Number(event.target.value)); }} />
+            <FieldDescription>Set to 0 to retain state indefinitely by age.</FieldDescription>
+          </Field>
+          {error !== "" && <FieldError className="@md/field-group:col-span-2">{error}</FieldError>}
+        </FieldGroup>
+      </SettingsSection>
     </form>
   );
 }

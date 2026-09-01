@@ -209,7 +209,7 @@ function ExecutionBadge({ execution }: Readonly<{ execution: ResourceExecutionIn
       <Badge variant="outline" className="gap-1.5 rounded-md border-primary/40 bg-primary/10 font-medium text-primary animate-pulse">
         <Spinner className="size-3 text-primary" />
         <span className="capitalize">{state}…</span>
-        {elapsed !== undefined && <span className="font-mono text-[10px] text-primary">[{elapsed}]</span>}
+        {elapsed !== undefined && <span className="font-mono text-2xs text-primary">[{elapsed}]</span>}
       </Badge>
     );
   }
@@ -227,7 +227,7 @@ function ExecutionBadge({ execution }: Readonly<{ execution: ResourceExecutionIn
     <Badge variant="outline" className="gap-1 rounded-md border-success/40 bg-success/10 font-medium text-success">
       <CheckCircle2 className="size-3 text-success" />
       <span className="capitalize">{state}</span>
-      {elapsed !== undefined && <span className="font-mono text-[10px] text-success">({elapsed})</span>}
+      {elapsed !== undefined && <span className="font-mono text-2xs text-success">({elapsed})</span>}
     </Badge>
   );
 }
@@ -403,7 +403,7 @@ export function ApplyOutput({
           <FileCode className="size-4 text-muted-foreground/70" />
           <span className="text-xs font-medium text-foreground/85">Apply output</span>
           {applyStatus === "applying" && (
-            <Badge variant="outline" className="gap-1 rounded border-primary/40 bg-primary/10 text-[10px] text-primary animate-pulse">
+            <Badge variant="outline" className="gap-1 rounded border-primary/40 bg-primary/10 text-2xs text-primary animate-pulse">
               <Spinner className="size-3 text-primary" />
               Apply in progress
             </Badge>

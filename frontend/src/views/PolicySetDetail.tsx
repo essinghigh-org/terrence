@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
+import { Breadcrumbs, type BreadcrumbItem } from "../components/Breadcrumbs";
+import { PageShell } from "../components/PageHeader";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
@@ -237,21 +239,25 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
 
   if (loading) {
     return (
-      <div role="status" aria-label="Loading policy set" className="flex flex-col gap-5">
-        <div className="h-3 w-40 animate-pulse rounded bg-muted" />
-        <div className="h-10 w-80 animate-pulse rounded bg-muted" />
-        <div className="h-24 animate-pulse rounded-md border bg-muted/50" />
-        <div className="h-64 animate-pulse rounded-md border bg-muted/50" />
-      </div>
+      <PageShell variant="standard">
+        <div role="status" aria-label="Loading policy set" className="flex flex-col gap-5">
+          <div className="h-3 w-40 animate-pulse rounded bg-muted" />
+          <div className="h-10 w-80 animate-pulse rounded bg-muted" />
+          <div className="h-24 animate-pulse rounded-md border bg-muted/50" />
+          <div className="h-64 animate-pulse rounded-md border bg-muted/50" />
+        </div>
+      </PageShell>
     );
   }
 
   if (policySet === null) {
     return (
-      <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-5 text-sm text-destructive">
-        <p className="font-medium">{error !== "" ? error : "Policy set not found"}</p>
-        <Button className="mt-3" variant="outline" onClick={reload}>Try again</Button>
-      </div>
+      <PageShell variant="standard">
+        <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-5 text-sm text-destructive">
+          <p className="font-medium">{error !== "" ? error : "Policy set not found"}</p>
+          <Button className="mt-3" variant="outline" onClick={reload}>Try again</Button>
+        </div>
+      </PageShell>
     );
   }
 
@@ -373,18 +379,29 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
     { id: "vcs", label: "VCS" },
   ];
 
+  const crumbs: readonly BreadcrumbItem[] = [
+    { label: "Policy sets", to: `${orgPath}/settings/policy-sets` },
+    { label: attrs.name },
+  ];
+
   return (
-    <div className="space-y-6">
-      <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground">
-        <Link to={`${orgPath}/settings/policy-sets`} className="hover:underline">Policy sets</Link>
-        <span aria-hidden="true">/</span>
-        <span className="text-foreground">{attrs.name}</span>
-      </nav>
+    <PageShell variant="standard">
+      <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-6">
+        <div className="min-w-0">
+          <Breadcrumbs items={crumbs} />
+          <div className="flex items-center gap-2">
+            <h1 className="text-balance text-3xl font-bold tracking-tight text-foreground">{attrs.name}</h1>
+            <Badge variant="outline">{(attrs.kind ?? "sentinel").toUpperCase()}</Badge>
+            {isGlobal && <Badge>Global</Badge>}
+            {isVcsBacked && <Badge variant="secondary"><GitBranch className="size-3 mr-1" />VCS</Badge>}
+          </div>
+          <p className="mt-1 max-w-3xl text-pretty text-sm text-muted-foreground">
+            {attrs.description ?? "No description provided."}
+          </p>
+        </div>
+      </header>
 
-      <HeaderLeft name={attrs.name} kind={attrs.kind ?? "sentinel"} isGlobal={isGlobal} isVcsBacked={isVcsBacked} />
-      <p className="text-sm text-muted-foreground">{attrs.description ?? "No description provided."}</p>
-
-      <div className="mb-2 flex flex-wrap gap-x-6 gap-y-2 border-b">
+      <div className="flex flex-wrap gap-x-6 gap-y-2 border-b">
         {tabs.map((tab): React.JSX.Element => (
           <button
             type="button"
@@ -944,7 +961,7 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
         confirmVariant="destructive"
         onConfirm={async (): Promise<void> => { if (paramToDelete !== null) await deleteParam(paramToDelete); }}
       />
-    </div>
+    </PageShell>
   );
 
   async function updateOverview(): Promise<void> {
@@ -1142,15 +1159,4 @@ export function PolicySetDetail({ section = "overview" }: Readonly<{ section?: T
     setAttachProjectOpen(true);
     setAttachWorkspaceOpen(false);
   }
-}
-
-function HeaderLeft({ name, kind, isGlobal, isVcsBacked }: Readonly<{ name: string; kind: string; isGlobal: boolean; isVcsBacked: boolean }>): React.JSX.Element {
-  return (
-    <div className="flex items-center gap-2">
-      <h1 className="text-3xl font-bold tracking-tight">{name}</h1>
-      <Badge variant="outline">{kind.toUpperCase()}</Badge>
-      {isGlobal && <Badge>Global</Badge>}
-      {isVcsBacked && <Badge variant="secondary"><GitBranch className="size-3 mr-1" />VCS</Badge>}
-    </div>
-  );
 }

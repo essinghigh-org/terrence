@@ -2,14 +2,8 @@ import { useState } from "react";
 import { Trash2 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 
+import { SettingsSection } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -22,7 +16,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { fetchApi } from "@/lib/api";
 import { isString } from "../lib/type-guards";
@@ -152,21 +145,12 @@ export function WorkspaceDestruction({
   };
 
   return (
-    <Card className="mx-auto max-w-3xl ring-destructive/30">
-      <CardHeader>
-        <CardTitle>Destruction and deletion</CardTitle>
-        <CardDescription>
-          Destroy managed infrastructure before permanently deleting its workspace data.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        <section aria-labelledby="destroy-infrastructure-heading" className="space-y-4">
-          <div>
-            <h3 id="destroy-infrastructure-heading" className="font-semibold">Destroy infrastructure</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Queue a plan that destroys all infrastructure managed by this workspace.
-            </p>
-          </div>
+    <div className="space-y-6">
+      <SettingsSection
+        title="Destroy infrastructure"
+        description="Queue a plan that destroys every resource this workspace manages. The workspace itself stays."
+      >
+        <div className="space-y-4">
           <div className="flex items-start gap-3">
             <Checkbox
               id="allow-destroy-plans"
@@ -205,19 +189,17 @@ export function WorkspaceDestruction({
               You do not have permission to queue a destroy plan.
             </p>
           )}
-        </section>
+        </div>
+      </SettingsSection>
 
-        <Separator />
-
-        <section aria-labelledby="delete-workspace-heading" className="flex flex-col items-start gap-4">
-          <div>
-            <h3 id="delete-workspace-heading" className="font-semibold">Delete workspace</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Permanently delete this workspace and its runs, state, variables, and settings.
-            </p>
-          </div>
+      <SettingsSection
+        tone="danger"
+        title="Delete workspace"
+        description="Permanently removes this workspace and its runs, state, variables and settings. Infrastructure it manages is left running."
+      >
+        <div className="flex flex-col items-start gap-4">
           <p className="text-sm text-muted-foreground">
-            This action cannot be undone. Infrastructure managed by the workspace is not destroyed.
+            This action cannot be undone. Destroy the infrastructure first if you also want it gone.
           </p>
           <Dialog open={open} onOpenChange={setDialogOpen}>
             <DialogTrigger render={
@@ -280,8 +262,8 @@ export function WorkspaceDestruction({
               You do not have permission to delete this workspace.
             </p>
           )}
-        </section>
-      </CardContent>
-    </Card>
+        </div>
+      </SettingsSection>
+    </div>
   );
 }

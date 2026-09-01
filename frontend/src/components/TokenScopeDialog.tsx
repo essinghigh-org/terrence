@@ -751,12 +751,12 @@ export function TokenScopeDialog({
                     <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
                       <Folder className="size-3.5 text-muted-foreground" />
                       Projects
-                      <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                      <Badge variant="secondary" className="px-1.5 py-0 text-2xs">
                         {selectedProjects.size === 0 ? "All" : `${selectedProjects.size}/${projects.length}`}
                       </Badge>
                     </span>
                     {projects.length > 0 && (
-                      <div className="flex items-center gap-1 text-[11px]">
+                      <div className="flex items-center gap-1 text-2xs">
                         <button
                           type="button"
                           aria-label="Select all projects"
@@ -811,7 +811,7 @@ export function TokenScopeDialog({
                       ))}
                     </div>
                   )}
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-2xs text-muted-foreground">
                     {selectedProjects.size === 0 ? "No project selected: all projects in org are included." : "Scoped to selected projects."}
                   </p>
                 </div>
@@ -822,12 +822,12 @@ export function TokenScopeDialog({
                     <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
                       <Boxes className="size-3.5 text-muted-foreground" />
                       Workspaces
-                      <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                      <Badge variant="secondary" className="px-1.5 py-0 text-2xs">
                         {selectedWorkspaces.size === 0 ? "All" : `${selectedWorkspaces.size}/${workspaces.length}`}
                       </Badge>
                     </span>
                     {workspaces.length > 0 && (
-                      <div className="flex items-center gap-1 text-[11px]">
+                      <div className="flex items-center gap-1 text-2xs">
                         <button
                           type="button"
                           aria-label="Select all workspaces"
@@ -882,7 +882,7 @@ export function TokenScopeDialog({
                       ))}
                     </div>
                   )}
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-2xs text-muted-foreground">
                     {selectedWorkspaces.size === 0 ? "No workspace selected: all workspaces in projects are included." : "Scoped to selected workspaces."}
                   </p>
                 </div>
@@ -907,7 +907,7 @@ export function TokenScopeDialog({
                   </div>
                 )}
 
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-2xs text-muted-foreground">
                   Workspaces matching this rule are included even if not selected above. Use AND to require all conditions, OR to match any, and &quot;group&quot; to nest conditions.
                 </p>
               </div>
@@ -917,7 +917,7 @@ export function TokenScopeDialog({
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 pb-2">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-semibold text-foreground">Permissions</span>
-                    <Badge variant={totalGrantedCount > 0 ? "default" : "secondary"} className="px-1.5 py-0 text-[10px]">
+                    <Badge variant={totalGrantedCount > 0 ? "default" : "secondary"} className="px-1.5 py-0 text-2xs">
                       {totalGrantedCount} granted
                     </Badge>
                   </div>
@@ -929,7 +929,7 @@ export function TokenScopeDialog({
                       size="sm"
                       aria-label="Select read-only permissions"
                       onClick={grantReadOnly}
-                      className="h-6 text-[11px] font-medium"
+                      className="h-6 text-2xs font-medium"
                     >
                       Read-only
                     </Button>
@@ -939,7 +939,7 @@ export function TokenScopeDialog({
                       size="sm"
                       aria-label="Select all permissions"
                       onClick={grantAll}
-                      className="h-6 text-[11px] font-medium"
+                      className="h-6 text-2xs font-medium"
                     >
                       All
                     </Button>
@@ -949,7 +949,7 @@ export function TokenScopeDialog({
                       size="sm"
                       aria-label="Clear all permissions"
                       onClick={clearGrants}
-                      className="h-6 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+                      className="h-6 text-2xs font-medium text-muted-foreground hover:text-foreground"
                     >
                       Clear
                     </Button>
@@ -975,13 +975,13 @@ export function TokenScopeDialog({
                         <div className="mb-1.5 flex items-center justify-between">
                           <span className="text-xs font-semibold text-foreground">{group.label}</span>
                           <div className="flex items-center gap-1">
-                            <Badge variant="outline" className="px-1 py-0 text-[10px] text-muted-foreground font-mono">
+                            <Badge variant="outline" className="px-1 py-0 text-2xs text-muted-foreground font-mono">
                               {activeInGroup}/{group.grants.length}
                             </Badge>
                             <button
                               type="button"
                               onClick={(): void => { toggleGroupGrants(group.grants); }}
-                              className="text-[10px] text-primary hover:underline ml-1"
+                              className="text-2xs text-primary hover:underline ml-1"
                             >
                               {activeInGroup === group.grants.length ? "none" : "all"}
                             </button>

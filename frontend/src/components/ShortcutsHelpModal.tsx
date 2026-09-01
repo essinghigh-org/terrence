@@ -77,7 +77,7 @@ export function ShortcutsHelpModal({
         <div className="max-h-[60vh] space-y-4 overflow-y-auto py-2 pr-1">
           {GROUPS.map((group) => (
             <section key={group.label} aria-label={`${group.label} shortcuts`}>
-              <p className="mb-1.5 text-[10px] uppercase font-semibold tracking-wide text-muted-foreground/70">
+              <p className="mb-1.5 text-2xs uppercase font-semibold tracking-wide text-muted-foreground/70">
                 {group.label}
               </p>
               <div className="space-y-1">

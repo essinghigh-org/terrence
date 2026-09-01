@@ -39,6 +39,7 @@ type AgentToken = {
 export function AgentPools(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
+  const orgPath = `/app/${encodeURIComponent(orgName)}`;
   const [pools, setPools] = useState<AgentPool[]>([]);
   const [manageableOrganizationName, setManageableOrganizationName] = useState("");
   const [loading, setLoading] = useState(true);
@@ -234,7 +235,11 @@ export function AgentPools(): React.JSX.Element {
   return (
     <PageShell>
       <PageHeader
-        eyebrow={`${orgName} / Settings`}
+        breadcrumbs={[
+          { label: orgName, to: `${orgPath}/workspaces` },
+          { label: "Settings", to: `${orgPath}/settings` },
+          { label: "Agent pools" },
+        ]}
         title={
           <span className="flex items-center gap-2">
             Agent pools

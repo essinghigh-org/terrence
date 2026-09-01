@@ -83,96 +83,96 @@ export function SecurityOverview(props: Readonly<{
 }>): React.JSX.Element {
   const { navigate, samlEnabled, oidcEnabled, ldapEnabled, securitySummary, users, auditLogs } = props;
   return (
-            <div className="space-y-6">
-              <div>
-                <h2 className="text-lg font-semibold text-foreground">Site overview</h2>
-                <p className="text-sm text-muted-foreground">A quick read of the instance-wide controls that protect access and runs.</p>
-              </div>
-              <div className="grid gap-4 md:grid-cols-2">
-                <Card>
-                  <CardHeader variant="section">
-                    <CardTitle className="text-base">Identity providers</CardTitle>
-                    <CardDescription>Configured sign-in paths for this instance.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <ProviderStatusRow label="SAML SSO" enabled={samlEnabled} />
-                    <ProviderStatusRow label="OpenID Connect" enabled={oidcEnabled} />
-                    <ProviderStatusRow label="LDAP" enabled={ldapEnabled} />
-                    <Button variant="outline" size="sm" onClick={(): void => { navigate("/app/admin/auth"); }}>
-                      Open authentication settings
-                    </Button>
-                  </CardContent>
-                </Card>
-                <DatabaseStorageCard />
-                <Card>
-                  <CardHeader variant="section">
-                    <CardTitle className="text-base">Account safeguards</CardTitle>
-                    <CardDescription>Local access and privileged-account posture.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                      <span>Local account signup</span>
-                      <span className={securitySummary.signupEnabled ? "font-medium text-warning" : "font-medium text-success"}>
-                        {securitySummary.signupEnabled ? "Enabled" : "Disabled"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                      <span>Site administrators</span>
-                      <span className="font-medium text-foreground">{users.filter((item): boolean => item.attributes["is-site-admin"] === true).length}</span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                      <span>Suspended users</span>
-                      <span className="font-medium text-foreground">{users.filter((item): boolean => item.attributes["is-suspended"] === true).length}</span>
-                    </div>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardHeader variant="section">
-                    <CardTitle className="text-base">Execution isolation</CardTitle>
-                    <CardDescription>Whether Terraform runs are required and supported by the host.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                      <span>Sandbox required</span>
-                      <span className={securitySummary.sandboxEnabled ? "font-medium text-success" : "font-medium text-warning"}>
-                        {securitySummary.sandboxEnabled ? "Yes" : "No"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                      <span>Sandbox available</span>
-                      <span className={securitySummary.sandboxAvailable ? "font-medium text-success" : "font-medium text-destructive"}>
-                        {securitySummary.sandboxAvailable ? "Available" : "Unavailable"}
-                      </span>
-                    </div>
-                    {securitySummary.sandboxReason !== null && (
-                      <p className="text-xs text-muted-foreground">{securitySummary.sandboxReason}</p>
-                    )}
-                    {securitySummary.sandboxExtraRwAllowed && (
-                      <div className="rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-sm text-warning">
-                        Warning: extra sandbox read-write paths are enabled (TERRENCE_SANDBOX_EXTRA_RW_ALLOWED). The sandbox allow-list is widened beyond the default.
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardHeader variant="section">
-                    <CardTitle className="text-base">Latest audit events</CardTitle>
-                    <CardDescription>Most recent administrative events returned by the instance.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <p className="text-2xl font-semibold text-foreground">{auditLogs.length}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {auditLogs.length === 0 ? "No recent events returned" : `Showing ${auditLogs.length} latest event${auditLogs.length === 1 ? "" : "s"}`}
-                    </p>
-                    {auditLogs[0]?.attributes.action !== undefined && (
-                      <p className="truncate text-sm text-foreground/85">Latest: {auditLogs[0].attributes.action}</p>
-                    )}
-                    <Button variant="outline" size="sm" onClick={(): void => { navigate("/app/admin/audit"); }}>
-                      Open audit log
-                    </Button>
-                  </CardContent>
-                </Card>
-              </div>
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-lg font-semibold text-foreground">Site overview</h2>
+        <p className="text-sm text-muted-foreground">A quick read of the instance-wide controls that protect access and runs.</p>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card>
+          <CardHeader variant="section">
+            <CardTitle className="text-base">Identity providers</CardTitle>
+            <CardDescription>Configured sign-in paths for this instance.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <ProviderStatusRow label="SAML SSO" enabled={samlEnabled} />
+            <ProviderStatusRow label="OpenID Connect" enabled={oidcEnabled} />
+            <ProviderStatusRow label="LDAP" enabled={ldapEnabled} />
+            <Button variant="outline" size="sm" onClick={(): void => { navigate("/app/admin/auth"); }}>
+              Open authentication settings
+            </Button>
+          </CardContent>
+        </Card>
+        <DatabaseStorageCard />
+        <Card>
+          <CardHeader variant="section">
+            <CardTitle className="text-base">Account safeguards</CardTitle>
+            <CardDescription>Local access and privileged-account posture.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+              <span>Local account signup</span>
+              <span className={securitySummary.signupEnabled ? "font-medium text-warning" : "font-medium text-success"}>
+                {securitySummary.signupEnabled ? "Enabled" : "Disabled"}
+              </span>
             </div>
+            <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+              <span>Site administrators</span>
+              <span className="font-medium text-foreground">{users.filter((item): boolean => item.attributes["is-site-admin"] === true).length}</span>
+            </div>
+            <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+              <span>Suspended users</span>
+              <span className="font-medium text-foreground">{users.filter((item): boolean => item.attributes["is-suspended"] === true).length}</span>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader variant="section">
+            <CardTitle className="text-base">Execution isolation</CardTitle>
+            <CardDescription>Whether Terraform runs are required and supported by the host.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+              <span>Sandbox required</span>
+              <span className={securitySummary.sandboxEnabled ? "font-medium text-success" : "font-medium text-warning"}>
+                {securitySummary.sandboxEnabled ? "Yes" : "No"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+              <span>Sandbox available</span>
+              <span className={securitySummary.sandboxAvailable ? "font-medium text-success" : "font-medium text-destructive"}>
+                {securitySummary.sandboxAvailable ? "Available" : "Unavailable"}
+              </span>
+            </div>
+            {securitySummary.sandboxReason !== null && (
+              <p className="text-xs text-muted-foreground">{securitySummary.sandboxReason}</p>
+            )}
+            {securitySummary.sandboxExtraRwAllowed && (
+              <div className="rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-sm text-warning">
+                Warning: extra sandbox read-write paths are enabled (TERRENCE_SANDBOX_EXTRA_RW_ALLOWED). The sandbox allow-list is widened beyond the default.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader variant="section">
+            <CardTitle className="text-base">Latest audit events</CardTitle>
+            <CardDescription>Most recent administrative events returned by the instance.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-2xl font-semibold text-foreground">{auditLogs.length}</p>
+            <p className="text-sm text-muted-foreground">
+              {auditLogs.length === 0 ? "No recent events returned" : `Showing ${auditLogs.length} latest event${auditLogs.length === 1 ? "" : "s"}`}
+            </p>
+            {auditLogs[0]?.attributes.action !== undefined && (
+              <p className="truncate text-sm text-foreground/85">Latest: {auditLogs[0].attributes.action}</p>
+            )}
+            <Button variant="outline" size="sm" onClick={(): void => { navigate("/app/admin/audit"); }}>
+              Open audit log
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
   );
 };

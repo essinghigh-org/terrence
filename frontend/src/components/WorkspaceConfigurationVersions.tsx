@@ -30,8 +30,8 @@ export function WorkspaceConfigurationVersions({ workspaceId }: Readonly<{ works
       setVersions((current) => [response.data, ...current]); toast.add({ title: "Configuration version created", description: "Upload configuration content with the API upload URL.", type: "success" });
     } catch (caught: unknown) { setError(caught instanceof Error ? caught.message : "Could not create configuration version"); } finally { setCreating(false); }
   };
-  return <Card className="max-w-4xl">
-    <CardHeader className="flex-row items-start justify-between gap-4"><div><CardTitle>Configuration versions</CardTitle><CardDescription>Prepare and track configuration archives for this workspace.</CardDescription></div><Button type="button" onClick={() => void createVersion()} disabled={creating}>{creating ? "Creating…" : "New version"}</Button></CardHeader>
+  return <Card>
+    <CardHeader className="flex-row items-start justify-between gap-4"><div><CardTitle>Recent versions</CardTitle><CardDescription>Prepare and track configuration archives for this workspace.</CardDescription></div><Button type="button" onClick={() => void createVersion()} disabled={creating}>{creating ? "Creating…" : "New version"}</Button></CardHeader>
     <CardContent>{error !== "" && <ErrorPanel message={error} onRetry={retryLoad} className="mb-3" />}{loading ? <p role="status" className="text-sm text-muted-foreground">Loading configuration versions…</p> : <div className="divide-y rounded-md border">{versions.map((version) => <div className="flex items-center justify-between px-4 py-3" key={version.id}><div><p className="font-mono text-sm">{version.id}</p><p className="text-xs text-muted-foreground">{version.attributes.source ?? "API"}{isString(version.attributes["created-at"]) && version.attributes["created-at"] !== "" ? ` · ${formatDateTime(version.attributes["created-at"])}` : ""}</p></div><span className="rounded-full bg-muted px-2 py-1 text-xs">{version.attributes.status ?? "pending"}</span></div>)}{versions.length === 0 && <p className="px-4 py-6 text-sm text-muted-foreground">No configuration versions yet.</p>}</div>}</CardContent>
   </Card>;
 }

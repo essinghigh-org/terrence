@@ -114,6 +114,7 @@ export function VcsIntegrations({
   const [access, setAccess] = useState<Readonly<{ orgName: string; status: VcsAccess }> | null>(null);
   const loadRequest = useRef<AbortController | null>(null);
   const currentOrgName = orgName ?? "";
+  const orgPath = `/app/${encodeURIComponent(currentOrgName)}`;
   const currentOrgNameRef = useRef(currentOrgName);
   currentOrgNameRef.current = currentOrgName;
   const accessStatus: VcsAccess | "loading" = access?.orgName === currentOrgName
@@ -391,7 +392,11 @@ export function VcsIntegrations({
   return (
     <PageShell>
       <PageHeader
-        eyebrow={`${currentOrgName} / Settings`}
+        breadcrumbs={[
+          { label: currentOrgName, to: `${orgPath}/workspaces` },
+          { label: "Settings", to: `${orgPath}/settings` },
+          { label: "VCS integrations" },
+        ]}
         title="VCS integrations"
         description="Connect Version Control System (VCS) providers like GitHub, GitLab, and Bitbucket for automated runs."
       />

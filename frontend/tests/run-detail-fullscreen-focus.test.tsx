@@ -28,10 +28,15 @@ afterEach((): void => {
   globalThis.fetch = originalFetch;
 });
 
-function buildFetchMock(): ReturnType<typeof mock> {
+function buildFetchMock(
+  options: Readonly<{ readonly rejectWorkspace?: boolean }> = {},
+): ReturnType<typeof mock> {
   return mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
+      if (options.rejectWorkspace === true) {
+        throw new Error("Run detail must not load workspace data");
+      }
       return json({
         data: {
           id: "ws-1",
@@ -126,6 +131,18 @@ function renderRunDetail(fetchMock: ReturnType<typeof mock>): ReturnType<typeof 
     </MemoryRouter>,
   );
 }
+
+test("run detail does not wait for workspace data", async () => {
+  const fetchMock = buildFetchMock({ rejectWorkspace: true });
+  const view = renderRunDetail(fetchMock);
+
+  await waitFor((): void => {
+    expect(view.getByText("PLAN_FULLSCREEN_LINE")).toBeTruthy();
+  });
+  expect(fetchMock.mock.calls.some(([input]): boolean =>
+    requestUrl(input) === "/api/v2/organizations/acme/workspaces/production",
+  )).toBe(false);
+});
 
 test("fullscreen log dialog returns focus to its trigger button on close", async () => {
   const view = renderRunDetail(buildFetchMock());

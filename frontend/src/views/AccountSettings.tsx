@@ -443,7 +443,7 @@ export function AccountSettings(): React.JSX.Element {
       <PageShell variant="form">
         <div role="alert" className="mx-auto flex max-w-lg flex-col items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-5 text-destructive">
         <div>
-          <h1 className="font-semibold">Could not load account settings</h1>
+          <h1 className="text-lg font-semibold">Could not load account settings</h1>
           <p className="mt-1 text-sm">{error !== "" ? error : "Your account details could not be loaded."}</p>
         </div>
         <Button type="button" variant="outline" onClick={(): void => { void loadAccount(); }}>
@@ -456,7 +456,7 @@ export function AccountSettings(): React.JSX.Element {
 
   /* ── Render ─────────────────────────────────────── */
   return (
-    <PageShell variant="form" className="space-y-8">
+    <PageShell variant="form">
       <PageHeader
         eyebrow="Account"
         title="Account settings"

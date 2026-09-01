@@ -30,6 +30,7 @@ type PolicyTagsSet = {
 export function PolicySetsTags(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
+  const orgPath = `/app/${encodeURIComponent(orgName)}`;
   const navigate = useNavigate();
   const [sets, setSets] = useState<PolicyTagsSet[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,7 +95,11 @@ export function PolicySetsTags(): React.JSX.Element {
   return (
     <PageShell>
       <PageHeader
-        eyebrow={`${orgName} / Settings`}
+        breadcrumbs={[
+          { label: orgName, to: `${orgPath}/workspaces` },
+          { label: "Settings", to: `${orgPath}/settings` },
+          { label: "Tag-based policy sets" },
+        ]}
         title="Tag-based policy sets"
         description="Policy sets scoped by tag selectors are automatically applied to workspaces whose tags match."
       />

@@ -115,7 +115,7 @@ export function AdminMaintenanceWindows(): React.JSX.Element {
 
   if (loading) {
     return (
-      <PageShell role="status" aria-label="Loading maintenance window settings" variant="wide">
+      <PageShell role="status" aria-label="Loading maintenance window settings" variant="form">
         <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
           <Spinner className="size-6" />
           Loading maintenance window settings…
@@ -126,7 +126,7 @@ export function AdminMaintenanceWindows(): React.JSX.Element {
 
   if (loadError !== "") {
     return (
-      <PageShell variant="wide">
+      <PageShell variant="form">
         <Card>
           <CardContent role="alert" className="flex flex-wrap items-center justify-between gap-3 py-8 text-sm text-destructive">
             <span>{loadError}</span>
@@ -140,7 +140,7 @@ export function AdminMaintenanceWindows(): React.JSX.Element {
   }
 
   return (
-    <PageShell variant="wide">
+    <PageShell variant="form">
       <PageHeader
         eyebrow="Site administration"
         title={(

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { PageShell } from "../components/PageHeader";
+import { useParams } from "react-router-dom";
+import { PageHeader, PageShell } from "../components/PageHeader";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
@@ -70,22 +70,27 @@ export function RegistryProviderDetail(): React.JSX.Element {
     return (): void => { controller.abort(); };
   }, [name, namespace, orgName]);
 
-  if (loading) return <PageShell><div className="flex min-h-64 items-center justify-center gap-2 text-sm text-muted-foreground" role="status"><Spinner />Loading provider…</div></PageShell>;
-  if (error !== null) return <PageShell><Empty><EmptyHeader><EmptyTitle>Provider unavailable</EmptyTitle><EmptyDescription>{error}</EmptyDescription></EmptyHeader></Empty></PageShell>;
+  if (loading) return <PageShell variant="form"><div className="flex min-h-64 items-center justify-center gap-2 text-sm text-muted-foreground" role="status"><Spinner />Loading provider…</div></PageShell>;
+  if (error !== null) return <PageShell variant="form"><Empty><EmptyHeader><EmptyTitle>Provider unavailable</EmptyTitle><EmptyDescription>{error}</EmptyDescription></EmptyHeader></Empty></PageShell>;
   return (
-    <PageShell>
-      <div className="max-w-4xl space-y-6">
-        <nav aria-label="Breadcrumb" className="text-sm text-muted-foreground"><Link className="hover:text-foreground" to={`/app/${encodeURIComponent(orgName)}/registry?tab=providers`}>Registry providers</Link><span aria-hidden="true"> / </span><span>{namespace}</span><span aria-hidden="true"> / </span><span aria-current="page">{name}</span></nav>
-        <div><h1 className="text-2xl font-semibold tracking-tight">{name}</h1><code className="text-sm text-muted-foreground">private/{namespace}/{name}</code></div>
-        {versions.length === 0 ? (
-          <Empty className="border"><EmptyHeader><EmptyTitle>No provider versions</EmptyTitle><EmptyDescription>This provider has no published versions.</EmptyDescription></EmptyHeader></Empty>
-        ) : versions.map((version): React.JSX.Element => (
-          <Card key={version.id}>
-            <CardHeader><CardTitle className="flex items-center gap-2">v{version.version}<Badge variant="outline">Protocols {version.protocols.length === 0 ? "unknown" : version.protocols.join(", ")}</Badge></CardTitle><CardDescription>{version.keyId === null ? "Unsigned" : `Signing key ${version.keyId}`} · {version.createdAt === "" ? "Unknown publication date" : new Date(version.createdAt).toLocaleDateString()}</CardDescription></CardHeader>
-            <CardContent className="space-y-2">{version.platforms.map((platform): React.JSX.Element => <div key={platform.id} className="grid gap-1 rounded-md border p-3 text-sm sm:grid-cols-[10rem_minmax(0,1fr)]"><span className="font-medium">{platform.os}/{platform.arch}</span><div className="min-w-0"><p className="truncate">{platform.filename}</p><code className="block truncate text-xs text-muted-foreground" title={platform.shasum}>{platform.shasum}</code></div></div>)}</CardContent>
-          </Card>
-        ))}
-      </div>
+    <PageShell variant="form">
+      <PageHeader
+        breadcrumbs={[
+          { label: "Registry providers", to: `/app/${encodeURIComponent(orgName)}/registry?tab=providers` },
+          { label: namespace },
+          { label: name },
+        ]}
+        title={name}
+        description={<code>private/{namespace}/{name}</code>}
+      />
+      {versions.length === 0 ? (
+        <Empty className="border"><EmptyHeader><EmptyTitle>No provider versions</EmptyTitle><EmptyDescription>This provider has no published versions.</EmptyDescription></EmptyHeader></Empty>
+      ) : versions.map((version): React.JSX.Element => (
+        <Card key={version.id}>
+          <CardHeader><CardTitle className="flex items-center gap-2">v{version.version}<Badge variant="outline">Protocols {version.protocols.length === 0 ? "unknown" : version.protocols.join(", ")}</Badge></CardTitle><CardDescription>{version.keyId === null ? "Unsigned" : `Signing key ${version.keyId}`} · {version.createdAt === "" ? "Unknown publication date" : new Date(version.createdAt).toLocaleDateString()}</CardDescription></CardHeader>
+          <CardContent className="space-y-2">{version.platforms.map((platform): React.JSX.Element => <div key={platform.id} className="grid gap-1 rounded-md border p-3 text-sm sm:grid-cols-[10rem_minmax(0,1fr)]"><span className="font-medium">{platform.os}/{platform.arch}</span><div className="min-w-0"><p className="truncate">{platform.filename}</p><code className="block truncate text-xs text-muted-foreground" title={platform.shasum}>{platform.shasum}</code></div></div>)}</CardContent>
+        </Card>
+      ))}
     </PageShell>
   );
 }
