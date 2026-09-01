@@ -31,7 +31,6 @@ export function EmptyState(props: Readonly<{
         <div className="mt-4 flex items-center justify-center gap-3">
           {hasAction && (
             <Button
-              className="h-9 rounded-[4px] bg-primary px-4 text-primary-foreground shadow-none hover:bg-primary/90"
               onClick={onAction}
             >
               {actionLabel}

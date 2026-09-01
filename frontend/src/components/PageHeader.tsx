@@ -2,7 +2,12 @@ import type { ReactNode } from "react";
 
 import { cn } from "../lib/utils";
 
-type PageShellProps = Readonly<React.ComponentProps<"div"> & { children: ReactNode }>;
+export type PageShellVariant = "standard" | "wide" | "form";
+
+type PageShellProps = Readonly<React.ComponentProps<"div"> & {
+  children: ReactNode;
+  variant?: PageShellVariant;
+}>;
 
 type PageHeaderProps = Readonly<{
   action?: ReactNode;
@@ -11,9 +16,14 @@ type PageHeaderProps = Readonly<{
   title: ReactNode;
 }>;
 
-export function PageShell({ children, className, ...props }: PageShellProps): React.JSX.Element {
+export function PageShell({ children, className, variant = "standard", ...props }: PageShellProps): React.JSX.Element {
+  const width = {
+    standard: "max-w-6xl",
+    wide: "max-w-[1440px]",
+    form: "max-w-4xl",
+  }[variant];
   return (
-    <div className={cn("mx-auto w-full max-w-6xl space-y-6 pb-12", className)} {...props}>
+    <div className={cn("mx-auto w-full space-y-6 pb-12", width, className)} {...props}>
       {children}
     </div>
   );

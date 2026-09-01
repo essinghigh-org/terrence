@@ -9,16 +9,19 @@ type DeepReadonly<T> = T extends null | undefined
   : T;
 
 export type BadgeProps = Readonly<{
-  readonly variant?: "default" | "secondary" | "destructive" | "outline";
+  readonly variant?: "default" | "secondary" | "destructive" | "outline" | "success" | "warning" | "info";
 }> & DeepReadonly<HTMLAttributes<HTMLSpanElement>>;
 
 export function Badge({ className = "", variant = "default", ...props }: BadgeProps): JSX.Element {
   const baseStyle = "inline-flex max-w-full items-center rounded-full border border-transparent px-2.5 py-0.5 text-xs font-medium leading-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2";
   const variantStyles = {
     default: "bg-primary text-primary-foreground",
-    secondary: "bg-secondary text-secondary-foreground",
+    secondary: "bg-secondary text-secondary-foreground border-border/40",
     destructive: "border-destructive/20 bg-destructive/10 text-destructive",
     outline: "border-border bg-background text-foreground",
+    success: "border-success/30 bg-success/10 text-success",
+    warning: "border-warning/30 bg-warning/10 text-warning",
+    info: "border-primary/25 bg-primary/10 text-primary",
   };
 
   const styleClass = variantStyles[variant];

@@ -363,12 +363,12 @@ export function WorkspaceSettings({
   };
 
   return (
-    <form onSubmit={saveSettings} noValidate className="max-w-3xl">
+    <form onSubmit={saveSettings} noValidate className="mx-auto max-w-4xl space-y-6">
       <Card>
         <CardHeader>
           <CardTitle>General settings</CardTitle>
           <CardDescription>
-            Configure this workspace&apos;s identity, execution, state sharing, and apply behavior.
+            Name and description for this workspace.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -394,83 +394,120 @@ export function WorkspaceSettings({
                 name="workspace-description"
                 autoComplete="off"
                 spellCheck={false}
-                rows={4}
+                rows={3}
                 value={description}
                 onInput={(event): void => { setDescription(event.currentTarget.value); }}
                 disabled={!canUpdate}
-                className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm shadow-2xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
               />
             </Field>
-            <Field data-disabled={!canUpdate}>
-              <FieldLabel htmlFor="workspace-execution-mode">Execution mode</FieldLabel>
-              <Select
-                id="workspace-execution-mode"
-                name="execution-mode"
-                value={executionMode}
-                onValueChange={(value: string): void => {
-                  const nextMode: ExecutionModeSetting = value === "agent" || value === "local" || value === "remote"
-                    ? value
-                    : "inherit";
-                  setExecutionMode(nextMode);
-                  const nextEffectiveMode = nextMode === "inherit" ? projectExecutionMode : nextMode;
-                  if (nextEffectiveMode !== "agent") setAgentPoolId("");
-                }}
-                disabled={!canUpdate}
-              >
-                <SelectItem value="inherit">Use project default</SelectItem>
-                <SelectItem value="remote">Remote</SelectItem>
-                <SelectItem value="local">Local</SelectItem>
-                <SelectItem value="agent">Agent</SelectItem>
-              </Select>
-              <FieldDescription>
-                Use the project default, or override execution for this workspace.
-              </FieldDescription>
-            </Field>
-            {effectiveExecutionMode === "agent" && (
+          </FieldGroup>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Execution</CardTitle>
+          <CardDescription>
+            Configure how and where infrastructure runs execute.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup className="gap-5">
+            <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
               <Field data-disabled={!canUpdate}>
-                <FieldLabel htmlFor="workspace-agent-pool">Agent pool</FieldLabel>
+                <FieldLabel htmlFor="workspace-execution-mode">Execution mode</FieldLabel>
                 <Select
-                  id="workspace-agent-pool"
-                  name="agent-pool"
-                  value={agentPoolId}
-                  onValueChange={setAgentPoolId}
-                  disabled={!canUpdate || agentPoolsState.loading}
+                  id="workspace-execution-mode"
+                  name="execution-mode"
+                  value={executionMode}
+                  onValueChange={(value: string): void => {
+                    const nextMode: ExecutionModeSetting = value === "agent" || value === "local" || value === "remote"
+                      ? value
+                      : "inherit";
+                    setExecutionMode(nextMode);
+                    const nextEffectiveMode = nextMode === "inherit" ? projectExecutionMode : nextMode;
+                    if (nextEffectiveMode !== "agent") setAgentPoolId("");
+                  }}
+                  disabled={!canUpdate}
                 >
-                  <SelectItem value="">Use project default</SelectItem>
-                  {agentPoolOptions.map((pool): React.JSX.Element => (
-                    <SelectItem key={pool.id} value={pool.id}>{pool.attributes.name}</SelectItem>
-                  ))}
+                  <SelectItem value="inherit">Use project default</SelectItem>
+                  <SelectItem value="remote">Remote</SelectItem>
+                  <SelectItem value="local">Local</SelectItem>
+                  <SelectItem value="agent">Agent</SelectItem>
                 </Select>
                 <FieldDescription>
-                  Use the project&apos;s pool, or select a workspace-specific pool.
+                  Use project default or override for this workspace.
                 </FieldDescription>
-                {agentPoolsState.loading && <span className="text-xs text-muted-foreground">Loading agent pools…</span>}
-                {agentPoolsState.error !== "" && <FieldError>{agentPoolsState.error}</FieldError>}
               </Field>
-            )}
-            <Field data-disabled={!canUpdate}>
-              <FieldLabel htmlFor="workspace-iac-binary">Execution engine</FieldLabel>
-              <Select
-                id="workspace-iac-binary"
-                name="iac-binary"
-                value={iacBinary}
-// SAFETY: the select options are generated from the same union; the change event carries one of them.
-                onValueChange={(value: string): void => {
 
-                  // SAFETY: the change event carries one of the union values the UI renders from the same options.
+              {effectiveExecutionMode === "agent" && (
+                <Field data-disabled={!canUpdate}>
+                  <FieldLabel htmlFor="workspace-agent-pool">Agent pool</FieldLabel>
+                  <Select
+                    id="workspace-agent-pool"
+                    name="agent-pool"
+                    value={agentPoolId}
+                    onValueChange={setAgentPoolId}
+                    disabled={!canUpdate || agentPoolsState.loading}
+                  >
+                    <SelectItem value="">Use project default</SelectItem>
+                    {agentPoolOptions.map((pool): React.JSX.Element => (
+                      <SelectItem key={pool.id} value={pool.id}>{pool.attributes.name}</SelectItem>
+                    ))}
+                  </Select>
+                  <FieldDescription>
+                    Select a workspace-specific agent pool.
+                  </FieldDescription>
+                  {agentPoolsState.loading && <span className="text-xs text-muted-foreground">Loading agent pools…</span>}
+                  {agentPoolsState.error !== "" && <FieldError>{agentPoolsState.error}</FieldError>}
+                </Field>
+              )}
+            </FieldGroup>
 
-                  setIacBinary(value as IacBinary);
+            <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
+              <Field data-disabled={!canUpdate}>
+                <FieldLabel htmlFor="workspace-iac-binary">Execution engine</FieldLabel>
+                <Select
+                  id="workspace-iac-binary"
+                  name="iac-binary"
+                  value={iacBinary}
+                  onValueChange={(value: string): void => {
+                    setIacBinary(value as IacBinary);
+                  }}
+                  disabled={!canUpdate}
+                >
+                  <SelectItem value="tofu">OpenTofu</SelectItem>
+                  <SelectItem value="terraform">Terraform</SelectItem>
+                </Select>
+                <FieldDescription>
+                  Binary used for plans and applies.
+                </FieldDescription>
+              </Field>
 
-                }}
-                disabled={!canUpdate}
-              >
-                <SelectItem value="tofu">OpenTofu</SelectItem>
-                <SelectItem value="terraform">Terraform</SelectItem>
-              </Select>
-              <FieldDescription>
-                Select the infrastructure-as-code binary used for plans and applies.
-              </FieldDescription>
-            </Field>
+              <Field data-disabled={!canUpdate}>
+                <FieldLabel htmlFor="workspace-terraform-version">Engine version</FieldLabel>
+                <Input
+                  id="workspace-terraform-version"
+                  name="terraform-version"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={terraformVersion}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                    setTerraformVersion(event.target.value);
+                  }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                    setTerraformVersion(event.currentTarget.value);
+                  }}
+                  placeholder="latest or 1.9.3"
+                  disabled={!canUpdate}
+                />
+                <FieldDescription>
+                  Use latest or a version constraint.
+                </FieldDescription>
+              </Field>
+            </FieldGroup>
+
             <Field data-disabled={!canUpdate}>
               <FieldLabel htmlFor="workspace-working-directory">Terraform working directory</FieldLabel>
               <Input
@@ -480,26 +517,34 @@ export function WorkspaceSettings({
                 spellCheck={false}
                 value={workingDirectory}
                 onInput={(event): void => { setWorkingDirectory(event.currentTarget.value); }}
-                placeholder="Defaults to the repository root"
+                placeholder="Defaults to repository root"
                 disabled={!canUpdate}
               />
               <FieldDescription>
-                A relative subdirectory within the configuration where the execution engine runs.
+                A relative subdirectory within the configuration where execution occurs.
               </FieldDescription>
             </Field>
+          </FieldGroup>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>State sharing</CardTitle>
+          <CardDescription>
+            Controls which workspaces may read this workspace&apos;s outputs through remote state.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup className="gap-4">
             <Field data-disabled={!canUpdate}>
               <FieldLabel htmlFor="workspace-remote-state-sharing">Remote state sharing</FieldLabel>
               <Select
                 id="workspace-remote-state-sharing"
                 name="remote-state-sharing"
                 value={remoteStateSharing}
-// SAFETY: the select options are generated from the same union; the change event carries one of them.
                 onValueChange={(value: string): void => {
-
-                  // SAFETY: the change event carries one of the union values the UI renders from the same options.
-
                   setRemoteStateSharing(value as RemoteStateSharing);
-
                 }}
                 disabled={!canUpdate}
               >
@@ -507,10 +552,8 @@ export function WorkspaceSettings({
                 <SelectItem value="project">All workspaces in this project</SelectItem>
                 <SelectItem value="global">All workspaces in this organization</SelectItem>
               </Select>
-              <FieldDescription>
-                Controls which workspaces may read this workspace&apos;s outputs through remote state.
-              </FieldDescription>
             </Field>
+
             {remoteStateSharing === "specific" && (
               <FieldSet
                 disabled={!canUpdate}
@@ -580,61 +623,45 @@ export function WorkspaceSettings({
                 )}
               </FieldSet>
             )}
-            <Field data-disabled={!canUpdate}>
-              <FieldLabel htmlFor="workspace-terraform-version">Engine version</FieldLabel>
-              <Input
-                id="workspace-terraform-version"
-                name="terraform-version"
-                autoComplete="off"
-                spellCheck={false}
-                value={terraformVersion}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                  setTerraformVersion(event.target.value);
-                }}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
-                  setTerraformVersion(event.currentTarget.value);
-                }}
-                placeholder="latest or 1.9.3"
+          </FieldGroup>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Automatic apply</CardTitle>
+          <CardDescription>
+            Configure automatic execution behavior for plans and run triggers.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup className="gap-3">
+            <Field orientation="horizontal" data-disabled={!canUpdate}>
+              <Checkbox
+                id="workspace-auto-apply"
+                checked={autoApply}
+                onCheckedChange={(checked: boolean): void => { setAutoApply(checked); }}
                 disabled={!canUpdate}
               />
-              <FieldDescription>
-                Use latest, an exact version, or a supported version constraint.
-              </FieldDescription>
+              <FieldContent>
+                <FieldLabel htmlFor="workspace-auto-apply">Auto-apply API, UI, and VCS runs</FieldLabel>
+                <FieldDescription>Apply changes automatically after a successful plan.</FieldDescription>
+              </FieldContent>
             </Field>
-            <FieldSet disabled={!canUpdate}>
-              <FieldLegend variant="label">Automatic apply</FieldLegend>
-              <FieldDescription>
-                Successful plans require confirmation unless the applicable option is enabled.
-              </FieldDescription>
-              <FieldGroup className="gap-3">
-                <Field orientation="horizontal" data-disabled={!canUpdate}>
-                  <Checkbox
-                    id="workspace-auto-apply"
-                    checked={autoApply}
-                    onCheckedChange={(checked: boolean): void => { setAutoApply(checked); }}
-                    disabled={!canUpdate}
-                  />
-                  <FieldContent>
-                    <FieldLabel htmlFor="workspace-auto-apply">Auto-apply API, UI, and VCS runs</FieldLabel>
-                    <FieldDescription>Apply changes automatically after a successful plan.</FieldDescription>
-                  </FieldContent>
-                </Field>
-                <Field orientation="horizontal" data-disabled={!canUpdate}>
-                  <Checkbox
-                    id="workspace-auto-apply-run-trigger"
-                    checked={autoApplyRunTrigger}
-                    onCheckedChange={(checked: boolean): void => { setAutoApplyRunTrigger(checked); }}
-                    disabled={!canUpdate}
-                  />
-                  <FieldContent>
-                    <FieldLabel htmlFor="workspace-auto-apply-run-trigger">Auto-apply run-triggered runs</FieldLabel>
-                    <FieldDescription>
-                      Apply runs created when an upstream workspace finishes.
-                    </FieldDescription>
-                  </FieldContent>
-                </Field>
-              </FieldGroup>
-            </FieldSet>
+            <Field orientation="horizontal" data-disabled={!canUpdate}>
+              <Checkbox
+                id="workspace-auto-apply-run-trigger"
+                checked={autoApplyRunTrigger}
+                onCheckedChange={(checked: boolean): void => { setAutoApplyRunTrigger(checked); }}
+                disabled={!canUpdate}
+              />
+              <FieldContent>
+                <FieldLabel htmlFor="workspace-auto-apply-run-trigger">Auto-apply run-triggered runs</FieldLabel>
+                <FieldDescription>
+                  Apply runs created when an upstream workspace finishes.
+                </FieldDescription>
+              </FieldContent>
+            </Field>
             <FieldError>{error}</FieldError>
           </FieldGroup>
         </CardContent>
@@ -642,9 +669,9 @@ export function WorkspaceSettings({
           <span role="status" className="text-sm text-muted-foreground">
             {saved ? "Settings saved." : canUpdate ? "" : "You do not have permission to update this workspace."}
           </span>
-          <Button type="submit" disabled={saving || !canUpdate || invalidName}>
+          <Button type="submit" disabled={saving || !canUpdate || invalidName} aria-label="Save settings">
             {saving && <Spinner data-icon="inline-start" />}
-            {saving ? "Saving" : "Save settings"}
+            {saving ? "Saving" : "Save changes"}
           </Button>
         </CardFooter>
       </Card>

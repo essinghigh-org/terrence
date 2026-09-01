@@ -14,9 +14,9 @@ export function WorkspacesAdmin(props: Readonly<{ workspaces: DataItem[]; }>): R
                   <Table className="w-full text-left text-sm">
                     <TableHeader className="bg-muted border-b text-muted-foreground font-medium">
                       <TableRow>
-                        <TableHead className="px-4 py-3">Workspace Name</TableHead>
-                        <TableHead className="px-4 py-3">Auto Apply</TableHead>
-                        <TableHead className="px-4 py-3">Lock Status</TableHead>
+                        <TableHead className="px-4 py-3">Workspace name</TableHead>
+                        <TableHead className="px-4 py-3">Auto-apply</TableHead>
+                        <TableHead className="px-4 py-3">Lock status</TableHead>
                         <TableHead className="px-4 py-3">Workspace ID</TableHead>
                       </TableRow>
                     </TableHeader>

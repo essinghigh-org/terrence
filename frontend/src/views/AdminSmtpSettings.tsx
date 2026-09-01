@@ -148,7 +148,7 @@ export function AdminSmtpSettings(): React.JSX.Element {
   };
 
   return (
-    <PageShell className="max-w-5xl">
+    <PageShell variant="form">
       <PageHeader
         eyebrow="Site administration"
         title={<span className="flex items-center gap-2"><Mail className="size-7 text-primary" aria-hidden="true" />SMTP settings</span>}

@@ -21,7 +21,9 @@ export function VersionsAdmin(props: Readonly<{
               <Card>
                 <CardHeader variant="section">
                   <CardTitle className="text-lg">Register a Terraform version</CardTitle>
-                  <CardDescription>Add binary versions available for workspace execution</CardDescription>
+                  <CardDescription>
+                    Register a pinned Terraform or OpenTofu binary for workspace execution. A SHA256 checksum is strongly recommended when using a custom download URL.
+                  </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <form onSubmit={handleAddVersion} className="flex gap-4 items-end">
@@ -37,7 +39,7 @@ export function VersionsAdmin(props: Readonly<{
                       />
                     </div>
                     <div className="space-y-1 flex-1">
-                      <label className="text-xs font-medium text-foreground/85" htmlFor="admin-version-url">Download URL (Optional)</label>
+                      <label className="text-xs font-medium text-foreground/85" htmlFor="admin-version-url">Download URL (optional)</label>
                       <Input
                         id="admin-version-url"
                         name="download-url"
@@ -48,7 +50,7 @@ export function VersionsAdmin(props: Readonly<{
                       />
                     </div>
                     <div className="space-y-1 flex-1">
-                      <label className="text-xs font-medium text-foreground/85" htmlFor="admin-version-sha">SHA256 (Optional)</label>
+                      <label className="text-xs font-medium text-foreground/85" htmlFor="admin-version-sha">SHA256 (optional)</label>
                       <Input
                         id="admin-version-sha"
                         name="sha256"
@@ -59,7 +61,7 @@ export function VersionsAdmin(props: Readonly<{
                       />
                     </div>
                     <Button type="submit" className="gap-2">
-                      <Plus className="h-4 w-4" /> Add Version
+                      <Plus className="h-4 w-4" /> Add version
                     </Button>
                   </form>
                 </CardContent>
@@ -67,6 +69,9 @@ export function VersionsAdmin(props: Readonly<{
               <Card>
                 <CardHeader variant="section">
                   <CardTitle className="text-lg">Available Terraform and OpenTofu versions</CardTitle>
+                  <CardDescription>
+                    Workspace settings choose which engine and version constraint to run. Custom binaries are downloaded and verified when a URL and checksum are provided.
+                  </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="rounded-md border overflow-x-auto">

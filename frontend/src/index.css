@@ -45,7 +45,7 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
+    --background: 220 20% 98%;
     --foreground: 220 7% 13%;
     --topbar: 220 7% 13%;
     --topbar-foreground: 0 0% 100%;
@@ -63,7 +63,7 @@
     --accent-foreground: 217 100% 42%;
     --destructive: 358 78% 51%;
     --destructive-foreground: 0 0% 100%;
-    --border: 225 8% 88%;
+    --border: 220 14% 88%;
     --input: 223 8% 68%;
     --ring: 217 91% 48%;
     --success: 142 60% 38%;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Plus, Unplug } from "lucide-react";
+import { LockKeyhole, Plus, Unplug } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -315,14 +315,14 @@ export function WorkspaceVariables({
   return (
     <>
       <div className="flex flex-col gap-6">
-        <Card className="max-w-5xl">
+        <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             Workspace variables
             <Badge variant="secondary">{variables.length}</Badge>
           </CardTitle>
           <CardDescription>
-            Variables owned by this workspace. They override matching values from attached variable sets.
+            Variables owned by this workspace. They override matching values from attached variable sets. Sensitive values are write-only and must be replaced when rotated.
           </CardDescription>
           {canUpdate && <CardAction>
             <Button onClick={(): void => { openEditor(); }}>
@@ -343,7 +343,7 @@ export function WorkspaceVariables({
             </p>
           )}
           <div className="rounded-md border">
-            <Table>
+            <Table density="dense">
               <TableHeader>
                 <TableRow>
                   <TableHead>Key</TableHead>
@@ -366,11 +366,11 @@ export function WorkspaceVariables({
                     <TableCell className="font-mono font-medium">
                       <div className="flex items-center gap-2">
                         {variable.attributes.key}
-                        {variable.attributes.sensitive && <Badge variant="secondary">Sensitive</Badge>}
+                        {variable.attributes.sensitive && <Badge variant="outline" className="border-warning/40 bg-warning/10 text-warning"><LockKeyhole className="mr-1 size-3" aria-hidden="true" />Sensitive</Badge>}
                       </div>
                     </TableCell>
                     <TableCell className="max-w-48 truncate font-mono text-xs">
-                      {variable.attributes.sensitive ? "Sensitive — write only" : variable.attributes.value ?? "—"}
+                      {variable.attributes.sensitive ? <span className="inline-flex items-center gap-1 text-warning" title="This value is hidden after it is saved"><LockKeyhole className="size-3" aria-hidden="true" />Sensitive — write only</span> : variable.attributes.value ?? "—"}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
@@ -412,14 +412,14 @@ export function WorkspaceVariables({
         </CardContent>
       </Card>
 
-      <Card className="max-w-5xl">
+      <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             Variable sets
             <Badge variant="secondary">{sets.length}</Badge>
           </CardTitle>
           <CardDescription>
-            Variable sets attached to this workspace. Inherited variables are read-only here and managed on the variable set itself.
+            Variable sets attached to this workspace. Inherited variables are read-only here and managed on the variable set itself; sensitive values remain hidden.
           </CardDescription>
           {canUpdate && <CardAction>
             <Button onClick={openAttach}>
@@ -481,7 +481,7 @@ export function WorkspaceVariables({
                   <p className="px-4 pt-3 text-sm text-muted-foreground">{set.attributes.description}</p>
                 )}
                 <div className="overflow-x-auto">
-                  <Table>
+                  <Table density="dense">
                     <TableHeader>
                       <TableRow>
                         <TableHead>Key</TableHead>
@@ -503,11 +503,11 @@ export function WorkspaceVariables({
                           <TableCell className="font-mono font-medium">
                             <div className="flex items-center gap-2">
                               {variable.attributes.key}
-                              {variable.attributes.sensitive && <Badge variant="secondary">Sensitive</Badge>}
+                              {variable.attributes.sensitive && <Badge variant="outline" className="border-warning/40 bg-warning/10 text-warning"><LockKeyhole className="mr-1 size-3" aria-hidden="true" />Sensitive</Badge>}
                             </div>
                           </TableCell>
                           <TableCell className="max-w-48 truncate font-mono text-xs">
-                            {variable.attributes.sensitive ? "Sensitive — write only" : variable.attributes.value ?? "—"}
+                            {variable.attributes.sensitive ? <span className="inline-flex items-center gap-1 text-warning" title="This value is hidden after it is saved"><LockKeyhole className="size-3" aria-hidden="true" />Sensitive — write only</span> : variable.attributes.value ?? "—"}
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">

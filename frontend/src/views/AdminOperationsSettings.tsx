@@ -2,14 +2,14 @@ import { useEffect, useState } from "react";
 import { fetchApi, type ReasoningEffort } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { Card, CardAction, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
+import { Select, SelectItem } from "../components/ui/select";
+import { Switch } from "../components/ui/switch";
+import { Card, CardAction, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Spinner } from "../components/ui/spinner";
 import { Badge } from "../components/ui/badge";
-import { Checkbox } from "../components/ui/checkbox";
 import { FuzzyCombobox } from "../components/ui/fuzzy-combobox";
 import { Check, LockKeyhole, Plus, ShieldAlert, Trash2 } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
-
 type ApprovalWebhookSettings = {
   enabled?: boolean;
   secret?: string | null;
@@ -101,38 +101,6 @@ function toggleDay(days: number[], day: number): number[] {
 const DAYS_ALL = [0, 1, 2, 3, 4, 5, 6];
 const DAYS_WEEKDAYS = [1, 2, 3, 4, 5];
 const DAYS_WEEKEND = [0, 6];
-
-function SettingToggle({
-  id,
-  label,
-  checked,
-  onCheckedChange,
-  disabled = false,
-}: Readonly<{
-  id: string;
-  label: string;
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-  disabled?: boolean;
-}>): React.JSX.Element {
-  return (
-    <label
-      htmlFor={id}
-      className={`inline-flex min-h-8 cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs font-medium shadow-sm transition-colors hover:bg-muted ${
-        checked ? "border-success/30 bg-success/5 text-success" : "border-border bg-background text-muted-foreground"
-      } ${disabled ? "cursor-not-allowed opacity-50" : ""}`}
-    >
-      <Checkbox
-        id={id}
-        checked={checked}
-        onCheckedChange={onCheckedChange}
-        disabled={disabled}
-        aria-label={`${checked ? "Disable" : "Enable"} ${label}`}
-      />
-      <span>{checked ? "Enabled" : "Disabled"}</span>
-    </label>
-  );
-}
 
 export function AdminOperationsSettings(): React.JSX.Element {
   const [settings, setSettings] = useState<OperationsSettings | null>(null);
@@ -376,7 +344,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
 
   if (loading) {
     return (
-      <PageShell role="status" aria-label="Loading operations settings" className="max-w-5xl">
+      <PageShell role="status" aria-label="Loading operations settings" variant="wide">
         <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
           <Spinner className="size-6" />
           Loading operations settings…
@@ -387,7 +355,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
 
   if (loadError !== "") {
     return (
-      <PageShell className="max-w-5xl">
+      <PageShell variant="wide">
         <Card>
           <CardContent role="alert" className="flex flex-wrap items-center justify-between gap-3 py-8 text-sm text-destructive">
             <span>{loadError}</span>
@@ -401,7 +369,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
   }
 
   return (
-    <PageShell className="max-w-5xl">
+    <PageShell variant="wide">
       <PageHeader
         eyebrow="Site administration"
         title={(
@@ -413,71 +381,85 @@ export function AdminOperationsSettings(): React.JSX.Element {
         description="Control approvals, maintenance windows, and plain-language plan explanations."
       />
 
-      <div className="space-y-5">
+      <div className="space-y-6">
         <Card>
           <CardHeader variant="section">
             <CardTitle>Logging and remote syslog</CardTitle>
             <CardDescription>
-              Site Admin values override environment variables. Leave a field empty to keep its environment fallback.
+              Site admin values override environment variables. Leave a field empty to keep its environment fallback.
             </CardDescription>
-            <CardAction>
-              <div className="flex items-center gap-2">
-                <SettingToggle id="logging-enabled" label="remote syslog" checked={loggingEnabled} onCheckedChange={setLoggingEnabled} disabled={!loggingLoaded || loggingSaving} />
-                <Button type="button" size="sm" onClick={(): void => { void saveLogging(); }} disabled={!loggingLoaded || loggingSaving}>
-                  {loggingSaving ? "Saving…" : "Save logging"}
-                </Button>
-              </div>
-            </CardAction>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <label htmlFor="logging-level" className="mb-1.5 block text-sm font-medium text-foreground">Local log level</label>
-                <select id="logging-level" value={loggingLevel} disabled={!loggingLoaded || loggingSaving} onChange={(event): void => { setLoggingLevel(event.currentTarget.value); }} className="h-10 w-full rounded-md border bg-background px-3 text-sm">
-                  <option value="">Environment fallback</option>
-                  <option value="error">error</option>
-                  <option value="warn">warn</option>
-                  <option value="info">info</option>
-                  <option value="debug">debug</option>
-                </select>
+            <div className="flex items-center justify-between rounded-lg border border-border bg-muted/20 p-3.5">
+              <div className="space-y-0.5">
+                <label htmlFor="logging-enabled" className="text-sm font-medium text-foreground cursor-pointer">
+                  Remote syslog forwarding
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  {loggingEnabled ? "Enabled" : "Disabled"} · Stream system events and run output to remote syslog destinations
+                </p>
               </div>
-              <div>
-                <label htmlFor="syslog-level" className="mb-1.5 block text-sm font-medium text-foreground">Remote syslog level</label>
-                <select id="syslog-level" value={syslogLevel} disabled={!loggingLoaded || loggingSaving} onChange={(event): void => { setSyslogLevel(event.currentTarget.value); }} className="h-10 w-full rounded-md border bg-background px-3 text-sm">
-                  <option value="">Local level fallback</option>
-                  <option value="error">error</option>
-                  <option value="warn">warn</option>
-                  <option value="info">info</option>
-                  <option value="debug">debug</option>
-                </select>
+              <Switch
+                id="logging-enabled"
+                checked={loggingEnabled}
+                onCheckedChange={setLoggingEnabled}
+                disabled={!loggingLoaded || loggingSaving}
+                aria-label="Remote syslog"
+              />
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <label htmlFor="logging-level" className="block text-sm font-medium text-foreground">Local log level</label>
+                <Select id="logging-level" value={loggingLevel} disabled={!loggingLoaded || loggingSaving} onValueChange={setLoggingLevel}>
+                  <SelectItem value="">Environment fallback</SelectItem>
+                  <SelectItem value="error">error</SelectItem>
+                  <SelectItem value="warn">warn</SelectItem>
+                  <SelectItem value="info">info</SelectItem>
+                  <SelectItem value="debug">debug</SelectItem>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <label htmlFor="syslog-level" className="block text-sm font-medium text-foreground">Remote syslog level</label>
+                <Select id="syslog-level" value={syslogLevel} disabled={!loggingLoaded || loggingSaving} onValueChange={setSyslogLevel}>
+                  <SelectItem value="">Local level fallback</SelectItem>
+                  <SelectItem value="error">error</SelectItem>
+                  <SelectItem value="warn">warn</SelectItem>
+                  <SelectItem value="info">info</SelectItem>
+                  <SelectItem value="debug">debug</SelectItem>
+                </Select>
               </div>
             </div>
-            <div>
-              <label htmlFor="syslog-targets" className="mb-1.5 block text-sm font-medium text-foreground">Remote destinations</label>
+            <div className="space-y-1.5">
+              <label htmlFor="syslog-targets" className="block text-sm font-medium text-foreground">Remote destinations</label>
               <textarea
                 id="syslog-targets"
                 value={syslogTargets}
                 disabled={!loggingLoaded || loggingSaving}
                 onInput={(event): void => { setSyslogTargets(event.currentTarget.value); }}
-                placeholder="udp://collector.example.com:514\ntcp://collector.example.com:601"
+                placeholder={"udp://collector.example.com:514\ntcp://collector.example.com:601"}
                 rows={3}
-                className="w-full rounded-md border bg-background px-3 py-2 font-mono text-sm"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm shadow-2xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
               />
-              <p className="mt-1 text-xs text-muted-foreground">One udp:// or tcp:// destination per line. An empty value uses TERRENCE_SYSLOG_TARGET(S).</p>
+              <p className="text-xs text-muted-foreground">One udp:// or tcp:// destination per line. An empty value uses TERRENCE_SYSLOG_TARGET(S).</p>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <label htmlFor="syslog-hostname" className="mb-1.5 block text-sm font-medium text-foreground">Syslog hostname</label>
+              <div className="space-y-1.5">
+                <label htmlFor="syslog-hostname" className="block text-sm font-medium text-foreground">Syslog hostname (optional)</label>
                 <Input id="syslog-hostname" value={syslogHostname} disabled={!loggingLoaded || loggingSaving} onInput={(event): void => { setSyslogHostname(event.currentTarget.value); }} placeholder="Environment fallback" />
               </div>
-              <div>
-                <label htmlFor="syslog-app" className="mb-1.5 block text-sm font-medium text-foreground">Syslog app name</label>
+              <div className="space-y-1.5">
+                <label htmlFor="syslog-app" className="block text-sm font-medium text-foreground">Syslog app name</label>
                 <Input id="syslog-app" value={syslogApp} disabled={!loggingLoaded || loggingSaving} onInput={(event): void => { setSyslogApp(event.currentTarget.value); }} placeholder="terrence" />
               </div>
             </div>
             {loggingError !== "" && <p role="alert" className="text-sm text-destructive">{loggingError}</p>}
             {loggingSavedAt !== "" && <p className="text-sm text-success">Logging settings saved at {loggingSavedAt}.</p>}
           </CardContent>
+          <CardFooter className="justify-end">
+            <Button type="button" variant="outline" onClick={(): void => { void saveLogging(); }} disabled={!loggingLoaded || loggingSaving} aria-label="Save logging">
+              {loggingSaving ? "Saving…" : "Save logging"}
+            </Button>
+          </CardFooter>
         </Card>
 
         <Card>
@@ -489,12 +471,17 @@ export function AdminOperationsSettings(): React.JSX.Element {
               HMAC-SHA256 signature in <code className="rounded bg-muted px-1 py-0.5 text-xs">X-Terrence-Signature</code>.
             </CardDescription>
             <CardAction>
-              <SettingToggle id="approval-enabled" label="approval webhook" checked={approvalEnabled} onCheckedChange={setApprovalEnabled} />
+              <div className="flex items-center gap-2">
+                <label htmlFor="approval-enabled" className="text-xs font-medium text-muted-foreground cursor-pointer">
+                  {approvalEnabled ? "Enabled" : "Disabled"}
+                </label>
+                <Switch id="approval-enabled" checked={approvalEnabled} onCheckedChange={setApprovalEnabled} aria-label="Approval webhook" />
+              </div>
             </CardAction>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div>
-              <label htmlFor="approval-url" className="mb-1.5 block text-sm font-medium text-foreground">
+            <div className="space-y-1.5">
+              <label htmlFor="approval-url" className="block text-sm font-medium text-foreground">
                 Callback URL (optional)
               </label>
               <Input
@@ -506,12 +493,12 @@ export function AdminOperationsSettings(): React.JSX.Element {
                 placeholder="https://example.com/hooks/terrence-approval"
                 className="max-w-xl"
               />
-              <p className="mt-1 text-xs text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 If set, a signed confirmation notification is sent to this URL after a successful approval.
               </p>
             </div>
-            <div>
-              <label htmlFor="approval-secret" className="mb-1.5 block text-sm font-medium text-foreground">
+            <div className="space-y-1.5">
+              <label htmlFor="approval-secret" className="block text-sm font-medium text-foreground">
                 Shared secret
               </label>
               <div className="flex max-w-xl items-center gap-2">
@@ -542,7 +529,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
                   </Button>
                 )}
               </div>
-              <p className="mt-1 text-xs text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Required to verify incoming approval requests. Leave blank to keep the stored secret.
               </p>
             </div>
@@ -556,7 +543,12 @@ export function AdminOperationsSettings(): React.JSX.Element {
               Applies are blocked during configured windows. Plans are never affected.
             </CardDescription>
             <CardAction>
-              <SettingToggle id="maintenance-enabled" label="maintenance windows" checked={windowsEnabled} onCheckedChange={setWindowsEnabled} />
+              <div className="flex items-center gap-2">
+                <label htmlFor="maintenance-enabled" className="text-xs font-medium text-muted-foreground cursor-pointer">
+                  {windowsEnabled ? "Enabled" : "Disabled"}
+                </label>
+                <Switch id="maintenance-enabled" checked={windowsEnabled} onCheckedChange={setWindowsEnabled} aria-label="Maintenance windows" />
+              </div>
             </CardAction>
           </CardHeader>
           <CardContent>
@@ -568,7 +560,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
             ) : (
               <div className="grid gap-3 sm:grid-cols-2">
                 {windows.map((window, index): React.JSX.Element => (
-                  <div key={index} className="rounded-md border border-border p-4">
+                  <div key={index} className="rounded-md border border-border bg-card p-4 shadow-2xs">
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-1.5">
                         {DAY_OPTIONS.map((option): React.JSX.Element => (
@@ -578,11 +570,11 @@ export function AdminOperationsSettings(): React.JSX.Element {
                             aria-pressed={window.days.includes(option.day)}
                             aria-label={`Toggle ${option.label}`}
                             onClick={(): void => { updateWindow(index, { days: toggleDay(window.days, option.day) }); }}
-                            className={`rounded-full px-2 py-0.5 text-xs font-medium transition-colors ${
+                            className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${
                               window.days.includes(option.day)
-                                ? "bg-primary text-primary-foreground"
+                                ? "bg-primary text-primary-foreground shadow-2xs"
                                 : "bg-muted text-muted-foreground hover:bg-muted/80"
-                          }`}
+                            }`}
                           >
                             {option.label}
                           </button>
@@ -595,7 +587,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
                         aria-label="Remove maintenance window"
                         onClick={(): void => { setWindows((existing): MaintenanceWindow[] => existing.filter((_, i): boolean => i !== index)); }}
                       >
-                        <Trash2 className="size-4" />
+                        <Trash2 className="size-4 text-muted-foreground hover:text-destructive" />
                       </Button>
                     </div>
                     <div className="mt-3 flex flex-wrap items-end gap-3">
@@ -686,7 +678,7 @@ export function AdminOperationsSettings(): React.JSX.Element {
                 ]);
               }}
             >
-              <Plus className="mr-2 size-4" /> Add window
+              <Plus data-icon="inline-start" className="size-4" /> Add window
             </Button>
           </CardContent>
         </Card>
@@ -699,7 +691,12 @@ export function AdminOperationsSettings(): React.JSX.Element {
               Never affects run status.
             </CardDescription>
             <CardAction>
-              <SettingToggle id="explainer-enabled" label="AI plan explainer" checked={explainerEnabled} onCheckedChange={setExplainerEnabled} />
+              <div className="flex items-center gap-2">
+                <label htmlFor="explainer-enabled" className="text-xs font-medium text-muted-foreground cursor-pointer">
+                  {explainerEnabled ? "Enabled" : "Disabled"}
+                </label>
+                <Switch id="explainer-enabled" checked={explainerEnabled} onCheckedChange={setExplainerEnabled} aria-label="AI plan explainer" />
+              </div>
             </CardAction>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -851,9 +848,9 @@ export function AdminOperationsSettings(): React.JSX.Element {
       </div>
 
       <div className="flex flex-wrap items-center gap-3 border-t border-border pt-5">
-        <Button type="button" onClick={(): void => { void save(); }} disabled={saving}>
+        <Button type="button" onClick={(): void => { void save(); }} disabled={saving} aria-label="Save operations settings">
           {saving ? <Spinner data-icon="inline-start" className="size-4" /> : <Check data-icon="inline-start" className="size-4" />}
-          {saving ? "Saving…" : "Save operations settings"}
+          {saving ? "Saving…" : "Save changes"}
         </Button>
         {savedAt !== "" && <span className="text-sm text-success" role="status" aria-live="polite">Saved at {savedAt}</span>}
         {saveError !== "" && <span className="text-sm text-destructive" role="alert">{saveError}</span>}

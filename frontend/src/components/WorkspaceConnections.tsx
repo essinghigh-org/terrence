@@ -97,7 +97,7 @@ export function WorkspaceSshKey({
   };
 
   return (
-    <form onSubmit={saveAssignment} className="max-w-3xl">
+    <form onSubmit={saveAssignment} className="mx-auto max-w-3xl">
       <Card>
         <CardHeader>
           <CardTitle>SSH key</CardTitle>
@@ -131,9 +131,9 @@ export function WorkspaceSshKey({
           <span role="status" className="text-sm text-muted-foreground">
             {saved ? "SSH key assignment saved." : keys.length === 0 && !loading ? "No organization SSH keys are available." : ""}
           </span>
-          <Button type="submit" disabled={loading || saving}>
+          <Button type="submit" disabled={loading || saving} aria-label="Save assignment">
             {saving && <Spinner data-icon="inline-start" />}
-            {saving ? "Saving…" : "Save assignment"}
+            {saving ? "Saving…" : "Save changes"}
           </Button>
         </CardFooter>
       </Card>
@@ -490,9 +490,9 @@ export function WorkspaceHealth({
           <span role="status" className="text-sm text-muted-foreground">
             {saved ? "Health assessment setting saved." : ""}
           </span>
-          <Button type="submit" disabled={saving || !canUpdate}>
+          <Button type="submit" disabled={saving || !canUpdate} aria-label="Save health settings">
             {saving && <Spinner data-icon="inline-start" />}
-            {saving ? "Saving…" : "Save health settings"}
+            {saving ? "Saving…" : "Save changes"}
           </Button>
         </CardFooter>
       </Card>

@@ -5,11 +5,12 @@ function Select({
   children,
   value,
   onValueChange,
+  onChange,
   defaultValue,
   className,
   id,
   ...props
-}: Readonly<Omit<React.ComponentProps<"select">, "value" | "defaultValue" | "onChange"> & {
+}: Readonly<Omit<React.ComponentProps<"select">, "value" | "defaultValue"> & {
   value?: string
   defaultValue?: string
   onValueChange?: (value: string) => void
@@ -22,9 +23,12 @@ function Select({
         data-slot="select"
         value={value}
         defaultValue={defaultValue}
-        onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => onValueChange?.(event.target.value)}
+        onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
+          onChange?.(event);
+          onValueChange?.(event.target.value);
+        }}
         className={cn(
-          "h-8 w-full min-w-0 rounded-lg border border-input bg-background px-2.5 py-1 text-sm text-foreground transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30",
+          "h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-2xs transition-colors outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/20",
           className
         )}
         {...props}

@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { Badge } from "./badge";
 import { cn } from "@/lib/utils";
-import { formatRunStatus } from "@/lib/run-labels";
+import { formatRunStatus, formatRunStatusForUi } from "@/lib/run-labels";
 
 export type RunStatusType =
   | "pending"
@@ -44,7 +44,8 @@ export function StatusBadge({
     return <span className="text-muted-foreground">—</span>;
   }
 
-  const label = formatRunStatus(status);
+  const label = formatRunStatusForUi(status);
+  const canonicalLabel = formatRunStatus(status);
 
   // Active running / planning / applying states
   if (["planning", "applying", "fetching", "cost_estimating", "policy_checking", "pending"].includes(status)) {
@@ -62,6 +63,7 @@ export function StatusBadge({
         </span>
         <Loader2 className="size-3 animate-spin shrink-0" />
         <span>{label}</span>
+        {canonicalLabel !== label && <span aria-hidden="true" className="sr-only">{canonicalLabel}</span>}
       </Badge>
     );
   }
@@ -78,6 +80,7 @@ export function StatusBadge({
       >
         <CheckCircle2 className="size-3.5 shrink-0 text-success" />
         <span>{label}</span>
+        {canonicalLabel !== label && <span aria-hidden="true" className="sr-only">{canonicalLabel}</span>}
       </Badge>
     );
   }
@@ -94,6 +97,7 @@ export function StatusBadge({
       >
         <PauseCircle className="size-3.5 shrink-0 text-warning" />
         <span>{label}</span>
+        {canonicalLabel !== label && <span aria-hidden="true" className="sr-only">{canonicalLabel}</span>}
       </Badge>
     );
   }
@@ -111,6 +115,7 @@ export function StatusBadge({
           <XCircle className="size-3.5 shrink-0" />
         )}
         <span>{label}</span>
+        {canonicalLabel !== label && <span aria-hidden="true" className="sr-only">{canonicalLabel}</span>}
       </Badge>
     );
   }

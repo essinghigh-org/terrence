@@ -422,7 +422,7 @@ export function WorkspaceDetail({
       && (tab.id !== "variables" || canReadVariable));
 
   return (
-    <div className="w-full max-w-full">
+    <div className="mx-auto w-full max-w-[1440px]">
       {/* Breadcrumbs */}
       <nav
         aria-label="Breadcrumb"
@@ -516,7 +516,9 @@ export function WorkspaceDetail({
               to={canQueueRun && (activeSection === "overview" || isRunDetail)
                 ? `${workspacePath}/runs?new-run=true`
                 : `${workspacePath}/runs`}
-              className={buttonVariants()}
+              className={buttonVariants({
+                variant: isSettingsSection ? "outline" : "default",
+              })}
             >
               <Play data-icon="inline-start" />
               {canQueueRun && (activeSection === "overview" || isRunDetail) ? "New run" : "View runs"}

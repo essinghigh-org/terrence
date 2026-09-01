@@ -520,84 +520,39 @@ export function Layout({
 
   const renderNavigation = (): JSX.Element => {
     if (inSiteAdministration && siteAdmin) {
-      const links = [
+      const groups = [
         {
-          active: location.pathname === "/app/admin",
-          icon: ShieldCheck,
-          label: "Security overview",
-          to: "/app/admin",
+          label: "Overview",
+          links: [
+            { active: location.pathname === "/app/admin", icon: ShieldCheck, label: "Security overview", to: "/app/admin" },
+          ],
         },
         {
-          active: isActivePath(location.pathname, "/app/admin/users"),
-          icon: Users,
-          label: "Users",
-          to: "/app/admin/users",
+          label: "Identity & access",
+          links: [
+            { active: isActivePath(location.pathname, "/app/admin/users"), icon: Users, label: "Users", to: "/app/admin/users" },
+            { active: isActivePath(location.pathname, "/app/admin/auth"), icon: KeyRound, label: "Authentication", to: "/app/admin/auth" },
+            { active: isActivePath(location.pathname, "/app/admin/scim"), icon: UserCog, label: "SCIM settings", to: "/app/admin/scim" },
+          ],
         },
         {
-          active: isActivePath(location.pathname, "/app/admin/organizations"),
-          icon: Building2,
-          label: "Organizations",
-          to: "/app/admin/organizations",
+          label: "Infrastructure",
+          links: [
+            { active: isActivePath(location.pathname, "/app/admin/organizations"), icon: Building2, label: "Organizations", to: "/app/admin/organizations" },
+            { active: isActivePath(location.pathname, "/app/admin/workspaces"), icon: Box, label: "Workspaces", to: "/app/admin/workspaces" },
+            { active: isActivePath(location.pathname, "/app/admin/runs"), icon: PlayCircle, label: "System runs", to: "/app/admin/runs" },
+            { active: isActivePath(location.pathname, "/app/admin/versions"), icon: FileCode, label: "Tool versions", to: "/app/admin/versions" },
+            { active: isActivePath(location.pathname, "/app/admin/compatibility"), icon: ShieldCheck, label: "Provider compatibility", to: "/app/admin/compatibility" },
+          ],
         },
         {
-          active: isActivePath(location.pathname, "/app/admin/workspaces"),
-          icon: Box,
-          label: "Workspaces",
-          to: "/app/admin/workspaces",
-        },
-        {
-          active: isActivePath(location.pathname, "/app/admin/runs"),
-          icon: PlayCircle,
-          label: "System Runs",
-          to: "/app/admin/runs",
-        },
-        {
-          active: isActivePath(location.pathname, "/app/admin/versions"),
-          icon: FileCode,
-          label: "Tool Versions",
-          to: "/app/admin/versions",
-        },
-        {
-          active: isActivePath(location.pathname, "/app/admin/compatibility"),
-          icon: ShieldCheck,
-          label: "Provider compatibility",
-          to: "/app/admin/compatibility",
-        },
-        {
-          active: isActivePath(location.pathname, "/app/admin/audit"),
-          icon: HistoryIcon,
-          label: "Audit Logs",
-          to: "/app/admin/audit",
-        },
-        {
-          active: isActivePath(location.pathname, "/app/admin/auth"),
-          icon: KeyRound,
-          label: "Authentication",
-          to: "/app/admin/auth",
-        },
-        {
-          active: isActivePath(location.pathname, "/app/admin/smtp"),
-          icon: Mail,
-          label: "SMTP settings",
-          to: "/app/admin/smtp",
-        },
-        {
-          active: isActivePath(location.pathname, "/app/admin/scim"),
-          icon: UserCog,
-          label: "SCIM settings",
-          to: "/app/admin/scim",
-        },
-        {
-          active: isActivePath(location.pathname, "/app/admin/operations"),
-          icon: SlidersHorizontal,
           label: "Operations",
-          to: "/app/admin/operations",
-        },
-        {
-          active: isActivePath(location.pathname, "/app/admin/database"),
-          icon: Database,
-          label: "Database",
-          to: "/app/admin/database",
+          links: [
+            { active: isActivePath(location.pathname, "/app/admin/audit"), icon: HistoryIcon, label: "Audit logs", to: "/app/admin/audit" },
+            { active: isActivePath(location.pathname, "/app/admin/smtp"), icon: Mail, label: "SMTP settings", to: "/app/admin/smtp" },
+            { active: isActivePath(location.pathname, "/app/admin/operations"), icon: SlidersHorizontal, label: "Operations", to: "/app/admin/operations" },
+            { active: isActivePath(location.pathname, "/app/admin/database"), icon: Database, label: "Database", to: "/app/admin/database" },
+          ],
         },
       ] as const;
 
@@ -619,16 +574,28 @@ export function Layout({
           >
             Site administration
           </div>
-          {links.map((link): JSX.Element => (
-            <SidebarNavLink
-              key={link.to}
-              active={link.active}
-              collapsed={sidebarCollapsed}
-              icon={link.icon}
-              label={link.label}
-              onNavigate={closeMobileNavigation}
-              to={link.to}
-            />
+          {groups.map((group): JSX.Element => (
+            <div key={group.label}>
+              <div
+                className={cn(
+                  "px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground",
+                  sidebarCollapsed && "lg:sr-only",
+                )}
+              >
+                {group.label}
+              </div>
+              {group.links.map((link): JSX.Element => (
+                <SidebarNavLink
+                  key={link.to}
+                  active={link.active}
+                  collapsed={sidebarCollapsed}
+                  icon={link.icon}
+                  label={link.label}
+                  onNavigate={closeMobileNavigation}
+                  to={link.to}
+                />
+              ))}
+            </div>
           ))}
         </>
       );
@@ -709,19 +676,44 @@ export function Layout({
     }
 
     if (hasWorkspace && inWorkspaceSettings) {
-      const links = [
-        { label: "General", to: `${settingsPath}/general`, icon: Settings },
-        { label: "Locking", to: `${settingsPath}/lock`, icon: Lock },
-        { label: "Notifications", to: `${settingsPath}/notifications`, icon: Bell },
-        { label: "Policies", to: `${settingsPath}/policies`, icon: ShieldCheck },
-        { label: "Run Tasks", to: `${settingsPath}/tasks`, icon: ListTodo },
-        { label: "Run triggers", to: `${settingsPath}/run-triggers`, icon: GitPullRequest },
-        { label: "SSH Key", to: `${settingsPath}/ssh`, icon: KeyRound },
-        { label: "Version Control", to: `${settingsPath}/version-control`, icon: GitBranch },
-        { label: "Team access", to: `${settingsPath}/team-access`, icon: Users },
-        { label: "Health assessments", to: `${settingsPath}/health`, icon: Activity },
-        { label: "Data retention", to: `${settingsPath}/retention`, icon: HistoryIcon },
-        { label: "Destruction and deletion", to: `${settingsPath}/delete`, icon: Trash2 },
+      const groups = [
+        {
+          label: "Workspace",
+          links: [
+            { label: "General", to: `${settingsPath}/general`, icon: Settings },
+            { label: "Locking", to: `${settingsPath}/lock`, icon: Lock },
+          ],
+        },
+        {
+          label: "Execution",
+          links: [
+            { label: "Policies", to: `${settingsPath}/policies`, icon: ShieldCheck },
+            { label: "Run tasks", to: `${settingsPath}/tasks`, icon: ListTodo },
+            { label: "Run triggers", to: `${settingsPath}/run-triggers`, icon: GitPullRequest },
+            { label: "Configuration versions", to: `${settingsPath}/configuration-versions`, icon: FileCode },
+          ],
+        },
+        {
+          label: "Access",
+          links: [{ label: "Team access", to: `${settingsPath}/team-access`, icon: Users }],
+        },
+        {
+          label: "Lifecycle",
+          links: [
+            { label: "Health assessments", to: `${settingsPath}/health`, icon: Activity },
+            { label: "Data retention", to: `${settingsPath}/retention`, icon: HistoryIcon },
+            { label: "Destruction and deletion", to: `${settingsPath}/delete`, icon: Trash2 },
+          ],
+        },
+        {
+          label: "Integrations",
+          links: [
+            { label: "Notifications", to: `${settingsPath}/notifications`, icon: Bell },
+            { label: "Webhooks", to: `${settingsPath}/webhooks`, icon: SlidersHorizontal },
+            { label: "SSH key", to: `${settingsPath}/ssh`, icon: KeyRound },
+            { label: "Version control", to: `${settingsPath}/version-control`, icon: GitBranch },
+          ],
+        },
       ] as const;
 
       return (
@@ -742,21 +734,33 @@ export function Layout({
           >
             Workspace settings
           </div>
-          {links.map((link): JSX.Element => (
-            <SidebarNavLink
-              key={link.to}
-              active={
-                link.label === "General"
-                  ? location.pathname === settingsPath ||
-                    isActivePath(location.pathname, link.to)
-                  : isActivePath(location.pathname, link.to)
-              }
-              collapsed={sidebarCollapsed}
-              icon={link.icon}
-              label={link.label}
-              onNavigate={closeMobileNavigation}
-              to={link.to}
-            />
+          {groups.map((group): JSX.Element => (
+            <div key={group.label}>
+              <div
+                className={cn(
+                  "px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground",
+                  sidebarCollapsed && "lg:sr-only",
+                )}
+              >
+                {group.label}
+              </div>
+              {group.links.map((link): JSX.Element => (
+                <SidebarNavLink
+                  key={link.to}
+                  active={
+                    link.label === "General"
+                      ? location.pathname === settingsPath ||
+                        isActivePath(location.pathname, link.to)
+                      : isActivePath(location.pathname, link.to)
+                  }
+                  collapsed={sidebarCollapsed}
+                  icon={link.icon}
+                  label={link.label}
+                  onNavigate={closeMobileNavigation}
+                  to={link.to}
+                />
+              ))}
+            </div>
           ))}
         </>
       );

@@ -474,7 +474,7 @@ export function Workspaces(): React.JSX.Element {
   const tableColumnCount = WORKSPACE_TABLE_COLUMNS.filter((column): boolean => visibleColumns.includes(column.id)).length + 2;
 
   return (
-    <PageShell className="max-w-7xl">
+    <PageShell variant="wide">
       <PageHeader
         eyebrow={orgName}
         title="Workspaces"
@@ -489,21 +489,42 @@ export function Workspaces(): React.JSX.Element {
 
       {/* Top KPI Metrics Bar */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
+        <button
+          type="button"
+          onClick={(): void => { setStatusFilter(""); setActiveViewName(""); }}
+          className={cn(
+            "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-all hover:border-border/80 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
+            statusFilter === "" && "ring-1 ring-border"
+          )}
+        >
           <div className="text-xs font-medium text-muted-foreground">Total Workspaces</div>
           <div className="mt-1 tabular-nums text-2xl font-bold">{totalsUnavailable ? "—" : totalWorkspaceCount}</div>
-        </div>
-        <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
+        </button>
+        <button
+          type="button"
+          onClick={(): void => { setStatusFilter("running"); setActiveViewName(""); }}
+          className={cn(
+            "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-all hover:border-primary/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
+            statusFilter === "running" && "border-primary/50 bg-primary/5 ring-1 ring-primary/30"
+          )}
+        >
           <div className="text-xs font-medium text-muted-foreground">Active Runs</div>
           <div className="mt-1 tabular-nums text-2xl font-bold text-primary">{activeRunsCount}</div>
-        </div>
-        <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
+        </button>
+        <button
+          type="button"
+          onClick={(): void => { setStatusFilter("attention"); setActiveViewName(""); }}
+          className={cn(
+            "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-all hover:border-destructive/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
+            statusFilter === "attention" && "border-destructive/50 bg-destructive/5 ring-1 ring-destructive/30"
+          )}
+        >
           <div className="text-xs font-medium text-muted-foreground">Attention Needed</div>
           <div className={cn("mt-1 tabular-nums text-2xl font-bold", attentionNeededCount > 0 ? "text-destructive" : "")}>
             {attentionNeededCount}
           </div>
-        </div>
-        <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
+        </button>
+        <div className="rounded-xl border bg-card p-4 text-card-foreground shadow-2xs">
           <div className="text-xs font-medium text-muted-foreground">Locked Workspaces</div>
           <div className="mt-1 tabular-nums text-2xl font-bold">{totalsUnavailable ? "—" : lockedWorkspaceCount}</div>
         </div>

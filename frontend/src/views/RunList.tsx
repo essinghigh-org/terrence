@@ -4,7 +4,7 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpRight,
-  Copy,
+  MoreHorizontal,
   Search,
 } from "lucide-react";
 import { Avatar, AvatarImage } from "../components/ui/avatar";
@@ -27,7 +27,7 @@ import { fetchApi } from "../lib/api";
 import { useTerrenceEvent } from "../lib/event-provider";
 import { isNumber, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
-import { formatRunSource, formatRunStatus, isVcsRunSource } from "../lib/run-labels";
+import { formatRunSource, formatRunStatusForUi, isVcsRunSource } from "../lib/run-labels";
 
 type RunItem = {
   id: string;
@@ -67,6 +67,10 @@ type IncludedUser = {
 };
 
 type RunType = "empty" | "plan" | "refresh" | "standard";
+
+function shortRunId(id: string): string {
+  return id.length > 16 ? `${id.slice(0, 10)}…${id.slice(-4)}` : id;
+}
 
 const RUN_TYPE_DESCRIPTIONS = {
   standard: "Create a plan that can be confirmed and applied.",
@@ -285,7 +289,7 @@ export function RunList({
         run.id,
         run.attributes.message,
         run.attributes.status,
-        formatRunStatus(run.attributes.status),
+        formatRunStatusForUi(run.attributes.status),
         run.attributes.source,
         run.attributes["trigger-reason"],
         creatorName,
@@ -403,7 +407,6 @@ export function RunList({
         </div>
         {canStartRun && (
           <Button
-            className="h-9 rounded-[4px] bg-primary px-4 text-primary-foreground shadow-none hover:bg-primary/90"
             onClick={openNewRunDialog}
           >
             Start new run
@@ -436,11 +439,11 @@ export function RunList({
             description="Try a different message, status, source, or run ID."
           />
         ) : (
-          <div className="p-3 sm:p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-3 p-3 sm:px-4 sm:py-3 border-b border-border bg-muted/20">
               <div>
                 <h2 className="text-sm font-semibold text-foreground">Run history</h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">{filteredRuns.length} of {runs.length} runs</p>
+                <p className="text-xs text-muted-foreground">{filteredRuns.length} of {runs.length} runs</p>
               </div>
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span>Sort by</span>
@@ -464,7 +467,7 @@ export function RunList({
                 </button>
               </div>
             </div>
-            <div className="space-y-2 pt-3">
+            <div className="divide-y divide-border">
               {filteredRuns.map((run: RunItem): React.JSX.Element => {
                 const creatorId = run.relationships?.["created-by"]?.data?.id;
                 const creatorUser = creatorId !== undefined ? usersMap.get(creatorId) : undefined;
@@ -477,24 +480,26 @@ export function RunList({
                 return (
                   <article
                     key={run.id}
-                    className="grid gap-3 rounded-lg border border-border bg-background p-4 transition-colors hover:border-primary/40 hover:bg-muted/20 md:grid-cols-[minmax(0,1fr)_auto_auto_auto] md:items-center"
+                    className="flex flex-col md:flex-row md:items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-muted/30"
                   >
-                    <div className="min-w-0">
-                      <Link
-                        to={`/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspaceName)}/runs/${encodeURIComponent(run.id)}`}
-                        className="block truncate text-sm font-semibold text-primary hover:underline"
-                      >
-                        {run.attributes.message ?? "Triggered via UI"}
-                      </Link>
-                      <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] text-muted-foreground">
-                        <span className="truncate" title={run.id}>{run.id}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <Link
+                          to={`/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspaceName)}/runs/${encodeURIComponent(run.id)}`}
+                          className="truncate text-sm font-medium text-foreground hover:text-primary hover:underline"
+                        >
+                          {run.attributes.message ?? "Triggered via UI"}
+                        </Link>
+                      </div>
+                      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                        <span className="font-mono text-[11px] text-muted-foreground/90" title={run.id}>{shortRunId(run.id)}</span>
                         {run.attributes.operation !== undefined && run.attributes.operation !== "plan_and_apply" && (
-                          <><span aria-hidden="true">·</span><span className="text-foreground/85">{run.attributes.operation.replace(/_/g, " ")}</span></>
+                          <><span aria-hidden="true">·</span><span className="text-foreground/80">{run.attributes.operation.replace(/_/g, " ")}</span></>
                         )}
                         <span aria-hidden="true">·</span>
                         <span className="flex items-center gap-1">
                           {avatarUrl !== "" && (
-                            <Avatar className="inline-flex size-4 rounded-full">
+                            <Avatar className="inline-flex size-3.5 rounded-full">
                               <AvatarImage src={avatarUrl} alt={username} className="rounded-full object-cover" />
                             </Avatar>
                           )}
@@ -503,7 +508,7 @@ export function RunList({
                         <span aria-hidden="true">·</span>
                         <span>via {sourceLabel}</span>
                         {externalSource && run.attributes.branch !== null && run.attributes.branch !== undefined && (
-                          <><span aria-hidden="true">·</span><span>{`Branch ${run.attributes.branch}`}</span></>
+                          <><span aria-hidden="true">·</span><span>{`branch ${run.attributes.branch}`}</span></>
                         )}
                         {externalSource && run.attributes["commit-sha"] !== null && run.attributes["commit-sha"] !== undefined && run.attributes["commit-sha"] !== "" && (
                           <>
@@ -514,41 +519,38 @@ export function RunList({
                                 target="_blank"
                                 rel="noreferrer"
                                 title={run.attributes["commit-sha"]}
-                                className="inline-flex items-center gap-0.5 text-primary underline decoration-primary/40 hover:no-underline"
+                                className="inline-flex items-center gap-0.5 font-mono text-[11px] text-primary hover:underline"
                               >
                                 {run.attributes["commit-sha"].slice(0, 7)}
                                 <ArrowUpRight className="size-3" aria-hidden="true" />
                               </a>
                             ) : (
-                              <span title={run.attributes["commit-sha"]}>{run.attributes["commit-sha"].slice(0, 7)}</span>
+                              <span className="font-mono text-[11px]" title={run.attributes["commit-sha"]}>{run.attributes["commit-sha"].slice(0, 7)}</span>
                             )}
                           </>
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center justify-between gap-3 md:block">
-                      <span className="text-xs text-muted-foreground md:hidden">Status</span>
+                    <div className="flex shrink-0 items-center gap-4">
                       <StatusBadge status={run.attributes.status} />
-                    </div>
-                    <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground md:block md:min-w-24 md:text-right">
-                      <span className="md:hidden">Created</span>
-                      <time dateTime={run.attributes["created-at"]} title={formatDateTime(run.attributes["created-at"])}>{formatRelativeTime(run.attributes["created-at"])}</time>
-                    </div>
-                    {canStartRun && (
-                      <div className="flex justify-end border-t border-border pt-2 md:border-0 md:pt-0">
+                      <div className="text-right text-xs text-muted-foreground min-w-[5.5rem]">
+                        <time dateTime={run.attributes["created-at"]} title={formatDateTime(run.attributes["created-at"])}>
+                          {formatRelativeTime(run.attributes["created-at"])}
+                        </time>
+                      </div>
+                      {canStartRun && (
                         <Button
                           type="button"
-                          variant="outline"
-                          size="sm"
-                          className="gap-1.5"
+                          variant="ghost"
+                          size="icon-sm"
                           onClick={(): void => { cloneRunSettings(run); }}
-                          title="Start a new run with this run's settings (type, destroy, targets, replace addresses)"
+                          aria-label="Clone run"
+                          title="More actions — clone this run's settings"
                         >
-                          <Copy data-icon="inline-start" className="size-3.5" aria-hidden="true" />
-                          Clone
+                          <MoreHorizontal className="size-4" aria-hidden="true" />
                         </Button>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </article>
                 );
               })}

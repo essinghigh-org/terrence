@@ -57,6 +57,19 @@ export function formatRunStatus(status: string): string {
   return label ?? status.replace(/_/g, " ");
 }
 
+// The API lifecycle names are useful in diagnostics but too literal for the
+// primary UI. Keep the canonical formatter for detail views and logs, and use
+// this shorter vocabulary where operators scan lists and badges.
+const RUN_STATUS_UI_LABELS: Readonly<Record<string, string>> = {
+  planned_and_finished: "Plan complete",
+  errored: "Failed",
+  force_canceled: "Canceled",
+};
+
+export function formatRunStatusForUi(status: string): string {
+  return RUN_STATUS_UI_LABELS[status] ?? formatRunStatus(status);
+}
+
 export function isVcsRunSource(source: string | undefined, triggerReason?: string): boolean {
   return (source !== undefined && VCS_SOURCES.has(source))
     || (source === "tfe-configuration-version" && VCS_TRIGGER_REASONS.has(triggerReason ?? ""));

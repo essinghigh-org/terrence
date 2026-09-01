@@ -430,7 +430,7 @@ export function AccountSettings(): React.JSX.Element {
 
   if (loading) {
     return (
-      <PageShell className="max-w-4xl">
+      <PageShell variant="form">
         <div role="status" aria-label="Loading account settings" className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
           <Spinner className="size-4" />
           Loading account settings…
@@ -440,7 +440,7 @@ export function AccountSettings(): React.JSX.Element {
   }
   if (account === null) {
     return (
-      <PageShell className="max-w-4xl">
+      <PageShell variant="form">
         <div role="alert" className="mx-auto flex max-w-lg flex-col items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-5 text-destructive">
         <div>
           <h1 className="font-semibold">Could not load account settings</h1>
@@ -456,7 +456,7 @@ export function AccountSettings(): React.JSX.Element {
 
   /* ── Render ─────────────────────────────────────── */
   return (
-    <PageShell className="max-w-4xl space-y-8">
+    <PageShell variant="form" className="space-y-8">
       <PageHeader
         eyebrow="Account"
         title="Account settings"
