@@ -253,10 +253,14 @@ async function auditLogsForPrincipal(
       columns: { orgId: true, role: true },
     });
     if (scopes !== null) {
-      const candidateOrgIds = user.isSiteAdmin === true
-        ? (await db.query.organizations.findMany({ columns: { id: true } })).map((org): string => org.id)
-        : memberships.map(({ orgId }): string => orgId);
-      orgIds = candidateOrgIds.filter((orgId): boolean => scopeCoversOrg(scopes, orgId) && scopeGrants(scopes, "audit-logs:read"));
+      if (!scopeGrants(scopes, "audit-logs:read")) {
+        orgIds = [];
+      } else {
+        const candidateOrgIds = user.isSiteAdmin === true || user.isSiteAuditor === true
+          ? (await db.query.organizations.findMany({ columns: { id: true } })).map((org): string => org.id)
+          : memberships.filter((membership): boolean => membership.role === "owner").map(({ orgId }): string => orgId);
+        orgIds = candidateOrgIds.filter((orgId): boolean => scopeCoversOrg(scopes, orgId));
+      }
     } else if (user.isSiteAdmin === true || user.isSiteAuditor === true) {
       orgIds = (await db.query.organizations.findMany({ columns: { id: true } })).map((org): string => org.id);
     } else {

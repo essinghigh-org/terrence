@@ -72,6 +72,7 @@ type VcsCredentialSubject = Readonly<{
 
 const MAX_TARBALL_BYTES = 100 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 30_000;
+const ARCHIVE_DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 const OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const REPOSITORY_PATTERN = /^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/;
 const COMMIT_SHA_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
@@ -2103,6 +2104,7 @@ async function fetchProviderPolicyArchive(
   const response = await fetchVcsUrlStream(request.url, {
     headers: request.headers,
     maxResponseBytes: MAX_TARBALL_BYTES,
+    timeoutMs: ARCHIVE_DOWNLOAD_TIMEOUT_MS,
   });
   if (!response.ok || response.body === null) {
     throw new Error(`Failed to download ${credentials.provider} policy archive`);
@@ -2186,6 +2188,7 @@ async function downloadAndSaveTarball(
     const response = await fetchVcsUrlStream(url, {
       headers,
       maxResponseBytes: MAX_TARBALL_BYTES,
+      timeoutMs: ARCHIVE_DOWNLOAD_TIMEOUT_MS,
     });
     if (!response.ok || response.body === null) throw new Error(`Failed to download ${provider} tarball`);
 

@@ -37,6 +37,7 @@ const adminToken = `p1-admin-token-${suffix}`;
 const memberToken = `p1-member-token-${suffix}`;
 const ownerToken = `p1-owner-token-${suffix}`;
 const scopedToken = `p1-scoped-token-${suffix}`;
+const scopedMemberToken = `p1-scoped-member-token-${suffix}`;
 const organizationAuditToken = `p1-organization-audit-token-${suffix}`;
 const targetWorkspaceId = `p1-target-workspace-${suffix}`;
 const sourceWorkspaceId = `p1-source-workspace-${suffix}`;
@@ -108,6 +109,12 @@ beforeAll(async () => {
       id: `p1-scoped-token-row-${suffix}`,
       token: hashAuthenticationToken(scopedToken),
       userId: adminId,
+      scopes: JSON.stringify({ version: 1, orgs: [orgId], permissions: scopedPermissions }),
+    },
+    {
+      id: `p1-scoped-member-token-row-${suffix}`,
+      token: hashAuthenticationToken(scopedMemberToken),
+      userId: memberId,
       scopes: JSON.stringify({ version: 1, orgs: [orgId], permissions: scopedPermissions }),
     },
     {
@@ -401,12 +408,39 @@ describe("P1 security and authorization regressions", () => {
     expect(updated?.apiUrl).toBe("https://new-api.example.test/api/v3");
     expect(updated?.secret).toBeNull();
     expect(await db.query.oauthTokens.findMany({ where: eq(oauthTokens.oauthClientId, clientId) })).toHaveLength(0);
+
+    const providerClientId = `p1-provider-client-${suffix}`;
+    const providerTokenId = `p1-provider-token-${suffix}`;
+    await db.insert(oauthClients).values({
+      id: providerClientId,
+      orgId,
+      name: `credential-provider-${suffix}`,
+      serviceProvider: "github_enterprise",
+      apiUrl: "https://provider-api.example.test/api/v3",
+      httpUrl: "https://provider-login.example.test",
+      key: "provider-client-key",
+      secret: "provider-client-secret",
+    });
+    await db.insert(oauthTokens).values({ id: providerTokenId, oauthClientId: providerClientId, token: "provider-access-token" });
+
+    const providerChanged = await request(`/api/v2/oauth-clients/${providerClientId}`, adminToken, "PATCH", resource("oauth-clients", {
+      "service-provider": "gitlab",
+    }));
+    expect(providerChanged.status).toBe(200);
+    const providerUpdated = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, providerClientId) });
+    expect(providerUpdated?.serviceProvider).toBe("gitlab");
+    expect(providerUpdated?.secret).toBeNull();
+    expect(await db.query.oauthTokens.findMany({ where: eq(oauthTokens.oauthClientId, providerClientId) })).toHaveLength(0);
   });
 
   it("limits audit reads to owners, auditors, and declared scoped grants", async () => {
     const memberResponse = await request("/api/v2/audit-trails", memberToken);
     expect(memberResponse.status).toBe(200);
     expect((await memberResponse.json() as { data: unknown[] }).data).toHaveLength(0);
+
+    const scopedMemberResponse = await request("/api/v2/audit-trails", scopedMemberToken);
+    expect(scopedMemberResponse.status).toBe(200);
+    expect((await scopedMemberResponse.json() as { data: unknown[] }).data).toHaveLength(0);
 
     const ownerResponse = await request("/api/v2/audit-trails", ownerToken);
     expect(ownerResponse.status).toBe(200);

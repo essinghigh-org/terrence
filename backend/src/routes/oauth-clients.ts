@@ -732,12 +732,14 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     if (attributes.key !== undefined) updates.key = typeof attributes.key === "string" ? attributes.key : null;
     if (attributes.secret !== undefined) updates.secret = typeof attributes.secret === "string" ? await encryptSecret(attributes.secret) : null;
     if (attributes["rsa-public-key"] !== undefined) updates.rsaPublicKey = typeof attributes["rsa-public-key"] === "string" ? attributes["rsa-public-key"] : null;
+    const serviceProviderChanged = updates.serviceProvider !== undefined && updates.serviceProvider !== oc.serviceProvider;
     const endpointOriginChanged = configuredUrlOriginChanged(oc.apiUrl, requestedApiUrl)
       || configuredUrlOriginChanged(oc.httpUrl, requestedHttpUrl);
-    if (endpointOriginChanged && attributes.secret === undefined) updates.secret = null;
-    if (endpointOriginChanged || Object.keys(updates).length > 0) {
+    const credentialsInvalidated = serviceProviderChanged || endpointOriginChanged;
+    if (credentialsInvalidated && attributes.secret === undefined) updates.secret = null;
+    if (credentialsInvalidated || Object.keys(updates).length > 0) {
       await db.transaction(async (tx): Promise<void> => {
-        if (endpointOriginChanged) await tx.delete(oauthTokens).where(eq(oauthTokens.oauthClientId, ocId));
+        if (credentialsInvalidated) await tx.delete(oauthTokens).where(eq(oauthTokens.oauthClientId, ocId));
         if (Object.keys(updates).length > 0) await tx.update(oauthClients).set(updates).where(eq(oauthClients.id, ocId));
       });
     }

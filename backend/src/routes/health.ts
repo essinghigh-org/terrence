@@ -744,7 +744,7 @@ export const healthRoutes = new Elysia({ name: "health" })
       };
     };
   } | { errors: { status: string; title: string }[] } => {
-    if (user === null) {
+    if (user === null || user === undefined) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
