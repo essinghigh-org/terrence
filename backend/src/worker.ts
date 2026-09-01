@@ -285,7 +285,33 @@ async function recordPlanInput(
 
 // Warn once per (run, phase) so a burst of log writes cannot flood the log
 // output, while the failure counter still tracks every lost write.
+const MAX_WARNED_RUN_LOG_FAILURES = 1000;
 const warnedRunLogFailures = new Set<string>();
+
+function pruneWarnedRunLogFailuresIfNeeded(): void {
+  if (warnedRunLogFailures.size <= MAX_WARNED_RUN_LOG_FAILURES) return;
+  const targetSize = Math.floor(MAX_WARNED_RUN_LOG_FAILURES / 2);
+  const toDelete = warnedRunLogFailures.size - targetSize;
+  let deleted = 0;
+  for (const key of warnedRunLogFailures) {
+    warnedRunLogFailures.delete(key);
+    deleted++;
+    if (deleted >= toDelete) break;
+  }
+}
+
+export function warnedRunLogFailuresSizeForTests(): number {
+  return warnedRunLogFailures.size;
+}
+
+export function clearWarnedRunLogFailuresForTests(): void {
+  warnedRunLogFailures.clear();
+}
+
+export function addWarnedRunLogFailureForTests(key: string): void {
+  warnedRunLogFailures.add(key);
+  pruneWarnedRunLogFailuresIfNeeded();
+}
 
 type TrackedRunProcess = Readonly<{
   pid: number | null;
@@ -470,6 +496,7 @@ async function writeLog(runId: string, phase: "plan" | "apply", outputText: stri
     const key = `${runId}:${phase}`;
     if (!warnedRunLogFailures.has(key)) {
       warnedRunLogFailures.add(key);
+      pruneWarnedRunLogFailuresIfNeeded();
       log.error("Failed to persist run log output", {
         runId,
         phase,
@@ -3591,7 +3618,7 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
   // canceled, or rescheduled).
   const dueIds = new Set(dueRuns.map((run): string => run.id));
   for (const key of scheduledBlockReasons.keys()) {
-    const runId = key.startsWith("scheduled:") || key.startsWith("agent-pool:")
+    const runId = key.startsWith("scheduled:") || key.startsWith("agent-pool:") || key.startsWith("workspace-lock:")
       ? key.slice(key.indexOf(":") + 1)
       : "";
     if (runId !== "" && !dueIds.has(runId)) scheduledBlockReasons.delete(key);
@@ -3683,6 +3710,23 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
 
 /** Latest gate-block reason per scheduled run (avoids per-poll log spam). */
 const scheduledBlockReasons = new Map<string, string>();
+
+export function scheduledBlockReasonsForTests(): ReadonlyMap<string, string> {
+  return scheduledBlockReasons;
+}
+
+export function clearScheduledBlockReasonsForTests(): void {
+  scheduledBlockReasons.clear();
+}
+
+export function pruneScheduledBlockReasonsForTests(dueIds: ReadonlySet<string>): void {
+  for (const key of scheduledBlockReasons.keys()) {
+    const runId = key.startsWith("scheduled:") || key.startsWith("agent-pool:") || key.startsWith("workspace-lock:")
+      ? key.slice(key.indexOf(":") + 1)
+      : "";
+    if (runId !== "" && !dueIds.has(runId)) scheduledBlockReasons.delete(key);
+  }
+}
 
 /**
  * Parse a poll-interval override. Invalid, empty, or sub-minimum values
