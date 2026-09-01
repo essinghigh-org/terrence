@@ -17,6 +17,7 @@ import { applySecurityHeaders, HSTS_VALUE, shouldSendHsts, staticCacheControl, s
 import openapiJson from "../openapi.json" with { type: "json" };
 import { requestFinished, requestStarted } from "./lib/process-metrics";
 import { API_BODY_LIMIT_BYTES, BodyTooLargeError, readTextWithLimit } from "./lib/body-limit";
+import { acceptsJsonApi, isJsonApiContentType, isJsonApiResponseContentType, isJsonContentType, JSON_API_MEDIA_TYPE } from "./lib/media-types";
 // 464: per-endpoint security/rate/body/audit classifications live in endpoint-policy.ts; app.ts reuses that single registry.
 import {
   isUploadPath,
@@ -154,6 +155,57 @@ type ParseContext = Readonly<{
   request: CustomRequest;
   contentType: string;
 }>;
+
+type MediaTypeContext = Readonly<{
+  request: CustomRequest;
+  body?: unknown;
+  set: SetObject;
+  user?: unknown;
+  token?: unknown;
+  orgId?: string | null;
+  teamId?: string | null;
+  run?: unknown;
+  systemToken?: unknown;
+}>;
+
+/** True for the Terraform-compatible JSON:API endpoint namespace. */
+function isJsonApiEndpointPath(pathname: string): boolean {
+  return pathname === "/api/v2" || pathname.startsWith("/api/v2/");
+}
+
+/** JSON:API request documents use the strict media type. Raw uploads and the
+ * signed approval webhook intentionally have their own wire formats. */
+function isJsonApiRequestPath(pathname: string): boolean {
+  if (!isJsonApiEndpointPath(pathname)) return false;
+  if (pathname === "/api/v2/webhooks/run-approval") return false;
+  return !pathname.endsWith("/upload")
+    && !pathname.endsWith("/json-upload")
+    && !pathname.endsWith("/json-outputs-upload");
+}
+
+/** Account bootstrap/authentication endpoints intentionally work without a user. */
+function isPublicJsonApiRequestPath(pathname: string): boolean {
+  return pathname === "/api/v2/users"
+    || pathname === "/api/v2/users/login"
+    || pathname === "/api/v2/users/login/mfa"
+    || pathname === "/api/v2/users/refresh"
+    || pathname === "/api/v2/users/logout";
+}
+
+function hasAuthenticatedPrincipal(context: MediaTypeContext): boolean {
+  return [context.user, context.token, context.orgId, context.teamId, context.run, context.systemToken]
+    .some((value): boolean => value !== undefined && value !== null);
+}
+
+function mediaTypeError(status: 406 | 415, detail: string): { errors: { status: string; title: string; detail: string }[] } {
+  return {
+    errors: [{
+      status: String(status),
+      title: status === 406 ? "Not Acceptable" : "Unsupported Media Type",
+      detail,
+    }],
+  };
+}
 
 type OptionsContext = Readonly<{
   set: unknown;
@@ -414,6 +466,22 @@ export const app = new Elysia()
       }],
     };
   })
+  .onBeforeHandle((context: MediaTypeContext): Record<string, unknown> | undefined => {
+    const { request, body, set } = context;
+    const pathname = new URL(request.url).pathname;
+    if (!isJsonApiRequestPath(pathname)) return undefined;
+    // Route handlers own most authorization checks. Do not let a malformed
+    // media type mask their existing 401/403 response; public auth/bootstrap
+    // routes are explicitly listed above and still reject the wrong type.
+    if (!isPublicJsonApiRequestPath(pathname) && !hasAuthenticatedPrincipal(context)) return undefined;
+    const contentLength = Number(request.headers.get("content-length"));
+    const hasBody = body !== undefined && body !== null
+      || (Number.isFinite(contentLength) && contentLength > 0)
+      || request.headers.get("transfer-encoding") !== null;
+    if (!hasBody || isJsonApiContentType(request.headers.get("content-type"))) return undefined;
+    (set as { status: number }).status = 415;
+    return mediaTypeError(415, `Request bodies on this endpoint must use ${JSON_API_MEDIA_TYPE}`);
+  })
   .use(rateLimit({
     max: RATE_LIMIT_MAX,
     duration: 1000,
@@ -550,12 +618,34 @@ export const app = new Elysia()
     headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,Retry-After,X-Request-Id,ETag,Deprecation,Sunset";
   })
   .onAfterHandle(({ request, response, set }: AfterHandleContext): Response | void => {
+    const pathname = new URL(request.url).pathname;
+    const isJsonDocument = response !== null
+      && typeof response === "object"
+      && (Array.isArray(response) || Object.getPrototypeOf(response) === Object.prototype);
+    const responseObject = isJsonDocument ? response as Record<string, unknown> : null;
+    const isErrorDocument = responseObject !== null && Array.isArray(responseObject.errors);
+    const responseHeaders = response instanceof Response ? response.headers : null;
+    const configuredContentType = set.headers["Content-Type"] ?? set.headers["content-type"];
+    const declaredContentType = responseHeaders?.get("content-type")
+      ?? (configuredContentType === undefined ? null : String(configuredContentType));
+    const isJsonApiDocument = (isJsonApiEndpointPath(pathname) || isErrorDocument)
+      && isJsonDocument
+      && (declaredContentType === null || isJsonApiResponseContentType(declaredContentType));
+    const isExplicitJsonApiResponse = isJsonApiResponseContentType(declaredContentType);
+    const responseStatus = response instanceof Response
+      ? response.status
+      : typeof set.status === "number" ? set.status : Number.parseInt(String(set.status), 10) || 200;
+    const isJsonApiResponse = isJsonApiEndpointPath(pathname)
+      && responseStatus !== 204
+      && !(responseStatus >= 300 && responseStatus < 400)
+      && (isJsonApiDocument || isExplicitJsonApiResponse);
+    const unacceptable = isJsonApiResponse && !acceptsJsonApi(request.headers.get("accept"));
     const meta = requestMeta.get(request as unknown as Request);
     if (meta !== undefined) {
       const duration = Date.now() - meta.startTime;
       const method = meta.method;
       const path = meta.path;
-      const status = set.status ?? 200;
+      const status = unacceptable ? 406 : set.status ?? (response instanceof Response ? response.status : 200);
       const numericStatus = typeof status === "number" ? status : Number.parseInt(String(status), 10) || 200;
       requestFinished(numericStatus);
       // Idempotent bookkeeping: the WeakMap entry is consumed here so an
@@ -579,11 +669,7 @@ export const app = new Elysia()
         });
       }
     }
-    const isJsonDocument = response !== null
-      && typeof response === "object"
-      && (Array.isArray(response) || Object.getPrototypeOf(response) === Object.prototype);
     const headers = set.headers as Record<string, string | number>;
-    const pathname = new URL(request.url).pathname;
 
     // Browser/document shell hardening (CSP, clickjacking, referrer, robots,
     // permissions) + static caching. Applies to every response, so static
@@ -626,10 +712,23 @@ export const app = new Elysia()
       if (headers.Sunset === undefined) headers.Sunset = "Sat, 31 Dec 2028 23:59:59 GMT";
       if (headers.Link === undefined) headers.Link = "</api/v1/support/bundle-requests>; rel=\"successor-version\"";
     }
-    if ((pathname === "/api" || pathname.startsWith("/api/")) && isJsonDocument) {
-      headers["Content-Type"] = "application/vnd.api+json";
+    if (isJsonApiDocument) {
+      headers["Content-Type"] = JSON_API_MEDIA_TYPE;
     }
-    const responseHeaders = response instanceof Response ? response.headers : null;
+    if (unacceptable) {
+      headers["Content-Type"] = JSON_API_MEDIA_TYPE;
+      const vary = String(headers.Vary ?? "");
+      if (!vary.split(",").some((value): boolean => value.trim().toLowerCase() === "accept")) {
+        headers.Vary = vary === "" ? "Accept" : `${vary}, Accept`;
+      }
+      (set as { status: number }).status = 406;
+      const errorHeaders = new Headers();
+      for (const [name, value] of Object.entries(headers)) errorHeaders.set(name, String(value));
+      return new Response(JSON.stringify(mediaTypeError(406, `The Accept header must allow ${JSON_API_MEDIA_TYPE}`)), {
+        status: 406,
+        headers: errorHeaders,
+      });
+    }
     const limit = responseHeaders?.get("RateLimit-Limit") ?? set.headers["RateLimit-Limit"];
     const remaining = responseHeaders?.get("RateLimit-Remaining") ?? set.headers["RateLimit-Remaining"];
     if (limit !== undefined && limit !== null) headers["X-RateLimit-Limit"] = limit;
@@ -681,6 +780,23 @@ export const app = new Elysia()
   })
   .onParse(async ({ request, contentType }: ParseContext): Promise<Record<string, unknown> | string | null | undefined> => {
     const pathname = new URL(request.url).pathname;
+    const requestBody = (request as CustomRequest & { readonly body?: unknown }).body;
+    const hasBody = requestBody !== undefined
+      ? requestBody !== null
+      : Number(request.headers.get("content-length")) > 0 || request.headers.get("transfer-encoding") !== null;
+    if (hasBody && isJsonApiRequestPath(pathname)) {
+      // Read through the same bounded path used for JSON. Invalid media types
+      // remain text until the authenticated onBeforeHandle guard returns 415;
+      // this preserves auth/permission precedence without losing the 4 MiB
+      // chunked-body limit.
+      const text = await readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
+      if (!isJsonApiContentType(request.headers.get("content-type"))) return text;
+      try {
+        return JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    }
     // HMAC-verified webhooks must verify against the exact bytes on the wire;
     // a JSON round-trip would re-serialize noncanonically and break signatures.
     if (
@@ -693,13 +809,12 @@ export const app = new Elysia()
     ) {
       return readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
     }
-    // Any JSON-flavored content type (vnd.api+json, application/json,
+    // Any valid JSON media type (vnd.api+json, application/json,
     // application/scim+json, ...) is capped and parsed here so chunked
     // bodies without Content-Length cannot buffer up to the 100 MiB server
-    // limit. Non-JSON types (multipart avatar uploads, archive blobs) stay
-    // on Elysia's default parse; the archive paths are upload-path exempt
-    // by design.
-    if (contentType !== undefined && contentType.includes("json")) {
+    // limit. Arbitrary strings that merely contain "json" are not treated as
+    // JSON and fall through to Elysia's default parser.
+    if (isJsonContentType(contentType)) {
       const text = await readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
       try {
         return JSON.parse(text) as Record<string, unknown>;

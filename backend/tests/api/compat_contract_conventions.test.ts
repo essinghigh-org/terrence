@@ -92,24 +92,64 @@ describe("remote-workflow API global conventions", () => {
     expect(response.headers.get("access-control-allow-headers")).toContain("Authorization");
   });
 
-  it("returns JSON:API documents for unsupported Accept and wrong Content-Type (API-005)", async () => {
-    // A non-JSON:API Accept header must not crash the route; the server answers
-    // with its default representation, not a 5xx.
-    const accept = await request("/api/v2/organizations", {
+  it("negotiates JSON:API responses and validates request media types (API-005)", async () => {
+    const unsupportedAccept = await request("/api/v2/organizations", {
       headers: { ...headers, Accept: "text/plain" },
     });
-    expect(accept.status).toBeLessThan(500);
+    expect(unsupportedAccept.status).toBe(406);
+    expect(unsupportedAccept.headers.get("content-type")).toContain("application/vnd.api+json");
+    const acceptBody = await unsupportedAccept.json() as { errors?: { status?: string; title?: string }[] };
+    expect(acceptBody.errors?.[0]?.status).toBe("406");
+    expect(acceptBody.errors?.[0]?.title).toBe("Not Acceptable");
+    expect(unsupportedAccept.headers.get("vary")?.toLowerCase()).toContain("accept");
 
-    // Wrong Content-Type on a body-bearing request is tolerated permissively
-    // (the body is still parsed) — the property under test is that it never
-    // yields a raw 5xx.
-    const badContentType = await request(`/api/v2/organizations/${seed.orgName}/workspaces`, {
+    const unsupportedContentType = await request(`/api/v2/organizations/${seed.orgName}/workspaces`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ data: { type: "workspaces", attributes: { name: "x" } } }),
+      body: JSON.stringify({ data: { type: "workspaces", attributes: { name: "wrong-media-type" } } }),
     });
-    expect(badContentType.status).toBeLessThan(500);
-    expect(badContentType.status).toBeGreaterThanOrEqual(200);
+    expect(unsupportedContentType.status).toBe(415);
+    expect(unsupportedContentType.headers.get("content-type")).toContain("application/vnd.api+json");
+    const contentTypeBody = await unsupportedContentType.json() as { errors?: { status?: string; title?: string }[] };
+    expect(contentTypeBody.errors?.[0]?.status).toBe("415");
+    expect(contentTypeBody.errors?.[0]?.title).toBe("Unsupported Media Type");
+
+    const unauthenticatedProtectedRequest = await request("/api/v2/workspace-transfers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(unauthenticatedProtectedRequest.status).toBe(401);
+
+    const publicLoginWithWrongMediaType = await request("/api/v2/users/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(publicLoginWithWrongMediaType.status).toBe(415);
+
+    const missingHeaders = new Headers(headers);
+    missingHeaders.delete("Content-Type");
+    const missingContentType = await request(`/api/v2/organizations/${seed.orgName}/workspaces`, {
+      method: "POST",
+      headers: missingHeaders,
+      body: JSON.stringify({ data: { type: "workspaces", attributes: { name: "missing-media-type" } } }),
+    });
+    expect(missingContentType.status).toBe(415);
+
+    const parameterizedContentType = await request(`/api/v2/organizations/${seed.orgName}/workspaces`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/vnd.api+json; charset=utf-8" },
+      body: JSON.stringify({ data: { type: "workspaces", attributes: { name: "parameterized-media-type" } } }),
+    });
+    expect(parameterizedContentType.status).toBe(415);
+
+    const valid = await request(`/api/v2/organizations/${seed.orgName}/workspaces`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ data: { type: "workspaces", attributes: { name: `valid-media-${seed.suffix}` } } }),
+    });
+    expect(valid.status).not.toBe(415);
   });
 
   it("shapes error documents consistently (API-006)", async () => {
