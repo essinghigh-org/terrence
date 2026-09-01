@@ -27,6 +27,8 @@ import { DiagnosticsBanner } from "../components/DiagnosticsBanner";
 import { extractDiagnostics, type TerraformDiagnostic } from "../lib/diagnostics";
 import { cn, copyTextToClipboard, formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { safeHttpUrl } from "@/lib/safe-url";
+
+const MAX_LOG_DISPLAY_CHARS = 200_000;
 import { ApplyOutput } from "../components/ApplyOutput";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
@@ -1824,7 +1826,7 @@ export function RunDetail({
                 <span>Raw plan log</span>
               </summary>
               <pre className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
-                {planLogs !== "" ? planLogs : planRawLogMessage}
+                {planLogs !== "" ? (planLogs.length > MAX_LOG_DISPLAY_CHARS ? planLogs.slice(0, MAX_LOG_DISPLAY_CHARS) + "\n… (truncated, download full log)" : planLogs) : planRawLogMessage}
               </pre>
               </details>
               <Button
@@ -2083,7 +2085,7 @@ export function RunDetail({
                   <span>Raw apply log</span>
                 </summary>
                 <pre className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
-                  {applyLogs !== "" ? applyLogs : applyRawLogMessage}
+                  {applyLogs !== "" ? (applyLogs.length > MAX_LOG_DISPLAY_CHARS ? applyLogs.slice(0, MAX_LOG_DISPLAY_CHARS) + "\n… (truncated, download full log)" : applyLogs) : applyRawLogMessage}
                 </pre>
                 </details>
                 <Button
@@ -2436,8 +2438,8 @@ export function RunDetail({
           </div>
           <pre className={`flex-1 overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
             {fullscreenLog === "plan"
-              ? planLogs !== "" ? planLogs : planRawLogMessage
-              : applyLogs !== "" ? applyLogs : applyRawLogMessage}
+              ? planLogs !== "" ? (planLogs.length > MAX_LOG_DISPLAY_CHARS ? planLogs.slice(0, MAX_LOG_DISPLAY_CHARS) + "\n… (truncated, download full log)" : planLogs) : planRawLogMessage
+              : applyLogs !== "" ? (applyLogs.length > MAX_LOG_DISPLAY_CHARS ? applyLogs.slice(0, MAX_LOG_DISPLAY_CHARS) + "\n… (truncated, download full log)" : applyLogs) : applyRawLogMessage}
           </pre>
         </div>
       )}
