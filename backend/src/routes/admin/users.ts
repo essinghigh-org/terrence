@@ -3,7 +3,7 @@ import { authPlugin } from "../../auth";
 import { db } from "../../db";
 import { users, apiTokens, refreshSessions, user2FA, emailVerificationTokens, identityLinks, organizationMemberships, teamMemberships, scimUserIdentities } from "../../db/schema";
 import type { SQL } from "drizzle-orm";
-import { eq, and, or, count, isNull, like } from "drizzle-orm";
+import { eq, and, or, count, isNull } from "drizzle-orm";
 import { auditLog, caseInsensitiveLike, pageRequest, pagination, sensitiveIdentifierHash, withOrganizationMembershipLocks } from "../../lib/utils";
 import { isUniqueConstraintError } from "../../lib/validation";
 import { checkPasswordPolicy, loadPasswordPolicy } from "../../lib/password-policy";

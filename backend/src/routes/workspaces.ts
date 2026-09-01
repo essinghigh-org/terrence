@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db, isPostgres, rawQueryAll } from "../db";
 import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, runs, configurationVersions, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, variableSets, variableSetWorkspaces, sshKeys, type users } from "../db/schema";
-import { eq, and, asc, desc, count, inArray, isNull, like, notInArray, or, sql } from "drizzle-orm";
+import { eq, and, asc, desc, count, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import {
   workspaceResource,
   workspaceOutputResources,

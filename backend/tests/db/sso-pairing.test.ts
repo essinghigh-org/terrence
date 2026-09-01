@@ -1,7 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "../../src/db";
-import { isPostgres } from "../../src/db/driver";
 import { users } from "../../src/db/schema";
 
 const suffix = crypto.randomUUID();
@@ -26,7 +25,7 @@ async function expectPairingError(operation: Promise<unknown>): Promise<void> {
     error = caught;
   }
   expect(error).toBeInstanceOf(Error);
-  if (!isPostgres) expect((error as Error).message).toContain("sso_provider and sso_subject must be set together");
+  expect((error as Error).message).toContain("sso_provider and sso_subject must be set together");
 }
 
 afterAll(async () => {

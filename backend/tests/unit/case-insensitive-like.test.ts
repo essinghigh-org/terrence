@@ -51,7 +51,7 @@ test("uses PostgreSQL ILIKE when the database driver is PostgreSQL", async () =>
     new Response(child.stderr).text(),
   ]);
   if (exitCode !== 0) throw new Error(`PostgreSQL dialect probe failed: ${stderr}`);
-  const query = JSON.parse(stdout) as { sql: string };
+  const query = JSON.parse(stdout.trim().split("\n").at(-1)!) as { sql: string };
   expect(query.sql.toLowerCase()).toContain(" ilike ");
   expect(query.sql.toLowerCase()).not.toContain(" like ");
 });

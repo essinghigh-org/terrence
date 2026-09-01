@@ -11,8 +11,10 @@ import {
 } from "../db/schema";
 import { and, desc, eq, exists, gte, ilike, inArray, isNull, like, lt, notInArray, or, sql } from "drizzle-orm";
 import { timingSafeEqual, createHash, createHmac, randomBytes } from "node:crypto";
-import { access, rm } from "node:fs/promises";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { access, appendFile, rm } from "node:fs/promises";
+import { createReadStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { recordFailure } from "./process-metrics";
 import { log } from "./log";
@@ -1676,10 +1678,10 @@ const DISCARDABLE_RUN_STATUSES = [
   "post_plan_completed",
 ];
 
-type WorkspaceDeletionArtifacts = {
-  readonly runIds: readonly string[];
-  readonly configurationArchivePaths: readonly string[];
-};
+type WorkspaceDeletionArtifact = Readonly<{
+  kind: "run" | "configuration";
+  value: string;
+}>;
 
 const DELETE_ID_CHUNK_SIZE = 500;
 const DELETION_ARTIFACT_BATCH_SIZE = 25;
@@ -1693,37 +1695,54 @@ async function deleteIdChunks(
   }
 }
 
+function workspaceDeletionManifestPath(): string {
+  return join(tmpdir(), `terrence-workspace-deletion-${crypto.randomUUID()}.jsonl`);
+}
+
+async function appendWorkspaceDeletionArtifacts(
+  manifestPath: string,
+  runIds: readonly string[],
+  configurationArchives: readonly { readonly archivePath: string | null }[],
+): Promise<void> {
+  const entries: string[] = [];
+  for (const runId of runIds) {
+    entries.push(JSON.stringify({ kind: "run", value: runId }));
+  }
+  for (const archive of configurationArchives) {
+    if (archive.archivePath !== null) {
+      entries.push(JSON.stringify({ kind: "configuration", value: archive.archivePath }));
+    }
+  }
+  if (entries.length > 0) await appendFile(manifestPath, `${entries.join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
+}
+
 async function deleteWorkspaceDataInTransaction(
   transaction: typeof db,
   workspaceIds: readonly string[],
-): Promise<WorkspaceDeletionArtifacts> {
+  manifestPath: string,
+): Promise<void> {
   const ids = [...new Set(workspaceIds)];
-  if (ids.length === 0) return { runIds: [], configurationArchivePaths: [] };
-
-  const runsToDelete: { readonly id: string }[] = [];
-  const configurationArchives: { readonly archivePath: string | null }[] = [];
   await deleteIdChunks(ids, async (chunk): Promise<void> => {
-    runsToDelete.push(...await transaction.query.runs.findMany({
+    const runsToDelete = await transaction.query.runs.findMany({
       where: inArray(runs.workspaceId, chunk),
       columns: { id: true },
-    }));
-    configurationArchives.push(...await transaction.query.configurationVersions.findMany({
+    });
+    const configurationArchives = await transaction.query.configurationVersions.findMany({
       where: inArray(configurationVersions.workspaceId, chunk),
       columns: { archivePath: true },
-    }));
-  });
-  const runIds = runsToDelete.map((run): string => run.id);
+    });
+    const runIds = runsToDelete.map((run): string => run.id);
+    await appendWorkspaceDeletionArtifacts(manifestPath, runIds, configurationArchives);
 
-  // These tables intentionally do not have foreign keys to runs: tokens are
-  // independently verifiable credentials and stack locks can outlive a run.
-  // Remove them before the run rows so a failed transaction cannot leave
-  // credentials or locks pointing at deleted execution records.
-  await deleteIdChunks(runIds, async (chunk): Promise<void> => {
-    await transaction.delete(workloadIdentityTokens).where(inArray(workloadIdentityTokens.runId, chunk));
-    await transaction.delete(stackStateLocks).where(inArray(stackStateLocks.runId, chunk));
-    await transaction.delete(logs).where(inArray(logs.runId, chunk));
-  });
-  await deleteIdChunks(ids, async (chunk): Promise<void> => {
+    // These tables intentionally do not have foreign keys to runs: tokens are
+    // independently verifiable credentials and stack locks can outlive a run.
+    // Remove them before the run rows so a failed transaction cannot leave
+    // credentials or locks pointing at deleted execution records.
+    await deleteIdChunks(runIds, async (runChunk): Promise<void> => {
+      await transaction.delete(workloadIdentityTokens).where(inArray(workloadIdentityTokens.runId, runChunk));
+      await transaction.delete(stackStateLocks).where(inArray(stackStateLocks.runId, runChunk));
+      await transaction.delete(logs).where(inArray(logs.runId, runChunk));
+    });
     await transaction.delete(runs).where(inArray(runs.workspaceId, chunk));
     await transaction.delete(configurationVersions).where(inArray(configurationVersions.workspaceId, chunk));
     await transaction.delete(workspaceVariables).where(inArray(workspaceVariables.workspaceId, chunk));
@@ -1736,32 +1755,83 @@ async function deleteWorkspaceDataInTransaction(
     ));
     await transaction.delete(workspaceRunTasks).where(inArray(workspaceRunTasks.workspaceId, chunk));
   });
-
-  return {
-    runIds,
-    configurationArchivePaths: configurationArchives
-      .map((archive): string | null => archive.archivePath)
-      .filter((archivePath): archivePath is string => archivePath !== null),
-  };
 }
 
-async function cleanupWorkspaceDeletionArtifacts(artifacts: WorkspaceDeletionArtifacts): Promise<void> {
-  const archivePaths = [...new Set(artifacts.configurationArchivePaths)];
-  const runIds = [...new Set(artifacts.runIds)];
-  const cleanupOperations: (() => Promise<void>)[] = [
-    ...archivePaths.map((archivePath): (() => Promise<void>) => () => rm(archivePath, { force: true })),
-    ...runIds.flatMap((runId): (() => Promise<void>)[] => [
-      async (): Promise<void> => { await deleteRunLogArchive(runId); },
-      async (): Promise<void> => { await deletePlanJsonArtifact(runId); },
-    ]),
-  ];
-  for (let offset = 0; offset < cleanupOperations.length; offset += DELETION_ARTIFACT_BATCH_SIZE) {
-    const results = await Promise.allSettled(
-      cleanupOperations.slice(offset, offset + DELETION_ARTIFACT_BATCH_SIZE).map((cleanup): Promise<void> => cleanup()),
-    );
+function isWorkspaceDeletionArtifact(value: unknown): value is WorkspaceDeletionArtifact {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as { kind?: unknown; value?: unknown };
+  return (candidate.kind === "run" || candidate.kind === "configuration") && typeof candidate.value === "string";
+}
+
+async function cleanupWorkspaceDeletionArtifacts(manifestPath: string): Promise<void> {
+  try {
+    await access(manifestPath);
+  } catch {
+    return;
+  }
+
+  const cleanupOperations: (() => Promise<void>)[] = [];
+  const flush = async (): Promise<void> => {
+    if (cleanupOperations.length === 0) return;
+    const batch = cleanupOperations.splice(0, DELETION_ARTIFACT_BATCH_SIZE);
+    const results = await Promise.allSettled(batch.map((cleanup): Promise<void> => cleanup()));
     for (const result of results) {
       if (result.status === "rejected") log.error("Workspace deletion artifact cleanup failed", { error: result.reason });
     }
+  };
+
+  try {
+    const input = createReadStream(manifestPath, { encoding: "utf8" });
+    const lines = createInterface({ input, crlfDelay: Infinity });
+    try {
+      for await (const line of lines) {
+        if (line === "") continue;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(line);
+        } catch (error: unknown) {
+          log.error("Workspace deletion artifact manifest entry is invalid", { error });
+          continue;
+        }
+        if (!isWorkspaceDeletionArtifact(parsed)) {
+          log.error("Workspace deletion artifact manifest entry is unsupported");
+          continue;
+        }
+        if (parsed.kind === "configuration") {
+          cleanupOperations.push((): Promise<void> => rm(parsed.value, { force: true }));
+        } else {
+          cleanupOperations.push(async (): Promise<void> => { await deleteRunLogArchive(parsed.value); });
+          cleanupOperations.push(async (): Promise<void> => { await deletePlanJsonArtifact(parsed.value); });
+        }
+        if (cleanupOperations.length >= DELETION_ARTIFACT_BATCH_SIZE) await flush();
+      }
+    } finally {
+      lines.close();
+      input.destroy();
+    }
+    await flush();
+  } catch (error: unknown) {
+    log.error("Workspace deletion artifact manifest cleanup failed", { error });
+  } finally {
+    await rm(manifestPath, { force: true }).catch((error: unknown): void => {
+      log.error("Workspace deletion artifact manifest removal failed", { error });
+    });
+  }
+}
+
+async function withWorkspaceDeletionManifest<T>(
+  operation: (manifestPath: string) => Promise<T>,
+): Promise<T> {
+  const manifestPath = workspaceDeletionManifestPath();
+  try {
+    const result = await operation(manifestPath);
+    await cleanupWorkspaceDeletionArtifacts(manifestPath);
+    return result;
+  } catch (error: unknown) {
+    await rm(manifestPath, { force: true }).catch((cleanupError: unknown): void => {
+      log.error("Workspace deletion artifact manifest removal failed after rollback", { error: cleanupError });
+    });
+    throw error;
   }
 }
 
@@ -1771,20 +1841,22 @@ async function cleanupWorkspaceDeletionArtifacts(artifacts: WorkspaceDeletionArt
  * called this primitive. Files are removed only after the transaction commits.
  */
 export async function deleteWorkspaceData(workspaceId: string): Promise<void> {
-  const artifacts = await db.transaction(async (tx: unknown): Promise<WorkspaceDeletionArtifacts> =>
-    deleteWorkspaceDataInTransaction(tx as typeof db, [workspaceId]));
-  await cleanupWorkspaceDeletionArtifacts(artifacts);
+  await withWorkspaceDeletionManifest(async (manifestPath): Promise<void> => {
+    await db.transaction(async (tx: unknown): Promise<void> => {
+      await deleteWorkspaceDataInTransaction(tx as typeof db, [workspaceId], manifestPath);
+    });
+  });
 }
 
 /** Delete one workspace, including its parent row, atomically. */
 export async function deleteWorkspace(workspaceId: string): Promise<void> {
-  const artifacts = await db.transaction(async (tx: unknown): Promise<WorkspaceDeletionArtifacts> => {
-    const transaction = tx as typeof db;
-    const deletion = await deleteWorkspaceDataInTransaction(transaction, [workspaceId]);
-    await transaction.delete(workspaces).where(eq(workspaces.id, workspaceId));
-    return deletion;
+  await withWorkspaceDeletionManifest(async (manifestPath): Promise<void> => {
+    await db.transaction(async (tx: unknown): Promise<void> => {
+      const transaction = tx as typeof db;
+      await deleteWorkspaceDataInTransaction(transaction, [workspaceId], manifestPath);
+      await transaction.delete(workspaces).where(eq(workspaces.id, workspaceId));
+    });
   });
-  await cleanupWorkspaceDeletionArtifacts(artifacts);
 }
 
 /**
@@ -1793,34 +1865,29 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
  * callers can invalidate permission/event-stream caches after commit.
  */
 export async function deleteOrganization(organizationId: string): Promise<readonly string[]> {
-  const result = await db.transaction(async (tx: unknown): Promise<{
-    readonly artifacts: WorkspaceDeletionArtifacts;
-    readonly memberIds: readonly string[];
-  }> => {
-    const transaction = tx as typeof db;
-    const organizationWorkspaces = await transaction.query.workspaces.findMany({
-      where: eq(workspaces.orgId, organizationId),
-      columns: { id: true },
+  return withWorkspaceDeletionManifest(async (manifestPath): Promise<readonly string[]> => {
+    return db.transaction(async (tx: unknown): Promise<readonly string[]> => {
+      const transaction = tx as typeof db;
+      const organizationWorkspaces = await transaction.query.workspaces.findMany({
+        where: eq(workspaces.orgId, organizationId),
+        columns: { id: true },
+      });
+      const memberships = await transaction.query.organizationMemberships.findMany({
+        where: eq(organizationMemberships.orgId, organizationId),
+        columns: { userId: true },
+      });
+      await deleteWorkspaceDataInTransaction(
+        transaction,
+        organizationWorkspaces.map((workspace): string => workspace.id),
+        manifestPath,
+      );
+      await transaction.delete(workspaces).where(eq(workspaces.orgId, organizationId));
+      await transaction.delete(organizationMemberships).where(eq(organizationMemberships.orgId, organizationId));
+      await transaction.delete(apiTokens).where(eq(apiTokens.orgId, organizationId));
+      await transaction.delete(organizations).where(eq(organizations.id, organizationId));
+      return [...new Set(memberships.map((membership): string => membership.userId))];
     });
-    const memberships = await transaction.query.organizationMemberships.findMany({
-      where: eq(organizationMemberships.orgId, organizationId),
-      columns: { userId: true },
-    });
-    const artifacts = await deleteWorkspaceDataInTransaction(
-      transaction,
-      organizationWorkspaces.map((workspace): string => workspace.id),
-    );
-    await transaction.delete(workspaces).where(eq(workspaces.orgId, organizationId));
-    await transaction.delete(organizationMemberships).where(eq(organizationMemberships.orgId, organizationId));
-    await transaction.delete(apiTokens).where(eq(apiTokens.orgId, organizationId));
-    await transaction.delete(organizations).where(eq(organizations.id, organizationId));
-    return {
-      artifacts,
-      memberIds: [...new Set(memberships.map((membership): string => membership.userId))],
-    };
   });
-  await cleanupWorkspaceDeletionArtifacts(result.artifacts);
-  return result.memberIds;
 }
 
 /**
