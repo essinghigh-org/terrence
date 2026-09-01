@@ -1600,14 +1600,14 @@ function addWorkspaceNameFilter(conditions: readonly RunWhereCondition[], name: 
   const trimmed = name?.trim();
   if (trimmed === undefined || trimmed === "") return conditions;
   const matchingWorkspaces = db.select({ id: workspaces.id }).from(workspaces)
-    .where(isPostgres ? ilike(workspaces.name, `%${trimmed}%`) : like(workspaces.name, `%${trimmed}%`));
+    .where(caseInsensitiveLike(workspaces.name, `%${trimmed}%`));
   return [...conditions, inArray(runs.workspaceId, matchingWorkspaces)];
 }
 
 function addWorkspaceNamesFilter(conditions: readonly RunWhereCondition[], names: string[] | undefined): RunWhereConditions {
   if (names === undefined || names.length === 0) return conditions;
   const matchingWorkspaces = db.select({ id: workspaces.id }).from(workspaces)
-    .where(or(...names.map((name: string) => isPostgres ? ilike(workspaces.name, `%${name}%`) : like(workspaces.name, `%${name}%`))));
+    .where(or(...names.map((name: string) => caseInsensitiveLike(workspaces.name, `%${name}%`))));
   return [...conditions, inArray(runs.workspaceId, matchingWorkspaces)];
 }
 
