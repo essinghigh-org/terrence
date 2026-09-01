@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { safeHttpUrl } from "@/lib/safe-url";
 import { fetchApi } from "../lib/api";
 
 const iconCache = new Map<string, string | null>();
@@ -118,10 +119,12 @@ export function ProviderIcon({
   useEffect((): void => {
     setImageFailed(false);
   }, [url]);
-  if (url === undefined || url === null || imageFailed) return fallback ?? null;
+  if (url === undefined || imageFailed) return fallback ?? null;
+  const safeUrl = safeHttpUrl(url);
+  if (safeUrl === null) return fallback ?? null;
   return (
     <img
-      src={url}
+      src={safeUrl ?? undefined}
       alt={alt}
       width={size}
       height={size}

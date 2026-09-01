@@ -26,6 +26,7 @@ import { DegradedBanner } from "../components/DegradedBanner";
 import { DiagnosticsBanner } from "../components/DiagnosticsBanner";
 import { extractDiagnostics, type TerraformDiagnostic } from "../lib/diagnostics";
 import { cn, copyTextToClipboard, formatDateTime, formatRelativeTime } from "@/lib/utils";
+import { safeHttpUrl } from "@/lib/safe-url";
 import { ApplyOutput } from "../components/ApplyOutput";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
@@ -543,7 +544,7 @@ function PhaseMeta({
     : status === "canceled"
       ? "Canceled"
       : "Finished";
-  const hasLogUrl = logUrl !== null && logUrl !== undefined && logUrl !== "";
+  const hasLogUrl = safeHttpUrl(logUrl) !== null;
   const phaseDurationLabel = started !== undefined && completed !== undefined
     ? formatDuration(started, completed)
     : null;
@@ -571,7 +572,7 @@ function PhaseMeta({
             Wrap {logWrap ? "on" : "off"}
           </button>
           <a
-            href={logUrl}
+            href={safeHttpUrl(logUrl) ?? undefined}
             download
             onClick={(event: React.MouseEvent<HTMLAnchorElement>): void => { event.stopPropagation(); }}
             className="font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -1548,9 +1549,9 @@ export function RunDetail({
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               <span>{isString(attributes.branch) ? attributes.branch : "Default branch"}</span>
               {attributes["commit-sha"] !== undefined && attributes["commit-sha"] !== null && attributes["commit-sha"] !== "" && (
-                isString(attributes["commit-url"]) && attributes["commit-url"] !== "" ? (
+                isString(attributes["commit-url"]) && safeHttpUrl(attributes["commit-url"]) !== null ? (
                   <a
-                    href={attributes["commit-url"]}
+                    href={safeHttpUrl(attributes["commit-url"]) ?? undefined}
                     target="_blank"
                     rel="noreferrer"
                     title={attributes["commit-sha"]}
