@@ -29,6 +29,8 @@ import { isNumber, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
 import { formatRunSource, formatRunStatusForUi, isVcsRunSource } from "../lib/run-labels";
 
+const MAX_RUN_LIST_PAGES = 3;
+
 type RunItem = {
   id: string;
   attributes: {
@@ -153,7 +155,8 @@ export function RunList({
         }
         // Fetch remaining pages
         let nextPage = response.meta?.pagination?.["next-page"];
-        while (isNumber(nextPage) && Number.isSafeInteger(nextPage) && nextPage > 0 && !signal.aborted) {
+        let fetchedPages = 1;
+        while (isNumber(nextPage) && Number.isSafeInteger(nextPage) && nextPage > 0 && !signal.aborted && fetchedPages < MAX_RUN_LIST_PAGES) {
           const nextUrl = new URL(endpoint, "http://terrence.local");
           nextUrl.searchParams.set("page[number]", String(nextPage));
           nextUrl.searchParams.set("sort", sort);
@@ -173,6 +176,7 @@ export function RunList({
             }
           }
           nextPage = nextRes.meta?.pagination?.["next-page"];
+          fetchedPages++;
         }
         setRuns(allRuns);
         setUsersMap(userMap);
