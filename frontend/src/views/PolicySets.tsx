@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { Textarea } from "../components/ui/textarea";
 import { Card, CardContent } from "../components/ui/card";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
 import { TableSkeleton } from "@/components/ui/table-skeleton";
@@ -287,7 +288,7 @@ export function PolicySets(): React.JSX.Element {
               </div>
               <div className="space-y-2">
                 <label htmlFor="policy-set-description" className="text-sm font-medium">Description <span className="font-normal text-muted-foreground">(Optional)</span></label>
-                <textarea
+                <Textarea
                   id="policy-set-description"
                   name="policy-set-description"
                   autoComplete="off"
@@ -296,7 +297,6 @@ export function PolicySets(): React.JSX.Element {
                   value={description}
                   onInput={(event: React.SyntheticEvent<HTMLTextAreaElement>): void => { setDescription(event.currentTarget.value); }}
                   placeholder="What does this set enforce?"
-                  className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 />
               </div>
               <div className="space-y-2">

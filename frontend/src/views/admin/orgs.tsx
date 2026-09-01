@@ -14,10 +14,10 @@ export function OrgsAdmin(props: Readonly<{ orgs: DataItem[]; }>): React.JSX.Ele
                   <Table className="w-full text-left text-sm">
                     <TableHeader className="bg-muted border-b text-muted-foreground font-medium">
                       <TableRow>
-                        <TableHead className="px-4 py-3">Organization Name</TableHead>
-                        <TableHead className="px-4 py-3">Default Engine</TableHead>
-                        <TableHead className="px-4 py-3">Default Version</TableHead>
-                        <TableHead className="px-4 py-3">Org ID</TableHead>
+                        <TableHead className="px-4 py-3">Organization name</TableHead>
+                        <TableHead className="px-4 py-3">Default engine</TableHead>
+                        <TableHead className="px-4 py-3">Default version</TableHead>
+                        <TableHead className="px-4 py-3">Organization ID</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody className="divide-y">

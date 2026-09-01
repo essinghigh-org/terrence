@@ -3,6 +3,7 @@ import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
+import { Textarea } from "../components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -179,7 +180,7 @@ export function OrganizationSshKeys({ orgName }: Readonly<{ orgName: string }>):
               </div>
               <div className="space-y-1.5">
                 <label htmlFor="ssh-value" className="text-sm font-medium">Private SSH Key</label>
-                <textarea
+                <Textarea
                   id="ssh-value"
                   name="private-ssh-key"
                   autoComplete="off"
@@ -188,7 +189,7 @@ export function OrganizationSshKeys({ orgName }: Readonly<{ orgName: string }>):
                   onInput={(event: React.SyntheticEvent<HTMLTextAreaElement>): void => { setNewValue(event.currentTarget.value); }}
                   placeholder={"-----BEGIN RSA PRIVATE KEY-----\n…"}
                   rows={6}
-                  className="flex min-h-20 w-full rounded-md border border-border bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
+                  className="font-mono text-xs"
                 />
               </div>
               {formError !== "" && <p role="alert" className="text-sm text-destructive">{formError}</p>}

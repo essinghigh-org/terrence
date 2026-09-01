@@ -152,7 +152,7 @@ export function WorkspaceDestruction({
   };
 
   return (
-    <Card className="max-w-3xl ring-destructive/30">
+    <Card className="mx-auto max-w-3xl ring-destructive/30">
       <CardHeader>
         <CardTitle>Destruction and deletion</CardTitle>
         <CardDescription>

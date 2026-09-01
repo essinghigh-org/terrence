@@ -230,7 +230,7 @@ export function AdminDatabaseMigration(): React.JSX.Element {
   const terminalFailed = phase === "failed" || phase === "aborted" || phase === "interrupted";
 
   return (
-    <PageShell>
+    <PageShell variant="wide">
       <PageHeader
         eyebrow="Admin · Operations"
         title="Database"
@@ -420,14 +420,20 @@ export function AdminDatabaseMigration(): React.JSX.Element {
 
       {!active && (phase === "idle" || phase === "failed" || phase === "aborted" || phase === "interrupted") && (
         <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Start a migration</CardTitle>
+          <CardHeader variant="danger">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <AlertTriangle className="size-4" aria-hidden="true" />
+              Start a migration
+            </CardTitle>
             <CardDescription>
               Enter the target PostgreSQL connection URL. The target database must be empty; the wizard creates the
               schema and copies all records. The backend enters maintenance mode for the duration of the copy.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              This changes the storage backend and puts the instance into maintenance mode. Verify the target and rollback plan before continuing.
+            </p>
             <div className="flex flex-col gap-2 sm:flex-row">
               <Input
                 aria-label="PostgreSQL connection URL"

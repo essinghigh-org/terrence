@@ -97,7 +97,7 @@ export function WorkspaceSshKey({
   };
 
   return (
-    <form onSubmit={saveAssignment} className="max-w-3xl">
+    <form onSubmit={saveAssignment} className="mx-auto max-w-3xl">
       <Card>
         <CardHeader>
           <CardTitle>SSH key</CardTitle>

@@ -105,7 +105,7 @@ export function AdminScimSettings(): React.JSX.Element {
   };
 
   return (
-    <PageShell className="max-w-5xl">
+    <PageShell variant="form">
       <PageHeader
         eyebrow="Site administration"
         title={<span className="flex items-center gap-2"><UserCog className="size-7 text-primary" aria-hidden="true" />SCIM settings</span>}

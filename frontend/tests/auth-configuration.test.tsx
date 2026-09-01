@@ -213,7 +213,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
 
   // The admin sections live in the sidebar, not in a dashboard navbar
   await waitFor((): void => { expect(view.getByText("SAML SSO")).toBeTruthy(); });
-  expect(view.getByRole("link", { name: "Security overview" }).getAttribute("href"))
+  expect(view.getByRole("link", { name: "Site overview" }).getAttribute("href"))
     .toBe("/app/admin");
   expect(view.getByRole("link", { name: "Users" }).getAttribute("href"))
     .toBe("/app/admin/users");
@@ -364,7 +364,7 @@ test("hides the site administration sidebar from non-admin users", async (): Pro
   // Non-admins are redirected to the app home once their account is loaded
   await waitFor((): void => { expect(view.getByText("Redirect target")).toBeTruthy(); });
   expect(view.queryByRole("link", { name: "Authentication" })).toBeNull();
-  expect(view.queryByRole("link", { name: "Security overview" })).toBeNull();
+  expect(view.queryByRole("link", { name: "Site overview" })).toBeNull();
   expect(view.getByRole("link", { name: "Organizations" }).getAttribute("href")).toBe("/app");
 });
 
@@ -408,7 +408,7 @@ test("shows the security overview from existing admin controls", async (): Promi
   );
 
   await waitFor((): void => { expect(view.getByText("Identity providers")).toBeTruthy(); });
-  expect(view.getByRole("link", { name: "Security overview" }).getAttribute("aria-current"))
+  expect(view.getByRole("link", { name: "Site overview" }).getAttribute("aria-current"))
     .toBe("page");
 
   const identityCard = view.getByText("Identity providers").closest('[data-slot="card"]') ?? document.body;

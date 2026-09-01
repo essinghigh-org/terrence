@@ -570,7 +570,7 @@ export function OrganizationSettings(): React.JSX.Element {
 
   if (loading || (org !== null && !orgIsCurrent)) {
     return (
-      <PageShell role="status" aria-label="Loading organization settings" className="max-w-5xl">
+      <PageShell role="status" aria-label="Loading organization settings" variant="form">
         <div className="h-9 w-72 animate-pulse rounded bg-muted" />
         <div className="h-56 animate-pulse rounded-md border bg-muted/50" />
         <div className="h-40 animate-pulse rounded-md border bg-muted/50" />
@@ -579,7 +579,7 @@ export function OrganizationSettings(): React.JSX.Element {
   }
   if (org === null) {
     return (
-      <PageShell className="max-w-5xl">
+      <PageShell variant="form">
         <div role="alert" className="mx-auto flex max-w-lg flex-col items-start gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-5 text-destructive">
         <div>
           <h1 className="font-semibold">Could not load organization settings</h1>
@@ -594,7 +594,7 @@ export function OrganizationSettings(): React.JSX.Element {
   }
 
   return (
-    <PageShell className="max-w-5xl">
+    <PageShell variant="form">
       <div className="space-y-3">
         <Breadcrumbs items={[
           { label: "Dashboard", to: "/app" },

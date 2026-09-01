@@ -331,12 +331,12 @@ export function WorkspaceVcs({
   };
 
   return (
-    <form onSubmit={save} className="max-w-4xl">
+    <form onSubmit={save} className="mx-auto max-w-4xl">
       <Card>
         <CardHeader>
           <CardTitle>Version control</CardTitle>
           <CardAction>
-            <Badge variant={connected ? "default" : "secondary"}>
+            <Badge variant={connected ? "success" : "secondary"}>
               {connected ? "Connected" : "Not connected"}
             </Badge>
           </CardAction>
@@ -344,155 +344,127 @@ export function WorkspaceVcs({
             Configure the repository source and the changes that trigger workspace runs.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-6">
           <FieldGroup>
-            <Field data-disabled={!canUpdate}>
-              <FieldLabel htmlFor="vcs-connection">VCS connection</FieldLabel>
-              <Select
-                id="vcs-connection"
-                name="vcs-connection"
-                value={connectionValue}
-                onValueChange={(val: string): void => {
-                  setConnectionValue(val);
-                }}
-                disabled={!canUpdate || connectionsLoading}
-              >
-                <SelectItem value="">
-                  {connectionsLoading ? "Loading registered connections…" : "Select a registered connection"}
-                </SelectItem>
-                {displayedConnections.map((connection: VcsConnection): React.JSX.Element => (
-                  <SelectItem key={connection.value} value={connection.value}>
-                    {connection.label}
-                  </SelectItem>
-                ))}
-              </Select>
-              {connectionsError !== "" ? (
-                <p role="alert" className="text-sm text-destructive">
-                  Registered VCS connections could not be loaded. The current connection can still be preserved.
-                </p>
-              ) : (
-                <FieldDescription>
-                  {displayedConnections.length === 0 && !connectionsLoading
-                    ? "No registered connections are available. Add one in organization VCS settings."
-                      : "Choose a registered GitHub App or OAuth connection. Repository search includes organization and name."}
-                </FieldDescription>
-              )}
-            </Field>
-
-            <Field data-disabled={!canUpdate}>
-              <FieldLabel htmlFor="vcs-identifier">Repository identifier</FieldLabel>
-              <VcsRepoSelector
-                id="vcs-identifier"
-                name="vcs-repository"
-                value={identifier}
-                onValueChange={setIdentifier}
-                repositories={vcsRepositories}
-                loading={vcsRepositoriesLoading}
-                disabled={!canUpdate}
-                placeholder="e.g. organization/repository"
-              />
-              <FieldDescription>Search by organization or repository name, then select the full repository path.</FieldDescription>
-            </Field>
-            <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
-              <Field data-disabled={!canUpdate}>
-                <FieldLabel htmlFor="vcs-branch">VCS branch</FieldLabel>
-                <Input
-                  id="vcs-branch"
-                  name="vcs-branch"
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={branch}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                    setBranch(event.target.value);
-                  }}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
-                    setBranch(event.currentTarget.value);
-                  }}
-                  placeholder="Default branch"
-                  disabled={!canUpdate}
-                />
-              </Field>
-              <Field data-disabled={!canUpdate}>
-                <FieldLabel htmlFor="vcs-working-directory">Terraform working directory</FieldLabel>
-                <Input
-                  id="vcs-working-directory"
-                  name="vcs-working-directory"
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={workingDirectory}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                    setWorkingDirectory(event.target.value);
-                  }}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
-                    setWorkingDirectory(event.currentTarget.value);
-                  }}
-                  placeholder="Root of repository"
-                  disabled={!canUpdate}
-                />
-              </Field>
-            </FieldGroup>
-            <Field data-disabled={!canUpdate}>
-              <FieldLabel htmlFor="vcs-tags-regex">Git tag regular expression</FieldLabel>
-              <Input
-                id="vcs-tags-regex"
-                name="vcs-tags-regex"
-                autoComplete="off"
-                spellCheck={false}
-                value={tagsRegex}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                  setTagsRegex(event.target.value);
-                }}
-                onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
-                  setTagsRegex(event.currentTarget.value);
-                }}
-                placeholder="^v\d+\.\d+\.\d+$"
-                disabled={!canUpdate}
-              />
-              <FieldDescription>When set, only matching tag pushes trigger runs; branch pushes and pull requests are ignored.</FieldDescription>
-            </Field>
-            <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
-              <Field data-disabled={!canUpdate}>
-                <FieldLabel htmlFor="vcs-trigger-prefixes">Trigger prefixes</FieldLabel>
-                <Input
-                  id="vcs-trigger-prefixes"
-                  name="vcs-trigger-prefixes"
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={triggerPrefixes}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                    setTriggerPrefixes(event.target.value);
-                  }}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
-                    setTriggerPrefixes(event.currentTarget.value);
-                  }}
-                  placeholder="modules, services/api"
-                  disabled={!canUpdate}
-                />
-                <FieldDescription>Separate repository paths with commas.</FieldDescription>
-              </Field>
-              <Field data-disabled={!canUpdate}>
-                <FieldLabel htmlFor="vcs-trigger-patterns">Trigger patterns</FieldLabel>
-                <Input
-                  id="vcs-trigger-patterns"
-                  name="vcs-trigger-patterns"
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={triggerPatterns}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                    setTriggerPatterns(event.target.value);
-                  }}
-                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
-                    setTriggerPatterns(event.currentTarget.value);
-                  }}
-                  placeholder="modules/**/*.tf, shared/**/*.tf"
-                  disabled={!canUpdate}
-                />
-                <FieldDescription>Separate glob patterns with commas.</FieldDescription>
-              </Field>
-            </FieldGroup>
             <FieldSet disabled={!canUpdate}>
-              <FieldLegend variant="label">Run behavior</FieldLegend>
-              <FieldGroup className="gap-3">
+              <FieldLegend variant="label">Repository source</FieldLegend>
+              <FieldGroup className="gap-4">
+                <Field data-disabled={!canUpdate}>
+                  <FieldLabel htmlFor="vcs-connection">VCS connection</FieldLabel>
+                  <Select
+                    id="vcs-connection"
+                    name="vcs-connection"
+                    value={connectionValue}
+                    onValueChange={(val: string): void => {
+                      setConnectionValue(val);
+                    }}
+                    disabled={!canUpdate || connectionsLoading}
+                  >
+                    <SelectItem value="">
+                      {connectionsLoading ? "Loading registered connections…" : "Select a registered connection"}
+                    </SelectItem>
+                    {displayedConnections.map((connection: VcsConnection): React.JSX.Element => (
+                      <SelectItem key={connection.value} value={connection.value}>
+                        {connection.label}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                  {connectionsError !== "" ? (
+                    <p role="alert" className="text-sm text-destructive">
+                      Registered VCS connections could not be loaded. The current connection can still be preserved.
+                    </p>
+                  ) : (
+                    <FieldDescription>
+                      {displayedConnections.length === 0 && !connectionsLoading
+                        ? "No registered connections are available. Add one in organization VCS settings."
+                        : "Choose a registered GitHub App or OAuth connection."}
+                    </FieldDescription>
+                  )}
+                </Field>
+
+                <Field data-disabled={!canUpdate}>
+                  <FieldLabel htmlFor="vcs-identifier">Repository identifier</FieldLabel>
+                  <VcsRepoSelector
+                    id="vcs-identifier"
+                    name="vcs-repository"
+                    value={identifier}
+                    onValueChange={setIdentifier}
+                    repositories={vcsRepositories}
+                    loading={vcsRepositoriesLoading}
+                    disabled={!canUpdate}
+                    placeholder="e.g. organization/repository"
+                  />
+                  <FieldDescription>Search by organization or repository name, then select the full repository path.</FieldDescription>
+                </Field>
+
+                <FieldGroup className="grid gap-5 @md/field-group:grid-cols-2">
+                  <Field data-disabled={!canUpdate}>
+                    <FieldLabel htmlFor="vcs-branch">VCS branch</FieldLabel>
+                    <Input
+                      id="vcs-branch"
+                      name="vcs-branch"
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={branch}
+                      onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                        setBranch(event.target.value);
+                      }}
+                      onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                        setBranch(event.currentTarget.value);
+                      }}
+                      placeholder="Default branch"
+                      disabled={!canUpdate}
+                    />
+                  </Field>
+                  <Field data-disabled={!canUpdate}>
+                    <FieldLabel htmlFor="vcs-working-directory">Terraform working directory</FieldLabel>
+                    <Input
+                      id="vcs-working-directory"
+                      name="vcs-working-directory"
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={workingDirectory}
+                      onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                        setWorkingDirectory(event.target.value);
+                      }}
+                      onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                        setWorkingDirectory(event.currentTarget.value);
+                      }}
+                      placeholder="Root of repository"
+                      disabled={!canUpdate}
+                    />
+                  </Field>
+                </FieldGroup>
+              </FieldGroup>
+            </FieldSet>
+
+            <FieldSet disabled={!canUpdate} className="border-t border-border/60 pt-5">
+              <FieldLegend variant="label">Run triggers</FieldLegend>
+              <FieldGroup className="gap-4">
+                <Field data-disabled={!canUpdate}>
+                  <FieldLabel htmlFor="vcs-tags-regex">Git tag regular expression</FieldLabel>
+                  <Input
+                    id="vcs-tags-regex"
+                    name="vcs-tags-regex"
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={tagsRegex}
+                    onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                      setTagsRegex(event.target.value);
+                    }}
+                    onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                      setTagsRegex(event.currentTarget.value);
+                    }}
+                    placeholder="^v\d+\.\d+\.\d+$"
+                    disabled={!canUpdate}
+                  />
+                  <FieldDescription>
+                    {tagsRegex.trim() !== ""
+                      ? "Tag triggering active: only matching Git tag pushes will trigger runs; branch pushes and pull requests are ignored."
+                      : "Leave blank to trigger from branch pushes and pull requests. When set, only matching Git tag pushes trigger runs."}
+                  </FieldDescription>
+                </Field>
+
                 <Field orientation="horizontal" data-disabled={!canUpdate}>
                   <Checkbox
                     id="vcs-file-triggers"
@@ -502,9 +474,58 @@ export function WorkspaceVcs({
                   />
                   <FieldContent>
                     <FieldLabel htmlFor="vcs-file-triggers">Filter runs by changed files</FieldLabel>
-                    <FieldDescription>Use the configured paths and patterns to decide when to run.</FieldDescription>
+                    <FieldDescription>Only trigger runs when changes match the prefixes or glob patterns below.</FieldDescription>
                   </FieldContent>
                 </Field>
+
+                {fileTriggersEnabled && (
+                  <FieldGroup className="grid gap-5 pl-7 @md/field-group:grid-cols-2">
+                    <Field data-disabled={!canUpdate}>
+                      <FieldLabel htmlFor="vcs-trigger-prefixes">Trigger prefixes</FieldLabel>
+                      <Input
+                        id="vcs-trigger-prefixes"
+                        name="vcs-trigger-prefixes"
+                        autoComplete="off"
+                        spellCheck={false}
+                        value={triggerPrefixes}
+                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                          setTriggerPrefixes(event.target.value);
+                        }}
+                        onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                          setTriggerPrefixes(event.currentTarget.value);
+                        }}
+                        placeholder="modules, services/api"
+                        disabled={!canUpdate}
+                      />
+                      <FieldDescription>Separate repository paths with commas.</FieldDescription>
+                    </Field>
+                    <Field data-disabled={!canUpdate}>
+                      <FieldLabel htmlFor="vcs-trigger-patterns">Trigger patterns</FieldLabel>
+                      <Input
+                        id="vcs-trigger-patterns"
+                        name="vcs-trigger-patterns"
+                        autoComplete="off"
+                        spellCheck={false}
+                        value={triggerPatterns}
+                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
+                          setTriggerPatterns(event.target.value);
+                        }}
+                        onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => {
+                          setTriggerPatterns(event.currentTarget.value);
+                        }}
+                        placeholder="modules/**/*.tf, shared/**/*.tf"
+                        disabled={!canUpdate}
+                      />
+                      <FieldDescription>Separate glob patterns with commas.</FieldDescription>
+                    </Field>
+                  </FieldGroup>
+                )}
+              </FieldGroup>
+            </FieldSet>
+
+            <FieldSet disabled={!canUpdate} className="border-t border-border/60 pt-5">
+              <FieldLegend variant="label">Run behavior</FieldLegend>
+              <FieldGroup className="gap-3">
                 <Field orientation="horizontal" data-disabled={!canUpdate}>
                   <Checkbox
                     id="vcs-speculative"
@@ -562,7 +583,7 @@ export function WorkspaceVcs({
           </div>
           <Button type="submit" disabled={saving || !canUpdate}>
             {saving && <Spinner data-icon="inline-start" />}
-            {saving ? "Saving" : connected ? "Save VCS settings" : "Connect repository"}
+            {saving ? "Saving…" : connected ? "Save VCS settings" : "Connect repository"}
           </Button>
         </CardFooter>
       </Card>

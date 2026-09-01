@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/utils";
-import { formatRunStatus } from "@/lib/run-labels";
+import { formatRunStatusForUi } from "@/lib/run-labels";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Upload } from "lucide-react";
@@ -26,13 +26,14 @@ type StateItem = {
 };
 
 function stateStatus(value: unknown): string {
-  if (!isString(value) || value === "") return "Finalized";
+  if (!isString(value) || value === "") return "Saved";
   const labels = {
     pending: "Pending",
-    finalized: "Finalized",
+    finalized: "Saved",
   };
-  const label = Object.prototype.hasOwnProperty.call(labels, value)
-    ? labels[value as keyof typeof labels]
+  const normalized = value.toLowerCase();
+  const label = Object.prototype.hasOwnProperty.call(labels, normalized)
+    ? labels[normalized as keyof typeof labels]
     : undefined;
   // SAFETY: unknown state values fall through to the title-cased label below.
   return label ?? value.replace(/_/g, " ").replace(/\b\w/g, (c: string): string => c.toUpperCase());
@@ -55,6 +56,10 @@ function formatDate(value: unknown): string {
   if (!isString(value) || value === "") return "—";
   const date = new Date(value);
   return formatDateTime(date);
+}
+
+function shortStateId(id: string): string {
+  return id.length > 16 ? `${id.slice(0, 10)}…${id.slice(-4)}` : id;
 }
 
 export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = true }: StateHistoryProps): React.JSX.Element {
@@ -198,7 +203,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
       </div>
 
       <div className="border rounded-md">
-        <Table>
+        <Table density="dense">
           <TableHeader>
             <TableRow>
               <TableHead>Version</TableHead>
@@ -242,7 +247,7 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
                   {/* SAFETY: the fixture field matches the API contract type. */}
                   <p className="font-bold">#{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
 s.attributes["serial"] as number}</p>
-                  <p className="font-mono text-xs text-muted-foreground">{s.id}</p>
+                  <p className="font-mono text-xs text-muted-foreground" title={s.id}>{shortStateId(s.id)}</p>
                 </TableCell>
                 <TableCell className="text-sm">{formatDate(s.attributes["created-at"])}</TableCell>
                 <TableCell className="font-mono text-xs">
@@ -257,11 +262,14 @@ s.attributes["serial"] as number}</p>
                           : "Manual run"}
                       </Link>
                       <span className="text-[11px] text-muted-foreground">
-                        {isString(s.attributes["run-status"])
-                          ? formatRunStatus(s.attributes["run-status"])
-                          : "Run Status Unknown"}
+                        <span className="font-medium text-foreground/70">Run</span>{" · "}
+                        <span>{isString(s.attributes["run-status"])
+                          ? formatRunStatusForUi(s.attributes["run-status"])
+                          : "Run Status Unknown"}</span>
                       </span>
-                      <span className="text-[11px] text-muted-foreground">{stateStatus(s.attributes["status"])}</span>
+                      <span className="text-[11px] text-muted-foreground">
+                        <span className="font-medium text-foreground/70">State</span>{" · "}<span>{stateStatus(s.attributes["status"])}</span>
+                      </span>
                     </div>
                   ) : "—"}
                 </TableCell>

@@ -129,17 +129,17 @@ test("creates a workspace from the modal", async () => {
     />,
   );
 
-  changeInput(asElement(view.getByLabelText("Workspace Name")), "production");
-  changeInput(asElement(view.getByLabelText("Execution Engine")), "terraform");
+  changeInput(asElement(view.getByLabelText(/Workspace name/i)), "production");
+  changeInput(asElement(view.getByLabelText(/Execution engine/i)), "terraform");
   // Engine Version is a catalog-driven select; wait for the mocked version
   // option to exist before selecting it.
   await waitFor((): void => { expect(view.getByRole("option", { name: "1.9.3" })).toBeTruthy(); });
-  changeInput(asElement(view.getByLabelText(/Engine Version/)), "1.9.3");
+  changeInput(asElement(view.getByLabelText(/Engine version/i)), "1.9.3");
   // Switch source to VCS so Repository Identifier fields appear
-  fireEvent.change(view.getByLabelText("Workspace Source"), { target: { value: "vcs" } });
+  fireEvent.change(view.getByLabelText(/Workspace source/i), { target: { value: "vcs" } });
   await waitFor((): void => { expect(view.getByText("Acme GitHub — GitHub App")).toBeTruthy(); });
   changeInput(asElement(view.getByLabelText("Repository Identifier")), "hashicorp/terraform");
-  fireEvent.change(view.getByLabelText("VCS Connection"), { target: { value: "github-app:ghain-123" } });
+  fireEvent.change(view.getByLabelText(/VCS connection/i), { target: { value: "github-app:ghain-123" } });
   fireEvent.click(view.getByLabelText("Auto-apply plans upon completion"));
   await act(async () => {
     const form = view.getByRole("button", { name: "Create Workspace" }).closest("form");
@@ -201,8 +201,8 @@ test("opens workspace creation from the workspace list", async () => {
   fireEvent.click(view.getByRole("button", { name: "New workspace" }));
   expect(view.getByRole("heading", { name: "New Workspace" })).toBeTruthy();
   await waitFor((): void => {
-    expect((view.getByLabelText("Execution Engine") as HTMLSelectElement).value).toBe("terraform");
-    expect((view.getByLabelText("Engine Version") as HTMLSelectElement).value).toBe("1.9.3");
+    expect((view.getByLabelText(/Execution engine/i) as HTMLSelectElement).value).toBe("terraform");
+    expect((view.getByLabelText(/Engine version/i) as HTMLSelectElement).value).toBe("1.9.3");
   });
 });
 
@@ -218,21 +218,21 @@ test("rejects a partially configured workspace VCS connection", async () => {
   globalThis.fetch = fetchMock;
   const view = render(
     <>
+      <Toaster />
       <CreateWorkspaceModal
-        orgName="acme"
-        open
+        open={true}
         onOpenChange={(): void => {
-          // Intentional noop
+          // Dialog state is controlled by the test.
         }}
+        orgName="acme"
         onCreated={(): void => {
-          // Intentional noop
+          // Payload is asserted below.
         }}
       />
-      <Toaster />
     </>,
   );
-  changeInput(asElement(view.getByLabelText("Workspace Name")), "production");
-  fireEvent.change(view.getByLabelText("Workspace Source"), { target: { value: "vcs" } });
+  changeInput(asElement(view.getByLabelText(/Workspace name/i)), "production");
+  fireEvent.change(view.getByLabelText(/Workspace source/i), { target: { value: "vcs" } });
   await waitFor((): void => { expect(view.getByText("Acme GitHub — GitHub App")).toBeTruthy(); });
   changeInput(asElement(view.getByLabelText("Repository Identifier")), "hashicorp/terraform");
   await act(async () => {

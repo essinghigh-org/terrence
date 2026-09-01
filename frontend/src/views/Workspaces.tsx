@@ -357,7 +357,9 @@ export function Workspaces(): React.JSX.Element {
       const matchesSearch = needle === ""
         || workspace.attributes.name.toLowerCase().includes(needle)
         || tags.some((tag): boolean => tag.toLowerCase().includes(needle));
-      return matchesSearch && (projectFilter === "" || projectId === projectFilter);
+      const matchesProject = projectFilter === "" || projectId === projectFilter;
+      const matchesLocked = statusFilter !== "locked" || workspace.attributes.locked === true;
+      return matchesSearch && matchesProject && matchesLocked;
     });
     // Pinned workspaces float to the top (kanban 26.12); order is otherwise
     // stable (API order).
@@ -367,7 +369,7 @@ export function Workspaces(): React.JSX.Element {
       if (aPinned === bPinned) return 0;
       return aPinned ? -1 : 1;
     });
-  }, [orgName, pinsRevision, projectFilter, search, workspaces]);
+  }, [orgName, pinsRevision, projectFilter, search, statusFilter, workspaces]);
 
   const activeRunsCount = useMemo((): number => {
     let count = 0;
@@ -470,11 +472,11 @@ export function Workspaces(): React.JSX.Element {
     return projects.find((project): boolean => project.id === projectId)?.attributes.name ?? "Unknown project";
   };
 
-  const hasFilters = search !== "" || statusFilter !== "" || projectFilter !== "";
+  const hasFilters = search !== "" || statusFilter !== "" || projectFilter !== "" || activeViewName !== "";
   const tableColumnCount = WORKSPACE_TABLE_COLUMNS.filter((column): boolean => visibleColumns.includes(column.id)).length + 2;
 
   return (
-    <PageShell className="max-w-7xl">
+    <PageShell variant="wide">
       <PageHeader
         eyebrow={orgName}
         title="Workspaces"
@@ -489,24 +491,60 @@ export function Workspaces(): React.JSX.Element {
 
       {/* Top KPI Metrics Bar */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
+        <button
+          type="button"
+          onClick={(): void => {
+            setSearch("");
+            setStatusFilter("");
+            setProjectFilter("");
+            setActiveViewName("");
+          }}
+          className={cn(
+            "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-all hover:border-primary/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
+            !hasFilters && "border-primary/50 bg-primary/5 ring-1 ring-primary/30"
+          )}
+        >
           <div className="text-xs font-medium text-muted-foreground">Total Workspaces</div>
           <div className="mt-1 tabular-nums text-2xl font-bold">{totalsUnavailable ? "—" : totalWorkspaceCount}</div>
-        </div>
-        <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
+        </button>
+        <button
+          type="button"
+          onClick={(): void => { setStatusFilter(statusFilter === "running" ? "" : "running"); setActiveViewName(""); }}
+          className={cn(
+            "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-all hover:border-primary/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
+            statusFilter === "running" && "border-primary/50 bg-primary/5 ring-1 ring-primary/30"
+          )}
+        >
           <div className="text-xs font-medium text-muted-foreground">Active Runs</div>
           <div className="mt-1 tabular-nums text-2xl font-bold text-primary">{activeRunsCount}</div>
-        </div>
-        <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
+        </button>
+        <button
+          type="button"
+          onClick={(): void => { setStatusFilter(statusFilter === "attention" ? "" : "attention"); setActiveViewName(""); }}
+          className={cn(
+            "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-all hover:border-destructive/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
+            statusFilter === "attention" && "border-destructive/50 bg-destructive/5 ring-1 ring-destructive/30"
+          )}
+        >
           <div className="text-xs font-medium text-muted-foreground">Attention Needed</div>
           <div className={cn("mt-1 tabular-nums text-2xl font-bold", attentionNeededCount > 0 ? "text-destructive" : "")}>
             {attentionNeededCount}
           </div>
-        </div>
-        <div className="rounded-lg border bg-card p-4 text-card-foreground shadow-sm">
+        </button>
+        <button
+          type="button"
+          onClick={(): void => {
+            setStatusFilter(statusFilter === "locked" ? "" : "locked");
+            setActiveViewName("");
+          }}
+          className={cn(
+            "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-all hover:border-warning/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
+            statusFilter === "locked" && "border-warning/50 bg-warning/5 ring-1 ring-warning/30"
+          )}
+        >
           <div className="text-xs font-medium text-muted-foreground">Locked Workspaces</div>
           <div className="mt-1 tabular-nums text-2xl font-bold">{totalsUnavailable ? "—" : lockedWorkspaceCount}</div>
-        </div>
+        </button>
       </div>
 
       {totalsUnavailable && (
@@ -566,6 +604,7 @@ export function Workspaces(): React.JSX.Element {
             <option value="attention">Needs attention</option>
             <option value="errored">Errored</option>
             <option value="running">Running</option>
+            <option value="locked">Locked</option>
             <option value="on-hold">On hold</option>
             <option value="completed">Completed</option>
           </Select>

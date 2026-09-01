@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { fetchApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectItem } from "@/components/ui/select";
 import { loadOrganizationVcsConnections, type VcsConnection } from "@/components/WorkspaceVcs";
 import { VcsRepoSelector } from "@/components/VcsRepoSelector";
 import {
@@ -225,7 +226,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
         </DialogHeader>
         <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4 py-2">
           <div className="flex flex-col gap-1.5">
-            <label htmlFor="ws-name" className="text-sm font-medium">Workspace Name</label>
+            <label htmlFor="ws-name" className="text-sm font-medium">Workspace name</label>
             <Input
               id="ws-name"
               name="workspace-name"
@@ -240,52 +241,49 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
 
           {projects.length > 0 && (
             <div className="flex flex-col gap-1.5">
-              <label htmlFor="ws-project" className="text-sm font-medium">Project</label>
-              <select
-                id="ws-project"
+              <label htmlFor="workspace-project" className="text-sm font-medium">Project (optional)</label>
+              <Select
+                id="workspace-project"
                 name="project"
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 value={projectId}
-                onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setProjectId(event.target.value); }}
+                onValueChange={setProjectId}
               >
-                <option value="">Organization default project</option>
+                <SelectItem value="">Organization default project</SelectItem>
                 {projects.map((project): React.JSX.Element => (
-                  <option key={project.id} value={project.id}>{project.attributes.name}</option>
+                  <SelectItem key={project.id} value={project.id}>{project.attributes.name}</SelectItem>
                 ))}
-              </select>
+              </Select>
               <p className="text-xs text-muted-foreground">Choose the project that will own this workspace.</p>
             </div>
           )}
 
           <div className="flex flex-col gap-1.5">
-            <label htmlFor="iac-tool" className="text-sm font-medium">Execution Engine</label>
-            <select
+            <label htmlFor="iac-tool" className="text-sm font-medium">Execution engine</label>
+            <Select
               id="iac-tool"
               name="iac-binary"
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               value={iacBinary}
-              onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setIacBinary(event.target.value); }}
+              onValueChange={setIacBinary}
             >
-              <option value="tofu">OpenTofu</option>
-              <option value="terraform">Terraform</option>
-            </select>
+              <SelectItem value="tofu">OpenTofu</SelectItem>
+              <SelectItem value="terraform">Terraform</SelectItem>
+            </Select>
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label htmlFor="tf-version" className="text-sm font-medium">Engine Version</label>
-            <select
+            <label htmlFor="tf-version" className="text-sm font-medium">Engine version</label>
+            <Select
               id="tf-version"
               name="terraform-version"
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               value={terraformVersion}
-              onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setTerraformVersion(event.target.value); }}
+              onValueChange={setTerraformVersion}
             >
-              <option value="latest">Latest available</option>
+              <SelectItem value="latest">Latest available</SelectItem>
               {terraformVersion !== "latest" && !availableVersions.includes(terraformVersion) && (
-                <option value={terraformVersion}>{terraformVersion} (organization default)</option>
+                <SelectItem value={terraformVersion}>{terraformVersion} (organization default)</SelectItem>
               )}
-              {availableVersions.map((version): React.JSX.Element => <option key={version} value={version}>{version}</option>)}
-            </select>
+              {availableVersions.map((version): React.JSX.Element => <SelectItem key={version} value={version}>{version}</SelectItem>)}
+            </Select>
             <p className="text-xs text-muted-foreground">{versionsLoading ? "Loading supported versions…" : "Versions are fetched from the selected engine release catalog."}</p>
           </div>
 
@@ -298,41 +296,37 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
 
           <div className="pt-4 border-t border-border mt-2">
             <div className="flex flex-col gap-1.5 mb-4">
-              <label htmlFor="source-type" className="text-sm font-medium">Workspace Source</label>
-              <select
+              <label htmlFor="source-type" className="text-sm font-medium">Workspace source</label>
+              <Select
                 id="source-type"
                 name="workspace-source"
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 value={sourceType}
-                onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setSourceType(event.target.value); }}
+                onValueChange={setSourceType}
               >
-                <option value="tfe-api">API Driven (tfe-api)</option>
-                <option value="local">Local Path Directory</option>
-                <option value="vcs">Version Control (VCS)</option>
-              </select>
+                <SelectItem value="tfe-api">API-driven (CLI or pipeline)</SelectItem>
+                <SelectItem value="local">Local path directory</SelectItem>
+                <SelectItem value="vcs">Version control (VCS)</SelectItem>
+              </Select>
             </div>
 
             {sourceType === "vcs" && (
               <div className="grid gap-4">
                 <div className="flex flex-col gap-2">
-                  <label htmlFor="vcs-connection" className="text-sm font-medium leading-none">VCS Connection</label>
-                  <select
+                  <label htmlFor="vcs-connection" className="text-sm font-medium leading-none">VCS connection</label>
+                  <Select
                     id="vcs-connection"
                     name="vcs-connection"
-                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     value={vcsConnectionValue}
-                    onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
-                      setVcsConnectionValue(event.target.value);
-                    }}
+                    onValueChange={setVcsConnectionValue}
                     disabled={loading || vcsConnectionsLoading}
                   >
-                    <option value="">
+                    <SelectItem value="">
                       {vcsConnectionsLoading ? "Loading registered connections…" : "Select a registered connection"}
-                    </option>
+                    </SelectItem>
                     {vcsConnections.map((connection: VcsConnection): React.JSX.Element => (
-                      <option key={connection.value} value={connection.value}>{connection.label}</option>
+                      <SelectItem key={connection.value} value={connection.value}>{connection.label}</SelectItem>
                     ))}
-                  </select>
+                  </Select>
                   <p
                     role={vcsConnectionsError === "" ? undefined : "alert"}
                     className={vcsConnectionsError === "" ? "text-xs text-muted-foreground" : "text-xs text-destructive"}

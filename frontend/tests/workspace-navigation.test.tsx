@@ -68,7 +68,7 @@ test("uses a persisted, route-aware workspace settings sidebar", async () => {
     .toBe("page");
   expect(view.getByRole("link", { name: "production" }).getAttribute("href"))
     .toBe("/app/acme/workspaces/production");
-  expect(view.getByRole("link", { name: "Run Tasks" }).getAttribute("href"))
+  expect(view.getByRole("link", { name: "Run tasks" }).getAttribute("href"))
     .toBe("/app/acme/workspaces/production/settings/tasks");
   expect(view.getByRole("link", { name: "Destruction and deletion" }).getAttribute("href"))
     .toBe("/app/acme/workspaces/production/settings/delete");

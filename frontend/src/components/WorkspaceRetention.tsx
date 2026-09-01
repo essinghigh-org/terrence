@@ -78,7 +78,7 @@ export function WorkspaceRetention({ workspaceId }: Readonly<{ workspaceId: stri
   if (loading) return <div role="status" className="py-8 text-sm text-muted-foreground">Loading retention policy…</div>;
 
   return (
-    <form onSubmit={save} className="max-w-3xl">
+    <form onSubmit={save} className="mx-auto max-w-3xl">
       <Card>
         <CardHeader>
           <CardTitle>Data retention</CardTitle>

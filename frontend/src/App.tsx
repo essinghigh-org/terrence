@@ -85,7 +85,10 @@ const AdminDashboard = lazyView(() => import("./views/AdminDashboard"), "AdminDa
 const CompatibilityDashboard = lazyView(() => import("./views/CompatibilityDashboard"), "CompatibilityDashboard");
 const AdminSmtpSettings = lazyView(() => import("./views/AdminSmtpSettings"), "AdminSmtpSettings");
 const AdminScimSettings = lazyView(() => import("./views/AdminScimSettings"), "AdminScimSettings");
-const AdminOperationsSettings = lazyView(() => import("./views/AdminOperationsSettings"), "AdminOperationsSettings");
+const AdminLoggingSettings = lazyView(() => import("./views/AdminLoggingSettings"), "AdminLoggingSettings");
+const AdminMaintenanceWindows = lazyView(() => import("./views/AdminMaintenanceWindows"), "AdminMaintenanceWindows");
+const AdminApprovalWebhook = lazyView(() => import("./views/AdminApprovalWebhook"), "AdminApprovalWebhook");
+const AdminPlanExplainer = lazyView(() => import("./views/AdminPlanExplainer"), "AdminPlanExplainer");
 const AdminDatabaseMigration = lazyView(() => import("./views/AdminDatabaseMigration"), "AdminDatabaseMigration");
 const Docs = lazyView(() => import("./views/Docs"), "Docs");
 const NotFound = lazyView(() => import("./views/NotFound"), "NotFound");
@@ -209,16 +212,20 @@ function AppRoutes(): JSX.Element {
         <Route index element={<Dashboard />} />
         <Route path="admin" element={<AdminDashboard section="security" />} />
         <Route path="admin/users" element={<AdminDashboard section="users" />} />
+        <Route path="admin/auth" element={<AdminDashboard section="auth" />} />
+        <Route path="admin/scim" element={<AdminScimSettings />} />
         <Route path="admin/organizations" element={<AdminDashboard section="orgs" />} />
         <Route path="admin/workspaces" element={<AdminDashboard section="workspaces" />} />
         <Route path="admin/runs" element={<AdminDashboard section="runs" />} />
         <Route path="admin/versions" element={<AdminDashboard section="versions" />} />
         <Route path="admin/compatibility" element={<CompatibilityDashboard />} />
         <Route path="admin/audit" element={<AdminDashboard section="audit" />} />
-        <Route path="admin/auth" element={<AdminDashboard section="auth" />} />
+        <Route path="admin/logging" element={<AdminLoggingSettings />} />
+        <Route path="admin/maintenance" element={<AdminMaintenanceWindows />} />
+        <Route path="admin/approval-webhook" element={<AdminApprovalWebhook />} />
+        <Route path="admin/plan-explainer" element={<AdminPlanExplainer />} />
         <Route path="admin/smtp" element={<AdminSmtpSettings />} />
-        <Route path="admin/scim" element={<AdminScimSettings />} />
-        <Route path="admin/operations" element={<AdminOperationsSettings />} />
+        <Route path="admin/operations" element={<Navigate to="/app/admin/logging" replace />} />
         <Route path="admin/database" element={<AdminDatabaseMigration />} />
         <Route path="account" element={<AccountSettings />} />
         <Route path="docs" element={<Docs />} />

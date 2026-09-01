@@ -46,7 +46,7 @@ export function UsersAdmin(props: Readonly<{
                       <TableRow>
                         <TableHead className="px-4 py-3">Username</TableHead>
                         <TableHead className="px-4 py-3">Email</TableHead>
-                        <TableHead className="px-4 py-3">Site Admin</TableHead>
+                        <TableHead className="px-4 py-3">Site admin</TableHead>
                         <TableHead className="px-4 py-3">Status</TableHead>
                         <TableHead className="px-4 py-3">User ID</TableHead>
                         <TableHead className="px-4 py-3">Actions</TableHead>

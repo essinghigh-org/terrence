@@ -85,7 +85,7 @@ export function SecurityOverview(props: Readonly<{
   return (
             <div className="space-y-6">
               <div>
-                <h2 className="text-lg font-semibold text-foreground">Security overview</h2>
+                <h2 className="text-lg font-semibold text-foreground">Site overview</h2>
                 <p className="text-sm text-muted-foreground">A quick read of the instance-wide controls that protect access and runs.</p>
               </div>
               <div className="grid gap-4 md:grid-cols-2">

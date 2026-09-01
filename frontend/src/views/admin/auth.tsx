@@ -2,6 +2,7 @@ import { AlertCircle, } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
+import { Textarea } from "../../components/ui/textarea";
 export function AuthAdmin(props: Readonly<{
   general: Readonly<{
     loading: boolean;
@@ -267,7 +268,6 @@ export function AuthAdmin(props: Readonly<{
                       <Button
                         type="submit"
                         disabled={generalSaving || persistedSamlEnabled === null || persistedOidcEnabled === null || persistedLdapEnabled === null}
-                        aria-label="Save sign-in settings"
                       >
                         {generalSaving ? "Saving…" : "Save sign-in settings"}
                       </Button>
@@ -375,7 +375,7 @@ export function AuthAdmin(props: Readonly<{
                       </div>
                       <div className="space-y-1">
                         <label htmlFor="saml-idp-cert" className="text-xs font-medium text-foreground/85">IdP Certificate (PEM)</label>
-                        <textarea
+                        <Textarea
                           id="saml-idp-cert"
                           name="saml-idp-certificate"
                           autoComplete="off"
@@ -385,7 +385,7 @@ export function AuthAdmin(props: Readonly<{
                           value={samlIdpCert}
                           onChange={(e): void => { setSamlIdpCert(e.target.value); }}
                           aria-label="IdP Certificate (PEM)"
-                          className="min-h-28 w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                          className="font-mono"
                         />
                       </div>
                       <div className="border-t pt-4">
@@ -476,7 +476,7 @@ export function AuthAdmin(props: Readonly<{
                           </div>
                         </dl>
                       </div>
-                      <Button type="submit" disabled={samlSaving} aria-label="Save SAML settings">
+                      <Button type="submit" disabled={samlSaving}>
                         {samlSaving ? "Saving…" : "Save SAML settings"}
                       </Button>
                     </form>
@@ -602,7 +602,7 @@ export function AuthAdmin(props: Readonly<{
                           </select>
                         </div>
                       </div>
-                      <Button type="submit" disabled={oidcSaving} aria-label="Save OIDC settings">
+                      <Button type="submit" disabled={oidcSaving}>
                         {oidcSaving ? "Saving…" : "Save OIDC settings"}
                       </Button>
                     </form>
@@ -795,7 +795,7 @@ export function AuthAdmin(props: Readonly<{
                           avoid account takeover.
                         </p>
                       </div>
-                      <Button type="submit" disabled={ldapSaving} aria-label="Save LDAP settings">
+                      <Button type="submit" disabled={ldapSaving}>
                         {ldapSaving ? "Saving…" : "Save LDAP settings"}
                       </Button>
                     </form>

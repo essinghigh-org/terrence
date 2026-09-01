@@ -23,7 +23,7 @@ function Card({
       data-slot="card"
       data-size={size}
       className={cn(
-        "group/card flex flex-col gap-(--card-spacing) overflow-hidden rounded-xl bg-card py-(--card-spacing) text-sm text-card-foreground ring-1 ring-foreground/10 [--card-spacing:--spacing(4)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
+        "group/card flex flex-col gap-(--card-spacing) overflow-hidden rounded-xl bg-card py-(--card-spacing) text-sm text-card-foreground shadow-[0_1px_2px_hsl(var(--foreground)/.04)] ring-1 ring-border/80 [--card-spacing:--spacing(4)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
         className
       )}
 // SAFETY: DeepReadonly is a compile-time-only structural wrapper; the props object is the primitive's own shape at runtime.
@@ -39,7 +39,7 @@ function CardHeader({ className, variant = "default", ...props }: CardHeaderProp
       data-variant={variant}
       className={cn(
         "group/card-header @container/card-header grid auto-rows-min items-start gap-1 px-(--card-spacing) has-data-[slot=card-action]:grid-cols-[1fr_auto] has-data-[slot=card-description]:grid-rows-[auto_auto] [.border-b]:pb-(--card-spacing)",
-        variant === "section" && "-mt-(--card-spacing) border-b bg-muted pt-(--card-spacing)",
+        variant === "section" && "-mt-(--card-spacing) border-b bg-muted/50 pt-(--card-spacing)",
         variant === "danger" && "-mt-(--card-spacing) border-b border-destructive/30 bg-destructive/15 pt-(--card-spacing) text-destructive",
         className
       )}
@@ -104,7 +104,7 @@ function CardFooter({ className, ...props }: DeepReadonly<React.ComponentProps<"
     <div
       data-slot="card-footer"
       className={cn(
-        "flex items-center border-t bg-muted/50 p-(--card-spacing)",
+        "flex items-center border-t bg-muted/30 p-(--card-spacing)",
         className
       )}
 // SAFETY: DeepReadonly is a compile-time-only structural wrapper; the props object is the primitive's own shape at runtime.
