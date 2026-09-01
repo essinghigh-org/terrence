@@ -183,9 +183,11 @@ function isJsonApiRequestPath(pathname: string): boolean {
     && !pathname.endsWith("/json-outputs-upload");
 }
 
-/** Raw upload and webhook endpoints also return non-JSON:API success documents. */
+/** Raw policy uploads and the signed approval webhook return non-JSON:API success documents. */
 function isJsonApiResponsePath(pathname: string): boolean {
-  return isJsonApiRequestPath(pathname);
+  if (!isJsonApiEndpointPath(pathname)) return false;
+  if (pathname === "/api/v2/webhooks/run-approval") return false;
+  return !/^\/api\/v2\/policies\/[^/]+\/upload$/.test(pathname);
 }
 
 /** Account bootstrap/authentication endpoints intentionally work without a user. */
