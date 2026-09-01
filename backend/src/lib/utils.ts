@@ -1,4 +1,4 @@
-import { db } from "../db";
+import { db, isPostgres } from "../db";
 import {
   users, workspaces,
   runs, stateVersions, workspaceVariables, workspaceTags,
@@ -8,7 +8,7 @@ import {
   organizations, registryPartnerships, teams, teamMemberships, teamWorkspaces,
   organizationMembershipRoles, organizationRoles,
 } from "../db/schema";
-import { and, desc, eq, exists, gte, inArray, isNull, like, lt, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, exists, gte, ilike, inArray, isNull, like, lt, notInArray, or, sql } from "drizzle-orm";
 import { timingSafeEqual, createHash, createHmac, randomBytes } from "node:crypto";
 import { access, rm } from "node:fs/promises";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -1590,14 +1590,14 @@ function addWorkspaceNameFilter(conditions: readonly RunWhereCondition[], name: 
   const trimmed = name?.trim();
   if (trimmed === undefined || trimmed === "") return conditions;
   const matchingWorkspaces = db.select({ id: workspaces.id }).from(workspaces)
-    .where(like(workspaces.name, `%${trimmed}%`));
+    .where(isPostgres ? ilike(workspaces.name, `%${trimmed}%`) : like(workspaces.name, `%${trimmed}%`));
   return [...conditions, inArray(runs.workspaceId, matchingWorkspaces)];
 }
 
 function addWorkspaceNamesFilter(conditions: readonly RunWhereCondition[], names: string[] | undefined): RunWhereConditions {
   if (names === undefined || names.length === 0) return conditions;
   const matchingWorkspaces = db.select({ id: workspaces.id }).from(workspaces)
-    .where(or(...names.map((name: string) => like(workspaces.name, `%${name}%`))));
+    .where(or(...names.map((name: string) => isPostgres ? ilike(workspaces.name, `%${name}%`) : like(workspaces.name, `%${name}%`))));
   return [...conditions, inArray(runs.workspaceId, matchingWorkspaces)];
 }
 

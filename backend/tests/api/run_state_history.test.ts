@@ -94,8 +94,8 @@ describe("workspace run history and state metadata", () => {
       description: "run and state contract",
     });
     await db.insert(workspaces).values([
-      { id: workspaceId, name: "history", orgId },
-      { id: otherWorkspaceId, name: "other", orgId },
+      { id: workspaceId, name: "History", orgId },
+      { id: otherWorkspaceId, name: "Other", orgId },
     ]);
     await db.insert(runs).values([
       {

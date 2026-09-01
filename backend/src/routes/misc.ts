@@ -3,7 +3,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { envEnabled } from "../lib/env";
 import { db } from "../db";
 import { runTriggers, auditLogs, githubWebhookDeliveries, workspaces, workspaceVariables, users, organizationMemberships, teams } from "../db/schema";
-import { eq, and, asc, count, desc, inArray, or, type SQL } from "drizzle-orm";
+import { eq, and, asc, count, desc, inArray, or, sql, type SQL } from "drizzle-orm";
 import { checkOrgPermission, findAuthorizedRun, findAuthorizedWorkspace, pageRequest, pagination, workspaceIdsForPermission } from "../lib/utils";
 import { scopeCoversOrg, scopeGrants } from "../lib/token-scopes";
 import { currentTokenScopes } from "../lib/request-scope";
@@ -43,6 +43,8 @@ async function variableAuthorizationWhere(
   tokenOrgId: string | null,
   tokenTeamId: string | null,
 ): Promise<SQL | undefined> {
+  if (tokenOrgId === null && tokenTeamId === null && user?.isSiteAdmin === true) return sql`true`;
+
   let organizationIds: string[];
   if (tokenOrgId !== null) {
     organizationIds = [tokenOrgId];
@@ -62,8 +64,7 @@ async function variableAuthorizationWhere(
     organizationIds = [];
   }
 
-  const accessConditions: SQL[] = [];
-  for (const organizationId of [...new Set(organizationIds)]) {
+  const accessConditions = (await Promise.all([...new Set(organizationIds)].map(async (organizationId): Promise<SQL | null> => {
     const authorizedWorkspaceIds = await workspaceIdsForPermission(
       organizationId,
       user?.id,
@@ -71,12 +72,10 @@ async function variableAuthorizationWhere(
       tokenTeamId,
       "variables-read",
     );
-    if (authorizedWorkspaceIds === null) {
-      accessConditions.push(eq(workspaces.orgId, organizationId));
-    } else if (authorizedWorkspaceIds.length > 0) {
-      accessConditions.push(inArray(workspaceVariables.workspaceId, authorizedWorkspaceIds));
-    }
-  }
+    if (authorizedWorkspaceIds === null) return eq(workspaces.orgId, organizationId);
+    if (authorizedWorkspaceIds.length > 0) return inArray(workspaceVariables.workspaceId, authorizedWorkspaceIds);
+    return null;
+  }))).filter((condition): condition is SQL => condition !== null);
   return accessConditions.length === 0 ? undefined : or(...accessConditions);
 }
 

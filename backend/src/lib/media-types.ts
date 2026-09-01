@@ -132,7 +132,8 @@ function quality(parameters: Readonly<ReadonlyMap<string, Readonly<{ value: stri
  *
  * An absent header means any representation is acceptable. Wildcard ranges such
  * as `* / *` (without the spaces) and `application/*` are also compatible.
- * an Accept parameter; every other parameter is unsupported by this server.
+ * Only `q`, `profile`, and `ext` are recognized as Accept parameters; every
+ * other parameter makes the range unsupported by this server.
  */
 export function acceptsJsonApi(value: string | null): boolean {
   if (value === null) return true;
