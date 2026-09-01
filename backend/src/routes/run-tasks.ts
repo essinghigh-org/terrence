@@ -15,6 +15,7 @@ import { authPlugin } from "../auth";
 import { organizationName } from "../lib/response";
 import { cachedOrgByName } from "../lib/cached-lookups";
 import { encryptSecret } from "../lib/secrets";
+import { isUniqueConstraintError } from "../lib/validation";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -423,7 +424,13 @@ const attachWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, t
     return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
   }
   const id = `wrt-${crypto.randomUUID()}`;
-  await db.insert(workspaceRunTasks).values({ id, workspaceId, runTaskId: taskId, stage, enforcementLevel }).onConflictDoNothing();
+  try {
+    await db.insert(workspaceRunTasks).values({ id, workspaceId, runTaskId: taskId, stage, enforcementLevel });
+  } catch (error: unknown) {
+    if (!isUniqueConstraintError(error)) throw error;
+    (set as { status: number }).status = 409;
+    return { errors: [{ status: "409", title: "Conflict", detail: "Run task is already attached to this workspace" }] };
+  }
   const persisted = await db.query.workspaceRunTasks.findFirst({
     where: and(eq(workspaceRunTasks.workspaceId, workspaceId), eq(workspaceRunTasks.runTaskId, taskId)),
   });

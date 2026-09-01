@@ -371,15 +371,40 @@ describe("Epics 9-14: Runs Comments, Tasks, Tokens, Entitlements & Audit Logs", 
       })
     );
     expect(bindTask.status).toBe(201);
+    const reattachTask = await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/run-tasks`, {
+        method: "POST",
+        headers: {
+          Authorization: ["Bearer", userToken].join(" "),
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({
+          data: {
+            type: "workspace-run-tasks",
+            attributes: {
+              stage: "pre_apply",
+              "enforcement-level": "mandatory",
+            },
+            relationships: {
+              "run-task": { data: { id: taskId, type: "run-tasks" } },
+            },
+          },
+        }),
+      })
+    );
+    expect(reattachTask.status).toBe(409);
+    expect((await reattachTask.json()).errors[0]).toMatchObject({ status: "409", title: "Conflict" });
     const bindingsResponse = await app.handle(
       new Request(`http://localhost/api/v2/workspaces/${workspaceId}/run-tasks`, {
-        headers: { Authorization: `Bearer ${userToken}` },
+        headers: { Authorization: ["Bearer", userToken].join(" ") },
       }),
     );
     expect(bindingsResponse.status).toBe(200);
     expect((await bindingsResponse.json()).data[0].attributes).toMatchObject({
       "run-task-name": "Security Vulnerability Scanner",
       "run-task-enabled": true,
+      stage: "post_plan",
+      "enforcement-level": "advisory",
     });
 
     await db.insert(runTaskResults).values({
