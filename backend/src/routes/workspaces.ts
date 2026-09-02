@@ -1413,8 +1413,10 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const workspaceId = params.workspace_id ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null, "admin");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (ws.locked !== true) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is not locked" }] }; }
     await promoteIntermediateStateVersion(workspaceId);
-    await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true)));
+    const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true))).returning({ id: workspaces.id });
+    if (unlocked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock changed while unlocking" }] }; }
     const org = await cachedOrgById(ws.orgId);
     return {
       data: await workspaceResource(
