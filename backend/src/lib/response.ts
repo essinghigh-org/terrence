@@ -145,6 +145,9 @@ export function tokenResource(token: ApiTokenWithRaw, includeSecret = false): Re
         data: token.userId !== null ? { id: token.userId, type: "users" } : null,
       },
     },
+    links: {
+      self: `/api/v2/authentication-tokens/${token.id}`,
+    },
   };
 }
 
