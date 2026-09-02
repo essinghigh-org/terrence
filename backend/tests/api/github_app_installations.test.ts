@@ -41,6 +41,7 @@ const originalEnvironment = Object.fromEntries([
 let publicKey = "";
 let providerMode: "valid" | "mismatch" = "valid";
 let providerName = "octo-organization";
+let accessTokenPermissions: Readonly<Record<string, string>> | undefined = { statuses: "write" };
 const providerRequests: { authorization: string | null; url: string }[] = [];
 
 function restoreEnvironment(): void {
@@ -103,7 +104,11 @@ beforeAll(async () => {
       authorization: authorization ?? headers.get("authorization"),
       url,
     });
-    if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+    if (url.includes("/access_tokens")) {
+      const payload: Record<string, unknown> = { token: "installation-token" };
+      if (accessTokenPermissions !== undefined) payload.permissions = accessTokenPermissions;
+      return Response.json(payload);
+    }
     if (url.includes("/installation/repositories")) {
       const page = new URL(url).searchParams.get("page");
       if (page === "2") {
@@ -173,6 +178,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   providerMode = "valid";
   providerName = "octo-organization";
+  accessTokenPermissions = { statuses: "write" };
   providerRequests.length = 0;
   process.env.GITHUB_APP_SLUG = "terrence-test";
   await db.insert(organizationMemberships).values({
@@ -354,7 +360,7 @@ describe("GitHub App installation setup", () => {
     }
   });
 
-  test("diagnostics skips archived repositories before checking commit-status permission", async () => {
+  test("diagnostics skips archived repositories and uses token permission metadata", async () => {
     const localId = `ghain-diagnostic-${suffix}`;
     const previousFetch = globalThis.fetch;
     const diagnosticRequests: { headers: Headers; url: string }[] = [];
@@ -392,19 +398,88 @@ describe("GitHub App installation setup", () => {
         data?: { checks?: { detail?: string; id?: string; ok?: boolean; status?: number | null }[] }[];
       };
       const check = body.data?.[0]?.checks?.find((candidate) => candidate.id === "commit-statuses");
-      expect(check).toEqual(expect.objectContaining({ ok: true, status: 422 }));
+      expect(check).toEqual(expect.objectContaining({ ok: true, status: null }));
       expect(check?.detail).toContain("acme/active-repository");
+      expect(check?.detail).toContain("grants Commit statuses write");
 
       const repositoryRequest = diagnosticRequests.find((entry) => entry.url.includes("/installation/repositories"));
       expect(repositoryRequest).toBeDefined();
       expect(new URL(repositoryRequest?.url ?? "https://terrence.test").searchParams.get("per_page")).toBe("100");
-      const statusRequest = diagnosticRequests.find((entry) => entry.url.includes("/statuses/"));
-      expect(statusRequest).toBeDefined();
-      expect(statusRequest?.url).toContain("acme%2Factive-repository");
-      expect(statusRequest?.headers.get("user-agent")).toBe("Terrence");
-      expect(statusRequest?.headers.get("x-github-api-version")).toBe("2022-11-28");
+      expect(diagnosticRequests.some((entry) => entry.url.includes("/statuses/"))).toBe(false);
     } finally {
       globalThis.fetch = previousFetch;
+      await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, localId));
+    }
+  });
+
+  test("diagnostics reports when token permission metadata lacks write access", async () => {
+    const localId = `ghain-diagnostic-read-${suffix}`;
+    const previousPermissions = accessTokenPermissions;
+    accessTokenPermissions = { statuses: "read" };
+    await db.insert(githubAppInstallations).values({
+      id: localId,
+      orgId,
+      name: "diagnostic-read-installation",
+      installationId: installationId + 21,
+    });
+    try {
+      const response = await request(`/api/v2/organizations/${orgName}/github-app/diagnostics`);
+      expect(response.status).toBe(200);
+      const body = await response.json() as {
+        data?: { checks?: { detail?: string; id?: string; ok?: boolean; status?: number | null }[] }[];
+      };
+      const check = body.data?.[0]?.checks?.find((candidate) => candidate.id === "commit-statuses");
+      expect(check).toEqual(expect.objectContaining({ ok: false, status: null }));
+      expect(check?.detail).toContain("reports Commit statuses permission as \"read\"");
+    } finally {
+      accessTokenPermissions = previousPermissions;
+      await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, localId));
+    }
+  });
+
+  test("diagnostics keeps the synthetic probe fallback when permission metadata is omitted", async () => {
+    const localId = `ghain-diagnostic-fallback-${suffix}`;
+    const previousPermissions = accessTokenPermissions;
+    const previousFetch = globalThis.fetch;
+    const diagnosticRequests: { headers: Headers; url: string }[] = [];
+    accessTokenPermissions = undefined;
+    const diagnosticFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = input instanceof Request ? input.url : input.toString();
+      diagnosticRequests.push({
+        headers: new Headers(input instanceof Request ? input.headers : init?.headers),
+        url,
+      });
+      if (url.includes("/installation/repositories")) {
+        return Response.json({ repositories: [{ archived: false, full_name: "acme/fallback-repository" }] });
+      }
+      if (url.includes("/statuses/")) {
+        return new Response(JSON.stringify({ message: "No commit found for SHA" }), {
+          headers: { "Content-Type": "application/json" },
+          status: 422,
+        });
+      }
+      return previousFetch(input, init);
+    };
+    globalThis.fetch = Object.assign(diagnosticFetch, { preconnect: previousFetch.preconnect });
+    await db.insert(githubAppInstallations).values({
+      id: localId,
+      orgId,
+      name: "diagnostic-fallback-installation",
+      installationId: installationId + 22,
+    });
+    try {
+      const response = await request(`/api/v2/organizations/${orgName}/github-app/diagnostics`);
+      expect(response.status).toBe(200);
+      const body = await response.json() as {
+        data?: { checks?: { detail?: string; id?: string; ok?: boolean; status?: number | null }[] }[];
+      };
+      const check = body.data?.[0]?.checks?.find((candidate) => candidate.id === "commit-statuses");
+      expect(check).toEqual(expect.objectContaining({ ok: true, status: 422 }));
+      expect(check?.detail).toContain("acme/fallback-repository");
+      expect(diagnosticRequests.some((entry) => entry.url.includes("/statuses/"))).toBe(true);
+    } finally {
+      globalThis.fetch = previousFetch;
+      accessTokenPermissions = previousPermissions;
       await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, localId));
     }
   });
