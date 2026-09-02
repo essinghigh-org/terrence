@@ -819,7 +819,12 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
+    if (data !== undefined && data.type !== undefined && data.type !== "explorer-views") {
+      (set as { status: number }).status = 422;
+      return error("422", "Unprocessable Entity", "Invalid type");
+    }
     const name = typeof data?.name === "string" ? data.name.trim() : "";
+    if (name.length > 255) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "Name too long"); }
     const query = queryObject(data?.query, data?.query_type ?? data?.["query-type"]);
     if (name === "" || query === undefined) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "name, query_type, and query are required"); }
     const saved: typeof explorerSavedQueries.$inferInsert = { id: `sq-${crypto.randomUUID()}`, orgId: org.id, name, queryType: query.type, query: { type: query.type, filter: query.filter, fields: query.fields, sort: query.sort }, createdAt: Date.now() };
