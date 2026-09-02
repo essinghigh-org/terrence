@@ -20,7 +20,7 @@ export type ProviderMode = (typeof PROVIDER_MODES)[number];
 export const COMPATIBILITY_VERSION =
   process.env.TERRENCE_COMPATIBILITY_VERSION?.trim() ||
   process.env.TERRENCE_TFE_COMPATIBILITY_VERSION?.trim() ||
-  "2.5.0";
+  "v202609-1";
 
 // The TFP-API-Version response header carries the Terraform provider API
 // version that clients compare as a dotted numeric (e.g. "2.0"), whereas
@@ -28,7 +28,7 @@ export const COMPATIBILITY_VERSION =
 // The compatibility version above often holds a release-style value via env,
 // which would make TFP-API-Version unparseable and break version negotiation.
 // Keep the API version in its own constant, overridable independently.
-export const TFP_API_VERSION = process.env.TERRENCE_TFP_API_VERSION?.trim() || "2.5.0";
+export const TFP_API_VERSION = process.env.TERRENCE_TFP_API_VERSION?.trim() || "2.6";
 
 export const NOTIFICATION_DESTINATIONS = ["generic", "slack", "microsoft-teams", "email"] as const;
 export type NotificationDestination = (typeof NOTIFICATION_DESTINATIONS)[number];
