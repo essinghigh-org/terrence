@@ -303,6 +303,14 @@ export const projectRoutes = new Elysia({ name: "projects" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    if (data !== null && typeof data === "object" && "type" in data && (data as Record<string, unknown>).type !== undefined && (data as Record<string, unknown>).type !== "projects") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid type" }] };
+    }
+    if (attributes.name !== undefined && typeof attributes.name === "string" && attributes.name.trim() === "") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] };
+    }
     const settings = await projectSettings(project.orgId, projectId, data, attributes, project);
     if ("error" in settings) {
       (set as { status: number }).status = 422;
