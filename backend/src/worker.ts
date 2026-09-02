@@ -1378,6 +1378,7 @@ async function unnestArchiveDirectory(
     }
   } catch (error: unknown) {
     log.warn("Could not unnest archive directory", { destDir, error });
+    throw error;
   }
 }
 

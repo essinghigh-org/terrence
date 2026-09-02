@@ -220,9 +220,15 @@ function serializeLogErrorInternal(error: Error, depth: number, active: Set<Erro
 /** Convert Error instances into useful, bounded, JSON-safe structured metadata. */
 export function serializeLogError(error: unknown): Readonly<Record<string, unknown>> {
   if (!(error instanceof Error)) {
+    let message: string;
+    try {
+      message = String(error);
+    } catch {
+      message = "[Non-error value omitted]";
+    }
     return {
       name: "NonErrorThrown",
-      message: truncateLogString(String(error), MAX_ERROR_STRING_LENGTH),
+      message: truncateLogString(message, MAX_ERROR_STRING_LENGTH),
     };
   }
   return serializeLogErrorInternal(error, 0, new Set<Error>());

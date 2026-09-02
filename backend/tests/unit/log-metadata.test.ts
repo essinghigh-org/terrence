@@ -37,7 +37,7 @@ describe("structured logger metadata nesting (12.5)", () => {
 
   it("serializes Error metadata without dropping diagnostic fields", async () => {
     const mod = await import("../../src/lib/log");
-    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    const errorSpy = spyOn(console, "error").mockImplementation(() => undefined);
     try {
       const error = new Error("boom") as Error & {
         cause?: unknown;
@@ -71,6 +71,15 @@ describe("structured logger metadata nesting (12.5)", () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  it("serializes non-coercible non-Error values safely", async () => {
+    const mod = await import("../../src/lib/log");
+    const nonCoercible = Object.create(null) as unknown;
+    expect(mod.serializeLogError(nonCoercible)).toEqual({
+      name: "NonErrorThrown",
+      message: "[Non-error value omitted]",
+    });
   });
 
   it("omits meta when it is an empty object", async () => {
