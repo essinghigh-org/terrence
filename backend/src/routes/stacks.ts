@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import { and, desc, eq, notInArray } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray, or } from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { db } from "../db";
 import { agentPools, durableJobs, githubAppInstallations, oauthClients, oauthTokens, organizations, projects, stackAgentJobs, stackRecords, stackStateLocks, stacks } from "../db/schema";
@@ -656,14 +656,32 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     const authorized = await authorizedStackRecord(params.stack_deployment_group_id ?? "", user, tokenOrgId, teamId, "stack-deployment-groups");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const now = Date.now();
-    await db.update(stackRecords).set({ status: "pending", updatedAt: now }).where(eq(stackRecords.id, authorized.record.id));
-    const runs = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.parentId, authorized.record.id), eq(stackRecords.recordType, "stack-deployment-runs")) });
-    for (const run of runs) {
-      if (!["failed", "canceled"].includes(run.status)) continue;
-      const step = (await db.query.stackRecords.findMany({ where: and(eq(stackRecords.parentId, run.id), eq(stackRecords.recordType, "stack-deployment-steps")), orderBy: [desc(stackRecords.createdAt)] }))[0];
-      await db.update(stackRecords).set({ status: "planning", updatedAt: now }).where(eq(stackRecords.id, run.id));
-      if (step !== undefined) await db.update(stackRecords).set({ status: "queued", payload: { ...(step.payload ?? {}), error: null }, updatedAt: now }).where(eq(stackRecords.id, step.id));
-      await enqueueDurableJob("stack-deployment", { runId: run.id }, { dedupeKey: `stack-run:${run.id}:rerun:${now}` });
+    const rerunIds: string[] = [];
+    await db.transaction(async (tx): Promise<void> => {
+      await tx.update(stackRecords).set({ status: "pending", updatedAt: now }).where(eq(stackRecords.id, authorized.record.id));
+      const runs = await tx.query.stackRecords.findMany({
+        where: and(eq(stackRecords.parentId, authorized.record.id), eq(stackRecords.recordType, "stack-deployment-runs"), or(eq(stackRecords.status, "failed"), eq(stackRecords.status, "canceled"))),
+        columns: { id: true },
+      });
+      if (runs.length === 0) return;
+      const runIds = runs.map((r): string => r.id);
+      rerunIds.push(...runIds);
+      const steps = await tx.query.stackRecords.findMany({
+        where: and(eq(stackRecords.recordType, "stack-deployment-steps"), inArray(stackRecords.parentId, runIds)),
+        orderBy: [desc(stackRecords.createdAt)],
+      });
+      const latestStepByRun = new Map<string, typeof steps[number]>();
+      for (const s of steps) {
+        if (!latestStepByRun.has(s.parentId ?? "")) latestStepByRun.set(s.parentId ?? "", s);
+      }
+      for (const run of runs) {
+        await tx.update(stackRecords).set({ status: "planning", updatedAt: now }).where(eq(stackRecords.id, run.id));
+        const step = latestStepByRun.get(run.id);
+        if (step !== undefined) await tx.update(stackRecords).set({ status: "queued", payload: { ...(step.payload ?? {}), error: null }, updatedAt: now }).where(eq(stackRecords.id, step.id));
+      }
+    });
+    for (const runId of rerunIds) {
+      await enqueueDurableJob("stack-deployment", { runId }, { dedupeKey: `stack-run:${runId}:rerun:${now}` });
     }
     (set as { status: number }).status = 204;
     return {};
