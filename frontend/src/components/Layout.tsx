@@ -85,6 +85,7 @@ import { cn } from "../lib/utils";
 import { CapabilitiesProvider, DEFAULT_CAPABILITIES, type Capabilities } from "../lib/capabilities";
 import { useDocsIndex } from "../lib/docs-index";
 import { isString } from "../lib/type-guards";
+import { ORG_CACHE_TTL_MS, orgPermissionsCache } from "../hooks/useOrganizationPermissions";
 
 const SIDEBAR_STORAGE_KEY = "terrence-sidebar-collapsed";
 
@@ -448,6 +449,12 @@ export function Layout({
   const [capabilities, setCapabilities] = useState<Capabilities>(DEFAULT_CAPABILITIES);
 
   useEffect((): (() => void) | undefined => {
+    const cached = hasOrg ? orgPermissionsCache.get(orgName) : undefined;
+    if (cached !== undefined && cached.expires > Date.now()) {
+      setOrganizationPermissions(cached.permissions ?? null);
+      setOrganizationPermissionPath(orgPath);
+      return undefined;
+    }
     setOrganizationPermissions(null);
     setOrganizationPermissionPath("");
     setCapabilities(DEFAULT_CAPABILITIES);
@@ -458,7 +465,9 @@ export function Layout({
     }).then((response): void => {
       if (controller.signal.aborted) return;
       const attributes = response.data?.attributes;
-      setOrganizationPermissions(attributes?.permissions ?? null);
+      const perms = attributes?.permissions ?? null;
+      if (hasOrg) orgPermissionsCache.set(orgName, { permissions: perms as Readonly<Record<string, boolean>> | undefined, expires: Date.now() + ORG_CACHE_TTL_MS });
+      setOrganizationPermissions(perms);
       setCapabilities(attributes?.capabilities ?? DEFAULT_CAPABILITIES);
       setOrganizationPermissionPath(orgPath);
     }).catch((): void => {
