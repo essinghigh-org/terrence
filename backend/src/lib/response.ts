@@ -417,10 +417,10 @@ export function tagBindingResource(tag: TagParam, effective = false): Record<str
 
 type ProjectTagParam = DeepReadonly<{ id: string; projectId: string; key: string; value?: string | null }>;
 
-export function projectTagBindingResource(pt: ProjectTagParam): Record<string, unknown> {
+export function projectTagBindingResource(pt: ProjectTagParam, effective = false): Record<string, unknown> {
   return {
     id: pt.id,
-    type: "tag-bindings",
+    type: effective ? "effective-tag-bindings" : "tag-bindings",
     attributes: {
       key: pt.key,
       value: pt.value ?? "",
