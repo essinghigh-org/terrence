@@ -135,12 +135,6 @@ describe("mcp run plan surface", () => {
   });
 
   it("denies plan JSON for runs outside the token's workspaces", async () => {
-    const res = await mcpCall(scopedSecret, "get_plan_json", { run_id: runId });
-    expect(res.status).toBe(200);
-    const body = await res.json() as { error?: { code: number } };
-    // Sanity: the run is inside the granted workspace, so this succeeds;
-    // a run in another workspace must fail. Seed one inline.
-    expect(body.error).toBeUndefined();
     const foreignRunId = `run-foreign-${seed.suffix}`;
     await db.insert(runs).values({
       id: foreignRunId,
@@ -156,6 +150,26 @@ describe("mcp run plan surface", () => {
       expect(deniedBody.error?.code).toBe(-32001);
     } finally {
       await db.delete(runs).where(eq(runs.id, foreignRunId));
+    }
+  });
+
+  it("reports unavailable plan JSON for runs without an artifact", async () => {
+    const emptyRunId = `run-empty-${seed.suffix}`;
+    await db.insert(runs).values({
+      id: emptyRunId,
+      workspaceId,
+      status: "planned",
+      message: "no artifact",
+      createdAt: Date.now(),
+    });
+    try {
+      const res = await mcpCall(seed.token, "get_plan_json", { run_id: emptyRunId });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { error?: { code: number; message: string } };
+      expect(body.error?.code).toBe(-32602);
+      expect(body.error?.message).toBe("Plan JSON output is unavailable for this run");
+    } finally {
+      await db.delete(runs).where(eq(runs.id, emptyRunId));
     }
   });
 
