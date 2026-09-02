@@ -17,6 +17,8 @@ import { isMaintenanceActive, exitMaintenance } from "../../src/lib/maintenance"
 import { readBootConfigFile } from "../../src/lib/boot-config";
 import { storageDir } from "../../src/db/driver";
 import { makeTestDbName } from "../setup";
+const isPostgresEnv = !!process.env.PG_ADMIN_URL || (process.env.DATABASE_URL?.includes("postgres") ?? false);
+
 
 process.env.TERRENCE_DISABLE_RESTART ??= "1";
 process.env.MIGRATION_SKIP_DRAIN = "true";
@@ -168,7 +170,7 @@ afterAll(async (): Promise<void> => {
   }
 });
 
-describe("SQLite -> PostgreSQL migration wizard", () => {
+describe.skipIf(!isPostgresEnv)("SQLite -> PostgreSQL migration wizard", () => {
   test("rejects non-admin callers", async (): Promise<void> => {
     const response = await app.handle(new Request("http://localhost/api/v2/admin/db-migration/status"));
     expect(response.status).toBe(404);
