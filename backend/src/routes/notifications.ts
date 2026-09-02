@@ -14,7 +14,7 @@ import {
 } from "../db/schema";
 import { isOwnershipVerified, postNotification, verifyDestinationOwnership, type NotificationDelivery } from "../lib/notifications";
 import { checkOrganizationPermission, checkOrgPermission, findAuthorizedWorkspace, notFound, pageRequest, pagination } from "../lib/utils";
-import { isNotificationDestination, isNotificationTrigger, RUN_NOTIFICATION_TRIGGERS } from "../lib/constants";
+import { isNotificationDestination, isNotificationTrigger } from "../lib/constants";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "../lib/secrets";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -262,7 +262,7 @@ function createValues(
     ? attributes["email-all-members"]
     : (scope.projectId !== undefined || scope.teamId !== undefined) && emailUserIds.length === 0;
   const triggers = attributes.triggers === undefined
-    ? [...RUN_NOTIFICATION_TRIGGERS]
+    ? []
     : Array.isArray(attributes.triggers) && attributes.triggers.every(isNotificationTrigger)
       ? [...attributes.triggers]
       : null;
