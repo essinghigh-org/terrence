@@ -276,7 +276,7 @@ function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<
           target.transport === "udp" ? { maxBodyBytes: UDP_JSON_BODY_BUDGET, format: configuration.syslogFormat } : { format: configuration.syslogFormat },
         );
         try {
-          sendSyslogFrame(target, frame);
+          sendSyslogFrame(target, frame, { jsonBody: configuration.syslogFormat === "json" });
         } catch {
           // A single destination must never suppress the remaining fan-out.
         }

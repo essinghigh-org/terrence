@@ -258,13 +258,20 @@ export function formatSyslogMessage(
     identity.hostname || NIL
   } ${identity.appName || NIL} ${identity.procId || NIL} ${NIL}`;
   if ((options?.format ?? "rfc5424") === "json") {
+    // Envelope keys come first so last-resort transport truncation keeps
+    // timestamp/level/message; colliding meta keys are dropped so the
+    // envelope always wins (same precedence as before, just ordered).
+    const extra: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(entry.meta ?? {})) {
+      if (!["timestamp", "level", "message", "hostname", "app"].includes(key)) extra[key] = value;
+    }
     const body: Record<string, unknown> = {
-      ...(entry.meta ?? {}),
       timestamp: entry.timestamp,
       level: entry.level,
       message: entry.message,
       hostname: identity.hostname || NIL,
       app: identity.appName || NIL,
+      ...extra,
     };
     const maxBytes = options?.maxBodyBytes;
     const json = maxBytes === undefined ? stringifySyslogBody(body) : fitJsonBody(body, maxBytes);

@@ -152,6 +152,56 @@ describe("syslog UDP transport end to end", (): void => {
     expect((receivedBody["message"] as string).startsWith("🙂")).toBeTrue();
   }, 5_000);
 
+  it("repairs JSON bodies cut by the transport-level fallback into parseable objects", async (): Promise<void> => {
+    const port = await new Promise<number>((resolve, reject): void => {
+      const socket = createSocket("udp4");
+      probe = socket;
+      socket.on("error", reject);
+      socket.bind(0, "127.0.0.1", (): void => {
+        resolve((socket.address() as { port: number }).port);
+      });
+    });
+
+    const target = parseSyslogTarget(`udp://127.0.0.1:${port}`);
+    if (target === null) throw new Error("unreachable");
+    const received = new Promise<Buffer>((resolve): void => {
+      probe?.once("message", (message: Buffer): void => {
+        resolve(message);
+      });
+    });
+    // No maxBodyBytes: the frame exceeds the datagram cap, so the transport
+    // fallback (not the formatter budget) shortens it. jsonBody tells the
+    // fallback to repair the cut into a parseable object.
+    const frame = formatSyslogMessage(
+      {
+        timestamp: "2026-08-26T03:00:00.000Z",
+        level: "info",
+        message: "fallback repair",
+        meta: { first: "a".repeat(300), second: "b".repeat(300), third: "c".repeat(300) },
+      },
+      { hostname: "test-host", appName: "terrence", procId: "7" },
+      { format: "json" },
+    );
+    expect(Buffer.byteLength(frame, "utf8")).toBeGreaterThan(1024);
+
+    sendSyslogFrame(target, frame, { jsonBody: true });
+
+    const message = await Promise.race([
+      received,
+      new Promise<Buffer>((_, reject): void => {
+        setTimeout((): void => {
+          reject(new Error("collector never received the frame"));
+        }, 3_000);
+      }),
+    ]);
+    const decoded = message.toString("utf8");
+    expect(message.byteLength).toBeLessThanOrEqual(1024);
+    const repaired = JSON.parse(decoded.slice(decoded.indexOf("{"))) as Record<string, unknown>;
+    expect(repaired["truncated"]).toBe(true);
+    expect(repaired["timestamp"]).toBe("2026-08-26T03:00:00.000Z");
+    expect(repaired["level"]).toBe("info");
+  }, 5_000);
+
   it("preserves the first emoji when truncating a NILVALUE UDP frame", async (): Promise<void> => {
     const port = await new Promise<number>((resolve, reject): void => {
       const socket = createSocket("udp4");
