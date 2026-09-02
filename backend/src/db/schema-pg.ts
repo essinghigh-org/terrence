@@ -1510,7 +1510,7 @@ export const stacks = pgTable("stacks", {
     id: text("id").notNull().primaryKey(),
     orgId: text("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
     projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
-    agentPoolId: text("agent_pool_id"),
+    agentPoolId: text("agent_pool_id").references(() => agentPools.id, { onDelete: "set null" }),
     executionMode: text("execution_mode").notNull().default("remote"),
     name: text("name").notNull(),
     description: text("description"),
