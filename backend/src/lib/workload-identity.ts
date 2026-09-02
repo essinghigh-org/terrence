@@ -227,6 +227,7 @@ export async function trimWorkloadIdentityKeys(): Promise<void> {
       ne(workloadIdentityKeys.id, current.id),
       ...(liveKeyIds.length === 0 ? [] : [notInArray(workloadIdentityKeys.keyId, liveKeyIds)]),
     ));
+    await pruneExpiredWorkloadIdentityTokens();
   } finally {
     await leadership.release();
   }
