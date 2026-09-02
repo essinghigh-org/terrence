@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, count} from "drizzle-orm";
 import { authPlugin } from "../auth";
 import { db } from "../db";
 import {
@@ -148,13 +148,21 @@ export const gpgKeyRoutes = new Elysia({ name: "registry-gpg-keys" })
       return { errors: [{ status: "403", title: "Forbidden" }] };
     }
 
-    const allKeys = await db.query.registryGpgKeys.findMany({ orderBy: [desc(registryGpgKeys.createdAt)] });
-    const matching = allKeys.filter((key): boolean => authorizedNamespaces.has(key.namespace));
     const page = pageRequest(request);
-    const offset = (page.number - 1) * page.size;
+    const where = inArray(registryGpgKeys.namespace, [...authorizedNamespaces]);
+    const [matching, countRows] = await Promise.all([
+      db.query.registryGpgKeys.findMany({
+        where,
+        orderBy: [desc(registryGpgKeys.createdAt)],
+        limit: page.size,
+        offset: (page.number - 1) * page.size,
+      }),
+      db.select({ total: count() }).from(registryGpgKeys).where(where),
+    ]);
+    const total = countRows[0]?.total ?? 0;
     return {
-      data: matching.slice(offset, offset + page.size).map(gpgKeyResource),
-      ...pagination(request, page.number, page.size, matching.length),
+      data: matching.map(gpgKeyResource),
+      ...pagination(request, page.number, page.size, total),
     };
   })
   .post("/api/registry/:registry_name/v2/gpg-keys", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
