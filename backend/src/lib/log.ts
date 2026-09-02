@@ -1,4 +1,4 @@
-import { formatSyslogMessage, resolveHostname } from "./syslog-format";
+import { formatSyslogMessage, resolveHostname, UDP_JSON_BODY_BUDGET } from "./syslog-format";
 import {
   closeSyslogTransports,
   parseSyslogTarget,
@@ -254,26 +254,29 @@ function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<
     && configuration.syslogTargets.length > 0
     && isLogLevelEnabled(level, configuration.syslogLevel)
   ) {
-    try {
-      const frame = formatSyslogMessage(
-        meta !== undefined
-          ? { timestamp: new Date().toISOString(), level, message, meta }
-          : { timestamp: new Date().toISOString(), level, message },
-        {
-          hostname: resolveHostname(process.env, configuration.syslogHostname),
-          appName: configuration.syslogApp,
-          procId: String(process.pid),
-        },
-      );
-      for (const target of configuration.syslogTargets) {
+    // Format per destination: datagram transports (UDP) need a byte-budgeted
+    // body so oversized entries stay valid JSON; streams take the full body.
+    for (const target of configuration.syslogTargets) {
+      try {
+        const frame = formatSyslogMessage(
+          meta !== undefined
+            ? { timestamp: new Date().toISOString(), level, message, meta }
+            : { timestamp: new Date().toISOString(), level, message },
+          {
+            hostname: resolveHostname(process.env, configuration.syslogHostname),
+            appName: configuration.syslogApp,
+            procId: String(process.pid),
+          },
+          target.transport === "udp" ? { maxBodyBytes: UDP_JSON_BODY_BUDGET } : undefined,
+        );
         try {
           sendSyslogFrame(target, frame);
         } catch {
           // A single destination must never suppress the remaining fan-out.
         }
+      } catch {
+        // Formatting and transport are best-effort diagnostics.
       }
-    } catch {
-      // Formatting and transport are best-effort diagnostics.
     }
   }
   if (!isLogLevelEnabled(level, configuration.logLevel)) return;

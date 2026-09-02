@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createSocket, type Socket } from "node:dgram";
 
 import { closeSyslogTransports, parseSyslogTarget, sendSyslogFrame } from "../../src/lib/syslog-transport";
-import { formatSyslogMessage } from "../../src/lib/syslog-format";
+import { formatSyslogMessage, UDP_JSON_BODY_BUDGET } from "../../src/lib/syslog-format";
 
 describe("syslog UDP transport end to end", (): void => {
   let probe: Socket | null = null;
@@ -101,7 +101,7 @@ describe("syslog UDP transport end to end", (): void => {
     expect(Buffer.byteLength(bigFrame.slice(0, 1024), "utf8")).toBeLessThanOrEqual(1024);
   });
 
-  it("keeps oversized UDP frames valid UTF-8 with complete structured data", async (): Promise<void> => {
+  it("delivers oversized UDP frames as valid JSON within the datagram cap", async (): Promise<void> => {
     const port = await new Promise<number>((resolve, reject): void => {
       const socket = createSocket("udp4");
       probe = socket;
@@ -126,6 +126,7 @@ describe("syslog UDP transport end to end", (): void => {
         meta: { detail: "é".repeat(1_000) },
       },
       { hostname: "test-host", appName: "terrence", procId: "7" },
+      { maxBodyBytes: UDP_JSON_BODY_BUDGET },
     );
 
     sendSyslogFrame(target, frame);
@@ -142,7 +143,12 @@ describe("syslog UDP transport end to end", (): void => {
     expect(message.byteLength).toBeLessThanOrEqual(1024);
     expect(Buffer.from(decoded, "utf8").equals(message)).toBeTrue();
     expect(decoded.startsWith("<14>1 2026-08-26T03:00:00.000Z test-host terrence 7 - ")).toBeTrue();
-    expect(decoded).not.toContain("[terrence@65024");
+    // The received payload parses: collectors extract fields from oversized
+    // entries instead of choking on a truncated blob.
+    const receivedBody = JSON.parse(decoded.slice(decoded.indexOf("{"))) as Record<string, unknown>;
+    expect(receivedBody["truncated"]).toBe(true);
+    expect(typeof receivedBody["message"]).toBe("string");
+    expect((receivedBody["message"] as string).startsWith("🙂")).toBeTrue();
   }, 5_000);
 
   it("preserves the first emoji when truncating a NILVALUE UDP frame", async (): Promise<void> => {

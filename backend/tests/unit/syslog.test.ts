@@ -138,6 +138,35 @@ describe("RFC 5424 formatting", (): void => {
     expect(body["big"]).toBe("10");
   });
 
+  it("preserves repeated references while still catching true cycles", (): void => {
+    const shared: Record<string, unknown> = { tag: "same" };
+    const line = formatSyslogMessage({ ...base, meta: { first: shared, second: shared } }, IDENTITY);
+    const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
+    expect(body["first"]).toEqual({ tag: "same" });
+    expect(body["second"]).toEqual({ tag: "same" });
+  });
+
+  it("serializes Date values via toJSON instead of empty objects", (): void => {
+    const line = formatSyslogMessage({ ...base, meta: { at: new Date("2026-01-02T03:04:05.000Z") } }, IDENTITY);
+    const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
+    expect(body["at"]).toBe("2026-01-02T03:04:05.000Z");
+  });
+
+  it("fits oversized bodies into the byte budget as valid JSON", (): void => {
+    const line = formatSyslogMessage(
+      { ...base, message: "m".repeat(2000), meta: { big: "x".repeat(2000) } },
+      IDENTITY,
+      { maxBodyBytes: 896 },
+    );
+    const json = line.slice(line.indexOf("{"));
+    expect(Buffer.byteLength(json, "utf8")).toBeLessThanOrEqual(896);
+    const body = JSON.parse(json) as Record<string, unknown>;
+    expect(body["truncated"]).toBe(true);
+    expect(body["timestamp"]).toBe("2026-08-26T03:00:00.000Z");
+    expect(typeof body["message"]).toBe("string");
+    expect((body["message"] as string).startsWith("m")).toBeTrue();
+  });
+
   it("falls back to a NIL timestamp for malformed stamps", (): void => {
     const line = formatSyslogMessage({ ...base, timestamp: "yesterday" }, IDENTITY);
     expect(line.startsWith("<14>1 - ")).toBeTrue();
