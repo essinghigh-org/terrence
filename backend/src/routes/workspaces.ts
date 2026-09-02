@@ -1555,7 +1555,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     };
     if (existing !== undefined) { await db.update(dataRetentionPolicies).set(values).where(eq(dataRetentionPolicies.id, pid)); } else { await db.insert(dataRetentionPolicies).values(values); }
     const gcSummary = await applyDataRetentionGarbageCollection(workspaceId);
-    (set as { status: number }).status = 201;
+    (set as { status: number }).status = existing !== undefined ? 200 : 201;
     return {
       data: {
         id: pid,

@@ -509,6 +509,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     } else {
       await db.update(organizationDataRetentionPolicies).set(values).where(eq(organizationDataRetentionPolicies.id, existing.id));
     }
+    const wasExisting = existing !== undefined
     const organizationWorkspaces = await db.query.workspaces.findMany({
       where: eq(workspaces.orgId, org.id),
       columns: { id: true },
@@ -517,7 +518,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     for (const workspace of organizationWorkspaces) {
       gc[workspace.id] = await applyDataRetentionGarbageCollection(workspace.id);
     }
-    (set as { status: number }).status = 201;
+    (set as { status: number }).status = wasExisting ? 200 : 201;
     return {
       data: {
         id: values.id,
