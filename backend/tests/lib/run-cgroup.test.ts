@@ -190,6 +190,9 @@ describe("run cgroups (kanban 8/9)", () => {
     writeFileSync(join(root, "run-dirty", "cgroup.procs"), "12345\n");
     // Non-empty group: destroy must NOT delete it silently.
     destroyRunCgroup("run-dirty", env);
+    // Directory must still exist — populated group is not removed.
+    expect(existsSync(join(root, "run-dirty"))).toBeTrue();
+    expect(readFileSync(join(root, "run-dirty", "cgroup.procs"), "utf8")).toContain("12345");
     rmSync(join(root, "run-dirty"), { recursive: true, force: true });
   });
 
