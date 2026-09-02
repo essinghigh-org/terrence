@@ -84,7 +84,7 @@ describe("mcp run plan surface", () => {
   });
 
   afterAll(async () => {
-    await deletePlanJsonArtifact(runId).catch((): void => {});
+    await deletePlanJsonArtifact(runId).catch(() => undefined);
     await db.delete(apiTokens).where(eq(apiTokens.id, scopedTokenId));
     await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
     await db.delete(workspaces).where(eq(workspaces.orgId, seed.orgId));
