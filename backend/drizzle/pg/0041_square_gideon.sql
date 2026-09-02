@@ -1,0 +1,1 @@
+CREATE INDEX "agent_jobs_status_claimed_idx" ON "agent_jobs" USING btree ("status","claimed_at");
