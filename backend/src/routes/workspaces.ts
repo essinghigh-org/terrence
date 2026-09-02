@@ -6,6 +6,7 @@ import {
   workspaceResource,
   workspaceOutputResources,
   workspaceVariableResource,
+  variableSetVariableResource,
   variableSetResource,
   tagBindingResource,
   type WorkspaceResourcePermissions,
@@ -22,6 +23,7 @@ import { cachedOrgByName, cachedOrgById } from "../lib/cached-lookups";
 import { isExecutionMode } from "../lib/constants";
 import { scheduleExplorerInventory } from "../lib/explorer-inventory";
 import { isValidTagsRegex } from "../lib/vcs-repo";
+import { effectiveWorkspaceVariables } from "../lib/effective-variables";
 
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -1245,6 +1247,36 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       }
     }
     return { data: vars.map((v: VarItem): Record<string, unknown> => workspaceVariableResource(v)), ...pagination(request, number, size, totalCount) };
+  })
+  // Effective variable list including variable-set inheritance (what the CLI
+  // needs via Variables.ListAll). Same precedence as executionVariables, but
+  // stored rows only: serializers null sensitive values, so no decryption
+  // happens on the API path.
+  .get("/api/v2/workspaces/:workspace_id/all-vars", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params.workspace_id ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "variables-read");
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const { number, size } = pageRequest(request);
+    const effective = await effectiveWorkspaceVariables(workspaceId, ws.orgId, ws.projectId ?? null);
+    const totalCount = effective.length;
+    const page = effective.slice((number - 1) * size, number * size);
+    if (strictAuditEnabled()) {
+      const sensitiveCount = page.filter((entry): boolean => entry.variable.sensitive === true).length;
+      if (sensitiveCount > 0) {
+        await auditLog("read", "workspace-variable", workspaceId, user?.id ?? null, ws.orgId, {
+          workspaceId,
+          scope: "all-vars-list",
+          "sensitive-count": sensitiveCount,
+        });
+      }
+    }
+    return {
+      data: page.map((entry): Record<string, unknown> =>
+        entry.source === "workspace"
+          ? workspaceVariableResource(entry.variable)
+          : variableSetVariableResource(entry.variable)),
+      ...pagination(request, number, size, totalCount),
+    };
   })
   .post("/api/v2/workspaces/:workspace_id/vars", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params.workspace_id ?? "";
