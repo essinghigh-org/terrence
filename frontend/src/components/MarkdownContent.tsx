@@ -21,10 +21,12 @@ export function inlineMarkdown(text: string): ReactNode {
       // Safe links: no scheme (relative paths, fragments), or http(s)/mailto.
       // Anything with another scheme (javascript:, data:, file:) renders as
       // plain text so markdown can never inject navigation.
-      const scheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.exec(href);
-      const safe = scheme === null || /^(https?:|mailto:)/.test(href);
+      // Trim leading whitespace/control chars so " javascript:" cannot bypass the scheme check (issue #364).
+      const trimmed = href.trimStart();
+      const scheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.exec(trimmed);
+      const safe = scheme === null || /^(https?:|mailto:)/i.test(trimmed);
       return safe
-        ? <a key={index} href={href} className="text-primary underline underline-offset-2" target={href.startsWith("http") ? "_blank" : undefined} rel={href.startsWith("http") ? "noreferrer" : undefined}>{link[1]}</a>
+        ? <a key={index} href={href} className="text-primary underline underline-offset-2" target={trimmed.startsWith("http") ? "_blank" : undefined} rel={trimmed.startsWith("http") ? "noreferrer" : undefined}>{link[1]}</a>
         : link[1];
     }
     return part;
