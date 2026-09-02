@@ -32,14 +32,17 @@ function dbName(table: object): string {
 
 function columnFingerprint(table: object): Readonly<Record<string, Col>> {
   const out: Record<string, Col> = {};
-  for (const column of Object.values((table as unknown as Record<PropertyKey, unknown>)[COLUMNS] as Record<string, Col>)) {
+  for (const column of Object.values((table as unknown as Record<PropertyKey, unknown>)[COLUMNS] as Record<string, Col & { hasDefault?: boolean; default?: unknown; hasDefaultFn?: boolean; defaultFn?: unknown }>)) {
     out[column.name] = {
       name: column.name,
       columnType: column.columnType,
       notNull: column.notNull,
       primary: column.primary,
       ...(column.isUnique === true ? { isUnique: true } : {}),
-    };
+      // Include default/defaultFn where present so drift in defaults is caught
+      ...((column as unknown as Record<string, unknown>).hasDefault === true ? { hasDefault: true as const, default: (column as unknown as Record<string, unknown>).default } : {}),
+      ...((column as unknown as Record<string, unknown>).hasDefaultFn === true ? { hasDefaultFn: true as const } : {}),
+    } as Col;
   }
   return out;
 }
@@ -106,12 +109,13 @@ describe("pg schema parity", () => {
       const staticTable = staticPg[exportName as keyof typeof staticPg];
       const runtimeFp = indexFingerprint(runtimeTable as object).map(({ name: n, unique, columns }) => ({ name: n, unique, columnCount: columns.length }));
       const staticFp = indexFingerprint(staticTable as object);
-      // Full identity (real column names) is checked against the sqlite
-      // schema; runtime vs static compares name/unique/column-count because
-      // runtime IndexedColumns are opaque.
       expect(runtimeFp).toEqual(staticFp.map(({ name: n, unique, columns }) => ({ name: n, unique, columnCount: columns.length })));
       const sqliteFp = indexFingerprint(sqliteTable as object);
       expect(staticFp).toEqual(sqliteFp);
+      // Strengthen: also ensure unique flag and column names are not silently weakened
+      for (const idx of staticFp) {
+        expect(idx.columns.length, `index ${idx.name} on ${name} has empty columns`).toBeGreaterThan(0);
+      }
     }
   });
 
@@ -133,11 +137,19 @@ describe("pg schema parity", () => {
     for (const [exportName, sqliteTable] of Object.entries(sqliteSchema)) {
       if (sqliteTable === null || typeof sqliteTable !== "object" || (sqliteTable as unknown as Record<PropertyKey, unknown>)[COLUMNS] === undefined) continue;
       const name = dbName(sqliteTable as object);
-      const sqliteCount = ((sqliteTable as unknown as Record<PropertyKey, unknown>)[sqliteFKSymbol] as unknown[] | undefined)?.length ?? 0;
-      const runtimeCount = ((runtime[name] as unknown as Record<PropertyKey, unknown>)[pgFKSymbol] as unknown[] | undefined)?.length ?? 0;
-      const staticCount = ((staticPg[exportName as keyof typeof staticPg] as unknown as Record<PropertyKey, unknown>)[pgFKSymbol] as unknown[] | undefined)?.length ?? 0;
-      expect(runtimeCount, `runtime FK count mismatch on ${name}`).toBe(sqliteCount);
-      expect(staticCount, `static FK count mismatch on ${name}`).toBe(sqliteCount);
+      const sqliteFks = ((sqliteTable as unknown as Record<PropertyKey, unknown>)[sqliteFKSymbol] as unknown[] | undefined) ?? [];
+      const runtimeFks = ((runtime[name] as unknown as Record<PropertyKey, unknown>)[pgFKSymbol] as unknown[] | undefined) ?? [];
+      const staticFks = ((staticPg[exportName as keyof typeof staticPg] as unknown as Record<PropertyKey, unknown>)[pgFKSymbol] as unknown[] | undefined) ?? [];
+      expect(runtimeFks.length, `runtime FK count mismatch on ${name}`).toBe(sqliteFks.length);
+      expect(staticFks.length, `static FK count mismatch on ${name}`).toBe(sqliteFks.length);
+      const fkDetails = (fks: unknown[]): readonly { onDelete: string; onUpdate: string; columnCount: number }[] =>
+        (fks as readonly Record<string, unknown>[]).map((fk) => ({
+          onDelete: typeof fk.onDelete === "string" ? fk.onDelete : "no action",
+          onUpdate: typeof fk.onUpdate === "string" ? fk.onUpdate : "no action",
+          columnCount: Array.isArray((fk as Record<string, unknown>).columns) ? ((fk as Record<string, unknown>).columns as unknown[]).length : Array.isArray((fk as Record<string, unknown>).foreignColumns) ? ((fk as Record<string, unknown>).foreignColumns as unknown[]).length : 0,
+        })).sort((a, b) => a.onDelete.localeCompare(b.onDelete));
+      expect(fkDetails(runtimeFks), `runtime FK details mismatch on ${name}`).toEqual(fkDetails(sqliteFks));
+      expect(fkDetails(staticFks), `static FK details mismatch on ${name}`).toEqual(fkDetails(sqliteFks));
     }
   });
 });
