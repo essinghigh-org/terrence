@@ -421,19 +421,20 @@ export const projectRoutes = new Elysia({ name: "projects" })
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload.data;
-    const tagList = Array.isArray(items) ? items : [items];
-    const entries: TagEntry[] = tagList.map((item: unknown): TagEntry => {
-      const i = item !== null && typeof item === "object" ? (item as Record<string, unknown>) : {};
-      const attrs = typeof i.attributes === "object" && i.attributes !== null ? (i.attributes as Record<string, unknown>) : {};
-      const key = typeof attrs.key === "string" ? attrs.key : (typeof i.key === "string" ? i.key : "");
-      const value = typeof attrs.value === "string" ? attrs.value : (typeof i.value === "string" ? i.value : null);
-      return { key, value };
-    }).filter((e: TagEntry): boolean => e.key !== "");
-    const keys = entries.map((e: TagEntry): string => e.key);
-    if (keys.length === 0) {
-      (set as { status: number }).status = 201;
-      return { data: [] };
+    const items = Array.isArray(payload.data) ? payload.data : payload.data === undefined ? [] : [payload.data];
+    const entries: TagEntry[] = items.map((item: unknown): TagEntry => {
+      const resource = item !== null && typeof item === "object" ? (item as Record<string, unknown>) : {};
+      const attrs = resource.attributes !== null && typeof resource.attributes === "object" ? (resource.attributes as Record<string, unknown>) : {};
+      return { key: typeof attrs.key === "string" ? attrs.key : "", value: typeof attrs.value === "string" ? attrs.value : null };
+    });
+    if (entries.some((entry): boolean => entry.key === "" || entry.value === null || entry.value === "")) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Each tag binding requires a string key and value" }] };
+    }
+    if (entries.length === 0 || entries.length > 10) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "At least one and no more than ten tag bindings are required" }] }; }
+    if (new Set(entries.map((entry): string => entry.key)).size !== entries.length) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Tag binding keys must be unique" }] };
     }
     // Single upsert upserts all requested tag bindings in one statement
     // (insert new keys, update values for existing ones) instead of a
@@ -444,10 +445,10 @@ export const projectRoutes = new Elysia({ name: "projects" })
       target: [projectTags.projectId, projectTags.key],
       set: { value: sql`excluded.value` },
     });
-    const allTags = await db.query.projectTags.findMany({ where: and(eq(projectTags.projectId, projectId), inArray(projectTags.key, keys)) });
+    const allTags = await db.query.projectTags.findMany({ where: and(eq(projectTags.projectId, projectId), inArray(projectTags.key, entries.map((e): string => e.key))) });
     const created = allTags.map((pt: Readonly<typeof projectTags.$inferSelect>): Record<string, unknown> => projectTagBindingResource(pt));
     (set as { status: number }).status = 201;
-    return { data: created.length === 1 ? created[0] : created };
+    return { data: created };
   })
   .delete("/api/v2/projects/:project_id/tag-bindings", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
     const projectId = params.project_id ?? "";
