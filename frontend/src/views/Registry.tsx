@@ -14,7 +14,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { PageHeader, PageShell } from "../components/PageHeader";
 import { PublishModuleDialog } from "../components/PublishModuleDialog";
@@ -269,6 +269,11 @@ function SearchControl({
   onClear: () => void;
 }>): React.JSX.Element {
   const [draft, setDraft] = useState(value);
+  const onChangeRef = useRef(onChange);
+
+  useEffect((): void => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
 
   useEffect((): void => {
     setDraft(value);
@@ -276,10 +281,10 @@ function SearchControl({
 
   useEffect((): (() => void) => {
     const timeout = window.setTimeout((): void => {
-      if (draft !== value) onChange(draft);
+      if (draft !== value) onChangeRef.current(draft);
     }, 250);
     return (): void => { window.clearTimeout(timeout); };
-  }, [draft, onChange, value]);
+  }, [draft, value]);
 
   return (
     <div className="relative min-w-0 flex-1">
@@ -383,13 +388,13 @@ export function Registry(): React.JSX.Element {
     return (): void => { controller.abort(); };
   }, [activeTab, normalizedSearch, orgName, page, providerFilter, publishingFilter, reload, sort]);
 
-  const updateBrowseParam = (key: string, value: string, resetPage = true): void => {
+  const updateBrowseParam = useCallback((key: string, value: string, resetPage = true): void => {
     const next = new URLSearchParams(searchParams);
     if (value === "") next.delete(key);
     else next.set(key, value);
     if (resetPage) next.delete("page");
     setSearchParams(next, { replace: true });
-  };
+  }, [searchParams, setSearchParams]);
 
   const clearFilters = (): void => {
     const next = new URLSearchParams(searchParams);
