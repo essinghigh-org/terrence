@@ -16,11 +16,14 @@ export const PROVIDER_MODES = ["tofu", "terraform"] as const;
 export const TOKEN_DESCRIPTION_MAX_LENGTH = 255;
 export type ProviderMode = (typeof PROVIDER_MODES)[number];
 
-/** One deliberate compatibility target for every reference-format discovery header. */
+/** One deliberate compatibility target for every reference-format discovery header.
+ * Kept dotted on purpose: the hashicorp/tfe provider treats Terrence as TFE
+ * (no TFP-AppName) and gates versioned features on a dotted X-TFE-Version —
+ * release-style values fail those gates (provider E2E proves it). */
 export const COMPATIBILITY_VERSION =
   process.env.TERRENCE_COMPATIBILITY_VERSION?.trim() ||
   process.env.TERRENCE_TFE_COMPATIBILITY_VERSION?.trim() ||
-  "v202609-1";
+  "2.5.0";
 
 // The TFP-API-Version response header carries the Terraform provider API
 // version that clients compare as a dotted numeric (e.g. "2.0"), whereas

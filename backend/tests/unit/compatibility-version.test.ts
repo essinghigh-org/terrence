@@ -12,9 +12,11 @@ describe("compatibility version headers (audit finding 13)", () => {
     expect(major > 2 || (major === 2 && minor >= 6)).toBe(true);
   });
 
-  it("X-TFE-Version defaults to release style the CLI SRO gate can parse", () => {
-    expect(COMPATIBILITY_VERSION.startsWith("v")).toBe(true);
-    const stamp = COMPATIBILITY_VERSION.slice(1).split("-")[0] as string;
-    expect(/^\d{6}$/.test(stamp)).toBe(true);
+  it("X-TFE-Version stays dotted so the tfe provider feature gates parse it", () => {
+    const parts = COMPATIBILITY_VERSION.split(".");
+    expect(parts.length).toBeGreaterThanOrEqual(2);
+    for (const part of parts) {
+      expect(Number.isInteger(Number(part))).toBe(true);
+    }
   });
 });
