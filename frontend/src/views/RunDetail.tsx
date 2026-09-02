@@ -932,7 +932,11 @@ export function RunDetail({
     // the run event timeline change with every transition; the rest is
     // refetched when a phase completes or the 30s safety net fires.
     const refreshLight = async (): Promise<void> => {
-      if (stopped || controller.signal.aborted || refreshing) return;
+      if (stopped || controller.signal.aborted) return;
+      if (refreshing) {
+        armTimer();
+        return;
+      }
       refreshing = true;
       try {
         await loadRun(controller.signal);
@@ -942,7 +946,11 @@ export function RunDetail({
       }
     };
     const refreshPhase = async (kinds: readonly AuxKind[]): Promise<void> => {
-      if (stopped || controller.signal.aborted || refreshing) return;
+      if (stopped || controller.signal.aborted) return;
+      if (refreshing) {
+        armTimer();
+        return;
+      }
       refreshing = true;
       try {
         await loadRun(controller.signal);
