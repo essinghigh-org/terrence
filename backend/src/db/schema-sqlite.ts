@@ -925,7 +925,7 @@ export const workloadIdentityLeases = sqliteTable("workload_identity_leases", {
 
 export const workloadIdentityTokens = sqliteTable("workload_identity_tokens", {
   jti: text("jti").primaryKey(),
-  runId: text("run_id").notNull(),
+  runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
   keyId: text("key_id").notNull(),
   audience: text("audience").notNull(),
   subject: text("subject").notNull(),

@@ -332,6 +332,13 @@ export async function revokeWorkloadIdentityTokens(runId: string, jtis?: readonl
   ));
 }
 
+export async function pruneExpiredWorkloadIdentityTokens(now = Date.now()): Promise<number> {
+  // Grace period: keep revoked/expired rows for 24h for audit, then hard-delete
+  const cutoff = now - 24 * 60 * 60 * 1000;
+  const result = await db.delete(workloadIdentityTokens).where(lt(workloadIdentityTokens.expiresAt, cutoff)).returning({ jti: workloadIdentityTokens.jti });
+  return result.length;
+}
+
 function keyIdFromWorkloadToken(token: string): string {
   const decoded = jwt.decode(token, { complete: true });
   const header = decoded !== null && typeof decoded === "object" && "header" in decoded ? decoded.header : undefined;

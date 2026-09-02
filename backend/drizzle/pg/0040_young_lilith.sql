@@ -1,0 +1,1 @@
+ALTER TABLE "workload_identity_tokens" ADD CONSTRAINT "workload_identity_tokens_run_id_runs_id_fk" FOREIGN KEY ("run_id") REFERENCES "public"."runs"("id") ON DELETE cascade ON UPDATE no action;

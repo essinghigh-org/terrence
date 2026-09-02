@@ -309,6 +309,13 @@
       "when": 1788338924232,
       "tag": "0043_heavy_gauntlet",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1788339674517,
+      "tag": "0044_natural_scalphunter",
+      "breakpoints": true
     }
   ]
 }
