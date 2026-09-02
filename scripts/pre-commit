@@ -28,7 +28,11 @@ fi
 export STORAGE_DIR="${TMPDIR:-/tmp}/drizzle-gen-$$"
 
 # Run generate from the backend dir (where drizzle.config.ts lives).
-if ! (cd "$BACKEND_DIR" && bun run db:generate >/dev/null 2>&1); then
+if ! (cd "$BACKEND_DIR" && bunx drizzle-kit generate >/dev/null 2>&1); then
+  echo "pre-commit: drizzle-kit generate (sqlite) failed; aborting commit." >&2
+  exit 1
+fi
+if ! (cd "$BACKEND_DIR" && bunx drizzle-kit generate --config=drizzle.config.pg.ts >/dev/null 2>&1); then
   echo "pre-commit: drizzle-kit generate failed; aborting commit." >&2
   exit 1
 fi
