@@ -1465,6 +1465,20 @@ export const runRoutes = new Elysia({ name: "runs" })
     }
     return planJson;
   })
+  .get("/api/v2/plans/:plan_id/json-output-redacted", async ({ params, user, orgId, teamId, run: runContext, set }: ParamCtx): Promise<unknown> => {
+    const planId = params.plan_id ?? "";
+    const runId = planId.replace(/^plan-/, "");
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+    if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (await authorizedPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null) === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (isPlanIncompleteRunStatus(run.status)) { (set as { status: number }).status = 204; return null; }
+    const planJson = await readPlanJsonSideArtifact(runId, "sanitized") ?? await readPlanJsonArtifact(runId);
+    if (planJson === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return sanitizePlanJson(planJson);
+  })
   .get("/api/v2/plans/:plan_id/sanitized-plan", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const planId = params.plan_id ?? "";
     const runId = planId.replace(/^plan-/, "");

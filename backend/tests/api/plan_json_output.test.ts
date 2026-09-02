@@ -50,6 +50,11 @@ describe("plan JSON output availability semantics", () => {
       headers: { Authorization: `Bearer ${token}`, Accept: accept },
     }));
 
+  const getRedactedJsonOutput = async (token: string, accept = "*/*"): Promise<Response> =>
+    app.handle(new Request(`http://localhost/api/v2/plans/plan-${runId}/json-output-redacted`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: accept },
+    }));
+
   const setRunStatus = (status: string): Promise<unknown> =>
     db.update(runs).set({ status }).where(eq(runs.id, runId));
 
@@ -73,6 +78,7 @@ describe("plan JSON output availability semantics", () => {
     await writePlanJsonArtifact(runId, {
       format_version: "1.2",
       terraform_version: "1.9.8",
+      values: { secret: "sensitive-value", secret_sensitive: true },
       resource_changes: [{ address: "terraform_data.example", type: "terraform_data", change: { actions: ["create"], before: null, after: {} } }],
     });
     const response = await getJsonOutput(seed.token, "application/json");
@@ -80,6 +86,15 @@ describe("plan JSON output availability semantics", () => {
     expect(response.headers.get("content-type")).toMatch(/^application\/json(?:;|$)/);
     const body = await response.json();
     expect((body as { terraform_version?: string }).terraform_version).toBe("1.9.8");
+  });
+
+  it("serves Terraform's redacted plan endpoint as sanitized JSON", async () => {
+    await setRunStatus("planned");
+    const response = await getRedactedJsonOutput(seed.token, "application/json");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toMatch(/^application\/json(?:;|$)/);
+    const body = await response.json() as { values?: { secret?: unknown } };
+    expect(body.values?.secret).toBeNull();
   });
 
   it("hides the artifact from users outside the organization", async () => {

@@ -189,7 +189,7 @@ function isJsonApiResponsePath(pathname: string): boolean {
   if (pathname === "/api/v2/webhooks/run-approval") return false;
   // Plan artifacts are ordinary JSON documents consumed by terraform show,
   // not JSON:API resources. Their callers send Accept: application/json.
-  if (/^\/api\/v2\/(?:plans\/[^/]+|runs\/[^/]+\/plan)\/(?:json-output|sanitized-plan)$/.test(pathname)) return false;
+  if (/^\/api\/v2\/(?:plans\/[^/]+|runs\/[^/]+\/plan)\/(?:json-output|json-output-redacted|sanitized-plan)$/.test(pathname)) return false;
   return !/^\/api\/v2\/policies\/[^/]+\/upload$/.test(pathname);
 }
 
