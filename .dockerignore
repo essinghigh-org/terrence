@@ -8,3 +8,5 @@ references
 backend/storage
 .env*
 coverage
+scratch/
+frontend/test-results/
