@@ -114,7 +114,7 @@ export function formatRelativeTime(value: Readonly<Date> | string | number | nul
 
 export function formatDate(value: Readonly<Date> | string | number | null | undefined, fallback = "—", timeZone = resolveDisplayTimeZone()): string {
   const date = toDisplayDate(value, timeZone);
-  return Number.isNaN(date.valueOf()) ? fallback : date.toLocaleDateString(undefined, timeZone !== undefined ? { timeZone } : undefined);
+  return Number.isNaN(date.valueOf()) ? fallback : date.toLocaleDateString("en-US", timeZone !== undefined ? { timeZone } : undefined);
 }
 
 /**

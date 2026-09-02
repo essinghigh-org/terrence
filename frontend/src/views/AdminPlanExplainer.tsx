@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchApi, type ReasoningEffort } from "../lib/api";
+import { formatDateTime } from "@/lib/utils";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Select, SelectItem } from "../components/ui/select";
@@ -156,7 +157,7 @@ export function AdminPlanExplainer(): React.JSX.Element {
         method: "PATCH",
         body: JSON.stringify({ data: { attributes: { "plan-explainer": payload } } }),
       });
-      setSavedAt(new Date().toLocaleTimeString());
+      setSavedAt(formatDateTime(new Date()));
       setExplainerApiKey("");
       setExplainerClearApiKey(false);
       setExplainerApiKeySet(explainerApiKey !== "" || (explainerApiKeySet && !explainerClearApiKey));

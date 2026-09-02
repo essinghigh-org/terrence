@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchApi } from "../lib/api";
+import { formatDateTime } from "@/lib/utils";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Switch } from "../components/ui/switch";
@@ -105,7 +106,7 @@ export function AdminMaintenanceWindows(): React.JSX.Element {
         method: "PATCH",
         body: JSON.stringify({ data: { attributes: { "maintenance-windows": payload } } }),
       });
-      setSavedAt(new Date().toLocaleTimeString());
+      setSavedAt(formatDateTime(new Date()));
     } catch (caught: unknown) {
       setSaveError(caught instanceof Error ? caught.message : String(caught));
     } finally {
