@@ -1,15 +1,19 @@
 // RFC 5424 syslog message formatting for Terrence's structured log entries.
 //
 // Maps the app's { error, warn, info, debug } levels onto the syslog
-// severity codes and emits IETF-style messages:
+// severity codes and emits IETF-style messages with a JSON body:
 //
-//   <PRI>VERSION TIMESTAMP HOSTNAME APP PROCID MSGID SD STRUCTURED-DATA MSG
+//   <PRI>VERSION TIMESTAMP HOSTNAME APP PROCID MSGID - {"timestamp":...}
 //
-// Structured data carries the log entry's `meta` object flattened into
-// dotted SD-PARAMs (`http: {status: 200}` -> `http.status="200"`) under the
-// terrence@<enterprise-id> namespace so collectors (Splunk, rsyslog, Vector,
-// Grafana Loki's syslog source) can index fields without regex parsing.
-// Values that cannot flatten (over-deep, circular) degrade to JSON strings.
+// Structured data is always NIL; the message is a JSON object so collectors
+// with a json sourcetype (Splunk index=terrence) auto-extract every field,
+// including nested objects such as `http`, without regex parsing or
+// collector-side props. The RFC 5424 envelope (PRI/severity, timestamp,
+// hostname, app) is preserved for syslog-native tooling.
+//
+// Datagram transports (UDP, 1024-byte RFC 5426 cap) pass maxBodyBytes so the
+// body is shortened to valid JSON that fits; stream transports (TCP) send
+// the full body.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
@@ -22,15 +26,21 @@ const NIL = "-";
  * this constant. IANA PEN registration is not required for local use. */
 const ENTERPRISE_ID = 65024;
 
-const SEVERITY_BY_LEVEL: Readonly<Record<string, SyslogSeverity>> = {
-  error: 3, // Error
-  warn: 4, // Warning
-  info: 6, // Informational
-  debug: 7, // Debug
-};
 
-export function severityForLevel(level: string): SyslogSeverity {
-  return SEVERITY_BY_LEVEL[level] ?? 6;
+export type SyslogFormat = "rfc5424" | "json";
+
+/** Resolve the syslog message format defensively: unknown values warn
+ * and fall back to RFC 5424 structured data (the historical default). */
+export function resolveSyslogFormat(raw: unknown): SyslogFormat {
+  const normalized = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (normalized === "json" || normalized === "rfc5424") return normalized;
+  if (normalized !== "") {
+    console.warn(
+      `[terrence] Unknown syslog format ${JSON.stringify(raw)}; ` +
+      `expected "rfc5424" or "json". Falling back to "rfc5424".`,
+    );
+  }
+  return "rfc5424";
 }
 
 /** RFC 5424 §6.2.4 PARAM-VALUE escaping: "\" -> "\\", "]" -> "\]",
@@ -91,6 +101,24 @@ function flattenMetaParam(
   nested.delete(value);
 }
 
+/** JSON body budget for UDP frames: 1024-byte datagram cap minus envelope
+ * headroom (the header is well under 128 bytes). */
+export const UDP_JSON_BODY_BUDGET = 896;
+
+/** Marker appended to shortened strings; counted in byte budgets. */
+const TRUNCATION_MARKER = "[truncated]";
+
+const SEVERITY_BY_LEVEL: Readonly<Record<string, SyslogSeverity>> = {
+  error: 3, // Error
+  warn: 4, // Warning
+  info: 6, // Informational
+  debug: 7, // Debug
+};
+
+export function severityForLevel(level: string): SyslogSeverity {
+  return SEVERITY_BY_LEVEL[level] ?? 6;
+}
+
 /** Bump a PRI by facility << 3 | severity. Facility 1 = user-level. */
 export function pri(facility: number, severity: SyslogSeverity): number {
   return facility * 8 + severity;
@@ -102,6 +130,99 @@ function rfc3339Timestamp(timestamp: string): string {
   // Defensive: if the caller passes something non-ISO, fall back to nil
   // rather than emitting a spec-violating stamp.
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(timestamp) ? timestamp : NIL;
+}
+
+function hasToJson(value: object): boolean {
+  try {
+    return typeof (value as { toJSON?: unknown }).toJSON === "function";
+  } catch {
+    return false;
+  }
+}
+
+/** Deep-convert one value into JSON-safe data ahead of stringify. Objects on
+ * the active recursion path become "[Circular]"; repeated (sibling)
+ * references serialize in full. Errors shrink to {name, message} — stacks
+ * would blow the UDP budget on their own, and full detail stays in the local
+ * console JSON logs. Values with toJSON (Date et al) pass through untouched
+ * so JSON.stringify applies their serializer. */
+function makeJsonSafe(value: unknown, ancestors: Set<object>): unknown {
+  if (typeof value === "bigint") return value.toString();
+  if (value !== null && typeof value === "object") {
+    if (value instanceof Error) return { name: value.name, message: value.message };
+    if (hasToJson(value)) return value;
+    if (ancestors.has(value)) return "[Circular]";
+    ancestors.add(value);
+    try {
+      if (Array.isArray(value)) return value.map((item: unknown): unknown => makeJsonSafe(item, ancestors));
+      const out: Record<string, unknown> = {};
+      for (const [childKey, childValue] of Object.entries(value)) {
+        out[childKey] = makeJsonSafe(childValue, ancestors);
+      }
+      return out;
+    } finally {
+      ancestors.delete(value);
+    }
+  }
+  return value;
+}
+
+/** Never-throwing JSON for the message body. */
+function stringifySyslogBody(value: Record<string, unknown>): string {
+  try {
+    return JSON.stringify(makeJsonSafe(value, new Set())) ?? "{}";
+  } catch {
+    return "{}";
+  }
+}
+
+/** Byte length of a JSON-encoded string value including its quotes. */
+function jsonStringBytes(value: string): number {
+  return Buffer.byteLength(JSON.stringify(value) as string, "utf8");
+}
+
+/** Shorten body to fit maxBytes while staying valid JSON: the largest
+ * non-envelope meta fields are dropped first, then the remaining budget is
+ * filled with the longest message prefix that fits. Envelope keys always
+ * survive. */
+function fitJsonBody(body: Record<string, unknown>, maxBytes: number): string {
+  const full = stringifySyslogBody(body);
+  if (Buffer.byteLength(full, "utf8") <= maxBytes) return full;
+  const shortened: Record<string, unknown> = { ...body, truncated: true };
+  const sizeOf = (candidate: Record<string, unknown>): number =>
+    Buffer.byteLength(stringifySyslogBody(candidate), "utf8");
+  // 1. Drop the largest non-envelope meta fields until the fixed overhead
+  // (everything except the resizable message) fits the budget.
+  const droppable = Object.keys(shortened)
+    .filter((key): boolean => !["timestamp", "level", "message", "hostname", "app", "truncated"].includes(key))
+    .map((key): readonly [string, number] => [key, Buffer.byteLength(stringifySyslogBody({ [key]: shortened[key] }), "utf8")])
+    .sort((a, b): number => b[1] - a[1]);
+  const dropped = new Set<string>();
+  const baseFor = (drop: ReadonlySet<string>): Record<string, unknown> =>
+    Object.fromEntries(
+      Object.entries({ ...shortened, message: "" }).filter(([key]): boolean => !drop.has(key)),
+    );
+  for (const [key] of droppable) {
+    if (sizeOf(baseFor(dropped)) <= maxBytes) break;
+    dropped.add(key);
+  }
+  const base = baseFor(dropped);
+  const budget = maxBytes - sizeOf(base);
+  // 2. Binary-search the longest message prefix (plus marker) that fits.
+  const message = typeof shortened["message"] === "string" ? (shortened["message"] as string) : "";
+  let lo = 0;
+  let hi = message.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    const candidate = mid < message.length ? `${message.slice(0, mid)}${TRUNCATION_MARKER}` : message;
+    if (jsonStringBytes(candidate) <= budget) lo = mid;
+    else hi = mid - 1;
+  }
+  const final: Record<string, unknown> = {
+    ...base,
+    message: lo < message.length && message !== "" ? `${message.slice(0, lo)}${TRUNCATION_MARKER}` : message,
+  };
+  return stringifySyslogBody(final);
 }
 
 export type SyslogEntryInput = Readonly<{
@@ -117,18 +238,49 @@ export type SyslogIdentity = Readonly<{
   procId: string;
 }>;
 
-/** Build one RFC 5424 line (no framing, no trailing newline). */
-export function formatSyslogMessage(entry: SyslogEntryInput, identity: SyslogIdentity): string {
+export type SyslogFormatOptions = Readonly<{
+  /** Cap the JSON body at this many UTF-8 bytes (UDP). Omit for no cap. */
+  maxBodyBytes?: number;
+  /** Message shape: "json" for a JSON body, "rfc5424" (default) for dotted SD-PARAMs. */
+  format?: SyslogFormat;
+}>;
+
+/** Build one RFC 5424 line (no framing, no trailing newline). Format
+ * "json" carries the entry as a JSON message body (SD=NIL) for json
+ * sourcetypes; "rfc5424" (the default) carries meta as dotted SD-PARAMs. */
+export function formatSyslogMessage(
+  entry: SyslogEntryInput,
+  identity: SyslogIdentity,
+  options?: SyslogFormatOptions,
+): string {
   const severity = severityForLevel(entry.level);
   const header = `<${pri(1, severity)}>1 ${rfc3339Timestamp(entry.timestamp)} ${
     identity.hostname || NIL
   } ${identity.appName || NIL} ${identity.procId || NIL} ${NIL}`;
-
+  if ((options?.format ?? "rfc5424") === "json") {
+    // Envelope keys come first so last-resort transport truncation keeps
+    // timestamp/level/message; colliding meta keys are dropped so the
+    // envelope always wins (same precedence as before, just ordered).
+    const extra: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(entry.meta ?? {})) {
+      if (!["timestamp", "level", "message", "hostname", "app"].includes(key)) extra[key] = value;
+    }
+    const body: Record<string, unknown> = {
+      timestamp: entry.timestamp,
+      level: entry.level,
+      message: entry.message,
+      hostname: identity.hostname || NIL,
+      app: identity.appName || NIL,
+      ...extra,
+    };
+    const maxBytes = options?.maxBodyBytes;
+    const json = maxBytes === undefined ? stringifySyslogBody(body) : fitJsonBody(body, maxBytes);
+    return `${header} ${NIL} ${json}`;
+  }
   const meta = entry.meta;
   if (meta === undefined || Object.keys(meta).length === 0) {
     return `${header} ${NIL} ${entry.message}`;
   }
-
   const params: Array<readonly [string, string]> = [];
   for (const [rawKey, rawValue] of Object.entries(meta)) {
     flattenMetaParam(paramSafeKey(rawKey), rawValue, 0, new Set(), params);

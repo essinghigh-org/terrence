@@ -18,6 +18,7 @@ type LoggingSettings = {
   "syslog-targets"?: string[] | null;
   "syslog-hostname"?: string | null;
   "syslog-app"?: string | null;
+  "syslog-format"?: string | null;
 };
 
 export function AdminLoggingSettings(): React.JSX.Element {
@@ -32,6 +33,7 @@ export function AdminLoggingSettings(): React.JSX.Element {
   const [syslogTargets, setSyslogTargets] = useState("");
   const [syslogHostname, setSyslogHostname] = useState("");
   const [syslogApp, setSyslogApp] = useState("");
+  const [syslogFormat, setSyslogFormat] = useState("");
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState("");
   const [saveError, setSaveError] = useState("");
@@ -50,6 +52,7 @@ export function AdminLoggingSettings(): React.JSX.Element {
         setSyslogTargets((logging["syslog-targets"] ?? []).join("\n"));
         setSyslogHostname(logging["syslog-hostname"] ?? "");
         setSyslogApp(logging["syslog-app"] ?? "");
+        setSyslogFormat(logging["syslog-format"] ?? "");
         setLoggingLoaded(true);
       } catch (caught: unknown) {
         const message = caught instanceof Error ? caught.message : String(caught);
@@ -79,6 +82,7 @@ export function AdminLoggingSettings(): React.JSX.Element {
               "syslog-targets": targets.length === 0 ? null : targets,
               "syslog-hostname": syslogHostname === "" ? null : syslogHostname,
               "syslog-app": syslogApp === "" ? null : syslogApp,
+              "syslog-format": syslogFormat === "" ? null : syslogFormat,
             },
           },
         }),
@@ -90,6 +94,7 @@ export function AdminLoggingSettings(): React.JSX.Element {
       setSyslogTargets((logging["syslog-targets"] ?? []).join("\n"));
       setSyslogHostname(logging["syslog-hostname"] ?? "");
       setSyslogApp(logging["syslog-app"] ?? "");
+      setSyslogFormat(logging["syslog-format"] ?? "");
       setSavedAt(formatDateTime(new Date()));
     } catch (caught: unknown) {
       setSaveError(caught instanceof Error ? caught.message : String(caught));
@@ -183,6 +188,15 @@ export function AdminLoggingSettings(): React.JSX.Element {
                 <SelectItem value="debug">debug</SelectItem>
               </Select>
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="syslog-format" className="block text-sm font-medium text-foreground">Syslog message format</label>
+            <Select id="syslog-format" value={syslogFormat} disabled={!loggingLoaded || saving} onValueChange={setSyslogFormat}>
+              <SelectItem value="">Environment fallback</SelectItem>
+              <SelectItem value="rfc5424">RFC 5424 structured data</SelectItem>
+              <SelectItem value="json">JSON message body</SelectItem>
+            </Select>
+            <p className="text-xs text-muted-foreground">JSON bodies auto-extract in Splunk (sourcetype json); RFC 5424 structured data suits syslog-native collectors. Empty uses TERRENCE_SYSLOG_FORMAT (default rfc5424).</p>
           </div>
           <div className="space-y-1.5">
             <label htmlFor="syslog-targets" className="block text-sm font-medium text-foreground">Remote destinations</label>

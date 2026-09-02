@@ -1,4 +1,4 @@
-import { formatSyslogMessage, resolveHostname } from "./syslog-format";
+import { formatSyslogMessage, resolveHostname, resolveSyslogFormat, type SyslogFormat, UDP_JSON_BODY_BUDGET } from "./syslog-format";
 import {
   closeSyslogTransports,
   parseSyslogTarget,
@@ -18,6 +18,7 @@ type LoggingConfiguration = Readonly<{
   syslogTargets: readonly SyslogTarget[];
   syslogHostname: string | null;
   syslogApp: string;
+  syslogFormat: SyslogFormat;
 }>;
 
 export function isLogLevel(value: unknown): value is LogLevel {
@@ -53,6 +54,7 @@ function environmentConfiguration(): LoggingConfiguration {
     syslogTargets,
     syslogHostname: process.env["TERRENCE_SYSLOG_HOSTNAME"]?.trim() || null,
     syslogApp: process.env["TERRENCE_SYSLOG_APP"]?.trim() || "terrence",
+    syslogFormat: resolveSyslogFormat(process.env["TERRENCE_SYSLOG_FORMAT"]),
   };
 }
 
@@ -93,6 +95,7 @@ export function applyLoggingSettings(settings: Readonly<Record<string, unknown>>
   const configuredSyslogLevel = settingString(settings, "syslog-level");
   const configuredTargets = settingTargets(settings);
   const configuredEnabled = settings.enabled;
+  const configuredFormat = settingString(settings, "syslog-format");
   const next: LoggingConfiguration = {
     enabled: typeof configuredEnabled === "boolean"
       ? configuredEnabled
@@ -106,6 +109,9 @@ export function applyLoggingSettings(settings: Readonly<Record<string, unknown>>
     syslogTargets: configuredTargets ?? environment.syslogTargets,
     syslogHostname: settingString(settings, "syslog-hostname") ?? environment.syslogHostname,
     syslogApp: settingString(settings, "syslog-app") ?? environment.syslogApp,
+    syslogFormat: configuredFormat === undefined
+      ? environment.syslogFormat
+      : resolveSyslogFormat(configuredFormat),
   };
   if (
     targetSetChanged(loggingConfiguration.syslogTargets, next.syslogTargets)
@@ -254,26 +260,29 @@ function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<
     && configuration.syslogTargets.length > 0
     && isLogLevelEnabled(level, configuration.syslogLevel)
   ) {
-    try {
-      const frame = formatSyslogMessage(
-        meta !== undefined
-          ? { timestamp: new Date().toISOString(), level, message, meta }
-          : { timestamp: new Date().toISOString(), level, message },
-        {
-          hostname: resolveHostname(process.env, configuration.syslogHostname),
-          appName: configuration.syslogApp,
-          procId: String(process.pid),
-        },
-      );
-      for (const target of configuration.syslogTargets) {
+    // Format per destination: datagram transports (UDP) need a byte-budgeted
+    // body so oversized entries stay valid JSON; streams take the full body.
+    for (const target of configuration.syslogTargets) {
+      try {
+        const frame = formatSyslogMessage(
+          meta !== undefined
+            ? { timestamp: new Date().toISOString(), level, message, meta }
+            : { timestamp: new Date().toISOString(), level, message },
+          {
+            hostname: resolveHostname(process.env, configuration.syslogHostname),
+            appName: configuration.syslogApp,
+            procId: String(process.pid),
+          },
+          target.transport === "udp" ? { maxBodyBytes: UDP_JSON_BODY_BUDGET, format: configuration.syslogFormat } : { format: configuration.syslogFormat },
+        );
         try {
-          sendSyslogFrame(target, frame);
+          sendSyslogFrame(target, frame, { jsonBody: configuration.syslogFormat === "json" });
         } catch {
           // A single destination must never suppress the remaining fan-out.
         }
+      } catch {
+        // Formatting and transport are best-effort diagnostics.
       }
-    } catch {
-      // Formatting and transport are best-effort diagnostics.
     }
   }
   if (!isLogLevelEnabled(level, configuration.logLevel)) return;

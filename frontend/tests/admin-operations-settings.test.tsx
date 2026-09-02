@@ -93,6 +93,7 @@ test("AdminLoggingSettings loads and saves logging configuration independently",
 
   const view = render(<AdminLoggingSettings />);
   await waitFor((): void => { expect(view.getByLabelText("Remote destinations")).toBeTruthy(); });
+  expect(view.getByLabelText("Syslog message format")).toBeTruthy();
   fireEvent.click(view.getByRole("button", { name: "Save changes" }));
   await waitFor((): void => { expect(patchBody).toBeDefined(); });
 // SAFETY: the fixture object is read as a record; each field is typed below.
@@ -104,6 +105,7 @@ test("AdminLoggingSettings loads and saves logging configuration independently",
     "syslog-targets": ["udp://syslog.local:514"],
     "syslog-hostname": null,
     "syslog-app": null,
+    "syslog-format": null,
   });
   expect(view.getByText(/Logging settings saved/i)).toBeTruthy();
 });
