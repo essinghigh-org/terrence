@@ -157,6 +157,8 @@ jobs:
         run: |
           docker build -f Dockerfile -t terrence:ci . > /tmp/docker-build.log 2>&1 || (cat /tmp/docker-build.log; exit 1)
           docker run --rm terrence:ci /usr/bin/bun --version
+          # Verify non-root guarantee (issue #379)
+          user=$(docker inspect terrence:ci --format '{{.Config.User}}' 2>/dev/null || true); echo "image USER=$user"; case "$user" in nonroot*|65532*) ;; *) echo "FAIL: image USER must be nonroot/65532" >&2; exit 1;; esac
           echo "Docker image build and runtime smoke check OK"
       - name: Bundle size budget (todo 800)
         run: bun run check:bundle-size
