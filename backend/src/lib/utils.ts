@@ -194,6 +194,7 @@ export type OrganizationPermission =
   | "manage-policy-overrides"
   | "delegate-policy-overrides"
   | "manage-run-tasks"
+  | "read-run-tasks"
   | "manage-workspaces"
   | "manage-vcs-settings"
   | "read-vcs-settings"
@@ -219,6 +220,7 @@ const TEAM_ORG_FALLBACK_MAP: Readonly<Record<string, readonly string[]>> = {
   "read-policies": ["manage-policies"],
   "read-vcs-settings": ["manage-vcs-settings"],
   "read-agent-pools": ["manage-agent-pools"],
+  "read-run-tasks": ["manage-run-tasks"],
   "manage-varsets": ["manage-workspaces", "manage-projects"],
 };
 
@@ -246,6 +248,7 @@ const ORGANIZATION_PERMISSION_GRANT_MAP: Readonly<Record<OrganizationPermission,
   "manage-policy-overrides": "runs:policy-override",
   "delegate-policy-overrides": "runs:policy-override",
   "manage-run-tasks": "run-tasks:write",
+  "read-run-tasks": "run-tasks:read",
   "manage-vcs-settings": "vcs:write",
   "read-vcs-settings": "vcs:read",
   "manage-agent-pools": "agent-pools:write",
