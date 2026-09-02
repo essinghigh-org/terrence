@@ -7,12 +7,11 @@ import {
   apiTokens, notificationConfigurations, organizationMemberships,
   organizations, users, workspaces,
 } from "../../src/db/schema";
-import { RUN_NOTIFICATION_TRIGGERS } from "../../src/lib/constants";
 
 /**
  * NOT-003 / NOT-004: default `enabled` and `triggers` must match the reference
  * format. A freshly-created notification configuration defaults to enabled=true
- * and to the standard run-trigger set when neither is supplied.
+ * and to an empty trigger list when neither is supplied (TFE parity).
  *
  * Email destinations skip ownership verification regardless of `enabled`, so we
  * use them to exercise the *defaults* path without needing a reachable webhook.
@@ -52,7 +51,7 @@ describe("Notification configuration defaults (NOT-003 / NOT-004)", () => {
     await db.delete(users).where(eq(users.id, userId));
   });
 
-  it("defaults enabled=true and triggers to the standard run set when omitted", async () => {
+  it("defaults enabled=true and triggers to an empty list when omitted", async () => {
     const created = await request(`/api/v2/workspaces/${workspaceId}/notification-configurations`, "POST", {
       data: {
         type: "notification-configurations",
@@ -70,7 +69,7 @@ describe("Notification configuration defaults (NOT-003 / NOT-004)", () => {
     expect(fetched.status).toBe(200);
     const attrs = (await fetched.json()).data.attributes;
     expect(attrs.enabled).toBe(true);
-    expect(attrs.triggers).toEqual([...RUN_NOTIFICATION_TRIGGERS]);
+    expect(attrs.triggers).toEqual([]);
   });
 
   it("honors an explicitly supplied triggers list", async () => {
