@@ -174,6 +174,7 @@ export async function claimStackAgentJob(
 ): Promise<ClaimedStackAgentJob | undefined> {
   await db.update(stackAgentJobs).set({ agentId: null, status: "queued", claimedAt: null, completedAt: null, result: null, errorMessage: null, updatedAt: Date.now() }).where(and(
     eq(stackAgentJobs.status, "claimed"),
+    eq(stackAgentJobs.agentPoolId, agent.agentPoolId),
     lt(stackAgentJobs.claimedAt, Date.now() - STACK_AGENT_CLAIM_TIMEOUT_MS),
   ));
   const existing = await db.query.stackAgentJobs.findFirst({
