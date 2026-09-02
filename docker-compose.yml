@@ -1,10 +1,18 @@
 services:
   terrence:
     image: ghcr.io/essinghigh-org/terrence:latest
+    init: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
     build:
       context: .
       args:
-        TARGETARCH: ${TARGETARCH:-amd64}
+        BUILD_VERSION: ${BUILD_VERSION:-0.0.0}
+        BUILD_SHA: ${BUILD_SHA:-unknown}
     ports:
       - "3000:3000"
       # System API is bound to loopback by the app (SYSTEM_API_HOST=127.0.0.1

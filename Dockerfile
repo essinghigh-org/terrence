@@ -40,6 +40,10 @@ COPY package.json ./
 COPY backend/package.json ./backend/
 COPY frontend/package.json ./frontend/
 
+# Install toolchain first for optimal cache: any source change won't re-download gcc
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install dependencies (workspaces)
 RUN bun install --frozen-lockfile
 
@@ -53,9 +57,7 @@ RUN bun run build
 # Compile the static Landlock runner (needs a C toolchain; the final image
 # does not ship one). Static glibc binary -> runs identically on any base.
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
-    && backend/bin/build-landlock-runner.sh \
-    && rm -rf /var/lib/apt/lists/*
+RUN backend/bin/build-landlock-runner.sh
 
 # ---------- Runtime: Chainguard Wolfi (glibc, near-zero CVE) ----------
 # Base pinned to an immutable digest (reviewed/immutable supply chain).
