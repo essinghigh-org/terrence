@@ -843,7 +843,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     );
     return maybeAttachOutputs(data, ws, new URL(request.url).searchParams.get("include") ?? "");
   })
-  .patch("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .patch("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, body, user, orgId: principalOrgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const orgName = params.org_name ?? "";
     const workspaceName = params.workspace_name ?? "";
     const org = await cachedOrgByName(orgName);
@@ -851,6 +851,18 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+    {
+      const ifMatch = request.headers.get("if-match");
+      if (ifMatch !== null && ifMatch.trim() !== "*") {
+        const currentResource = await workspaceResource(
+          ws,
+          org.defaultIacBinary,
+          await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
+          { orgName: org.name },
+        );
+        if (!ifMatchSatisfied(request, { data: currentResource })) { (set as { status: number }).status = 412; return { errors: [{ status: "412", title: "Precondition Failed" }] }; }
+      }
+    }
     return updateWorkspaceResponse(
       ws,
       org.defaultIacBinary,
