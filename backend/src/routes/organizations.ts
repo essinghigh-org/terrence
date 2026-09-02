@@ -739,7 +739,10 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     }
     const wsList = await db.query.workspaces.findMany({ where: eq(workspaces.orgId, org.id), columns: { id: true } });
     const wsIds = wsList.map((w) => w.id);
-    if (wsIds.length === 0) return { data: [] };
+    if (wsIds.length === 0) {
+      const { number, size } = pageRequest(request);
+      return { data: [], ...pagination(request, number, size, 0) };
+    }
 
     const tags = await db.query.workspaceTags.findMany({ where: inArray(workspaceTags.workspaceId, wsIds) });
     const tagCounts = new Map<string, number>();
