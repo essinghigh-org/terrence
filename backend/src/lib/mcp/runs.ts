@@ -7,16 +7,23 @@ import { cancelAgentJobsForRun, insertAgentApplyJobTx } from "../agent-jobs";
 import { agentPoolAllowsWorkspace } from "../agent-pool-scope";
 import { queueRunNotification } from "../notifications";
 import { createRun } from "../../routes/runs";
+import { planStatusForRun } from "../response";
+import { readPlanJsonArtifact, readPlanJsonSideArtifact, sanitizePlanJson } from "../plan-json";
 import { toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
 
 function runCreationAttributes(args: Readonly<Record<string, unknown>>): Record<string, unknown> {
   const attributes: Record<string, unknown> = {};
-  for (const key of ["message", "terraform-version", "is-destroy", "auto-apply", "plan-only", "refresh", "refresh-only"]) {
+  for (const key of ["message", "terraform-version", "is-destroy", "auto-apply", "plan-only", "save-plan", "refresh", "refresh-only"]) {
     const value = args[key];
     if (value !== null && value !== undefined) attributes[key] = value;
   }
   if (Array.isArray(args["target-addrs"])) attributes["target-addrs"] = args["target-addrs"];
   return attributes;
+}
+
+function requestedRunIncludes(args: Readonly<Record<string, unknown>>): Readonly<{ plan: boolean; workspace: boolean }> {
+  const names = String(args.include ?? "").split(",").map((part): string => part.trim()).filter((part): boolean => part !== "");
+  return { plan: names.includes("plan"), workspace: names.includes("workspace") };
 }
 
 type AuthorizedRun = NonNullable<Awaited<ReturnType<typeof findAuthorizedRun>>>;
@@ -127,6 +134,7 @@ export const runTools: readonly McpTool[] = [
         run_id: { type: "string", description: "Specific run ID (if absent, returns list)" },
         limit: { type: "number", description: "Max results (default 20)", default: 20 },
         offset: { type: "number", description: "Pagination offset", default: 0 },
+        include: { type: "string", description: "Comma-separated related resources for a single run: plan,workspace" },
       },
       required: ["workspace_id"],
     },
@@ -139,11 +147,20 @@ export const runTools: readonly McpTool[] = [
       if (runId !== undefined) {
         const run = await db.query.runs.findFirst({
           where: eq(runs.id, runId),
-          columns: { id: true, workspaceId: true, status: true, message: true, createdAt: true },
+          columns: { id: true, workspaceId: true, status: true, message: true, createdAt: true, statusTimestamps: true },
         });
         if (run === undefined) return toolBadRequest(`Run "${runId}" not found`);
         if (run.workspaceId !== wsId) return toolError("Run does not belong to the specified workspace");
-        return run;
+        const { id, workspaceId, status, message, createdAt } = run;
+        const result: Record<string, unknown> = { id, workspaceId, status, message, createdAt };
+        const includes = requestedRunIncludes(args);
+        if (includes.plan || includes.workspace) {
+          const included: Record<string, unknown> = {};
+          if (includes.plan) included.plan = { id: `plan-${run.id}`, status: planStatusForRun(run) };
+          if (includes.workspace) included.workspace = { id: ws.id, name: ws.name, locked: ws.locked };
+          result.included = included;
+        }
+        return result;
       }
       const limit = Math.min(Math.max(Number(args.limit ?? 20), 1), 100);
       const offset = Math.max(Number(args.offset ?? 0), 0);
@@ -167,7 +184,8 @@ export const runTools: readonly McpTool[] = [
         message: { type: "string", description: "Run message" },
         "is-destroy": { type: "boolean", description: "Destroy plan" },
         "auto-apply": { type: "boolean", description: "Auto-apply when the plan succeeds (needs runs:apply)" },
-        "plan-only": { type: "boolean", description: "Skipp the apply" },
+        "plan-only": { type: "boolean", description: "Skip the apply" },
+        "save-plan": { type: "boolean", description: "Save the plan for later apply (terraform plan -out support)" },
         refresh: { type: "boolean", description: "Refresh state before planning (default true)" },
         "refresh-only": { type: "boolean", description: "Only refresh state, no changes" },
         "target-addrs": {
@@ -309,6 +327,27 @@ export const runTools: readonly McpTool[] = [
       });
       queueRunNotification(runId, "run:errored", "canceled");
       return { id: runId, status: "canceled" };
+    },
+  },
+  {
+    name: "get_plan_json",
+    description: "Return the sanitized JSON plan for a run (sensitive values redacted). Requires the runs:read grant.",
+    inputSchema: {
+      type: "object",
+      properties: { run_id: { type: "string", description: "Run ID" } },
+      required: ["run_id"],
+    },
+    requires: ["runs:read"],
+    handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
+      const runId = String(args.run_id);
+      const authorized = await findAuthorizedRun(runId, session.userId ?? undefined, session.orgId, session.teamId);
+      if (authorized === undefined) return toolError("Run not found or not authorized");
+      if (!(await checkWorkspacePermission(authorized.workspace, session.userId ?? undefined, session.orgId, session.teamId, "run-read"))) {
+        return toolError("Not authorized to read this run");
+      }
+      const planJson = await readPlanJsonSideArtifact(runId, "sanitized") ?? await readPlanJsonArtifact(runId);
+      if (planJson === undefined) return toolBadRequest("Plan JSON output is unavailable for this run");
+      return { run_id: runId, plan: sanitizePlanJson(planJson) };
     },
   },
 ];

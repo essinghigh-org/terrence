@@ -842,7 +842,7 @@ export function runResource(
 type RequestParam = Readonly<{ readonly url: string }>;
 
 
-function resolvePlanStatus(run: RunParam, planStarted: boolean, planFinished: boolean): string {
+function resolvePlanStatus(run: Readonly<{ status: string }>, planStarted: boolean, planFinished: boolean): string {
   if (run.status === "planning") return "running";
   if (run.status === "plan_queued" || run.status === "queuing") return "queued";
   if (PLAN_REACHED_TERMINAL_STATUSES.includes(run.status)) return "finished";
@@ -866,13 +866,21 @@ function resolveApplyStatus(run: RunParam, applyStarted: boolean): string {
   return "pending";
 }
 
-export function planResource(run: RunParam, request: RequestParam): Record<string, unknown> {
+/**
+ * Plan status for a run, shared by the HTTP plan resource and MCP run
+ * includes so both surfaces report identical values.
+ */
+export function planStatusForRun(run: Readonly<{ status: string; statusTimestamps: Readonly<Record<string, unknown>> | null }>): string {
   const timestamps = run.statusTimestamps ?? {};
   const planStarted = typeof timestamps["planning-at"] === "string";
   const planFinished = typeof timestamps["planned-at"] === "string"
     || typeof timestamps["planned-and-finished-at"] === "string"
     || typeof timestamps["planned-and-saved-at"] === "string";
-  const status = resolvePlanStatus(run, planStarted, planFinished);
+  return resolvePlanStatus(run, planStarted, planFinished);
+}
+
+export function planResource(run: RunParam, request: RequestParam): Record<string, unknown> {
+  const status = planStatusForRun(run);
   return {
     id: `plan-${run.id}`,
     type: "plans",
