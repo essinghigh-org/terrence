@@ -1,0 +1,1 @@
+ALTER TABLE "stack_records" ADD CONSTRAINT "stack_records_parent_id_fk" FOREIGN KEY ("parent_id") REFERENCES "public"."stack_records"("id") ON DELETE set null ON UPDATE no action;

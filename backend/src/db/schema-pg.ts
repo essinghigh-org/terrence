@@ -1477,6 +1477,11 @@ export const stackRecords = pgTable("stack_records", {
 }, (table) => [
     index("stack_records_stack_type_idx").on(table.stackId, table.recordType),
     index("stack_records_parent_type_idx").on(table.parentId, table.recordType),
+    foreignKey({
+      columns: [table.parentId],
+      foreignColumns: [table.id],
+      name: "stack_records_parent_id_fk",
+    }).onDelete("set null"),
   ]);
 
 export const stackStateLocks = pgTable("stack_state_locks", {

@@ -284,14 +284,15 @@ function buildExtraConfig(
       }).reference();
       const local = ref.columns.map(resolveColumn);
       const foreignTable = tableName(ref.foreignTable as SqliteTable);
-      const target = pg[foreignTable];
+      const isSelfReference = foreignTable === tableName(table);
+      const target = isSelfReference ? tableColumns : pg[foreignTable];
       if (target === undefined) {
         throw new Error(
           `pg-convert: composite FK on "${tableName(table)}" references unknown table "${foreignTable}"`,
         );
       }
       const foreign = ref.foreignColumns.map((c): unknown => {
-        const column = pgColumnByDbName(target, columnName(c));
+        const column = isSelfReference ? columnsByDbName[columnName(c)] : pgColumnByDbName(target, columnName(c));
         if (column === undefined) {
           throw new Error(
             `pg-convert: composite FK column "${foreignTable}.${columnName(c)}" not found`,
@@ -437,7 +438,8 @@ export function buildPgSchema(sqliteSchema: Record<string, unknown>): Record<str
         if (column === undefined) throw new Error(`pg-convert: composite FK column "${c}" not found on "${name}"`);
         return column;
       });
-      const target = pg[fk.foreignTable] as Record<string, unknown> | undefined;
+      const isSelfFk = fk.foreignTable === name;
+      const target = (isSelfFk ? (columns as unknown as Record<string, unknown>) : pg[fk.foreignTable]) as Record<string, unknown> | undefined;
       if (target === undefined) {
         throw new Error(`pg-convert: composite FK on "${name}" references unknown table "${fk.foreignTable}"`);
       }
