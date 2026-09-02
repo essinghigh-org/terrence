@@ -4125,6 +4125,7 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
   let requeued = 0;
   let errored = 0;
   for (const run of candidates) {
+    try {
     // Agent-mode runs are owned by recoverStaleAgentJobs; only running local
     // (or workspace-deleted, which can never execute again) runs are
     // reconciled here.
@@ -4160,6 +4161,13 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
         else await rm(runWorkDir(run.id), { recursive: true, force: true });
       } catch {}
       errored += 1;
+    }
+    } catch (error: unknown) {
+      // One bad transition or CAS race must not abort the whole startup
+      // reconciliation; log and continue to the next interrupted run.
+      const detail = error instanceof Error ? error.message : String(error);
+      try { await writeLog(run.id, "plan", `[terrence ERROR] Startup reconciliation failed for run ${run.id}: ${detail}`); } catch {}
+      try { console.error(`reconcileInterruptedLocalRuns: run ${run.id} failed:`, detail); } catch {}
     }
   }
 
