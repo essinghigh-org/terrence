@@ -5755,7 +5755,7 @@
           "200": {
             "description": "Success",
             "content": {
-              "application/vnd.api+json": {
+              "application/json": {
                 "schema": {
                   "type": "object"
                 }
