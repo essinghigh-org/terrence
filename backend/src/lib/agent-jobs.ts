@@ -408,6 +408,7 @@ export async function recoverStaleAgentJobs(now = Date.now()): Promise<string[]>
   const staleJobs = await db.query.agentJobs.findMany({
     where: and(eq(agentJobs.status, "claimed"), unavailableClaim),
     orderBy: [asc(agentJobs.claimedAt)],
+    limit: 100,
   });
   const recoveredJobs: { jobId: string; runId: string; runStatus: string }[] = [];
 

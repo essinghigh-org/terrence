@@ -288,6 +288,13 @@
       "when": 1788339680265,
       "tag": "0040_young_lilith",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1788343543149,
+      "tag": "0041_square_gideon",
+      "breakpoints": true
     }
   ]
 }

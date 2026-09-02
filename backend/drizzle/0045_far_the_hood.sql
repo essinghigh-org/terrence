@@ -1,0 +1,1 @@
+CREATE INDEX `agent_jobs_status_claimed_idx` ON `agent_jobs` (`status`,`claimed_at`);

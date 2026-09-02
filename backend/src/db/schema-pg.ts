@@ -141,6 +141,7 @@ export const agentJobs = pgTable("agent_jobs", {
 }, (table) => [
     uniqueIndex("agent_jobs_run_phase_idx").on(table.runId, table.phase),
     index("agent_jobs_pool_status_created_idx").on(table.agentPoolId, table.status, table.createdAt),
+  index("agent_jobs_status_claimed_idx").on(table.status, table.claimedAt),
   ]);
 
 export const agentPoolAllowedProjects = pgTable("agent_pool_allowed_projects", {
