@@ -17,6 +17,8 @@ import { apiTokens, users } from "../../src/db/schema";
 import { storageDir } from "../../src/db/driver";
 import { defaultOutputName, sanitizeOutputName } from "../../src/lib/db-export";
 import { makeTestDbName } from "../setup";
+const isPostgresEnv = !!process.env.PG_ADMIN_URL || (process.env.DATABASE_URL?.includes("postgres") ?? false);
+
 
 process.env.TERRENCE_DISABLE_RESTART ??= "1";
 
@@ -209,7 +211,7 @@ afterAll(async (): Promise<void> => {
   }
 });
 
-describe("Postgres -> SQLite database export", (): void => {
+describe.skipIf(!isPostgresEnv)("Postgres -> SQLite database export", (): void => {
   test("test-connection accepts a seeded Terrence database", async (): Promise<void> => {
     if (!postgresAvailable) return;
     const response = await app.handle(adminRequest("/api/v2/admin/db-export/test-connection", "POST", {
