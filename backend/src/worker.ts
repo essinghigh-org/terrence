@@ -1825,7 +1825,7 @@ async function executeRunImpl(runId: string): Promise<void> {
     // Parse resource counts from plan log output
     const planLogs = await db.query.logs.findMany({
       where: and(eq(logs.runId, runId), eq(logs.phase, "plan")),
-      orderBy: [asc(logs.createdAt)],
+      orderBy: [asc(logs.createdAt), asc(logs.id)],
     });
     const resourceCounts =
       (planJson === undefined ? undefined : planJsonResourceCounts(planJson))
@@ -2313,7 +2313,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
     // Parse resource counts from apply log output
     const applyLogs = await db.query.logs.findMany({
       where: and(eq(logs.runId, runId), eq(logs.phase, "apply")),
-      orderBy: [asc(logs.createdAt)],
+      orderBy: [asc(logs.createdAt), asc(logs.id)],
     });
     const applyResourceCounts = parseResourceCounts(applyLogs.map((log: Readonly<{ outputText: string }>): string => log.outputText).join("\n"));
 

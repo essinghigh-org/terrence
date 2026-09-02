@@ -992,7 +992,7 @@ async function appendLog(ctx: AgentCtx): Promise<unknown> {
     // the run log does not double up every line.
     const last = await db.query.logs.findFirst({
       where: and(eq(logs.runId, details.job.runId), eq(logs.phase, details.job.phase)),
-      orderBy: [desc(logs.createdAt)],
+      orderBy: [desc(logs.createdAt), desc(logs.id)],
     });
     if (last === undefined || last.outputText !== text) {
       await appendAgentJobLog(details.job.agentId ?? "", details.job.id, details.job.fencingToken, text.slice(0, 1024 * 1024));
