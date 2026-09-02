@@ -22,7 +22,7 @@ export default tseslint.config(
   // Keep the baseline guard itself linted without opting it into the
   // repository's TypeScript project service.
   {
-    files: ['scripts/lint-budget.mjs'],
+    files: ['scripts/lint-budget.ts'],
     ...tseslint.configs.disableTypeChecked,
     languageOptions: {
       ...tseslint.configs.disableTypeChecked.languageOptions,
