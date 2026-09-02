@@ -835,7 +835,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const policySet = await db.query.policySets.findFirst({ where: eq(policySets.id, version.policySetId) });
-    if (policySet === undefined || !(await checkOrganizationPermission(policySet.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policies"))) {
+    if (policySet === undefined || !(await checkOrganizationPermission(policySet.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-policies"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }

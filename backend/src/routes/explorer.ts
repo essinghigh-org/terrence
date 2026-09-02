@@ -818,7 +818,7 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
   })
   .post("/api/v2/organizations/:org_name/explorer/views", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
-    if (org === undefined || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
+    if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-workspaces"))) {
       (set as { status: number }).status = 404; return error("404", "Not Found");
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -847,7 +847,7 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
   .patch("/api/v2/organizations/:org_name/explorer/views/:view_id", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
     const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params.view_id ?? "") });
-    if (org === undefined || view === undefined || view.orgId !== org.id || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
+    if (org === undefined || view === undefined || view.orgId !== org.id || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-workspaces"))) {
       (set as { status: number }).status = 404; return error("404", "Not Found");
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
@@ -862,7 +862,7 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
   .delete("/api/v2/organizations/:org_name/explorer/views/:view_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
     const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params.view_id ?? "") });
-    if (org === undefined || view === undefined || view.orgId !== org.id || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
+    if (org === undefined || view === undefined || view.orgId !== org.id || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-workspaces"))) {
       (set as { status: number }).status = 404; return error("404", "Not Found");
     }
     await db.delete(explorerSavedQueries).where(eq(explorerSavedQueries.id, view.id));

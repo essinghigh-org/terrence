@@ -168,7 +168,7 @@ const runTaskResource = async (t: RunTaskRow, orgNameOverride?: string | null): 
 const listOrgRunTasks = async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
   const orgName = params.org_name ?? "";
   const org = await cachedOrgByName(orgName);
-  if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+  if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
   const page = pageRequest(request);
   const offset = (page.number - 1) * page.size;
   const [tasks, total] = await Promise.all([
