@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type JSX, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } from "react";
 import {
   Link,
   matchPath,
@@ -277,6 +277,14 @@ export function Layout({
   const selectedDocsSlug = docsSlug ?? docsIndex.index?.[0]?.slug;
   const orgPath = hasOrg ? `/app/${encodeURIComponent(orgName)}` : "/app";
 
+  const toggleSidebar = useCallback((): void => {
+    setSidebarCollapsed((collapsed: boolean): boolean => {
+      const next = !collapsed;
+      writeSidebarCollapsed(next);
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       // Never intercept typing inside form controls or contenteditable.
@@ -357,7 +365,7 @@ export function Layout({
       window.removeEventListener("keydown", handleKeyDown);
     };
     // hasOrg/orgPath are stable per-route values used by the g-sequences.
-  }, [navigate, commandPaletteOpen, shortcutsModalOpen, mobileNavigationOpen, hasOrg, orgPath]);
+  }, [navigate, commandPaletteOpen, shortcutsModalOpen, mobileNavigationOpen, hasOrg, orgPath, toggleSidebar]);
 
   // Remember the last organization the operator worked in so a fresh page
   // load (or the next visit) can resume there instead of the org picker.
@@ -505,14 +513,6 @@ export function Layout({
 
   const closeMobileNavigation = (): void => {
     setMobileNavigationOpen(false);
-  };
-
-  const toggleSidebar = (): void => {
-    setSidebarCollapsed((collapsed: boolean): boolean => {
-      const next = !collapsed;
-      writeSidebarCollapsed(next);
-      return next;
-    });
   };
 
   const handleLogout = (): void => {
