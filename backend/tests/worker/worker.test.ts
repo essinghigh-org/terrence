@@ -429,6 +429,198 @@ test("keeps a pending plan durable so apply can recover after the work directory
   });
 }, 30_000);
 
+test("restores a saved plan beside a single-root archive and records apply preflight diagnostics", async () => {
+  const result = await runWorkerScript(`
+    const { chmod, exists, mkdir, writeFile } = await import("fs/promises");
+    const { join } = await import("path");
+    const { db } = await import("./src/db/index.ts");
+    const { configurationVersions, logs, organizations, runs, workspaces } = await import("./src/db/schema.ts");
+    const { executeApply, executeRun } = await import("./src/worker.ts");
+
+    const testDir = process.env.TEST_DIR;
+    const recordDir = join(testDir, "record");
+    const binaryDir = join(process.env.STORAGE_DIR, "binaries", "tofu", "1.2.3");
+    const binaryPath = join(binaryDir, "tofu");
+    await mkdir(recordDir, { recursive: true });
+    await mkdir(binaryDir, { recursive: true });
+    await writeFile(binaryPath, [
+      '#!/bin/sh',
+      'record_dir=' + JSON.stringify(recordDir),
+      'if [ "$1" = init ]; then exit 0; fi',
+      'if [ "$1" = plan ]; then echo "Plan: 1 to add, 0 to change, 0 to destroy."; : > tfplan; exit 0; fi',
+      'if [ "$1" = show ]; then printf "{}"; exit 0; fi',
+      'if [ "$1" = apply ]; then echo applied > "$record_dir/apply"; exit 0; fi',
+      'exit 2',
+    ].join("\\n"));
+    await chmod(binaryPath, 0o755);
+
+    const archiveSource = join(testDir, "archive-source");
+    const archiveRoot = join(archiveSource, "configuration-root");
+    const archivePath = join(testDir, "single-root.tar.gz");
+    await mkdir(archiveRoot, { recursive: true });
+    await writeFile(join(archiveRoot, "main.tf"), 'terraform { required_version = ">= 1.0" }\\n');
+    const tar = Bun.spawn(["tar", "-czf", archivePath, "-C", archiveSource, "configuration-root"]);
+    if (await tar.exited !== 0) throw new Error("tar failed");
+
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(workspaces).values({
+      id: "workspace",
+      name: "workspace",
+      orgId: "org",
+      autoApply: false,
+      iacBinary: "tofu",
+      terraformVersion: "1.2.3",
+    });
+    await db.insert(configurationVersions).values({
+      id: "configuration",
+      workspaceId: "workspace",
+      status: "uploaded",
+      archivePath,
+    });
+    await db.insert(runs).values({
+      id: "run",
+      workspaceId: "workspace",
+      configurationVersionId: "configuration",
+      status: "pending",
+      autoApply: false,
+      savePlan: false,
+      createdAt: Date.now(),
+    });
+
+    await executeRun("run");
+    await executeApply("run");
+    const applied = await db.query.runs.findFirst({ where: (run, { eq }) => eq(run.id, "run") });
+    const applyLogs = await db.query.logs.findMany({
+      where: (log, { and, eq }) => and(eq(log.runId, "run"), eq(log.phase, "apply")),
+    });
+    const prefix = "[terrence diagnostic] ";
+    const diagnostics = applyLogs.flatMap((log) => {
+      if (!log.outputText.startsWith(prefix)) return [];
+      try {
+        return [JSON.parse(log.outputText.slice(prefix.length))];
+      } catch {
+        return [];
+      }
+    });
+    const preflight = diagnostics.find((diagnostic) => diagnostic.event === "run.apply.preflight");
+    console.log(JSON.stringify({
+      status: applied?.status,
+      applyInvoked: await exists(join(recordDir, "apply")),
+      preflight,
+      diagnosticEvents: diagnostics.map((diagnostic) => diagnostic.event),
+    }));
+  `, { NODE_ENV: "production", SIMULATED_RUNS: "false" });
+
+  expect(result.status).toBe("applied");
+  expect(result.applyInvoked).toBe(true);
+  expect(result.preflight).toMatchObject({
+    schemaVersion: 1,
+    level: "info",
+    event: "run.apply.preflight",
+    runId: "run",
+    phase: "apply",
+    requestedTool: "tofu",
+    requestedVersion: "1.2.3",
+    resolvedTool: "tofu",
+    resolvedVersion: "1.2.3",
+    binaryResolved: true,
+    simulated: false,
+    savedPlanRequired: true,
+    savedPlanRestored: true,
+    savedPlanFilePresent: true,
+    archiveRestored: true,
+    executionDirectoryExists: true,
+    configurationFileCount: 1,
+    configurationFiles: ["main.tf"],
+  });
+  expect(result.preflight.rootEntryNames).toEqual(expect.arrayContaining(["main.tf", "tfplan"]));
+  expect(result.diagnosticEvents).toContain("run.apply.preflight");
+  expect(result.diagnosticEvents).not.toContain("run.apply.preflight_failed");
+}, 30_000);
+
+test("fails an apply explicitly when saved-plan metadata is corrupt", async () => {
+  const result = await runWorkerScript(`
+    const { mkdir, writeFile } = await import("fs/promises");
+    const { join } = await import("path");
+    const { db } = await import("./src/db/index.ts");
+    const { logs, organizations, runs, workspaces } = await import("./src/db/schema.ts");
+    const { executeApply } = await import("./src/worker.ts");
+
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(workspaces).values({ id: "workspace", name: "workspace", orgId: "org" });
+    await db.insert(runs).values([
+      {
+        id: "invalid-json",
+        workspaceId: "workspace",
+        status: "planned",
+        savePlan: true,
+        createdAt: Date.now(),
+      },
+      {
+        id: "invalid-identifiers",
+        workspaceId: "workspace",
+        status: "planned",
+        savePlan: true,
+        createdAt: Date.now() + 1,
+      },
+    ]);
+
+    const invalidJsonDir = join(process.env.STORAGE_DIR, "saved-plans", "invalid-json");
+    await mkdir(invalidJsonDir, { recursive: true });
+    await writeFile(join(invalidJsonDir, "metadata.json"), "{ definitely-not-json");
+    await writeFile(join(invalidJsonDir, "tfplan"), "placeholder");
+
+    const invalidIdentifiersDir = join(process.env.STORAGE_DIR, "saved-plans", "invalid-identifiers");
+    await mkdir(invalidIdentifiersDir, { recursive: true });
+    await writeFile(join(invalidIdentifiersDir, "metadata.json"), JSON.stringify({
+      sha256: "placeholder",
+      stateId: 42,
+      stateSerial: 0,
+      configurationVersionId: { invalid: true },
+    }));
+    await writeFile(join(invalidIdentifiersDir, "tfplan"), "placeholder");
+
+    await executeApply("invalid-json");
+    await executeApply("invalid-identifiers");
+    const invalidJsonRun = await db.query.runs.findFirst({ where: (run, { eq }) => eq(run.id, "invalid-json") });
+    const invalidIdentifiersRun = await db.query.runs.findFirst({ where: (run, { eq }) => eq(run.id, "invalid-identifiers") });
+    const invalidJsonLogs = await db.query.logs.findMany({
+      where: (log, { and, eq }) => and(eq(log.runId, "invalid-json"), eq(log.phase, "apply")),
+      orderBy: (log, { asc }) => [asc(log.createdAt), asc(log.id)],
+    });
+    const invalidIdentifiersLogs = await db.query.logs.findMany({
+      where: (log, { and, eq }) => and(eq(log.runId, "invalid-identifiers"), eq(log.phase, "apply")),
+      orderBy: (log, { asc }) => [asc(log.createdAt), asc(log.id)],
+    });
+    const diagnosticPrefix = "[terrence diagnostic] ";
+    const diagnosticEvents = (entries) => entries.flatMap((entry) => {
+      if (!entry.outputText.startsWith(diagnosticPrefix)) return [];
+      try {
+        return [JSON.parse(entry.outputText.slice(diagnosticPrefix.length)).event];
+      } catch {
+        return [];
+      }
+    });
+    console.log(JSON.stringify({
+      invalidJsonStatus: invalidJsonRun?.status,
+      invalidJsonLog: invalidJsonLogs.some(log => log.outputText.includes("invalid JSON")),
+      invalidJsonEvents: diagnosticEvents(invalidJsonLogs).sort(),
+      invalidIdentifiersStatus: invalidIdentifiersRun?.status,
+      invalidIdentifiersLog: invalidIdentifiersLogs.some(log => log.outputText.includes("invalid shape")),
+      invalidIdentifiersEvents: diagnosticEvents(invalidIdentifiersLogs).sort(),
+    }));
+  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+
+  expect(result).toEqual({
+    invalidJsonStatus: "errored",
+    invalidJsonLog: true,
+    invalidJsonEvents: ["run.apply.failed", "run.apply.saved_plan_restore_failed"],
+    invalidIdentifiersStatus: "errored",
+    invalidIdentifiersLog: true,
+    invalidIdentifiersEvents: ["run.apply.failed", "run.apply.saved_plan_restore_failed"],
+  });
+}, 30_000);
+
 test("runs signed pre-plan and post-plan tasks around cost and policy stages", async () => {
   const result = await runWorkerScript(`\n    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
     const { createHmac } = await import("node:crypto");

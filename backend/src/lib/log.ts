@@ -118,13 +118,130 @@ function isLogLevelEnabled(level: LogLevel, configured: LogLevel): boolean {
   return LOG_LEVELS.indexOf(level) <= LOG_LEVELS.indexOf(configured);
 }
 
-function safeJsonStringify(value: unknown): string {
+const ERROR_RESERVED_KEYS = new Set(["name", "message", "stack", "cause", "errors"]);
+const SAFE_ERROR_DETAIL_KEYS = new Set([
+  "code",
+  "errno",
+  "syscall",
+  "path",
+  "status",
+  "statusCode",
+  "exitCode",
+  "signal",
+  "type",
+  "operation",
+  "reason",
+  "resource",
+  "phase",
+  "runId",
+  "requestId",
+]);
+const MAX_ERROR_STRING_LENGTH = 4_096;
+const MAX_ERROR_DETAIL_STRING_LENGTH = 1_024;
+const MAX_ERROR_DETAIL_KEYS = 16;
+const MAX_ERROR_COLLECTION_ITEMS = 16;
+const MAX_ERROR_CAUSE_DEPTH = 3;
+const ERROR_TRUNCATION_SUFFIX = "…[truncated]";
+
+type ErrorWithOptionalCause = Error & { cause?: unknown; errors?: unknown };
+type SafeErrorScalar = string | number | boolean | null;
+
+function truncateLogString(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  return value.slice(0, limit - ERROR_TRUNCATION_SUFFIX.length) + ERROR_TRUNCATION_SUFFIX;
+}
+
+function safeErrorScalar(value: unknown, limit: number): SafeErrorScalar | undefined {
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") return truncateLogString(value, limit);
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "bigint") return truncateLogString(value.toString(), limit);
+  return undefined;
+}
+
+function serializeNestedError(value: unknown, depth: number, active: Set<Error>): unknown {
+  if (value instanceof Error) {
+    if (active.has(value)) return { name: value.name, message: "[Circular error cause]" };
+    if (depth >= MAX_ERROR_CAUSE_DEPTH) {
+      return {
+        name: truncateLogString(value.name, MAX_ERROR_STRING_LENGTH),
+        message: "[Nested error omitted]",
+      };
+    }
+    return serializeLogErrorInternal(value, depth, active);
+  }
+  return safeErrorScalar(value, MAX_ERROR_DETAIL_STRING_LENGTH) ?? { name: "NonErrorThrown", message: "[Non-error cause omitted]" };
+}
+
+function serializeLogErrorInternal(error: Error, depth: number, active: Set<Error>): Readonly<Record<string, unknown>> {
+  if (active.has(error)) return { name: error.name, message: "[Circular error cause]" };
+  active.add(error);
+  try {
+    const value = error as ErrorWithOptionalCause;
+    const serialized: Record<string, unknown> = {
+      name: truncateLogString(value.name, MAX_ERROR_STRING_LENGTH),
+      message: truncateLogString(value.message, MAX_ERROR_STRING_LENGTH),
+    };
+    if (value.stack !== undefined) serialized.stack = truncateLogString(value.stack, MAX_ERROR_STRING_LENGTH);
+    if (value.cause !== undefined) serialized.cause = serializeNestedError(value.cause, depth + 1, active);
+    if (Array.isArray(value.errors)) {
+      const errors = value.errors
+        .slice(0, MAX_ERROR_COLLECTION_ITEMS)
+        .map((entry): unknown => serializeNestedError(entry, depth + 1, active));
+      if (value.errors.length > MAX_ERROR_COLLECTION_ITEMS) {
+        errors.push(`[${value.errors.length - MAX_ERROR_COLLECTION_ITEMS} additional errors omitted]`);
+      }
+      serialized.errors = errors;
+    }
+
+    const details: Record<string, SafeErrorScalar> = {};
+    for (const key of Object.keys(value)) {
+      if (
+        ERROR_RESERVED_KEYS.has(key)
+        || !SAFE_ERROR_DETAIL_KEYS.has(key)
+        || Object.keys(details).length >= MAX_ERROR_DETAIL_KEYS
+      ) continue;
+      let detail: unknown;
+      try {
+        detail = Reflect.get(value, key);
+      } catch {
+        continue;
+      }
+      const safeValue = safeErrorScalar(detail, MAX_ERROR_DETAIL_STRING_LENGTH);
+      if (safeValue !== undefined) details[key] = safeValue;
+    }
+    if (Object.keys(details).length > 0) serialized.details = details;
+    return serialized;
+  } finally {
+    active.delete(error);
+  }
+}
+
+/** Convert Error instances into useful, bounded, JSON-safe structured metadata. */
+export function serializeLogError(error: unknown): Readonly<Record<string, unknown>> {
+  if (!(error instanceof Error)) {
+    let message: string;
+    try {
+      message = String(error);
+    } catch {
+      message = "[Non-error value omitted]";
+    }
+    return {
+      name: "NonErrorThrown",
+      message: truncateLogString(message, MAX_ERROR_STRING_LENGTH),
+    };
+  }
+  return serializeLogErrorInternal(error, 0, new Set<Error>());
+}
+
+export function safeJsonStringify(value: unknown): string {
   const seen = new WeakSet<object>();
   return JSON.stringify(value, (_key: string, entry: unknown) => {
     if (typeof entry === "bigint") return entry.toString();
     if (entry !== null && typeof entry === "object") {
       if (seen.has(entry)) return "[Circular]";
       seen.add(entry);
+      if (entry instanceof Error) return serializeLogError(entry);
     }
     return entry;
   });
