@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { probeLandlockAbi } from "../../src/lib/sandbox";
@@ -41,9 +41,47 @@ async function runWorkerScript(script: string, env: Readonly<Record<string, stri
   }
 }
 
+async function runWorkerScriptWithFakeSandbox(
+  script: string,
+  env: Readonly<Record<string, string>> = {},
+): Promise<Record<string, unknown>> {
+  const runnerDir = await mkdtemp(join(tmpdir(), "terrence-landlock-runner-"));
+  const runnerPath = join(runnerDir, "landlock-runner");
+  const recordPath = join(runnerDir, "runner-args");
+  try {
+    await writeFile(
+      runnerPath,
+      [
+        "#!/bin/sh",
+        `record_path=${JSON.stringify(recordPath)}`,
+        'if [ "$1" = "--probe" ]; then echo 1; exit 0; fi',
+        'cwd=""',
+        'while [ "$#" -gt 0 ]; do',
+        '  if [ "$1" = "--" ]; then shift; break; fi',
+        '  case "$1" in --cwd=*) cwd="${1#--cwd=}";; esac',
+        "  shift",
+        "done",
+        'for arg in "$@"; do printf "%s\\n" "$arg" >> "$record_path"; done',
+        'if [ -n "$cwd" ]; then cd "$cwd" || exit 1; fi',
+        'exec "$@"',
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    return await runWorkerScript(script, {
+      TERRENCE_RUN_SANDBOX: "true",
+      TERRENCE_RUN_NET_POLICY: "allow",
+      TERRENCE_LANDLOCK_RUNNER: runnerPath,
+      TERRENCE_LANDLOCK_RECORD_PATH: recordPath,
+      ...env,
+    });
+  } finally {
+    await rm(runnerDir, { recursive: true, force: true });
+  }
+}
+
 test("invokes Infracost with the persisted Terraform plan and stores its resource-level estimate", async () => {
-  const result = await runWorkerScript(`
-    const { chmod, mkdir, readFile, writeFile } = await import("node:fs/promises");
+  const result = await runWorkerScriptWithFakeSandbox(`
+    const { chmod, mkdir, readFile: readFileText, writeFile } = await import("node:fs/promises");
     const { join } = await import("node:path");
     const testDir = process.env.TEST_DIR;
     const recordDir = join(testDir, "record");
@@ -133,6 +171,8 @@ test("invokes Infracost with the persisted Terraform plan and stores its resourc
     const { executeRun } = await import("./src/worker.ts");
     const { readCostEstimateArtifact } = await import("./src/lib/cost-estimate.ts");
     const { readPlanJsonArtifact } = await import("./src/lib/plan-json.ts");
+    const runnerRecordPath = process.env.TERRENCE_LANDLOCK_RECORD_PATH;
+    if (runnerRecordPath === undefined) throw new Error("Missing fake Landlock runner record path");
 
     await db.insert(organizations).values({ id: "org", name: "org", costEstimationEnabled: true });
     await db.insert(adminSettings).values({ id: "cost", values: { enabled: true }, updatedAt: Date.now() });
@@ -161,12 +201,13 @@ test("invokes Infracost with the persisted Terraform plan and stores its resourc
     await executeRun("run");
     const completed = await db.query.runs.findFirst({ where: (row, { eq }) => eq(row.id, "run") });
     const persistedPlan = await readPlanJsonArtifact("run");
-    const capturedPlan = JSON.parse(await readFile(join(recordDir, "infracost-input.json"), "utf8"));
+    const capturedPlan = JSON.parse(await readFileText(join(recordDir, "infracost-input.json"), "utf8"));
     const estimate = await readCostEstimateArtifact("run");
     console.log(JSON.stringify({
       status: completed?.status,
       statusKeys: Object.keys(completed?.statusTimestamps ?? {}),
-      args: (await readFile(join(recordDir, "infracost-args"), "utf8")).trim(),
+      args: (await readFileText(join(recordDir, "infracost-args"), "utf8")).trim(),
+      runnerArgs: await readFileText(runnerRecordPath, "utf8"),
       persistedPlan,
       capturedPlan,
       estimate,
@@ -177,6 +218,7 @@ test("invokes Infracost with the persisted Terraform plan and stores its resourc
   expect(result.capturedPlan).toEqual(result.persistedPlan);
   expect(result.args).toContain("breakdown");
   expect(result.args).toContain("--format json");
+  expect(String(result.runnerArgs)).toContain("breakdown");
   expect(result.statusKeys).toContain("cost-estimated-at");
   const estimate = result.estimate as Record<string, unknown>;
   expect(estimate.status).toBe("finished");
