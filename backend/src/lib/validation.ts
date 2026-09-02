@@ -128,9 +128,13 @@ export function tokenExpiry(value: unknown): number | null {
 
 export function decodeStatePayload(state: unknown): string {
   if (typeof state !== "string") return JSON.stringify(state);
+  if (isEncryptedSecret(state)) {
+    const plaintext = decryptStatePayload(state);
+    JSON.parse(plaintext);
+    return plaintext;
+  }
   let plaintext = state;
   try {
-    plaintext = decryptStatePayload(state);
     JSON.parse(plaintext);
     return plaintext;
   } catch {
