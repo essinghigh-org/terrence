@@ -1,4 +1,5 @@
 PRAGMA foreign_keys=OFF;--> statement-breakpoint
+DELETE FROM `workload_identity_tokens` WHERE `run_id` NOT IN (SELECT `id` FROM `runs`);--> statement-breakpoint
 CREATE TABLE `__new_workload_identity_tokens` (
 	`jti` text PRIMARY KEY NOT NULL,
 	`run_id` text NOT NULL,
