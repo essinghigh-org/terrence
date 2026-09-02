@@ -69,7 +69,7 @@ import { probeLandlockAbi, RunSandbox, removeSandboxWorkDir, runNetDenyEnabled, 
 import { createRunCgroup, destroyRunCgroup, killRunCgroup } from "./lib/run-cgroup";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "./lib/secrets";
 import { encryptStatePayload } from "./lib/validation";
-import { log } from "./lib/log";
+import { log, safeJsonStringify } from "./lib/log";
 export type { ExecutionPhase } from "./worker/phases";
 export { executorBackendFromEnv, type ExecutorBackend, EXECUTOR_BACKENDS } from "./worker/executor-policy";
 import {
@@ -212,6 +212,13 @@ type SavedPlanMetadata = Readonly<{
   configurationVersionId: string | null;
 }>;
 
+class SavedPlanIntegrityError extends Error {
+  constructor() {
+    super("Saved plan integrity check failed.");
+    this.name = "SavedPlanIntegrityError";
+  }
+}
+
 function savedPlanDirectory(runId: string): string {
   return join(storageDir, "saved-plans", runId);
 }
@@ -322,7 +329,7 @@ async function restoreSavedPlan(runId: string, executionDir: string): Promise<Sa
     ? Buffer.from(await decryptSecret(storedText), "base64")
     : stored;
   const checksum = createHash("sha256").update(bytes).digest("hex");
-  if (checksum !== metadata.sha256) throw new Error("Saved plan integrity check failed.");
+  if (checksum !== metadata.sha256) throw new SavedPlanIntegrityError();
   await mkdir(executionDir, { recursive: true, mode: 0o700 });
   await writeFile(join(executionDir, "tfplan"), bytes, { mode: 0o600 });
   return metadata;
@@ -557,7 +564,12 @@ async function runWasCanceled(runId: string): Promise<boolean> {
   return row?.status === "canceled" || row?.status === "force_canceled";
 }
 
-async function writeLog(runId: string, phase: "plan" | "apply", outputText: string): Promise<void> {
+type RunLogPhase = "plan" | "apply";
+type RunDiagnosticLevel = "info" | "warn" | "error";
+
+type RunDiagnosticFields = Readonly<Record<string, unknown>>;
+
+async function writeLog(runId: string, phase: RunLogPhase, outputText: string): Promise<void> {
   try {
     await db.insert(logs).values({
       id: crypto.randomUUID(),
@@ -576,11 +588,34 @@ async function writeLog(runId: string, phase: "plan" | "apply", outputText: stri
       log.error("Failed to persist run log output", {
         runId,
         phase,
-        error: error instanceof Error ? error.message : String(error),
+        error,
       });
     }
   }
 }
+
+/** Persist machine-readable context beside human-readable run output. */
+async function writeRunDiagnostic(
+  runId: string,
+  phase: RunLogPhase,
+  level: RunDiagnosticLevel,
+  event: string,
+  message: string,
+  fields: RunDiagnosticFields = {},
+): Promise<void> {
+  const record = {
+    ...fields,
+    schemaVersion: 1,
+    timestamp: new Date().toISOString(),
+    level,
+    event,
+    runId,
+    phase,
+    message,
+  };
+  await writeLog(runId, phase, `[terrence diagnostic] ${safeJsonStringify(record)}`);
+}
+
 
 type RunStatusExtra = Readonly<Partial<Pick<
   typeof runs.$inferInsert,
@@ -1217,27 +1252,51 @@ export async function executionVariables(
   return [...effective.values()];
 }
 
+type ArchiveExtractionContext = Readonly<{
+  runId?: string;
+  phase?: string;
+}>;
+
 async function extractTarArchive(
   archivePath: string,
   destDir: string,
   workingDirectory?: string | null,
+  context?: ArchiveExtractionContext,
 ): Promise<boolean> {
+  const diagnosticContext = {
+    ...context,
+    archivePath,
+    destinationDirectory: destDir,
+    workingDirectory: workingDirectory ?? null,
+  };
   try {
     await assertArchiveExpandedSize(archivePath);
     const verboseProc = spawn(["tar", "-tvzf", archivePath]);
     const verboseText = await new Response(verboseProc.stdout).text();
     const verboseExitCode = await verboseProc.exited;
-    if (verboseExitCode !== 0) return false;
+    if (verboseExitCode !== 0) {
+      log.error("Configuration archive member inspection failed", {
+        ...diagnosticContext,
+        exitCode: verboseExitCode,
+      });
+      return false;
+    }
 
     const verboseLines = verboseText.split("\n").map((s: string): string => s.trim()).filter((s: string): boolean => s !== "");
     assertArchiveMemberCount(verboseLines);
     for (const line of verboseLines) {
       if (tarMemberIsForbiddenSpecial(line.charAt(0))) {
-        log.error("Security error: archive contains forbidden link/special member", { member: line });
+        log.error("Security error: archive contains forbidden link/special member", {
+          ...diagnosticContext,
+          member: line,
+        });
         return false;
       }
       if (line.includes(" -> ") || line.includes(" link to ")) {
-        log.error("Security error: archive contains link member", { member: line });
+        log.error("Security error: archive contains link member", {
+          ...diagnosticContext,
+          member: line,
+        });
         return false;
       }
     }
@@ -1245,26 +1304,44 @@ async function extractTarArchive(
     const listProc = spawn(["tar", "-tzf", archivePath]);
     const membersText = await new Response(listProc.stdout).text();
     const exitCode = await listProc.exited;
-    if (exitCode !== 0) return false;
+    if (exitCode !== 0) {
+      log.error("Configuration archive path inspection failed", {
+        ...diagnosticContext,
+        exitCode,
+      });
+      return false;
+    }
 
     const members = membersText.split("\n").map((s: string): string => s.trim()).filter((s: string): boolean => s !== "");
     assertArchiveMemberCount(members);
     for (const m of members) {
       if (tarMemberPathUnsafe(m)) {
-        log.error("Security error: archive contains dangerous path", { path: m });
+        log.error("Security error: archive contains dangerous path", {
+          ...diagnosticContext,
+          member: m,
+          path: m,
+        });
         return false;
       }
     }
     await assertArchiveLogicalSize(archivePath);
 
     const extractProc = spawn(["tar", "-x", "-o", "-z", "-f", archivePath, "-C", destDir]);
-    const ok = (await extractProc.exited) === 0;
-    if (ok) {
-      await unnestArchiveDirectory(destDir, workingDirectory);
+    const extractExitCode = await extractProc.exited;
+    if (extractExitCode !== 0) {
+      log.error("Configuration archive extraction process failed", {
+        ...diagnosticContext,
+        exitCode: extractExitCode,
+      });
+      return false;
     }
-    return ok;
-  } catch (err: unknown) {
-    log.error("Tar extraction error", { error: err });
+    await unnestArchiveDirectory(destDir, workingDirectory);
+    return true;
+  } catch (error: unknown) {
+    log.error("Configuration archive extraction failed", {
+      ...diagnosticContext,
+      error,
+    });
     return false;
   }
 }
@@ -1284,17 +1361,23 @@ async function unnestArchiveDirectory(
     if (hasTfInRoot) return;
 
     const dirEntries = entries.filter((e): boolean => e.isDirectory());
-    if (entries.length === 1 && dirEntries.length === 1 && dirEntries[0] !== undefined) {
+    const rootEntriesAreSafe = entries.every((e): boolean => e.isDirectory() || e.isFile());
+    if (dirEntries.length === 1 && rootEntriesAreSafe && dirEntries[0] !== undefined) {
       const subDir = join(destDir, dirEntries[0].name);
       const subFiles = await readdir(subDir);
+      const rootNames = new Set(entries.map((entry): string => entry.name));
+      const conflictingFile = subFiles.find((file): boolean => rootNames.has(file));
+      if (conflictingFile !== undefined) {
+        throw new Error(`Cannot unnest archive directory: root entry '${conflictingFile}' already exists.`);
+      }
       for (const file of subFiles) {
         await rename(join(subDir, file), join(destDir, file));
       }
       await rm(subDir, { recursive: true, force: true });
       log.info(`Un-nested archive directory '${dirEntries[0].name}' into working directory.`);
     }
-  } catch (err: unknown) {
-    log.warn("Could not unnest archive directory", { error: err });
+  } catch (error: unknown) {
+    log.warn("Could not unnest archive directory", { destDir, error });
   }
 }
 
@@ -1715,8 +1798,25 @@ async function executeRunImpl(runId: string): Promise<void> {
 
       if (cv !== undefined && typeof cv.archivePath === "string" && cv.archivePath !== "" && (await exists(cv.archivePath))) {
         await writeLog(runId, "plan", `[terrence] Extracting configuration archive ${cv.archivePath}`);
-        const ok = await extractTarArchive(cv.archivePath, workDir, workspace.workingDirectory);
+        const ok = await extractTarArchive(
+          cv.archivePath,
+          workDir,
+          workspace.workingDirectory,
+          { runId, phase: "plan" },
+        );
         if (!ok) {
+          await writeRunDiagnostic(
+            runId,
+            "plan",
+            "error",
+            "run.plan.archive_restore_failed",
+            "The configuration archive could not be restored for planning.",
+            {
+              failureReason: "configuration_archive_restore_failed",
+              archivePath: cv.archivePath,
+              executionDirectory: workDir,
+            },
+          );
           throw new Error("Configuration archive extraction failed or contained invalid path components.");
         }
       }
@@ -2059,7 +2159,15 @@ async function executeRunImpl(runId: string): Promise<void> {
     }
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    log.error(`Run ${runId} planning failed`, { error: errMsg });
+    log.error(`Run ${runId} planning failed`, { error });
+    await writeRunDiagnostic(
+      runId,
+      "plan",
+      "error",
+      "run.plan.failed",
+      "Planning failed.",
+      { failureReason: "plan_failed", error },
+    );
     await writeLog(runId, "plan", `[terrence ERROR] ${errMsg}`);
     try {
       if (!isTerminalRunStatus(run.status)) await updateRunStatus(runId, "errored");
@@ -2186,6 +2294,18 @@ async function executeApplyImpl(runId: string): Promise<void> {
     if (policyErr !== null) {
       if (run.status !== "canceled" && run.status !== "force_canceled") {
         await updateRunStatus(runId, "errored");
+        await writeRunDiagnostic(
+          runId,
+          "apply",
+          "error",
+          "run.apply.policy_blocked",
+          "Apply was blocked by executor policy before execution started.",
+          {
+            failureReason: "executor_policy_blocked",
+            policyError: policyErr,
+            executionMode: workspace.executionMode,
+          },
+        );
         await writeLog(runId, "apply", `[terrence ERROR] ${policyErr}`);
         publish("run.status", { "run-id": runId, "workspace-id": workspace.id, "org-id": workspace.orgId, status: "errored", at: new Date().toISOString() });
         queueRunNotification(runId, "run:errored", "errored");
@@ -2242,13 +2362,52 @@ async function executeApplyImpl(runId: string): Promise<void> {
     const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
     await writeLog(runId, "apply", `[terrence] Starting apply phase for run ${runId}`);
 
-    const savedPlan = await restoreSavedPlan(runId, executionDir);
+    let savedPlan: SavedPlanMetadata | undefined;
+    try {
+      savedPlan = await restoreSavedPlan(runId, executionDir);
+    } catch (error: unknown) {
+      const integrityFailure = error instanceof SavedPlanIntegrityError;
+      await writeRunDiagnostic(
+        runId,
+        "apply",
+        "error",
+        integrityFailure ? "run.apply.saved_plan_integrity_failed" : "run.apply.saved_plan_restore_failed",
+        integrityFailure
+          ? "Saved plan integrity verification failed before apply."
+          : "Saved plan could not be restored before apply.",
+        {
+          failureReason: integrityFailure ? "saved_plan_integrity_check_failed" : "saved_plan_restore_failed",
+          error,
+        },
+      );
+      throw error;
+    }
     const savedPlanRequired = run.savePlan === true || savedPlan !== undefined;
     if (savedPlanRequired) {
       if (savedPlan === undefined) {
+        await writeRunDiagnostic(
+          runId,
+          "apply",
+          "error",
+          "run.apply.saved_plan_missing",
+          "Apply cannot verify the saved plan because its metadata or file is unavailable.",
+          { failureReason: "saved_plan_metadata_or_file_missing" },
+        );
         throw new Error("Saved plan metadata or file is missing; the plan cannot be verified before apply.");
       }
       if (savedPlan.configurationVersionId !== run.configurationVersionId) {
+        await writeRunDiagnostic(
+          runId,
+          "apply",
+          "error",
+          "run.apply.saved_plan_mismatch",
+          "Saved plan belongs to a different configuration version.",
+          {
+            failureReason: "saved_plan_configuration_mismatch",
+            savedPlanConfigurationVersionId: savedPlan.configurationVersionId,
+            runConfigurationVersionId: run.configurationVersionId,
+          },
+        );
         throw new Error("Saved plan configuration version no longer matches the run.");
       }
       const currentState = await db.query.stateVersions.findFirst({
@@ -2257,11 +2416,37 @@ async function executeApplyImpl(runId: string): Promise<void> {
         columns: { id: true, serial: true },
       });
       if (savedPlan.stateSerial !== (currentState?.serial ?? 0) || savedPlan.stateId !== (currentState?.id ?? null)) {
+        await writeRunDiagnostic(
+          runId,
+          "apply",
+          "error",
+          "run.apply.saved_plan_stale",
+          "Saved plan is stale because workspace state changed after planning.",
+          {
+            failureReason: "saved_plan_state_mismatch",
+            savedPlanStateId: savedPlan.stateId,
+            savedPlanStateSerial: savedPlan.stateSerial,
+            currentStateId: currentState?.id ?? null,
+            currentStateSerial: currentState?.serial ?? 0,
+          },
+        );
         throw new Error("Saved plan is stale because the workspace state changed after planning.");
       }
     }
 
     if (savedPlanRequired && !(await exists(join(executionDir, "tfplan")) && await exists(executionDir))) {
+      await writeRunDiagnostic(
+        runId,
+        "apply",
+        "error",
+        "run.apply.plan_file_missing",
+        "The verified saved plan file is not present in the apply execution directory.",
+        {
+          failureReason: "saved_plan_file_missing_after_restore",
+          executionDirectory: executionDir,
+          executionDirectoryExists: await exists(executionDir),
+        },
+      );
       throw new Error("Saved plan file 'tfplan' is missing; cannot apply run.");
     }
 
@@ -2270,10 +2455,33 @@ async function executeApplyImpl(runId: string): Promise<void> {
 
     let dirFiles = (await exists(executionDir)) ? await readdir(executionDir) : [];
     let hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
+    let configurationArchivePath: string | null = null;
+    let archiveRestored = false;
     if (savedPlanRequired && !hasTfFiles && run.configurationVersionId !== null) {
       const configuration = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, run.configurationVersionId) });
-      if (configuration?.archivePath !== null && configuration?.archivePath !== undefined && await exists(configuration.archivePath)) {
-        if (!(await extractTarArchive(configuration.archivePath, executionDir, workspace.workingDirectory))) {
+      configurationArchivePath = typeof configuration?.archivePath === "string" && configuration.archivePath !== ""
+        ? configuration.archivePath
+        : null;
+      if (configurationArchivePath !== null && await exists(configurationArchivePath)) {
+        archiveRestored = await extractTarArchive(
+          configurationArchivePath,
+          executionDir,
+          workspace.workingDirectory,
+          { runId, phase: "apply" },
+        );
+        if (!archiveRestored) {
+          await writeRunDiagnostic(
+            runId,
+            "apply",
+            "error",
+            "run.apply.archive_restore_failed",
+            "The configuration archive could not be restored for apply.",
+            {
+              failureReason: "configuration_archive_restore_failed",
+              archivePath: configurationArchivePath,
+              executionDirectory: executionDir,
+            },
+          );
           throw new Error("Saved plan configuration archive could not be restored.");
         }
         dirFiles = await readdir(executionDir);
@@ -2281,9 +2489,59 @@ async function executeApplyImpl(runId: string): Promise<void> {
       }
     }
     const isSimulatedAllowed = envEnabled(process.env.SIMULATED_RUNS) || Reflect.get(process.env, "NODE_ENV") === "test";
-    const resolved = isSimulatedAllowed ? null : await ensureBinary(requestedTool, requestedVersion);
+    let resolved: Awaited<ReturnType<typeof ensureBinary>> | null = null;
+    if (!isSimulatedAllowed) {
+      try {
+        resolved = await ensureBinary(requestedTool, requestedVersion);
+      } catch (error: unknown) {
+        await writeRunDiagnostic(
+          runId,
+          "apply",
+          "error",
+          "run.apply.binary_resolution_failed",
+          "The execution engine threw while resolving its CLI binary.",
+          {
+            failureReason: "cli_binary_resolution_threw",
+            requestedTool,
+            requestedVersion,
+            error,
+          },
+        );
+        throw error;
+      }
+    }
 
-    if (resolved !== null && (await exists(executionDir)) && hasTfFiles) {
+    const executionDirectoryExists = await exists(executionDir);
+    const configurationFiles = dirFiles.filter((file: string): boolean => file.endsWith(".tf") || file.endsWith(".tf.json"));
+    await writeRunDiagnostic(
+      runId,
+      "apply",
+      "info",
+      "run.apply.preflight",
+      "Apply preflight evaluated.",
+      {
+        requestedTool,
+        requestedVersion,
+        resolvedTool: resolved?.tool ?? null,
+        resolvedVersion: resolved?.version ?? null,
+        binaryPath: resolved?.binaryPath ?? null,
+        binaryResolved: resolved !== null,
+        simulated: isSimulatedAllowed,
+        savedPlanRequired,
+        savedPlanRestored: savedPlan !== undefined,
+        savedPlanFilePresent: await exists(join(executionDir, "tfplan")),
+        archivePath: configurationArchivePath,
+        archiveRestored,
+        executionDirectory: executionDir,
+        executionDirectoryExists,
+        rootEntryCount: dirFiles.length,
+        rootEntryNames: dirFiles.slice(0, 64),
+        configurationFileCount: configurationFiles.length,
+        configurationFiles,
+      },
+    );
+
+    if (resolved !== null && executionDirectoryExists && hasTfFiles) {
       if (await runWasCanceled(runId)) return;
       const binary = resolved.binaryPath;
       if (runSandbox !== null) await runSandbox.ensureTool(resolved.tool, resolved.version, binary);
@@ -2295,6 +2553,18 @@ async function executeApplyImpl(runId: string): Promise<void> {
       if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
       const hasPlanFile = await exists(join(executionDir, "tfplan"));
       if (!hasPlanFile) {
+        await writeRunDiagnostic(
+          runId,
+          "apply",
+          "error",
+          "run.apply.plan_file_missing",
+          "Terraform configuration was restored, but the plan file is missing.",
+          {
+            failureReason: "tfplan_missing_before_process_start",
+            executionDirectory: executionDir,
+            rootEntryNames: dirFiles.slice(0, 64),
+          },
+        );
         throw new Error("Saved plan file 'tfplan' is missing; cannot apply run.");
       }
       if (await runWasCanceled(runId)) return;
@@ -2424,7 +2694,35 @@ async function executeApplyImpl(runId: string): Promise<void> {
     } else if (isSimulatedAllowed) {
       await writeLog(runId, "apply", `[terrence] Execution engine: Simulated apply completed successfully.`);
     } else {
-      throw new Error(`Unable to resolve CLI binary '${requestedTool}' for apply phase.`);
+      const failedChecks = [
+        ...(resolved === null ? ["cli_binary_unresolved"] : []),
+        ...(!executionDirectoryExists ? ["execution_directory_missing"] : []),
+        ...(!hasTfFiles ? ["configuration_files_missing"] : []),
+      ];
+      await writeRunDiagnostic(
+        runId,
+        "apply",
+        "error",
+        "run.apply.preflight_failed",
+        "Apply preflight failed before the Terraform process started.",
+        {
+          failureReason: "apply_preflight_failed",
+          failedChecks,
+          requestedTool,
+          requestedVersion,
+          executionDirectory: executionDir,
+          executionDirectoryExists,
+          rootEntryNames: dirFiles.slice(0, 64),
+          configurationFiles,
+        },
+      );
+      if (failedChecks.length === 1 && failedChecks[0] === "cli_binary_unresolved") {
+        throw new Error(`Unable to resolve CLI binary '${requestedTool}' for apply phase.`);
+      }
+      if (failedChecks.length === 1 && failedChecks[0] === "configuration_files_missing") {
+        throw new Error(`No Terraform configuration (.tf or .tf.json) files were found in workspace directory '${executionDir}'.`);
+      }
+      throw new Error(`Apply preflight failed: ${failedChecks.join(", ") || "unknown_failure"}.`);
     }
 
     // Parse resource counts from apply log output
@@ -2464,6 +2762,14 @@ async function executeApplyImpl(runId: string): Promise<void> {
     }
     const errMsg = error instanceof Error ? error.message : String(error);
     log.error("Run apply failed", { runId, error });
+    await writeRunDiagnostic(
+      runId,
+      "apply",
+      "error",
+      "run.apply.failed",
+      "Apply failed.",
+      { failureReason: "apply_failed", error },
+    );
     await writeLog(runId, "apply", `[terrence ERROR] ${errMsg}`);
     await updateRunStatus(runId, "errored");
     await cleanupSavedPlan(runId);
@@ -3185,7 +3491,12 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
       ) throw new Error("Applied configuration archive is unavailable.");
 
       await mkdir(workDir, { recursive: true, mode: 0o700 });
-      if (!(await extractTarArchive(configuration.archivePath, workDir))) {
+      if (!(await extractTarArchive(
+        configuration.archivePath,
+        workDir,
+        undefined,
+        { phase: "assessment" },
+      ))) {
         throw new Error("Configuration archive extraction failed or contained invalid path components.");
       }
       const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
