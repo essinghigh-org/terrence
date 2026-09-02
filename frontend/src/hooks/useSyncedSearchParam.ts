@@ -40,16 +40,30 @@ export function useSyncedSearchParam(
 
   const currentParam = useMemo((): string | undefined => paramName, [paramName]);
 
+  const pendingRef = useRef<string | null>(null);
+  const timeoutRef = useRef<number | null>(null);
+
+  useEffect((): (() => void) => {
+    return (): void => {
+      if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
   const setFilter = useCallback((next: string): void => {
     setValue(next);
     if (currentParam === undefined) return;
-    const params = new URLSearchParams(searchParams.toString());
-    if (next === "") {
-      params.delete(currentParam);
-    } else {
-      params.set(currentParam, next);
-    }
-    setSearchParams(params, { replace: true });
+    pendingRef.current = next;
+    if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+    timeoutRef.current = window.setTimeout((): void => {
+      timeoutRef.current = null;
+      const pending = pendingRef.current;
+      pendingRef.current = null;
+      if (pending === null) return;
+      const params = new URLSearchParams(searchParams.toString());
+      if (pending === "") params.delete(currentParam);
+      else params.set(currentParam, pending);
+      setSearchParams(params, { replace: true });
+    }, 300);
   }, [currentParam, searchParams, setSearchParams]);
 
   return [value, setFilter];
