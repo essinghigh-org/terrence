@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray, lt, lte } from "drizzle-orm";
 import { envEnabled } from "./env";
 import { db } from "../db";
+import { workerQueueDraining } from "../worker";
 import { durableJobs } from "../db/schema";
 import { log } from "./log";
 
@@ -219,9 +220,19 @@ async function finishDurableJob(job: DurableJob, status: "succeeded" | "failed" 
 }
 
 async function runJob(job: DurableJob, handler: DurableJobHandler): Promise<void> {
+  let heartbeatFailures = 0;
   const heartbeatTimer = setInterval((): void => {
-    void heartbeatDurableJob(job).catch((error: unknown): void => {
-      log.warn("Durable job heartbeat failed", { jobId: job.id, error: String(error) });
+    void heartbeatDurableJob(job).then((ok): void => {
+      if (!ok) heartbeatFailures += 1;
+      else heartbeatFailures = 0;
+      if (heartbeatFailures >= 3) {
+        log.warn("Durable job heartbeat repeatedly failed, stopping heartbeat", { jobId: job.id });
+        clearInterval(heartbeatTimer);
+      }
+    }).catch((error: unknown): void => {
+      heartbeatFailures += 1;
+      log.warn("Durable job heartbeat failed", { jobId: job.id, error: String(error), failures: heartbeatFailures });
+      if (heartbeatFailures >= 3) clearInterval(heartbeatTimer);
     });
   }, LEASE_MS / 3);
   try {
@@ -250,6 +261,10 @@ export function startDurableJobWorker(
   const workerId = `durable-${process.pid}-${crypto.randomUUID()}`;
   const kinds = Object.keys(handlers) as DurableJobKind[];
   const poll = async (): Promise<void> => {
+    if (workerQueueDraining()) {
+      setTimeout((): void => { void poll(); }, POLL_MS);
+      return;
+    }
     try {
       const job = await claimDurableJob(workerId, kinds);
       if (job !== undefined) {
