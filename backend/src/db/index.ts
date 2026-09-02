@@ -473,6 +473,14 @@ if (!isPostgres) {
   client.run("CREATE INDEX IF NOT EXISTS audit_logs_org_created_at_idx ON audit_logs (org_id, created_at)");
   client.run("CREATE INDEX IF NOT EXISTS audit_logs_resource_idx ON audit_logs (resource_type, resource_id, created_at, id)");
   client.run("CREATE INDEX IF NOT EXISTS run_comments_run_created_idx ON run_comments (run_id, created_at, id)");
+  client.run("CREATE INDEX IF NOT EXISTS organization_memberships_user_idx ON organization_memberships (user_id)");
+  client.run("CREATE INDEX IF NOT EXISTS team_memberships_user_idx ON team_memberships (user_id)");
+  client.run("CREATE INDEX IF NOT EXISTS runs_configuration_version_idx ON runs (configuration_version_id)");
+  client.run("CREATE INDEX IF NOT EXISTS state_versions_run_idx ON state_versions (run_id)");
+  client.run("CREATE INDEX IF NOT EXISTS policy_checks_run_idx ON policy_checks (run_id)");
+  client.run("CREATE INDEX IF NOT EXISTS task_stages_run_idx ON task_stages (run_id)");
+  client.run("CREATE INDEX IF NOT EXISTS run_task_results_run_idx ON run_task_results (run_id)");
+  client.run("CREATE INDEX IF NOT EXISTS policy_evaluations_run_idx ON policy_evaluations (run_id)");
   client.run("CREATE UNIQUE INDEX IF NOT EXISTS workspace_variables_workspace_key_idx ON workspace_variables (workspace_id, category, key)");
 
   // SQLite cannot add a portable CHECK constraint to the existing users table;
@@ -813,6 +821,14 @@ export async function applyPgMigrations(): Promise<void> {
     await pg.unsafe("CREATE INDEX IF NOT EXISTS audit_logs_org_created_at_idx ON audit_logs (org_id, created_at)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS audit_logs_resource_idx ON audit_logs (resource_type, resource_id, created_at, id)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS run_comments_run_created_idx ON run_comments (run_id, created_at, id)");
+    await pg.unsafe("CREATE INDEX IF NOT EXISTS organization_memberships_user_idx ON organization_memberships (user_id)");
+    await pg.unsafe("CREATE INDEX IF NOT EXISTS team_memberships_user_idx ON team_memberships (user_id)");
+    await pg.unsafe("CREATE INDEX IF NOT EXISTS runs_configuration_version_idx ON runs (configuration_version_id)");
+    await pg.unsafe("CREATE INDEX IF NOT EXISTS state_versions_run_idx ON state_versions (run_id)");
+    await pg.unsafe("CREATE INDEX IF NOT EXISTS policy_checks_run_idx ON policy_checks (run_id)");
+    await pg.unsafe("CREATE INDEX IF NOT EXISTS task_stages_run_idx ON task_stages (run_id)");
+    await pg.unsafe("CREATE INDEX IF NOT EXISTS run_task_results_run_idx ON run_task_results (run_id)");
+    await pg.unsafe("CREATE INDEX IF NOT EXISTS policy_evaluations_run_idx ON policy_evaluations (run_id)");
     await pg.unsafe("CREATE UNIQUE INDEX IF NOT EXISTS workspace_variables_workspace_key_idx ON workspace_variables (workspace_id, category, key)");
     // Team-token legacy discriminator (see sqlite boot path): the singular
     // legacy team-token endpoints must only see the team's legacy credential.

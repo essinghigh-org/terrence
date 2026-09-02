@@ -302,6 +302,13 @@
       "when": 1788257467073,
       "tag": "0042_remove-dead-query-runs",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1788338924232,
+      "tag": "0043_heavy_gauntlet",
+      "breakpoints": true
     }
   ]
 }
