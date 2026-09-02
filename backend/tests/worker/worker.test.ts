@@ -429,6 +429,74 @@ test("keeps a pending plan durable so apply can recover after the work directory
   });
 }, 30_000);
 
+test("fails an apply explicitly when saved-plan metadata is corrupt", async () => {
+  const result = await runWorkerScript(`
+    const { mkdir, writeFile } = await import("fs/promises");
+    const { join } = await import("path");
+    const { db } = await import("./src/db/index.ts");
+    const { logs, organizations, runs, workspaces } = await import("./src/db/schema.ts");
+    const { executeApply } = await import("./src/worker.ts");
+
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(workspaces).values({ id: "workspace", name: "workspace", orgId: "org" });
+    await db.insert(runs).values([
+      {
+        id: "invalid-json",
+        workspaceId: "workspace",
+        status: "planned",
+        savePlan: true,
+        createdAt: Date.now(),
+      },
+      {
+        id: "invalid-identifiers",
+        workspaceId: "workspace",
+        status: "planned",
+        savePlan: true,
+        createdAt: Date.now() + 1,
+      },
+    ]);
+
+    const invalidJsonDir = join(process.env.STORAGE_DIR, "saved-plans", "invalid-json");
+    await mkdir(invalidJsonDir, { recursive: true });
+    await writeFile(join(invalidJsonDir, "metadata.json"), "{ definitely-not-json");
+    await writeFile(join(invalidJsonDir, "tfplan"), "placeholder");
+
+    const invalidIdentifiersDir = join(process.env.STORAGE_DIR, "saved-plans", "invalid-identifiers");
+    await mkdir(invalidIdentifiersDir, { recursive: true });
+    await writeFile(join(invalidIdentifiersDir, "metadata.json"), JSON.stringify({
+      sha256: "placeholder",
+      stateId: 42,
+      stateSerial: 0,
+      configurationVersionId: { invalid: true },
+    }));
+    await writeFile(join(invalidIdentifiersDir, "tfplan"), "placeholder");
+
+    await executeApply("invalid-json");
+    await executeApply("invalid-identifiers");
+    const invalidJsonRun = await db.query.runs.findFirst({ where: (run, { eq }) => eq(run.id, "invalid-json") });
+    const invalidIdentifiersRun = await db.query.runs.findFirst({ where: (run, { eq }) => eq(run.id, "invalid-identifiers") });
+    const invalidJsonLogs = await db.query.logs.findMany({
+      where: (log, { and, eq }) => and(eq(log.runId, "invalid-json"), eq(log.phase, "apply")),
+    });
+    const invalidIdentifiersLogs = await db.query.logs.findMany({
+      where: (log, { and, eq }) => and(eq(log.runId, "invalid-identifiers"), eq(log.phase, "apply")),
+    });
+    console.log(JSON.stringify({
+      invalidJsonStatus: invalidJsonRun?.status,
+      invalidJsonLog: invalidJsonLogs.some(log => log.outputText.includes("invalid JSON")),
+      invalidIdentifiersStatus: invalidIdentifiersRun?.status,
+      invalidIdentifiersLog: invalidIdentifiersLogs.some(log => log.outputText.includes("invalid shape")),
+    }));
+  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+
+  expect(result).toEqual({
+    invalidJsonStatus: "errored",
+    invalidJsonLog: true,
+    invalidIdentifiersStatus: "errored",
+    invalidIdentifiersLog: true,
+  });
+}, 30_000);
+
 test("runs signed pre-plan and post-plan tasks around cost and policy stages", async () => {
   const result = await runWorkerScript(`\n    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
     const { createHmac } = await import("node:crypto");

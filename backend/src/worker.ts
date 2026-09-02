@@ -144,6 +144,42 @@ function assertRunSandboxAvailable(): void {
   }
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object" || !("code" in error)) return undefined;
+  const code = Reflect.get(error, "code");
+  return typeof code === "string" ? code : undefined;
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return errorCode(error) === "ENOENT";
+}
+
+function isExpectedProcessTerminationError(error: unknown): boolean {
+  if (["ENOENT", "ESRCH"].includes(errorCode(error) ?? "")) return true;
+  return /(?:already exited|no such process|not running)/i.test(errorMessage(error));
+}
+
+function logBestEffortFailure(
+  message: string,
+  context: Readonly<Record<string, unknown>>,
+  error: unknown,
+): void {
+  log.warn(message, { ...context, error: errorMessage(error) });
+}
+
+function logProcessTerminationFailure(
+  error: unknown,
+  context: Readonly<Record<string, unknown>>,
+): void {
+  if (!isExpectedProcessTerminationError(error)) {
+    logBestEffortFailure("Failed to terminate run process", context, error);
+  }
+}
+
 /** Executor policy check (36-39): returns an error message when local execution is forbidden. */
 export function executorPolicyAllowsLocal(
   workspace: Readonly<{ trustedExecution?: boolean | null; executionMode?: string | null }>,
@@ -191,7 +227,9 @@ export async function cleanupRunWorkDir(runId: string): Promise<void> {
 
 export function scheduleRunWorkDirCleanup(runId: string, delayMs = 6_000): void {
   const timer = setTimeout((): void => {
-    void cleanupRunWorkDir(runId).catch((): void => undefined);
+    void cleanupRunWorkDir(runId).catch((error: unknown): void => {
+      logBestEffortFailure("Scheduled run workdir cleanup failed", { runId }, error);
+    });
   }, delayMs);
   timer.unref?.();
 }
@@ -235,20 +273,44 @@ async function persistSavedPlan(
 }
 
 async function readSavedPlanMetadata(runId: string): Promise<SavedPlanMetadata | undefined> {
+  const path = savedPlanMetadataFile(runId);
+  let raw: string;
   try {
-    const parsed: unknown = JSON.parse(await readFile(savedPlanMetadataFile(runId), "utf8"));
-    if (parsed === null || typeof parsed !== "object") return undefined;
-    const value = parsed as Record<string, unknown>;
-    if (typeof value.sha256 !== "string" || typeof value.stateSerial !== "number") return undefined;
-    return {
-      sha256: value.sha256,
-      stateId: typeof value.stateId === "string" ? value.stateId : null,
-      stateSerial: value.stateSerial,
-      configurationVersionId: typeof value.configurationVersionId === "string" ? value.configurationVersionId : null,
-    };
-  } catch {
-    return undefined;
+    raw = await readFile(path, "utf8");
+  } catch (error: unknown) {
+    if (isMissingFileError(error)) return undefined;
+    throw new Error(`Could not read saved plan metadata for run ${runId}: ${errorMessage(error)}`);
   }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch (error: unknown) {
+    throw new Error(`Saved plan metadata for run ${runId} is invalid JSON: ${errorMessage(error)}`);
+  }
+  if (parsed === null || typeof parsed !== "object") {
+    throw new Error(`Saved plan metadata for run ${runId} has an invalid shape.`);
+  }
+  const value = parsed as Record<string, unknown>;
+  if (typeof value.sha256 !== "string" || typeof value.stateSerial !== "number") {
+    throw new Error(`Saved plan metadata for run ${runId} has an invalid shape.`);
+  }
+  const stateId = value.stateId;
+  const configurationVersionId = value.configurationVersionId;
+  if (
+    !Object.hasOwn(value, "stateId")
+    || !Object.hasOwn(value, "configurationVersionId")
+    || (stateId !== null && typeof stateId !== "string")
+    || (configurationVersionId !== null && typeof configurationVersionId !== "string")
+  ) {
+    throw new Error(`Saved plan metadata for run ${runId} has an invalid shape.`);
+  }
+  return {
+    sha256: value.sha256,
+    stateId: stateId as string | null,
+    stateSerial: value.stateSerial,
+    configurationVersionId: configurationVersionId as string | null,
+  };
 }
 
 async function restoreSavedPlan(runId: string, executionDir: string): Promise<SavedPlanMetadata | undefined> {
@@ -320,6 +382,20 @@ type TrackedRunProcess = Readonly<{
   stdout?: Readonly<ReadableStream<Uint8Array>>;
   stderr?: Readonly<ReadableStream<Uint8Array>>;
 }>;
+
+function killTrackedProcess(
+  child: TrackedRunProcess,
+  signal: "SIGINT" | "SIGKILL",
+  runId: string,
+  phase: string,
+): void {
+  try {
+    child.kill(signal);
+  } catch (error: unknown) {
+    logProcessTerminationFailure(error, { runId, phase, pid: child.pid, signal });
+  }
+}
+
 const activeRunProcesses = new Map<string, Set<TrackedRunProcess>>();
 /** Per-run cgroup paths (kanban 8/9). Empty when cgroups are unavailable. */
 const activeRunCgroups = new Map<string, string>();
@@ -417,8 +493,8 @@ function terminateProcessGroup(pid: number | null, signal: "SIGINT" | "SIGKILL")
   if (pid === null || pid <= 0) return;
   try {
     process.kill(-pid, signal);
-  } catch {
-    // Group may already be gone (ESRCH) or the platform may not support it.
+  } catch (error: unknown) {
+    logProcessTerminationFailure(error, { pid, signal, scope: "process-group" });
   }
 }
 
@@ -440,7 +516,7 @@ export function cancelRunExecution(runId: string, force = false): void {
     // (e.g. `sleep &`) — some of which ignore SIGINT. Only SIGKILL cannot be
     // ignored, so it is what guarantees no orphan survives cancellation.
     terminateProcessGroup(pgid, signal);
-    try { child.kill(signal); } catch {}
+    killTrackedProcess(child, signal, runId, "cancel");
     if (!force) {
       // Grace period for a clean shutdown (tofu writes partial state, releases
       // locks), then force-kill anything still left in the group. This
@@ -464,7 +540,7 @@ export function terminateActiveRunExecutions(): void {
   for (const runId of runIds) {
     for (const child of activeRunProcesses.get(runId) ?? []) {
       terminateProcessGroup(child.pid, "SIGKILL");
-      try { child.kill("SIGKILL"); } catch {}
+      killTrackedProcess(child, "SIGKILL", runId, "shutdown");
     }
     if (activeRunCgroups.has(runId)) killRunCgroup(runId);
   }
@@ -734,9 +810,17 @@ async function readPlanJson(
         new Response(process.stdout).text(),
         new Response(process.stderr).text(),
       ]);
-      const [exitCode, [stdout]] = await waitForTrackedProcess(runId, "plan", process, output, timeoutMs);
+      const [exitCode, [stdout, stderr]] = await waitForTrackedProcess(runId, "plan", process, output, timeoutMs);
       if (exitCode === 0) return parseJsonObject(stdout);
-    } catch {}
+      log.warn("Terraform plan JSON command failed", {
+        runId,
+        binary,
+        exitCode,
+        stderr: stderr.trim().slice(0, 2_000),
+      });
+    } catch (error: unknown) {
+      logBestEffortFailure("Failed to read Terraform plan JSON", { runId, binary }, error);
+    }
   }
   return undefined;
 }
@@ -870,10 +954,19 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
     }
     await writeLog(runId, "plan", `[terrence] Cost estimation errored: ${message}`);
   } finally {
-    try {
-      await rm(inputPath, { force: true });
-      await rm(secretsDir, { recursive: true, force: true });
-    } catch {}
+    const cleanupTargets: readonly { label: string; operation: Promise<void> }[] = [
+      { label: "plan input", operation: rm(inputPath, { force: true }) },
+      { label: "credentials directory", operation: rm(secretsDir, { recursive: true, force: true }) },
+    ];
+    const cleanupResults = await Promise.allSettled(cleanupTargets.map((target) => target.operation));
+    for (const [index, result] of cleanupResults.entries()) {
+      if (result.status === "rejected") {
+        const target = cleanupTargets[index];
+        if (target !== undefined) {
+          logBestEffortFailure("Could not clean up cost-estimate temporary files", { runId, artifact: target.label }, result.reason);
+        }
+      }
+    }
   }
 }
 
@@ -906,17 +999,18 @@ async function waitForTrackedProcess<T>(
   let cancelEscalationTimer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   let cancellationRequested = false;
+  let cancellationPollFailureLogged = false;
   const requestCancellation = (force: boolean): void => {
     if (cancellationRequested && !force) return;
     cancellationRequested = true;
     const signal = force ? "SIGKILL" : "SIGINT";
     terminateProcessGroup(child.pid, signal);
-    try { child.kill(signal); } catch {}
+    killTrackedProcess(child, signal, runId, phase);
     if (force) killRunCgroup(runId);
     if (!force && cancelEscalationTimer === undefined) {
       cancelEscalationTimer = setTimeout((): void => {
         terminateProcessGroup(child.pid, "SIGKILL");
-        try { child.kill("SIGKILL"); } catch {}
+        killTrackedProcess(child, "SIGKILL", runId, `${phase}-cancellation`);
         killRunCgroup(runId);
       }, 5_000);
     }
@@ -925,7 +1019,11 @@ async function waitForTrackedProcess<T>(
     void db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { status: true } }).then((run): void => {
       if (run?.status === "force_canceled") requestCancellation(true);
       else if (run?.status === "canceled") requestCancellation(false);
-    }).catch((): void => undefined);
+    }).catch((error: unknown): void => {
+      if (cancellationPollFailureLogged) return;
+      cancellationPollFailureLogged = true;
+      logBestEffortFailure("Cancellation status polling failed", { runId, phase }, error);
+    });
   }, 250);
   cancellationPoller.unref?.();
   const completed = Promise.all([child.exited, output]);
@@ -940,7 +1038,7 @@ async function waitForTrackedProcess<T>(
   } catch (error: unknown) {
     if (!timedOut) throw error;
     terminateProcessGroup(child.pid, "SIGKILL");
-    try { child.kill("SIGKILL"); } catch {}
+    killTrackedProcess(child, "SIGKILL", runId, `${phase}-timeout`);
     if (activeRunCgroups.has(runId)) killRunCgroup(runId);
     await Promise.allSettled([child.exited, output]);
     throw error;
@@ -1357,7 +1455,13 @@ async function executeRunTasks(
             if (["running", "passed", "failed"].includes(String(attributes.status))) status = String(attributes.status);
             if (typeof attributes.message === "string") message = attributes.message;
             if (typeof attributes.url === "string") resultUrl = attributes.url;
-          } catch {}
+          } catch (error: unknown) {
+            logBestEffortFailure(
+              "Run task returned an invalid JSON response; using its HTTP status",
+              { runId, resultId, taskId: task.id },
+              error,
+            );
+          }
         }
       } catch (error: unknown) {
         status = "failed";
@@ -1548,7 +1652,7 @@ async function executeRunImpl(runId: string): Promise<void> {
   // admin enabling requireHardIsolation between claim and execution.
   if (workspace.executionMode !== "agent") {
     const pForExec = workspace.projectId
-      ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) }).catch((): undefined => undefined)
+      ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) })
       : undefined;
     const policyError = executorPolicyAllowsLocal(
       workspace,
@@ -1970,7 +2074,10 @@ async function executeRunImpl(runId: string): Promise<void> {
       // Saved plans live under storage/saved-plans; never retain the execution
       // directory, which contains tfvars, state, provider caches, and tokens.
       await cleanupRunWorkDir(runId);
-    } catch {}
+    } catch (error: unknown) {
+      logBestEffortFailure("Run workdir cleanup failed after planning", { runId }, error);
+      scheduleRunWorkDirCleanup(runId);
+    }
   }
 }
 
@@ -2032,14 +2139,15 @@ async function releaseRunWorkspaceLock(workspaceId: string, runId: string): Prom
 async function cleanupApplyArtifacts(runId: string): Promise<void> {
   try {
     await cleanupSavedPlan(runId);
-  } catch {
-    // Cleanup is best effort after a task gate or apply failure.
+  } catch (error: unknown) {
+    logBestEffortFailure("Saved-plan cleanup failed after apply gate failure", { runId }, error);
   }
   try {
     if (runSandbox !== null) await removeSandboxWorkDir(runId);
     else await rm(runWorkDir(runId), { recursive: true, force: true });
-  } catch {
-    // Cleanup is best effort after a task gate or apply failure.
+  } catch (error: unknown) {
+    logBestEffortFailure("Run workdir cleanup failed after apply gate failure", { runId }, error);
+    scheduleRunWorkDirCleanup(runId);
   }
 }
 
@@ -2068,7 +2176,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
   // Re-check executor policy at apply entry too (admin may have tightened policy between plan and apply).
   if (workspace.executionMode !== "agent") {
     const pForApply = workspace.projectId
-      ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) }).catch((): undefined => undefined)
+      ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) })
       : undefined;
     const policyErr = executorPolicyAllowsLocal(
       workspace,
@@ -2213,8 +2321,9 @@ async function executeApplyImpl(runId: string): Promise<void> {
           jsonStateOutputs = parsed.outputs !== null && parsed.outputs !== undefined
             ? JSON.stringify(parsed.outputs)
             : null;
-        } catch {
+        } catch (error: unknown) {
           jsonState = null;
+          logBestEffortFailure("Apply state file is not valid JSON; storing raw state without JSON resources", { runId }, error);
         }
 
         // Pull VCS commit metadata from the run's configuration version so the state
@@ -2292,7 +2401,11 @@ async function executeApplyImpl(runId: string): Promise<void> {
           await saveStateAfterApply();
         } catch (saveError: unknown) {
           await writeLog(runId, "apply", `[terrence] Could not record partial state after failed apply: ${saveError instanceof Error ? saveError.message : String(saveError)}`);
-          await captureInterruptedApplyState(runId).catch(() => false);
+          try {
+            await captureInterruptedApplyState(runId);
+          } catch (captureError: unknown) {
+            log.error("Could not capture state after partial apply persistence failure", { runId, error: captureError });
+          }
         }
         throw new Error(`${resolved.tool} apply failed with exit code ${applyExit}`);
       }
@@ -2300,7 +2413,11 @@ async function executeApplyImpl(runId: string): Promise<void> {
       try {
         await saveStateAfterApply();
       } catch (saveError: unknown) {
-        await captureInterruptedApplyState(runId).catch(() => false);
+        try {
+          await captureInterruptedApplyState(runId);
+        } catch (captureError: unknown) {
+          log.error("Could not capture state after apply state persistence failure", { runId, error: captureError });
+        }
         throw saveError;
       }
 
@@ -2358,7 +2475,10 @@ async function executeApplyImpl(runId: string): Promise<void> {
         } else {
           await rm(workDir, { recursive: true, force: true });
         }
-      } catch {}
+      } catch (error: unknown) {
+        logBestEffortFailure("Run workdir cleanup failed after successful apply", { runId }, error);
+        scheduleRunWorkDirCleanup(runId);
+      }
     } else {
       if (applyStarted && !applyCanceled) {
         await writeLog(runId, "apply", `[terrence] Apply failed; partial state was journaled before cleaning the execution directory.`);
@@ -2366,7 +2486,10 @@ async function executeApplyImpl(runId: string): Promise<void> {
       try {
         if (runSandbox !== null) await removeSandboxWorkDir(runId);
         else await rm(workDir, { recursive: true, force: true });
-      } catch {}
+      } catch (error: unknown) {
+        logBestEffortFailure("Run workdir cleanup failed after failed apply", { runId }, error);
+        scheduleRunWorkDirCleanup(runId);
+      }
     }
   }
 } finally {
@@ -2482,9 +2605,7 @@ export async function runPolicyChecks(
         // Unpredictable per-invocation directory: a guessable tmp path under
         // /tmp invites symlink attacks and cross-run tampering.
         const workDir = join(tmpdir(), "terrence", "opa", `${runId}-${crypto.randomUUID()}`);
-        try {
-          await mkdir(workDir, { recursive: true, mode: 0o700 });
-        } catch {}
+        await mkdir(workDir, { recursive: true, mode: 0o700 });
         const policyPath = join(workDir, "policy.rego");
         const dataPath = join(workDir, "input.json");
         await writeFile(policyPath, policySource, { mode: 0o600 });
@@ -2526,7 +2647,9 @@ export async function runPolicyChecks(
         }
         try {
           await rm(workDir, { recursive: true, force: true });
-        } catch {}
+        } catch (error: unknown) {
+          logBestEffortFailure("OPA policy workdir cleanup failed", { runId, policyId: policy.id }, error);
+        }
       } else if (isSentinel && typeof policySource === "string" && policySource !== "") {
         const workDir = join(tmpdir(), "terrence", "sentinel", `${runId}-${crypto.randomUUID()}`, policy.id);
         await mkdir(workDir, { recursive: true, mode: 0o700 });
@@ -2601,7 +2724,9 @@ export async function runPolicyChecks(
         }
         try {
           await rm(workDir, { recursive: true, force: true });
-        } catch {}
+        } catch (error: unknown) {
+          logBestEffortFailure("Sentinel policy workdir cleanup failed", { runId, policyId: policy.id }, error);
+        }
       } else if (!isOpa && !isSentinel) {
         checkStatus = "unreachable";
         checkResult = { error: `Policy kind '${policySet?.kind ?? "unknown"}' is not supported` };
@@ -3244,7 +3369,9 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
       } else {
         await rm(workDir, { recursive: true, force: true });
       }
-    } catch {}
+    } catch (error: unknown) {
+      logBestEffortFailure("Assessment workdir cleanup failed", { assessmentResultId }, error);
+    }
   }
 }
 
@@ -3702,7 +3829,11 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
       if (localRunReservations.has(run.id)) releaseLocalRunReservation(run.id);
       log.error("Scheduled apply failed", { runId: run.id, error });
       // Keep the run confirmed so a transient failure retries next poll.
-      await db.update(runs).set({ status: "confirmed" }).where(and(eq(runs.id, run.id), eq(runs.status, "apply_queued"))).catch((): void => {});
+      try {
+        await db.update(runs).set({ status: "confirmed" }).where(and(eq(runs.id, run.id), eq(runs.status, "apply_queued")));
+      } catch (restoreError: unknown) {
+        logBestEffortFailure("Failed to restore scheduled run after apply dispatch failure", { runId: run.id }, restoreError);
+      }
     }
   }
   return applied;
@@ -4060,8 +4191,17 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
   const parsedRetention = rawRetention === undefined || rawRetention === "" ? 7 * 24 * 60 * 60 * 1000 : Number(rawRetention);
   const retentionMs = Number.isSafeInteger(parsedRetention) && parsedRetention >= 0 ? parsedRetention : 7 * 24 * 60 * 60 * 1000;
   const cutoff = Date.now() - retentionMs;
+  type CleanupEntry = Readonly<{ name: string; isDirectory(): boolean }>;
+  const readCleanupEntries = async (root: string, message: string): Promise<readonly CleanupEntry[] | null> => {
+    try {
+      return await readdir(root, { withFileTypes: true, encoding: "utf8" }) as unknown as CleanupEntry[];
+    } catch (error: unknown) {
+      if (!isMissingFileError(error)) logBestEffortFailure(message, { root }, error);
+      return null;
+    }
+  };
   const pruneRoot = async (root: string, requireRecoveredMarker = false): Promise<void> => {
-    const entries = await readdir(root, { withFileTypes: true, encoding: "utf8" }).catch(() => null);
+    const entries = await readCleanupEntries(root, "Could not scan cleanup directory");
     if (entries === null) return;
     await Promise.all(entries
       .filter((entry): boolean => entry.isDirectory())
@@ -4070,14 +4210,16 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
         try {
           if (requireRecoveredMarker && !(await exists(join(path, ".recovered")))) return;
           if ((await stat(path)).mtimeMs < cutoff) await rm(path, { recursive: true, force: true });
-        } catch {
-          // Best effort: a concurrent reconciliation or cleanup may own it.
+        } catch (error: unknown) {
+          if (!isMissingFileError(error)) {
+            logBestEffortFailure("Could not prune interrupted-apply recovery", { path }, error);
+          }
         }
       }));
   };
   const pruneSavedPlans = async (): Promise<void> => {
     const root = join(storageDir, "saved-plans");
-    const entries = await readdir(root, { withFileTypes: true, encoding: "utf8" }).catch(() => null);
+    const entries = await readCleanupEntries(root, "Could not scan saved-plan cleanup directory");
     if (entries === null) return;
     await Promise.all(entries
       .filter((entry): boolean => entry.isDirectory())
@@ -4088,8 +4230,8 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
           const run = await db.query.runs.findFirst({ where: eq(runs.id, entry.name), columns: { status: true } });
           if (run !== undefined && !FINAL_RUN_STATUSES.includes(run.status)) return;
           await rm(path, { recursive: true, force: true });
-        } catch {
-          // Best effort: a concurrent reconciliation or cleanup may own it.
+        } catch (error: unknown) {
+          if (!isMissingFileError(error)) logBestEffortFailure("Could not prune saved plan", { path }, error);
         }
       }));
   };
@@ -4143,7 +4285,14 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
       await writeLog(run.id, "plan", "[terrence] Run requeued: the Terrence process restarted before this run's plan began.");
     } else {
       const applySide = run.status === "apply_queued" || run.status === "applying";
-      const capturedPartialState = run.status === "applying" ? await captureInterruptedApplyState(run.id).catch((): boolean => false) : false;
+      let capturedPartialState = false;
+      if (run.status === "applying") {
+        try {
+          capturedPartialState = await captureInterruptedApplyState(run.id);
+        } catch (error: unknown) {
+          logBestEffortFailure("Could not capture state after interrupted apply", { runId: run.id }, error);
+        }
+      }
       const message = applySide
         ? run.status === "applying"
           ? `Terrence restarted during apply; infrastructure state may be partially changed. This run was NOT re-executed automatically.${capturedPartialState ? " A durable recovery copy was captured." : " No local state file was available to capture."}`
@@ -4159,15 +4308,22 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
       try {
         if (runSandbox !== null) await removeSandboxWorkDir(run.id);
         else await rm(runWorkDir(run.id), { recursive: true, force: true });
-      } catch {}
+      } catch (error: unknown) {
+        logBestEffortFailure("Startup reconciliation workdir cleanup failed", { runId: run.id }, error);
+        scheduleRunWorkDirCleanup(run.id);
+      }
       errored += 1;
     }
     } catch (error: unknown) {
       // One bad transition or CAS race must not abort the whole startup
       // reconciliation; log and continue to the next interrupted run.
       const detail = error instanceof Error ? error.message : String(error);
-      try { await writeLog(run.id, "plan", `[terrence ERROR] Startup reconciliation failed for run ${run.id}: ${detail}`); } catch {}
-      try { console.error(`reconcileInterruptedLocalRuns: run ${run.id} failed:`, detail); } catch {}
+      try {
+        await writeLog(run.id, "plan", `[terrence ERROR] Startup reconciliation failed for run ${run.id}: ${detail}`);
+      } catch (logError: unknown) {
+        logBestEffortFailure("Could not persist startup reconciliation failure", { runId: run.id }, logError);
+      }
+      log.error(`Startup reconciliation failed for run ${run.id}`, { runId: run.id, error: detail });
     }
   }
 
@@ -4196,8 +4352,8 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
       } else {
         await rm(join(tmpdir(), "terrence", "assessments", assessment.id), { recursive: true, force: true });
       }
-    } catch {
-      // best-effort
+    } catch (error: unknown) {
+      logBestEffortFailure("Startup assessment workdir cleanup failed", { assessmentResultId: assessment.id }, error);
     }
   }
 
