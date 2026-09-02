@@ -1071,6 +1071,11 @@ async function executeStackDeploymentStep(
   try {
     const planArtifactPath = await planArtifactPathForStackStep(run, component, step, operation);
     if (stack.executionMode === "agent") {
+      const timeoutMs = await stackExecutionTimeoutMs(operation);
+      if (Date.now() - step.updatedAt > timeoutMs) {
+        await failStackRun(stack, run, step, `Stack ${operation} timed out after ${String(timeoutMs)} ms`, preparation.fencingToken ?? undefined);
+        return;
+      }
       await queueStackAgentStep(stack, run.id, step, operation);
       await scheduleStackRun(run.id, 15_000);
       return;
