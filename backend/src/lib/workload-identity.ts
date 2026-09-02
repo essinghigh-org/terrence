@@ -227,6 +227,7 @@ export async function trimWorkloadIdentityKeys(): Promise<void> {
       ne(workloadIdentityKeys.id, current.id),
       ...(liveKeyIds.length === 0 ? [] : [notInArray(workloadIdentityKeys.keyId, liveKeyIds)]),
     ));
+    await pruneExpiredWorkloadIdentityTokens();
   } finally {
     await leadership.release();
   }
@@ -330,6 +331,13 @@ export async function revokeWorkloadIdentityTokens(runId: string, jtis?: readonl
     isNull(workloadIdentityTokens.revokedAt),
     ...(jtis === undefined ? [] : [inArray(workloadIdentityTokens.jti, [...jtis])]),
   ));
+}
+
+export async function pruneExpiredWorkloadIdentityTokens(now = Date.now()): Promise<number> {
+  // Grace period: keep revoked/expired rows for 24h for audit, then hard-delete
+  const cutoff = now - 24 * 60 * 60 * 1000;
+  const result = await db.delete(workloadIdentityTokens).where(lt(workloadIdentityTokens.expiresAt, cutoff)).returning({ jti: workloadIdentityTokens.jti });
+  return result.length;
 }
 
 function keyIdFromWorkloadToken(token: string): string {

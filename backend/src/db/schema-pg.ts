@@ -1752,7 +1752,7 @@ export const workloadIdentityLeases = pgTable("workload_identity_leases", {
 
 export const workloadIdentityTokens = pgTable("workload_identity_tokens", {
     jti: text("jti").notNull().primaryKey(),
-    runId: text("run_id").notNull(),
+    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
     keyId: text("key_id").notNull(),
     audience: text("audience").notNull(),
     subject: text("subject").notNull(),
