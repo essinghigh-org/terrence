@@ -660,7 +660,18 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
       throw new Error(`HTTP status ${res.status} when fetching binary package`);
     }
 
+    const MAX_BINARY_SIZE = 100 * 1024 * 1024;
+    const contentLength = res.headers.get("content-length");
+    if (contentLength !== null) {
+      const parsed = Number.parseInt(contentLength, 10);
+      if (Number.isFinite(parsed) && parsed > MAX_BINARY_SIZE) {
+        throw new Error(`Binary package too large: ${parsed} bytes exceeds ${MAX_BINARY_SIZE} limit`);
+      }
+    }
     const arrayBuffer = await res.arrayBuffer();
+    if (arrayBuffer.byteLength > MAX_BINARY_SIZE) {
+      throw new Error(`Binary package too large: ${arrayBuffer.byteLength} bytes exceeds ${MAX_BINARY_SIZE} limit`);
+    }
 
     const isValidHash = await verifySha256(tool, version, zipFilename, arrayBuffer);
     if (!isValidHash) {
