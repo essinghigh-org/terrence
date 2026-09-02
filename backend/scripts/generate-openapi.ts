@@ -124,8 +124,15 @@ for (const route of routes) {
       "404": { description: "Not Found" },
     };
   }
-  if (m === "get" && /^\/api\/v2\/(plans\/\{[^}]+\}|runs\/\{[^}]+\}\/plan)\/(json-output|json-output-redacted|sanitized-plan)$/.test(openApiPath)) {
+  // Plan artifacts are ordinary JSON documents (terraform show sends
+  // Accept: application/json), not JSON:API resources: they answer 200 with
+  // application/json and 204 while the plan is still running.
+  const isPlanArtifact = m === "get" && /^\/api\/v2\/(plans\/\{[^}]+\}|runs\/\{[^}]+\}\/plan)\/(json-output|json-output-redacted|sanitized-plan)$/.test(openApiPath);
+  if (isPlanArtifact) {
     (operation.responses as Record<string, unknown>)["204"] = { description: "Plan accepted but not completed yet" };
+    ((operation.responses as Record<string, Record<string, unknown>>)["200"] as Record<string, unknown>)["content"] = {
+      "application/json": { schema: { type: "object" } },
+    };
   }
   if (m === "patch" && openApiPath === "/api/v2/organization-memberships/{id}") {
     operation.requestBody = {

@@ -1474,10 +1474,14 @@ export const runRoutes = new Elysia({ name: "runs" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    if (isPlanIncompleteRunStatus(run.status)) { (set as { status: number }).status = 204; return null; }
+    // Serve the artifact as soon as it exists: the worker persists plan JSON
+    // before the run leaves its planning statuses, and Terraform treats any
+    // 2xx as success, so an empty 204 here would fail clients decoding JSON.
     const planJson = await readPlanJsonSideArtifact(runId, "sanitized") ?? await readPlanJsonArtifact(runId);
-    if (planJson === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return sanitizePlanJson(planJson);
+    if (planJson !== undefined) return sanitizePlanJson(planJson);
+    if (isPlanIncompleteRunStatus(run.status)) { (set as { status: number }).status = 204; return null; }
+    (set as { status: number }).status = 404;
+    return { errors: [{ status: "404", title: "Not Found" }] };
   })
   .get("/api/v2/plans/:plan_id/sanitized-plan", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const planId = params.plan_id ?? "";

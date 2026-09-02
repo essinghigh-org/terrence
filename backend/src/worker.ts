@@ -2412,7 +2412,10 @@ async function executeApplyImpl(runId: string): Promise<void> {
     if (savedPlanRequired && !hasTfFiles && run.configurationVersionId !== null) {
       // The plan-phase workdir is cleaned after planning, so the directory may
       // not exist yet (it used to be created implicitly by the early restore).
-      await mkdir(executionDir, { recursive: true, mode: 0o700 });
+      // Extract into workDir (like the plan phase): archive members carry
+      // working-directory-relative paths, so extracting into executionDir
+      // would nest them one level too deep.
+      await mkdir(workDir, { recursive: true, mode: 0o700 });
       const configuration = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, run.configurationVersionId) });
       configurationArchivePath = typeof configuration?.archivePath === "string" && configuration.archivePath !== ""
         ? configuration.archivePath
@@ -2420,7 +2423,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
       if (configurationArchivePath !== null && await exists(configurationArchivePath)) {
         archiveRestored = await extractTarArchive(
           configurationArchivePath,
-          executionDir,
+          workDir,
           workspace.workingDirectory,
           { runId, phase: "apply" },
         );

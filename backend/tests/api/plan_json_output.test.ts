@@ -97,6 +97,14 @@ describe("plan JSON output availability semantics", () => {
     expect(body.values?.secret).toBeNull();
   });
 
+  it("serves the redacted artifact even while the run status is still incomplete", async () => {
+    await setRunStatus("pending");
+    const response = await getRedactedJsonOutput(seed.token, "application/json");
+    expect(response.status).toBe(200);
+    const body = await response.json() as { values?: { secret?: unknown } };
+    expect(body.values?.secret).toBeNull();
+  });
+
   it("hides the artifact from users outside the organization", async () => {
     await setRunStatus("planned");
     const foreign = seedOrg("planjson-foreign");
