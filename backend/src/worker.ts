@@ -2364,6 +2364,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
     const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
     await writeLog(runId, "apply", `[terrence] Starting apply phase for run ${runId}`);
 
+    let applyStatePayload: string | null = null;
     let savedPlan: SavedPlanMetadata | undefined;
     try {
       savedPlan = await restoreSavedPlan(runId, executionDir);
@@ -2415,8 +2416,9 @@ async function executeApplyImpl(runId: string): Promise<void> {
       const currentState = await db.query.stateVersions.findFirst({
         where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
         orderBy: [desc(stateVersions.serial)],
-        columns: { id: true, serial: true },
+        columns: { id: true, serial: true, statePayload: true },
       });
+      applyStatePayload = currentState?.statePayload ?? null;
       if (savedPlan.stateSerial !== (currentState?.serial ?? 0) || savedPlan.stateId !== (currentState?.id ?? null)) {
         await writeRunDiagnostic(
           runId,
@@ -2489,6 +2491,10 @@ async function executeApplyImpl(runId: string): Promise<void> {
         dirFiles = await readdir(executionDir);
         hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
       }
+    }
+    if (savedPlanRequired && applyStatePayload !== null && applyStatePayload !== "") {
+      await writeFile(join(executionDir, "terraform.tfstate"), decodeStatePayload(applyStatePayload), { mode: 0o600 });
+      await writeLog(runId, "apply", `[terrence] Seeded workspace state for saved plan apply.`);
     }
     const isSimulatedAllowed = envEnabled(process.env.SIMULATED_RUNS) || Reflect.get(process.env, "NODE_ENV") === "test";
     let resolved: Awaited<ReturnType<typeof ensureBinary>> | null = null;

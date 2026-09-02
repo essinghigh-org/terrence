@@ -434,7 +434,7 @@ test("restores a saved plan beside a single-root archive and records apply prefl
     const { chmod, exists, mkdir, writeFile } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
-    const { configurationVersions, logs, organizations, runs, workspaces } = await import("./src/db/schema.ts");
+    const { configurationVersions, logs, organizations, runs, stateVersions, workspaces } = await import("./src/db/schema.ts");
     const { executeApply, executeRun } = await import("./src/worker.ts");
 
     const testDir = process.env.TEST_DIR;
@@ -449,7 +449,7 @@ test("restores a saved plan beside a single-root archive and records apply prefl
       'if [ "$1" = init ]; then exit 0; fi',
       'if [ "$1" = plan ]; then echo "Plan: 1 to add, 0 to change, 0 to destroy."; : > tfplan; exit 0; fi',
       'if [ "$1" = show ]; then printf "{}"; exit 0; fi',
-      'if [ "$1" = apply ]; then echo applied > "$record_dir/apply"; exit 0; fi',
+      'if [ "$1" = apply ]; then test -f terraform.tfstate || exit 7; case "$(cat terraform.tfstate)" in *apply-lineage*) ;; *) exit 8 ;; esac; echo applied > "$record_dir/apply"; exit 0; fi',
       'exit 2',
     ].join("\\n"));
     await chmod(binaryPath, 0o755);
@@ -476,6 +476,14 @@ test("restores a saved plan beside a single-root archive and records apply prefl
       workspaceId: "workspace",
       status: "uploaded",
       archivePath,
+    });
+    await db.insert(stateVersions).values({
+      id: "state",
+      workspaceId: "workspace",
+      serial: 1,
+      statePayload: JSON.stringify({ version: 4, serial: 1, lineage: "apply-lineage", resources: [] }),
+      status: "finalized",
+      intermediate: false,
     });
     await db.insert(runs).values({
       id: "run",
