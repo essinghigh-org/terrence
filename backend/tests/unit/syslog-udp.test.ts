@@ -42,7 +42,8 @@ describe("syslog UDP transport end to end", (): void => {
       { hostname: "test-host", appName: "terrence", procId: "7" },
     );
     expect(frame.startsWith("<12>1 2026-08-26T03:00:00.000Z test-host terrence 7 - ")).toBeTrue();
-    expect(frame).toContain('[terrence@65024 requestId="r-9"]');
+    const delivered = JSON.parse(frame.slice(frame.indexOf("{"))) as Record<string, unknown>;
+    expect(delivered["requestId"]).toBe("r-9");
 
     if (target === null) throw new Error("unreachable");
     sendSyslogFrame(target, frame);
@@ -170,7 +171,13 @@ describe("syslog UDP transport end to end", (): void => {
       { hostname: "test-host", appName: "terrence", procId: "7" },
     );
 
-    expect(frame.startsWith("<14>1 2026-08-26T03:00:00.000Z test-host terrence 7 - - 🙂")).toBeTrue();
+    expect(frame.startsWith("<14>1 2026-08-26T03:00:00.000Z test-host terrence 7 - - {")).toBeTrue();
+    const emojiBody = JSON.parse(frame.slice(frame.indexOf("{"))) as Record<string, unknown>;
+    expect(typeof emojiBody["message"]).toBe("string");
+    expect((emojiBody["message"] as string).startsWith("🙂")).toBeTrue();
+    // The untruncated frame parses; the transport may cut the JSON tail on
+    // oversized frames, but the message prefix (and its emoji) always lands
+    // before the cut because message serializes first.
     sendSyslogFrame(target, frame);
 
     const message = await Promise.race([
@@ -184,6 +191,6 @@ describe("syslog UDP transport end to end", (): void => {
     const decoded = message.toString("utf8");
     expect(message.byteLength).toBeLessThanOrEqual(1024);
     expect(Buffer.from(decoded, "utf8").equals(message)).toBeTrue();
-    expect(decoded.startsWith("<14>1 2026-08-26T03:00:00.000Z test-host terrence 7 - - 🙂")).toBeTrue();
+    expect(decoded.startsWith("<14>1 2026-08-26T03:00:00.000Z test-host terrence 7 - - {")).toBeTrue();
   }, 5_000);
 });

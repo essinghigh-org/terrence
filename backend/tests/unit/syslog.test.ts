@@ -80,85 +80,62 @@ describe("RFC 5424 formatting", (): void => {
     expect(pri(1, 3)).toBe(11);
   });
 
-  it("emits a spec-shaped message with structured data", (): void => {
+  it("emits a spec-shaped envelope with a JSON body", (): void => {
     const line = formatSyslogMessage(base, IDENTITY);
     expect(line.startsWith("<14>1 2026-08-26T03:00:00.000Z terrence-host terrence 4242 - ")).toBeTrue();
-    // SD-ELEMENT with private enterprise id and escaped params
-    expect(line).toContain('[terrence@65024 requestId="req-1" durationMs="42"]');
-    // Message body last
-    expect(line.endsWith(" request completed")).toBeTrue();
+    const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
+    expect(body).toEqual({
+      timestamp: "2026-08-26T03:00:00.000Z",
+      level: "info",
+      message: "request completed",
+      hostname: "terrence-host",
+      app: "terrence",
+      requestId: "req-1",
+      durationMs: 42,
+    });
   });
 
-  it("uses the NIL value for empty structured data", (): void => {
-    const { meta: _omitted, ...withoutMeta } = base;
-    void _omitted;
-    const line = formatSyslogMessage(withoutMeta, IDENTITY);
-    expect(line).toContain(" - - request completed");
-    expect(line).not.toContain("[terrence@");
-  });
-
-  it("escapes backslashes, brackets, and control characters in param values", (): void => {
-    const line = formatSyslogMessage(
-      { ...base, meta: { detail: 'a\\b]c\nd' } },
-      IDENTITY,
-    );
-    expect(line).toContain('detail="a\\\\b\\]cd"');
-  });
-
-  it("stringifies scalar meta values and flattens nested objects into dotted params", (): void => {
-    const line = formatSyslogMessage({ ...base, meta: { count: 3, nested: { ok: true } } }, IDENTITY);
-    expect(line).toContain('count="3"');
-    expect(line).toContain('nested.ok="true"');
-    expect(line).not.toContain("nested=");
-  });
-
-  it("flattens request-shaped meta so collectors can index http fields", (): void => {
+  it("keeps nested objects nested with numeric scalars for json extraction", (): void => {
     const line = formatSyslogMessage(
       {
         ...base,
         meta: {
           requestId: "req-1",
           http: { method: "GET", path: "/api/v2/organizations", status: 200, durationMs: 2 },
-          routeBucket: "GET /api/v2/organizations",
           outcome: "success",
         },
       },
       IDENTITY,
     );
-    expect(line).toContain('http.method="GET"');
-    expect(line).toContain('http.path="/api/v2/organizations"');
-    expect(line).toContain('http.status="200"');
-    expect(line).toContain('http.durationMs="2"');
-    expect(line).not.toContain("http=");
+    const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
+    expect(body["http"]).toEqual({ method: "GET", path: "/api/v2/organizations", status: 200, durationMs: 2 });
+    expect(body["outcome"]).toBe("success");
   });
 
-  it("indexes arrays and drops nullish values", (): void => {
+  it("lets envelope fields win over colliding meta keys", (): void => {
     const line = formatSyslogMessage(
-      { ...base, meta: { tags: ["a", "b"], missing: null, absent: undefined, kept: "yes" } },
+      { ...base, meta: { message: "evil", level: "evil", timestamp: "evil", hostname: "evil", app: "evil" } },
       IDENTITY,
     );
-    expect(line).toContain('tags.0="a"');
-    expect(line).toContain('tags.1="b"');
-    expect(line).toContain('kept="yes"');
-    expect(line).not.toContain("missing=");
-    expect(line).not.toContain("absent=");
+    const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
+    expect(body["message"]).toBe("request completed");
+    expect(body["level"]).toBe("info");
+    expect(body["timestamp"]).toBe("2026-08-26T03:00:00.000Z");
+    expect(body["hostname"]).toBe("terrence-host");
+    expect(body["app"]).toBe("terrence");
   });
 
-  it("never throws on circular or over-deep meta", (): void => {
+  it("serializes circular, Error, and bigint values without throwing", (): void => {
     const circular: Record<string, unknown> = { name: "loop" };
     circular.self = circular;
-    const deep: Record<string, unknown> = {};
-    let cursor = deep;
-    for (let i = 0; i < 10; i += 1) {
-      const next: Record<string, unknown> = {};
-      cursor.next = next;
-      cursor = next;
-    }
-    const line = formatSyslogMessage({ ...base, meta: { circular, deep } }, IDENTITY);
-    expect(line).toContain("circular.name=");
-    expect(line).toContain("circular.self=");
-    expect(line).toContain("deep.next");
-    expect(line.endsWith(" request completed")).toBeTrue();
+    const line = formatSyslogMessage(
+      { ...base, meta: { circular, boom: new Error("kaput"), big: 10n } },
+      IDENTITY,
+    );
+    const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
+    expect(body["circular"]).toEqual({ name: "loop", self: "[Circular]" });
+    expect(body["boom"]).toEqual({ name: "Error", message: "kaput" });
+    expect(body["big"]).toBe("10");
   });
 
   it("falls back to a NIL timestamp for malformed stamps", (): void => {
