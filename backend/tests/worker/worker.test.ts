@@ -446,7 +446,7 @@ test("restores a saved plan beside a single-root archive and records apply prefl
     await writeFile(binaryPath, [
       '#!/bin/sh',
       'record_dir=' + JSON.stringify(recordDir),
-      'if [ "$1" = init ]; then exit 0; fi',
+      'if [ "$1" = init ]; then test -f terrence_backend_override.tf || exit 6; test -f "$TF_CLI_CONFIG_FILE" || exit 9; exit 0; fi',
       'if [ "$1" = plan ]; then echo "Plan: 1 to add, 0 to change, 0 to destroy."; : > tfplan; exit 0; fi',
       'if [ "$1" = show ]; then printf "{}"; exit 0; fi',
       'if [ "$1" = apply ]; then test -f terraform.tfstate || exit 7; case "$(cat terraform.tfstate)" in *apply-lineage*) ;; *) exit 8 ;; esac; echo applied > "$record_dir/apply"; exit 0; fi',

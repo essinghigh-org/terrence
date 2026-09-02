@@ -205,6 +205,12 @@ export function runWorkDir(runId: string): string {
   return runSandbox !== null ? runSandbox.workDirFor(runId) : join(tmpdir(), "terrence", "runs", runId);
 }
 
+const LOCAL_BACKEND_OVERRIDE = 'terraform {\n  backend "local" {}\n}\n';
+
+async function writeLocalBackendOverride(executionDir: string): Promise<void> {
+  await writeFile(join(executionDir, "terrence_backend_override.tf"), LOCAL_BACKEND_OVERRIDE, { mode: 0o600 });
+}
+
 type SavedPlanMetadata = Readonly<{
   sha256: string;
   stateId: string | null;
@@ -1864,11 +1870,7 @@ async function executeRunImpl(runId: string): Promise<void> {
       throw new Error(`Working directory '${workspace.workingDirectory ?? ""}' does not exist in the configuration.`);
     }
     await writeLog(runId, "plan", `[terrence] Executing from ${executionDir}`);
-    await writeFile(
-      join(executionDir, "terrence_backend_override.tf"),
-      'terraform {\n  backend "local" {}\n}\n',
-      { mode: 0o600 },
-    );
+    await writeLocalBackendOverride(executionDir);
 
     const latestState = await db.query.stateVersions.findFirst({
       where: and(
@@ -2496,6 +2498,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
       await writeFile(join(executionDir, "terraform.tfstate"), decodeStatePayload(applyStatePayload), { mode: 0o600 });
       await writeLog(runId, "apply", `[terrence] Seeded workspace state for saved plan apply.`);
     }
+    if (savedPlanRequired) await writeLocalBackendOverride(executionDir);
     const isSimulatedAllowed = envEnabled(process.env.SIMULATED_RUNS) || Reflect.get(process.env, "NODE_ENV") === "test";
     let resolved: Awaited<ReturnType<typeof ensureBinary>> | null = null;
     if (!isSimulatedAllowed) {
@@ -2556,6 +2559,31 @@ async function executeApplyImpl(runId: string): Promise<void> {
       const vars = await executionVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
       const envVars = { ...buildSanitizedEnv(vars), ...(await runTerraformEnv(run.id, workspace, "apply", vars)) };
       if (run.debuggingMode) envVars.TF_LOG = "TRACE";
+      const applyTimeoutMs = await executionTimeoutMs("apply");
+
+      if (savedPlanRequired && resolved !== null) {
+        if (await runWasCanceled(runId)) return;
+        await writeLog(runId, "apply", `\n--- Executing ${resolved.tool} init ---`);
+        if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
+        const initProc = spawnRunProcess(
+          runId,
+          [binary, "init", "-reconfigure", "-no-color", "-input=false"],
+          {
+            cwd: executionDir,
+            env: envVars,
+            stdout: "pipe",
+            stderr: "pipe",
+          },
+          runSandbox,
+        );
+        const initOutput = Promise.all([
+          streamLog(runId, "apply", initProc.stdout),
+          streamLog(runId, "apply", initProc.stderr),
+        ]);
+        const [initExit] = await waitForTrackedProcess(runId, "apply", initProc, initOutput, applyTimeoutMs);
+        if (await runWasCanceled(runId)) return;
+        if (initExit !== 0) throw new Error(`${resolved.tool} init failed with exit code ${initExit}`);
+      }
 
       await writeLog(runId, "apply", `\n--- Executing ${resolved.tool} apply ---`);
       if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
@@ -2637,7 +2665,6 @@ async function executeApplyImpl(runId: string): Promise<void> {
       };
 
       applyStarted = true;
-      const applyTimeoutMs = await executionTimeoutMs("apply");
       const applyProc = spawnRunProcess(
         runId,
         applyArgs,
@@ -4364,7 +4391,13 @@ async function runTokenStateFor(
   workspace: Readonly<{ id: string; orgId: string }>,
 ): Promise<RunTokenState> {
   const cached = runTokenCache.get(runId);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined) {
+    if (await exists(cached.tfrcPath)) return cached;
+    const tfrcPath = await writeRunCliConfig(runWorkDir(runId), registryHostname(), cached.token);
+    const refreshed = { ...cached, tfrcPath };
+    runTokenCache.set(runId, refreshed);
+    return refreshed;
+  }
   const token = await mintRunToken(runId, workspace.id, workspace.orgId);
   const tfrcPath = await writeRunCliConfig(runWorkDir(runId), registryHostname(), token);
   const value: RunTokenState = { token, tfrcPath, oidc: {} };
