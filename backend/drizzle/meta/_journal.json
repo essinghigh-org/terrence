@@ -337,6 +337,13 @@
       "when": 1788347064295,
       "tag": "0047_gray_sentinel",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1788347980493,
+      "tag": "0048_fine_cloak",
+      "breakpoints": true
     }
   ]
 }

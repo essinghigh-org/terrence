@@ -1,0 +1,3 @@
+ALTER TABLE "stack_agent_jobs" ADD CONSTRAINT "stack_agent_jobs_deployment_run_id_stack_records_id_fk" FOREIGN KEY ("deployment_run_id") REFERENCES "public"."stack_records"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "stack_agent_jobs" ADD CONSTRAINT "stack_agent_jobs_step_id_stack_records_id_fk" FOREIGN KEY ("step_id") REFERENCES "public"."stack_records"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "stack_state_locks" ADD CONSTRAINT "stack_state_locks_run_id_stack_records_id_fk" FOREIGN KEY ("run_id") REFERENCES "public"."stack_records"("id") ON DELETE set null ON UPDATE no action;
