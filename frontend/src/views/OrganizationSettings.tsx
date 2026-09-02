@@ -1068,9 +1068,9 @@ team.attributes["name"] as string}</option>
                             <div className="border-b border-border px-4 py-4">
                               <p className="mb-3 text-sm font-semibold text-foreground">Team settings for {teamName}</p>
                               <div className="mb-3 flex items-center gap-4">
-                                <div>
-                                  <label className="text-xs font-medium text-foreground/85">Visibility</label>
-                                  <div className="mt-1 flex gap-3 text-sm">
+                                <fieldset className="border-0 p-0">
+                                  <legend className="text-xs font-medium text-foreground/85">Visibility</legend>
+                                  <div className="mt-1 flex gap-3 text-sm" role="radiogroup">
                                     <label className="flex items-center gap-1.5 font-medium text-foreground/85">
                                       <input
                                         type="radio"
@@ -1093,7 +1093,7 @@ team.attributes["name"] as string}</option>
                                     </label>
                                   </div>
                                   <p className="mt-0.5 text-xs text-muted-foreground">Visible to every member of this organization / Only visible to team members and organization owners.</p>
-                                </div>
+                                </fieldset>
                                 <div className="flex items-center gap-3 text-sm">
                                   <Checkbox
                                     id={`token-mgmt-${team.id}`}
