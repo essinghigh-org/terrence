@@ -3,12 +3,16 @@ import {
   formatSyslogMessage,
   pri,
   resolveHostname,
+  resolveSyslogFormat,
   severityForLevel,
   type SyslogEntryInput,
 } from "../../src/lib/syslog-format";
 import { parseSyslogTarget, parseSyslogTargets } from "../../src/lib/syslog-transport";
 
 const IDENTITY = { hostname: "terrence-host", appName: "terrence", procId: "4242" };
+
+/** Explicit opt-in to the JSON message body; the default stays RFC 5424. */
+const JSON_OPTS = { format: "json" } as const;
 
 describe("syslog target parsing", (): void => {
   it("parses udp and tcp targets", (): void => {
@@ -81,7 +85,7 @@ describe("RFC 5424 formatting", (): void => {
   });
 
   it("emits a spec-shaped envelope with a JSON body", (): void => {
-    const line = formatSyslogMessage(base, IDENTITY);
+    const line = formatSyslogMessage(base, IDENTITY, JSON_OPTS);
     expect(line.startsWith("<14>1 2026-08-26T03:00:00.000Z terrence-host terrence 4242 - ")).toBeTrue();
     const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
     expect(body).toEqual({
@@ -106,6 +110,7 @@ describe("RFC 5424 formatting", (): void => {
         },
       },
       IDENTITY,
+      JSON_OPTS,
     );
     const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
     expect(body["http"]).toEqual({ method: "GET", path: "/api/v2/organizations", status: 200, durationMs: 2 });
@@ -116,6 +121,7 @@ describe("RFC 5424 formatting", (): void => {
     const line = formatSyslogMessage(
       { ...base, meta: { message: "evil", level: "evil", timestamp: "evil", hostname: "evil", app: "evil" } },
       IDENTITY,
+      JSON_OPTS,
     );
     const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
     expect(body["message"]).toBe("request completed");
@@ -131,6 +137,7 @@ describe("RFC 5424 formatting", (): void => {
     const line = formatSyslogMessage(
       { ...base, meta: { circular, boom: new Error("kaput"), big: 10n } },
       IDENTITY,
+      JSON_OPTS,
     );
     const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
     expect(body["circular"]).toEqual({ name: "loop", self: "[Circular]" });
@@ -140,14 +147,14 @@ describe("RFC 5424 formatting", (): void => {
 
   it("preserves repeated references while still catching true cycles", (): void => {
     const shared: Record<string, unknown> = { tag: "same" };
-    const line = formatSyslogMessage({ ...base, meta: { first: shared, second: shared } }, IDENTITY);
+    const line = formatSyslogMessage({ ...base, meta: { first: shared, second: shared } }, IDENTITY, JSON_OPTS);
     const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
     expect(body["first"]).toEqual({ tag: "same" });
     expect(body["second"]).toEqual({ tag: "same" });
   });
 
   it("serializes Date values via toJSON instead of empty objects", (): void => {
-    const line = formatSyslogMessage({ ...base, meta: { at: new Date("2026-01-02T03:04:05.000Z") } }, IDENTITY);
+    const line = formatSyslogMessage({ ...base, meta: { at: new Date("2026-01-02T03:04:05.000Z") } }, IDENTITY, JSON_OPTS);
     const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
     expect(body["at"]).toBe("2026-01-02T03:04:05.000Z");
   });
@@ -156,7 +163,7 @@ describe("RFC 5424 formatting", (): void => {
     const line = formatSyslogMessage(
       { ...base, message: "m".repeat(2000), meta: { big: "x".repeat(2000) } },
       IDENTITY,
-      { maxBodyBytes: 896 },
+      { maxBodyBytes: 896, format: "json" },
     );
     const json = line.slice(line.indexOf("{"));
     expect(Buffer.byteLength(json, "utf8")).toBeLessThanOrEqual(896);
@@ -167,8 +174,25 @@ describe("RFC 5424 formatting", (): void => {
     expect((body["message"] as string).startsWith("m")).toBeTrue();
   });
 
+  it("defaults to RFC 5424 structured data and flattens nested meta", (): void => {
+    const line = formatSyslogMessage(
+      { ...base, meta: { requestId: "req-1", http: { method: "GET", status: 200 } } },
+      IDENTITY,
+    );
+    expect(line).toContain('[terrence@65024 requestId="req-1" http.method="GET" http.status="200"]');
+    expect(line.endsWith(" request completed")).toBeTrue();
+  });
+
+  it("resolves the syslog format defensively", (): void => {
+    expect(resolveSyslogFormat("json")).toBe("json");
+    expect(resolveSyslogFormat(" JSON ")).toBe("json");
+    expect(resolveSyslogFormat("rfc5424")).toBe("rfc5424");
+    expect(resolveSyslogFormat(undefined)).toBe("rfc5424");
+    expect(resolveSyslogFormat("bogus")).toBe("rfc5424");
+  });
+
   it("falls back to a NIL timestamp for malformed stamps", (): void => {
-    const line = formatSyslogMessage({ ...base, timestamp: "yesterday" }, IDENTITY);
+    const line = formatSyslogMessage({ ...base, timestamp: "yesterday" }, IDENTITY, JSON_OPTS);
     expect(line.startsWith("<14>1 - ")).toBeTrue();
   });
 });

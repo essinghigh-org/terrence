@@ -81,6 +81,14 @@ function validateLoggingAttributes(
     }
   }
   const normalized: Record<string, unknown> = { ...attrs };
+  const rawFormat = attrs["syslog-format"];
+  if (rawFormat !== undefined && rawFormat !== null) {
+    const normalizedFormat = typeof rawFormat === "string" ? rawFormat.trim().toLowerCase() : "";
+    if (normalizedFormat !== "rfc5424" && normalizedFormat !== "json") {
+      return { ok: false, error: "syslog-format must be one of: rfc5424, json or null" };
+    }
+    normalized["syslog-format"] = normalizedFormat;
+  }
   for (const key of ["syslog-hostname", "syslog-app"] as const) {
     const value = attrs[key];
     const maxLength = key === "syslog-hostname" ? 255 : 48;

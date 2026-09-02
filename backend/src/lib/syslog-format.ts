@@ -22,6 +22,85 @@ export type SyslogSeverity = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 /** Nil value marker defined by RFC 5424 §6.3. */
 const NIL = "-";
 
+/** Private enterprise number placeholder; operators can rebrand by changing
+ * this constant. IANA PEN registration is not required for local use. */
+const ENTERPRISE_ID = 65024;
+
+
+export type SyslogFormat = "rfc5424" | "json";
+
+/** Resolve the syslog message format defensively: unknown values warn
+ * and fall back to RFC 5424 structured data (the historical default). */
+export function resolveSyslogFormat(raw: unknown): SyslogFormat {
+  const normalized = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (normalized === "json" || normalized === "rfc5424") return normalized;
+  if (normalized !== "") {
+    console.warn(
+      `[terrence] Unknown syslog format ${JSON.stringify(raw)}; ` +
+      `expected "rfc5424" or "json". Falling back to "rfc5424".`,
+    );
+  }
+  return "rfc5424";
+}
+
+/** RFC 5424 §6.2.4 PARAM-VALUE escaping: "\" -> "\\", "]" -> "\]",
+ * '"' -> '\"', and control characters are removed. */
+function sdEscape(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/]/g, "\\]").replace(/[\x00-\x1f\x7f]/g, "");
+}
+
+function paramSafeKey(key: string): string {
+  const safe = key.replace(/[^\w.\-/]/g, "_").slice(0, 32);
+  return safe === "" ? "key" : safe;
+}
+
+/** Maximum SD-PARAM nesting depth before falling back to a JSON string,
+ * and maximum total params per message so one huge meta object cannot blow
+ * the UDP datagram budget on structure alone (the transport still truncates
+ * oversized frames with the SD block preserved). */
+const MAX_FLATTEN_DEPTH = 5;
+const MAX_FLATTEN_PARAMS = 128;
+
+/** Flatten one meta value into dotted SD-PARAM entries. Objects recurse
+ * (`http: {status}` -> `http.status`), arrays use numeric segments
+ * (`tags: ["a"]` -> `tags.0`), scalars stringify, and null/undefined are
+ * dropped so collectors see absence instead of the string "null". Circular
+ * references and over-deep values degrade to a JSON string (never throw:
+ * the logger must not crash the request path). */
+function flattenMetaParam(
+  key: string,
+  value: unknown,
+  depth: number,
+  ancestors: ReadonlySet<object>,
+  out: Array<readonly [string, string]>,
+): void {
+  if (out.length >= MAX_FLATTEN_PARAMS || value === null || value === undefined) return;
+  if (typeof value === "string") {
+    out.push([key, value]);
+    return;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    out.push([key, String(value)]);
+    return;
+  }
+  if (typeof value !== "object" || depth >= MAX_FLATTEN_DEPTH || ancestors.has(value)) {
+    try {
+      const json = JSON.stringify(value) ?? NIL;
+      out.push([key, json]);
+    } catch {
+      out.push([key, "[unserializable]"]);
+    }
+    return;
+  }
+  const nested = ancestors instanceof Set ? ancestors : new Set(ancestors);
+  nested.add(value);
+  for (const [childKey, childValue] of Object.entries(value)) {
+    flattenMetaParam(`${key}.${childKey}`, childValue, depth + 1, nested, out);
+    if (out.length >= MAX_FLATTEN_PARAMS) return;
+  }
+  nested.delete(value);
+}
+
 /** JSON body budget for UDP frames: 1024-byte datagram cap minus envelope
  * headroom (the header is well under 128 bytes). */
 export const UDP_JSON_BODY_BUDGET = 896;
@@ -162,10 +241,13 @@ export type SyslogIdentity = Readonly<{
 export type SyslogFormatOptions = Readonly<{
   /** Cap the JSON body at this many UTF-8 bytes (UDP). Omit for no cap. */
   maxBodyBytes?: number;
+  /** Message shape: "json" for a JSON body, "rfc5424" (default) for dotted SD-PARAMs. */
+  format?: SyslogFormat;
 }>;
 
-/** Build one RFC 5424 line (no framing, no trailing newline). Base fields
- * always win over same-named meta keys. */
+/** Build one RFC 5424 line (no framing, no trailing newline). Format
+ * "json" carries the entry as a JSON message body (SD=NIL) for json
+ * sourcetypes; "rfc5424" (the default) carries meta as dotted SD-PARAMs. */
 export function formatSyslogMessage(
   entry: SyslogEntryInput,
   identity: SyslogIdentity,
@@ -175,17 +257,31 @@ export function formatSyslogMessage(
   const header = `<${pri(1, severity)}>1 ${rfc3339Timestamp(entry.timestamp)} ${
     identity.hostname || NIL
   } ${identity.appName || NIL} ${identity.procId || NIL} ${NIL}`;
-  const body: Record<string, unknown> = {
-    ...(entry.meta ?? {}),
-    timestamp: entry.timestamp,
-    level: entry.level,
-    message: entry.message,
-    hostname: identity.hostname || NIL,
-    app: identity.appName || NIL,
-  };
-  const maxBytes = options?.maxBodyBytes;
-  const json = maxBytes === undefined ? stringifySyslogBody(body) : fitJsonBody(body, maxBytes);
-  return `${header} ${NIL} ${json}`;
+  if ((options?.format ?? "rfc5424") === "json") {
+    const body: Record<string, unknown> = {
+      ...(entry.meta ?? {}),
+      timestamp: entry.timestamp,
+      level: entry.level,
+      message: entry.message,
+      hostname: identity.hostname || NIL,
+      app: identity.appName || NIL,
+    };
+    const maxBytes = options?.maxBodyBytes;
+    const json = maxBytes === undefined ? stringifySyslogBody(body) : fitJsonBody(body, maxBytes);
+    return `${header} ${NIL} ${json}`;
+  }
+  const meta = entry.meta;
+  if (meta === undefined || Object.keys(meta).length === 0) {
+    return `${header} ${NIL} ${entry.message}`;
+  }
+  const params: Array<readonly [string, string]> = [];
+  for (const [rawKey, rawValue] of Object.entries(meta)) {
+    flattenMetaParam(paramSafeKey(rawKey), rawValue, 0, new Set(), params);
+  }
+  const sd = `[terrence@${ENTERPRISE_ID}${params
+    .map(([key, value]): string => ` ${key}="${sdEscape(value)}"`)
+    .join("")}]`;
+  return `${header} ${sd} ${entry.message}`;
 }
 
 /** Deterministic default hostname: container id hash when /etc/hostname is

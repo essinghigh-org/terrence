@@ -40,6 +40,7 @@ describe("syslog UDP transport end to end", (): void => {
         meta: { requestId: "r-9" },
       },
       { hostname: "test-host", appName: "terrence", procId: "7" },
+      { format: "json" },
     );
     expect(frame.startsWith("<12>1 2026-08-26T03:00:00.000Z test-host terrence 7 - ")).toBeTrue();
     const delivered = JSON.parse(frame.slice(frame.indexOf("{"))) as Record<string, unknown>;
@@ -126,7 +127,7 @@ describe("syslog UDP transport end to end", (): void => {
         meta: { detail: "é".repeat(1_000) },
       },
       { hostname: "test-host", appName: "terrence", procId: "7" },
-      { maxBodyBytes: UDP_JSON_BODY_BUDGET },
+      { maxBodyBytes: UDP_JSON_BODY_BUDGET, format: "json" },
     );
 
     sendSyslogFrame(target, frame);
@@ -175,6 +176,7 @@ describe("syslog UDP transport end to end", (): void => {
         message: `🙂${"x".repeat(2_048)}`,
       },
       { hostname: "test-host", appName: "terrence", procId: "7" },
+      { format: "json" },
     );
 
     expect(frame.startsWith("<14>1 2026-08-26T03:00:00.000Z test-host terrence 7 - - {")).toBeTrue();
