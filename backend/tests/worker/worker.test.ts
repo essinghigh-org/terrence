@@ -434,7 +434,7 @@ test("restores a saved plan beside a single-root archive and records apply prefl
     const { chmod, exists, mkdir, writeFile } = await import("fs/promises");
     const { join } = await import("path");
     const { db } = await import("./src/db/index.ts");
-    const { configurationVersions, logs, organizations, runs, workspaces } = await import("./src/db/schema.ts");
+    const { configurationVersions, logs, organizations, runs, stateVersions, workspaces } = await import("./src/db/schema.ts");
     const { executeApply, executeRun } = await import("./src/worker.ts");
 
     const testDir = process.env.TEST_DIR;
@@ -446,10 +446,10 @@ test("restores a saved plan beside a single-root archive and records apply prefl
     await writeFile(binaryPath, [
       '#!/bin/sh',
       'record_dir=' + JSON.stringify(recordDir),
-      'if [ "$1" = init ]; then exit 0; fi',
+      'if [ "$1" = init ]; then test -f terrence_backend_override.tf || exit 6; test -f "$TF_CLI_CONFIG_FILE" || exit 9; exit 0; fi',
       'if [ "$1" = plan ]; then echo "Plan: 1 to add, 0 to change, 0 to destroy."; : > tfplan; exit 0; fi',
       'if [ "$1" = show ]; then printf "{}"; exit 0; fi',
-      'if [ "$1" = apply ]; then echo applied > "$record_dir/apply"; exit 0; fi',
+      'if [ "$1" = apply ]; then test -f terraform.tfstate || exit 7; case "$(cat terraform.tfstate)" in *apply-lineage*) ;; *) exit 8 ;; esac; echo applied > "$record_dir/apply"; exit 0; fi',
       'exit 2',
     ].join("\\n"));
     await chmod(binaryPath, 0o755);
@@ -476,6 +476,14 @@ test("restores a saved plan beside a single-root archive and records apply prefl
       workspaceId: "workspace",
       status: "uploaded",
       archivePath,
+    });
+    await db.insert(stateVersions).values({
+      id: "state",
+      workspaceId: "workspace",
+      serial: 1,
+      statePayload: JSON.stringify({ version: 4, serial: 1, lineage: "apply-lineage", resources: [] }),
+      status: "finalized",
+      intermediate: false,
     });
     await db.insert(runs).values({
       id: "run",
@@ -530,12 +538,159 @@ test("restores a saved plan beside a single-root archive and records apply prefl
     savedPlanFilePresent: true,
     archiveRestored: true,
     executionDirectoryExists: true,
-    configurationFileCount: 1,
-    configurationFiles: ["main.tf"],
+    configurationFileCount: 2,
+    configurationFiles: expect.arrayContaining(["main.tf", "terrence_backend_override.tf"]),
   });
   expect(result.preflight.rootEntryNames).toEqual(expect.arrayContaining(["main.tf", "tfplan"]));
   expect(result.diagnosticEvents).toContain("run.apply.preflight");
   expect(result.diagnosticEvents).not.toContain("run.apply.preflight_failed");
+}, 30_000);
+
+test("ignores a stale client plan bookmark in the uploaded archive during saved-plan apply", async () => {
+  const result = await runWorkerScript(`
+    const { chmod, exists, mkdir, writeFile } = await import("fs/promises");
+    const { join } = await import("path");
+    const { db } = await import("./src/db/index.ts");
+    const { configurationVersions, organizations, runs, workspaces } = await import("./src/db/schema.ts");
+    const { executeApply, executeRun } = await import("./src/worker.ts");
+
+    const testDir = process.env.TEST_DIR;
+    const recordDir = join(testDir, "record");
+    const binaryDir = join(process.env.STORAGE_DIR, "binaries", "tofu", "1.2.3");
+    const binaryPath = join(binaryDir, "tofu");
+    await mkdir(recordDir, { recursive: true });
+    await mkdir(binaryDir, { recursive: true });
+    await writeFile(binaryPath, [
+      '#!/bin/sh',
+      'record_dir=' + JSON.stringify(recordDir),
+      'if [ "$1" = init ]; then exit 0; fi',
+      'if [ "$1" = plan ]; then echo "Plan: 1 to add, 0 to change, 0 to destroy."; echo real-plan-marker > tfplan; exit 0; fi',
+      'if [ "$1" = show ]; then printf "{}"; exit 0; fi',
+      'if [ "$1" = apply ]; then grep -q real-plan-marker tfplan || exit 9; echo applied > "$record_dir/apply"; exit 0; fi',
+      'exit 2',
+    ].join("\\n"));
+    await chmod(binaryPath, 0o755);
+
+    // The uploaded archive carries the client's stale tfplan bookmark from a
+    // previous terraform plan -out=tfplan in the same directory. It must not
+    // shadow the verified saved plan at apply time.
+    const archiveSource = join(testDir, "archive-source");
+    await mkdir(archiveSource, { recursive: true });
+    await writeFile(join(archiveSource, "main.tf"), 'terraform { required_version = ">= 1.0" }\\\\n');
+    await writeFile(join(archiveSource, "tfplan"), '{"remote_plan_format":1,"run_id":"run-stale-client","hostname":"example.com"}');
+    const archivePath = join(testDir, "dirty.tar.gz");
+    const tar = Bun.spawn(["tar", "-czf", archivePath, "-C", archiveSource, "."]);
+    if (await tar.exited !== 0) throw new Error("tar failed");
+
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(workspaces).values({
+      id: "workspace",
+      name: "workspace",
+      orgId: "org",
+      autoApply: false,
+      iacBinary: "tofu",
+      terraformVersion: "1.2.3",
+    });
+    await db.insert(configurationVersions).values({
+      id: "configuration",
+      workspaceId: "workspace",
+      status: "uploaded",
+      archivePath,
+    });
+    await db.insert(runs).values({
+      id: "run",
+      workspaceId: "workspace",
+      configurationVersionId: "configuration",
+      status: "pending",
+      autoApply: false,
+      savePlan: false,
+      createdAt: Date.now(),
+    });
+
+    await executeRun("run");
+    await executeApply("run");
+    const applied = await db.query.runs.findFirst({ where: (run, { eq }) => eq(run.id, "run") });
+    console.log(JSON.stringify({
+      status: applied?.status,
+      applyInvoked: await exists(join(recordDir, "apply")),
+    }));
+  `, { NODE_ENV: "production", SIMULATED_RUNS: "false" });
+
+  expect(result.status).toBe("applied");
+  expect(result.applyInvoked).toBe(true);
+}, 30_000);
+
+test("restores configuration into the working directory without double-nesting", async () => {
+  const result = await runWorkerScript(`
+    const { chmod, exists, mkdir, writeFile } = await import("fs/promises");
+    const { join } = await import("path");
+    const { db } = await import("./src/db/index.ts");
+    const { configurationVersions, organizations, runs, workspaces } = await import("./src/db/schema.ts");
+    const { executeApply, executeRun } = await import("./src/worker.ts");
+
+    const testDir = process.env.TEST_DIR;
+    const recordDir = join(testDir, "record");
+    const binaryDir = join(process.env.STORAGE_DIR, "binaries", "tofu", "1.2.3");
+    const binaryPath = join(binaryDir, "tofu");
+    await mkdir(recordDir, { recursive: true });
+    await mkdir(binaryDir, { recursive: true });
+    await writeFile(binaryPath, [
+      '#!/bin/sh',
+      'record_dir=' + JSON.stringify(recordDir),
+      'if [ "$1" = init ]; then exit 0; fi',
+      'if [ "$1" = plan ]; then echo "Plan: 1 to add, 0 to change, 0 to destroy."; echo subdir-marker > tfplan; exit 0; fi',
+      'if [ "$1" = show ]; then printf "{}"; exit 0; fi',
+      'if [ "$1" = apply ]; then grep -q subdir-marker tfplan || exit 9; test -f main.tf || exit 8; echo applied > "$record_dir/apply"; exit 0; fi',
+      'exit 2',
+    ].join("\\n"));
+    await chmod(binaryPath, 0o755);
+
+    // Archive members carry working-directory-relative paths; extracting into
+    // the execution directory would nest them one level too deep (sub/sub).
+    const archiveSource = join(testDir, "archive-source");
+    await mkdir(join(archiveSource, "sub"), { recursive: true });
+    await writeFile(join(archiveSource, "sub", "main.tf"), 'terraform { required_version = ">= 1.0" }\\\\n');
+    const archivePath = join(testDir, "nested.tar.gz");
+    const tar = Bun.spawn(["tar", "-czf", archivePath, "-C", archiveSource, "."]);
+    if (await tar.exited !== 0) throw new Error("tar failed");
+
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(workspaces).values({
+      id: "workspace",
+      name: "workspace",
+      orgId: "org",
+      autoApply: false,
+      workingDirectory: "sub",
+      iacBinary: "tofu",
+      terraformVersion: "1.2.3",
+    });
+    await db.insert(configurationVersions).values({
+      id: "configuration",
+      workspaceId: "workspace",
+      status: "uploaded",
+      archivePath,
+    });
+    await db.insert(runs).values({
+      id: "run",
+      workspaceId: "workspace",
+      configurationVersionId: "configuration",
+      status: "pending",
+      autoApply: false,
+      savePlan: true,
+      createdAt: Date.now(),
+    });
+
+    await executeRun("run");
+    await executeApply("run");
+    const applied = await db.query.runs.findFirst({ where: (run, { eq }) => eq(run.id, "run") });
+    console.log(JSON.stringify({
+      status: applied?.status,
+      applyInvoked: await exists(join(recordDir, "apply")),
+    }));
+  `, { NODE_ENV: "production", SIMULATED_RUNS: "false" });
+
+  expect(result.status).toBe("applied");
+  expect(result.applyInvoked).toBe(true);
 }, 30_000);
 
 test("fails an apply explicitly when saved-plan metadata is corrupt", async () => {

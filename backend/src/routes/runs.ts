@@ -138,6 +138,27 @@ function originForConfiguration(
   return origin;
 }
 
+function requestedRunIncludes(request: ParamCtx["request"]): ReadonlySet<string> {
+  const values = new URL(request.url).searchParams.getAll("include");
+  return new Set(values.flatMap((value: string): string[] => value.split(",").map((item: string): string => item.trim()).filter(Boolean)));
+}
+
+function includedWorkspaceResource(workspace: Readonly<typeof workspaces.$inferSelect>): Record<string, unknown> {
+  // Terraform's cloud backend only needs these fields while decoding a run
+  // for `terraform show`: the workspace name for the header and its lock state
+  // for the footer. Do not invent permission values or expose unrelated data
+  // merely because the client requested the standard workspace relation.
+  return {
+    id: workspace.id,
+    type: "workspaces",
+    attributes: {
+      name: workspace.name,
+      locked: workspace.locked === true,
+    },
+    links: { self: `/api/v2/workspaces/${workspace.id}` },
+  };
+}
+
 async function originsForRuns(runList: readonly RunItem[]): Promise<ReadonlyMap<string, RunOrigin>> {
   const configurationIds = [...new Set(runList.flatMap((run): string[] =>
     run.configurationVersionId === null ? [] : [run.configurationVersionId]))];
@@ -596,6 +617,26 @@ async function authorizedPlanWorkspace(
   return findAuthorizedWorkspace(run.workspaceId, userId, tokenOrgId, tokenTeamId);
 }
 
+/**
+ * Shared sanitized plan-artifact responder for the redacted/sanitized plan
+ * endpoints. Serves the artifact as soon as it exists: the worker persists
+ * plan JSON before the run leaves its planning statuses, and Terraform
+ * treats any 2xx as success, so an empty 204 here would fail clients
+ * decoding JSON. Returns 204 only when no artifact exists yet and 404 when
+ * it never will.
+ */
+async function sanitizedPlanArtifactResponse(
+  runId: string,
+  run: Readonly<typeof runs.$inferSelect>,
+  set: SetObj,
+): Promise<unknown> {
+  const planJson = await readPlanJsonSideArtifact(runId, "sanitized") ?? await readPlanJsonArtifact(runId);
+  if (planJson !== undefined) return sanitizePlanJson(planJson);
+  if (isPlanIncompleteRunStatus(run.status)) { (set as { status: number }).status = 204; return null; }
+  (set as { status: number }).status = 404;
+  return { errors: [{ status: "404", title: "Not Found" }] };
+}
+
 export const runRoutes = new Elysia({ name: "runs" })
   .use(authPlugin)
   .get("/api/v2/workspaces/:workspace_id/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -753,7 +794,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     const cvId = typeof cvData.id === "string" ? cvData.id : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
     return createRun(workspaceId, attributes, cvId, user, orgId, teamId, set);
   })
-  .get("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -776,6 +817,9 @@ export const runRoutes = new Elysia({ name: "runs" })
         ? lockedReason
         : "Locked manually";
     const included = await includedUsersForRuns([authorized.run]);
+    const includes = requestedRunIncludes(request);
+    if (includes.has("plan")) included.push(planResource(authorized.run, request));
+    if (includes.has("workspace")) included.push(includedWorkspaceResource(authorized.workspace));
     return { data, ...(included.length > 0 ? { included } : {}) };
   })
   .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
@@ -1441,6 +1485,17 @@ export const runRoutes = new Elysia({ name: "runs" })
     }
     return planJson;
   })
+  .get("/api/v2/plans/:plan_id/json-output-redacted", async ({ params, user, orgId, teamId, run: runContext, set }: ParamCtx): Promise<unknown> => {
+    const planId = params.plan_id ?? "";
+    const runId = planId.replace(/^plan-/, "");
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+    if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (await authorizedPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null) === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return sanitizedPlanArtifactResponse(runId, run, set);
+  })
   .get("/api/v2/plans/:plan_id/sanitized-plan", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const planId = params.plan_id ?? "";
     const runId = planId.replace(/^plan-/, "");
@@ -1449,10 +1504,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    if (isPlanIncompleteRunStatus(run.status)) { (set as { status: number }).status = 204; return null; }
-    const planJson = await readPlanJsonSideArtifact(runId, "sanitized") ?? await readPlanJsonArtifact(runId);
-    if (planJson === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return sanitizePlanJson(planJson);
+    return sanitizedPlanArtifactResponse(runId, run, set);
   })
   .get("/api/v2/runs/:run_id/plan/sanitized-plan", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
@@ -1461,8 +1513,5 @@ export const runRoutes = new Elysia({ name: "runs" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    if (isPlanIncompleteRunStatus(run.status)) { (set as { status: number }).status = 204; return null; }
-    const planJson = await readPlanJsonSideArtifact(runId, "sanitized") ?? await readPlanJsonArtifact(runId);
-    if (planJson === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return sanitizePlanJson(planJson);
+    return sanitizedPlanArtifactResponse(runId, run, set);
   });
