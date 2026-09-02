@@ -519,7 +519,8 @@ async function executeQuery(orgId: string, orgName: string, query: ExplorerQuery
 }
 
 function savedQueryResource(saved: typeof explorerSavedQueries.$inferSelect): Record<string, unknown> {
-  const query = queryObject(saved.query, saved.queryType) ?? { type: saved.queryType as ViewType, filter: [], fields: [], sort: [] };
+  const query = queryObject(saved.query, saved.queryType);
+  if (query === undefined) throw new Error(`Corrupt saved query ${saved.id}`);
   return {
     id: saved.id,
     type: "explorer-saved-queries",
@@ -814,7 +815,12 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
       db.query.explorerSavedQueries.findMany({ where: eq(explorerSavedQueries.orgId, org.id), orderBy: [desc(explorerSavedQueries.createdAt)], limit: size, offset }),
       db.select({ total: count() }).from(explorerSavedQueries).where(eq(explorerSavedQueries.orgId, org.id)).then((rows) => rows[0]?.total ?? 0),
     ]);
-    return { data: views.map(savedQueryResource), ...pagination(request, number, size, total) };
+    try {
+      return { data: views.map(savedQueryResource), ...pagination(request, number, size, total) };
+    } catch {
+      (set as { status: number }).status = 500;
+      return error("500", "Internal Server Error");
+    }
   })
   .post("/api/v2/organizations/:org_name/explorer/views", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
@@ -842,7 +848,12 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
     if (org === undefined || view === undefined || view.orgId !== org.id || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
       (set as { status: number }).status = 404; return error("404", "Not Found");
     }
-    return { data: savedQueryResource(view) };
+    try {
+      return { data: savedQueryResource(view) };
+    } catch {
+      (set as { status: number }).status = 500;
+      return error("500", "Internal Server Error");
+    }
   })
   .patch("/api/v2/organizations/:org_name/explorer/views/:view_id", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
