@@ -549,6 +549,10 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload.data as Record<string, unknown> | undefined;
+    if (data !== null && typeof data === "object" && "type" in data && (data as Record<string, unknown>).type !== undefined && (data as Record<string, unknown>).type !== "organizations") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid type" }] };
+    }
     const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
     const newName = attributes.name === undefined ? org.name : (typeof attributes.name === "string" ? attributes.name.trim() : "");
     const defaultIacBinary = typeof attributes["default-iac-binary"] === "string" ? attributes["default-iac-binary"] : (org.defaultIacBinary ?? "terraform");
