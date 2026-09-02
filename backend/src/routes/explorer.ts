@@ -474,7 +474,7 @@ async function indexedExplorerRows(
   const workspaceCount = countDistinct(explorerCatalogMemberships.workspaceId);
   const workspaces = isPostgres
     ? sql<string>`string_agg(${explorerCatalogMemberships.workspaceName}, ', ' ORDER BY ${explorerCatalogMemberships.workspaceName})`
-    : sql<string>`group_concat(${explorerCatalogMemberships.workspaceName}, ', ')`;
+    : sql<string>`group_concat(${explorerCatalogMemberships.workspaceName}, ', ' ORDER BY ${explorerCatalogMemberships.workspaceName})`;
   const having = query.filter
     .filter((filter) => filter.field === "workspace_count" || filter.field === "workspace-count")
     .map((filter) => aggregateFilter(workspaceCount, filter));
