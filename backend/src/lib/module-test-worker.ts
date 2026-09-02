@@ -136,6 +136,12 @@ async function stopSupervisor(marker: SupervisorMarker): Promise<void> {
   try { process.kill(-marker.pid, "SIGTERM"); } catch {
     try { process.kill(marker.pid, "SIGTERM"); } catch { /* already exited */ }
   }
+  // Escalate to SIGKILL if the process group is still alive after 5s
+  await Bun.sleep(5000);
+  if (!(await processOwned(marker))) return;
+  try { process.kill(-marker.pid, "SIGKILL"); } catch {
+    try { process.kill(marker.pid, "SIGKILL"); } catch { /* already exited */ }
+  }
 }
 
 async function resultAfterSupervisorExit(resultPath: string): Promise<ModuleTestResult> {
