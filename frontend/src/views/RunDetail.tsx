@@ -1402,7 +1402,7 @@ export function RunDetail({
   const showCostEstimate = costEstimate !== null
     && costAttributes !== undefined
     && costAttributes["terrence:infracost-enabled"] !== false
-    && !["skipped", "disabled", "unavailable"].includes(costStatus);
+    && !["skipped", "skipped_due_to_targeting", "disabled", "unavailable"].includes(costStatus);
   const hasSoftFailedPolicy = status === "policy_soft_failed"
     || policyChecks.some((check: PolicyCheck): boolean => check.attributes.status === "soft_failed");
   const hasHardFailedPolicy = policyChecks.some((check: PolicyCheck): boolean =>

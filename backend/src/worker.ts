@@ -920,7 +920,7 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
     : await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId), columns: { orgId: true } });
   if (workspace === undefined || !(await costEstimationEnabledForOrganization(workspace.orgId))) {
     await writeLog(runId, "plan", "[terrence] Cost estimation is disabled. Skipping.");
-    const estimate = emptyCostEstimate("skipped", {
+    const estimate = emptyCostEstimate("skipped_due_to_targeting", {
       ...timestamps,
       "finished-at": new Date().toISOString(),
     });
