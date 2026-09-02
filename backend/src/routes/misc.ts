@@ -110,7 +110,7 @@ export function costEstimateResource(
       : ["canceled", "force_canceled", "discarded"].includes(run.status)
         ? "canceled"
         : run.status === "planned_and_finished"
-          ? "skipped"
+          ? "skipped_due_to_targeting"
           : run.status === "cost_estimating"
             ? "pending"
             : ["pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed", "queuing", "plan_queued", "planning"].includes(run.status)

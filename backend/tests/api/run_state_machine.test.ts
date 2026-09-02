@@ -290,7 +290,7 @@ describe("the reference format API v2 - Cost estimate stub fields", () => {
 
     for (const [runStatus, expectedStatus] of [
       ["cost_estimating", "pending"],
-      ["planned_and_finished", "skipped"],
+      ["planned_and_finished", "skipped_due_to_targeting"],
       ["errored", "errored"],
       ["canceled", "canceled"],
     ] as const) {
