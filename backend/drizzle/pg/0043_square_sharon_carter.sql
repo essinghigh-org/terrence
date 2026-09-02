@@ -1,0 +1,1 @@
+ALTER TABLE "stacks" ADD CONSTRAINT "stacks_agent_pool_id_agent_pools_id_fk" FOREIGN KEY ("agent_pool_id") REFERENCES "public"."agent_pools"("id") ON DELETE set null ON UPDATE no action;

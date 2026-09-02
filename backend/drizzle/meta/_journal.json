@@ -330,6 +330,13 @@
       "when": 1788346045400,
       "tag": "0046_parched_brother_voodoo",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1788347064295,
+      "tag": "0047_gray_sentinel",
+      "breakpoints": true
     }
   ]
 }
