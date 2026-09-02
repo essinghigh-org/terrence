@@ -355,11 +355,13 @@ async function finishModuleTestRun(
     if (latest?.status === "canceled" || await context.canceled()) return;
     await persistFinishedModuleTestRun(run.id, executionPid, result);
     await rm(supervisorMarkerPath(run.executionDirectory ?? dirname(resultPath)), { force: true });
+    await rm(join(run.executionDirectory ?? dirname(resultPath), "input.json"), { force: true });
   } catch (error: unknown) {
     await markModuleTestRunFailed(run.id, context, error);
     throw error;
   } finally {
     await cleanupModuleTestTokens(run.id, context);
+    try { await rm(join(run.executionDirectory ?? dirname(resultPath), "input.json"), { force: true }); } catch {}
   }
 }
 
