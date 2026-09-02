@@ -10,10 +10,13 @@ function serverPort(server: Server): number {
 
 describe("streamed external URL responses", () => {
   let server: Server;
+  let receivedUserAgent: string | undefined;
 
   beforeAll(async () => {
     setExternalUrlTransportForTests(undefined);
-    server = createServer((_request, response): void => {
+    server = createServer((request, response): void => {
+      const userAgent = request.headers["user-agent"];
+      receivedUserAgent = Array.isArray(userAgent) ? userAgent[0] : userAgent;
       response.writeHead(200, { "content-length": "32" });
       response.write("partial response");
       setTimeout((): void => {
@@ -45,6 +48,24 @@ describe("streamed external URL responses", () => {
 
     const first = await reader.read();
     expect(new TextDecoder().decode(first.value)).toBe("partial response");
+    expect(receivedUserAgent).toBe("Terrence");
     await expect(reader.read()).rejects.toThrow(/External response closed before completing|aborted/);
+
+    const customResponse = await fetchResolvedExternalUrlStream(
+      { address: "127.0.0.1", url: `http://127.0.0.1:${serverPort(server)}/custom` },
+      {
+        method: "GET",
+        headers: { "User-Agent": "CustomAgent/1.0" },
+        timeoutMs: 5_000,
+        maxResponseBytes: 1_024,
+      },
+    );
+    const customReader = customResponse.body?.getReader();
+    if (customReader === undefined) throw new Error("Expected a custom response body reader");
+
+    const customFirst = await customReader.read();
+    expect(new TextDecoder().decode(customFirst.value)).toBe("partial response");
+    expect(receivedUserAgent).toBe("CustomAgent/1.0");
+    await expect(customReader.read()).rejects.toThrow(/External response closed before completing|aborted/);
   });
 });

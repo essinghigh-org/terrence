@@ -24,6 +24,7 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
 const PRIVATE_MSG = "URL points to a private or loopback address";
+const DEFAULT_USER_AGENT = "Terrence";
 
 const V4_OCTET = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
 const V6_HEXTET = /^[0-9a-f]{1,4}$/;
@@ -347,6 +348,7 @@ function pinnedRequestOptions(target: ResolvedExternalUrl, init: ExternalRequest
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
   const hostHeader = `${hostname.includes(":") ? `[${hostname}]` : hostname}${port === defaultPort ? "" : `:${port}`}`;
   const headers = new Headers(init.headers);
+  if (!headers.has("user-agent")) headers.set("User-Agent", DEFAULT_USER_AGENT);
   headers.set("Host", hostHeader);
   headers.set("Accept-Encoding", "identity");
   if (init.body !== undefined) headers.set("Content-Length", String(Buffer.byteLength(init.body)));
