@@ -1,4 +1,5 @@
 import { afterEach, mock } from "bun:test";
+import { orgPermissionsCache } from "../src/hooks/useOrganizationPermissions";
 import { cleanup, configure } from "@testing-library/react";
 import { JSDOM } from "jsdom";
 import type { JsonObject } from "../src/lib/json";
@@ -219,4 +220,5 @@ afterEach((): void => {
   mock.restore();
   customLocation = undefined;
   if (localStorage !== undefined) localStorage.clear();
+  orgPermissionsCache.clear();
 });

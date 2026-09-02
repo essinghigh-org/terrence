@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { fetchApi } from "../lib/api";
 
+export const orgPermissionsCache = new Map<string, { permissions: Readonly<Record<string, boolean>> | undefined; expires: number }>();
+export const ORG_CACHE_TTL_MS = 30_000;
+
 /**
  * Centralized organization-permission lookup (kanban 14.6).
  *
@@ -25,8 +28,20 @@ export type OrganizationPermissions = Readonly<{
 }>;
 
 export function useOrganizationPermissions(orgName: string | undefined): OrganizationPermissions {
-  const [permissions, setPermissions] = useState<Readonly<Record<string, boolean>> | undefined>(undefined);
-  const [loaded, setLoaded] = useState(false);
+  const [permissions, setPermissions] = useState<Readonly<Record<string, boolean>> | undefined>(() => {
+    if (orgName !== undefined && orgName !== "") {
+      const cached = orgPermissionsCache.get(orgName);
+      if (cached !== undefined && cached.expires > Date.now()) return cached.permissions;
+    }
+    return undefined;
+  });
+  const [loaded, setLoaded] = useState(() => {
+    if (orgName !== undefined && orgName !== "") {
+      const cached = orgPermissionsCache.get(orgName);
+      if (cached !== undefined && cached.expires > Date.now()) return true;
+    }
+    return false;
+  });
   const [error, setError] = useState<string | null>(null);
 
   useEffect((): (() => void) | undefined => {
@@ -36,6 +51,14 @@ export function useOrganizationPermissions(orgName: string | undefined): Organiz
       setError(null);
       return undefined;
     }
+    const cached = orgName !== undefined && orgName !== "" ? orgPermissionsCache.get(orgName) : undefined;
+    if (cached !== undefined && cached.expires > Date.now()) {
+      setPermissions(cached.permissions);
+      setLoaded(true);
+      setError(null);
+      return undefined;
+    }
+
     const controller = new AbortController();
     setError(null);
     setLoaded(false);
@@ -50,7 +73,9 @@ export function useOrganizationPermissions(orgName: string | undefined): Organiz
       const attributes = (result as {
         data?: { attributes?: { permissions?: Record<string, boolean> } };
       }).data?.attributes;
-      setPermissions(attributes?.permissions);
+      const perms = attributes?.permissions;
+      orgPermissionsCache.set(orgName ?? "", { permissions: perms, expires: Date.now() + ORG_CACHE_TTL_MS });
+      setPermissions(perms);
       setLoaded(true);
     }).catch((caught: unknown): void => {
       if (controller.signal.aborted) return;
