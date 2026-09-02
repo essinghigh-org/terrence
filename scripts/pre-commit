@@ -28,7 +28,7 @@ fi
 export STORAGE_DIR="${TMPDIR:-/tmp}/drizzle-gen-$$"
 
 # Run generate from the backend dir (where drizzle.config.ts lives).
-if ! (cd "$BACKEND_DIR" && npm run db:generate >/dev/null 2>&1); then
+if ! (cd "$BACKEND_DIR" && bun run db:generate >/dev/null 2>&1); then
   echo "pre-commit: drizzle-kit generate failed; aborting commit." >&2
   exit 1
 fi
