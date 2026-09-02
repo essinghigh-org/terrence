@@ -166,14 +166,14 @@ const PERMISSION_GROUPS: readonly {
 ];
 
 /** A single key=value tag filter. */
-type TagFilterNode = Readonly<{ kind: "filter"; key: string; value: string }>;
+type TagFilterNode = Readonly<{ kind: "filter"; id: string; key: string; value: string }>;
 /** A group of rules combined with AND or OR. */
-type TagGroupNode = Readonly<{ kind: "group"; combinator: "AND" | "OR"; rules: TagRuleNode[] }>;
+type TagGroupNode = Readonly<{ kind: "group"; id: string; combinator: "AND" | "OR"; rules: TagRuleNode[] }>;
 type TagRuleNode = TagFilterNode | TagGroupNode;
 
 /** Initial builder state: one empty filter row. */
 function emptyGroup(): TagGroupNode {
-  return { kind: "group", combinator: "OR", rules: [{ kind: "filter", key: "", value: "" }] };
+  return { kind: "group", id: crypto.randomUUID(), combinator: "OR", rules: [{ kind: "filter", id: crypto.randomUUID(), key: "", value: "" }] };
 }
 
 /**
@@ -428,7 +428,7 @@ export function TokenScopeDialog({
 
   const setFilterValue = (path: readonly number[], key: string, value: string): void => {
     updateRule(path, (rule): TagRuleNode =>
-      rule.kind === "filter" ? { kind: "filter", key, value } : rule);
+      rule.kind === "filter" ? { ...rule, key, value } : rule);
   };
 
   const setCombinator = (path: readonly number[], combinator: "AND" | "OR"): void => {
@@ -437,11 +437,11 @@ export function TokenScopeDialog({
   };
 
   const wrapRule = (path: readonly number[]): void => {
-    updateRule(path, (rule): TagRuleNode => ({ kind: "group", combinator: "OR", rules: [rule] }));
+    updateRule(path, (rule): TagRuleNode => ({ kind: "group", id: crypto.randomUUID(), combinator: "OR", rules: [rule] }));
   };
 
   const addFilter = (path: readonly number[]): void => {
-    appendRule(path, { kind: "filter", key: "", value: "" });
+    appendRule(path, { kind: "filter", id: crypto.randomUUID(), key: "", value: "" });
   };
 
   const addGroup = (path: readonly number[]): void => {
@@ -663,7 +663,7 @@ export function TokenScopeDialog({
 
         <div className="space-y-2">
           {node.rules.map((child, index): React.JSX.Element => (
-            <div key={index}>
+            <div key={child.id}>
               {renderRuleRow(child, [...path, index])}
             </div>
           ))}
