@@ -169,15 +169,20 @@ const listOrgRunTasks = async ({ params, request, user, orgId: tokenOrgId, teamI
   const orgName = params.org_name ?? "";
   const org = await cachedOrgByName(orgName);
   if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-  const tasksList = await db.query.runTasks.findMany({
-    where: eq(runTasks.orgId, org.id),
-    orderBy: [asc(runTasks.id)],
-  });
   const page = pageRequest(request);
-  const pageTasks = tasksList.slice((page.number - 1) * page.size, page.number * page.size);
+  const offset = (page.number - 1) * page.size;
+  const [tasks, total] = await Promise.all([
+    db.query.runTasks.findMany({
+      where: eq(runTasks.orgId, org.id),
+      orderBy: [asc(runTasks.id)],
+      limit: page.size,
+      offset,
+    }),
+    db.select({ total: count() }).from(runTasks).where(eq(runTasks.orgId, org.id)).then((rows) => rows[0]?.total ?? 0),
+  ]);
   return {
-    data: await Promise.all(pageTasks.map(async (t): Promise<Record<string, unknown>> => runTaskResource(t, org.name))),
-    ...pagination(request, page.number, page.size, tasksList.length),
+    data: await Promise.all(tasks.map(async (t): Promise<Record<string, unknown>> => runTaskResource(t, org.name))),
+    ...pagination(request, page.number, page.size, total),
   };
 };
 
@@ -264,20 +269,25 @@ const listWorkspaceRunTasks = async ({ params, request, user, orgId: tokenOrgId,
   const workspaceId = params.workspace_id ?? "";
   const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
   if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-  const bindings = await db.query.workspaceRunTasks.findMany({
-    where: eq(workspaceRunTasks.workspaceId, workspaceId),
-    orderBy: [asc(workspaceRunTasks.id)],
-  });
   const page = pageRequest(request);
-  const pageBindings = bindings.slice((page.number - 1) * page.size, page.number * page.size);
-  const attachedTasks = pageBindings.length === 0
+  const offset = (page.number - 1) * page.size;
+  const [bindings, total] = await Promise.all([
+    db.query.workspaceRunTasks.findMany({
+      where: eq(workspaceRunTasks.workspaceId, workspaceId),
+      orderBy: [asc(workspaceRunTasks.id)],
+      limit: page.size,
+      offset,
+    }),
+    db.select({ total: count() }).from(workspaceRunTasks).where(eq(workspaceRunTasks.workspaceId, workspaceId)).then((rows) => rows[0]?.total ?? 0),
+  ]);
+  const attachedTasks = bindings.length === 0
     ? []
     : await db.query.runTasks.findMany({
-        where: inArray(runTasks.id, pageBindings.map((binding: BindingItem): string => binding.runTaskId)),
+        where: inArray(runTasks.id, bindings.map((binding: BindingItem): string => binding.runTaskId)),
       });
   const tasksById = new Map(attachedTasks.map((task): [string, typeof task] => [task.id, task]));
   return {
-    data: pageBindings.map((binding: BindingItem): Record<string, unknown> => {
+    data: bindings.map((binding: BindingItem): Record<string, unknown> => {
       const task = tasksById.get(binding.runTaskId);
       return {
         id: binding.id,
@@ -296,7 +306,7 @@ const listWorkspaceRunTasks = async ({ params, request, user, orgId: tokenOrgId,
         },
       };
     }),
-    ...pagination(request, page.number, page.size, bindings.length),
+    ...pagination(request, page.number, page.size, total),
   };
 };
 

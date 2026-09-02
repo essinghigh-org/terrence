@@ -808,9 +808,13 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
     if (org === undefined || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
       (set as { status: number }).status = 404; return error("404", "Not Found");
     }
-    const views = await db.query.explorerSavedQueries.findMany({ where: eq(explorerSavedQueries.orgId, org.id), orderBy: [desc(explorerSavedQueries.createdAt)] });
     const { number, size } = pageRequest(request);
-    return { data: views.slice((number - 1) * size, number * size).map(savedQueryResource), ...pagination(request, number, size, views.length) };
+    const offset = (number - 1) * size;
+    const [views, total] = await Promise.all([
+      db.query.explorerSavedQueries.findMany({ where: eq(explorerSavedQueries.orgId, org.id), orderBy: [desc(explorerSavedQueries.createdAt)], limit: size, offset }),
+      db.select({ total: count() }).from(explorerSavedQueries).where(eq(explorerSavedQueries.orgId, org.id)).then((rows) => rows[0]?.total ?? 0),
+    ]);
+    return { data: views.map(savedQueryResource), ...pagination(request, number, size, total) };
   })
   .post("/api/v2/organizations/:org_name/explorer/views", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
