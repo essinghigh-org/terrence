@@ -810,6 +810,7 @@ export const organizationMemberships = pgTable("organization_memberships", {
     ssoSource: text("sso_source"),
 }, (table) => [
     uniqueIndex("organization_memberships_org_user_idx").on(table.orgId, table.userId),
+    index("organization_memberships_user_idx").on(table.userId),
   ]);
 
 export const organizationRoles = pgTable("organization_roles", {
@@ -886,7 +887,9 @@ export const policyChecks = pgTable("policy_checks", {
     status: text("status").notNull().default("pending"),
     result: jsonb("result"),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.policyChecks.createdAt.defaultFn!()),
-});
+}, (table) => [
+    index("policy_checks_run_idx").on(table.runId),
+  ]);
 
 export const policyEvaluations = pgTable("policy_evaluations", {
     id: text("id").notNull().primaryKey(),
@@ -898,7 +901,9 @@ export const policyEvaluations = pgTable("policy_evaluations", {
     resultCount: jsonb("result_count"),
     statusTimestamps: jsonb("status_timestamps"),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.policyEvaluations.createdAt.defaultFn!()),
-});
+}, (table) => [
+    index("policy_evaluations_run_idx").on(table.runId),
+  ]);
 
 export const policySetExclusions = pgTable("policy_set_exclusions", {
     id: text("id").notNull().primaryKey(),
@@ -1255,7 +1260,9 @@ export const runTaskResults = pgTable("run_task_results", {
     message: text("message"),
     url: text("url"),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.runTaskResults.createdAt.defaultFn!()),
-});
+}, (table) => [
+    index("run_task_results_run_idx").on(table.runId),
+  ]);
 
 export const runTasks = pgTable("run_tasks", {
     id: text("id").notNull().primaryKey(),
@@ -1336,6 +1343,7 @@ export const runs = pgTable("runs", {
     index("runs_workspace_status_created_idx").on(table.workspaceId, table.status, table.createdAt),
     index("runs_status_created_idx").on(table.status, table.createdAt),
     index("runs_status_scheduled_idx").on(table.status, table.scheduledAt),
+    index("runs_configuration_version_idx").on(table.configurationVersionId),
   ]);
 
 export const samlSettings = pgTable("saml_settings", {
@@ -1546,6 +1554,7 @@ export const stateVersions = pgTable("state_versions", {
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.stateVersions.createdAt.defaultFn!()),
 }, (table) => [
     uniqueIndex("state_versions_ws_serial_idx").on(table.workspaceId, table.serial),
+    index("state_versions_run_idx").on(table.runId),
   ]);
 
 export const supportBundleRequests = pgTable("support_bundle_requests", {
@@ -1572,7 +1581,9 @@ export const taskStages = pgTable("task_stages", {
     status: text("status").notNull().default("pending"),
     statusTimestamps: jsonb("status_timestamps"),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.taskStages.createdAt.defaultFn!()),
-});
+}, (table) => [
+    index("task_stages_run_idx").on(table.runId),
+  ]);
 
 export const teamMemberships = pgTable("team_memberships", {
     id: text("id").notNull().primaryKey(),
@@ -1582,6 +1593,7 @@ export const teamMemberships = pgTable("team_memberships", {
     ssoSource: text("sso_source"),
 }, (table) => [
     uniqueIndex("team_memberships_team_user_idx").on(table.teamId, table.userId),
+    index("team_memberships_user_idx").on(table.userId),
   ]);
 
 export const teamProjects = pgTable("team_projects", {

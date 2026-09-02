@@ -169,6 +169,7 @@ export const organizationMemberships = sqliteTable("organization_memberships", {
   ssoSource: text("sso_source"),
 }, (table) => [
   uniqueIndex("organization_memberships_org_user_idx").on(table.orgId, table.userId),
+  index("organization_memberships_user_idx").on(table.userId),
 ]);
 
 // First-class invitations (todo.md #3, #4, #17): invite != user != membership.
@@ -259,6 +260,7 @@ export const teamMemberships = sqliteTable("team_memberships", {
   ssoSource: text("sso_source"),
 }, (table) => [
   uniqueIndex("team_memberships_team_user_idx").on(table.teamId, table.userId),
+  index("team_memberships_user_idx").on(table.userId),
 ]);
 
 export const teamScimGroupMappings = sqliteTable("team_scim_group_mappings", {
@@ -537,6 +539,7 @@ export const runs = sqliteTable("runs", {
   index("runs_workspace_status_created_idx").on(table.workspaceId, table.status, table.createdAt),
   index("runs_status_created_idx").on(table.status, table.createdAt),
   index("runs_status_scheduled_idx").on(table.status, table.scheduledAt),
+  index("runs_configuration_version_idx").on(table.configurationVersionId),
 ]);
 
 // Ephemeral per-run credentials (the reference format run-token model). Minted when the worker
@@ -706,6 +709,7 @@ export const stateVersions = sqliteTable("state_versions", {
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   uniqueIndex("state_versions_ws_serial_idx").on(table.workspaceId, table.serial),
+  index("state_versions_run_idx").on(table.runId),
 ]);
 
 export const stateOutputIndex = sqliteTable("state_output_index", {
@@ -1176,7 +1180,9 @@ export const policyChecks = sqliteTable("policy_checks", {
   result: text("result", { mode: "json" }).$type<Record<string, unknown>>(),
 
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
-});
+}, (table) => [
+  index("policy_checks_run_idx").on(table.runId),
+]);
 
 export const registryModules = sqliteTable("registry_modules", {
   id: text("id").primaryKey(),
@@ -1631,7 +1637,9 @@ export const taskStages = sqliteTable("task_stages", {
   status: text("status").notNull().default("pending"), // 'pending', 'running', 'passed', 'failed', 'awaiting_override', 'errored', 'canceled', 'unreachable'
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<Record<string, string>>(),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
-});
+}, (table) => [
+  index("task_stages_run_idx").on(table.runId),
+]);
 
 export const runTaskResults = sqliteTable("run_task_results", {
   id: text("id").primaryKey(),
@@ -1642,7 +1650,9 @@ export const runTaskResults = sqliteTable("run_task_results", {
   message: text("message"),
   url: text("url"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
-});
+}, (table) => [
+  index("run_task_results_run_idx").on(table.runId),
+]);
 
 export const policyEvaluations = sqliteTable("policy_evaluations", {
   id: text("id").primaryKey(),
@@ -1654,7 +1664,9 @@ export const policyEvaluations = sqliteTable("policy_evaluations", {
   resultCount: text("result_count", { mode: "json" }).$type<Record<string, number>>(),
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<Record<string, string>>(),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
-});
+}, (table) => [
+  index("policy_evaluations_run_idx").on(table.runId),
+]);
 
 export const policySetOutcomes = sqliteTable("policy_set_outcomes", {
   id: text("id").primaryKey(),
