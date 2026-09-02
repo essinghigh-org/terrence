@@ -361,7 +361,7 @@ async function command(
   const operation = args[1] === "apply" ? "apply" : "plan";
   const timeoutMs = await stackExecutionTimeoutMs(operation);
   const child = sandbox === null
-    ? spawn([...args], { cwd, env, stdout: "pipe", stderr: "pipe" })
+    ? spawn([...args], { cwd, env, stdout: "pipe", stderr: "pipe", detached: true } as never)
     : sandbox.spawn([...args], { cwd, env });
   let heartbeatLost = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -370,9 +370,9 @@ async function command(
     void heartbeat().then((owned): void => {
       if (!owned) {
         heartbeatLost = true;
-        child.kill();
+        try { if ((child as unknown as { pid?: number }).pid) process.kill(-(child as unknown as { pid: number }).pid, "SIGTERM"); else child.kill(); } catch { try { child.kill(); } catch {} }
       }
-    }).catch((): void => { heartbeatLost = true; child.kill(); });
+    }).catch((): void => { heartbeatLost = true; try { if ((child as unknown as { pid?: number }).pid) process.kill(-(child as unknown as { pid: number }).pid, "SIGTERM"); else child.kill(); } catch { try { child.kill(); } catch {} } });
   }, 10_000);
   const output = Promise.all([
     new Response(child.stdout).text(),
@@ -382,7 +382,7 @@ async function command(
   const timeout = new Promise<never>((_, reject): void => {
     timer = setTimeout((): void => {
       timedOut = true;
-      try { child.kill("SIGKILL"); } catch {}
+      try { if ((child as unknown as { pid?: number }).pid) process.kill(-(child as unknown as { pid: number }).pid, "SIGKILL"); else child.kill("SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }
       reject(new Error(`Stack ${operation} process timed out after ${String(timeoutMs)} ms`));
     }, timeoutMs);
   });
@@ -390,7 +390,7 @@ async function command(
     const [code, [stdout, stderr]] = await Promise.race([completed, timeout]);
     return { code, output: [stdout.trim(), stderr.trim()].filter(Boolean).join("\n"), heartbeatLost };
   } catch (error: unknown) {
-    try { child.kill("SIGKILL"); } catch {}
+    try { if ((child as unknown as { pid?: number }).pid) process.kill(-(child as unknown as { pid: number }).pid, "SIGKILL"); else child.kill("SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }
     if (!timedOut) throw error;
     await Promise.allSettled([child.exited, output]);
     throw error;
