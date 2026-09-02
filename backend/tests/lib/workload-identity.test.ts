@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { db } from "../../src/db";
-import { workloadIdentityKeys, workloadIdentityTokens } from "../../src/db/schema";
+import { organizations, runs, workspaces, workloadIdentityKeys, workloadIdentityTokens } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 import {
   issueModuleTestIdentityToken,
@@ -17,6 +17,16 @@ import {
 } from "../../src/lib/workload-identity";
 import { workloadIdentityRoutes } from "../../src/routes/workload-identity";
 
+
+async function ensureTestRun(runId: string): Promise<void> {
+  const orgId = "org-1";
+  const workspaceId = "workspace-1";
+  // Insert org if not exists
+  await db.insert(organizations).values({ id: orgId, name: "example", email: "test@example.com" }).onConflictDoNothing();
+  await db.insert(workspaces).values({ id: workspaceId, name: "network", orgId, autoApply: false }).onConflictDoNothing();
+  await db.insert(runs).values({ id: runId, workspaceId, status: "pending", createdAt: Date.now() }).onConflictDoNothing();
+}
+
 afterEach(async (): Promise<void> => {
   await db.delete(workloadIdentityTokens);
   await db.delete(workloadIdentityKeys);
@@ -25,6 +35,7 @@ afterEach(async (): Promise<void> => {
 describe("workload identity", () => {
   test("issues a module-test token with the documented subject and validity window", async () => {
     const runId = `module-run-${crypto.randomUUID()}`;
+    await ensureTestRun(runId);
     const issued = await issueModuleTestIdentityToken({
       organizationId: "org-1",
       organizationName: "example",
@@ -48,6 +59,8 @@ describe("workload identity", () => {
   test("injects one token for each manual audience", async () => {
     const directory = await mkdtemp(join(tmpdir(), "terrence-oidc-test-"));
     try {
+      const runId = `run-${crypto.randomUUID()}`;
+      await ensureTestRun(runId);
       const result = await workspaceIdentityEnvironment({
         organizationId: "org-1",
         organizationName: "example",
@@ -55,7 +68,7 @@ describe("workload identity", () => {
         projectName: "default",
         workspaceId: "workspace-1",
         workspaceName: "network",
-        runId: `run-${crypto.randomUUID()}`,
+        runId,
         phase: "plan",
         ttlSeconds: 600,
       }, [
@@ -90,6 +103,8 @@ describe("workload identity", () => {
     expect(document.subject_types_supported).toEqual(["public"]);
     expect(document.response_types_supported).toEqual(["id_token"]);
 
+    const runId = `run-${crypto.randomUUID()}`;
+    await ensureTestRun(runId);
     const issued = await issueWorkspaceIdentityToken({
       organizationId: "org-1",
       organizationName: "example",
@@ -97,7 +112,7 @@ describe("workload identity", () => {
       projectName: "default",
       workspaceId: "workspace-1",
       workspaceName: "network",
-      runId: `run-${crypto.randomUUID()}`,
+      runId,
       phase: "plan",
       audience: "aws.workload.identity",
       ttlSeconds: 600,
