@@ -7,7 +7,7 @@ import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
-import { fetchApi, setAuthToken } from "@/lib/api";
+import { ApiError, fetchApi, setAuthToken } from "@/lib/api";
 import { isString } from "../lib/type-guards";
 
 
@@ -115,8 +115,18 @@ export function Login(): React.JSX.Element {
         return;
       }
       await completeSignIn(attributes);
-    } catch (_error: unknown) {
-      setError("Check your username and password, then try again.");
+    } catch (error: unknown) {
+      if (error instanceof ApiError) {
+        // Surface the backend\'s specific message (e.g. invitation not accepted,
+        // LDAP unavailable, rate-limited) instead of always blaming the password.
+        // For generic 401 invalid-credentials, the backend already returns that
+        // exact detail, so we can show it directly.
+        setError(error.message);
+      } else if (error instanceof Error) {
+        setError(error.message);
+      } else {
+        setError("Check your username and password, then try again.");
+      }
     } finally {
       setSubmitting(false);
     }
@@ -135,8 +145,10 @@ export function Login(): React.JSX.Element {
       }) as { data: { attributes: { token: string; "expired-at"?: string | null; "must-change-password"?: boolean } } };
       const attributes = response.data.attributes;
       await completeSignIn(attributes);
-    } catch (_error: unknown) {
-      setError("That authentication code was not accepted. Try again.");
+    } catch (error: unknown) {
+      if (error instanceof ApiError) setError(error.message);
+      else if (error instanceof Error) setError(error.message);
+      else setError("That authentication code was not accepted. Try again.");
     } finally {
       setSubmitting(false);
     }
