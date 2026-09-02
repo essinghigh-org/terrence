@@ -836,6 +836,7 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
         stdout: "pipe",
         stderr: "pipe",
       },
+      runSandbox,
     );
     const costOutput = Promise.all([
       new Response(costProcess.stdout).text(),
