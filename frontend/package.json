@@ -40,6 +40,6 @@
     "bun-plugin-tailwind": "^0.1.2",
     "jsdom": "^30.0.1",
     "oxlint": "^1.80.0",
-    "typescript": "~7.0.2"
+    "typescript": "npm:@typescript/typescript6@6.0.2"
   }
 }
