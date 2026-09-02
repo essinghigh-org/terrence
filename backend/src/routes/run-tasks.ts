@@ -169,15 +169,21 @@ const listOrgRunTasks = async ({ params, request, user, orgId: tokenOrgId, teamI
   const orgName = params.org_name ?? "";
   const org = await cachedOrgByName(orgName);
   if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-  const tasksList = await db.query.runTasks.findMany({
-    where: eq(runTasks.orgId, org.id),
-    orderBy: [asc(runTasks.id)],
-  });
   const page = pageRequest(request);
-  const pageTasks = tasksList.slice((page.number - 1) * page.size, page.number * page.size);
+  const where = eq(runTasks.orgId, org.id);
+  const [tasksList, countRows] = await Promise.all([
+    db.query.runTasks.findMany({
+      where,
+      orderBy: [asc(runTasks.id)],
+      limit: page.size,
+      offset: (page.number - 1) * page.size,
+    }),
+    db.select({ total: count() }).from(runTasks).where(where),
+  ]);
+  const total = countRows[0]?.total ?? 0;
   return {
-    data: await Promise.all(pageTasks.map(async (t): Promise<Record<string, unknown>> => runTaskResource(t, org.name))),
-    ...pagination(request, page.number, page.size, tasksList.length),
+    data: await Promise.all(tasksList.map(async (t): Promise<Record<string, unknown>> => runTaskResource(t, org.name))),
+    ...pagination(request, page.number, page.size, total),
   };
 };
 
@@ -264,12 +270,19 @@ const listWorkspaceRunTasks = async ({ params, request, user, orgId: tokenOrgId,
   const workspaceId = params.workspace_id ?? "";
   const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
   if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-  const bindings = await db.query.workspaceRunTasks.findMany({
-    where: eq(workspaceRunTasks.workspaceId, workspaceId),
-    orderBy: [asc(workspaceRunTasks.id)],
-  });
   const page = pageRequest(request);
-  const pageBindings = bindings.slice((page.number - 1) * page.size, page.number * page.size);
+  const where = eq(workspaceRunTasks.workspaceId, workspaceId);
+  const [bindings, countRows] = await Promise.all([
+    db.query.workspaceRunTasks.findMany({
+      where,
+      orderBy: [asc(workspaceRunTasks.id)],
+      limit: page.size,
+      offset: (page.number - 1) * page.size,
+    }),
+    db.select({ total: count() }).from(workspaceRunTasks).where(where),
+  ]);
+  const total = countRows[0]?.total ?? 0;
+  const pageBindings = bindings;
   const attachedTasks = pageBindings.length === 0
     ? []
     : await db.query.runTasks.findMany({
@@ -296,7 +309,7 @@ const listWorkspaceRunTasks = async ({ params, request, user, orgId: tokenOrgId,
         },
       };
     }),
-    ...pagination(request, page.number, page.size, bindings.length),
+    ...pagination(request, page.number, page.size, total),
   };
 };
 
