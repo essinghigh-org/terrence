@@ -124,6 +124,9 @@ for (const route of routes) {
       "404": { description: "Not Found" },
     };
   }
+  if (m === "get" && /^\/api\/v2\/(plans\/\{[^}]+\}|runs\/\{[^}]+\}\/plan)\/(json-output|json-output-redacted|sanitized-plan)$/.test(openApiPath)) {
+    (operation.responses as Record<string, unknown>)["204"] = { description: "Plan accepted but not completed yet" };
+  }
   if (m === "patch" && openApiPath === "/api/v2/organization-memberships/{id}") {
     operation.requestBody = {
       required: true,

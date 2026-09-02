@@ -5688,6 +5688,9 @@
               }
             }
           },
+          "204": {
+            "description": "Plan accepted but not completed yet"
+          },
           "401": {
             "description": "Unauthorized"
           },
@@ -5724,6 +5727,9 @@
                 }
               }
             }
+          },
+          "204": {
+            "description": "Plan accepted but not completed yet"
           },
           "401": {
             "description": "Unauthorized"
@@ -5762,6 +5768,9 @@
               }
             }
           },
+          "204": {
+            "description": "Plan accepted but not completed yet"
+          },
           "401": {
             "description": "Unauthorized"
           },
@@ -5799,6 +5808,9 @@
               }
             }
           },
+          "204": {
+            "description": "Plan accepted but not completed yet"
+          },
           "401": {
             "description": "Unauthorized"
           },
@@ -5835,6 +5847,9 @@
                 }
               }
             }
+          },
+          "204": {
+            "description": "Plan accepted but not completed yet"
           },
           "401": {
             "description": "Unauthorized"
