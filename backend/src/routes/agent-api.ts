@@ -989,12 +989,15 @@ async function appendLog(ctx: AgentCtx): Promise<unknown> {
   const text = raw.replace(/\u0002/g, "").replace(/\u0003/g, "");
   if (text.trim() !== "") {
     // The final PUT repeats the last PATCHed chunk; skip exact duplicates so
-    // the run log does not double up every line.
+    // the run log does not double up every line. Only dedupe immediate
+    // duplicates (within 2s) so legitimate repeated ticks like
+    // "Still creating..." are not dropped.
     const last = await db.query.logs.findFirst({
       where: and(eq(logs.runId, details.job.runId), eq(logs.phase, details.job.phase)),
       orderBy: [desc(logs.createdAt), desc(logs.id)],
     });
-    if (last === undefined || last.outputText !== text) {
+    const isImmediateDuplicate = last !== undefined && last.outputText === text && Date.now() - last.createdAt < 2000;
+    if (!isImmediateDuplicate) {
       await appendAgentJobLog(details.job.agentId ?? "", details.job.id, details.job.fencingToken, text.slice(0, 1024 * 1024));
     }
   }
