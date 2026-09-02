@@ -1234,21 +1234,29 @@ export function RunDetail({
   // Terraform warnings and errors embedded in the phase logs surface as
   // colored bubbles; they do not affect run or phase status. Declared before
   // the early returns so the hook count stays stable across loading states.
-  const planWarnings = useMemo(
-    (): TerraformDiagnostic[] => extractDiagnostics(planLogs).filter((diag) => diag.severity === "warning"),
+  const planDiagnostics = useMemo(
+    (): TerraformDiagnostic[] => extractDiagnostics(planLogs),
     [planLogs],
+  );
+  const planWarnings = useMemo(
+    (): TerraformDiagnostic[] => planDiagnostics.filter((diag) => diag.severity === "warning"),
+    [planDiagnostics],
   );
   const planErrors = useMemo(
-    (): TerraformDiagnostic[] => extractDiagnostics(planLogs).filter((diag) => diag.severity === "error"),
-    [planLogs],
+    (): TerraformDiagnostic[] => planDiagnostics.filter((diag) => diag.severity === "error"),
+    [planDiagnostics],
+  );
+  const applyDiagnostics = useMemo(
+    (): TerraformDiagnostic[] => extractDiagnostics(applyLogs),
+    [applyLogs],
   );
   const applyWarnings = useMemo(
-    (): TerraformDiagnostic[] => extractDiagnostics(applyLogs).filter((diag) => diag.severity === "warning"),
-    [applyLogs],
+    (): TerraformDiagnostic[] => applyDiagnostics.filter((diag) => diag.severity === "warning"),
+    [applyDiagnostics],
   );
   const applyErrors = useMemo(
-    (): TerraformDiagnostic[] => extractDiagnostics(applyLogs).filter((diag) => diag.severity === "error"),
-    [applyLogs],
+    (): TerraformDiagnostic[] => applyDiagnostics.filter((diag) => diag.severity === "error"),
+    [applyDiagnostics],
   );
 
   if (run !== null && run.id !== runId) return <div className="p-8 text-muted-foreground">Loading run…</div>;

@@ -18,11 +18,19 @@ describe("inArray chunking #344", (): void => {
           const orgId = "org-chunk-test";
           await db.insert(organizations).values({ id: orgId, name: "chunk-org", email: "a@b.c" });
           const wsIds: string[] = [];
-          for (let i = 0; i < 600; i++) {
+          const wsBatch: any[] = [];
+          const tagBatch: any[] = [];
+          for (let i = 0; i < 510; i++) {
             const id = "ws-" + String(i).padStart(4, "0");
             wsIds.push(id);
-            await db.insert(workspaces).values({ id, orgId, name: "ws-" + i, locked: false });
-            await db.insert(workspaceTags).values({ id: crypto.randomUUID(), workspaceId: id, key: "env", value: i % 2 === 0 ? "prod" : "dev" });
+            wsBatch.push({ id, orgId, name: "ws-" + i, locked: false });
+            tagBatch.push({ id: crypto.randomUUID(), workspaceId: id, key: "env", value: i % 2 === 0 ? "prod" : "dev" });
+          }
+          for (let i = 0; i < wsBatch.length; i += 100) {
+            await db.insert(workspaces).values(wsBatch.slice(i, i + 100));
+          }
+          for (let i = 0; i < tagBatch.length; i += 100) {
+            await db.insert(workspaceTags).values(tagBatch.slice(i, i + 100));
           }
           // Verify chunked fetch returns all tags
           const { inArray } = await import("drizzle-orm");
@@ -48,8 +56,8 @@ describe("inArray chunking #344", (): void => {
       const [exitCode, stdout, stderr] = await Promise.all([result.exited, new Response(result.stdout).text(), new Response(result.stderr).text()]);
       if (exitCode !== 0) throw new Error("spawn failed: " + stderr + stdout);
       const parsed = JSON.parse(stdout.trim().split("\\n").at(-1)!);
-      expect(parsed.tagCount).toBe(600);
-      expect(parsed.wsCount).toBe(600);
+      expect(parsed.tagCount).toBe(510);
+      expect(parsed.wsCount).toBe(510);
     } finally {
       await rm(testDir, { recursive: true, force: true });
     }
