@@ -103,7 +103,7 @@ beforeAll(async () => {
       authorization: authorization ?? headers.get("authorization"),
       url,
     });
-    if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+    if (url.includes("/access_tokens")) return Response.json({ permissions: { statuses: "write" }, token: "installation-token" });
     if (url.includes("/installation/repositories")) {
       const page = new URL(url).searchParams.get("page");
       if (page === "2") {
@@ -354,7 +354,7 @@ describe("GitHub App installation setup", () => {
     }
   });
 
-  test("diagnostics skips archived repositories before checking commit-status permission", async () => {
+  test("diagnostics skips archived repositories and uses token permission metadata", async () => {
     const localId = `ghain-diagnostic-${suffix}`;
     const previousFetch = globalThis.fetch;
     const diagnosticRequests: { headers: Headers; url: string }[] = [];
@@ -392,17 +392,14 @@ describe("GitHub App installation setup", () => {
         data?: { checks?: { detail?: string; id?: string; ok?: boolean; status?: number | null }[] }[];
       };
       const check = body.data?.[0]?.checks?.find((candidate) => candidate.id === "commit-statuses");
-      expect(check).toEqual(expect.objectContaining({ ok: true, status: 422 }));
+      expect(check).toEqual(expect.objectContaining({ ok: true, status: null }));
       expect(check?.detail).toContain("acme/active-repository");
+      expect(check?.detail).toContain("grants Commit statuses write");
 
       const repositoryRequest = diagnosticRequests.find((entry) => entry.url.includes("/installation/repositories"));
       expect(repositoryRequest).toBeDefined();
       expect(new URL(repositoryRequest?.url ?? "https://terrence.test").searchParams.get("per_page")).toBe("100");
-      const statusRequest = diagnosticRequests.find((entry) => entry.url.includes("/statuses/"));
-      expect(statusRequest).toBeDefined();
-      expect(statusRequest?.url).toContain("acme%2Factive-repository");
-      expect(statusRequest?.headers.get("user-agent")).toBe("Terrence");
-      expect(statusRequest?.headers.get("x-github-api-version")).toBe("2022-11-28");
+      expect(diagnosticRequests.some((entry) => entry.url.includes("/statuses/"))).toBe(false);
     } finally {
       globalThis.fetch = previousFetch;
       await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, localId));

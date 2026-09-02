@@ -6,7 +6,7 @@ import { db, isPostgres } from "../db";
 import { apiTokens, githubAppInstallations, oauthClients, oauthTokens, organizations, type users } from "../db/schema";
 import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission } from "../lib/utils";
 import { decryptSecret } from "../lib/secrets";
-import { getGitHubAppAccessToken } from "../lib/webhooks";
+import { getGitHubAppAccessToken, getGitHubAppAccessTokenDetails } from "../lib/webhooks";
 import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail, type VcsIntegrationUsage } from "../lib/vcs-integration-usage";
 import { AvatarService } from "../lib/avatars";
 import { githubAppApiBase } from "../lib/github-api";
@@ -886,11 +886,12 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       const checks: {
         id: string; label: string; ok: boolean; status: number | null; detail: string;
       }[] = [];
-      const token = await getGitHubAppAccessToken(installation.installationId);
-      if (token === null) {
+      const tokenDetails = await getGitHubAppAccessTokenDetails(installation.installationId);
+      if (tokenDetails === null) {
         checks.push({ id: "app-token", label: "GitHub App token creation", ok: false, status: null, detail: "GITHUB_APP_ID or GITHUB_APP_PRIVATE_KEY is missing or invalid — token generation failed." });
         return { installationId: installation.installationId, config: config?.appId ?? null, checks };
       }
+      const token = tokenDetails.token;
       const githubApiBase = githubAppApiBase(true) ?? "https://api.github.com";
       const repoHeaders = {
         Accept: "application/vnd.github+json",
@@ -941,6 +942,17 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
         });
         return { installationId: installation.installationId, config: config?.appId ?? null, checks };
       }
+      if (tokenDetails.permissions !== null) {
+        const statusesPermission = tokenDetails.permissions.statuses;
+        if (statusesPermission === "write") {
+          checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: true, status: null, detail: `The installation access token grants Commit statuses write on active repository ${repo.full_name}.` });
+        } else {
+          checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: false, status: null, detail: `The installation access token reports Commit statuses permission as ${statusesPermission === undefined ? "not granted" : JSON.stringify(statusesPermission)} on ${repo.full_name}. In the GitHub App settings for this installation, grant the 'Commit statuses' permission at 'Read and write', then save.` });
+        }
+        return { installationId: installation.installationId, config: config?.appId ?? null, checks };
+      }
+      // Some GitHub-compatible APIs omit permissions from the access-token
+      // response. Keep the synthetic write probe for those deployments.
       const testSha = "a".repeat(40);
       const writeRes = await fetch(`${githubApiBase}/repos/${encodeURIComponent(repo.full_name)}/statuses/${testSha}`, {
         method: "POST",
@@ -948,11 +960,10 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
         body: JSON.stringify({ state: "pending", context: "terrence/diagnostics", description: "Terrence permission check" }),
         signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
       });
-      // GitHub returns 422 for a synthetic (non-existent) SHA when the token
-      // DOES have the commit-statuses write permission — it parsed the request
-      // and rejected only the bogus commit. A 200 also proves the permission.
-      // 403/404 are the missing-permission signals. So 2xx and 422 both count
-      // as "write path works"; anything else is a real failure.
+      // GitHub-compatible APIs commonly return 422 for a synthetic
+      // (non-existent) SHA when the token has the commit-statuses permission.
+      // A 200 also proves the permission. 403/404 remain failure signals when
+      // the API did not provide explicit permission metadata above.
       if (writeRes.ok || writeRes.status === 422) {
         checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: true, status: writeRes.status, detail: `Commit statuses write path is authorized on active repository ${repo.full_name}.` });
       } else if (writeRes.status === 404) {
