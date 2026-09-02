@@ -5,9 +5,11 @@
 //
 //   <PRI>VERSION TIMESTAMP HOSTNAME APP PROCID MSGID SD STRUCTURED-DATA MSG
 //
-// Structured data carries the log entry's `meta` object as SD-PARAMs under
-// the terrence@<enterprise-id> namespace so collectors (rsyslog, Vector,
+// Structured data carries the log entry's `meta` object flattened into
+// dotted SD-PARAMs (`http: {status: 200}` -> `http.status="200"`) under the
+// terrence@<enterprise-id> namespace so collectors (Splunk, rsyslog, Vector,
 // Grafana Loki's syslog source) can index fields without regex parsing.
+// Values that cannot flatten (over-deep, circular) degrade to JSON strings.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
@@ -40,6 +42,53 @@ function sdEscape(value: string): string {
 function paramSafeKey(key: string): string {
   const safe = key.replace(/[^\w.\-/]/g, "_").slice(0, 32);
   return safe === "" ? "key" : safe;
+}
+
+/** Maximum SD-PARAM nesting depth before falling back to a JSON string,
+ * and maximum total params per message so one huge meta object cannot blow
+ * the UDP datagram budget on structure alone (the transport still truncates
+ * oversized frames with the SD block preserved). */
+const MAX_FLATTEN_DEPTH = 5;
+const MAX_FLATTEN_PARAMS = 128;
+
+/** Flatten one meta value into dotted SD-PARAM entries. Objects recurse
+ * (`http: {status}` -> `http.status`), arrays use numeric segments
+ * (`tags: ["a"]` -> `tags.0`), scalars stringify, and null/undefined are
+ * dropped so collectors see absence instead of the string "null". Circular
+ * references and over-deep values degrade to a JSON string (never throw:
+ * the logger must not crash the request path). */
+function flattenMetaParam(
+  key: string,
+  value: unknown,
+  depth: number,
+  ancestors: ReadonlySet<object>,
+  out: Array<readonly [string, string]>,
+): void {
+  if (out.length >= MAX_FLATTEN_PARAMS || value === null || value === undefined) return;
+  if (typeof value === "string") {
+    out.push([key, value]);
+    return;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    out.push([key, String(value)]);
+    return;
+  }
+  if (typeof value !== "object" || depth >= MAX_FLATTEN_DEPTH || ancestors.has(value)) {
+    try {
+      const json = JSON.stringify(value) ?? NIL;
+      out.push([key, json]);
+    } catch {
+      out.push([key, "[unserializable]"]);
+    }
+    return;
+  }
+  const nested = ancestors instanceof Set ? ancestors : new Set(ancestors);
+  nested.add(value);
+  for (const [childKey, childValue] of Object.entries(value)) {
+    flattenMetaParam(`${key}.${childKey}`, childValue, depth + 1, nested, out);
+    if (out.length >= MAX_FLATTEN_PARAMS) return;
+  }
+  nested.delete(value);
 }
 
 /** Bump a PRI by facility << 3 | severity. Facility 1 = user-level. */
@@ -80,13 +129,13 @@ export function formatSyslogMessage(entry: SyslogEntryInput, identity: SyslogIde
     return `${header} ${NIL} ${entry.message}`;
   }
 
-  const params = Object.entries(meta)
-    .map(([rawKey, rawValue]): string => {
-      const value = typeof rawValue === "string" ? rawValue : JSON.stringify(rawValue) ?? NIL;
-      return ` ${paramSafeKey(rawKey)}="${sdEscape(value)}"`;
-    })
-    .join("");
-  const sd = `[terrence@${ENTERPRISE_ID}${params}]`;
+  const params: Array<readonly [string, string]> = [];
+  for (const [rawKey, rawValue] of Object.entries(meta)) {
+    flattenMetaParam(paramSafeKey(rawKey), rawValue, 0, new Set(), params);
+  }
+  const sd = `[terrence@${ENTERPRISE_ID}${params
+    .map(([key, value]): string => ` ${key}="${sdEscape(value)}"`)
+    .join("")}]`;
   return `${header} ${sd} ${entry.message}`;
 }
 

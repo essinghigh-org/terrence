@@ -105,11 +105,60 @@ describe("RFC 5424 formatting", (): void => {
     expect(line).toContain('detail="a\\\\b\\]cd"');
   });
 
-  it("stringifies non-string meta values", (): void => {
+  it("stringifies scalar meta values and flattens nested objects into dotted params", (): void => {
     const line = formatSyslogMessage({ ...base, meta: { count: 3, nested: { ok: true } } }, IDENTITY);
     expect(line).toContain('count="3"');
-    expect(line).toContain('nested="{\\\"ok\\\":true}"');
-    // RFC 5424 SD-PARAM: JSON-produced double quotes are escaped as \".
+    expect(line).toContain('nested.ok="true"');
+    expect(line).not.toContain("nested=");
+  });
+
+  it("flattens request-shaped meta so collectors can index http fields", (): void => {
+    const line = formatSyslogMessage(
+      {
+        ...base,
+        meta: {
+          requestId: "req-1",
+          http: { method: "GET", path: "/api/v2/organizations", status: 200, durationMs: 2 },
+          routeBucket: "GET /api/v2/organizations",
+          outcome: "success",
+        },
+      },
+      IDENTITY,
+    );
+    expect(line).toContain('http.method="GET"');
+    expect(line).toContain('http.path="/api/v2/organizations"');
+    expect(line).toContain('http.status="200"');
+    expect(line).toContain('http.durationMs="2"');
+    expect(line).not.toContain("http=");
+  });
+
+  it("indexes arrays and drops nullish values", (): void => {
+    const line = formatSyslogMessage(
+      { ...base, meta: { tags: ["a", "b"], missing: null, absent: undefined, kept: "yes" } },
+      IDENTITY,
+    );
+    expect(line).toContain('tags.0="a"');
+    expect(line).toContain('tags.1="b"');
+    expect(line).toContain('kept="yes"');
+    expect(line).not.toContain("missing=");
+    expect(line).not.toContain("absent=");
+  });
+
+  it("never throws on circular or over-deep meta", (): void => {
+    const circular: Record<string, unknown> = { name: "loop" };
+    circular.self = circular;
+    const deep: Record<string, unknown> = {};
+    let cursor = deep;
+    for (let i = 0; i < 10; i += 1) {
+      const next: Record<string, unknown> = {};
+      cursor.next = next;
+      cursor = next;
+    }
+    const line = formatSyslogMessage({ ...base, meta: { circular, deep } }, IDENTITY);
+    expect(line).toContain("circular.name=");
+    expect(line).toContain("circular.self=");
+    expect(line).toContain("deep.next");
+    expect(line.endsWith(" request completed")).toBeTrue();
   });
 
   it("falls back to a NIL timestamp for malformed stamps", (): void => {
