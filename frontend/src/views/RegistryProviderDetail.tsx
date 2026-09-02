@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { Spinner } from "../components/ui/spinner";
 import { fetchApi } from "../lib/api";
+import { formatDate } from "@/lib/utils";
 import { isRecord, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
 
@@ -87,7 +88,7 @@ export function RegistryProviderDetail(): React.JSX.Element {
         <Empty className="border"><EmptyHeader><EmptyTitle>No provider versions</EmptyTitle><EmptyDescription>This provider has no published versions.</EmptyDescription></EmptyHeader></Empty>
       ) : versions.map((version): React.JSX.Element => (
         <Card key={version.id}>
-          <CardHeader><CardTitle className="flex items-center gap-2">v{version.version}<Badge variant="outline">Protocols {version.protocols.length === 0 ? "unknown" : version.protocols.join(", ")}</Badge></CardTitle><CardDescription>{version.keyId === null ? "Unsigned" : `Signing key ${version.keyId}`} · {version.createdAt === "" ? "Unknown publication date" : new Date(version.createdAt).toLocaleDateString()}</CardDescription></CardHeader>
+          <CardHeader><CardTitle className="flex items-center gap-2">v{version.version}<Badge variant="outline">Protocols {version.protocols.length === 0 ? "unknown" : version.protocols.join(", ")}</Badge></CardTitle><CardDescription>{version.keyId === null ? "Unsigned" : `Signing key ${version.keyId}`} · {version.createdAt === "" ? "Unknown publication date" : formatDate(version.createdAt)}</CardDescription></CardHeader>
           <CardContent className="space-y-2">{version.platforms.map((platform): React.JSX.Element => <div key={platform.id} className="grid gap-1 rounded-md border p-3 text-sm sm:grid-cols-[10rem_minmax(0,1fr)]"><span className="font-medium">{platform.os}/{platform.arch}</span><div className="min-w-0"><p className="truncate">{platform.filename}</p><code className="block truncate text-xs text-muted-foreground" title={platform.shasum}>{platform.shasum}</code></div></div>)}</CardContent>
         </Card>
       ))}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchApi } from "../lib/api";
+import { formatDateTime } from "@/lib/utils";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Switch } from "../components/ui/switch";
@@ -72,7 +73,7 @@ export function AdminApprovalWebhook(): React.JSX.Element {
         method: "PATCH",
         body: JSON.stringify({ data: { attributes: { "approval-webhook": payload } } }),
       });
-      setSavedAt(new Date().toLocaleTimeString());
+      setSavedAt(formatDateTime(new Date()));
       setApprovalSecret("");
       setApprovalClearSecret(false);
       setApprovalSecretSet(approvalSecret !== "" || (approvalSecretSet && !approvalClearSecret));
