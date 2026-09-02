@@ -97,6 +97,26 @@ describe("remote-workflow runs contract", () => {
     expect(resource.attributes["status-timestamps"]).toBeTypeOf("object");
   });
 
+  it("includes plan and workspace resources requested by the Terraform CLI", async () => {
+    const response = await request(`/api/v2/runs/${runId}?include=plan%2Cworkspace`, { headers });
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      included?: { id: string; type: string; attributes?: Record<string, unknown> }[];
+    };
+    expect(body.included).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: `plan-${runId}`,
+        type: "plans",
+        attributes: expect.objectContaining({ status: "pending" }),
+      }),
+      expect.objectContaining({
+        id: workspaceId,
+        type: "workspaces",
+        attributes: expect.objectContaining({ name: `runs-${seed.suffix}`, locked: false }),
+      }),
+    ]));
+  });
+
   it("lists runs for a workspace with pagination metadata", async () => {
     const response = await request(`/api/v2/workspaces/${workspaceId}/runs?page[number]=1&page[size]=10`, { headers });
     expect(response.status).toBe(200);

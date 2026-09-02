@@ -138,6 +138,27 @@ function originForConfiguration(
   return origin;
 }
 
+function requestedRunIncludes(request: ParamCtx["request"]): ReadonlySet<string> {
+  const values = new URL(request.url).searchParams.getAll("include");
+  return new Set(values.flatMap((value: string): string[] => value.split(",").map((item: string): string => item.trim()).filter(Boolean)));
+}
+
+function includedWorkspaceResource(workspace: Readonly<typeof workspaces.$inferSelect>): Record<string, unknown> {
+  // Terraform's cloud backend only needs these fields while decoding a run
+  // for `terraform show`: the workspace name for the header and its lock state
+  // for the footer. Do not invent permission values or expose unrelated data
+  // merely because the client requested the standard workspace relation.
+  return {
+    id: workspace.id,
+    type: "workspaces",
+    attributes: {
+      name: workspace.name,
+      locked: workspace.locked === true,
+    },
+    links: { self: `/api/v2/workspaces/${workspace.id}` },
+  };
+}
+
 async function originsForRuns(runList: readonly RunItem[]): Promise<ReadonlyMap<string, RunOrigin>> {
   const configurationIds = [...new Set(runList.flatMap((run): string[] =>
     run.configurationVersionId === null ? [] : [run.configurationVersionId]))];
@@ -753,7 +774,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     const cvId = typeof cvData.id === "string" ? cvData.id : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
     return createRun(workspaceId, attributes, cvId, user, orgId, teamId, set);
   })
-  .get("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -776,6 +797,9 @@ export const runRoutes = new Elysia({ name: "runs" })
         ? lockedReason
         : "Locked manually";
     const included = await includedUsersForRuns([authorized.run]);
+    const includes = requestedRunIncludes(request);
+    if (includes.has("plan")) included.push(planResource(authorized.run, request));
+    if (includes.has("workspace")) included.push(includedWorkspaceResource(authorized.workspace));
     return { data, ...(included.length > 0 ? { included } : {}) };
   })
   .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
