@@ -1445,8 +1445,8 @@ export const ssoChallenges = pgTable("sso_challenges", {
 export const stackAgentJobs = pgTable("stack_agent_jobs", {
     id: text("id").notNull().primaryKey(),
     stackId: text("stack_id").notNull().references(() => stacks.id, { onDelete: "cascade" }),
-    deploymentRunId: text("deployment_run_id").notNull(),
-    stepId: text("step_id").notNull(),
+    deploymentRunId: text("deployment_run_id").notNull().references(() => stackRecords.id, { onDelete: "cascade" }),
+    stepId: text("step_id").notNull().references(() => stackRecords.id, { onDelete: "cascade" }),
     agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
     agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
     phase: text("phase").notNull(),

@@ -845,8 +845,8 @@ export const stackRecords = sqliteTable("stack_records", {
 export const stackAgentJobs = sqliteTable("stack_agent_jobs", {
   id: text("id").primaryKey(),
   stackId: text("stack_id").notNull().references(() => stacks.id, { onDelete: "cascade" }),
-  deploymentRunId: text("deployment_run_id").notNull(),
-  stepId: text("step_id").notNull(),
+  deploymentRunId: text("deployment_run_id").notNull().references(() => stackRecords.id, { onDelete: "cascade" }),
+  stepId: text("step_id").notNull().references(() => stackRecords.id, { onDelete: "cascade" }),
   agentPoolId: text("agent_pool_id").notNull().references(() => agentPools.id, { onDelete: "cascade" }),
   agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
   phase: text("phase").notNull(),
