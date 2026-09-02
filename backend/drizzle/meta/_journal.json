@@ -344,6 +344,13 @@
       "when": 1788347980493,
       "tag": "0048_fine_cloak",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1788348384768,
+      "tag": "0049_special_ezekiel_stane",
+      "breakpoints": true
     }
   ]
 }

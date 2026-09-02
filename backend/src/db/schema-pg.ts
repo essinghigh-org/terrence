@@ -1488,7 +1488,7 @@ export const stackStateLocks = pgTable("stack_state_locks", {
     id: text("id").notNull().primaryKey(),
     stackId: text("stack_id").notNull().references(() => stacks.id, { onDelete: "cascade" }),
     deployment: text("deployment").notNull(),
-    runId: text("run_id").references(() => stackRecords.id, { onDelete: "set null" }),
+    runId: text("run_id"),
     fencingToken: bigint("fencing_token", { mode: "number" }).notNull().default(0),
     acquiredAt: bigint("acquired_at", { mode: "number" }),
     leaseExpiresAt: bigint("lease_expires_at", { mode: "number" }),

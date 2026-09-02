@@ -870,7 +870,7 @@ export const stackStateLocks = sqliteTable("stack_state_locks", {
   id: text("id").primaryKey(),
   stackId: text("stack_id").notNull().references(() => stacks.id, { onDelete: "cascade" }),
   deployment: text("deployment").notNull(),
-  runId: text("run_id").references(() => stackRecords.id, { onDelete: "set null" }),
+  runId: text("run_id"),
   fencingToken: integer("fencing_token").notNull().default(0),
   acquiredAt: integer("acquired_at"),
   leaseExpiresAt: integer("lease_expires_at"),
