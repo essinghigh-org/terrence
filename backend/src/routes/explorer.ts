@@ -261,7 +261,9 @@ function sqlFilter(columnName: string, filter: ExplorerFilter): SQL | undefined 
   const numeric = numericExplorerColumns.has(columnName);
   const date = dateExplorerColumns.has(columnName);
   const boolean = booleanExplorerColumns.has(columnName);
-  const textColumn = sql`CAST(${column} AS TEXT)`;
+  const textColumn = boolean
+    ? sql`CASE WHEN ${column} THEN 'true' ELSE 'false' END`
+    : sql`CAST(${column} AS TEXT)`;
   const make = (value: string): SQL => {
     const bound = boolean && comparisonOperators.has(filter.operator)
       ? value.toLowerCase() === "true" ? true : value.toLowerCase() === "false" ? false : undefined
