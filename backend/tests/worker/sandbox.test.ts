@@ -3,7 +3,7 @@ import { writeFile, mkdir, rm, symlink, mkdtemp } from "fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { RunSandbox, probeLandlockAbi } from "../../src/lib/sandbox";
+import { RunSandbox, probeLandlockAbi, runNetDenyEnabled } from "../../src/lib/sandbox";
 import { ensureBinary } from "../../src/binaryManager";
 
 const abi = probeLandlockAbi();
@@ -186,7 +186,7 @@ describe("landlock run sandbox", () => {
     await mkdir(join(workDir, "tmp"), { recursive: true });
     try {
       const script = join(workDir, "probe.sh");
-      const denyNet = (process.env.TERRENCE_RUN_NET_POLICY ?? "allow").trim().toLowerCase() === "deny";
+      const denyNet = runNetDenyEnabled();
       await writeFile(script, `#!/bin/sh\npython3 -c "import socket; s=socket.socket(); s.settimeout(1); rc=s.connect_ex(('127.0.0.1', 9)); print('NET_DENIED' if rc==13 else ('NET_REACHABLE' if rc==111 else f'NET_RC_{rc}'))"\n`, { mode: 0o755 });
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);

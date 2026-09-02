@@ -62,6 +62,7 @@ Set variables through the container environment or an `.env` file.
 | Variable | Default | Purpose |
 |---|---|---|
 | `TERRENCE_RUN_SANDBOX` | enabled | Run sandbox mode. Enabled by default. `false` disables the Landlock requirement. |
+| `TERRENCE_RUN_NET_POLICY` | `deny` | Network policy inside the Landlock run sandbox. Only `allow` opts out; unknown values remain denied. `deny` requires Landlock ABI 4+. |
 | `TERRENCE_LANDLOCK_RUNNER` | bundled | Path to the landlock runner binary. |
 | `TERRENCE_SANDBOX_EXTRA_RW_PATHS` | none | Extra read-write paths for the sandbox. |
 | `TERRENCE_SANDBOX_EXTRA_RW_ALLOWED` | off | Allow the extra paths to be specified. |

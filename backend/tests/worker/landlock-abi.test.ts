@@ -1,5 +1,5 @@
 import { describe, expect, it, afterAll } from "bun:test";
-import { writeFile, mkdir, mkdtemp, rm } from "fs/promises";
+import { writeFile, readFile, mkdir, mkdtemp, rm } from "fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -8,6 +8,8 @@ import {
   landlockAccessFlagsForAbi,
   probeLandlockAbi,
   resetLandlockAbiCache,
+  runNetDenyEnabled,
+  runNetPolicy,
 } from "../../src/lib/sandbox";
 
 /**
@@ -101,6 +103,71 @@ describe("landlock runner probe contract", () => {
   });
 });
 
+describe("landlock fail-closed network policy", () => {
+  it("passes --deny-net by default and requires an explicit allow opt-out", async (): Promise<void> => {
+    const fakeDir = await mkdtemp(join(tmpdir(), "terrence-ll-net-"));
+    const fakeRunner = join(fakeDir, "landlock-runner");
+    const denyArgs = join(fakeDir, "deny-args");
+    const allowArgs = join(fakeDir, "allow-args");
+    const cwd = join(fakeDir, "work");
+    const originalRunner = process.env.TERRENCE_LANDLOCK_RUNNER;
+    const originalNetPolicy = process.env.TERRENCE_RUN_NET_POLICY;
+    await mkdir(cwd, { recursive: true });
+    await writeFile(
+      fakeRunner,
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "--probe" ]; then',
+        "  echo 4",
+        "  exit 0",
+        "fi",
+        'printf "%s\\n" "$@" > "$RECORD_PATH"',
+        "exit 0",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    try {
+      process.env.TERRENCE_LANDLOCK_RUNNER = fakeRunner;
+      delete process.env.TERRENCE_RUN_NET_POLICY;
+      resetLandlockAbiCache();
+      const denySandbox = new RunSandbox();
+      const denyProc = denySandbox.spawn(["/bin/true"], { cwd, env: { RECORD_PATH: denyArgs } });
+      const [denyExitCode, , denyStderr] = await Promise.all([
+        denyProc.exited,
+        new Response(denyProc.stdout).text(),
+        new Response(denyProc.stderr).text(),
+      ]);
+      expect(denyExitCode).toBe(0);
+      expect(denyStderr).toBe("");
+      expect((await readFile(denyArgs, "utf8")).split("\n")).toContain("--deny-net");
+      expect(runNetDenyEnabled()).toBe(true);
+
+      process.env.TERRENCE_RUN_NET_POLICY = "allow";
+      resetLandlockAbiCache();
+      const allowSandbox = new RunSandbox();
+      const allowProc = allowSandbox.spawn(["/bin/true"], { cwd, env: { RECORD_PATH: allowArgs } });
+      await Promise.all([
+        allowProc.exited,
+        new Response(allowProc.stdout).text(),
+        new Response(allowProc.stderr).text(),
+      ]);
+      expect((await readFile(allowArgs, "utf8")).split("\n")).not.toContain("--deny-net");
+      expect(runNetPolicy()).toBe("allow");
+
+      process.env.TERRENCE_RUN_NET_POLICY = "unexpected-value";
+      expect(runNetPolicy()).toBe("deny");
+      expect(runNetDenyEnabled()).toBe(true);
+    } finally {
+      if (originalRunner === undefined) delete process.env.TERRENCE_LANDLOCK_RUNNER;
+      else process.env.TERRENCE_LANDLOCK_RUNNER = originalRunner;
+      if (originalNetPolicy === undefined) delete process.env.TERRENCE_RUN_NET_POLICY;
+      else process.env.TERRENCE_RUN_NET_POLICY = originalNetPolicy;
+      resetLandlockAbiCache();
+      await rm(fakeDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("landlock fail-closed on ABI-0 hosts", () => {
   it("fails closed when the runner reports Landlock unsupported", async (): Promise<void> => {
     // Fake runner: probes as ABI 0, refuses real spawns exactly like the C
@@ -122,9 +189,13 @@ describe("landlock fail-closed on ABI-0 hosts", () => {
       { mode: 0o755 },
     );
     const cwd = join(fakeDir, "work");
+    const originalNetPolicy = process.env.TERRENCE_RUN_NET_POLICY;
     await mkdir(cwd, { recursive: true });
     try {
       process.env.TERRENCE_LANDLOCK_RUNNER = fakeRunner;
+      // Exercise the ABI-0 path itself; the default deny policy correctly
+      // rejects hosts below ABI 4 before the runner can report ABI 0.
+      process.env.TERRENCE_RUN_NET_POLICY = "allow";
       resetLandlockAbiCache();
       expect(probeLandlockAbi()).toBe(0);
 
@@ -140,6 +211,8 @@ describe("landlock fail-closed on ABI-0 hosts", () => {
     } finally {
       await rm(fakeDir, { recursive: true, force: true });
       restoreRunnerEnv();
+      if (originalNetPolicy === undefined) delete process.env.TERRENCE_RUN_NET_POLICY;
+      else process.env.TERRENCE_RUN_NET_POLICY = originalNetPolicy;
       resetLandlockAbiCache();
     }
   });

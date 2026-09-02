@@ -65,6 +65,8 @@ Server-side execution uses Landlock isolation when the kernel supports it (Linux
 
 The sandbox is enabled by default. If Landlock is unavailable, runs fail with a clear error. Set `TERRENCE_RUN_SANDBOX=false` to disable the requirement explicitly.
 
+Sandboxed runs deny TCP bind and connect by default when the host provides Landlock ABI 4 or newer. Set `TERRENCE_RUN_NET_POLICY=allow` only for trusted configurations that require provider or provisioner network access. Any other value remains denied; with the default `deny`, a host below ABI 4 cannot execute sandboxed runs.
+
 The sandbox protects remote-mode runs. Local-mode runs execute on the CLI machine and are not sandboxed by the server.
 
 ## Binary management
