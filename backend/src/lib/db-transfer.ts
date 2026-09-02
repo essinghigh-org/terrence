@@ -609,11 +609,12 @@ async function streamSqliteRows(
       last = rows[rows.length - 1]?.[primaryColumn] ?? null;
     }
   }
-  // No single-column PK: offset pagination (join tables are small).
+  // No single-column PK: offset pagination (join tables are small). Order by all columns for determinism.
   let offset = 0;
+  const orderByAll = columns.map((c) => `"${c.name}"`).join(",");
   for (;;) {
     const rows = client.query(
-      `SELECT ${quotedCols} FROM "${name}" LIMIT ${batchSize} OFFSET ${offset}`,
+      `SELECT ${quotedCols} FROM "${name}" ORDER BY ${orderByAll} LIMIT ${batchSize} OFFSET ${offset}`,
     ).all() as Record<string, unknown>[];
     if (rows.length === 0) return;
     await onBatch(rows.map((row) => columns.map((c) => row[c.name])));
@@ -841,9 +842,10 @@ export class PgTransferSource implements TransferSource {
       }
     }
     let offset = 0;
+    const orderByAllPg = columns.map((c) => `"${c.name}"`).join(",");
     for (;;) {
       const rows = await this.#connection.unsafe<Record<string, unknown>>(
-        `SELECT ${quotedCols} FROM "${name}" LIMIT $1 OFFSET $2`,
+        `SELECT ${quotedCols} FROM "${name}" ORDER BY ${orderByAllPg} LIMIT $1 OFFSET $2`,
         [batchSize, offset],
       );
       if (rows.length === 0) return;
