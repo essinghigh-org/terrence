@@ -14,6 +14,7 @@
 ### Pre-commit Hook
 
 A pre-commit hook keeps the database schema and its migrations in lockstep. It is automatically installed via `bun run prepare` upon `bun install`, or can be linked manually:
+
 ```bash
 ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
 ```

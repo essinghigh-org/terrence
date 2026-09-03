@@ -18,7 +18,7 @@
     "esbuild": "0.28.2"
   },
   "scripts": {
-    "prepare": "test -d .git && ln -sf ../../scripts/pre-commit .git/hooks/pre-commit || true",
+    "prepare": "if test -d .git; then ln -sf ../../scripts/pre-commit .git/hooks/pre-commit; fi",
     "dev:backend": "bun run --cwd backend dev",
     "dev:frontend": "bun run --cwd frontend dev",
     "dev": "bun run --parallel dev:backend dev:frontend",

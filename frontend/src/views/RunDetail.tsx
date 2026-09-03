@@ -621,6 +621,8 @@ export function RunDetail({
   const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
   const [planExpanded, setPlanExpanded] = useState<boolean | null>(null);
   const [applyExpanded, setApplyExpanded] = useState<boolean | null>(null);
+  const planOpenRendered = useRef<boolean>(false);
+  const applyOpenRendered = useRef<boolean>(false);
   const [comments, setComments] = useState<RunComment[]>([]);
   const [commentBody, setCommentBody] = useState("");
   const [confirmationAction, setConfirmationAction] = useState<ConfirmationAction | null>(null);
@@ -890,6 +892,8 @@ export function RunDetail({
       setRunEvents([]);
       setPlanExpanded(null);
       setApplyExpanded(null);
+      planOpenRendered.current = false;
+      applyOpenRendered.current = false;
       setComments([]);
       setAuxiliaryError(false);
       setCreatorUsername("");
@@ -1186,6 +1190,7 @@ export function RunDetail({
           const ready = await pollExplanationUntilReady(kind, controller.signal);
           if (ready) return;
         } catch (enqueueErr) {
+          if (controller.signal.aborted || explainerAbortRef.current !== controller) return;
           console.error("Failed to enqueue explanation:", enqueueErr);
           setExplainError(enqueueErr instanceof Error ? enqueueErr.message : "Failed to enqueue explanation.");
           return;
@@ -1362,6 +1367,12 @@ export function RunDetail({
   // Once a run has applied, surface the apply phase as the default-expanded
   // section and collapse the plan (user preference).
   const applied = applyStatus === "finished";
+  const autoPlanOpen = !applied && ["running", "finished", "errored", "unreachable"].includes(planStatus);
+  const planIsOpen = planExpanded ?? autoPlanOpen;
+  planOpenRendered.current = planIsOpen;
+  const autoApplyOpen = applied || ["running", "errored", "unreachable"].includes(applyStatus);
+  const applyIsOpen = applyExpanded ?? autoApplyOpen;
+  applyOpenRendered.current = applyIsOpen;
   const planActionCount = planSummary?.runId === runId ? planSummary.summary.actionCount : null;
   const artifactImportCount = planSummary?.runId === runId ? planSummary.summary.importCount : null;
   const planCounts = plan?.attributes ?? {
@@ -1775,8 +1786,12 @@ export function RunDetail({
           <details
             aria-labelledby="plan-heading"
             className="group overflow-hidden rounded-md border border-border bg-background shadow-sm"
-            open={planExpanded ?? (!applied && ["running", "finished", "errored", "unreachable"].includes(planStatus))}
-            onToggle={(event): void => { setPlanExpanded(event.currentTarget.open); }}
+            open={planIsOpen}
+            onToggle={(event): void => {
+              if (event.currentTarget.open !== planOpenRendered.current) {
+                setPlanExpanded(event.currentTarget.open);
+              }
+            }}
           >
             <summary className="cursor-pointer list-none border-b border-border px-5 py-4 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -2013,8 +2028,12 @@ export function RunDetail({
             className={`group overflow-hidden rounded-md border bg-background shadow-sm ${
               ["errored", "unreachable"].includes(applyStatus) ? "border-destructive/50" : "border-border"
             }`}
-            open={applyExpanded ?? (applied || ["running", "errored", "unreachable"].includes(applyStatus))}
-            onToggle={(event): void => { setApplyExpanded(event.currentTarget.open); }}
+            open={applyIsOpen}
+            onToggle={(event): void => {
+              if (event.currentTarget.open !== applyOpenRendered.current) {
+                setApplyExpanded(event.currentTarget.open);
+              }
+            }}
           >
             <summary className="cursor-pointer list-none border-b border-border px-5 py-4 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

@@ -91,5 +91,8 @@ export function useOrganizationPermissions(orgName: string | undefined): Organiz
 
   const has = useCallback((name: OrganizationPermissionName): boolean => permissions?.[name] === true, [permissions]);
 
-  return useMemo(() => ({ permissions, loaded, error, has }), [permissions, loaded, error, has]);
+  return useMemo(
+    (): OrganizationPermissions => ({ permissions, loaded, error, has }),
+    [permissions, loaded, error, has],
+  );
 }
