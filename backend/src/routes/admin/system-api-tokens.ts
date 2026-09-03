@@ -21,10 +21,10 @@ export const systemApiTokenAdminRoutes = new Elysia({ name: "admin-system-api-to
   .post("/api/v2/admin/system-api-tokens", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return denied(set);
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
-    const attrs = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
-    const description = typeof attrs.description === "string" ? attrs.description : "";
-    const ttl = attrs.ttl === undefined ? 720 : Number(attrs.ttl);
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+    const description = typeof attrs["description"] === "string" ? attrs["description"] : "";
+    const ttl = attrs["ttl"] === undefined ? 720 : Number(attrs["ttl"]);
     try {
       const created = await createSystemApiToken(description, ttl);
       (set as { status: number }).status = 201;
@@ -32,7 +32,7 @@ export const systemApiTokenAdminRoutes = new Elysia({ name: "admin-system-api-to
       return {
         data: {
           ...resource,
-          attributes: { ...resource.attributes as Record<string, unknown>, token: created.token },
+          attributes: { ...resource["attributes"] as Record<string, unknown>, token: created.token },
         },
       };
     } catch (error: unknown) {
@@ -42,7 +42,7 @@ export const systemApiTokenAdminRoutes = new Elysia({ name: "admin-system-api-to
   })
   .delete("/api/v2/admin/system-api-tokens/:token_id", async ({ user, params, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return denied(set);
-    const id = params.token_id ?? "";
+    const id = params["token_id"] ?? "";
     const updated = await db.update(systemApiTokens).set({ revokedAt: Date.now() }).where(and(eq(systemApiTokens.id, id), isNull(systemApiTokens.revokedAt))).returning({ id: systemApiTokens.id });
     if (updated.length === 0) {
       (set as { status: number }).status = 404;

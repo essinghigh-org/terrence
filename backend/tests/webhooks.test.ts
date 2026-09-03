@@ -36,10 +36,10 @@ const userId = "usr-webhook-test";
 const authToken = "webhook-test-token";
 const installationId = "ghain-webhook-test";
 const secondaryInstallationId = "ghain-webhook-test-2";
-const originalSecret = process.env.GITHUB_WEBHOOK_SECRET;
-const originalAppId = process.env.GITHUB_APP_ID;
-const originalPrivateKey = process.env.GITHUB_APP_PRIVATE_KEY;
-const originalAppApiUrl = process.env.GITHUB_APP_API_URL;
+const originalSecret = process.env["GITHUB_WEBHOOK_SECRET"];
+const originalAppId = process.env["GITHUB_APP_ID"];
+const originalPrivateKey = process.env["GITHUB_APP_PRIVATE_KEY"];
+const originalAppApiUrl = process.env["GITHUB_APP_API_URL"];
 const originalFetch = globalThis.fetch;
 let tarballFetches = 0;
 let redirectTarball = false;
@@ -150,9 +150,9 @@ async function waitForCommitStatusMatching(predicate: (status: Record<string, un
 
 describe("GitHub Webhooks", () => {
   beforeAll(async () => {
-    process.env.GITHUB_WEBHOOK_SECRET = "test-secret";
-    process.env.GITHUB_APP_ID = "12345";
-    process.env.GITHUB_APP_PRIVATE_KEY = generateKeyPairSync("rsa", {
+    process.env["GITHUB_WEBHOOK_SECRET"] = "test-secret";
+    process.env["GITHUB_APP_ID"] = "12345";
+    process.env["GITHUB_APP_PRIVATE_KEY"] = generateKeyPairSync("rsa", {
       modulusLength: 2048,
       privateKeyEncoding: { type: "pkcs8", format: "pem" },
       publicKeyEncoding: { type: "spki", format: "pem" },
@@ -271,10 +271,10 @@ describe("GitHub Webhooks", () => {
   afterAll(async () => {
     setExternalUrlTransportForTests(undefined);
     globalThis.fetch = originalFetch;
-    process.env.GITHUB_WEBHOOK_SECRET = originalSecret;
-    process.env.GITHUB_APP_ID = originalAppId;
-    process.env.GITHUB_APP_PRIVATE_KEY = originalPrivateKey;
-    process.env.GITHUB_APP_API_URL = originalAppApiUrl;
+    process.env["GITHUB_WEBHOOK_SECRET"] = originalSecret;
+    process.env["GITHUB_APP_ID"] = originalAppId;
+    process.env["GITHUB_APP_PRIVATE_KEY"] = originalPrivateKey;
+    process.env["GITHUB_APP_API_URL"] = originalAppApiUrl;
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
     await db.delete(workspaces).where(eq(workspaces.id, secondWorkspaceId));
     await db.delete(workspaces).where(eq(workspaces.id, crossProviderWorkspaceId));
@@ -421,14 +421,14 @@ describe("GitHub Webhooks", () => {
     const nonAggregatedDelivery = crypto.randomUUID();
     await sendWebhook("push", pushPayload, nonAggregatedDelivery);
     await waitForDelivery(nonAggregatedDelivery);
-    expect(await waitForCommitStatusMatching((status): boolean => status.context === "terrence/webhook-ws")).toBeDefined();
+    expect(await waitForCommitStatusMatching((status): boolean => status["context"] === "terrence/webhook-ws")).toBeDefined();
 
     commitStatuses.length = 0;
     await db.update(organizations).set({ aggregatedCommitStatusEnabled: true }).where(eq(organizations.id, orgId));
     const aggregatedDelivery = crypto.randomUUID();
     await sendWebhook("push", pushPayload, aggregatedDelivery);
     await waitForDelivery(aggregatedDelivery);
-    expect(await waitForCommitStatusMatching((status): boolean => status.context === "terrence")).toBeDefined();
+    expect(await waitForCommitStatusMatching((status): boolean => status["context"] === "terrence")).toBeDefined();
   });
 
   test("reports failed runs as failure", async () => {
@@ -441,7 +441,7 @@ describe("GitHub Webhooks", () => {
     if (run === undefined) return;
     await db.update(runs).set({ status: "errored" }).where(eq(runs.id, run.id));
     await reportRunVcsStatus(run.id, "errored");
-    expect(await waitForCommitStatusMatching((status): boolean => status.state === "failure")).toMatchObject({ state: "failure" });
+    expect(await waitForCommitStatusMatching((status): boolean => status["state"] === "failure")).toMatchObject({ state: "failure" });
   });
 
   test("matching pull request creates a speculative run", async () => {
@@ -472,7 +472,7 @@ describe("GitHub Webhooks", () => {
     await sendWebhook("pull_request", pullRequestPayload(), deliveryId);
     await waitForDelivery(deliveryId);
     expect(await db.query.runs.findMany({ where: eq(runs.workspaceId, workspaceId) })).toHaveLength(0);
-    expect(await waitForCommitStatusMatching((status): boolean => status.state === "success")).toMatchObject({ state: "success" });
+    expect(await waitForCommitStatusMatching((status): boolean => status["state"] === "success")).toMatchObject({ state: "success" });
   });
 
   test("non-matching branch creates no run", async () => {
@@ -832,8 +832,8 @@ describe("GitHub Webhooks", () => {
 
   test("uses the configured GitHub Enterprise API URL", async () => {
     const enterpriseApiUrl = "https://github-enterprise.example/api/v3";
-    const previousApiUrl = process.env.GITHUB_APP_API_URL;
-    process.env.GITHUB_APP_API_URL = enterpriseApiUrl;
+    const previousApiUrl = process.env["GITHUB_APP_API_URL"];
+    process.env["GITHUB_APP_API_URL"] = enterpriseApiUrl;
     try {
       const deliveryId = crypto.randomUUID();
       await sendWebhook("push", {
@@ -848,8 +848,8 @@ describe("GitHub Webhooks", () => {
       expect(tarballRequests[0]?.url).toBe(`${enterpriseApiUrl}/repos/hashicorp/terraform/tarball/${pushPayload.after}`);
       expect(tarballRequests[0]?.authorization).toBe("Bearer test-token");
     } finally {
-      if (previousApiUrl === undefined) delete process.env.GITHUB_APP_API_URL;
-      else process.env.GITHUB_APP_API_URL = previousApiUrl;
+      if (previousApiUrl === undefined) delete process.env["GITHUB_APP_API_URL"];
+      else process.env["GITHUB_APP_API_URL"] = previousApiUrl;
     }
   });
 
@@ -866,8 +866,8 @@ describe("GitHub Webhooks", () => {
   });
 
   test("missing token leaves the run and marks its configuration version errored", async () => {
-    const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
-    process.env.GITHUB_APP_PRIVATE_KEY = "";
+    const privateKey = process.env["GITHUB_APP_PRIVATE_KEY"];
+    process.env["GITHUB_APP_PRIVATE_KEY"] = "";
     try {
       const deliveryId = crypto.randomUUID();
       await sendWebhook("push", pushPayload, deliveryId);
@@ -880,7 +880,7 @@ describe("GitHub Webhooks", () => {
       expect(configurationVersion?.status).toBe("errored");
       expect(tarballFetches).toBe(0);
     } finally {
-      process.env.GITHUB_APP_PRIVATE_KEY = privateKey;
+      process.env["GITHUB_APP_PRIVATE_KEY"] = privateKey;
     }
   });
 
@@ -923,7 +923,7 @@ describe("GitHub Webhooks", () => {
   test("reopened pull request creates a speculative run", async () => {
     const deliveryId = crypto.randomUUID();
     const payload = pullRequestPayload();
-    payload.action = "reopened";
+    payload["action"] = "reopened";
     expect((await sendWebhook("pull_request", payload, deliveryId)).status).toBe(200);
     const runList = await waitForRuns((items): boolean => items.some((run): boolean => run.planOnly));
     await waitForDelivery(deliveryId);

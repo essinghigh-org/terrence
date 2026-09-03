@@ -1,7 +1,7 @@
 import html from "../index.html";
 
-const port = Number(process.env.PORT ?? 5173);
-const backendUrl = process.env.BACKEND_URL ?? "http://127.0.0.1:3000";
+const port = Number(process.env["PORT"] ?? 5173);
+const backendUrl = process.env["BACKEND_URL"] ?? "http://127.0.0.1:3000";
 
 async function proxyToBackend(req: Request): Promise<Response> {
   const url = new URL(req.url);

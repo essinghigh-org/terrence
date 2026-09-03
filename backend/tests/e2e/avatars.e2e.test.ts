@@ -26,8 +26,8 @@ let storage = "";
 let port = 0;
 let upstream: { url: URL; stop: () => void };
 
-const previousStorageDir = process.env.STORAGE_DIR;
-const previousGithub = process.env.GITHUB_APP_HTTP_URL;
+const previousStorageDir = process.env["STORAGE_DIR"];
+const previousGithub = process.env["GITHUB_APP_HTTP_URL"];
 
 async function api(
   path: string,
@@ -35,7 +35,7 @@ async function api(
 ): Promise<{ status: number; json: Record<string, any> }> {
   const headers: Record<string, string> = {};
   if (init.body !== undefined) headers["Content-Type"] = "application/vnd.api+json";
-  if (init.token !== undefined) headers.Authorization = `Bearer ${init.token}`;
+  if (init.token !== undefined) headers["Authorization"] = `Bearer ${init.token}`;
   const requestInit: RequestInit = { method: init.method ?? "GET", headers };
   if (init.body !== undefined) requestInit.body = JSON.stringify(init.body);
   const res = await fetch(`http://127.0.0.1:${port}${path}`, requestInit);
@@ -54,16 +54,16 @@ async function signupAndToken(): Promise<{ token: string; userId: string }> {
   await api("/api/v2/users", { method: "POST", body: { data: { type: "users", attributes: { username, password } } } });
   const login = await api("/api/v2/users/login", { method: "POST", body: { data: { attributes: { username, password } } } });
   expect(login.status).toBe(200);
-  const token = login.json.data?.attributes?.token as string;
+  const token = login.json["data"]?.attributes?.token as string;
   expect(typeof token).toBe("string");
   const details = await api("/api/v2/account/details", { token });
   expect(details.status).toBe(200);
-  return { token, userId: details.json.data?.id as string };
+  return { token, userId: details.json["data"]?.id as string };
 }
 
 beforeAll(async (): Promise<void> => {
   storage = mkdtempSync(join(tmpdir(), "avatar-e2e-test-"));
-  process.env.STORAGE_DIR = storage;
+  process.env["STORAGE_DIR"] = storage;
   // Deterministic local upstream for the bound-VCS avatar path.
   upstream = Bun.serve({
     port: 0,
@@ -74,7 +74,7 @@ beforeAll(async (): Promise<void> => {
       return new Response("not found", { status: 404 });
     },
   });
-  process.env.GITHUB_APP_HTTP_URL = upstream.url.toString().slice(0, -1);
+  process.env["GITHUB_APP_HTTP_URL"] = upstream.url.toString().slice(0, -1);
   app.listen(0);
   port = (app.server as unknown as { port: number }).port;
   expect(port).toBeGreaterThan(0);
@@ -92,10 +92,10 @@ afterAll(async (): Promise<void> => {
   }
   upstream.stop();
   rmSync(storage, { recursive: true, force: true });
-  if (previousStorageDir === undefined) delete process.env.STORAGE_DIR;
-  else process.env.STORAGE_DIR = previousStorageDir;
-  if (previousGithub === undefined) delete process.env.GITHUB_APP_HTTP_URL;
-  else process.env.GITHUB_APP_HTTP_URL = previousGithub;
+  if (previousStorageDir === undefined) delete process.env["STORAGE_DIR"];
+  else process.env["STORAGE_DIR"] = previousStorageDir;
+  if (previousGithub === undefined) delete process.env["GITHUB_APP_HTTP_URL"];
+  else process.env["GITHUB_APP_HTTP_URL"] = previousGithub;
 });
 
 describe("avatar rendering over real HTTP", (): void => {
@@ -103,7 +103,7 @@ describe("avatar rendering over real HTTP", (): void => {
     const { token } = await signupAndToken();
     const details = await api("/api/v2/account/details", { token });
     expect(details.status).toBe(200);
-    const avatarUrl = details.json.data?.attributes?.["avatar-url"] as string | undefined;
+    const avatarUrl = details.json["data"]?.attributes?.["avatar-url"] as string | undefined;
     // What <Avatar> would set as <img src> — never a third-party URL.
     expect(avatarUrl).toMatch(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/);
     // The endpoint is reachable over real HTTP. The upstream is the public
@@ -150,14 +150,14 @@ describe("avatar rendering over real HTTP", (): void => {
   });
 
   it("rejects an unbound private destination (SSRF)", async (): Promise<void> => {
-    process.env.GITHUB_APP_HTTP_URL = "http://example.com";
+    process.env["GITHUB_APP_HTTP_URL"] = "http://example.com";
     try {
       const key = await AvatarService.record("probe", "http://127.0.0.1:1/avatar.png");
       const res = await fetch(`http://127.0.0.1:${port}/api/v2/avatars/${key}`);
       expect([422, 502]).toContain(res.status);
     } finally {
       // Restore the bound local upstream origin (the suite default).
-      process.env.GITHUB_APP_HTTP_URL = upstream.url.toString().slice(0, -1);
+      process.env["GITHUB_APP_HTTP_URL"] = upstream.url.toString().slice(0, -1);
     }
   });
 });

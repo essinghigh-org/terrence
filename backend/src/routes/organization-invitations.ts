@@ -42,7 +42,7 @@ export const organizationInvitationRoutes = new Elysia({ name: "organization-inv
   .use(authPlugin)
   // List pending invitations for an org (admin/owner view)
   .get("/api/v2/organizations/:org_name/organization-invitations", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: Ctx): Promise<unknown> => {
-    const org = await cachedOrgByName(params.org_name ?? "");
+    const org = await cachedOrgByName(params["org_name"] ?? "");
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -51,21 +51,21 @@ export const organizationInvitationRoutes = new Elysia({ name: "organization-inv
   })
   // Create invitation - hashed token, email required, role optional
   .post("/api/v2/organizations/:org_name/organization-invitations", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: Ctx): Promise<unknown> => {
-    const org = await cachedOrgByName(params.org_name ?? "");
+    const org = await cachedOrgByName(params["org_name"] ?? "");
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const rawEmail = typeof attrs.email === "string" ? attrs.email : "";
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const rawEmail = typeof attrs["email"] === "string" ? attrs["email"] : "";
     const email = normalizeEmail(rawEmail);
     if (email === null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A valid email is required for invitations" }] }; }
-    if (attrs.role !== undefined && (typeof attrs.role !== "string" || !["owner", "member"].includes(attrs.role))) {
+    if (attrs["role"] !== undefined && (typeof attrs["role"] !== "string" || !["owner", "member"].includes(attrs["role"]))) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "role must be one of: owner, member" }] };
     }
-    const role = typeof attrs.role === "string" ? attrs.role : "member";
+    const role = typeof attrs["role"] === "string" ? attrs["role"] : "member";
     // Team-delegated membership managers may invite members, but may not grant
     // the organization-owner role.
     if (role === "owner" && user?.isSiteAdmin !== true && !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId, null))) {
@@ -98,8 +98,8 @@ export const organizationInvitationRoutes = new Elysia({ name: "organization-inv
     return { data: invitationResource(row), meta: { token: rawToken } };
   })
   .delete("/api/v2/organizations/:org_name/organization-invitations/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: Ctx): Promise<unknown> => {
-    const org = await cachedOrgByName(params.org_name ?? "");
-    const id = params.id ?? "";
+    const org = await cachedOrgByName(params["org_name"] ?? "");
+    const id = params["id"] ?? "";
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const row = await db.query.organizationInvitations.findFirst({ where: and(eq(organizationInvitations.id, id), eq(organizationInvitations.orgId, org.id)) });
     if (row === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
@@ -112,7 +112,7 @@ export const organizationInvitationRoutes = new Elysia({ name: "organization-inv
   })
   // Accept invitation by token - materializes membership, converges identity
   .post("/api/v2/organization-invitations/:token/accept", async ({ params, user, set }: Ctx): Promise<unknown> => {
-    const rawToken = params.token ?? "";
+    const rawToken = params["token"] ?? "";
     if (rawToken.trim() === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invitation token is required" }] }; }
     if (user === null || user === undefined) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
     const [tokenHash, legacyTokenHash] = tokenHashCandidates(rawToken);
@@ -128,11 +128,11 @@ export const organizationInvitationRoutes = new Elysia({ name: "organization-inv
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invitation has expired" }] };
     }
     // Email convergence: invitation must match the acceptor's canonical email
-    const acceptorEmail = normalizeEmail((user as unknown as Record<string,unknown>).email as string | null | undefined ?? null);
+    const acceptorEmail = normalizeEmail((user as unknown as Record<string,unknown>)["email"] as string | null | undefined ?? null);
     if (acceptorEmail === null || acceptorEmail !== invite.emailNormalized) {
       (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Invitation email does not match your account" }] };
     }
-    if ((user as unknown as Record<string,unknown>).isSuspended === true) {
+    if ((user as unknown as Record<string,unknown>)["isSuspended"] === true) {
       (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Suspended accounts cannot accept invitations" }] };
     }
     if (user.emailVerifiedAt === null || user.emailVerifiedAt === undefined) {
@@ -175,7 +175,7 @@ export const organizationInvitationRoutes = new Elysia({ name: "organization-inv
       if (claim.length === 0) throw new Error("invitation no longer pending");
       await t.insert(organizationMemberships).values({ id: `orgmem-${crypto.randomUUID()}`, orgId: invite.orgId, userId: user.id, role: invite.role, status: "active" }).onConflictDoNothing();
       // Clear provisional if this invite resolves it
-      if ((user as unknown as Record<string,unknown>).isProvisional === true) {
+      if ((user as unknown as Record<string,unknown>)["isProvisional"] === true) {
         await t.update(users).set({ isProvisional: false }).where(eq(users.id, user.id));
       }
     });

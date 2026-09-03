@@ -55,21 +55,21 @@ describe("remote-workflow variable sets contract", () => {
     );
     varsetId = resource.id;
     expect(varsetId.startsWith("varset-")).toBe(true);
-    expect(resource.attributes.name).toBe(`contract-varset-${seed.suffix}`);
-    expect(resource.attributes.description).toBe("contract test varset");
-    expect(resource.attributes.global).toBe(false);
-    expect(resource.attributes.priority).toBe(false);
-    expect(resource.relationships?.parent).toMatchObject({
+    expect(resource.attributes["name"]).toBe(`contract-varset-${seed.suffix}`);
+    expect(resource.attributes["description"]).toBe("contract test varset");
+    expect(resource.attributes["global"]).toBe(false);
+    expect(resource.attributes["priority"]).toBe(false);
+    expect(resource.relationships?.["parent"]).toMatchObject({
       data: { id: seed.orgName, type: "organizations" },
     });
-    expect(resource.relationships?.workspaces).toMatchObject({ data: [] });
+    expect(resource.relationships?.["workspaces"]).toMatchObject({ data: [] });
     expectSelfLink(resource, "/api/v2/varsets/");
   });
 
   it("shows a variable set", async () => {
     const resource = await expectSuccessResponse(await request(`/api/v2/varsets/${varsetId}`, { headers }), 200, "varsets");
-    expect(resource.attributes.name).toBe(`contract-varset-${seed.suffix}`);
-    expect(resource.relationships?.parent).toMatchObject({
+    expect(resource.attributes["name"]).toBe(`contract-varset-${seed.suffix}`);
+    expect(resource.relationships?.["parent"]).toMatchObject({
       data: { id: seed.orgName, type: "organizations" },
     });
   });
@@ -94,7 +94,7 @@ describe("remote-workflow variable sets contract", () => {
     expect(response.status).toBe(204);
 
     const resource = await expectSuccessResponse(await request(`/api/v2/varsets/${varsetId}`, { headers }), 200, "varsets");
-    const workspacesData = (resource.relationships?.workspaces as { data: unknown[] }).data;
+    const workspacesData = (resource.relationships?.["workspaces"] as { data: unknown[] }).data;
     expect(workspacesData).toEqual([{ type: "workspaces", id: workspaceId }]);
   });
 
@@ -110,8 +110,8 @@ describe("remote-workflow variable sets contract", () => {
       200,
       "varsets",
     );
-    expect(resource.attributes.description).toBe("updated");
-    expect(resource.attributes.priority).toBe(true);
+    expect(resource.attributes["description"]).toBe("updated");
+    expect(resource.attributes["priority"]).toBe(true);
   });
 
   it("destroys a variable set", async () => {

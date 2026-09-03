@@ -1,37 +1,29 @@
 {
+  // Extends the repo-root tsconfig (issue #428); same DOM/ES2020 targeting as
+  // the app project. Includes scripts plus ALL frontend tests (issue #384):
+  // tests/*.test.* were previously in no project, so type errors there were
+  // invisible to typecheck and the ESLint project service.
+  "extends": "../tsconfig.json",
   "compilerOptions": {
-    "composite": true,
-    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.tools.tsbuildinfo",
+    // Not composite (issue #428): this project typechecks tests that import
+    // src/* files owned by tsconfig.app.json. In `tsc6 -b` mode those imports
+    // are TS6307 errors unless projects are linked with emitted declarations;
+    // as a plain check-only project `tsc6 --noEmit -p` handles them fine.
     "target": "ES2020",
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable", "ES2022.Array", "ES2022.Object"],
     "module": "ESNext",
-    "moduleResolution": "bundler",
-    "skipLibCheck": true,
-    "jsx": "react-jsx",
+    "resolveJsonModule": true,
     "paths": {
       "@/*": ["./src/*"]
     },
-    "strict": true,
-    "strictNullChecks": true,
-    "strictFunctionTypes": true,
-    "strictBindCallApply": true,
-    "strictPropertyInitialization": true,
-    "noImplicitAny": true,
-    "noImplicitThis": true,
-    "alwaysStrict": true,
-    "useUnknownInCatchVariables": true,
-    "exactOptionalPropertyTypes": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitOverride": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true,
-    "forceConsistentCasingInFileNames": true,
-    "noEmit": true
+    // Load-bearing (issue #429): third-party .d.ts files do not compile with
+    // it off; first-party code is clean. See root tsconfig.json.
+    "skipLibCheck": true
   },
   "include": [
     "scripts",
-    "tests/browser",
+    "tests",
     "src/lib/theme.ts",
     "src/lib/type-guards.ts",
     "src/lib/json.ts",

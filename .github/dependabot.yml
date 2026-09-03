@@ -1,0 +1,21 @@
+version: 2
+# Renovate (renovate.json) proposes version bumps; Dependabot security updates
+# close the advisory gap Renovate alone does not gate on (issue #285).
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    # Security-only updates: version bumps stay with Renovate.
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "security"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "security"

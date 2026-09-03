@@ -228,7 +228,7 @@ describe("vcs webhook durability", () => {
   });
 
   test("gitlab webhook route ACKs after durable enqueue (todo 190)", async () => {
-    process.env.GITLAB_WEBHOOK_SECRET = "durability-secret";
+    process.env["GITLAB_WEBHOOK_SECRET"] = "durability-secret";
     const rawBody = JSON.stringify(gitlabPayload);
     const response = await app.handle(new Request("http://127.0.0.1/api/webhooks/gitlab", {
       method: "POST",

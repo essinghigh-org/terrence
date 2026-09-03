@@ -62,8 +62,8 @@ describe("private registry module tests", () => {
     });
     expect(await tar.exited).toBe(0);
 
-    previousBinary = process.env.TERRAFORM_TEST_BINARY_PATH;
-    process.env.TERRAFORM_TEST_BINARY_PATH = binaryPath;
+    previousBinary = process.env["TERRAFORM_TEST_BINARY_PATH"];
+    process.env["TERRAFORM_TEST_BINARY_PATH"] = binaryPath;
 
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: `module-test-${suffix}` });
@@ -95,8 +95,8 @@ describe("private registry module tests", () => {
   });
 
   afterAll(async () => {
-    if (previousBinary === undefined) delete process.env.TERRAFORM_TEST_BINARY_PATH;
-    else process.env.TERRAFORM_TEST_BINARY_PATH = previousBinary;
+    if (previousBinary === undefined) delete process.env["TERRAFORM_TEST_BINARY_PATH"];
+    else process.env["TERRAFORM_TEST_BINARY_PATH"] = previousBinary;
     await db.delete(registryModuleVersions).where(eq(registryModuleVersions.id, versionId));
     await db.delete(registryModules).where(eq(registryModules.id, moduleId));
     await db.delete(apiTokens).where(eq(apiTokens.userId, userId));

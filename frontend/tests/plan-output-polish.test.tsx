@@ -53,7 +53,7 @@ afterEach((): void => {
 
 test("loads a running plan when plan.output.ready arrives over SSE", async () => {
   let request = 0;
-  const fetchMock = mock(async (): Promise<Response> => {
+  const fetchMock = mock(async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     request++;
     if (request === 1) {
       return json({
@@ -74,7 +74,7 @@ test("loads a running plan when plan.output.ready arrives over SSE", async () =>
       }],
     });
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   const stream = createFakeStream();
 
   const view = render(
@@ -151,7 +151,7 @@ test("renders replacement and nested safe diffs and filters resources", async ()
       },
     ],
   }));
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(<PlanOutput runId="run-detail" status="planned" />);
   await waitFor((): void => {
@@ -200,7 +200,7 @@ test("renders replacement and nested safe diffs and filters resources", async ()
 test("keeps moves, imports, drift, and output values visible", async () => {
   const onSummaryChange = mock((): void => undefined);
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (): Promise<Response> => json({
+  globalThis.fetch = (mock(async (): Promise<Response> => json({
     action_invocations: [{
       address: "action.aws_lambda_invoke.deploy",
       type: "aws_lambda_invoke",
@@ -245,7 +245,7 @@ test("keeps moves, imports, drift, and output values visible", async () => {
         after: "new.example",
       },
     },
-  })) as typeof fetch;
+  }))) as unknown as typeof fetch;
 
   const view = render(
     <PlanOutput runId="run-complete" status="planned" onSummaryChange={onSummaryChange} />,
@@ -280,7 +280,7 @@ test("keeps moves, imports, drift, and output values visible", async () => {
 test("counts an imported resource's planned update as both import and change", async () => {
   const onSummaryChange = mock((): void => undefined);
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (): Promise<Response> => json({
+  globalThis.fetch = (mock(async (): Promise<Response> => json({
     resource_changes: [{
       address: "aws_instance.imported_and_changed",
       type: "aws_instance",
@@ -291,7 +291,7 @@ test("counts an imported resource's planned update as both import and change", a
         importing: { id: "i-123" },
       },
     }],
-  })) as typeof fetch;
+  }))) as unknown as typeof fetch;
 
   const view = render(
     <PlanOutput runId="run-import-update" status="planned" onSummaryChange={onSummaryChange} />,
@@ -316,7 +316,7 @@ test("counts an imported resource's planned update as both import and change", a
 
 test("counts a moved resource's planned update as both move and change", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (): Promise<Response> => json({
+  globalThis.fetch = (mock(async (): Promise<Response> => json({
     resource_changes: [{
       address: "aws_instance.new_name",
       previous_address: "aws_instance.old_name",
@@ -327,7 +327,7 @@ test("counts a moved resource's planned update as both move and change", async (
         after: { size: "large" },
       },
     }],
-  })) as typeof fetch;
+  }))) as unknown as typeof fetch;
 
   const view = render(<PlanOutput runId="run-move-update" status="planned" />);
   await waitFor((): void => {
@@ -363,7 +363,7 @@ test("keeps a ready artifact across status changes and hides it immediately for 
     }
     return await nextResponse;
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(<PlanOutput runId="run-first" status="planned" />);
   await waitFor((): void => {
@@ -395,9 +395,9 @@ test("keeps a ready artifact across status changes and hides it immediately for 
 
 test("rejects malformed structured plan resources", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (): Promise<Response> => json({
+  globalThis.fetch = (mock(async (): Promise<Response> => json({
     resource_changes: [{ address: 123, change: { actions: "create" } }],
-  })) as typeof fetch;
+  }))) as unknown as typeof fetch;
 
   const view = render(<PlanOutput runId="run-invalid" status="planned" />);
   await waitFor((): void => {
@@ -407,10 +407,10 @@ test("rejects malformed structured plan resources", async () => {
 
 test("rejects malformed structured plan action metadata", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (): Promise<Response> => json({
+  globalThis.fetch = (mock(async (): Promise<Response> => json({
     action_invocations: [{ address: 123 }],
     resource_changes: [],
-  })) as typeof fetch;
+  }))) as unknown as typeof fetch;
 
   const view = render(<PlanOutput runId="run-invalid-action" status="planned" />);
   await waitFor((): void => {
@@ -420,7 +420,7 @@ test("rejects malformed structured plan action metadata", async () => {
 
 test("shows a neutral state when a terminal run never produced a plan artifact", async () => {
   const fetchMock = mock(async (): Promise<Response> => json({}, 404));
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <PlanOutput runId="run-pre-plan-canceled" status="canceled" planStatus="pending" />,
@@ -436,7 +436,7 @@ test("shows a neutral state when a terminal run never produced a plan artifact",
 
 test("renders structured terraform-style diff lines for changed list elements", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (): Promise<Response> => json({
+  globalThis.fetch = (mock(async (): Promise<Response> => json({
     terraform_version: "1.11.0",
     format_version: "1.2",
     resource_changes: [{
@@ -459,7 +459,7 @@ test("renders structured terraform-style diff lines for changed list elements", 
         },
       },
     }],
-  })) as typeof fetch;
+  }))) as unknown as typeof fetch;
 
   const view = render(<PlanOutput runId="run-topics" status="planned" />);
   await waitFor((): void => {

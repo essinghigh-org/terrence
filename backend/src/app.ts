@@ -440,7 +440,7 @@ export const app = new Elysia()
       try {
         parsed = parseTokenScopes(token.scopes);
       } catch {
-        (set as Record<string, unknown>).status = 401;
+        (set as Record<string, unknown>)["status"] = 401;
         return { errors: [{ status: "401", title: "Unauthorized", detail: "Token scopes are malformed" }] };
       }
       setRequestTokenScopes(parsed);
@@ -460,7 +460,7 @@ export const app = new Elysia()
       || pathname === "/api/v1/support-bundle-requests"
       || pathname.startsWith("/api/v1/support-bundle-requests/");
     if (currentTokenScopes() !== null && siteAdminPath) {
-      (set as Record<string, unknown>).status = 403;
+      (set as Record<string, unknown>)["status"] = 403;
       return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot access site-admin routes" }] };
     }
     return undefined;
@@ -616,7 +616,7 @@ export const app = new Elysia()
     // Origin that matches it. Otherwise, in non-production builds we reflect a
     // frontend dev Origin explicitly — no origin, no CORS header.
     const origin = request.headers.get("origin");
-    const allowedOrigins = (process.env.CORS_ORIGIN ?? "")
+    const allowedOrigins = (process.env["CORS_ORIGIN"] ?? "")
       .split(",")
       .map((value): string => value.trim())
       .filter((value): boolean => value !== "");
@@ -636,7 +636,7 @@ export const app = new Elysia()
       && typeof response === "object"
       && (Array.isArray(response) || Object.getPrototypeOf(response) === Object.prototype);
     const responseObject = isJsonDocument ? response as Record<string, unknown> : null;
-    const isErrorDocument = responseObject !== null && Array.isArray(responseObject.errors);
+    const isErrorDocument = responseObject !== null && Array.isArray(responseObject["errors"]);
     const responseHeaders = response instanceof Response ? response.headers : null;
     const configuredContentType = set.headers["Content-Type"] ?? set.headers["content-type"];
     const declaredContentType = responseHeaders?.get("content-type")
@@ -713,26 +713,26 @@ export const app = new Elysia()
     // response MUST advertise that with Vary: Origin or shared caches will
     // serve one origin's CORS decision to everyone.
     const originHeader = request.headers.get("origin");
-    const corsConfigured = (process.env.CORS_ORIGIN ?? "").split(",").some((value: string): boolean => value.trim() !== "");
+    const corsConfigured = (process.env["CORS_ORIGIN"] ?? "").split(",").some((value: string): boolean => value.trim() !== "");
     if (originHeader !== null || corsConfigured) {
       const { Vary: existingVary } = headers;
-      headers.Vary = existingVary === undefined ? "Origin" : `${String(existingVary)}, Origin`;
+      headers["Vary"] = existingVary === undefined ? "Origin" : `${String(existingVary)}, Origin`;
     }
 
     // 458: emit deprecation headers for compat-legacy support-bundle path.
     if (pathname.startsWith("/api/v1/support-bundle-requests")) {
-      if (headers.Deprecation === undefined) headers.Deprecation = "true";
-      if (headers.Sunset === undefined) headers.Sunset = "Sat, 31 Dec 2028 23:59:59 GMT";
-      if (headers.Link === undefined) headers.Link = "</api/v1/support/bundle-requests>; rel=\"successor-version\"";
+      if (headers["Deprecation"] === undefined) headers["Deprecation"] = "true";
+      if (headers["Sunset"] === undefined) headers["Sunset"] = "Sat, 31 Dec 2028 23:59:59 GMT";
+      if (headers["Link"] === undefined) headers["Link"] = "</api/v1/support/bundle-requests>; rel=\"successor-version\"";
     }
     if (isJsonApiDocument) {
       headers["Content-Type"] = JSON_API_MEDIA_TYPE;
     }
     if (unacceptable) {
       headers["Content-Type"] = JSON_API_MEDIA_TYPE;
-      const vary = String(headers.Vary ?? "");
+      const vary = String(headers["Vary"] ?? "");
       if (!vary.split(",").some((value): boolean => value.trim().toLowerCase() === "accept")) {
-        headers.Vary = vary === "" ? "Accept" : `${vary}, Accept`;
+        headers["Vary"] = vary === "" ? "Accept" : `${vary}, Accept`;
       }
       (set as { status: number }).status = 406;
       const errorHeaders = new Headers();
@@ -777,11 +777,11 @@ export const app = new Elysia()
     if (isJsonDocument && (pathname === "/api" || pathname.startsWith("/api/"))) {
       try {
         const etag = strongDocumentEtag(response);
-        if (headers.ETag === undefined) headers.ETag = etag;
+        if (headers["ETag"] === undefined) headers["ETag"] = etag;
         if (request.method === "GET") {
           const inm = request.headers.get("if-none-match");
           if (inm !== null && (inm === etag || inm === "*")) {
-            headers.ETag = etag;
+            headers["ETag"] = etag;
             return new Response(null, { status: 304, headers: headers as Record<string, string> });
           }
         }
@@ -850,7 +850,7 @@ export const app = new Elysia()
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const tool = query.tool === "terraform" ? "terraform" : "tofu";
+    const tool = query["tool"] === "terraform" ? "terraform" : "tofu";
     try {
       return { data: await availableVersions(tool) };
     } catch {
@@ -1017,7 +1017,7 @@ setTimeout((): void => {
   // disable both (TERRENCE_DISABLE_WORKER=1 keeps the process timer-free),
   // production runs both. The ring buffer is what turns the /metrics rss
   // growth figure into a leak trend instead of a steady-state snapshot.
-  if (!envEnabled(process.env.TERRENCE_DISABLE_WORKER)) {
+  if (!envEnabled(process.env["TERRENCE_DISABLE_WORKER"])) {
     import("./lib/process-metrics").then(({ startProcessSampler }: { startProcessSampler: (intervalMs?: number, ringMax?: number) => void }): void => {
       startProcessSampler();
     }).catch((error: unknown): void => {

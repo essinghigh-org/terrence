@@ -39,6 +39,7 @@
     }
   },
   "ignoreBinaries": [
-    "tsc"
+    "tsc",
+    "tsc6"
   ]
 }

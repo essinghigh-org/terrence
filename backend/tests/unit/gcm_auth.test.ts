@@ -11,17 +11,17 @@ describe("GCM auth-tag failure handling (#312)", () => {
   beforeEach(() => {
     if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
     mkdirSync(dir, { recursive: true });
-    previousDir = process.env.STORAGE_DIR;
-    previousPass = process.env.ENCRYPTION_PASSWORD;
-    process.env.STORAGE_DIR = dir;
-    delete process.env.ENCRYPTION_PASSWORD;
+    previousDir = process.env["STORAGE_DIR"];
+    previousPass = process.env["ENCRYPTION_PASSWORD"];
+    process.env["STORAGE_DIR"] = dir;
+    delete process.env["ENCRYPTION_PASSWORD"];
   });
 
   afterEach(() => {
-    if (previousDir === undefined) delete process.env.STORAGE_DIR;
-    else process.env.STORAGE_DIR = previousDir;
-    if (previousPass === undefined) delete process.env.ENCRYPTION_PASSWORD;
-    else process.env.ENCRYPTION_PASSWORD = previousPass;
+    if (previousDir === undefined) delete process.env["STORAGE_DIR"];
+    else process.env["STORAGE_DIR"] = previousDir;
+    if (previousPass === undefined) delete process.env["ENCRYPTION_PASSWORD"];
+    else process.env["ENCRYPTION_PASSWORD"] = previousPass;
     if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
     mkdirSync(dir, { recursive: true });
   });

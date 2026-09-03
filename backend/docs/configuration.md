@@ -56,6 +56,10 @@ Set variables through the container environment or an `.env` file.
 | `RUN_TASK_TIMEOUT_MS` | default | Run task request timeout. |
 | `TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS` | off | Allow HTTP pre-apply and enabled global task endpoints. Use only for trusted development; HTTPS is required by default. |
 | `GC_GRACE_PERIOD_DAYS` | default | Grace period for soft-deleted runs before garbage collection. |
+| `TERRENCE_RUN_CONCURRENCY` | `5` | Parallel local runs. Non-positive or non-integer values fall back to the default. |
+| `TERRENCE_RECOVERY_RETENTION_MS` | `604800000` (7 days) | Retention for interrupted-apply recovery records. |
+| `MIGRATION_SKIP_DRAIN` | off | Migration wizard skips waiting for active runs to drain. |
+| `TERRENCE_DISABLE_RESTART` | off | Test/benchmark mode: the migration wizard suppresses the post-migration restart. Restart the process manually to boot on PostgreSQL. |
 
 ## Run execution
 
@@ -75,6 +79,12 @@ Set variables through the container environment or an `.env` file.
 | `TERRAFORM_TEST_BINARY_PATH` | none | Path for the module test binary. |
 | `SENTINEL_BINARY_PATH` | none | Path to the policy engine binary. |
 | `GPG_BINARY_PATH` | system | Path to the GPG binary for provider signing keys. |
+| `TERRENCE_STACK_IAC_BINARY` | `terraform` | IaC binary for stack runs. |
+| `TERRENCE_STACK_IAC_VERSION` | `latest` | IaC binary version for stack runs. |
+| `TERRENCE_SANDBOX_EXTRA_RW_ALLOW_STORAGE` | off | Allow extra sandbox read-write paths under the storage directory. |
+| `TERRENCE_BINARY_PROBE_TIMEOUT_MS` | `10000` | Timeout for probing an IaC binary version. |
+| `TERRENCE_AGENT_FORWARD_TIMEOUT_MS` | `60000` | Agent forward deadline. Clamped to 1s..300s. |
+| `TERRENCE_COMPATIBILITY_VERSION` | `2.5.0` | Advertised TFE compatibility version. Keep dotted: the tfe provider feature gates fail on release-style strings. |
 
 ## VCS integration
 
@@ -114,6 +124,43 @@ Set variables through the container environment or an `.env` file.
 | `TERRENCE_QUERY_COUNT` | off | Count database queries for diagnostics. |
 | `MIGRATION_CHECKPOINT_RETRIES` | default | Retry count for migration checkpoints. |
 | `MIGRATION_DRAIN_TIMEOUT_MS` | default | Drain timeout for the migration wizard. |
+| `TERRENCE_DB_SLOW_QUERY_MS` | `1000` | Threshold for slow database query logging. |
+
+## Operations and clustering
+
+| Variable | Default | Purpose |
+|---|---|
+| `TERRENCE_NODE_ID` | `terrence-node-1` | Node identity reported in readiness responses. |
+| `TERRENCE_NODE_ADDRESS` | none | Node address reported in readiness responses. |
+| `TERRENCE_NODE_STATUS` | active | Override the readiness status. `draining` or `maintenance` marks the node as draining. |
+
+## Test simulation
+
+Simulation hooks for the test suite. They bypass real IaC execution and must never be set in production.
+
+| Variable | Default | Purpose |
+|---|---|
+| `SIMULATED_RUNS` | off | Run the worker and stack worker against simulated executions instead of real binaries. |
+| `SIMULATED_PLAN_JSON` | `{}` | Injected plan JSON for simulated runs. |
+| `SIMULATED_ASSESSMENT_JSON` | empty changes | Injected plan JSON for simulated health assessments. |
+| `SIMULATED_ASSESSMENT_SCHEMA` | `{}` | Injected provider schema for simulated health assessments. |
+| `SIMULATED_STACK_PLAN_CHANGES` | off | Simulated stack plans report changes. |
+| `SIMULATED_STACK_DEFERRED` | off | Simulated stack plans report deferred changes. |
+
+## Operator scripts
+
+Environment for the helper scripts under `backend/scripts` and `frontend/scripts`.
+
+| Variable | Default | Purpose |
+|---|---|
+| `TFE_TOKEN` | none | Site-admin application token for `tfectl` admin commands and agent run environments. |
+| `TFE_ADDRESS` | `http://localhost:3000` | Application API address for `tfectl`. |
+| `TFE_SYSTEM_ADDRESS` | derived | System API address for `tfectl`. Defaults to the application host on port 8443. |
+| `TFE_SYSTEM_TOKEN` | none | Dedicated System API token for `tfectl`. |
+| `TFE_PROVIDER_VERSION` | latest stable | Pinned provider version for `refresh-provider-surface`. |
+| `TERRAFORM_BIN` | `terraform` | Alternate IaC CLI for `refresh-provider-surface`. |
+| `COVERAGE_THRESHOLD` | `60` | Coverage floor for `coverage-report --fail`. |
+| `BACKEND_URL` | `http://127.0.0.1:3000` | Backend proxied by the frontend dev server. |
 
 ## Dependency update policy
 

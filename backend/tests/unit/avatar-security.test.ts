@@ -165,8 +165,8 @@ describe("AvatarService.sweepCache (bounded cache GC)", (): void => {
 
   function setUp(overrides: Record<string, string>): void {
     storageDir = mkdtempSync(join(tmpdir(), "avatar-gc-test-"));
-    savedEnv.STORAGE_DIR = process.env.STORAGE_DIR;
-    process.env.STORAGE_DIR = storageDir;
+    savedEnv["STORAGE_DIR"] = process.env["STORAGE_DIR"];
+    process.env["STORAGE_DIR"] = storageDir;
     for (const [name, value] of Object.entries(overrides)) {
       savedEnv[name] = process.env[name];
       process.env[name] = value;

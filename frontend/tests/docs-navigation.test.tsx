@@ -1,4 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
+import type { Mock } from "bun:test";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
@@ -33,8 +34,8 @@ const docDetail = (slug: string, title: string, category: string, order: number,
   },
 });
 
-function installFetchMock(): mock.Mock<(input: string | URL | Request, init?: RequestInit) => Promise<Response>> {
-  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+function installFetchMock(): Mock<(input: string | URL | Request, init?: RequestInit) => Promise<Response>> {
+  const fetchMock = mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     const url = getUrl(input);
     if (url === "/api/v2/docs") return json(docsIndex);
     if (url === "/api/v2/docs/overview") {
@@ -51,7 +52,7 @@ function installFetchMock(): mock.Mock<(input: string | URL | Request, init?: Re
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   return fetchMock;
 }
 

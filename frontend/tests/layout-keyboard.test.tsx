@@ -25,7 +25,7 @@ afterEach((): void => {
 
 function installFetch(): void {
 // SAFETY: the mock's handling mirrors the backend contract for these tests.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "alice", "is-site-admin": true } } });
@@ -36,7 +36,7 @@ function installFetch(): void {
     }
     if (url === "/api/v2/docs") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 }
 
 let capturedPathname = "";

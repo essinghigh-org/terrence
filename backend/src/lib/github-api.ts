@@ -1,9 +1,9 @@
 const DEFAULT_GITHUB_API_URL = "https://api.github.com";
 
 function configuredGithubApiUrl(): string {
-  const appUrl = process.env.GITHUB_APP_API_URL?.trim();
+  const appUrl = process.env["GITHUB_APP_API_URL"]?.trim();
   if (appUrl !== undefined && appUrl !== "") return appUrl;
-  const generalUrl = process.env.GITHUB_API_URL?.trim();
+  const generalUrl = process.env["GITHUB_API_URL"]?.trim();
   return generalUrl === undefined || generalUrl === "" ? DEFAULT_GITHUB_API_URL : generalUrl;
 }
 

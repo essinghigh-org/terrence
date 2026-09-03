@@ -27,7 +27,7 @@ import { extractValidatedModuleArchive } from "./registry-module-archive";
 import { enqueueDurableJob, type DurableJobContext } from "./durable-jobs";
 import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./sandbox";
 
-const STACK_STORAGE_DIR = join(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "stacks");
+const STACK_STORAGE_DIR = join(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "stacks");
 const MAX_STACK_ARCHIVE_BYTES = 100 * 1024 * 1024;
 const STACK_STATE_LOCK_LEASE_MS = 60_000;
 type Job = DeepReadonly<typeof durableJobs.$inferSelect>;
@@ -92,13 +92,13 @@ function providerFamily(provider: string): "github" | "gitlab" | "ado" {
 }
 
 function checkedUrl(value: string): string {
-  const reason = validateExternalUrl(value, envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS));
+  const reason = validateExternalUrl(value, envEnabled(process.env["TERRENCE_ALLOW_PRIVATE_VCS_URLS"]));
   if (reason !== null) throw new Error(`The Stack VCS URL is unsafe: ${reason}`);
   return value;
 }
 
 async function fetchArchive(url: string, headers: Readonly<Record<string, string>>): Promise<Response> {
-  const allowPrivate = envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS);
+  const allowPrivate = envEnabled(process.env["TERRENCE_ALLOW_PRIVATE_VCS_URLS"]);
   let nextUrl = url;
   let requestHeaders: Readonly<Record<string, string>> = headers;
   for (let redirect = 0; redirect <= 5; redirect += 1) {
@@ -117,7 +117,7 @@ async function fetchArchive(url: string, headers: Readonly<Record<string, string
       const redirected = new URL(location, nextUrl);
       if (redirected.origin !== new URL(nextUrl).origin) {
         const withoutAuthorization = { ...requestHeaders };
-        delete withoutAuthorization.Authorization;
+        delete withoutAuthorization["Authorization"];
         requestHeaders = withoutAuthorization;
       }
       nextUrl = redirected.toString();
@@ -165,7 +165,7 @@ async function fetchHttpArchive(stack: Stack, destination: string): Promise<void
     ? `${api ?? "https://api.github.com"}/repos/${identifier.split("/").map(encodeURIComponent).join("/")}/tarball/${encodeURIComponent(branch)}`
     : `${api ?? "https://gitlab.com/api/v4"}/projects/${encodeURIComponent(identifier)}/repository/archive.tar.gz?sha=${encodeURIComponent(branch)}`;
   const headers: Record<string, string> = { "User-Agent": "Terrence", Accept: "application/octet-stream" };
-  if (credentials.token !== null) headers.Authorization = `Bearer ${credentials.token}`;
+  if (credentials.token !== null) headers["Authorization"] = `Bearer ${credentials.token}`;
   await writeResponseArchive(await fetchArchive(url, headers), destination);
 }
 
@@ -178,12 +178,12 @@ async function fetchGitArchive(stack: Stack, destination: string): Promise<void>
   const cloneDirectory = join(staging, "repo");
   const branch = stack.vcsBranch;
   const args = ["git", "clone", "--depth=1", "--no-tags", ...(branch === null ? [] : ["--branch", branch]), url, cloneDirectory];
-  const env: Record<string, string> = { PATH: process.env.PATH ?? "", GIT_TERMINAL_PROMPT: "0" };
+  const env: Record<string, string> = { PATH: process.env["PATH"] ?? "", GIT_TERMINAL_PROMPT: "0" };
   if (credentials.token !== null) {
     const auth = family === "ado" ? `Basic ${Buffer.from(`:${credentials.token}`).toString("base64")}` : `Bearer ${credentials.token}`;
-    env.GIT_CONFIG_COUNT = "1";
-    env.GIT_CONFIG_KEY_0 = "http.extraHeader";
-    env.GIT_CONFIG_VALUE_0 = `Authorization: ${auth}`;
+    env["GIT_CONFIG_COUNT"] = "1";
+    env["GIT_CONFIG_KEY_0"] = "http.extraHeader";
+    env["GIT_CONFIG_VALUE_0"] = `Authorization: ${auth}`;
   }
   try {
     const child = spawn(args, { env, stdout: "pipe", stderr: "pipe" });
@@ -357,7 +357,7 @@ async function command(
   sandbox: DeepReadonly<RunSandbox> | null,
   heartbeat?: () => Promise<boolean>,
 ): Promise<Readonly<{ code: number; output: string; heartbeatLost: boolean }>> {
-  const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", LANG: "C" };
+  const env = { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "", LANG: "C" };
   const operation = args[1] === "apply" ? "apply" : "plan";
   const timeoutMs = await stackExecutionTimeoutMs(operation);
   const child = sandbox === null
@@ -409,12 +409,12 @@ function stateFilePath(stackId: string, deployment: string): string {
 function planHasChanges(value: string): boolean {
   try {
     const parsed = JSON.parse(value) as Record<string, unknown>;
-    const changes = parsed.resource_changes;
+    const changes = parsed["resource_changes"];
     return Array.isArray(changes) && changes.some((item): boolean => {
       if (item === null || typeof item !== "object") return false;
-      const actions = (item as Record<string, unknown>).change;
+      const actions = (item as Record<string, unknown>)["change"];
       if (actions === null || typeof actions !== "object") return false;
-      const raw = (actions as Record<string, unknown>).actions;
+      const raw = (actions as Record<string, unknown>)["actions"];
       return Array.isArray(raw) && raw.some((action): boolean => action !== "no-op");
     });
   } catch {
@@ -496,8 +496,8 @@ async function simulatedComponentExecution(
   fencingToken: number | null,
   statePath: string,
 ): Promise<StackExecutionResult> {
-  const hasChanges = operation === "plan" && envEnabled(process.env.SIMULATED_STACK_PLAN_CHANGES);
-  const deferredChanges = operation === "plan" && envEnabled(process.env.SIMULATED_STACK_DEFERRED);
+  const hasChanges = operation === "plan" && envEnabled(process.env["SIMULATED_STACK_PLAN_CHANGES"]);
+  const deferredChanges = operation === "plan" && envEnabled(process.env["SIMULATED_STACK_DEFERRED"]);
   if (operation === "apply") {
     if (destroy) await removeStackState(stackId, deployment, runId, fencingToken ?? undefined);
     else await saveStackState(stackId, deployment, runId, null, fencingToken ?? undefined);
@@ -564,8 +564,8 @@ async function startTerraformComponentExecution(request: ComponentExecutionReque
   await cp(component.directory, executionDirectory, { recursive: true });
   await mkdir(STACK_STORAGE_DIR, { recursive: true, mode: 0o700 });
   await writeFile(join(executionDirectory, "terrence_backend_override.tf"), 'terraform { backend "local" {} }\n', { mode: 0o600 });
-  const requestedTool = process.env.TERRENCE_STACK_IAC_BINARY ?? "terraform";
-  const requestedVersion = process.env.TERRENCE_STACK_IAC_VERSION ?? "latest";
+  const requestedTool = process.env["TERRENCE_STACK_IAC_BINARY"] ?? "terraform";
+  const requestedVersion = process.env["TERRENCE_STACK_IAC_VERSION"] ?? "latest";
   const resolved = await ensureBinary(requestedTool, requestedVersion);
   if (resolved === null) throw new Error(`Unable to resolve ${requestedTool} ${requestedVersion}`);
   const heartbeat = async (): Promise<boolean> => {
@@ -651,7 +651,7 @@ async function executeComponent(
   context: DurableJobContext,
 ): Promise<StackExecutionResult> {
   const statePath = stateFilePath(stackId, deployment);
-  if (envEnabled(process.env.SIMULATED_RUNS) || process.env.NODE_ENV === "test") {
+  if (envEnabled(process.env["SIMULATED_RUNS"]) || process.env.NODE_ENV === "test") {
     return simulatedComponentExecution(stackId, deployment, runId, operation, destroy, fencingToken, statePath);
   }
   if (!(await hasTerraformFiles(component.directory))) {
@@ -693,8 +693,8 @@ function storedComponents(value: unknown): readonly StoredComponent[] {
   return value.flatMap((item): StoredComponent[] => {
     if (item === null || typeof item !== "object") return [];
     const row = item as Record<string, unknown>;
-    return typeof row.name === "string" && typeof row.directory === "string"
-      ? [{ name: row.name, directory: row.directory, source: typeof row.source === "string" ? row.source : null, dependsOn: Array.isArray(row.dependsOn) ? row.dependsOn.filter((entry): entry is string => typeof entry === "string") : [] }]
+    return typeof row["name"] === "string" && typeof row["directory"] === "string"
+      ? [{ name: row["name"], directory: row["directory"], source: typeof row["source"] === "string" ? row["source"] : null, dependsOn: Array.isArray(row["dependsOn"]) ? row["dependsOn"].filter((entry): entry is string => typeof entry === "string") : [] }]
       : [];
   });
 }
@@ -710,7 +710,7 @@ function payloadNumber(record: DeepReadonly<typeof stackRecords.$inferSelect>, k
 }
 
 function payloadFencingToken(record: DeepReadonly<typeof stackRecords.$inferSelect>): number | undefined {
-  const value = (record.payload ?? {})["fencing-token"] ?? (record.payload ?? {}).fencingToken;
+  const value = (record.payload ?? {})["fencing-token"] ?? (record.payload ?? {})["fencingToken"];
   return typeof value === "number" && Number.isInteger(value) ? value : undefined;
 }
 
@@ -776,7 +776,7 @@ async function queueStackAgentStep(stack: Stack, runId: string, step: DeepReadon
     await db.update(stackAgentJobs).set({ status: "queued", agentId: null, result: null, errorMessage: null, claimedAt: null, completedAt: null, updatedAt: Date.now() }).where(and(eq(stackAgentJobs.id, existing.id), inArray(stackAgentJobs.status, ["completed", "errored", "canceled"])));
     return;
   }
-  await db.insert(stackAgentJobs).values({ id: `saj-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`, stackId: stack.id, deploymentRunId: runId, stepId: step.id, agentPoolId: stack.agentPoolId, agentId: null, phase, iacBinary: process.env.TERRENCE_STACK_IAC_BINARY ?? "terraform", status: "queued", result: null, errorMessage: null, claimedAt: null, completedAt: null, createdAt: Date.now(), updatedAt: Date.now() }).onConflictDoNothing({ target: [stackAgentJobs.stepId, stackAgentJobs.phase] });
+  await db.insert(stackAgentJobs).values({ id: `saj-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`, stackId: stack.id, deploymentRunId: runId, stepId: step.id, agentPoolId: stack.agentPoolId, agentId: null, phase, iacBinary: process.env["TERRENCE_STACK_IAC_BINARY"] ?? "terraform", status: "queued", result: null, errorMessage: null, claimedAt: null, completedAt: null, createdAt: Date.now(), updatedAt: Date.now() }).onConflictDoNothing({ target: [stackAgentJobs.stepId, stackAgentJobs.phase] });
 }
 
 async function scheduleStackRun(runId: string, delay = 0): Promise<void> {
@@ -800,10 +800,10 @@ async function recoverAgentApplyState(stack: Stack, run: DeepReadonly<typeof sta
     eq(stackRecords.status, "current"),
   ) });
   if (current !== undefined) return;
-  const state = (step.payload ?? {}).state ?? (step.payload ?? {}).json_state;
+  const state = (step.payload ?? {})["state"] ?? (step.payload ?? {})["json_state"];
   const statePayload = typeof state === "string" ? state : state !== null && typeof state === "object" ? JSON.stringify(state) : null;
   const fencingToken = payloadFencingToken(step) ?? payloadFencingToken(run);
-  if (run.payload?.destroy === true) {
+  if (run.payload?.["destroy"] === true) {
     await removeStackState(stack.id, deployment, run.id, fencingToken);
     return;
   }
@@ -841,7 +841,7 @@ async function loadStackDeploymentInputs(
   job: Job,
   context: DurableJobContext,
 ): Promise<StackDeploymentInputs | undefined> {
-  const runId = typeof job.payload.runId === "string" ? job.payload.runId : "";
+  const runId = typeof job.payload["runId"] === "string" ? job.payload["runId"] : "";
   if (runId === "") throw new Error("stack-deployment job is missing runId");
   const run = await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, runId), eq(stackRecords.recordType, "stack-deployment-runs")) });
   if (run === undefined || ["succeeded", "failed", "canceled"].includes(run.status) || await context.canceled()) return undefined;
@@ -853,8 +853,8 @@ async function loadStackDeploymentInputs(
     return undefined;
   }
   const runPayload = run.payload ?? {};
-  const configuredComponents = storedComponents((configuration.payload ?? {}).components);
-  const runComponents = storedComponents(runPayload.components);
+  const configuredComponents = storedComponents((configuration.payload ?? {})["components"]);
+  const runComponents = storedComponents(runPayload["components"]);
   const components = runComponents.length > 0 ? runComponents : configuredComponents;
   const index = payloadNumber(run, "componentIndex", 0);
   const component = components[index];
@@ -945,8 +945,8 @@ async function handleCompletedStackDeploymentStep(
   phase: string,
 ): Promise<StackDeploymentStepDecision> {
   const stepPayload = step.payload ?? {};
-  const hasChanges = stepPayload["has-changes"] === true || stepPayload.hasChanges === true;
-  const deferred = stepPayload["deferred-changes"] === true || stepPayload.deferredChanges === true;
+  const hasChanges = stepPayload["has-changes"] === true || stepPayload["hasChanges"] === true;
+  const deferred = stepPayload["deferred-changes"] === true || stepPayload["deferredChanges"] === true;
   if (phase === "apply") return handleCompletedApplyStackStep(inputs, step);
   if (hasChanges || deferred) return handleCompletedPlanChanges(inputs);
   return handleCompletedPlanWithoutChanges(inputs);
@@ -989,9 +989,9 @@ function stackDeploymentArchivePath(
   run: DeepReadonly<typeof stackRecords.$inferSelect>,
   configuration: DeepReadonly<typeof stackRecords.$inferSelect>,
 ): string {
-  const runArchivePath = (run.payload ?? {}).archivePath;
+  const runArchivePath = (run.payload ?? {})["archivePath"];
   if (typeof runArchivePath === "string") return runArchivePath;
-  const configurationArchivePath = (configuration.payload ?? {}).archivePath;
+  const configurationArchivePath = (configuration.payload ?? {})["archivePath"];
   return typeof configurationArchivePath === "string" ? configurationArchivePath : "";
 }
 
@@ -1015,7 +1015,7 @@ async function executeStackComponentFromArchive(
     const relativeDirectory = relative(root, directory);
     const insideRoot = relativeDirectory === "" || (!relativeDirectory.startsWith("..") && !relativeDirectory.startsWith("/"));
     if (!insideRoot) throw new Error(`Component ${component.name} is outside the Stack configuration archive`);
-    const destroy = (run.payload ?? {}).destroy === true || (configuration.payload ?? {})["destroy-all"] === true;
+    const destroy = (run.payload ?? {})["destroy"] === true || (configuration.payload ?? {})["destroy-all"] === true;
     return await executeComponent({ ...component, directory }, step.id, run.id, stack.id, run.name ?? "default", operation, planArtifactPath, destroy, fencingToken, context);
   } finally {
     await rm(staging, { recursive: true, force: true });
@@ -1132,7 +1132,7 @@ function eligiblePreviousDeploymentName(
 }
 
 function previousDeploymentArchive(configuration: DeepReadonly<typeof stackRecords.$inferSelect> | undefined): string | undefined {
-  const archivePath = (configuration?.payload ?? {}).archivePath;
+  const archivePath = (configuration?.payload ?? {})["archivePath"];
   return typeof archivePath === "string" ? archivePath : undefined;
 }
 
@@ -1145,7 +1145,7 @@ async function removedDeploymentForGroup(
   if (name === undefined) return undefined;
   if (group.parentId === null) return { name };
   const previousConfiguration = await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, group.parentId), eq(stackRecords.recordType, "stack-configurations")) });
-  const previousComponents = storedComponents((previousConfiguration?.payload ?? {}).components);
+  const previousComponents = storedComponents((previousConfiguration?.payload ?? {})["components"]);
   const previousArchive = previousDeploymentArchive(previousConfiguration);
   if (previousConfiguration === undefined || previousComponents.length === 0 || previousArchive === undefined || !isStackStoragePath(previousArchive)) return { name };
   return { name, deployment: { name, destroy: true, components: [...previousComponents].reverse(), archivePath: previousArchive } };
@@ -1175,7 +1175,7 @@ async function prepareStackConfiguration(
   context: DurableJobContext,
 ): Promise<PreparedStackConfiguration | undefined> {
   if (!isStackStoragePath(archivePath)) throw new Error("The Stack configuration archive path is invalid");
-  if (initialPayload.source === "fetch") await fetchStackArchive(stack, archivePath);
+  if (initialPayload["source"] === "fetch") await fetchStackArchive(stack, archivePath);
   if (!(await Bun.file(archivePath).exists())) throw new Error("The Stack configuration archive is unavailable");
   const staging = await mkdtemp(join(tmpdir(), "terrence-stack-config-"));
   try {
@@ -1236,7 +1236,7 @@ async function insertPreparedDeployment(
   const stepId = `sds-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
   const now = Date.now();
   await tx.insert(stackRecords).values({ id: groupId, stackId: stack.id, parentId: configuration.id, recordType: "stack-deployment-groups", name: deployment.name, status: "pending", payload: { "deployment-group-config": { "auto-approve-checks": [] }, latestRunId: deploymentRunId }, createdAt: now, updatedAt: now });
-  await tx.insert(stackRecords).values({ id: deploymentRunId, stackId: stack.id, parentId: groupId, recordType: "stack-deployment-runs", name: deployment.name, status: "planning", payload: { configurationId: configuration.id, components: deployment.components, archivePath: deployment.archivePath, "plan-mode": initialPayload.speculative === true ? "speculative" : "normal", component: deploymentFirst.name, componentIndex: 0, cycle: 0, destroy: deployment.destroy || initialPayload["destroy-all"] === true }, createdAt: now, updatedAt: now });
+  await tx.insert(stackRecords).values({ id: deploymentRunId, stackId: stack.id, parentId: groupId, recordType: "stack-deployment-runs", name: deployment.name, status: "planning", payload: { configurationId: configuration.id, components: deployment.components, archivePath: deployment.archivePath, "plan-mode": initialPayload["speculative"] === true ? "speculative" : "normal", component: deploymentFirst.name, componentIndex: 0, cycle: 0, destroy: deployment.destroy || initialPayload["destroy-all"] === true }, createdAt: now, updatedAt: now });
   await tx.insert(stackRecords).values({ id: stepId, stackId: stack.id, parentId: deploymentRunId, recordType: "stack-deployment-steps", name: deploymentFirst.name, status: "queued", payload: { "operation-type": "plan", phase: "plan", componentIndex: 0, "requires-state-lock": false, "has-changes": false, "deferred-changes": false }, createdAt: now, updatedAt: now });
   return deploymentRunId;
 }
@@ -1267,7 +1267,7 @@ export async function runStackConfigurationJob(job: Job, context: DurableJobCont
   const stack = await db.query.stacks.findFirst({ where: eq(stacks.id, configuration.stackId) });
   if (stack === undefined) throw new Error("The Stack no longer exists");
   const initialPayload = configuration.payload ?? {};
-  const archivePath = typeof initialPayload.archivePath === "string" && initialPayload.archivePath !== "" ? initialPayload.archivePath : join(STACK_STORAGE_DIR, `${configuration.id}.tar.gz`);
+  const archivePath = typeof initialPayload["archivePath"] === "string" && initialPayload["archivePath"] !== "" ? initialPayload["archivePath"] : join(STACK_STORAGE_DIR, `${configuration.id}.tar.gz`);
   await db.update(stackRecords).set({ status: "preparing", updatedAt: Date.now() }).where(eq(stackRecords.id, configuration.id));
   try {
     const prepared = await prepareStackConfiguration(stack, initialPayload, archivePath, context);

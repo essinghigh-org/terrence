@@ -49,7 +49,7 @@ test("run list sort headers carry a visible focus style", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs"]}>
@@ -157,7 +157,7 @@ function buildRunDetailMock(): ReturnType<typeof mock> {
 }
 
 function renderRunDetail(): ReturnType<typeof render> {
-  globalThis.fetch = buildRunDetailMock();
+  globalThis.fetch = (buildRunDetailMock()) as unknown as typeof fetch;
   return render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-focus"]}>
       <Routes>

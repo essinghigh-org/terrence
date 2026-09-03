@@ -1,36 +1,19 @@
 {
+  // Extends the repo-root tsconfig (issue #428) so strict flags cannot drift.
+  // Backend-specific overrides: NodeNext-style ESM emit semantics and
+  // esModuleInterop for CJS interop. Everything else inherits from root.
+  "extends": "../tsconfig.json",
   "compilerOptions": {
-    // ── Environment ──────────────────────────────────────────────────────
-    "target": "ESNext",
+    // lib must repeat the tsc6 default for target ESNext (issue #428): the
+    // root config sets lib ESNext-only, but backend code and @types/bun rely
+    // on DOM globals (Request/Response/BodyInit). Without this, Bun's own
+    // Response.json(): Promise<unknown> typing takes over and ~800
+    // TS18046/TS2571/TS2322 errors appear in src and tests.
+    "lib": ["ESNext", "DOM", "DOM.Iterable", "ScriptHost"],
     "module": "ESNext",
-    "moduleResolution": "bundler",
     "esModuleInterop": true,
-    "verbatimModuleSyntax": true,
-    "isolatedModules": true,
-    "moduleDetection": "force",
-    "noEmit": true,
-
-    // ── Full strict mode — every single strict flag ON ───────────────────
-    "strict": true,
-    "strictNullChecks": true,
-    "strictFunctionTypes": true,
-    "strictBindCallApply": true,
-    "strictPropertyInitialization": true,
-    "noImplicitAny": true,
-    "noImplicitThis": true,
-    "alwaysStrict": true,
-    "useUnknownInCatchVariables": true,
-
-    // ── Additional strictness ────────────────────────────────────────────
-    "exactOptionalPropertyTypes": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitOverride": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true,
-    "strictBuiltinIteratorReturn": true,
-    "forceConsistentCasingInFileNames": true,
+    // Load-bearing (issue #429): ~177 third-party .d.ts errors (elysia) with
+    // it off, zero in first-party code. See root tsconfig.json.
     "skipLibCheck": true
   },
   "include": ["src/**/*", "tests/**/*"]

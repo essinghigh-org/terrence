@@ -31,7 +31,7 @@ const NODE_HEARTBEAT_TIMEOUT_MS = 45_000;
 let nodeHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
 export function appVersion(): string {
   if (cachedAppVersion !== undefined) return cachedAppVersion;
-  const fromEnv = process.env.BUILD_VERSION;
+  const fromEnv = process.env["BUILD_VERSION"];
   if (typeof fromEnv === "string" && fromEnv.trim() !== "") {
     cachedAppVersion = fromEnv;
     return cachedAppVersion;
@@ -120,20 +120,20 @@ function poolLabels(pool: AgentPoolMetrics): string {
 function collectionToJson(collection: MetricsCollection): Record<string, unknown> {
   const metrics: Record<string, unknown> = {};
   if (collection.instance !== null) {
-    metrics.terrence_users_total = collection.instance.users;
-    metrics.terrence_organizations_total = collection.instance.organizations;
-    metrics.terrence_workspaces_total = collection.instance.workspaces;
-    metrics.terrence_runs_total = collection.instance.runs;
-    metrics.tfe_run_current_count = collection.instance.runsByStatus;
-    metrics.terrence_database_size_bytes = collection.instance.database.sizeBytes;
-    metrics.terrence_database_wal_size_bytes = collection.instance.database.walSizeBytes;
-    metrics.terrence_database_page_count = collection.instance.database.pageCount;
-    metrics.terrence_database_cache_size_bytes = collection.instance.database.cacheSizeBytes;
-    metrics.terrence_database_freelist_bytes = collection.instance.database.freelistBytes;
+    metrics["terrence_users_total"] = collection.instance.users;
+    metrics["terrence_organizations_total"] = collection.instance.organizations;
+    metrics["terrence_workspaces_total"] = collection.instance.workspaces;
+    metrics["terrence_runs_total"] = collection.instance.runs;
+    metrics["tfe_run_current_count"] = collection.instance.runsByStatus;
+    metrics["terrence_database_size_bytes"] = collection.instance.database.sizeBytes;
+    metrics["terrence_database_wal_size_bytes"] = collection.instance.database.walSizeBytes;
+    metrics["terrence_database_page_count"] = collection.instance.database.pageCount;
+    metrics["terrence_database_cache_size_bytes"] = collection.instance.database.cacheSizeBytes;
+    metrics["terrence_database_freelist_bytes"] = collection.instance.database.freelistBytes;
     // DB pool observation (todos 289,290,291): pending depth, latency p50/p95.
-    metrics.terrence_database_pool = collection.instance.database.pool;
+    metrics["terrence_database_pool"] = collection.instance.database.pool;
     // VCS webhook delivery queue (todo 192-194).
-    metrics.terrence_webhook_queue = {
+    metrics["terrence_webhook_queue"] = {
       queued: collection.instance.webhookQueue.queued,
       processing: collection.instance.webhookQueue.processing,
       failed: collection.instance.webhookQueue.failed,
@@ -142,22 +142,22 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
   }
   if (collection.process !== null) {
     const { snapshot, history } = collection.process;
-    metrics.terrence_process_rss_bytes = snapshot.rss;
-    metrics.terrence_process_max_rss_bytes = snapshot.maxRss;
-    metrics.terrence_process_heap_total_bytes = snapshot.heapTotal;
-    metrics.terrence_process_heap_used_bytes = snapshot.heapUsed;
-    metrics.terrence_process_external_bytes = snapshot.external;
-    metrics.terrence_process_array_buffers_bytes = snapshot.arrayBuffers;
-    metrics.terrence_process_uptime_seconds = snapshot.uptimeSeconds;
-    metrics.terrence_process_cpu_seconds = { user: snapshot.userCpuSeconds, system: snapshot.systemCpuSeconds };
-    metrics.terrence_requests = {
+    metrics["terrence_process_rss_bytes"] = snapshot.rss;
+    metrics["terrence_process_max_rss_bytes"] = snapshot.maxRss;
+    metrics["terrence_process_heap_total_bytes"] = snapshot.heapTotal;
+    metrics["terrence_process_heap_used_bytes"] = snapshot.heapUsed;
+    metrics["terrence_process_external_bytes"] = snapshot.external;
+    metrics["terrence_process_array_buffers_bytes"] = snapshot.arrayBuffers;
+    metrics["terrence_process_uptime_seconds"] = snapshot.uptimeSeconds;
+    metrics["terrence_process_cpu_seconds"] = { user: snapshot.userCpuSeconds, system: snapshot.systemCpuSeconds };
+    metrics["terrence_requests"] = {
       total: snapshot.requests.total,
       in_flight: snapshot.requests.inFlight,
       errors5xx: snapshot.requests.errors5xx,
     };
-    metrics.terrence_failures = { ...snapshot.failures };
-    metrics.terrence_storage_degraded = isStorageDegraded() ? 1 : 0;
-    metrics.terrence_worker = {
+    metrics["terrence_failures"] = { ...snapshot.failures };
+    metrics["terrence_storage_degraded"] = isStorageDegraded() ? 1 : 0;
+    metrics["terrence_worker"] = {
       polls: snapshot.worker.polls,
       last_poll_at: snapshot.worker.lastPollAt,
       last_poll_duration_ms: snapshot.worker.lastPollDurationMs,
@@ -169,7 +169,7 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
         last_ok: stats.lastOk,
       }])),
     };
-    metrics.terrence_process_history = {
+    metrics["terrence_process_history"] = {
       interval_ms: history.intervalMs,
       max_samples: history.maxSamples,
       samples: history.samples.map((sample): Record<string, number> => ({
@@ -196,14 +196,14 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
     };
   }
   if (collection.orgs !== null) {
-    metrics.organizations = collection.orgs.map((org): Record<string, unknown> => ({
+    metrics["organizations"] = collection.orgs.map((org): Record<string, unknown> => ({
       org_id: org.orgId,
       workspaces: org.workspaces,
       runs_by_status: org.runsByStatus,
     }));
   }
-  metrics.terrence_agent_pools_total = collection.agentPoolsTotal;
-  metrics.agent_pools = collection.agentPools.map((pool): Record<string, unknown> => ({
+  metrics["terrence_agent_pools_total"] = collection.agentPoolsTotal;
+  metrics["agent_pools"] = collection.agentPools.map((pool): Record<string, unknown> => ({
     id: pool.id,
     name: pool.name,
     org_id: pool.orgId,
@@ -434,7 +434,7 @@ function prometheusLines(collection: MetricsCollection): string[] {
   return lines;
 }
 
-export const readinessNodeId = (): string => process.env.TERRENCE_NODE_ID ?? "terrence-node-1";
+export const readinessNodeId = (): string => process.env["TERRENCE_NODE_ID"] ?? "terrence-node-1";
 
 async function readinessResponse(
   set: SetCtx["set"],
@@ -458,10 +458,10 @@ async function readinessResponse(
     if (timer !== undefined) clearTimeout(timer);
   });
   const disk = isStorageDegraded() ? "ERROR" : "OK";
-  const worker = envEnabled(process.env.TERRENCE_DISABLE_WORKER) ? "ERROR" : "OK";
+  const worker = envEnabled(process.env["TERRENCE_DISABLE_WORKER"]) ? "ERROR" : "OK";
   // Todo 64: fail readiness when operator policy demands a newer Landlock ABI than the host provides.
   const sandboxMinAbi = (() => {
-    const raw = process.env.TERRENCE_SANDBOX_MIN_ABI;
+    const raw = process.env["TERRENCE_SANDBOX_MIN_ABI"];
     if (raw === undefined || raw.trim() === "") return null;
     const n = Number.parseInt(raw.trim(), 10);
     return Number.isSafeInteger(n) && n >= 1 ? n : null;
@@ -469,7 +469,7 @@ async function readinessResponse(
   const sandboxAbiStatus: "OK" | "ERROR" =
     sandboxMinAbi !== null && probeLandlockAbi() < sandboxMinAbi ? "ERROR" : "OK";
   const maintenance = maintenanceSnapshot();
-  const draining = maintenance.active || ["draining", "maintenance"].includes((process.env.TERRENCE_NODE_STATUS ?? "").toLowerCase());
+  const draining = maintenance.active || ["draining", "maintenance"].includes((process.env["TERRENCE_NODE_STATUS"] ?? "").toLowerCase());
   const status =
     database === "ERROR" || disk === "ERROR" || sandboxAbiStatus === "ERROR"
       ? "ERROR"
@@ -511,7 +511,7 @@ async function readinessResponse(
     await db.insert(controlPlaneNodes).values({
       id: readinessNodeId(),
       hostname: readinessNodeId(),
-      address: process.env.TERRENCE_NODE_ADDRESS ?? null,
+      address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
       version: appVersion(),
       status: status === "ERROR" ? "error" : draining ? "draining" : "active",
       readinessChecks: result.checks,
@@ -521,7 +521,7 @@ async function readinessResponse(
       target: controlPlaneNodes.id,
       set: {
         hostname: readinessNodeId(),
-        address: process.env.TERRENCE_NODE_ADDRESS ?? null,
+        address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
         version: appVersion(),
         status: status === "ERROR" ? "error" : draining ? "draining" : "active",
         readinessChecks: result.checks,
@@ -625,7 +625,7 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
     }).catch(() => []);
     const byId = new Map(nodes.map((node): [string, typeof node] => [node.id, node]));
     byId.set(readinessNodeId(), {
-      id: readinessNodeId(), hostname: readinessNodeId(), address: process.env.TERRENCE_NODE_ADDRESS ?? null,
+      id: readinessNodeId(), hostname: readinessNodeId(), address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
       version: appVersion(), status: String(current.status).toLowerCase(), readinessChecks: current.checks,
       registeredAt: Date.now(), lastHeartbeatAt: Date.now(),
     });
@@ -637,7 +637,7 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
   })
   .get("/api/v1/metadata", (): { version: string; build: string } => ({
     version: appVersion(),
-    build: process.env.BUILD_SHA ?? "unknown",
+    build: process.env["BUILD_SHA"] ?? "unknown",
   }))
   .get("/api/v1/nodes", async (): Promise<{ data: string[]; links: { self: string } }> => {
     const nodes = await db.query.controlPlaneNodes.findMany({
@@ -659,12 +659,12 @@ export const healthRoutes = new Elysia({ name: "health" })
     h["TFE-Version"] = COMPATIBILITY_VERSION;
     h["X-TFE-Version"] = COMPATIBILITY_VERSION;
     const rateLimits = {
-      general: { max: Number(process.env.RATE_LIMIT_MAX ?? 30), windowMs: 1_000 },
-      workspaceRunHistory: { max: Number(process.env.RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX ?? 30), windowMs: Number(process.env.RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS ?? 60_000) },
-      sensitive: { max: Number(process.env.RATE_LIMIT_SENSITIVE_MAX ?? 5), windowMs: 60_000 },
-      ssoGet: { max: Number(process.env.RATE_LIMIT_SSO_GET_MAX ?? 60), windowMs: 60_000 },
-      scimSettings: { max: Number(process.env.RATE_LIMIT_SCIM_SETTINGS_MAX ?? 20), windowMs: 1_000 },
-      scimMapping: { max: Number(process.env.RATE_LIMIT_SCIM_MAPPING_MAX ?? 10), windowMs: 60_000 },
+      general: { max: Number(process.env["RATE_LIMIT_MAX"] ?? 30), windowMs: 1_000 },
+      workspaceRunHistory: { max: Number(process.env["RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX"] ?? 30), windowMs: Number(process.env["RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS"] ?? 60_000) },
+      sensitive: { max: Number(process.env["RATE_LIMIT_SENSITIVE_MAX"] ?? 5), windowMs: 60_000 },
+      ssoGet: { max: Number(process.env["RATE_LIMIT_SSO_GET_MAX"] ?? 60), windowMs: 60_000 },
+      scimSettings: { max: Number(process.env["RATE_LIMIT_SCIM_SETTINGS_MAX"] ?? 20), windowMs: 1_000 },
+      scimMapping: { max: Number(process.env["RATE_LIMIT_SCIM_MAPPING_MAX"] ?? 10), windowMs: 60_000 },
     };
     return {
       data: {
@@ -676,7 +676,7 @@ export const healthRoutes = new Elysia({ name: "health" })
           "maximum-client-version": null as string | null,
           "rate-limits": rateLimits,
         },
-        meta: { version: appVersion(), build: process.env.BUILD_SHA ?? "unknown" },
+        meta: { version: appVersion(), build: process.env["BUILD_SHA"] ?? "unknown" },
       },
     };
   })
@@ -717,7 +717,7 @@ export const healthRoutes = new Elysia({ name: "health" })
       log.error("Unable to read SSO configuration for ping", { error: error instanceof Error ? error.message : String(error) });
       const lastKnown = pingSsoLastKnown;
       return {
-        "signup-enabled": envEnabled(process.env.TERRENCE_ENABLE_LOCAL_SIGNUP),
+        "signup-enabled": envEnabled(process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"]),
         "local-auth-enabled": lastKnown?.localAuthEnabled ?? true,
         sso: {
           saml: lastKnown?.samlEnabled ?? false,
@@ -727,7 +727,7 @@ export const healthRoutes = new Elysia({ name: "health" })
       };
     }
     return {
-      "signup-enabled": envEnabled(process.env.TERRENCE_ENABLE_LOCAL_SIGNUP),
+      "signup-enabled": envEnabled(process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"]),
       "local-auth-enabled": sso.localAuthEnabled,
       sso: { saml: sso.samlEnabled, oidc: sso.oidcEnabled, ldap: sso.ldapEnabled },
     };
@@ -752,11 +752,11 @@ export const healthRoutes = new Elysia({ name: "health" })
     const abi = probeLandlockAbi();
     let reason: string | null = null;
     if (abi < 1) {
-      reason = process.env.TERRENCE_LANDLOCK_RUNNER
+      reason = process.env["TERRENCE_LANDLOCK_RUNNER"]
         ? "landlock-runner missing or Landlock not enabled in the kernel"
         : "Landlock is not available on this kernel (needs Linux >= 5.13 with CONFIG_SECURITY_LANDLOCK)";
     }
-    const extraRwAllowed = envEnabled(process.env.TERRENCE_SANDBOX_EXTRA_RW_ALLOWED);
+    const extraRwAllowed = envEnabled(process.env["TERRENCE_SANDBOX_EXTRA_RW_ALLOWED"]);
     return {
       data: {
         "run-sandbox": {

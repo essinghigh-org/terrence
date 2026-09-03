@@ -8,7 +8,7 @@
     "dev": "bun run --watch index.ts",
     "test": "bun test --bail=5 --max-concurrency=1 --no-orphans",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc6 --noEmit",
     "coverage": "bun run scripts/coverage-report.ts",
     "tfectl": "bun run scripts/tfectl.ts",
     "db:generate": "drizzle-kit generate",
@@ -18,10 +18,7 @@
     "@types/bun": "1.4.0",
     "@types/jsonwebtoken": "^9.0.10",
     "drizzle-kit": "^0.31.10",
-    "typescript": "~7.0.2"
-  },
-  "peerDependencies": {
-    "typescript": "~7.0.2"
+    "typescript": "npm:@typescript/typescript6@6.0.2"
   },
   "dependencies": {
     "@elysiajs/static": "^1.4.10",

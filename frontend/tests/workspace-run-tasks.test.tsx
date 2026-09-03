@@ -83,7 +83,7 @@ test("respects permissions and fully manages workspace run task bindings", async
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <WorkspaceRunTasks orgName="acme" workspaceId="ws-1" canManage={false} />,

@@ -60,7 +60,7 @@ function request(
   body?: unknown,
 ): Promise<Response> {
   const headers: Record<string, string> = {};
-  if (token !== null) headers.Authorization = `Bearer ${token}`;
+  if (token !== null) headers["Authorization"] = `Bearer ${token}`;
   if (body !== undefined) headers["Content-Type"] = "application/vnd.api+json";
   return app.handle(new Request(`http://terrence.test${path}`, {
     method,
@@ -222,10 +222,10 @@ describe("P1 security and authorization regressions", () => {
 
   it("requires HTTPS for OAuth endpoints outside test and opted-in development environments", async () => {
     const previousNodeEnv = process.env.NODE_ENV;
-    const previousInsecureFlag = process.env.TERRENCE_ALLOW_INSECURE_OAUTH_URLS;
+    const previousInsecureFlag = process.env["TERRENCE_ALLOW_INSECURE_OAUTH_URLS"];
     try {
       process.env.NODE_ENV = "production";
-      delete process.env.TERRENCE_ALLOW_INSECURE_OAUTH_URLS;
+      delete process.env["TERRENCE_ALLOW_INSECURE_OAUTH_URLS"];
       const rejected = await request(`/api/v2/organizations/${orgName}/oauth-clients`, adminToken, "POST", resource("oauth-clients", {
         name: `http-rejected-${suffix}`,
         "service-provider": "github_enterprise",
@@ -234,7 +234,7 @@ describe("P1 security and authorization regressions", () => {
       expect(rejected.status).toBe(422);
 
       process.env.NODE_ENV = "development";
-      process.env.TERRENCE_ALLOW_INSECURE_OAUTH_URLS = "true";
+      process.env["TERRENCE_ALLOW_INSECURE_OAUTH_URLS"] = "true";
       const optedIn = await request(`/api/v2/organizations/${orgName}/oauth-clients`, adminToken, "POST", resource("oauth-clients", {
         name: `http-development-${suffix}`,
         "service-provider": "github_enterprise",
@@ -244,8 +244,8 @@ describe("P1 security and authorization regressions", () => {
     } finally {
       if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
       else process.env.NODE_ENV = previousNodeEnv;
-      if (previousInsecureFlag === undefined) delete process.env.TERRENCE_ALLOW_INSECURE_OAUTH_URLS;
-      else process.env.TERRENCE_ALLOW_INSECURE_OAUTH_URLS = previousInsecureFlag;
+      if (previousInsecureFlag === undefined) delete process.env["TERRENCE_ALLOW_INSECURE_OAUTH_URLS"];
+      else process.env["TERRENCE_ALLOW_INSECURE_OAUTH_URLS"] = previousInsecureFlag;
     }
   });
 
@@ -373,7 +373,7 @@ describe("P1 security and authorization regressions", () => {
     });
     expect(startLog?.userId).toBe(adminId);
     expect(startLog?.details).toMatchObject({ targetUserId, impersonatorUserId: adminId });
-    const tokenId = (startLog?.details as Record<string, unknown> | null)?.impersonationTokenId;
+    const tokenId = (startLog?.details as Record<string, unknown> | null)?.["impersonationTokenId"];
     expect(typeof tokenId).toBe("string");
 
     const ended = await request("/api/v2/admin/users/actions/unimpersonate", impersonationToken, "POST");

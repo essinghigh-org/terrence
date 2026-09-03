@@ -48,7 +48,7 @@ export type IssuedIdentityToken = Readonly<{
 }>;
 
 export function workloadIdentityIssuer(): string {
-  const configured = process.env.PUBLIC_URL;
+  const configured = process.env["PUBLIC_URL"];
   try {
     return new URL(configured === undefined || configured === "" ? "http://localhost" : configured).origin;
   } catch {
@@ -58,7 +58,7 @@ export function workloadIdentityIssuer(): string {
 
 function publicJwk(publicKey: KeyObject): Record<string, unknown> {
   const jwk = publicKey.export({ format: "jwk" }) as Record<string, unknown>;
-  const encoded = `${String(jwk.kty)}:${String(jwk.n)}:${String(jwk.e)}`;
+  const encoded = `${String(jwk["kty"])}:${String(jwk["n"])}:${String(jwk["e"])}`;
   return {
     ...jwk,
     kid: createHash("sha256").update(encoded).digest("base64url"),
@@ -75,7 +75,7 @@ async function generateKeyRow(): Promise<KeyRow> {
     });
   });
   const jwk = publicJwk(pair.publicKey);
-  const keyId = String(jwk.kid);
+  const keyId = String(jwk["kid"]);
   const privatePem = pair.privateKey.export({ format: "pem", type: "pkcs8" }).toString();
   const now = Date.now();
   const row: typeof workloadIdentityKeys.$inferInsert = {
@@ -287,9 +287,9 @@ async function issue(claims: TokenClaims, runId: string, audience: string, ttlSe
     const generatedAt = Date.now();
     const iat = Math.floor(generatedAt / 1000);
     const exp = iat + ttlSeconds;
-    const jti = attempt === 0 ? String(claims.jti) : crypto.randomUUID();
-    const originalIat = typeof claims.iat === "number" ? claims.iat : iat;
-    const originalNbf = typeof claims.nbf === "number" ? claims.nbf : iat;
+    const jti = attempt === 0 ? String(claims["jti"]) : crypto.randomUUID();
+    const originalIat = typeof claims["iat"] === "number" ? claims["iat"] : iat;
+    const originalNbf = typeof claims["nbf"] === "number" ? claims["nbf"] : iat;
     const tokenClaims: TokenClaims = { ...claims, jti, iat, nbf: iat + (originalNbf - originalIat), exp };
     const expiresAt = exp * 1000;
     const token = jwt.sign(tokenClaims, privateKey, { algorithm: "RS256", keyid: key.keyId });
@@ -298,7 +298,7 @@ async function issue(claims: TokenClaims, runId: string, audience: string, ttlSe
       runId,
       keyId: key.keyId,
       audience,
-      subject: String(tokenClaims.sub),
+      subject: String(tokenClaims["sub"]),
       issuedAt: generatedAt,
       expiresAt,
       revokedAt: null,
@@ -368,7 +368,7 @@ export type CredentialProvider = "aws" | "gcp" | "azure" | "vault" | "hcp" | "ku
 export type CredentialConfiguration = Readonly<{ provider: CredentialProvider; tag?: string; values: Readonly<Record<string, unknown>> }>;
 
 function audienceFor(provider: CredentialProvider, values: Readonly<Record<string, unknown>>): string {
-  const configured = values.audience;
+  const configured = values["audience"];
   return typeof configured === "string" && configured.trim() !== "" ? configured.trim() : `${provider}.workload.identity`;
 }
 
@@ -406,9 +406,9 @@ function setAzureProviderEnvironment({ values, audience, tokenPath, set }: Provi
 
 function setVaultProviderEnvironment({ values, audience, set }: ProviderEnvironmentContext): void {
   set("TFC_VAULT_PROVIDER_AUTH", "true");
-  if (typeof values.url === "string") set("TFC_VAULT_ADDR", values.url);
+  if (typeof values["url"] === "string") set("TFC_VAULT_ADDR", values["url"]);
   if (typeof values["role-name"] === "string") set("TFC_VAULT_RUN_ROLE", values["role-name"]);
-  if (typeof values.namespace === "string") set("TFC_VAULT_NAMESPACE", values.namespace);
+  if (typeof values["namespace"] === "string") set("TFC_VAULT_NAMESPACE", values["namespace"]);
   if (typeof values["auth-path"] === "string") set("TFC_VAULT_AUTH_PATH", values["auth-path"]);
   set("TFC_VAULT_WORKLOAD_IDENTITY_AUDIENCE", audience);
 }
@@ -510,9 +510,9 @@ function workspaceProviderValues(
     providerValues["subscription-id"] = valueFor("RUN_SUBSCRIPTION_ID");
   }
   if (provider === "vault") {
-    providerValues.url = valueFor("ADDR");
+    providerValues["url"] = valueFor("ADDR");
     providerValues["role-name"] = valueFor("RUN_ROLE");
-    providerValues.namespace = valueFor("NAMESPACE");
+    providerValues["namespace"] = valueFor("NAMESPACE");
     providerValues["auth-path"] = valueFor("AUTH_PATH");
   }
   if (provider === "hcp") {
@@ -521,7 +521,7 @@ function workspaceProviderValues(
     providerValues["plan-provider-resource-name"] = valueFor("PLAN_PROVIDER_RESOURCE_NAME");
     providerValues["apply-provider-resource-name"] = valueFor("APPLY_PROVIDER_RESOURCE_NAME");
     providerValues["run-provider-resource-name"] = valueFor("RUN_PROVIDER_RESOURCE_NAME");
-    providerValues.audience = providerValues.audience ?? providerValues["provider-resource-name"];
+    providerValues["audience"] = providerValues["audience"] ?? providerValues["provider-resource-name"];
   }
   return providerValues;
 }

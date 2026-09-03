@@ -598,7 +598,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     const requestId = `_${randomBytes(16).toString("hex")}`;
     // Record the issued AuthnRequest so the ACS can match InResponseTo and
     // reject replayed or unsolicited assertions.
-    const rawRelayState = typeof query.RelayState === "string" ? query.RelayState : null;
+    const rawRelayState = typeof query["RelayState"] === "string" ? query["RelayState"] : null;
     // SAML 2.0 bindings cap RelayState at 80 bytes; reject oversized values
     // instead of storing or forwarding them to the IdP.
     if (rawRelayState !== null && Buffer.byteLength(rawRelayState, "utf8") > 80) {
@@ -631,14 +631,14 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     }
 
     const form = (body !== null && typeof body === "object" ? body : {}) as Record<string, unknown>;
-    const samlResponse = typeof form.SAMLResponse === "string"
-      ? form.SAMLResponse
-      : typeof query.SAMLResponse === "string"
-        ? query.SAMLResponse
+    const samlResponse = typeof form["SAMLResponse"] === "string"
+      ? form["SAMLResponse"]
+      : typeof query["SAMLResponse"] === "string"
+        ? query["SAMLResponse"]
         : "";
-    const relayState = typeof form.RelayState === "string"
-      ? form.RelayState
-      : typeof query.RelayState === "string" ? query.RelayState : null;
+    const relayState = typeof form["RelayState"] === "string"
+      ? form["RelayState"]
+      : typeof query["RelayState"] === "string" ? query["RelayState"] : null;
     if (samlResponse === "") {
       (set as { status: number }).status = 400;
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "Missing SAMLResponse."), 400);
@@ -774,8 +774,8 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     const authnChallenge = typeof inResponseTo === "string"
       ? await consumeSsoChallenge(SAML_AUTHN_CHALLENGE_KIND, inResponseTo)
       : undefined;
-    const issuedRelayState = authnChallenge?.relayState === null || typeof authnChallenge?.relayState === "string"
-      ? authnChallenge.relayState
+    const issuedRelayState = authnChallenge?.["relayState"] === null || typeof authnChallenge?.["relayState"] === "string"
+      ? authnChallenge["relayState"]
       : undefined;
     if (issuedRelayState === undefined || issuedRelayState !== relayState) {
       (set as { status: number }).status = 400;
@@ -921,15 +921,15 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     query: Readonly<Record<string, unknown>>;
   }): Promise<unknown> => {
     const settings = await currentSamlSettings();
-    const samlRequest = typeof query.SAMLRequest === "string" ? query.SAMLRequest : "";
+    const samlRequest = typeof query["SAMLRequest"] === "string" ? query["SAMLRequest"] : "";
     if (samlRequest !== "") {
-      const relayState = typeof query.RelayState === "string" ? query.RelayState : undefined;
+      const relayState = typeof query["RelayState"] === "string" ? query["RelayState"] : undefined;
       return handleIdpInitiatedLogout(samlRequest, relayState, settings, request, set);
     }
     // The IdP's response to an SP-initiated redirect binding completes at the
     // same endpoint. Local logout already happened before the request, so
     // just finish in the application instead of starting another request.
-    if (typeof query.SAMLResponse === "string" && query.SAMLResponse !== "") {
+    if (typeof query["SAMLResponse"] === "string" && query["SAMLResponse"] !== "") {
       const response = new Response(null, { status: 302, headers: { "Cache-Control": "no-store", Location: "/app" } });
       appendSetCookies(response, set.headers["Set-Cookie"]);
       return response;
@@ -989,13 +989,13 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
   }): Promise<unknown> => {
     const settings = await currentSamlSettings();
     const form = (body !== null && typeof body === "object" ? body : {}) as Record<string, unknown>;
-    const logoutRequestRaw = typeof form.SAMLRequest === "string"
-      ? form.SAMLRequest
-      : typeof query.SAMLRequest === "string"
-        ? query.SAMLRequest
+    const logoutRequestRaw = typeof form["SAMLRequest"] === "string"
+      ? form["SAMLRequest"]
+      : typeof query["SAMLRequest"] === "string"
+        ? query["SAMLRequest"]
         : "";
-    const relayState = typeof form.RelayState === "string"
-      ? form.RelayState
-      : typeof query.RelayState === "string" ? query.RelayState : undefined;
+    const relayState = typeof form["RelayState"] === "string"
+      ? form["RelayState"]
+      : typeof query["RelayState"] === "string" ? query["RelayState"] : undefined;
     return handleIdpInitiatedLogout(logoutRequestRaw, relayState, settings, request, set);
   });

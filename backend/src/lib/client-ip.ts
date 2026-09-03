@@ -35,7 +35,7 @@ export async function refreshTrustedClientIpHeaders(): Promise<void> {
       : [];
     cachedTrustedProxyCidrs = settingsCidrs.length > 0
       ? settingsCidrs
-      : (process.env.TERRENCE_TRUSTED_PROXY_CIDRS ?? "").split(",").map((cidr): string => cidr.trim()).filter(Boolean);
+      : (process.env["TERRENCE_TRUSTED_PROXY_CIDRS"] ?? "").split(",").map((cidr): string => cidr.trim()).filter(Boolean);
   } catch {
     cachedTrustedHeaders = [];
     cachedTrustedProxyCidrs = [];

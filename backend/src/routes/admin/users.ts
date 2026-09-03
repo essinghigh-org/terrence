@@ -42,12 +42,12 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
   .post("/api/v2/admin/users", async ({ body, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const username = typeof attrs.username === "string" ? normalizeUsername(attrs.username) : null;
-    const rawEmail = typeof attrs.email === "string" ? attrs.email.trim() : null;
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const username = typeof attrs["username"] === "string" ? normalizeUsername(attrs["username"]) : null;
+    const rawEmail = typeof attrs["email"] === "string" ? attrs["email"].trim() : null;
     const email = rawEmail === null || rawEmail === "" ? null : normalizeEmail(rawEmail);
-    const password = typeof attrs.password === "string" ? attrs.password : "";
+    const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
     const isSiteAdmin = attrs["is-site-admin"] === true;
     if (username === null) {
       (set as { status: number }).status = 422;
@@ -84,7 +84,7 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     return { data: adminUserResource(created) };
   })
   .get("/api/v2/admin/users/:user_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    const userId = params.user_id ?? "";
+    const userId = params["user_id"] ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -92,17 +92,17 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     return { data: adminUserResource(targetUser) };
   })
   .patch("/api/v2/admin/users/:user_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    const userId = params.user_id ?? "";
+    const userId = params["user_id"] ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if ((targetUser as unknown as { deletedAt?: unknown }).deletedAt != null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const updates: Partial<typeof users.$inferInsert> = {};
-    if (typeof attributes.username === "string") {
-      const username = normalizeUsername(attributes.username);
+    if (typeof attributes["username"] === "string") {
+      const username = normalizeUsername(attributes["username"]);
       if (username === null) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid username" }] };
@@ -114,8 +114,8 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
       }
       updates.username = username;
     }
-    if (attributes.email === null || typeof attributes.email === "string") {
-      const raw = attributes.email === null ? "" : attributes.email.trim();
+    if (attributes["email"] === null || typeof attributes["email"] === "string") {
+      const raw = attributes["email"] === null ? "" : attributes["email"].trim();
       const email = raw === "" ? null : normalizeEmail(raw);
       if (email === null && raw !== "") {
         (set as { status: number }).status = 422;
@@ -151,7 +151,7 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     return { data: adminUserResource(updated) };
   })
   .delete("/api/v2/admin/users/:user_id", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const userId = params.user_id ?? "";
+    const userId = params["user_id"] ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -236,10 +236,10 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
   // --- User Actions ---
   .post("/api/v2/admin/users/:user_id/actions/suspend", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const userId = params.user_id ?? "";
+    const userId = params["user_id"] ?? "";
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined || target.deletedAt !== null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if ((target as Record<string, unknown>).isSuspended === true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is already suspended" }] }; }
+    if ((target as Record<string, unknown>)["isSuspended"] === true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is already suspended" }] }; }
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
       await t.update(users).set({ isSuspended: true }).where(eq(users.id, userId));
@@ -256,10 +256,10 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
   })
   .post("/api/v2/admin/users/:user_id/actions/unsuspend", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const userId = params.user_id ?? "";
+    const userId = params["user_id"] ?? "";
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined || target.deletedAt !== null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if ((target as Record<string, unknown>).isSuspended !== true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is not suspended" }] }; }
+    if ((target as Record<string, unknown>)["isSuspended"] !== true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is not suspended" }] }; }
     await db.update(users).set({ isSuspended: false }).where(eq(users.id, userId));
     try { const { auditLog: al } = await import("../../lib/utils"); await al("unsuspend", "users", userId, user?.id ?? null, null, { username: (target as unknown as { username?: string }).username }); } catch {}
     publish("authz.changed", { "user-id": userId });
@@ -269,7 +269,7 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
   })
   .post("/api/v2/admin/users/:user_id/actions/grant_admin", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const userId = params.user_id ?? "";
+    const userId = params["user_id"] ?? "";
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined || target.deletedAt !== null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (target.isSiteAdmin === true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is already a site admin" }] }; }
@@ -282,7 +282,7 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
   })
   .post("/api/v2/admin/users/:user_id/actions/revoke_admin", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const userId = params.user_id ?? "";
+    const userId = params["user_id"] ?? "";
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined || target.deletedAt !== null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (target.isSiteAdmin !== true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is not a site admin" }] }; }
@@ -299,10 +299,10 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
   })
   .post("/api/v2/admin/users/:user_id/actions/grant_site_auditor", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const userId = params.user_id ?? "";
+    const userId = params["user_id"] ?? "";
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined || target.deletedAt !== null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if ((target as Record<string, unknown>).isSiteAuditor === true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is already a site auditor" }] }; }
+    if ((target as Record<string, unknown>)["isSiteAuditor"] === true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is already a site auditor" }] }; }
     await db.update(users).set({ isSiteAuditor: true }).where(eq(users.id, userId));
     await auditLog("grant-auditor", "users", userId, user.id, null, { username: target.username });
     publish("authz.changed", { "user-id": userId });
@@ -312,10 +312,10 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
   })
   .post("/api/v2/admin/users/:user_id/actions/revoke_site_auditor", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const userId = params.user_id ?? "";
+    const userId = params["user_id"] ?? "";
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined || target.deletedAt !== null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    if ((target as Record<string, unknown>).isSiteAuditor !== true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is not a site auditor" }] }; }
+    if ((target as Record<string, unknown>)["isSiteAuditor"] !== true) { (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "User is not a site auditor" }] }; }
     await db.update(users).set({ isSiteAuditor: false }).where(eq(users.id, userId));
     await auditLog("revoke-auditor", "users", userId, user.id, null, { username: target.username });
     publish("authz.changed", { "user-id": userId });
@@ -325,7 +325,7 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
   })
   .post("/api/v2/admin/users/:user_id/actions/disable_two_factor", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const target = await db.query.users.findFirst({ where: eq(users.id, params.user_id ?? "") });
+    const target = await db.query.users.findFirst({ where: eq(users.id, params["user_id"] ?? "") });
     if (target === undefined || target.deletedAt !== null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, target.id) });
     if (mfa === undefined || mfa.enabled !== true) {
@@ -339,14 +339,14 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
   })
   .post("/api/v2/admin/users/:user_id/actions/impersonate", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const userId = params.user_id ?? "";
+    const userId = params["user_id"] ?? "";
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined || target.deletedAt !== null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (target.id === user.id || target.isSiteAdmin === true) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "This user cannot be impersonated" }] };
     }
-    if ((target as Record<string, unknown>).isSuspended === true) {
+    if ((target as Record<string, unknown>)["isSuspended"] === true) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found", detail: "User not found" }] };
     }

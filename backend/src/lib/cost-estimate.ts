@@ -28,7 +28,7 @@ export type CostEstimateAttributes = Readonly<{
 // throwaway dir regardless of import order/caching.
 function costEstimateDirectory(): string {
   return resolve(
-    process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"),
+    process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"),
     "cost-estimates",
   );
 }
@@ -55,7 +55,7 @@ function count(value: unknown): number | undefined {
 
 function projectResources(projects: readonly unknown[], section: string): JsonObject[] {
   return projects.flatMap((project: unknown): JsonObject[] => {
-    const resources = asObject(asObject(project)?.[section])?.resources;
+    const resources = asObject(asObject(project)?.[section])?.["resources"];
     return Array.isArray(resources)
       ? resources.map(asObject).filter((resource: JsonObject | undefined): resource is JsonObject => resource !== undefined)
       : [];
@@ -88,30 +88,30 @@ export function parseInfracostOutput(
   const root = asObject(output);
   if (root === undefined) throw new Error("Infracost returned invalid JSON output.");
 
-  const proposed = decimal(root.totalMonthlyCost, "totalMonthlyCost");
-  const prior = root.pastTotalMonthlyCost === undefined
+  const proposed = decimal(root["totalMonthlyCost"], "totalMonthlyCost");
+  const prior = root["pastTotalMonthlyCost"] === undefined
     ? "0.0"
-    : decimal(root.pastTotalMonthlyCost, "pastTotalMonthlyCost");
-  const delta = root.diffTotalMonthlyCost === undefined
+    : decimal(root["pastTotalMonthlyCost"], "pastTotalMonthlyCost");
+  const delta = root["diffTotalMonthlyCost"] === undefined
     ? String(Number(proposed) - Number(prior))
-    : decimal(root.diffTotalMonthlyCost, "diffTotalMonthlyCost");
-  const projects = Array.isArray(root.projects) ? root.projects : [];
-  const summary = asObject(root.summary);
+    : decimal(root["diffTotalMonthlyCost"], "diffTotalMonthlyCost");
+  const projects = Array.isArray(root["projects"]) ? root["projects"] : [];
+  const summary = asObject(root["summary"]);
   const currentResources = projectResources(projects, "breakdown");
   const pastResources = projectResources(projects, "pastBreakdown");
   const diffResources = projectResources(projects, "diff");
-  const detected = count(summary?.totalDetectedResources)
+  const detected = count(summary?.["totalDetectedResources"])
     ?? Math.max(currentResources.length, pastResources.length, diffResources.length);
-  const matched = count(summary?.totalSupportedResources)
+  const matched = count(summary?.["totalSupportedResources"])
     ?? currentResources.filter((resource: JsonObject): boolean =>
-      resource.monthlyCost !== null && resource.monthlyCost !== undefined).length;
-  const unmatched = count(summary?.totalUnsupportedResources) ?? Math.max(detected - matched, 0);
+      resource["monthlyCost"] !== null && resource["monthlyCost"] !== undefined).length;
+  const unmatched = count(summary?.["totalUnsupportedResources"]) ?? Math.max(detected - matched, 0);
 
   return {
     status: "finished",
     "status-timestamps": timestamps,
     resources: {
-      currency: typeof root.currency === "string" ? root.currency : null,
+      currency: typeof root["currency"] === "string" ? root["currency"] : null,
       projects,
       summary: summary ?? {},
     },

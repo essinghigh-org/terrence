@@ -97,7 +97,7 @@ describe("userResource", () => {
   it("includes authentication-tokens relationship link", () => {
     const result = userResource({ id: "user-rel", username: "rel" });
     const rel = result.relationships["authentication-tokens"] as Record<string, unknown>;
-    expect((rel.links as Record<string, string>).related).toBe(
+    expect((rel["links"] as Record<string, string>)["related"]).toBe(
       "/api/v2/users/user-rel/authentication-tokens",
     );
   });
@@ -128,10 +128,10 @@ describe("run phase resources", () => {
       applyResourceDestructions: 0,
     } as unknown as Parameters<typeof planResource>[0];
 
-    const pendingPlan = planResource(pending, request).attributes as Record<string, unknown>;
-    const pendingApply = applyResource(pending, request).attributes as Record<string, unknown>;
-    const finishedPlan = planResource(finished, request).attributes as Record<string, unknown>;
-    const finishedApply = applyResource(finished, request).attributes as Record<string, unknown>;
+    const pendingPlan = planResource(pending, request)["attributes"] as Record<string, unknown>;
+    const pendingApply = applyResource(pending, request)["attributes"] as Record<string, unknown>;
+    const finishedPlan = planResource(finished, request)["attributes"] as Record<string, unknown>;
+    const finishedApply = applyResource(finished, request)["attributes"] as Record<string, unknown>;
     expect(pendingPlan["resource-additions"]).toBeNull();
     expect(pendingApply["resource-additions"]).toBeNull();
     expect(finishedPlan["resource-additions"]).toBe(0);
@@ -159,10 +159,10 @@ describe("run phase resources", () => {
       },
     } as unknown as Parameters<typeof planResource>[0];
 
-    expect((planResource(failedPlan, request).attributes as Record<string, unknown>).status).toBe("errored");
-    expect((applyResource(failedPlan, request).attributes as Record<string, unknown>).status).toBe("pending");
-    expect((planResource(failedApply, request).attributes as Record<string, unknown>).status).toBe("finished");
-    expect((applyResource(failedApply, request).attributes as Record<string, unknown>).status).toBe("errored");
+    expect((planResource(failedPlan, request)["attributes"] as Record<string, unknown>)["status"]).toBe("errored");
+    expect((applyResource(failedPlan, request)["attributes"] as Record<string, unknown>)["status"]).toBe("pending");
+    expect((planResource(failedApply, request)["attributes"] as Record<string, unknown>)["status"]).toBe("finished");
+    expect((applyResource(failedApply, request)["attributes"] as Record<string, unknown>)["status"]).toBe("errored");
   });
 });
 
@@ -191,12 +191,12 @@ describe("variable resources", () => {
       description: null,
     });
 
-    expect(variableSetVariable.type).toBe("vars");
-    expect(variableSetVariable.links).toEqual({
+    expect(variableSetVariable["type"]).toBe("vars");
+    expect(variableSetVariable["links"]).toEqual({
       self: "/api/v2/varsets/varset-1/relationships/vars/var-from-set",
     });
-    expect(workspaceVariable.type).toBe("vars");
-    expect(workspaceVariable.links).toEqual({
+    expect(workspaceVariable["type"]).toBe("vars");
+    expect(workspaceVariable["links"]).toEqual({
       self: "/api/v2/workspaces/workspace-1/vars/var-from-workspace",
     });
   });

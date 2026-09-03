@@ -100,7 +100,7 @@ async function readForwardBody(init: Readonly<RequestInit>): Promise<Buffer | nu
 }
 
 function forwardDeadline(): number {
-  const timeoutMs = Number(process.env.TERRENCE_AGENT_FORWARD_TIMEOUT_MS ?? DEFAULT_FORWARD_TIMEOUT_MS);
+  const timeoutMs = Number(process.env["TERRENCE_AGENT_FORWARD_TIMEOUT_MS"] ?? DEFAULT_FORWARD_TIMEOUT_MS);
   return Date.now() + (Number.isFinite(timeoutMs) ? Math.max(1_000, Math.min(timeoutMs, 300_000)) : DEFAULT_FORWARD_TIMEOUT_MS);
 }
 

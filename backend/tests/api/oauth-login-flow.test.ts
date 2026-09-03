@@ -80,10 +80,10 @@ describe("terraform login.v1 OAuth flow", () => {
     expect(res.status).toBe(200);
     const doc = (await res.json()) as { "login.v1"?: Record<string, unknown> };
     expect(doc["login.v1"]).toBeDefined();
-    expect((doc["login.v1"]!).authz).toBe(
+    expect((doc["login.v1"]!)["authz"]).toBe(
       "/oauth/authorization",
     );
-    expect((doc["login.v1"]!).token).toBe(
+    expect((doc["login.v1"]!)["token"]).toBe(
       "/oauth/token",
     );
   });

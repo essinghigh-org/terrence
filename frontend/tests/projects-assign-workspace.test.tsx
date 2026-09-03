@@ -59,7 +59,7 @@ test("assigns a workspace to another project via the workspace assignment dialog
     }
     throw new Error(`Unexpected request: ${method} ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/projects"]}>
@@ -87,7 +87,7 @@ test("assigns a workspace to another project via the workspace assignment dialog
 });
 
 test("does not allow workspace assignment without manage-project permission", async () => {
-  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme/projects") {
       return json({ data: [{ id: "prj-1", attributes: { name: "Default" } }] });
@@ -100,7 +100,7 @@ test("does not allow workspace assignment without manage-project permission", as
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/projects"]}>

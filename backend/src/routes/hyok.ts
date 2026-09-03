@@ -69,18 +69,18 @@ function hyokKeyVersionResource(row: Readonly<typeof hyokCustomerKeyVersions.$in
 
 function bodyData(body: unknown): { attributes?: Record<string, unknown> | undefined; relationships?: Record<string, unknown> | undefined } {
   if (body === null || typeof body !== "object") return {};
-  const data = (body as Record<string, unknown>).data;
+  const data = (body as Record<string, unknown>)["data"];
   if (data === null || typeof data !== "object") return {};
   const d = data as Record<string, unknown>;
   return {
-    attributes: d.attributes !== null && typeof d.attributes === "object" ? d.attributes as Record<string, unknown> : undefined,
-    relationships: d.relationships !== null && typeof d.relationships === "object" ? d.relationships as Record<string, unknown> : undefined,
+    attributes: d["attributes"] !== null && typeof d["attributes"] === "object" ? d["attributes"] as Record<string, unknown> : undefined,
+    relationships: d["relationships"] !== null && typeof d["relationships"] === "object" ? d["relationships"] as Record<string, unknown> : undefined,
   };
 }
 
 function relId(relationship: unknown): { id: string; type: string } | null {
   if (relationship === null || typeof relationship !== "object") return null;
-  const data = (relationship as Record<string, unknown>).data;
+  const data = (relationship as Record<string, unknown>)["data"];
   if (data === null || typeof data !== "object") return null;
   const d = data as { id?: unknown; type?: unknown };
   return typeof d.id === "string" ? { id: d.id, type: typeof d.type === "string" ? d.type : "" } : null;
@@ -89,7 +89,7 @@ function relId(relationship: unknown): { id: string; type: string } | null {
 export const hyokRoutes = new Elysia({ name: "hyok" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/hyok-configurations", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
     const rows = await db.query.hyokConfigurations.findMany({ where: eq(hyokConfigurations.orgId, org.id) });
@@ -110,11 +110,11 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
     return { data: await Promise.all(rows.map(async (row) => hyokResource(row, org.name, keyVersionsByConfig))) };
   })
   .post("/api/v2/organizations/:org_name/hyok-configurations", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
     const { attributes, relationships } = bodyData(body);
-    const name = typeof attributes?.name === "string" ? attributes.name : "";
+    const name = typeof attributes?.["name"] === "string" ? attributes["name"] : "";
     const kekId = typeof attributes?.["kek-id"] === "string" ? attributes["kek-id"] : "";
     const agentPoolRef = relId(relationships?.["agent-pool"] ?? null);
     const oidcRef = relId(relationships?.["oidc-configuration"] ?? null);
@@ -152,7 +152,7 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
     return { data: await hyokResource(row, org.name) };
   })
   .get("/api/v2/hyok-configurations/:id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const id = params.id ?? "";
+    const id = params["id"] ?? "";
     const row = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, id) });
     if (row === undefined) return notFound(set);
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, row.orgId) });
@@ -160,14 +160,14 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
     return { data: await hyokResource(row, org.name) };
   })
   .patch("/api/v2/hyok-configurations/:id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const id = params.id ?? "";
+    const id = params["id"] ?? "";
     const row = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, id) });
     if (row === undefined) return notFound(set);
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, row.orgId) });
     if (org === undefined || !(await checkOrganizationPermission(row.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
     const { attributes } = bodyData(body);
     const updates: Partial<typeof hyokConfigurations.$inferInsert> = {};
-    if (typeof attributes?.name === "string") updates.name = attributes.name;
+    if (typeof attributes?.["name"] === "string") updates.name = attributes["name"];
     if (typeof attributes?.["kek-id"] === "string") updates.kekId = attributes["kek-id"];
     if (attributes?.["kms-options"] !== undefined) updates.kmsOptions = attributes["kms-options"] !== null && typeof attributes["kms-options"] === "object" ? attributes["kms-options"] as Record<string, string> : null;
     if (Object.keys(updates).length > 0) await db.update(hyokConfigurations).set({ ...updates, updatedAt: Date.now() }).where(eq(hyokConfigurations.id, id));
@@ -176,7 +176,7 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
     return { data: await hyokResource(updated, org.name) };
   })
   .delete("/api/v2/hyok-configurations/:id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const id = params.id ?? "";
+    const id = params["id"] ?? "";
     const row = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, id) });
     if (row === undefined) return notFound(set);
     if (!(await checkOrganizationPermission(row.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
@@ -186,7 +186,7 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
   })
   .get("/api/v2/hyok-customer-key-versions/:key_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     // go-tfe HYOKCustomerKeyVersions.Read — the tfe_hyok_customer_key_version data source.
-    const keyVersion = await db.query.hyokCustomerKeyVersions.findFirst({ where: eq(hyokCustomerKeyVersions.id, params.key_id ?? "") });
+    const keyVersion = await db.query.hyokCustomerKeyVersions.findFirst({ where: eq(hyokCustomerKeyVersions.id, params["key_id"] ?? "") });
     if (keyVersion === undefined) return notFound(set);
     const hyok = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, keyVersion.hyokConfigId) });
     if (hyok === undefined || !(await checkOrganizationPermission(hyok.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);
@@ -194,7 +194,7 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
   })
   .get("/api/v2/hyok-encrypted-data-keys/:key_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     // go-tfe HYOKEncryptedDataKeys.Read — the tfe_hyok_encrypted_data_key data source.
-    const keyVersion = await db.query.hyokCustomerKeyVersions.findFirst({ where: eq(hyokCustomerKeyVersions.id, params.key_id ?? "") });
+    const keyVersion = await db.query.hyokCustomerKeyVersions.findFirst({ where: eq(hyokCustomerKeyVersions.id, params["key_id"] ?? "") });
     if (keyVersion === undefined) return notFound(set);
     const hyok = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, keyVersion.hyokConfigId) });
     if (hyok === undefined || !(await checkOrganizationPermission(hyok.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return notFound(set);

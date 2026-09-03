@@ -24,7 +24,7 @@ let tofuBin = "";
 
 // Iteration aid: TERRENCE_E2E_CLI=terraform (or tofu) runs only that CLI;
 // unset runs both.
-const e2eCliFilter: string | null = process.env.TERRENCE_E2E_CLI ?? null;
+const e2eCliFilter: string | null = process.env["TERRENCE_E2E_CLI"] ?? null;
 if (e2eCliFilter !== null && !["terraform", "tofu"].includes(e2eCliFilter)) {
   throw new Error(`Unsupported TERRENCE_E2E_CLI value: ${e2eCliFilter}`);
 }
@@ -169,11 +169,11 @@ async function startTlsProxy(backendPort: number): Promise<Awaited<ReturnType<ty
       const url = new URL(req.url);
       url.protocol = "http";
       url.host = `127.0.0.1:${backendPort}`;
-      if (process.env.TERRENCE_E2E_PROXY_LOG === "1") {
+      if (process.env["TERRENCE_E2E_PROXY_LOG"] === "1") {
         console.log(`[proxy] ${req.method} ${req.url}`);
       }
       return fetch(new Request(url, req)).then((res) => {
-        if (process.env.TERRENCE_E2E_PROXY_LOG === "1") {
+        if (process.env["TERRENCE_E2E_PROXY_LOG"] === "1") {
           console.log(`[proxy] -> ${res.status} ${req.method} ${req.url}`);
         }
         return res;
@@ -192,7 +192,7 @@ async function api(port: number, method: string, path: string, body?: unknown, t
     headers["Content-Type"] = "application/vnd.api+json";
     init.body = JSON.stringify(body);
   }
-  if (token !== undefined) headers.Authorization = `Bearer ${token}`;
+  if (token !== undefined) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetchWithRateLimitRetry(`http://127.0.0.1:${port}${path}`, init);
   const text = await res.text();
   let json: Record<string, any> = {};
@@ -221,7 +221,7 @@ async function signupAndToken(port: number): Promise<{ token: string; userId: st
     data: { attributes: { username, password } },
   });
   expect(login.status).toBe(200);
-  const tempToken = login.json.data.attributes.token as string;
+  const tempToken = login.json["data"].attributes.token as string;
 
   const pwRes = await api(port, "PATCH", "/api/v2/account/password", {
     data: {
@@ -238,13 +238,13 @@ async function signupAndToken(port: number): Promise<{ token: string; userId: st
     data: { attributes: { username, password: newPassword } },
   });
   expect(finalLogin.status).toBe(200);
-  const token = finalLogin.json.data.attributes.token as string;
+  const token = finalLogin.json["data"].attributes.token as string;
   expect(typeof token).toBe("string");
   expect(token).not.toBe("");
 
   const details = await api(port, "GET", "/api/v2/account/details", undefined, token);
   expect(details.status).toBe(200);
-  const userId = details.json.data.id as string;
+  const userId = details.json["data"].id as string;
   expect(userId).not.toBe("");
   return { token, userId, username };
 }
@@ -964,7 +964,7 @@ ${scimMapping}
 async function planAndApply(port: number, token: string, orgName: string, wsName: string, workDir: string): Promise<void> {
   const list = await api(port, "GET", `/api/v2/organizations/${orgName}/workspaces`, undefined, token);
   expect(list.status).toBe(200);
-  const ws = list.json.data.find((w: any): boolean => w.attributes.name === wsName);
+  const ws = list.json["data"].find((w: any): boolean => w.attributes.name === wsName);
   expect(ws).toBeDefined();
   const wsId = ws.id as string;
 
@@ -972,7 +972,7 @@ async function planAndApply(port: number, token: string, orgName: string, wsName
     data: { type: "configuration-versions", attributes: { "auto-queue-runs": true } },
   }, token);
   expect(cv.status).toBe(201);
-  const cvId = cv.json.data.id as string;
+  const cvId = cv.json["data"].id as string;
 
   const cfgDir = join(workDir, "run-config");
   await mkdir(cfgDir, { recursive: true });
@@ -1016,13 +1016,13 @@ output "probe_output" {
     },
   }, token);
   expect(run.status).toBe(201);
-  const runId = run.json.data.id as string;
+  const runId = run.json["data"].id as string;
 
   let status = "";
   for (let i = 0; i < 240; i++) {
     await sleep(2000);
     const r = await api(port, "GET", `/api/v2/runs/${runId}`, undefined, token);
-    status = r.json.data.attributes.status as string;
+    status = r.json["data"].attributes.status as string;
     if (status === "applied") break;
     if (["errored", "canceled", "discarded", "force_canceled"].includes(status)) {
       const planLog = await api(port, "GET", `/api/v2/runs/${runId}/plan/log`, undefined, token);
@@ -1040,11 +1040,11 @@ output "probe_output" {
     sv = await api(port, "GET", `/api/v2/workspaces/${wsId}/current-state-version`, undefined, token);
   }
   expect(sv.status, `current-state-version for workspace ${wsId} did not become available (last status ${sv.status}): ${sv.text.slice(0, 300)}`).toBe(200);
-  const resources = sv.json.data.attributes.resources as { name: string; type: string }[];
+  const resources = sv.json["data"].attributes.resources as { name: string; type: string }[];
   expect(resources.some((r): boolean => r.name === "probe" && r.type === "null_resource")).toBe(true);
 
   const apply = await api(port, "GET", `/api/v2/runs/${runId}/apply`, undefined, token);
-  const logUrl = apply.json.data.attributes["log-read-url"] as string;
+  const logUrl = apply.json["data"].attributes["log-read-url"] as string;
   const logRes = await fetch(logUrl);
   expect(logRes.ok).toBe(true);
   const logText = await logRes.text();
@@ -1176,11 +1176,11 @@ describe("tfe provider e2e", () => {
           // Fail loudly if the fixture cannot be resolved: silently skipping
           // the data sources would drop provider coverage without failing.
           let hyokDsTf = "";
-          const hyid = o.hyid?.value;
+          const hyid = o["hyid"]?.value;
           expect(typeof hyid, "hyid output must resolve").toBe("string");
           if (typeof hyid === "string") {
             const hyokRes = await api(backend.port, "GET", `/api/v2/hyok-configurations/${hyid}`, undefined, auth.token);
-            const kvRel = hyokRes.json.data?.relationships?.["hyok-customer-key-versions"]?.data as { id: string }[] | undefined;
+            const kvRel = hyokRes.json["data"]?.relationships?.["hyok-customer-key-versions"]?.data as { id: string }[] | undefined;
             const kid = kvRel?.[0]?.id;
             expect(typeof kid, "hyok key version must exist").toBe("string");
             if (typeof kid === "string") {
@@ -1305,8 +1305,8 @@ resource "tfe_admin_organization_settings" "aos" {
               data: { type: "authentication-tokens", attributes: { description: `e2e-scim-${suffix}` } },
             }, auth.token);
             if (scimTokRes.status === 201) {
-              const scimRaw = scimTokRes.json.data.attributes.token as string;
-              const scimTokenId = scimTokRes.json.data.id as string;
+              const scimRaw = scimTokRes.json["data"].attributes.token as string;
+              const scimTokenId = scimTokRes.json["data"].id as string;
               const groupRes = await fetch(`http://127.0.0.1:${backend.port}/scim/v2/Groups`, {
                 method: "POST",
                 headers: { "Content-Type": "application/scim+json", Authorization: `Bearer ${scimRaw}` },
@@ -1315,7 +1315,7 @@ resource "tfe_admin_organization_settings" "aos" {
               if (groupRes.status === 201) {
                 const scimGroupId = (await groupRes.json() as { id: string }).id;
                 const teamsRes = await api(backend.port, "GET", `/api/v2/organizations/pe2e-org-${suffix}/teams`, undefined, auth.token);
-                const team = (teamsRes.json.data as { id: string; attributes: { name: string } }[]).find((t): boolean => t.attributes.name === `pe2e-team-${suffix}`);
+                const team = (teamsRes.json["data"] as { id: string; attributes: { name: string } }[]).find((t): boolean => t.attributes.name === `pe2e-team-${suffix}`);
                 if (team !== undefined) {
                   scimMapping = scimGroupId;
                   scimMappingTf = `resource "tfe_scim_group_mapping" "sgm" {
@@ -1341,12 +1341,12 @@ data "tfe_scim_token" "d_stok" {
           let noCodeTf = "";
           {
             const modRes = await api(backend.port, "GET", `/api/v2/organizations/pe2e-org-${suffix}/registry-modules/private/pe2e-org-${suffix}/pe2e-mod-${suffix}/aws`, undefined, auth.token);
-            const moduleId = modRes.json.data?.id as string | undefined;
+            const moduleId = modRes.json["data"]?.id as string | undefined;
             if (typeof moduleId === "string") {
               const verRes = await api(backend.port, "POST", `/api/v2/registry-modules/${moduleId}/versions`, {
                 data: { type: "registry-module-versions", attributes: { version: "1.0.0" } },
               }, auth.token);
-              const versionId = verRes.json.data?.id as string | undefined;
+              const versionId = verRes.json["data"]?.id as string | undefined;
               if (typeof versionId === "string") {
                 await makeRegistryModuleArchive(join(workDir, "modver.tar.gz"));
                 const upload = await fetch(`http://127.0.0.1:${backend.port}/api/v2/registry-module-versions/${versionId}/upload`, {
@@ -1395,9 +1395,9 @@ data "tfe_no_code_module" "d_ncm" {
           cliOk(outApply, "build outputs apply");
           const outJson = await cli(bin, ["output", "-json", "-no-color"], cfgDir, cliEnv);
           const o2 = JSON.parse(outJson.out) as Record<string, { value: unknown }>;
-          expect(o2.run_output_value!.value).toBe("probe-value-pe2e");
-          expect(o2.ds_audit2?.value).toBe(true);
-          expect(o2.ds_rgs2?.value).toBe(true);
+          expect(o2["run_output_value"]!.value).toBe("probe-value-pe2e");
+          expect(o2["ds_audit2"]?.value).toBe(true);
+          expect(o2["ds_rgs2"]?.value).toBe(true);
           if (scimMapping !== "" || noCodeTf !== "" || scimDsTf !== "") {
             // The SCIM group mapping / no-code module were created in the second apply.
             const stateList2 = await cli(bin, ["state", "list"], cfgDir, cliEnv);
@@ -1443,12 +1443,12 @@ data "tfe_no_code_module" "d_ncm" {
         // leaving it behind fills the container's 8 GB cgroup RAM and OOM-kills
         // unrelated processes (the Hermes gateway), so remove it unless a debug
         // flag asks to keep it.
-        if (process.env.TERRENCE_E2E_KEEP_BACKEND_DIR === "1") {
+        if (process.env["TERRENCE_E2E_KEEP_BACKEND_DIR"] === "1") {
           console.log(`[e2e] backend kept: ${backend.storageDir}`);
         } else {
           await rm(backend.storageDir, { recursive: true, force: true }).catch(() => undefined);
         }
-        if (process.env.TERRENCE_E2E_KEEP_WORKDIR === "1") {
+        if (process.env["TERRENCE_E2E_KEEP_WORKDIR"] === "1") {
           console.log(`[e2e] workdir kept: ${workDir}`);
         } else {
           await rm(workDir, { recursive: true, force: true }).catch(() => undefined);

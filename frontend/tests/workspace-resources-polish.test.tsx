@@ -19,7 +19,7 @@ afterEach((): void => {
 
 test("shows searchable resources and redacts sensitive outputs", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url.startsWith("/api/v2/workspaces/ws-1/resources?")) {
       return json({
@@ -69,7 +69,7 @@ test("shows searchable resources and redacts sensitive outputs", async () => {
       });
     }
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(<WorkspaceResources workspaceId="ws-1" />);
   await waitFor((): void => { expect(view.getByText("aws_instance.web")).toBeTruthy(); });
@@ -131,7 +131,7 @@ test("shows searchable resources and redacts sensitive outputs", async () => {
 
 test("paginates resources and outputs independently", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url.startsWith("/api/v2/workspaces/ws-1/resources?")) {
       return json({
@@ -152,7 +152,7 @@ test("paginates resources and outputs independently", async () => {
     if (url === "/api/v2/workspaces/ws-1/readme") return json({ errors: [{ status: "404" }] }, 404);
     if (url === "/api/v2/workspaces/ws-1/dependency-graph") return json({ errors: [{ status: "404" }] }, 404);
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(<WorkspaceResources workspaceId="ws-1" />);
   await waitFor((): void => { expect(view.getByText("aws_instance.web_0")).toBeTruthy(); });

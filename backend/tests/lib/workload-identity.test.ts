@@ -45,11 +45,11 @@ describe("workload identity", () => {
       ttlSeconds: 600,
     });
     const claims = jwt.decode(issued.token) as Record<string, unknown>;
-    expect(claims.sub).toBe("organization:example:module:network:operation:test_run");
-    expect(claims.terraform_run_phase).toBe("plan");
-    expect(Number(claims.nbf)).toBe(Number(claims.iat) - 30);
-    expect(Number(claims.exp) - Number(claims.iat)).toBe(600);
-    expect((await verifyWorkloadIdentityToken(issued.token, "aws.workload.identity")).jti).toBe(issued.jti);
+    expect(claims["sub"]).toBe("organization:example:module:network:operation:test_run");
+    expect(claims["terraform_run_phase"]).toBe("plan");
+    expect(Number(claims["nbf"])).toBe(Number(claims["iat"]) - 30);
+    expect(Number(claims["exp"]) - Number(claims["iat"])).toBe(600);
+    expect((await verifyWorkloadIdentityToken(issued.token, "aws.workload.identity"))["jti"]).toBe(issued.jti);
 
     await revokeWorkloadIdentityTokens(runId);
     const revoked = verifyWorkloadIdentityToken(issued.token, "aws.workload.identity");
@@ -80,12 +80,12 @@ describe("workload identity", () => {
         { key: "TFC_KUBERNETES_WORKLOAD_IDENTITY_AUDIENCE", value: "kubernetes", category: "env" },
       ], directory);
       expect(result.tokens).toHaveLength(4);
-      expect(result.environment.TFC_WORKLOAD_IDENTITY_TOKEN).toBeString();
-      expect(result.environment.TFC_WORKLOAD_IDENTITY_TOKEN_SECOND).toBeString();
-      expect(result.environment.TFC_HCP_PROVIDER_AUTH).toBe("true");
-      expect(result.environment.TFC_KUBERNETES_PROVIDER_AUTH).toBe("true");
-      expect(result.environment.KUBE_TOKEN).toBeString();
-      expect(result.tokens.map((token) => (jwt.decode(token.token) as Record<string, unknown>).aud).sort()).toEqual([
+      expect(result.environment["TFC_WORKLOAD_IDENTITY_TOKEN"]).toBeString();
+      expect(result.environment["TFC_WORKLOAD_IDENTITY_TOKEN_SECOND"]).toBeString();
+      expect(result.environment["TFC_HCP_PROVIDER_AUTH"]).toBe("true");
+      expect(result.environment["TFC_KUBERNETES_PROVIDER_AUTH"]).toBe("true");
+      expect(result.environment["KUBE_TOKEN"]).toBeString();
+      expect(result.tokens.map((token) => (jwt.decode(token.token) as Record<string, unknown>)["aud"]).sort()).toEqual([
         "custom.one",
         "custom.two",
         "iam/project/pool/provider",
@@ -99,9 +99,9 @@ describe("workload identity", () => {
   test("publishes standard discovery metadata and retains retired keys for live tokens", async () => {
     const discovery = await workloadIdentityRoutes.handle(new Request("http://localhost/.well-known/openid-configuration"));
     const document = await discovery.json() as Record<string, unknown>;
-    expect(document.id_token_signing_alg_values_supported).toEqual(["RS256"]);
-    expect(document.subject_types_supported).toEqual(["public"]);
-    expect(document.response_types_supported).toEqual(["id_token"]);
+    expect(document["id_token_signing_alg_values_supported"]).toEqual(["RS256"]);
+    expect(document["subject_types_supported"]).toEqual(["public"]);
+    expect(document["response_types_supported"]).toEqual(["id_token"]);
 
     const runId = `run-${crypto.randomUUID()}`;
     await ensureTestRun(runId);
@@ -121,7 +121,7 @@ describe("workload identity", () => {
     await trimWorkloadIdentityKeys();
     const retired = await db.query.workloadIdentityKeys.findFirst({ where: eq(workloadIdentityKeys.keyId, issued.keyId) });
     expect(retired?.revokedAt).toBeNull();
-    expect((await verifyWorkloadIdentityToken(issued.token, "aws.workload.identity")).jti).toBe(issued.jti);
+    expect((await verifyWorkloadIdentityToken(issued.token, "aws.workload.identity"))["jti"]).toBe(issued.jti);
 
     await db.update(workloadIdentityTokens).set({ expiresAt: Date.now() - 1 }).where(eq(workloadIdentityTokens.jti, issued.jti));
     await trimWorkloadIdentityKeys();

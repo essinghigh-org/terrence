@@ -20,7 +20,7 @@ afterEach((): void => {
 });
 
 test("renders and invokes only the advertised admin run actions", async () => {
-  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/admin/users") return json({ data: [] });
     if (url === "/api/v2/admin/runs") {
@@ -51,7 +51,7 @@ test("renders and invokes only the advertised admin run actions", async () => {
     ) return json({ data: {} });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/admin/runs"]}>
@@ -117,7 +117,7 @@ test("destructive confirmations name the exact user and version (kanban 25.5)", 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/admin/users"]}>

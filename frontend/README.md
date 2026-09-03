@@ -1,32 +1,29 @@
-# React + TypeScript + Vite
+# Terrence frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React 19 + TypeScript web UI for Terrence. Built with the Bun native
+bundler (`Bun.build` via `scripts/build.ts` with `bun-plugin-tailwind`);
+typechecked with `tsc6 -b` (`tsconfig.app.json` + `tsconfig.tools.json`).
+There is no Vite, no HMR plugin, and no `.oxlintrc.json` in this workspace.
 
-Currently, two official plugins are available:
+## Commands (run from `frontend/`)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+| Command | Purpose |
+|---|---|
+| `bun run build` | Typecheck (`tsc6 -b`) then emit the static bundle consumed by the backend (`dist/`, served by the API). The backend `security-regression` suite asserts on this output, so build before running backend API tests. |
+| `bun test` | Unit tests (`tests/*.test.tsx`, `tests/*.test.ts`) under `bun:test` with mocked `fetch`. |
+| `bun run test:browser` | Browser E2E and accessibility suite (Bun.WebView). Needs `bun run build` first. |
+| `bun run typecheck` | `tsc6 -b` over the app and tools projects. |
 
-## React Compiler
+## Layout
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- `src/views/` — page-level components (`WorkspaceDetail`, `RunDetail`, `RunList`, ...).
+- `src/components/` — reusable UI (`PlanOutput`, `ApplyOutput`, `ProviderIcon`, `ui/` primitives built on `@base-ui/react`).
+- `src/lib/api.ts` — `fetchApi()` wrapper with token refresh; every view fetches fresh data on mount (no response cache).
+- `scripts/build.ts` — production bundler entry.
+- `tests/` — unit tests colocated by area; `tests/browser/` — WebView E2E.
 
-## Expanding the Oxlint configuration
+## Conventions
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+- Local state with `useState`/`useEffect`; no global state manager.
+- Tailwind CSS for styling; status symbols use colored text (`+`/`~`/`-`), not badges.
+- Collapsible panels default to collapsed with `→`/`↓` chevrons.

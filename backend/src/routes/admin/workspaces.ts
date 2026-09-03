@@ -14,31 +14,31 @@ export const workspacesRoutes = new Elysia({ name: "admin-workspaces" })
     return { data: allWs.map((w: WsItem): Record<string, unknown> => ({ id: w.id, type: "workspaces", attributes: { name: w.name, "terraform-version": w.terraformVersion, locked: w.locked } })) };
   })
   .get("/api/v2/admin/workspaces/:ws_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    const wsId = params.ws_id ?? "";
+    const wsId = params["ws_id"] ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: { id: ws.id, type: "workspaces", attributes: { name: ws.name, "terraform-version": ws.terraformVersion, locked: ws.locked } } };
   })
   .patch("/api/v2/admin/workspaces/:ws_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    const wsId = params.ws_id ?? "";
+    const wsId = params["ws_id"] ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const updates: Partial<typeof workspaces.$inferInsert> = {};
-    if (typeof attributes.name === "string") updates.name = attributes.name;
+    if (typeof attributes["name"] === "string") updates.name = attributes["name"];
     if (typeof attributes["terraform-version"] === "string") updates.terraformVersion = attributes["terraform-version"];
-    if (typeof attributes.locked === "boolean") updates.locked = attributes.locked;
+    if (typeof attributes["locked"] === "boolean") updates.locked = attributes["locked"];
     if (Object.keys(updates).length > 0) await db.update(workspaces).set(updates).where(eq(workspaces.id, wsId));
     const updated = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: { id: updated.id, type: "workspaces", attributes: { name: updated.name, "terraform-version": updated.terraformVersion, locked: updated.locked } } };
   })
   .delete("/api/v2/admin/workspaces/:ws_id", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const wsId = params.ws_id ?? "";
+    const wsId = params["ws_id"] ?? "";
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, wsId) });
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }

@@ -47,20 +47,20 @@ describe("remote-workflow projects contract", () => {
     );
     projectId = resource.id;
     expect(projectId.startsWith("prj-")).toBe(true);
-    expect(resource.attributes.name).toBe(`contract-project-${seed.suffix}`);
-    expect(resource.attributes.description === "" || resource.attributes.description === null).toBe(true);
+    expect(resource.attributes["name"]).toBe(`contract-project-${seed.suffix}`);
+    expect(resource.attributes["description"] === "" || resource.attributes["description"] === null).toBe(true);
     expect(resource.attributes["workspace-count"]).toBe(0);
     expect(resource.attributes["team-count"]).toBe(0);
     expect(resource.attributes["default-execution-mode"]).toBe("remote");
     expect(resource.attributes["setting-overwrites"]).toMatchObject({
       "execution-mode": false,
     });
-    expect(resource.attributes.permissions).toMatchObject({
+    expect(resource.attributes["permissions"]).toMatchObject({
       "can-update": true,
       "can-destroy": true,
       "can-create-workspace": true,
     });
-    expect(resource.relationships?.organization).toMatchObject({
+    expect(resource.relationships?.["organization"]).toMatchObject({
       data: { id: seed.orgName, type: "organizations" },
     });
     expectSelfLink(resource, "/api/v2/projects/");
@@ -68,8 +68,8 @@ describe("remote-workflow projects contract", () => {
 
   it("shows a project", async () => {
     const resource = await expectSuccessResponse(await request(`/api/v2/projects/${projectId}`, { headers }), 200, "projects");
-    expect(resource.attributes.name).toBe(`contract-project-${seed.suffix}`);
-    expect(resource.relationships?.organization).toMatchObject({
+    expect(resource.attributes["name"]).toBe(`contract-project-${seed.suffix}`);
+    expect(resource.relationships?.["organization"]).toMatchObject({
       data: { id: seed.orgName, type: "organizations" },
     });
   });
@@ -98,7 +98,7 @@ describe("remote-workflow projects contract", () => {
       200,
       "projects",
     );
-    expect(resource.attributes.description).toBe("updated description");
+    expect(resource.attributes["description"]).toBe("updated description");
   });
 
   it("destroys a project", async () => {

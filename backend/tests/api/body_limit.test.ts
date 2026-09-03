@@ -7,15 +7,15 @@ import { API_BODY_LIMIT_BYTES } from "../../src/lib/body-limit";
 // Content-Length is checked in onRequest before any buffering, and chunked
 // bodies are capped during onParse (BodyTooLargeError -> 413).
 describe("request body size guard", () => {
-  const previousSecret = process.env.GITHUB_WEBHOOK_SECRET;
+  const previousSecret = process.env["GITHUB_WEBHOOK_SECRET"];
 
   beforeAll(() => {
-    process.env.GITHUB_WEBHOOK_SECRET = "guard-secret";
+    process.env["GITHUB_WEBHOOK_SECRET"] = "guard-secret";
   });
 
   afterAll(() => {
-    if (previousSecret === undefined) delete process.env.GITHUB_WEBHOOK_SECRET;
-    else process.env.GITHUB_WEBHOOK_SECRET = previousSecret;
+    if (previousSecret === undefined) delete process.env["GITHUB_WEBHOOK_SECRET"];
+    else process.env["GITHUB_WEBHOOK_SECRET"] = previousSecret;
   });
 
   function oversizedBody(): string {

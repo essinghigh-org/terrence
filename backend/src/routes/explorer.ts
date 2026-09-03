@@ -64,25 +64,25 @@ function viewType(value: unknown): ViewType | undefined {
 function queryObject(value: unknown, fallbackType?: unknown): ExplorerQuery | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const raw = value as Record<string, unknown>;
-  const type = viewType(raw.type ?? fallbackType);
+  const type = viewType(raw["type"] ?? fallbackType);
   if (type === undefined) return undefined;
   let invalidOperator = false;
-  const filters = Array.isArray(raw.filter)
-    ? raw.filter.flatMap((item): ExplorerFilter[] => {
+  const filters = Array.isArray(raw["filter"])
+    ? raw["filter"].flatMap((item): ExplorerFilter[] => {
         if (typeof item !== "object" || item === null) return [];
         const filter = item as Record<string, unknown>;
-        const values = Array.isArray(filter.value) ? filter.value.filter((v): v is string => typeof v === "string") : [];
-        if (typeof filter.operator === "string" && !filterOperators.has(filter.operator)) invalidOperator = true;
-        return typeof filter.field === "string" && typeof filter.operator === "string"
-          ? [{ field: filter.field, operator: filter.operator, value: values }]
+        const values = Array.isArray(filter["value"]) ? filter["value"].filter((v): v is string => typeof v === "string") : [];
+        if (typeof filter["operator"] === "string" && !filterOperators.has(filter["operator"])) invalidOperator = true;
+        return typeof filter["field"] === "string" && typeof filter["operator"] === "string"
+          ? [{ field: filter["field"], operator: filter["operator"], value: values }]
           : [];
       })
     : [];
   if (invalidOperator) return undefined;
-  const fields = Array.isArray(raw.fields) ? raw.fields.filter((field): field is string => typeof field === "string") : [];
-  const sort = Array.isArray(raw.sort)
-    ? raw.sort.filter((field): field is string => typeof field === "string")
-    : typeof raw.sort === "string" ? raw.sort.split(",").filter(Boolean) : [];
+  const fields = Array.isArray(raw["fields"]) ? raw["fields"].filter((field): field is string => typeof field === "string") : [];
+  const sort = Array.isArray(raw["sort"])
+    ? raw["sort"].filter((field): field is string => typeof field === "string")
+    : typeof raw["sort"] === "string" ? raw["sort"].split(",").filter(Boolean) : [];
   const query = { type, filter: filters, fields, sort };
   return invalidQueryField(query) === null ? query : undefined;
 }
@@ -605,7 +605,7 @@ function streamingExplorerCsv(
 }
 
 async function organizationFor(params: Readonly<Record<string, string>>): Promise<typeof organizations.$inferSelect | undefined> {
-  return db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
+  return db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"] ?? "") });
 }
 
 type ExplorerBulkActionRecord = Readonly<typeof explorerBulkActionRecords.$inferSelect>;
@@ -646,11 +646,11 @@ const EXPLORER_NOTIFICATION_CONCURRENCY = 10;
 function bulkActionQuery(value: unknown): ExplorerQuery | undefined {
   if (value === null || typeof value !== "object") return undefined;
   const raw = value as Record<string, unknown>;
-  const type = viewType(raw.type);
+  const type = viewType(raw["type"]);
   if (type !== "workspaces") return undefined;
-  if (raw.filter !== undefined && !Array.isArray(raw.filter)) return undefined;
+  if (raw["filter"] !== undefined && !Array.isArray(raw["filter"])) return undefined;
 
-  const filter = (raw.filter ?? []).flatMap((item): Readonly<Record<string, unknown>>[] => {
+  const filter = (raw["filter"] ?? []).flatMap((item): Readonly<Record<string, unknown>>[] => {
     if (item === null || typeof item !== "object") return [];
     const entries = Object.entries(item as Record<string, unknown>);
     if (entries.length !== 1) return [];
@@ -662,7 +662,7 @@ function bulkActionQuery(value: unknown): ExplorerQuery | undefined {
       value: values,
     }));
   });
-  if (filter.length !== (raw.filter ?? []).length) return undefined;
+  if (filter.length !== (raw["filter"] ?? []).length) return undefined;
   return queryObject({ type, filter, fields: [], sort: [] });
 }
 
@@ -694,21 +694,21 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
     ) return explorerBulkActionError(set, 404, "Not Found");
 
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data;
+    const data = payload["data"];
     const dataObject = data !== null && typeof data === "object" ? data as Record<string, unknown> : {};
-    const attributes = dataObject.attributes !== null && typeof dataObject.attributes === "object"
-      ? dataObject.attributes as Record<string, unknown>
+    const attributes = dataObject["attributes"] !== null && typeof dataObject["attributes"] === "object"
+      ? dataObject["attributes"] as Record<string, unknown>
       : {};
-    const inputs = attributes.action_inputs !== null && typeof attributes.action_inputs === "object"
-      ? attributes.action_inputs as Record<string, unknown>
+    const inputs = attributes["action_inputs"] !== null && typeof attributes["action_inputs"] === "object"
+      ? attributes["action_inputs"] as Record<string, unknown>
       : {};
-    const subject = typeof inputs.subject === "string" ? inputs.subject.trim() : "";
-    const message = typeof inputs.message === "string" ? inputs.message.trim() : "";
-    const actionType = attributes.action_type;
-    const targetIds = attributes.target_ids;
-    const query = attributes.query;
+    const subject = typeof inputs["subject"] === "string" ? inputs["subject"].trim() : "";
+    const message = typeof inputs["message"] === "string" ? inputs["message"].trim() : "";
+    const actionType = attributes["action_type"];
+    const targetIds = attributes["target_ids"];
+    const query = attributes["query"];
     if (
-      dataObject.type !== "bulk_actions"
+      dataObject["type"] !== "bulk_actions"
       || (actionType !== "change_request" && actionType !== "change_requests")
       || subject === ""
       || message === ""
@@ -833,14 +833,14 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
       (set as { status: number }).status = 404; return error("404", "Not Found");
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    if (data !== undefined && data.type !== undefined && data.type !== "explorer-views") {
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    if (data !== undefined && data["type"] !== undefined && data["type"] !== "explorer-views") {
       (set as { status: number }).status = 422;
       return error("422", "Unprocessable Entity", "Invalid type");
     }
-    const name = typeof data?.name === "string" ? data.name.trim() : "";
+    const name = typeof data?.["name"] === "string" ? data["name"].trim() : "";
     if (name.length > 255) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "Name too long"); }
-    const query = queryObject(data?.query, data?.query_type ?? data?.["query-type"]);
+    const query = queryObject(data?.["query"], data?.["query_type"] ?? data?.["query-type"]);
     if (name === "" || query === undefined) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "name, query_type, and query are required"); }
     const saved: typeof explorerSavedQueries.$inferInsert = { id: `sq-${crypto.randomUUID()}`, orgId: org.id, name, queryType: query.type, query: { type: query.type, filter: query.filter, fields: query.fields, sort: query.sort }, createdAt: Date.now() };
     await db.insert(explorerSavedQueries).values(saved);
@@ -849,7 +849,7 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
   })
   .get("/api/v2/organizations/:org_name/explorer/views/:view_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
-    const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params.view_id ?? "") });
+    const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params["view_id"] ?? "") });
     if (org === undefined || view === undefined || view.orgId !== org.id || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
       (set as { status: number }).status = 404; return error("404", "Not Found");
     }
@@ -862,14 +862,14 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
   })
   .patch("/api/v2/organizations/:org_name/explorer/views/:view_id", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
-    const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params.view_id ?? "") });
+    const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params["view_id"] ?? "") });
     if (org === undefined || view === undefined || view.orgId !== org.id || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-workspaces"))) {
       (set as { status: number }).status = 404; return error("404", "Not Found");
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const name = typeof data?.name === "string" ? data.name.trim() : "";
-    const query = queryObject(data?.query, data?.query_type ?? data?.["query-type"] ?? view.queryType);
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const name = typeof data?.["name"] === "string" ? data["name"].trim() : "";
+    const query = queryObject(data?.["query"], data?.["query_type"] ?? data?.["query-type"] ?? view.queryType);
     if (name === "" || query === undefined) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "name and query are required"); }
     await db.update(explorerSavedQueries).set({ name, queryType: query.type, query: { type: query.type, filter: query.filter, fields: query.fields, sort: query.sort } }).where(eq(explorerSavedQueries.id, view.id));
     const updated = { ...view, name, queryType: query.type, query: { type: query.type, filter: query.filter, fields: query.fields, sort: query.sort } };
@@ -877,7 +877,7 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
   })
   .delete("/api/v2/organizations/:org_name/explorer/views/:view_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
-    const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params.view_id ?? "") });
+    const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params["view_id"] ?? "") });
     if (org === undefined || view === undefined || view.orgId !== org.id || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-workspaces"))) {
       (set as { status: number }).status = 404; return error("404", "Not Found");
     }
@@ -886,7 +886,7 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
   })
   .get("/api/v2/organizations/:org_name/explorer/views/:view_id/results", async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
-    const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params.view_id ?? "") });
+    const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params["view_id"] ?? "") });
     if (org === undefined || view === undefined || view.orgId !== org.id || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
       (set as { status: number }).status = 404; return error("404", "Not Found");
     }
@@ -897,7 +897,7 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
   })
   .get("/api/v2/organizations/:org_name/explorer/views/:view_id/csv", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
-    const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params.view_id ?? "") });
+    const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params["view_id"] ?? "") });
     if (org === undefined || view === undefined || view.orgId !== org.id || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
       (set as { status: number }).status = 404; return error("404", "Not Found");
     }

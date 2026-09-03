@@ -221,7 +221,7 @@ describe("audit coverage", () => {
       ),
     });
     expect(reads).toHaveLength(2);
-    const endpoints = new Set(reads.map((read): unknown => (read.details as Record<string, unknown>).endpoint));
+    const endpoints = new Set(reads.map((read): unknown => (read.details as Record<string, unknown>)["endpoint"]));
     expect(endpoints).toEqual(new Set(["json-download", "download"]));
     for (const read of reads) {
       expect(read).toMatchObject({ orgId, userId, details: { workspaceId } });
@@ -295,7 +295,7 @@ describe("audit coverage", () => {
         attributes: Record<string, unknown>;
       }[];
     };
-    expect(runEvents.data.map(({ attributes }): unknown => attributes.action)).toEqual(["create", "override-policy"]);
+    expect(runEvents.data.map(({ attributes }): unknown => attributes["action"])).toEqual(["create", "override-policy"]);
     expect(runEvents.data[0]).toMatchObject({
       type: "run-events",
       attributes: {

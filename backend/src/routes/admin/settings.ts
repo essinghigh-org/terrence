@@ -15,8 +15,8 @@ export const settingsRoutes = new Elysia({ name: "admin-settings" })
   .patch("/api/v2/admin/settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     return settingResource("settings", await updateSettings("site", attrs));
   })
   // --- B.1 General Settings ---
@@ -28,8 +28,8 @@ export const settingsRoutes = new Elysia({ name: "admin-settings" })
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return withAuthSettingsLock(async (): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const current = await getSettings("general");
     if (attrs["local-auth-enabled"] !== undefined && typeof attrs["local-auth-enabled"] !== "boolean") {
       (set as { status: number }).status = 422;
@@ -52,7 +52,7 @@ export const settingsRoutes = new Elysia({ name: "admin-settings" })
     ]);
     const authError = await authLockoutResponse(set, {
       saml: saml.enabled === true,
-      oidc: oidc.enabled === true,
+      oidc: oidc["enabled"] === true,
       ldap: ldap.enabled,
     }, localAuthEnabled);
     if (authError !== null) return authError;
@@ -72,8 +72,8 @@ export const settingsRoutes = new Elysia({ name: "admin-settings" })
   .post("/api/v2/admin/data-retention-policy-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const days = typeof attrs["delete-older-than-n-days"] === "number" ? attrs["delete-older-than-n-days"] : null;
     const values = await updateSettings("retention", { "delete-older-than-n-days": days });
     (set as { status: number }).status = 201;

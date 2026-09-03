@@ -107,7 +107,7 @@ test("loads every workspace page and replaces specific remote-state consumers", 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/general"]}>
@@ -220,7 +220,7 @@ test("reconciles general settings before reporting a remote-state replacement fa
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <WorkspaceSettings orgName="acme" workspace={workspace} onSaved={onSaved} />,
@@ -236,7 +236,7 @@ test("reconciles general settings before reporting a remote-state replacement fa
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect(view.getByText("Settings saved.")).toBeTruthy();
   });
-  expect(view.getByLabelText("Description").value)
+  expect((view.getByLabelText("Description") as HTMLInputElement).value)
     .toBe("Saved before consumers");
 
   await act(async (): Promise<void> => {
@@ -297,7 +297,7 @@ test("keeps general settings usable when remote-state consumers fail to load", a
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/general"]}>
@@ -316,7 +316,7 @@ test("keeps general settings usable when remote-state consumers fail to load", a
   fireEvent.input(view.getByLabelText("Description"), {
     target: { value: "Edited while consumers were loading" },
   });
-  expect(view.getByRole("button", { name: "Save settings" }).disabled)
+  expect((view.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled)
     .toBe(false);
 
   await act(async (): Promise<void> => {
@@ -326,7 +326,7 @@ test("keeps general settings usable when remote-state consumers fail to load", a
   });
   await view.findByText("Could not load approved workspaces: temporarily unavailable");
   expect(view.getByRole("button", { name: "Try again" })).toBeTruthy();
-  expect(view.getByRole("button", { name: "Save settings" }).disabled)
+  expect((view.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled)
     .toBe(false);
 
   await act(async (): Promise<void> => {
@@ -393,7 +393,7 @@ test("configures a workspace-specific agent pool override", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <WorkspaceSettings

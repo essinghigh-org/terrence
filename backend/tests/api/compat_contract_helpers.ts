@@ -87,8 +87,8 @@ export function expectResource(resource: unknown, type: string): asserts resourc
 }
 
 export function expectSelfLink(resource: JsonApiResource, prefix: string): void {
-  expect(typeof resource.links?.self).toBe("string");
-  expect(resource.links?.self).toMatch(new RegExp(`^${prefix}`));
+  expect(typeof resource.links?.["self"]).toBe("string");
+  expect(resource.links?.["self"]).toMatch(new RegExp(`^${prefix}`));
 }
 
 export function expectCollection(body: unknown, type: string): JsonApiResource[] {
@@ -109,9 +109,9 @@ export function expectPaginationMeta(body: unknown): void {
     expect(meta?.pagination).toHaveProperty(key);
   }
   const links = (body as { links?: Record<string, unknown> }).links;
-  expect(links?.self).toBeTypeOf("string");
-  expect(links?.first).toBeTypeOf("string");
-  expect(links?.last).toBeTypeOf("string");
+  expect(links?.["self"]).toBeTypeOf("string");
+  expect(links?.["first"]).toBeTypeOf("string");
+  expect(links?.["last"]).toBeTypeOf("string");
 }
 
 export function expectErrorDocument(body: unknown, status: string): void {

@@ -32,7 +32,7 @@ async function insertMemberships(tx: DeepReadonly<Parameters<Parameters<typeof d
 function parseStateResources(jsonState: string | null): unknown[] | undefined {
   try {
     const parsed = jsonState === null ? undefined : JSON.parse(decodeStatePayload(jsonState)) as Record<string, unknown>;
-    const rawResources = parsed?.resources;
+    const rawResources = parsed?.["resources"];
     return Array.isArray(rawResources) ? rawResources : undefined;
   } catch {
     return undefined;
@@ -48,14 +48,14 @@ function stateItems(jsonState: string | null): Readonly<{ resources: number; pro
   for (const raw of rawResources) {
     if (raw === null || typeof raw !== "object") continue;
     const resource = raw as Record<string, unknown>;
-    resources += Array.isArray(resource.instances) ? resource.instances.length : 0;
-    const provider = typeof resource.provider === "string" ? resource.provider.replace(/^provider\[\"|\"\]$/g, "") : "";
+    resources += Array.isArray(resource["instances"]) ? resource["instances"].length : 0;
+    const provider = typeof resource["provider"] === "string" ? resource["provider"].replace(/^provider\[\"|\"\]$/g, "") : "";
     if (provider !== "") {
       const name = provider.split("/").at(-1) ?? provider;
-      const version = typeof resource.provider_version === "string" ? resource.provider_version : "";
+      const version = typeof resource["provider_version"] === "string" ? resource["provider_version"] : "";
       providers.set(`${name}|${provider}|${version}`, { name, source: provider, version });
     }
-    const module = typeof resource.module === "string" ? resource.module : "";
+    const module = typeof resource["module"] === "string" ? resource["module"] : "";
     if (module !== "" && module !== "root") modules.set(`${module}|${module}`, { name: module, source: module, version: "" });
   }
   const providerItems = [...providers.values()].sort((a, b) => a.source.localeCompare(b.source));
@@ -66,7 +66,7 @@ function stateItems(jsonState: string | null): Readonly<{ resources: number; pro
 function jsonItems(value: string): ExplorerCatalogItem[] {
   try {
     const parsed: unknown = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter((item): item is ExplorerCatalogItem => item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).name === "string" && typeof (item as Record<string, unknown>).source === "string" && typeof (item as Record<string, unknown>).version === "string") : [];
+    return Array.isArray(parsed) ? parsed.filter((item): item is ExplorerCatalogItem => item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["name"] === "string" && typeof (item as Record<string, unknown>)["source"] === "string" && typeof (item as Record<string, unknown>)["version"] === "string") : [];
   } catch {
     return [];
   }
@@ -138,7 +138,7 @@ function explorerWorkspaceFields(data: DeepReadonly<ExplorerWorkspaceData>, now:
     workspaceUpdatedAt: workspace.updatedAt ?? now,
     terraformVersion: workspace.terraformVersion,
     executionMode: workspace.executionMode,
-    vcsRepoIdentifier: typeof repo.identifier === "string" ? repo.identifier : null,
+    vcsRepoIdentifier: typeof repo["identifier"] === "string" ? repo["identifier"] : null,
     projectId: workspace.projectId,
     projectName: data.project?.name ?? "Default Project",
   };
@@ -307,17 +307,17 @@ export function scheduleExplorerInventory(workspaceId: string): void {
 }
 
 export async function runExplorerInventoryJob(job: Job, context: DurableJobContext): Promise<void> {
-  const workspaceId = job.payload.workspaceId;
+  const workspaceId = job.payload["workspaceId"];
   if (typeof workspaceId !== "string") throw new Error("explorer-inventory job is missing workspaceId");
   if (await context.canceled()) return;
   await refreshExplorerWorkspace(workspaceId);
 }
 
 export async function runExplorerCatalogJob(job: Job, context: DurableJobContext): Promise<void> {
-  const orgId = job.payload.orgId;
+  const orgId = job.payload["orgId"];
   if (typeof orgId !== "string") throw new Error("explorer-catalog job is missing orgId");
   if (await context.canceled()) return;
-  if (job.payload.backfill === true) await backfillExplorerInventory(orgId, context);
+  if (job.payload["backfill"] === true) await backfillExplorerInventory(orgId, context);
   else await rebuildExplorerCatalog(orgId, context);
 }
 

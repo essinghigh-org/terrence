@@ -49,12 +49,12 @@ describe("remote-workflow variables contract", () => {
       "vars",
     );
     variableId = resource.id;
-    expect(resource.attributes.key).toBe("region");
-    expect(resource.attributes.value).toBe("us-east-1");
-    expect(resource.attributes.category).toBe("terraform");
-    expect(resource.attributes.sensitive).toBe(false);
-    expect(resource.attributes.hcl).toBe(false);
-    expect(resource.relationships?.workspace).toMatchObject({
+    expect(resource.attributes["key"]).toBe("region");
+    expect(resource.attributes["value"]).toBe("us-east-1");
+    expect(resource.attributes["category"]).toBe("terraform");
+    expect(resource.attributes["sensitive"]).toBe(false);
+    expect(resource.attributes["hcl"]).toBe(false);
+    expect(resource.relationships?.["workspace"]).toMatchObject({
       data: { id: workspaceId, type: "workspaces" },
     });
     expectSelfLink(resource, "/api/v2/workspaces/");
@@ -75,12 +75,12 @@ describe("remote-workflow variables contract", () => {
       201,
       "vars",
     );
-    expect(resource.attributes.category).toBe("env");
-    expect(resource.attributes.sensitive).toBe(true);
-    expect(resource.attributes.value).not.toBe("super-secret");
+    expect(resource.attributes["category"]).toBe("env");
+    expect(resource.attributes["sensitive"]).toBe(true);
+    expect(resource.attributes["value"]).not.toBe("super-secret");
 
     const shown = await expectSuccessResponse(await request(`/api/v2/workspaces/${workspaceId}/vars/${resource.id}`, { headers }), 200, "vars");
-    expect(shown.attributes.value).not.toBe("super-secret");
+    expect(shown.attributes["value"]).not.toBe("super-secret");
   });
 
   it("lists variables with pagination metadata", async () => {
@@ -107,8 +107,8 @@ describe("remote-workflow variables contract", () => {
       200,
       "vars",
     );
-    expect(resource.attributes.value).toBe("eu-west-1");
-    expect(resource.attributes.description).toBe("region override");
+    expect(resource.attributes["value"]).toBe("eu-west-1");
+    expect(resource.attributes["description"]).toBe("region override");
   });
 
   it("destroys a variable with 204 and empty body", async () => {

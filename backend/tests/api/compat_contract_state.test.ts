@@ -65,16 +65,16 @@ describe("remote-workflow state versions contract", () => {
     // the reference format emits ids prefixed with "sv-"; Terrence uses bare UUIDs (opaque to clients).
     expect(stateVersionId).toBeTypeOf("string");
     expect(stateVersionId).not.toBe("");
-    expect(resource.attributes.serial).toBe(1);
+    expect(resource.attributes["serial"]).toBe(1);
     // the reference format returns the MD5 digest of the state payload.
-    expect(resource.attributes.md5).toBe(
+    expect(resource.attributes["md5"]).toBe(
       createHash("md5").update('{"version":4,"serial":1,"lineage":"test-lineage","outputs":{}}').digest("hex"),
     );
-    expect(resource.attributes.lineage).toBe("test-lineage");
-    expect(resource.attributes.status).toBe("finalized");
+    expect(resource.attributes["lineage"]).toBe("test-lineage");
+    expect(resource.attributes["status"]).toBe("finalized");
     expect(resource.attributes["created-at"]).toBeTypeOf("string");
     expect(resource.attributes["hosted-state-download-url"]).toBeTypeOf("string");
-    expect(resource.relationships?.workspace).toMatchObject({
+    expect(resource.relationships?.["workspace"]).toMatchObject({
       data: { id: workspaceId, type: "workspaces" },
     });
     expectSelfLink(resource, "/api/v2/state-versions/");
@@ -86,8 +86,8 @@ describe("remote-workflow state versions contract", () => {
       200,
       "state-versions",
     );
-    expect(resource.attributes.serial).toBe(1);
-    expect(resource.attributes.status).toBe("finalized");
+    expect(resource.attributes["serial"]).toBe(1);
+    expect(resource.attributes["status"]).toBe("finalized");
     expect(resource.attributes["created-at"]).toBeTypeOf("string");
     expectSelfLink(resource, "/api/v2/state-versions/");
   });
@@ -110,7 +110,7 @@ describe("remote-workflow state versions contract", () => {
       200,
       "state-versions",
     );
-    expect(resource.attributes.serial).toBe(1);
+    expect(resource.attributes["serial"]).toBe(1);
   });
 
   it("lists state version outputs", async () => {
@@ -160,7 +160,7 @@ describe("remote-workflow state versions contract", () => {
       201,
       "state-versions",
     );
-    expect(newer.attributes.serial).toBe(2);
+    expect(newer.attributes["serial"]).toBe(2);
 
     const softDeleted = await expectSuccessResponse(
       await request(`/api/v2/state-versions/${stateVersionId}/actions/soft_delete_backing_data`, {
@@ -171,7 +171,7 @@ describe("remote-workflow state versions contract", () => {
       200,
       "state-versions",
     );
-    expect(softDeleted.attributes.status).toBe("backing_data_soft_deleted");
+    expect(softDeleted.attributes["status"]).toBe("backing_data_soft_deleted");
     await expectErrorResponse(await request(`/api/v2/state-versions/${stateVersionId}`, { headers }), 404);
 
     const restored = await expectSuccessResponse(
@@ -182,7 +182,7 @@ describe("remote-workflow state versions contract", () => {
       200,
       "state-versions",
     );
-    expect(restored.attributes.status).toBe("finalized");
+    expect(restored.attributes["status"]).toBe("finalized");
 
     await request(`/api/v2/state-versions/${stateVersionId}/actions/soft_delete_backing_data`, {
       method: "POST",
@@ -196,7 +196,7 @@ describe("remote-workflow state versions contract", () => {
       200,
       "state-versions",
     );
-    expect(permanentlyDeleted.attributes.status).toBe("backing_data_permanently_deleted");
+    expect(permanentlyDeleted.attributes["status"]).toBe("backing_data_permanently_deleted");
     await expectErrorResponse(await request(`/api/v2/state-versions/${stateVersionId}`, { headers }), 404);
   });
 });

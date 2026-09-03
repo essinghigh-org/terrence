@@ -10,7 +10,7 @@ import { recordFailure } from "./process-metrics";
 export type StoredRunLog = Readonly<Pick<typeof logs.$inferSelect, "id" | "runId" | "phase" | "outputText" | "createdAt">>;
 export type RunLogPage = Readonly<{ number: number; size: number }>;
 
-const storageDirectory = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "run-logs");
+const storageDirectory = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "run-logs");
 
 export function runLogArchivePath(runId: string): string {
   return join(storageDirectory, `${runId}.json.gz`);

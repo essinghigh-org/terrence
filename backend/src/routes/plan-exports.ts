@@ -49,11 +49,11 @@ export const planExportRoutes = new Elysia({ name: "plan-exports" })
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes: Record<string, unknown> = (data?.attributes ?? {}) as Record<string, unknown>;
-    const rels: Record<string, unknown> = (data?.relationships ?? {}) as Record<string, unknown>;
-    const planRel = rels.plan as Record<string, unknown> | undefined;
-    const planId = typeof (planRel?.data as Record<string, unknown> | undefined)?.id === "string" ? ((planRel?.data as Record<string, unknown>).id as string) : "";
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes: Record<string, unknown> = (data?.["attributes"] ?? {}) as Record<string, unknown>;
+    const rels: Record<string, unknown> = (data?.["relationships"] ?? {}) as Record<string, unknown>;
+    const planRel = rels["plan"] as Record<string, unknown> | undefined;
+    const planId = typeof (planRel?.["data"] as Record<string, unknown> | undefined)?.["id"] === "string" ? ((planRel?.["data"] as Record<string, unknown>)["id"] as string) : "";
 
     if (planId === "") {
       (set as { status: number }).status = 422;
@@ -91,7 +91,7 @@ export const planExportRoutes = new Elysia({ name: "plan-exports" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const pe = await db.query.planExports.findFirst({ where: eq(planExports.id, params.export_id ?? "") });
+    const pe = await db.query.planExports.findFirst({ where: eq(planExports.id, params["export_id"] ?? "") });
     if (pe === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -109,7 +109,7 @@ export const planExportRoutes = new Elysia({ name: "plan-exports" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const pe = await db.query.planExports.findFirst({ where: eq(planExports.id, params.export_id ?? "") });
+    const pe = await db.query.planExports.findFirst({ where: eq(planExports.id, params["export_id"] ?? "") });
     if (pe === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -142,7 +142,7 @@ export const planExportRoutes = new Elysia({ name: "plan-exports" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const exportId = params.export_id ?? "";
+    const exportId = params["export_id"] ?? "";
     const pe = await db.query.planExports.findFirst({ where: eq(planExports.id, exportId) });
     if (pe === undefined) {
       (set as { status: number }).status = 404;

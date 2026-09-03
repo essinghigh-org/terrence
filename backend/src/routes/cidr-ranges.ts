@@ -37,14 +37,14 @@ function isCidrBlock(value: string): boolean {
 async function createCidrRange(listId: string, attributes: Record<string, unknown>): Promise<CidrRangeItem | "invalid" | undefined> {
   const rawValue = typeof attributes["cidr-block"] === "string"
     ? attributes["cidr-block"].trim()
-    : typeof attributes.value === "string" ? attributes.value.trim() : "";
+    : typeof attributes["value"] === "string" ? attributes["value"].trim() : "";
   if (rawValue === "") return undefined;
   if (!isCidrBlock(rawValue)) return "invalid";
   const range: CidrRangeItem = {
     id: `cr-${crypto.randomUUID()}`,
     cidrRangeListId: listId,
     value: rawValue,
-    description: typeof attributes.description === "string" ? attributes.description : null,
+    description: typeof attributes["description"] === "string" ? attributes["description"] : null,
     createdAt: Date.now(),
   };
   await db.insert(cidrRanges).values(range);
@@ -95,7 +95,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
   .use(authPlugin)
   // CIDR Range Lists
   .get("/api/v2/organizations/:org_name/cidr-range-lists", async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"] ?? "") });
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -111,15 +111,15 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     return { data: await Promise.all(lists.map(async (l) => cidrRangeListResource(l))), ...pagination(request, number, size, total) };
   })
   .post("/api/v2/organizations/:org_name/cidr-range-lists", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"] ?? "") });
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId, tokenTeamId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = (data?.attributes as Record<string, unknown>) ?? {};
-    const name = typeof attributes.name === "string" ? attributes.name.trim() : "";
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = (data?.["attributes"] as Record<string, unknown>) ?? {};
+    const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
     if (name === "") {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "name is required" }] };
     }
@@ -133,7 +133,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
       id,
       orgId: org.id,
       name,
-      description: typeof attributes.description === "string" ? attributes.description : null,
+      description: typeof attributes["description"] === "string" ? attributes["description"] : null,
       enforcementScope,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -143,7 +143,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     return { data: await cidrRangeListResource(list) };
   })
   .get("/api/v2/cidr-range-lists/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params.id ?? "") });
+    const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params["id"] ?? "") });
     if (list === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkOrgPermission(user?.id, list.orgId, "member", tokenOrgId, tokenTeamId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -151,28 +151,28 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     return { data: await cidrRangeListResource(list) };
   })
   .patch("/api/v2/cidr-range-lists/:id", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params.id ?? "") });
+    const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params["id"] ?? "") });
     if (list === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkOrgPermission(user?.id, list.orgId, "owner", tokenOrgId, tokenTeamId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = (data?.attributes as Record<string, unknown>) ?? {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = (data?.["attributes"] as Record<string, unknown>) ?? {};
     const updates: Record<string, unknown> = { updatedAt: Date.now() };
-    if (typeof attributes.name === "string" && attributes.name.trim() !== "") updates.name = attributes.name.trim();
-    if (typeof attributes.description === "string") updates.description = attributes.description;
+    if (typeof attributes["name"] === "string" && attributes["name"].trim() !== "") updates["name"] = attributes["name"].trim();
+    if (typeof attributes["description"] === "string") updates["description"] = attributes["description"];
     if (typeof attributes["enforcement-scope"] === "string") {
       if (!enforcementScopes.has(attributes["enforcement-scope"])) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enforcement-scope is invalid" }] };
       }
-      updates.enforcementScope = attributes["enforcement-scope"];
+      updates["enforcementScope"] = attributes["enforcement-scope"];
     }
 
     await db.transaction(async (tx) => {
       await tx.update(cidrRangeLists).set(updates).where(eq(cidrRangeLists.id, list.id));
-      if (updates.enforcementScope === "organization" || updates.enforcementScope === "all_agent_pools") {
+      if (updates["enforcementScope"] === "organization" || updates["enforcementScope"] === "all_agent_pools") {
         await tx.delete(cidrRangeListAgentPools).where(eq(cidrRangeListAgentPools.cidrRangeListId, list.id));
       }
     });
@@ -181,7 +181,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     return { data: await cidrRangeListResource(updated) };
   })
   .delete("/api/v2/cidr-range-lists/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params.id ?? "") });
+    const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params["id"] ?? "") });
     if (list === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkOrgPermission(user?.id, list.orgId, "owner", tokenOrgId, tokenTeamId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -208,11 +208,11 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
   })
   .post("/api/v2/cidr-ranges", async ({ body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = (data?.attributes as Record<string, unknown>) ?? {};
-    const rels = (data?.relationships as Record<string, unknown>) ?? {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = (data?.["attributes"] as Record<string, unknown>) ?? {};
+    const rels = (data?.["relationships"] as Record<string, unknown>) ?? {};
     const listRel = rels["cidr-range-list"] as Record<string, unknown> | undefined;
-    const listId = typeof (listRel?.data as Record<string, unknown>)?.id === "string" ? ((listRel?.data as Record<string, unknown>).id as string) : "";
+    const listId = typeof (listRel?.["data"] as Record<string, unknown>)?.["id"] === "string" ? ((listRel?.["data"] as Record<string, unknown>)["id"] as string) : "";
 
     const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, listId) });
     if (list === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -228,7 +228,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     return { data: cidrRangeResource(range) };
   })
   .get("/api/v2/cidr-ranges/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const range = await db.query.cidrRanges.findFirst({ where: eq(cidrRanges.id, params.id ?? "") });
+    const range = await db.query.cidrRanges.findFirst({ where: eq(cidrRanges.id, params["id"] ?? "") });
     if (range === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, range.cidrRangeListId) });
     if (list === undefined || !(await checkOrgPermission(user?.id, list.orgId, "member", tokenOrgId, tokenTeamId))) {
@@ -237,27 +237,27 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     return { data: cidrRangeResource(range) };
   })
   .patch("/api/v2/cidr-ranges/:id", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const range = await db.query.cidrRanges.findFirst({ where: eq(cidrRanges.id, params.id ?? "") });
+    const range = await db.query.cidrRanges.findFirst({ where: eq(cidrRanges.id, params["id"] ?? "") });
     if (range === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, range.cidrRangeListId) });
     if (list === undefined || !(await checkOrgPermission(user?.id, list.orgId, "owner", tokenOrgId, tokenTeamId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = (data?.attributes as Record<string, unknown>) ?? {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = (data?.["attributes"] as Record<string, unknown>) ?? {};
     const updates: Record<string, unknown> = {};
     const cidrBlock = typeof attributes["cidr-block"] === "string"
       ? attributes["cidr-block"].trim()
-      : typeof attributes.value === "string" ? attributes.value.trim() : "";
+      : typeof attributes["value"] === "string" ? attributes["value"].trim() : "";
     if (cidrBlock !== "") {
       if (!isCidrBlock(cidrBlock)) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "cidr-block must be a valid CIDR block" }] };
       }
-      updates.value = cidrBlock;
+      updates["value"] = cidrBlock;
     }
-    if (typeof attributes.description === "string") updates.description = attributes.description;
+    if (typeof attributes["description"] === "string") updates["description"] = attributes["description"];
 
     await db.update(cidrRanges).set(updates).where(eq(cidrRanges.id, range.id));
     const updated = await db.query.cidrRanges.findFirst({ where: eq(cidrRanges.id, range.id) });
@@ -265,7 +265,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     return { data: cidrRangeResource(updated) };
   })
   .delete("/api/v2/cidr-ranges/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const range = await db.query.cidrRanges.findFirst({ where: eq(cidrRanges.id, params.id ?? "") });
+    const range = await db.query.cidrRanges.findFirst({ where: eq(cidrRanges.id, params["id"] ?? "") });
     if (range === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, range.cidrRangeListId) });
     if (list === undefined || !(await checkOrgPermission(user?.id, list.orgId, "owner", tokenOrgId, tokenTeamId))) {
@@ -277,7 +277,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
   })
 
   .get("/api/v2/cidr-range-lists/:id/relationships/cidr-ranges", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params.id ?? "") });
+    const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params["id"] ?? "") });
     if (list === undefined || !(await checkOrgPermission(user?.id, list.orgId, "member", tokenOrgId, tokenTeamId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -285,13 +285,13 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     return { data: ranges.map((range) => cidrRangeResource(range)) };
   })
   .post("/api/v2/cidr-range-lists/:id/relationships/cidr-ranges", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params.id ?? "") });
+    const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params["id"] ?? "") });
     if (list === undefined || !(await checkOrgPermission(user?.id, list.orgId, "owner", tokenOrgId, tokenTeamId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = (data?.attributes as Record<string, unknown>) ?? {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = (data?.["attributes"] as Record<string, unknown>) ?? {};
     const range = await createCidrRange(list.id, attributes);
     if (range === undefined || range === "invalid") {
       (set as { status: number }).status = 422;
@@ -301,7 +301,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     return { data: cidrRangeResource(range) };
   })
   .post("/api/v2/cidr-range-lists/:id/relationships/agent-pools", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params.id ?? "") });
+    const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params["id"] ?? "") });
     if (list === undefined || !(await checkOrgPermission(user?.id, list.orgId, "owner", tokenOrgId, tokenTeamId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -310,7 +310,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "agent pools are only valid for selected_agent_pools lists" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data;
+    const data = payload["data"];
     if (!Array.isArray(data)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data must be an array" }] };
@@ -318,7 +318,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     const parsedPoolIds = data.flatMap((item): string[] => {
       if (typeof item !== "object" || item === null) return [];
       const resource = item as Record<string, unknown>;
-      return resource.type === "agent-pools" && typeof resource.id === "string" ? [resource.id] : [];
+      return resource["type"] === "agent-pools" && typeof resource["id"] === "string" ? [resource["id"]] : [];
     });
     if (parsedPoolIds.length !== data.length) {
       (set as { status: number }).status = 422;
@@ -355,12 +355,12 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     return {};
   })
   .delete("/api/v2/cidr-range-lists/:id/relationships/agent-pools", async ({ params, user, body, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params.id ?? "") });
+    const list = await db.query.cidrRangeLists.findFirst({ where: eq(cidrRangeLists.id, params["id"] ?? "") });
     if (list === undefined || !(await checkOrgPermission(user?.id, list.orgId, "owner", tokenOrgId, tokenTeamId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data;
+    const data = payload["data"];
     if (!Array.isArray(data)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data must be an array" }] };
@@ -368,7 +368,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     const parsedPoolIds = data.flatMap((item): string[] => {
       if (typeof item !== "object" || item === null) return [];
       const resource = item as Record<string, unknown>;
-      return resource.type === "agent-pools" && typeof resource.id === "string" ? [resource.id] : [];
+      return resource["type"] === "agent-pools" && typeof resource["id"] === "string" ? [resource["id"]] : [];
     });
     if (parsedPoolIds.length !== data.length) {
       (set as { status: number }).status = 422;

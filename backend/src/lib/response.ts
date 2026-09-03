@@ -119,7 +119,7 @@ type ApiTokenWithRaw = DeepReadonly<typeof apiTokens.$inferSelect & Partial<Reco
 
 export function tokenResource(token: ApiTokenWithRaw, includeSecret = false): Record<string, unknown> {
   const iso = (value: number | null): string | null => value === null ? null : new Date(value).toISOString();
-  const rawToken = (token as Record<string, unknown>)._rawToken;
+  const rawToken = (token as Record<string, unknown>)["_rawToken"];
   let scopes: unknown = null;
   if (typeof token.scopes === "string" && token.scopes !== "") {
     try {
@@ -701,8 +701,8 @@ function buildRunBaselineAttributes(baseline?: Readonly<{ "median-duration-secon
 
 function resolveTriggeredByAvatarUrl(origin?: RunOrigin): string | null {
   const originRecord = origin as Record<string, unknown> | undefined;
-  const avatar = originRecord?.triggeredByAvatarUrl;
-  const providerId = originRecord?.triggeredByProviderId;
+  const avatar = originRecord?.["triggeredByAvatarUrl"];
+  const providerId = originRecord?.["triggeredByProviderId"];
   return AvatarService.resolveVcsUrl(
     typeof providerId === "string" ? providerId : null,
     typeof avatar === "string" ? avatar : null,
@@ -712,11 +712,11 @@ function resolveTriggeredByAvatarUrl(origin?: RunOrigin): string | null {
 function buildRunTriggerAttributes(origin?: RunOrigin): Record<string, unknown> {
   const originRecord = origin as Record<string, unknown> | undefined;
   return {
-    "trigger-reason": originRecord?.triggerReason ?? "manual",
-    "branch": originRecord?.branch ?? null,
-    "commit-sha": originRecord?.commitSha ?? null,
-    "commit-url": originRecord?.commitUrl ?? null,
-    "triggered-by": originRecord?.triggeredBy ?? null,
+    "trigger-reason": originRecord?.["triggerReason"] ?? "manual",
+    "branch": originRecord?.["branch"] ?? null,
+    "commit-sha": originRecord?.["commitSha"] ?? null,
+    "commit-url": originRecord?.["commitUrl"] ?? null,
+    "triggered-by": originRecord?.["triggeredBy"] ?? null,
     "triggered-by-avatar-url": resolveTriggeredByAvatarUrl(origin),
   };
 }
@@ -725,7 +725,7 @@ function getRunVariablesForResponse(run: RunParam): unknown[] {
   if (!Array.isArray(run.variables)) return [];
   return (run.variables as Record<string, unknown>[]).map((v) => ({
     ...v,
-    value: v.sensitive === true ? "******" : v.value,
+    value: v["sensitive"] === true ? "******" : v["value"],
   }));
 }
 
@@ -982,7 +982,7 @@ export type StateParam = DeepReadonly<typeof stateVersions.$inferSelect>;
 
 export function stateOutputResources(state: StateParam): Record<string, unknown>[] {
   const parsed = parseStatePayload(state.statePayload);
-  const outputs = parsed?.outputs;
+  const outputs = parsed?.["outputs"];
   if (outputs === null || outputs === undefined || typeof outputs !== "object" || Array.isArray(outputs)) return [];
 
   return Object.entries(outputs).map(([name, raw]: readonly [string, unknown]): Record<string, unknown> => {
@@ -990,8 +990,8 @@ export function stateOutputResources(state: StateParam): Record<string, unknown>
     const output = raw !== null && raw !== undefined && typeof raw === "object" && !Array.isArray(raw)
       ? (raw as Record<string, unknown>)
       : { value: raw };
-    const value = output.value;
-    const rawType = output.type;
+    const value = output["value"];
+    const rawType = output["type"];
     const detailedType = rawType ?? (
       Array.isArray(value) ? ["tuple", value.map((item: unknown): string => typeof item)] :
       value === null ? "null" :
@@ -1008,7 +1008,7 @@ export function stateOutputResources(state: StateParam): Record<string, unknown>
       attributes: {
         name,
         value,
-        sensitive: output.sensitive === true,
+        sensitive: output["sensitive"] === true,
         type,
         "detailed-type": detailedType,
       },
@@ -1026,40 +1026,40 @@ type OutputResourceRef = { id: string; type: string };
 // name/sensitive/output-type/value shape (see tfe.WorkspaceOutputs).
 export function workspaceOutputResources(state: StateParam): Record<string, unknown>[] {
   return stateOutputResources(state).map((resource: Record<string, unknown>): Record<string, unknown> => {
-    const attributes = (resource.attributes ?? {}) as Record<string, unknown>;
+    const attributes = (resource["attributes"] ?? {}) as Record<string, unknown>;
     return {
-      id: resource.id,
+      id: resource["id"],
       type: "workspace-outputs",
       attributes: {
-        name: attributes.name,
+        name: attributes["name"],
         // Sensitive output values are never exposed through the workspace
         // include=outputs path; authorized clients fetch them via the
         // state-version-outputs endpoint instead.
-        value: attributes.sensitive === true ? null : attributes.value,
-        sensitive: attributes.sensitive,
-        "output-type": attributes.type,
+        value: attributes["sensitive"] === true ? null : attributes["value"],
+        sensitive: attributes["sensitive"],
+        "output-type": attributes["type"],
       },
-      links: { self: `/api/v2/state-version-outputs/${String(resource.id)}` },
+      links: { self: `/api/v2/state-version-outputs/${String(resource["id"])}` },
     };
   });
 }
 
 function isStateResourceRecord(resource: unknown): resource is Record<string, unknown> {
   return resource !== null && resource !== undefined && typeof resource === "object" &&
-    typeof (resource as Record<string, unknown>).type === "string" &&
-    typeof (resource as Record<string, unknown>).name === "string";
+    typeof (resource as Record<string, unknown>)["type"] === "string" &&
+    typeof (resource as Record<string, unknown>)["name"] === "string";
 }
 
 type StateResource = Readonly<{ name: string; type: string; count: number; module: string; provider: string | null }>;
 type StateAggregates = DeepReadonly<{ modules: Record<string, Record<string, number>>; providers: Record<string, Record<string, number>> }>;
 
 function normalizeStateResource(resource: Readonly<Record<string, unknown>>): StateResource {
-  const rType = resource.type as string;
-  const rName = resource.name as string;
-  const rMode = resource.mode;
-  const rInstances = resource.instances;
-  const rModule = resource.module;
-  const rProvider = resource.provider;
+  const rType = resource["type"] as string;
+  const rName = resource["name"] as string;
+  const rMode = resource["mode"];
+  const rInstances = resource["instances"];
+  const rModule = resource["module"];
+  const rProvider = resource["provider"];
   return {
     name: rName,
     type: `${rMode === "data" ? "data." : ""}${rType}`,
@@ -1070,7 +1070,7 @@ function normalizeStateResource(resource: Readonly<Record<string, unknown>>): St
 }
 
 function extractStateResources(parsed: unknown): StateResource[] {
-  const rawResources = Array.isArray((parsed as Record<string, unknown> | null)?.resources) ? (parsed as Record<string, unknown>).resources as unknown[] : [];
+  const rawResources = Array.isArray((parsed as Record<string, unknown> | null)?.["resources"]) ? (parsed as Record<string, unknown>)["resources"] as unknown[] : [];
   return (rawResources)
     .filter(isStateResourceRecord)
     .map(normalizeStateResource);
@@ -1106,13 +1106,13 @@ function buildStateCoreAttributes(state: StateParam, parsed: Readonly<Record<str
     ...(includeState ? { state: payload } : {}),
     serial: state.serial,
     md5: createHash("md5").update(payload).digest("hex"),
-    lineage: typeof (parsed as Record<string, unknown> | null)?.lineage === "string" ? (parsed as Record<string, unknown>).lineage : null,
-    "terraform-version": typeof (parsed as Record<string, unknown> | null)?.terraform_version === "string" ? (parsed as Record<string, unknown>).terraform_version : null,
+    lineage: typeof (parsed as Record<string, unknown> | null)?.["lineage"] === "string" ? (parsed as Record<string, unknown>)["lineage"] : null,
+    "terraform-version": typeof (parsed as Record<string, unknown> | null)?.["terraform_version"] === "string" ? (parsed as Record<string, unknown>)["terraform_version"] : null,
     "resources-processed": parsed !== null,
     resources,
     modules: aggregates.modules,
     providers: aggregates.providers,
-    "state-version": parsed !== null && typeof (parsed as Record<string, unknown>).version === "number" && Number.isInteger((parsed as Record<string, unknown>).version) ? (parsed as Record<string, unknown>).version : null,
+    "state-version": parsed !== null && typeof (parsed as Record<string, unknown>)["version"] === "number" && Number.isInteger((parsed as Record<string, unknown>)["version"]) ? (parsed as Record<string, unknown>)["version"] : null,
     status: state.status ?? "finalized",
     intermediate: state.intermediate,
     size: Buffer.byteLength(payload),
@@ -1152,7 +1152,7 @@ function buildStateVersionRelationships(state: StateParam): Record<string, unkno
     workspace: { data: { id: state.workspaceId, type: "workspaces" } },
     run: state.runId !== null ? { data: { id: state.runId, type: "runs" } } : { data: null },
     outputs: {
-      data: outputResources.map((output): OutputResourceRef => ({ id: output.id as string, type: output.type as string })),
+      data: outputResources.map((output): OutputResourceRef => ({ id: output["id"] as string, type: output["type"] as string })),
     },
   };
 }

@@ -17,12 +17,12 @@ import { apiTokens, users } from "../../src/db/schema";
 import { storageDir } from "../../src/db/driver";
 import { defaultOutputName, sanitizeOutputName } from "../../src/lib/db-export";
 import { makeTestDbName } from "../setup";
-const isPostgresEnv = !!process.env.PG_ADMIN_URL || (process.env.DATABASE_URL?.includes("postgres") ?? false);
+const isPostgresEnv = !!process.env["PG_ADMIN_URL"] || (process.env["DATABASE_URL"]?.includes("postgres") ?? false);
 
 
-process.env.TERRENCE_DISABLE_RESTART ??= "1";
+process.env["TERRENCE_DISABLE_RESTART"] ??= "1";
 
-const PG_ADMIN_URL = process.env.PG_TEST_ADMIN_URL ?? "postgres://terrence:terrence@127.0.0.1:5432/terrence_test";
+const PG_ADMIN_URL = process.env["PG_TEST_ADMIN_URL"] ?? "postgres://terrence:terrence@127.0.0.1:5432/terrence_test";
 
 let adminToken = "";
 let adminId = "";

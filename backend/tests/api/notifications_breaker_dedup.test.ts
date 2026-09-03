@@ -25,7 +25,7 @@ describe("Notification circuit breaker & dedup (kanban 7.8 / 7.9)", () => {
   const authToken = `user-token-${suffix}`;
 
   beforeAll(async () => {
-    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
+    process.env["TERRENCE_ALLOW_PRIVATE_URLS"] = "true";
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: organizationName }]);
     await db.insert(organizationMemberships).values([

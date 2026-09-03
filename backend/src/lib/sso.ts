@@ -63,7 +63,7 @@ export async function ssoSettingsSnapshot(): Promise<SsoSettingsSnapshot> {
   return {
     localAuthEnabled: bool(general["local-auth-enabled"], true),
     samlEnabled: saml?.enabled === true,
-    oidcEnabled: bool(oidc.enabled),
+    oidcEnabled: bool(oidc["enabled"]),
     ldapEnabled: ldap.enabled,
   };
 }
@@ -86,21 +86,21 @@ export type LdapSettings = Readonly<{
 
 export async function ldapSettings(): Promise<LdapSettings> {
   const raw = await getSettings("ldap");
-  const encryptionValue = typeof raw.encryption === "string" ? raw.encryption : "";
+  const encryptionValue = typeof raw["encryption"] === "string" ? raw["encryption"] : "";
   const encryptionConfigured = ["plain", "starttls", "ldaps"].includes(encryptionValue);
-  if (bool(raw.enabled) && !encryptionConfigured) {
+  if (bool(raw["enabled"]) && !encryptionConfigured) {
     log.warn("LDAP settings are enabled without a valid encryption mode; LDAP login is disabled");
   }
   const encryption = encryptionConfigured
     ? encryptionValue as LdapSettings["encryption"]
     : "plain";
-  const port = typeof raw.port === "number" && Number.isInteger(raw.port) && raw.port >= 1 && raw.port <= 65535
-    ? raw.port
+  const port = typeof raw["port"] === "number" && Number.isInteger(raw["port"]) && raw["port"] >= 1 && raw["port"] <= 65535
+    ? raw["port"]
     : encryption === "ldaps" ? 636 : 389;
   return {
-    enabled: bool(raw.enabled) && encryptionConfigured,
+    enabled: bool(raw["enabled"]) && encryptionConfigured,
     allowEmailLinking: bool(raw["link-by-email"]),
-    host: str(raw.host),
+    host: str(raw["host"]),
     port,
     encryption,
     bindDn: str(raw["bind-dn"]),

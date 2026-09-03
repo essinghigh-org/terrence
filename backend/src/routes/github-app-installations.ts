@@ -80,11 +80,11 @@ function configuredUrl(value: string | undefined, fallback: string): URL | null 
 }
 
 function githubAppConfig(): GitHubAppConfig | null {
-  const appIdText = process.env.GITHUB_APP_ID?.trim() ?? "";
+  const appIdText = process.env["GITHUB_APP_ID"]?.trim() ?? "";
   const appId = positiveInteger(appIdText);
-  const privateKey = process.env.GITHUB_APP_PRIVATE_KEY?.replaceAll("\\n", "\n").trim() ?? "";
-  const slug = process.env.GITHUB_APP_SLUG?.trim() ?? "";
-  const httpUrl = configuredUrl(process.env.GITHUB_APP_HTTP_URL, "https://github.com");
+  const privateKey = process.env["GITHUB_APP_PRIVATE_KEY"]?.replaceAll("\\n", "\n").trim() ?? "";
+  const slug = process.env["GITHUB_APP_SLUG"]?.trim() ?? "";
+  const httpUrl = configuredUrl(process.env["GITHUB_APP_HTTP_URL"], "https://github.com");
   const apiUrl = githubAppApiBase(true);
   if (
     appId === null
@@ -297,13 +297,13 @@ async function discoverGithubInstallationRepositories(
     const response = await fetchRepositoryPage(url, token);
     if (response === null) break;
     const body = recordValue(response.body);
-    const records = body?.repositories;
+    const records = body?.["repositories"];
     if (!Array.isArray(records)) break;
     for (const value of records) {
       const record = recordValue(value);
-      const fullName = stringValue(record?.full_name);
+      const fullName = stringValue(record?.["full_name"]);
       if (record === null || fullName === null) continue;
-      const name = stringValue(record.name) ?? fullName.split("/").at(-1) ?? fullName;
+      const name = stringValue(record["name"]) ?? fullName.split("/").at(-1) ?? fullName;
       repositories.set(fullName, {
         id: fullName,
         type: "vcs-repositories",
@@ -328,21 +328,21 @@ function recordValue(value: unknown): RepositoryRecord | null {
 }
 
 function normalizedRepository(record: RepositoryRecord, provider: RepositoryProvider): RepositoryResource | null {
-  const namespace = recordValue(record.namespace);
-  const ownerRecord = recordValue(record.owner);
+  const namespace = recordValue(record["namespace"]);
+  const ownerRecord = recordValue(record["owner"]);
   const fullName = provider === "gitlab"
-    ? stringValue(record.path_with_namespace)
-      ?? (stringValue(namespace?.full_path) === null || stringValue(record.path) === null
+    ? stringValue(record["path_with_namespace"])
+      ?? (stringValue(namespace?.["full_path"]) === null || stringValue(record["path"]) === null
         ? null
-        : `${stringValue(namespace?.full_path)}/${stringValue(record.path)}`)
-    : stringValue(record.full_name);
+        : `${stringValue(namespace?.["full_path"])}/${stringValue(record["path"])}`)
+    : stringValue(record["full_name"]);
   if (fullName === null) return null;
 
-  const name = stringValue(record.name) ?? fullName.split("/").at(-1) ?? fullName;
+  const name = stringValue(record["name"]) ?? fullName.split("/").at(-1) ?? fullName;
   const owner = provider === "github"
-    ? stringValue(ownerRecord?.login)
+    ? stringValue(ownerRecord?.["login"])
     : provider === "bitbucket"
-      ? stringValue(ownerRecord?.display_name) ?? stringValue(ownerRecord?.nickname) ?? stringValue(ownerRecord?.username)
+      ? stringValue(ownerRecord?.["display_name"]) ?? stringValue(ownerRecord?.["nickname"]) ?? stringValue(ownerRecord?.["username"])
       : null;
   const pathOwner = fullName.split("/").slice(0, -1).join("/");
   return {
@@ -355,10 +355,10 @@ function normalizedRepository(record: RepositoryRecord, provider: RepositoryProv
 function repositoryPage(body: unknown, provider: RepositoryProvider): RepositoryPage | null {
   if (provider === "bitbucket") {
     const container = recordValue(body);
-    const values = container?.values;
+    const values = container?.["values"];
     if (!Array.isArray(values)) return null;
     return {
-      nextUrl: stringValue(container?.next),
+      nextUrl: stringValue(container?.["next"]),
       rawCount: values.length,
       records: values.flatMap((value): RepositoryRecord[] => {
         const record = recordValue(value);
@@ -391,7 +391,7 @@ async function fetchRepositoryPage(url: URL, token: string): Promise<{ body: unk
 }
 
 function workspaceSlug(record: RepositoryRecord): string | null {
-  return stringValue(recordValue(record.workspace)?.slug);
+  return stringValue(recordValue(record["workspace"])?.["slug"]);
 }
 
 async function discoverBitbucketRepositories(
@@ -534,18 +534,18 @@ async function fetchInstallation(
     });
     if (!response.ok) return null;
     const payload = await response.json() as Record<string, unknown>;
-    const account = payload.account !== null && typeof payload.account === "object"
-      ? payload.account as Record<string, unknown>
+    const account = payload["account"] !== null && typeof payload["account"] === "object"
+      ? payload["account"] as Record<string, unknown>
       : {};
-    const returnedId = payload.id;
-    const returnedAppId = payload.app_id;
-    const rawName = typeof account.login === "string"
-      ? account.login
-      : typeof account.name === "string"
-        ? account.name
+    const returnedId = payload["id"];
+    const returnedAppId = payload["app_id"];
+    const rawName = typeof account["login"] === "string"
+      ? account["login"]
+      : typeof account["name"] === "string"
+        ? account["name"]
         : "";
     const name = rawName.trim();
-    const rawType = payload.target_type ?? account.type;
+    const rawType = payload["target_type"] ?? account["type"];
     if (
       returnedId !== installationId
       || returnedAppId !== config.appId
@@ -553,9 +553,9 @@ async function fetchInstallation(
       || (rawType !== "Organization" && rawType !== "User")
     ) return null;
     return {
-      iconUrl: httpUrl(account.avatar_url),
+      iconUrl: httpUrl(account["avatar_url"]),
       installationType: rawType,
-      installationUrl: httpUrl(payload.html_url),
+      installationUrl: httpUrl(payload["html_url"]),
       name: name.slice(0, 255),
     };
   } catch {
@@ -581,13 +581,13 @@ function installationResource(installation: Readonly<typeof githubAppInstallatio
 export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstallations" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/vcs-connections/:connection_id/repositories", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"] ?? "") });
     if (org === undefined || !(await checkOrganizationVcsReadPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
 
-    let connectionId = params.connection_id ?? "";
+    let connectionId = params["connection_id"] ?? "";
     if (connectionId.startsWith("github-app:")) connectionId = connectionId.slice("github-app:".length);
     if (connectionId.startsWith("oauth-token:")) connectionId = connectionId.slice("oauth-token:".length);
 
@@ -664,7 +664,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     };
   })
   .get("/api/v2/github-app/installation/:gh_app_installation_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const installation = await db.query.githubAppInstallations.findFirst({ where: eq(githubAppInstallations.id, params.gh_app_installation_id ?? "") });
+    const installation = await db.query.githubAppInstallations.findFirst({ where: eq(githubAppInstallations.id, params["gh_app_installation_id"] ?? "") });
     if (installation === undefined || (user?.isSiteAdmin !== true && !(await checkOrganizationVcsReadPermission(installation.orgId, user?.id, tokenOrgId, tokenTeamId)))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -672,7 +672,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     return { data: installationResource(installation) };
   })
   .get("/api/v2/organizations/:org_name/github-app/installations", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"] ?? "") });
     if (org === undefined || !(await checkOrganizationVcsReadPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -683,15 +683,15 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     return { data: installations.map(installationResource) };
   })
   .post("/api/v2/organizations/:org_name/github-app/installations", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"] ?? "") });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
-    const attributes = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
-    const name = typeof attributes.name === "string" ? attributes.name.trim() : "";
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+    const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
     const installationId = attributes["installation-id"];
     if (name === "" || typeof installationId !== "number" || !Number.isSafeInteger(installationId) || installationId <= 0) {
       (set as { status: number }).status = 422;
@@ -716,14 +716,14 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     return { data: installationResource({ ...installation, iconUrl: null, installationType: "Organization", installationUrl: null }) };
   })
   .delete("/api/v2/organizations/:org_name/github-app/installations/:installation_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"] ?? "") });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const installation = await db.query.githubAppInstallations.findFirst({
       where: and(
-        eq(githubAppInstallations.id, params.installation_id ?? ""),
+        eq(githubAppInstallations.id, params["installation_id"] ?? ""),
         eq(githubAppInstallations.orgId, org.id),
       ),
     });
@@ -756,7 +756,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     return {};
   })
   .get("/api/v2/organizations/:org_name/github-app/installations/setup", async ({ params, request, user, token, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"] ?? "") });
     if (
       org === undefined
       || request === undefined
@@ -871,7 +871,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
     // 8.12 GitHub App permission diagnostics — detects missing required
     // permissions by exercising the exact API calls Terrence makes with the
     // installation (commit statuses write path) and reports what to change.
-    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params.org_name ?? "") });
+    const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"] ?? "") });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -943,7 +943,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
         return { installationId: installation.installationId, config: config?.appId ?? null, checks };
       }
       if (tokenDetails.permissions !== null) {
-        const statusesPermission = tokenDetails.permissions.statuses;
+        const statusesPermission = tokenDetails.permissions["statuses"];
         if (statusesPermission === "write") {
           checks.push({ id: "commit-statuses", label: "Commit statuses (write)", ok: true, status: null, detail: `The installation access token grants Commit statuses write on active repository ${repo.full_name}.` });
         } else {

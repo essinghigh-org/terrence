@@ -111,7 +111,7 @@ test("orders registry releases by SemVer and skips revoked releases", () => {
 test("browses and filters registry cards with distinct module permissions", async () => {
   const requests: string[] = [];
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     requests.push(url);
     if (url.startsWith("/api/v2/provider-icons?")) return json({ data: [
@@ -122,7 +122,7 @@ test("browses and filters registry cards with distinct module permissions", asyn
     if (url.startsWith("/api/v2/organizations/acme/registry-modules?")) return json({ data: [moduleResource()], meta: { pagination: { "total-pages": 2, "total-count": 1 }, providers: ["aws", "azurerm"] } });
     if (url === "/api/v2/organizations/acme/registry-providers") return json({ data: [{ id: "provider-sendgrid", attributes: { name: "sendgrid", namespace: "acme", "registry-name": "private", "created-at": "2026-08-01T12:00:00.000Z" } }] });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(<MemoryRouter initialEntries={["/app/acme/registry"]}><Routes><Route path="/app/:orgName/registry" element={<><Registry /><LocationProbe /></>} /></Routes></MemoryRouter>);
   const eyebrow = view.getByText("Private infrastructure / catalog");
@@ -173,7 +173,7 @@ test("browses and filters registry cards with distinct module permissions", asyn
 
 test("renders the provider icon fallback after artwork loading fails", async () => {
   // SAFETY: the mock's handling mirrors the provider-icon endpoint contract.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url.startsWith("/api/v2/provider-icons?")) return json({ data: [{
       id: "example/widget",
@@ -181,7 +181,7 @@ test("renders the provider icon fallback after artwork loading fails", async () 
       attributes: { "icon-url": "/icons/providers/missing.svg" },
     }] });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <ProviderIcon
@@ -197,7 +197,7 @@ test("renders the provider icon fallback after artwork loading fails", async () 
 
 test("uses provider dependency sources without guessing namespaces", async () => {
   const requests: string[] = [];
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     requests.push(url);
     if (url.startsWith("/api/v2/provider-icons?")) {
@@ -214,7 +214,7 @@ test("uses provider dependency sources without guessing namespaces", async () =>
       })) });
     }
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <div>
@@ -252,7 +252,7 @@ test("shows loading, retryable errors, and an honest empty state", async () => {
   let resolveFirst!: (response: Response) => void;
   const first = new Promise<Response>((resolve): void => { resolveFirst = resolve; });
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme") return json({ data: { attributes: { permissions: { "can-manage-modules": true } } } });
     if (url.startsWith("/api/v2/organizations/acme/registry-modules?")) {
@@ -261,7 +261,7 @@ test("shows loading, retryable errors, and an honest empty state", async () => {
       return json({ data: [], meta: { pagination: { "total-pages": 1 }, providers: [] } });
     }
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(<MemoryRouter initialEntries={["/app/acme/registry"]}><Routes><Route path="/app/:orgName/registry" element={<Registry />} /></Routes></MemoryRouter>);
   expect(view.getByRole("status").textContent).toContain("Loading registry");
@@ -274,12 +274,12 @@ test("shows loading, retryable errors, and an honest empty state", async () => {
 
 test("suppresses provider browse controls for a confirmed empty collection", async () => {
   // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme") return json({ data: { attributes: { permissions: { "can-manage-modules": true } } } });
     if (url === "/api/v2/organizations/acme/registry-providers") return json({ data: [], meta: { "total-count": 0 } });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(<MemoryRouter initialEntries={["/app/acme/registry?tab=providers"]}><Routes><Route path="/app/:orgName/registry" element={<Registry />} /></Routes></MemoryRouter>);
   await view.findByText("No private providers");
@@ -290,7 +290,7 @@ test("suppresses provider browse controls for a confirmed empty collection", asy
 test("renders version-specific module documentation, usage, lifecycle, and keyboard tabs", async () => {
   const requests: Readonly<{ method: string; url: string }>[] = [];
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const method = init?.method ?? "GET";
     requests.push({ method, url });
@@ -298,7 +298,7 @@ test("renders version-specific module documentation, usage, lifecycle, and keybo
     if (url === "/api/v2/registry-modules/mod-network/versions") return json({ data: [versionResource("version-2", "2.0.0", "# Version two"), versionResource("version-1", "1.0.0", "# Root docs")] });
     if (url === "/api/v2/registry-module-versions/version-1" && method === "PATCH") return json({ data: versionResource("version-1", "1.0.0", "# Root docs") });
     throw new Error(`Unexpected request: ${method} ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(<MemoryRouter initialEntries={["/app/acme/registry/modules/acme/network/aws?version=1.0.0"]}><Routes><Route path="/app/:orgName/registry/modules/:namespace/:name/:provider" element={<RegistryModuleDetail />} /></Routes></MemoryRouter>);
   await view.findByRole("heading", { name: "Root docs" });
@@ -335,12 +335,12 @@ test("renders version-specific module documentation, usage, lifecycle, and keybo
 
 test("keeps module management hidden from a read-only detail viewer", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url.endsWith("/organizations/acme/registry-modules/private/acme/network/aws")) return json({ data: moduleResource(false) });
     if (url.endsWith("/registry-modules/mod-network/versions")) return json({ data: [versionResource("version-1", "1.0.0", "# Root docs")] });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
   const view = render(<MemoryRouter initialEntries={["/app/acme/registry/modules/acme/network/aws?version=1.0.0"]}><Routes><Route path="/app/:orgName/registry/modules/:namespace/:name/:provider" element={<RegistryModuleDetail />} /></Routes></MemoryRouter>);
   await view.findByRole("heading", { name: "Root docs" });
   expect(view.queryByRole("button", { name: "Settings" })).toBeNull();

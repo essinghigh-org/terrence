@@ -47,9 +47,9 @@ const MAX_AGENT_PLAN_JSON_BYTES = 16 * 1024 * 1024;
 
 function getAttrs(body: unknown): Record<string, unknown> {
   if (typeof body !== "object" || body === null) return {};
-  const data = (body as Record<string, unknown>).data;
+  const data = (body as Record<string, unknown>)["data"];
   if (typeof data !== "object" || data === null) return {};
-  const attrs = (data as Record<string, unknown>).attributes;
+  const attrs = (data as Record<string, unknown>)["attributes"];
   return typeof attrs === "object" && attrs !== null ? attrs as Record<string, unknown> : {};
 }
 
@@ -69,9 +69,9 @@ function fencingConflict(set: SetObj): Record<string, unknown> {
 
 function getRelationships(body: unknown): Record<string, unknown> {
   if (typeof body !== "object" || body === null) return {};
-  const data = (body as Record<string, unknown>).data;
+  const data = (body as Record<string, unknown>)["data"];
   if (typeof data !== "object" || data === null) return {};
-  const relationships = (data as Record<string, unknown>).relationships;
+  const relationships = (data as Record<string, unknown>)["relationships"];
   return typeof relationships === "object" && relationships !== null
     ? relationships as Record<string, unknown>
     : {};
@@ -90,7 +90,7 @@ function parseScopeRelationship(
   if (typeof relationship !== "object" || relationship === null) {
     return { error: `${name} relationship must contain a data array` };
   }
-  const data = (relationship as Record<string, unknown>).data;
+  const data = (relationship as Record<string, unknown>)["data"];
   if (!Array.isArray(data)) {
     return { error: `${name} relationship must contain a data array` };
   }
@@ -100,10 +100,10 @@ function parseScopeRelationship(
       return { error: `${name} relationship contains an invalid resource identifier` };
     }
     const resource = item as Record<string, unknown>;
-    if (resource.type !== type || typeof resource.id !== "string" || resource.id === "") {
+    if (resource["type"] !== type || typeof resource["id"] !== "string" || resource["id"] === "") {
       return { error: `${name} relationship must contain ${type} resource identifiers` };
     }
-    ids.add(resource.id);
+    ids.add(resource["id"]);
   }
   return { value: { provided: true, ids: [...ids] } };
 }
@@ -299,7 +299,7 @@ function planJsonFrom(value: unknown): PlanJson | null | undefined {
 
 function completionFromBody(body: unknown): AgentJobCompletion | undefined {
   const attrs = getAttrs(body);
-  const status = attrs.status;
+  const status = attrs["status"];
   if (status !== "completed" && status !== "errored") return undefined;
   const resourceAdditions = nonNegativeInteger(attrs["resource-additions"]);
   const resourceChanges = nonNegativeInteger(attrs["resource-changes"]);
@@ -319,10 +319,10 @@ function completionFromBody(body: unknown): AgentJobCompletion | undefined {
     : typeof attrs["error-message"] === "string" && attrs["error-message"].length <= 16_384
       ? attrs["error-message"]
       : undefined;
-  const statePayload = attrs.state === undefined || attrs.state === null
+  const statePayload = attrs["state"] === undefined || attrs["state"] === null
     ? null
-    : typeof attrs.state === "string"
-      ? attrs.state
+    : typeof attrs["state"] === "string"
+      ? attrs["state"]
       : undefined;
   const jsonState = attrs["json-state"] === undefined || attrs["json-state"] === null
     ? null
@@ -348,12 +348,12 @@ function completionFromBody(body: unknown): AgentJobCompletion | undefined {
       return undefined;
     }
   }
-  const rawResult = attrs.result;
+  const rawResult = attrs["result"];
   if (rawResult !== undefined && rawResult !== null && typeof rawResult === "object") {
     if (!isAgentResultValid(rawResult)) return undefined;
   }
-  const result = typeof attrs.result === "object" && attrs.result !== null && !Array.isArray(attrs.result)
-    ? attrs.result as Record<string, unknown>
+  const result = typeof attrs["result"] === "object" && attrs["result"] !== null && !Array.isArray(attrs["result"])
+    ? attrs["result"] as Record<string, unknown>
     : {};
   return {
     status,
@@ -468,7 +468,7 @@ async function agentPoolResource(
 export const agentRoutes = new Elysia({ name: "agents" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/agent-pools", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "read-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const pools = await db.query.agentPools.findMany({ where: eq(agentPools.orgId, org.id) });
@@ -476,11 +476,11 @@ export const agentRoutes = new Elysia({ name: "agents" })
     return { data: poolData };
   })
   .post("/api/v2/organizations/:org_name/agent-pools", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "manage-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attrs = getAttrs(body);
-    const name = typeof attrs.name === "string" ? attrs.name : "";
+    const name = typeof attrs["name"] === "string" ? attrs["name"] : "";
     if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
     if (attrs["organization-scoped"] !== undefined && typeof attrs["organization-scoped"] !== "boolean") {
       (set as { status: number }).status = 422;
@@ -528,13 +528,13 @@ export const agentRoutes = new Elysia({ name: "agents" })
     return { data: await agentPoolResource(created, org.name) };
   })
   .get("/api/v2/agent-pools/:pool_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const poolId = params.pool_id ?? "";
+    const poolId = params["pool_id"] ?? "";
     const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, poolId) });
     if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "read-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: await agentPoolResource(pool) };
   })
   .patch("/api/v2/agent-pools/:pool_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const poolId = params.pool_id ?? "";
+    const poolId = params["pool_id"] ?? "";
     const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, poolId) });
     if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "manage-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attrs = getAttrs(body);
@@ -597,7 +597,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
       }
     }
     const updates: Partial<typeof agentPools.$inferInsert> = {};
-    if (typeof attrs.name === "string") updates.name = attrs.name;
+    if (typeof attrs["name"] === "string") updates.name = attrs["name"];
     if (typeof attrs["organization-scoped"] === "boolean") updates.organizationScoped = attrs["organization-scoped"];
     await db.transaction(async (tx): Promise<void> => {
       if (Object.keys(updates).length > 0) await tx.update(agentPools).set(updates).where(eq(agentPools.id, poolId));
@@ -637,7 +637,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
     return { data: await agentPoolResource(updated) };
   })
   .delete("/api/v2/agent-pools/:pool_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const poolId = params.pool_id ?? "";
+    const poolId = params["pool_id"] ?? "";
     const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, poolId) });
     if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "manage-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.transaction(async (transaction): Promise<void> => {
@@ -758,25 +758,25 @@ export const agentRoutes = new Elysia({ name: "agents" })
   })
   // --- Agents ---
   .get("/api/v2/agent-pools/:pool_id/agents", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const poolId = params.pool_id ?? "";
+    const poolId = params["pool_id"] ?? "";
     const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, poolId) });
     if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "read-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const agentList = await db.query.agents.findMany({ where: eq(agents.agentPoolId, poolId) });
     return { data: agentList.map((a: AgentItem): Record<string, unknown> => ({ id: a.id, type: "agents", attributes: { name: a.name, status: a.status, "ip-address": a.ipAddress, version: a.version, architecture: a.architecture, "iac-binaries": a.iacBinaries, "last-ping-at": a.lastPingAt !== null ? new Date(a.lastPingAt).toISOString() : null }, relationships: { "agent-pool": { data: { id: pool.id, type: "agent-pools" } } } })) };
   })
   .post("/api/v2/agent-pools/:pool_id/agents", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
-    const poolId = params.pool_id ?? "";
+    const poolId = params["pool_id"] ?? "";
     const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, poolId) });
     if (pool === undefined || !(await canRegisterAgent(pool, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, request))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attrs = getAttrs(body);
-    const name = typeof attrs.name === "string" ? attrs.name : "";
+    const name = typeof attrs["name"] === "string" ? attrs["name"] : "";
     if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
     const agentId = `agent-${crypto.randomUUID()}`;
     const now = Date.now();
-    const status = typeof attrs.status === "string" ? attrs.status : "idle";
+    const status = typeof attrs["status"] === "string" ? attrs["status"] : "idle";
     const ipAddress = typeof attrs["ip-address"] === "string" ? attrs["ip-address"] : null;
-    const version = typeof attrs.version === "string" ? attrs.version : null;
-    const architecture = typeof attrs.architecture === "string" ? attrs.architecture : null;
+    const version = typeof attrs["version"] === "string" ? attrs["version"] : null;
+    const architecture = typeof attrs["architecture"] === "string" ? attrs["architecture"] : null;
     // tfc-agent never sends iac-binaries; a tofu-capable agent (terrence-agent)
     // declares it so the claim path only hands it matching jobs. Absent means
     // terraform-only, preserving the pre-capability contract.
@@ -799,7 +799,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
     return { data: { id: agentId, type: "agents", attributes: { name, status, "ip-address": ipAddress, version, architecture, "iac-binaries": iacBinaries, "last-ping-at": new Date(now).toISOString() }, relationships: { "agent-pool": { data: { id: pool.id, type: "agent-pools" } } } } };
   })
   .get("/api/v2/agents/:agent_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const agentId = params.agent_id ?? "";
+    const agentId = params["agent_id"] ?? "";
     const agent = await db.query.agents.findFirst({ where: eq(agents.id, agentId) });
     if (agent === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, agent.agentPoolId) });
@@ -807,7 +807,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
     return { data: { id: agent.id, type: "agents", attributes: { name: agent.name, status: agent.status, "ip-address": agent.ipAddress, version: agent.version, architecture: agent.architecture, "iac-binaries": agent.iacBinaries, "last-ping-at": agent.lastPingAt !== null ? new Date(agent.lastPingAt).toISOString() : null }, relationships: { "agent-pool": { data: { id: pool.id, type: "agent-pools" } } } } };
   })
   .delete("/api/v2/agents/:agent_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const agentId = params.agent_id ?? "";
+    const agentId = params["agent_id"] ?? "";
     const agent = await db.query.agents.findFirst({ where: eq(agents.id, agentId) });
     if (agent === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, agent.agentPoolId) });
@@ -853,7 +853,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
   })
   // --- Agent execution protocol ---
   .post("/api/v2/agents/:agent_id/jobs/poll", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
-    const agentId = params.agent_id ?? "";
+    const agentId = params["agent_id"] ?? "";
     const agent = await authenticateAgent(agentId, request.headers.get("authorization"));
     if (agent === undefined) {
       (set as { status: number }).status = 401;
@@ -867,7 +867,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
     return { data: agentJobResource(job) };
   })
   .post("/api/v2/agents/:agent_id/stack-jobs/poll", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
-    const agentId = params.agent_id ?? "";
+    const agentId = params["agent_id"] ?? "";
     const agent = await authenticateAgent(agentId, request.headers.get("authorization"));
     if (agent === undefined) {
       (set as { status: number }).status = 401;
@@ -881,8 +881,8 @@ export const agentRoutes = new Elysia({ name: "agents" })
     return { data: stackAgentJobResource(job) };
   })
   .post("/api/v2/agents/:agent_id/jobs/:job_id/logs", async ({ params, body, request, set }: ParamCtx): Promise<unknown> => {
-    const agentId = params.agent_id ?? "";
-    const jobId = params.job_id ?? "";
+    const agentId = params["agent_id"] ?? "";
+    const jobId = params["job_id"] ?? "";
     const agent = await authenticateAgent(agentId, request.headers.get("authorization"));
     if (agent === undefined) {
       (set as { status: number }).status = 401;
@@ -910,8 +910,8 @@ export const agentRoutes = new Elysia({ name: "agents" })
     };
   })
   .post("/api/v2/agents/:agent_id/jobs/:job_id/complete", async ({ params, body, request, set }: ParamCtx): Promise<unknown> => {
-    const agentId = params.agent_id ?? "";
-    const jobId = params.job_id ?? "";
+    const agentId = params["agent_id"] ?? "";
+    const jobId = params["job_id"] ?? "";
     const agent = await authenticateAgent(agentId, request.headers.get("authorization"));
     if (agent === undefined) {
       (set as { status: number }).status = 401;
@@ -955,20 +955,20 @@ export const agentRoutes = new Elysia({ name: "agents" })
     };
   })
   .post("/api/v2/agents/:agent_id/stack-jobs/:job_id/complete", async ({ params, body, request, set }: ParamCtx): Promise<unknown> => {
-    const agentId = params.agent_id ?? "";
-    const jobId = params.job_id ?? "";
+    const agentId = params["agent_id"] ?? "";
+    const jobId = params["job_id"] ?? "";
     const agent = await authenticateAgent(agentId, request.headers.get("authorization"));
     if (agent === undefined) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const attrs = getAttrs(body);
-    const status = attrs.status;
+    const status = attrs["status"];
     if (status !== "completed" && status !== "errored") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "status must be completed or errored" }] };
     }
-    const rawResult = attrs.result;
+    const rawResult = attrs["result"];
     if (rawResult !== null && typeof rawResult === "object" && !Array.isArray(rawResult) && !isAgentResultValid(rawResult)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `result exceeds ${MAX_AGENT_RESULT_BYTES} bytes or structural limits` }] };
@@ -990,29 +990,29 @@ export const agentRoutes = new Elysia({ name: "agents" })
     return { data: { id: completed.job.id, type: "agent-jobs", attributes: { status: completed.job.status, "run-status": completed.runStatus } } };
   })
   .post("/api/v2/agents/:agent_id/stack-jobs/:job_id/heartbeat", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
-    const agentId = params.agent_id ?? "";
+    const agentId = params["agent_id"] ?? "";
     const agent = await authenticateAgent(agentId, request.headers.get("authorization"));
     if (agent === undefined) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    if (!(await heartbeatStackAgentJob(agent.id, params.job_id ?? ""))) {
+    if (!(await heartbeatStackAgentJob(agent.id, params["job_id"] ?? ""))) {
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Stack agent job is not claimed by this agent" }] };
     }
     return {};
   })
   .get("/api/v2/agents/:agent_id/stack-jobs/:job_id/configuration", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
-    const agentId = params.agent_id ?? "";
-    const jobId = params.job_id ?? "";
+    const agentId = params["agent_id"] ?? "";
+    const jobId = params["job_id"] ?? "";
     const agent = await authenticateAgent(agentId, request.headers.get("authorization"));
     if (agent === undefined) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const claimed = await findClaimedStackAgentJob(agent.id, jobId);
-    const runArchivePath = typeof (claimed?.deploymentRun.payload ?? {}).archivePath === "string" ? (claimed?.deploymentRun.payload ?? {}).archivePath as string : null;
-    const configurationArchivePath = typeof (claimed?.configuration.payload ?? {}).archivePath === "string" ? (claimed?.configuration.payload ?? {}).archivePath as string : null;
+    const runArchivePath = typeof (claimed?.deploymentRun.payload ?? {})["archivePath"] === "string" ? (claimed?.deploymentRun.payload ?? {})["archivePath"] as string : null;
+    const configurationArchivePath = typeof (claimed?.configuration.payload ?? {})["archivePath"] === "string" ? (claimed?.configuration.payload ?? {})["archivePath"] as string : null;
     const archivePath = runArchivePath ?? configurationArchivePath;
     if (claimed === undefined || archivePath === null || !isStackStoragePath(archivePath) || !(await Bun.file(archivePath).exists())) {
       (set as { status: number }).status = 404;
@@ -1028,8 +1028,8 @@ export const agentRoutes = new Elysia({ name: "agents" })
     return Bun.file(archivePath);
   })
   .get("/api/v2/agents/:agent_id/jobs/:job_id/configuration", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
-    const agentId = params.agent_id ?? "";
-    const jobId = params.job_id ?? "";
+    const agentId = params["agent_id"] ?? "";
+    const jobId = params["job_id"] ?? "";
     const agent = await authenticateAgent(agentId, request.headers.get("authorization"));
     if (agent === undefined) {
       (set as { status: number }).status = 401;
@@ -1080,8 +1080,8 @@ export const agentRoutes = new Elysia({ name: "agents" })
     return Bun.file(archivePath);
   })
   .get("/api/v2/agents/:agent_id/jobs/:job_id/state", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
-    const agentId = params.agent_id ?? "";
-    const jobId = params.job_id ?? "";
+    const agentId = params["agent_id"] ?? "";
+    const jobId = params["job_id"] ?? "";
     const agent = await authenticateAgent(agentId, request.headers.get("authorization"));
     if (agent === undefined) {
       (set as { status: number }).status = 401;
@@ -1099,18 +1099,18 @@ export const agentRoutes = new Elysia({ name: "agents" })
   })
   // --- Agent Pool Tokens ---
   .get("/api/v2/agent-pools/:pool_id/authentication-tokens", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const poolId = params.pool_id ?? "";
+    const poolId = params["pool_id"] ?? "";
     const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, poolId) });
     if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "manage-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const tokenList = await db.query.agentPoolTokens.findMany({ where: eq(agentPoolTokens.agentPoolId, poolId) });
     return { data: tokenList.map((t: TokenItem): Record<string, unknown> => ({ id: t.id, type: "authentication-tokens", attributes: { description: t.description, "created-at": new Date(t.createdAt).toISOString(), "last-used-at": t.lastUsedAt !== null ? new Date(t.lastUsedAt).toISOString() : null } })) };
   })
   .post("/api/v2/agent-pools/:pool_id/authentication-tokens", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const poolId = params.pool_id ?? "";
+    const poolId = params["pool_id"] ?? "";
     const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, poolId) });
     if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "manage-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attrs = getAttrs(body);
-    const description = typeof attrs.description === "string" ? attrs.description : `Agent token for ${pool.name}`;
+    const description = typeof attrs["description"] === "string" ? attrs["description"] : `Agent token for ${pool.name}`;
     const rawToken = `agent-${crypto.randomUUID().replace(/-/g, "")}`;
     const tokenId = `atok-${crypto.randomUUID()}`;
     await db.insert(agentPoolTokens).values({ id: tokenId, agentPoolId: poolId, token: hashAuthenticationToken(rawToken), description, createdAt: Date.now() });

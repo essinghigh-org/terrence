@@ -166,7 +166,7 @@ describe("the reference format API v2 - Runs", () => {
     expect(document.included!.length).toBeGreaterThan(0);
     const includedUser = document.included!.find((u: { type: string }): boolean => u.type === "users");
     expect(includedUser).toBeDefined();
-    expect(includedUser!.attributes.username).toBe(TEST_USERNAME);
+    expect(includedUser!.attributes["username"]).toBe(TEST_USERNAME);
     expect(includedUser!.attributes["avatar-url"]).toMatch(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/);
   });
 

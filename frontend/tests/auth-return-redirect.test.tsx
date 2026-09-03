@@ -122,7 +122,7 @@ test("sign-in returns the user to the preserved destination", async () => {
     if (url === "/api/v2/users/login") return json({ data: { attributes: { token: "user-token" } } });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/login?returnTo=%2Fapp%2Faccount"]}>
@@ -153,7 +153,7 @@ test("external returnTo values are ignored", async () => {
     if (url === "/api/v2/users/login") return json({ data: { attributes: { token: "user-token" } } });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/login?returnTo=https%3A%2F%2Fevil.example"]}>

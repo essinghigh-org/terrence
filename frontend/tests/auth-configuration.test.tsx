@@ -132,7 +132,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
         : {};
       const attributes = body.data?.attributes ?? {};
       oidcPatchAttributes = attributes;
-      oidcServerEnabled = attributes.enabled === true;
+      oidcServerEnabled = attributes["enabled"] === true;
       if (isString(attributes["client-secret"])) oidcServerSecretSet = true;
       if (attributes["client-secret"] === null) oidcServerSecretSet = false;
       return json({
@@ -186,7 +186,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
         ? JSON.parse(init.body) as { data?: { attributes?: JsonObject } }
         : {};
       ldapPatchAttributes = body.data?.attributes ?? null;
-      ldapServerEnabled = body.data?.attributes?.enabled === true;
+      ldapServerEnabled = body.data?.attributes?.["enabled"] === true;
       return json({
         data: {
           id: "ldap-settings",
@@ -197,7 +197,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
     }
     throw new Error(`Unexpected request: ${url} method=${init?.method ?? "GET"}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/admin/auth"]}>
@@ -236,7 +236,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   expect(view.getByText("OpenID Connect")).toBeTruthy();
 
   // --- SAML section ---
-  const samlSection = view.getByText("SAML SSO").closest('[data-slot="card"]') ?? document.body;
+  const samlSection = view.getByText("SAML SSO").closest<HTMLElement>('[data-slot="card"]') ?? document.body;
   expect(within(samlSection).getByText(/Security Assertion Markup Language/)).toBeTruthy();
 
   // Enable SAML
@@ -260,7 +260,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   });
 
   // --- OIDC section ---
-  const oidcSection = view.getByText("OpenID Connect").closest('[data-slot="card"]') ?? document.body;
+  const oidcSection = view.getByText("OpenID Connect").closest<HTMLElement>('[data-slot="card"]') ?? document.body;
   expect(within(oidcSection).getByText(/OpenID Connect provider/)).toBeTruthy();
 
   // Fill in OIDC issuer URL and client ID
@@ -285,7 +285,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   expect(oidcPatchAttributes?.["client-secret"]).toBeUndefined();
 
   // --- Local authentication section ---
-  const localAuthCard = view.getByText("Local Authentication").closest('[data-slot="card"]');
+  const localAuthCard = view.getByText("Local Authentication").closest<HTMLElement>('[data-slot="card"]');
   expect(localAuthCard).not.toBeNull();
   if (localAuthCard === null) throw new Error("Local authentication card is missing");
 // SAFETY: the component renders this element type for the queried role/label.
@@ -305,7 +305,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   });
 
   // --- LDAP section ---
-  const ldapSection = view.getByText("LDAP").closest('[data-slot="card"]');
+  const ldapSection = view.getByText("LDAP").closest<HTMLElement>('[data-slot="card"]');
   if (ldapSection === null) throw new Error("LDAP card is missing");
   expect(within(ldapSection).getByText(/directory access protocol password authentication/i)).toBeTruthy();
   await waitFor((): void => { expect(view.getByRole("button", { name: "Save LDAP settings" })).toBeTruthy(); });
@@ -336,19 +336,19 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   // The bind password field was left untouched: with a bind DN configured,
   // an empty password preserves the stored value instead of clearing it.
   expect(ldapPatchAttributes?.["bind-password"]).toBeUndefined();
-  expect(ldapPatchAttributes?.enabled).toBeTrue();
+  expect(ldapPatchAttributes?.["enabled"]).toBeTrue();
 });
 
 test("hides the site administration sidebar from non-admin users", async (): Promise<void> => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "bob", "is-site-admin": false } } });
     }
     if (url === "/api/v2/organizations?page[size]=100") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/admin"]}>
@@ -395,7 +395,7 @@ test("shows the security overview from existing admin controls", async (): Promi
     if (url === "/api/v2/admin/ldap-settings") return json({ data: { attributes: { enabled: false } } });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/admin"]}>
@@ -411,7 +411,7 @@ test("shows the security overview from existing admin controls", async (): Promi
   expect(view.getByRole("link", { name: "Site overview" }).getAttribute("aria-current"))
     .toBe("page");
 
-  const identityCard = view.getByText("Identity providers").closest('[data-slot="card"]') ?? document.body;
+  const identityCard = view.getByText("Identity providers").closest<HTMLElement>('[data-slot="card"]') ?? document.body;
   expect(within(identityCard).getByText("Enabled")).toBeTruthy();
   expect(view.getByText("Local account signup")).toBeTruthy();
   expect(view.getByText("Site administrators").nextElementSibling?.textContent).toBe("1");

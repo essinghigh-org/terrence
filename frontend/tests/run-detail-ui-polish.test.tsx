@@ -2,7 +2,8 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { RunDetail, runExecutionDurationMilliseconds } from "../src/views/RunDetail";
-import { OperationFilterDropdown, type Operation } from "../src/components/OperationFilterDropdown";
+import { OperationFilterDropdown } from "../src/components/OperationFilterDropdown";
+import type { Operation } from "../src/lib/plan-operations";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
 
@@ -117,7 +118,7 @@ test("collapsible plan warnings appear at top of plan with diagnostic details", 
     if (url.endsWith("/cost-estimate")) return json({ data: null });
     return json({ data: [] });
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-warn"]}>
@@ -221,7 +222,7 @@ test("when apply is running, apply disabled reasons are NOT shown", async () => 
     if (url.endsWith("/cost-estimate")) return json({ data: null });
     return json({ data: [] });
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-applying"]}>

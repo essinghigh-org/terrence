@@ -14,8 +14,8 @@ export const operationsRoutes = new Elysia({ name: "admin-operations" })
   .patch("/api/v2/admin/operations-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const reject = (detail: string): { errors: { status: string; title: string; detail: string }[] } => {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail }] };
@@ -24,10 +24,10 @@ export const operationsRoutes = new Elysia({ name: "admin-operations" })
       const value = attrs["approval-webhook"];
       if (value === null || typeof value !== "object" || Array.isArray(value)) return reject("approval-webhook must be an object");
       const group = value as Record<string, unknown>;
-      if (group.enabled !== undefined && typeof group.enabled !== "boolean") return reject("approval-webhook.enabled must be a boolean");
-      if (group.secret !== undefined && group.secret !== null && typeof group.secret !== "string") return reject("approval-webhook.secret must be a string");
-      if (group.url !== undefined && group.url !== null) {
-        if (typeof group.url !== "string" || !usableHttpUrl(group.url)) return reject("approval-webhook.url must be an http(s) URL or null");
+      if (group["enabled"] !== undefined && typeof group["enabled"] !== "boolean") return reject("approval-webhook.enabled must be a boolean");
+      if (group["secret"] !== undefined && group["secret"] !== null && typeof group["secret"] !== "string") return reject("approval-webhook.secret must be a string");
+      if (group["url"] !== undefined && group["url"] !== null) {
+        if (typeof group["url"] !== "string" || !usableHttpUrl(group["url"])) return reject("approval-webhook.url must be an http(s) URL or null");
       }
       await updateSettings("approval-webhook", group);
     }
@@ -35,13 +35,13 @@ export const operationsRoutes = new Elysia({ name: "admin-operations" })
       const value = attrs["maintenance-windows"];
       if (value === null || typeof value !== "object" || Array.isArray(value)) return reject("maintenance-windows must be an object");
       const group = value as Record<string, unknown>;
-      if (group.enabled !== undefined && typeof group.enabled !== "boolean") return reject("maintenance-windows.enabled must be a boolean");
-      if (group.windows !== undefined) {
-        if (!Array.isArray(group.windows)) return reject("maintenance-windows.windows must be an array");
-        for (const rawWindow of group.windows) {
+      if (group["enabled"] !== undefined && typeof group["enabled"] !== "boolean") return reject("maintenance-windows.enabled must be a boolean");
+      if (group["windows"] !== undefined) {
+        if (!Array.isArray(group["windows"])) return reject("maintenance-windows.windows must be an array");
+        for (const rawWindow of group["windows"]) {
           if (rawWindow === null || typeof rawWindow !== "object" || Array.isArray(rawWindow)) return reject("each maintenance window must be an object");
           const window = rawWindow as Record<string, unknown>;
-          const days = window.days;
+          const days = window["days"];
           if (!Array.isArray(days) || !days.every((day: unknown): boolean => typeof day === "number" && Number.isInteger(day) && day >= 0 && day <= 6)) {
             return reject("maintenance window days must be an array of integers 0-6");
           }
@@ -49,7 +49,7 @@ export const operationsRoutes = new Elysia({ name: "admin-operations" })
             || typeof window["end-time"] !== "string" || !validClockTime(window["end-time"])) {
             return reject("maintenance window start-time and end-time must be HH:MM with a valid clock time (00-23 hours, 00-59 minutes)");
           }
-          if (window.timezone !== undefined && typeof window.timezone !== "string") return reject("maintenance window timezone must be a string");
+          if (window["timezone"] !== undefined && typeof window["timezone"] !== "string") return reject("maintenance window timezone must be a string");
         }
       }
       await updateSettings("maintenance-windows", group);
@@ -58,8 +58,8 @@ export const operationsRoutes = new Elysia({ name: "admin-operations" })
       const value = attrs["plan-explainer"];
       if (value === null || typeof value !== "object" || Array.isArray(value)) return reject("plan-explainer must be an object");
       const group = value as Record<string, unknown>;
-      if (group.enabled !== undefined && typeof group.enabled !== "boolean") return reject("plan-explainer.enabled must be a boolean");
-      if (group.provider !== undefined && group.provider !== null && typeof group.provider !== "string") return reject("plan-explainer.provider must be a string or null");
+      if (group["enabled"] !== undefined && typeof group["enabled"] !== "boolean") return reject("plan-explainer.enabled must be a boolean");
+      if (group["provider"] !== undefined && group["provider"] !== null && typeof group["provider"] !== "string") return reject("plan-explainer.provider must be a string or null");
       const normalizedGroup: Record<string, unknown> = { ...group };
       if ("base-url" in group) {
         if (group["base-url"] !== null) {
@@ -77,7 +77,7 @@ export const operationsRoutes = new Elysia({ name: "admin-operations" })
         normalizedGroup["endpoint-url"] = null;
       }
       if (group["api-key"] !== undefined && group["api-key"] !== null && typeof group["api-key"] !== "string") return reject("plan-explainer api-key must be a string or null");
-      if (group.model !== undefined && group.model !== null && typeof group.model !== "string") return reject("plan-explainer model must be a string or null");
+      if (group["model"] !== undefined && group["model"] !== null && typeof group["model"] !== "string") return reject("plan-explainer model must be a string or null");
       if (group["reasoning-effort"] !== undefined && group["reasoning-effort"] !== null
         && (typeof group["reasoning-effort"] !== "string" || !REASONING_EFFORTS.includes(group["reasoning-effort"] as ReasoningEffort))) {
         return reject(`plan-explainer reasoning-effort must be one of: ${REASONING_EFFORTS.join(", ")} or null`);

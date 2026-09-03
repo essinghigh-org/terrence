@@ -119,7 +119,7 @@ function originForConfiguration(
   const ingress = configuration.ingressAttributes;
   const triggerReason = !VCS_RUN_SOURCES.has(source)
     ? "manual"
-    : (ingress as Record<string, unknown>).manualTrigger === true
+    : (ingress as Record<string, unknown>)["manualTrigger"] === true
       ? "manual"
       : typeof ingress?.pullRequestNumber === "number"
         ? "pull_request"
@@ -202,8 +202,8 @@ function commentResource(
   comment: CommentItem | Readonly<{ id: string; runId: string; body: string; userId: string | null; createdAt: number }> & Readonly<{ username?: string | null; avatarUrl?: string | null }>,
 ): Record<string, unknown> {
   const runEventId = `re-${comment.id}`;
-  const username = (comment as Record<string, unknown>).username;
-  const avatarUrl = (comment as Record<string, unknown>).avatarUrl;
+  const username = (comment as Record<string, unknown>)["username"];
+  const avatarUrl = (comment as Record<string, unknown>)["avatarUrl"];
   return {
     id: comment.id,
     type: "comments",
@@ -299,8 +299,8 @@ function validateRunInputs(
       return invalidRunInput(set, "variables must be an array of objects with a key and value");
     }
     const variable = rawVariable as Readonly<Record<string, unknown>>;
-    const key = variable.key;
-    const value = variable.value;
+    const key = variable["key"];
+    const value = variable["value"];
     if (
       typeof key !== "string"
       || key === ""
@@ -345,11 +345,11 @@ async function createRunComment(input: Readonly<{
 
 function actionComment(body: unknown): string {
   const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-  const data = payload.data as Record<string, unknown> | undefined;
-  const attributes = typeof data?.attributes === "object" && data.attributes !== null
-    ? data.attributes as Record<string, unknown>
+  const data = payload["data"] as Record<string, unknown> | undefined;
+  const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null
+    ? data["attributes"] as Record<string, unknown>
     : {};
-  const value = payload.comment ?? attributes.comment;
+  const value = payload["comment"] ?? attributes["comment"];
   return typeof value === "string" ? value.trim() : "";
 }
 
@@ -446,8 +446,8 @@ export async function createRun(
   teamId: string | null | undefined,
   set: SetObj,
 ): Promise<Record<string, unknown> | { errors: { status: string; title: string; detail?: string }[] }> {
-  const message = typeof attributes.message === "string" ? attributes.message : "";
-  const requestedOperation = typeof attributes.operation === "string" ? attributes.operation : undefined;
+  const message = typeof attributes["message"] === "string" ? attributes["message"] : "";
+  const requestedOperation = typeof attributes["operation"] === "string" ? attributes["operation"] : undefined;
   const allowedOperations = new Set(["plan", "plan_and_apply", "plan_only", "save_plan", "empty_apply", "action_only", "destroy", "refresh_only"]);
   if (requestedOperation !== undefined && !allowedOperations.has(requestedOperation)) {
     (set as { status: number }).status = 422;
@@ -467,12 +467,12 @@ export async function createRun(
   const requestedPlanOnly = requestedOperation === "plan" || requestedOperation === "plan_only"
     ? true
     : typeof attributes["plan-only"] === "boolean" ? attributes["plan-only"] : undefined;
-  const refresh = typeof attributes.refresh === "boolean" ? attributes.refresh : true;
+  const refresh = typeof attributes["refresh"] === "boolean" ? attributes["refresh"] : true;
   const refreshOnly = requestedOperation === "refresh_only" || requestedOperation === "action_only"
     || (typeof attributes["refresh-only"] === "boolean" ? attributes["refresh-only"] : false);
   const targetAddrs = Array.isArray(attributes["target-addrs"]) ? (attributes["target-addrs"] as string[]) : null;
   const replaceAddrs = Array.isArray(attributes["replace-addrs"]) ? (attributes["replace-addrs"] as string[]) : null;
-  const runVariables = Array.isArray(attributes.variables) ? attributes.variables : null;
+  const runVariables = Array.isArray(attributes["variables"]) ? attributes["variables"] : null;
   const terraformVersion = typeof attributes["terraform-version"] === "string" ? attributes["terraform-version"] : undefined;
   const debuggingMode = typeof attributes["debugging-mode"] === "boolean" ? attributes["debugging-mode"] : false;
   const allowEmptyApply = requestedOperation === "empty_apply"
@@ -500,7 +500,7 @@ export async function createRun(
     (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid run attributes" }] };
   }
   const invalidInputs = validateRunInputs(
-    attributes.variables,
+    attributes["variables"],
     attributes["target-addrs"],
     attributes["replace-addrs"],
     set,
@@ -633,8 +633,8 @@ type RunCursor = Readonly<{ createdAt: number; id: string }>;
 function decodeRunCursor(value: string): RunCursor | null {
   try {
     const decoded = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<string, unknown>;
-    return typeof decoded.createdAt === "number" && Number.isSafeInteger(decoded.createdAt) && typeof decoded.id === "string" && decoded.id !== ""
-      ? { createdAt: decoded.createdAt, id: decoded.id }
+    return typeof decoded["createdAt"] === "number" && Number.isSafeInteger(decoded["createdAt"]) && typeof decoded["id"] === "string" && decoded["id"] !== ""
+      ? { createdAt: decoded["createdAt"], id: decoded["id"] }
       : null;
   } catch {
     return null;
@@ -685,7 +685,7 @@ async function sanitizedPlanArtifactResponse(
 export const runRoutes = new Elysia({ name: "runs" })
   .use(authPlugin)
   .get("/api/v2/workspaces/:workspace_id/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params.workspace_id ?? "";
+    const workspaceId = params["workspace_id"] ?? "";
     const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
     if (workspace === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const canApply = await checkWorkspacePermission(workspace, user?.id, orgId ?? null, teamId ?? null, "apply");
@@ -702,7 +702,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/organizations/:org_name/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const organization = await cachedOrgByName(orgName);
     if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const [orgWorkspaces, applyIds] = await Promise.all([
@@ -724,7 +724,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/organizations/:org_name/runs/queue", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const organization = await cachedOrgByName(orgName);
     if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const [orgWorkspaces, applyIds] = await Promise.all([
@@ -792,7 +792,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       const resource = runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id), undefined, undefined, linkage.get(r.id));
       const isPending = CAPACITY_PENDING_STATUSES.some((s: string): boolean => s === r.status);
       if (isPending) { position += 1; }
-      const attrs = typeof resource.attributes === "object" && resource.attributes !== null ? (resource.attributes as Record<string, unknown>) : {};
+      const attrs = typeof resource["attributes"] === "object" && resource["attributes"] !== null ? (resource["attributes"] as Record<string, unknown>) : {};
       return { ...resource, attributes: { ...attrs, "position-in-queue": isPending ? position : 0 } };
     });
     const included = await includedUsersForRuns(queue);
@@ -803,7 +803,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data, ...(included.length > 0 ? { included } : {}), ...pageMeta };
   })
   .get("/api/v2/organizations/:org_name/capacity", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const organization = await cachedOrgByName(orgName);
     if (organization === undefined || !(await checkOrgPermission(user?.id, organization.id, "member", orgId ?? null, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const orgWorkspaces = await authorizedOrgWorkspaces(organization.id, user?.id, orgId ?? null, teamId ?? null);
@@ -817,31 +817,31 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: { id: organization.name, type: "organization-capacity", attributes: { pending: totalFor(CAPACITY_PENDING_STATUSES), running: totalFor(CAPACITY_RUNNING_STATUSES) } } };
   })
   .post("/api/v2/workspaces/:workspace_id/runs", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const wsId = params.workspace_id ?? "";
+    const wsId = params["workspace_id"] ?? "";
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
     const cvRel = typeof rels["configuration-version"] === "object" && rels["configuration-version"] !== null ? (rels["configuration-version"] as Record<string, unknown>) : {};
-    const cvData = typeof cvRel.data === "object" && cvRel.data !== null ? (cvRel.data as Record<string, unknown>) : {};
-    const cvId = typeof cvData.id === "string" ? cvData.id : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
+    const cvData = typeof cvRel["data"] === "object" && cvRel["data"] !== null ? (cvRel["data"] as Record<string, unknown>) : {};
+    const cvId = typeof cvData["id"] === "string" ? cvData["id"] : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
     return createRun(wsId, attributes, cvId, user, orgId, teamId, set);
   })
   .post("/api/v2/runs", async ({ body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
-    const wsRel = typeof rels.workspace === "object" && rels.workspace !== null ? (rels.workspace as Record<string, unknown>) : {};
-    const wsData = typeof wsRel.data === "object" && wsRel.data !== null ? (wsRel.data as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
+    const wsRel = typeof rels["workspace"] === "object" && rels["workspace"] !== null ? (rels["workspace"] as Record<string, unknown>) : {};
+    const wsData = typeof wsRel["data"] === "object" && wsRel["data"] !== null ? (wsRel["data"] as Record<string, unknown>) : {};
     const cvRel = typeof rels["configuration-version"] === "object" && rels["configuration-version"] !== null ? (rels["configuration-version"] as Record<string, unknown>) : {};
-    const cvData = typeof cvRel.data === "object" && cvRel.data !== null ? (cvRel.data as Record<string, unknown>) : {};
-    const workspaceId = typeof wsData.id === "string" ? wsData.id : "";
-    const cvId = typeof cvData.id === "string" ? cvData.id : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
+    const cvData = typeof cvRel["data"] === "object" && cvRel["data"] !== null ? (cvRel["data"] as Record<string, unknown>) : {};
+    const workspaceId = typeof wsData["id"] === "string" ? wsData["id"] : "";
+    const cvId = typeof cvData["id"] === "string" ? cvData["id"] : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
     return createRun(workspaceId, attributes, cvId, user, orgId, teamId, set);
   })
   .get("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const [canApply, canOverridePolicy, canAdmin, origins, baseline] = await Promise.all([
@@ -853,7 +853,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     ]);
     const linkage = await linkageForRuns([authorized.run]);
     const data = runResource(authorized.run, canApply, canOverridePolicy, origins.get(authorized.run.id), baseline, canAdmin, linkage.get(authorized.run.id));
-    const detailAttributes = data.attributes as Record<string, unknown>;
+    const detailAttributes = data["attributes"] as Record<string, unknown>;
     const lockedReason = authorized.workspace.lockedReason;
     detailAttributes["workspace-locked"] = authorized.workspace.locked === true;
     // Mirror lockedWorkspaceDetail: an absent or empty reason reads as
@@ -872,7 +872,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data, ...(included.length > 0 ? { included } : {}) };
   })
   .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "admin");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(logs).where(eq(logs.runId, runId));
@@ -886,7 +886,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     // run's own token may post module metadata; the payload is informational
     // only, so Terrence acknowledges and discards it. tfc-agent 1.30.1 fails
     // the run unless the response status is 201 (verified in traffic capture).
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     if ((run === undefined || run === null || run.runId !== runId)) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -895,27 +895,27 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: { modules: [] } };
   })
   .get("/api/v2/runs/:run_id/plan", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: planResource(authorized.run, request) };
   })
   .get("/api/v2/plans/:plan_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const rawPlanId = params.plan_id ?? "";
+    const rawPlanId = params["plan_id"] ?? "";
     const runId = rawPlanId.replace(/^plan-/, "");
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: planResource(authorized.run, request) };
   })
   .get("/api/v2/applies/:apply_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const rawApplyId = params.apply_id ?? "";
+    const rawApplyId = params["apply_id"] ?? "";
     const runId = rawApplyId.replace(/^apply-/, "");
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: applyResource(authorized.run, request) };
   })
   .get("/api/v2/applies/:apply_id/errored-state", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = (params.apply_id ?? "").replace(/^apply-/, "");
+    const runId = (params["apply_id"] ?? "").replace(/^apply-/, "");
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined || authorized.run.status !== "errored") {
       (set as { status: number }).status = 404;
@@ -933,7 +933,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return new Response(null, { status: 307, headers: { Location: location } });
   })
   .get("/api/v2/runs/:run_id/run-events", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const page = pageRequest(request);
@@ -993,9 +993,9 @@ export const runRoutes = new Elysia({ name: "runs" })
           attributes: {
             action: event.action,
             "created-at": new Date(event.createdAt).toISOString(),
-            "actor-username": event.userId === null ? details.actorUsername ?? null : usernames.get(event.userId)?.username ?? null,
+            "actor-username": event.userId === null ? details["actorUsername"] ?? null : usernames.get(event.userId)?.username ?? null,
             "actor-avatar-url": event.userId === null
-              ? AvatarService.resolveVcsUrl(details.actorProviderId, details.actorAvatarUrl ?? null)
+              ? AvatarService.resolveVcsUrl(details["actorProviderId"], details["actorAvatarUrl"] ?? null)
               : gravatarUrl(usernames.get(event.userId)?.email ?? null),
             details,
           },
@@ -1026,7 +1026,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     };
   })
   .get("/api/v2/runs/:run_id/input-state-version", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const inputStateId = authorized.run.statusTimestamps?.["input-state-version-id"];
@@ -1039,7 +1039,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: stateVersionResource(currentSV, request) };
   })
   .get("/api/v2/runs/:run_id/logs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const page = pageRequest(request);
@@ -1050,8 +1050,8 @@ export const runRoutes = new Elysia({ name: "runs" })
     };
   })
   .get("/api/v2/runs/:run_id/plan/log/:log_token", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
-    const logToken = params.log_token ?? "";
+    const runId = params["run_id"] ?? "";
+    const logToken = params["log_token"] ?? "";
     if ((await findLogCapability(runId, logToken)) === undefined) { (set as { status: number }).status = 404; return "Not Found"; }
     const planLogs = await readRunLogs(runId, "plan");
     set.headers["Content-Type"] = "text/plain; charset=utf-8";
@@ -1059,8 +1059,8 @@ export const runRoutes = new Elysia({ name: "runs" })
     return logChunk(planLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
   .get("/api/v2/runs/:run_id/apply/log/:log_token", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
-    const logToken = params.log_token ?? "";
+    const runId = params["run_id"] ?? "";
+    const logToken = params["log_token"] ?? "";
     if ((await findLogCapability(runId, logToken)) === undefined) { (set as { status: number }).status = 404; return "Not Found"; }
     const applyLogs = await readRunLogs(runId, "apply");
     set.headers["Content-Type"] = "text/plain; charset=utf-8";
@@ -1068,7 +1068,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return logChunk(applyLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
   .get("/api/v2/runs/:run_id/plan/log", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const planLogs = await readRunLogs(runId, "plan");
@@ -1077,7 +1077,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return logChunk(planLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
   .get("/api/v2/runs/:run_id/apply/log", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const applyLogs = await readRunLogs(runId, "apply");
@@ -1086,13 +1086,13 @@ export const runRoutes = new Elysia({ name: "runs" })
     return logChunk(applyLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
   })
   .get("/api/v2/runs/:run_id/apply", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: { id: `apply-${runId}`, type: "applies", attributes: { "log-read-url": typeof authorized.run.logToken === "string" && authorized.run.logToken !== "" ? apiURL(request, `/api/v2/runs/${runId}/apply/log/${authorized.run.logToken}`) : null } } };
   })
   .post("/api/v2/runs/:run_id/actions/apply", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -1182,7 +1182,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     // Schedule a confirmed apply for a future time.
     // The worker applies the run when scheduled-at arrives; the manual apply
     // action clears the schedule and applies immediately.
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -1202,10 +1202,10 @@ export const runRoutes = new Elysia({ name: "runs" })
     });
     if (before === undefined) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must have a completed saved plan before apply" }] }; }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const attributes = payload.data !== null && typeof payload.data === "object"
-      && (payload.data as Record<string, unknown>).attributes !== null
-      && typeof (payload.data as Record<string, unknown>).attributes === "object"
-      ? (payload.data as Record<string, unknown>).attributes as Record<string, unknown>
+    const attributes = payload["data"] !== null && typeof payload["data"] === "object"
+      && (payload["data"] as Record<string, unknown>)["attributes"] !== null
+      && typeof (payload["data"] as Record<string, unknown>)["attributes"] === "object"
+      ? (payload["data"] as Record<string, unknown>)["attributes"] as Record<string, unknown>
       : {};
     const applyAtRaw = attributes["apply-at"];
     if (typeof applyAtRaw !== "string" || applyAtRaw === "") {
@@ -1253,7 +1253,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: { id: runId, type: "runs", attributes: { status: "confirmed", "scheduled-at": new Date(applyAtMs).toISOString() } } };
   })
   .post("/api/v2/runs/:run_id/actions/discard", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -1281,7 +1281,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return new Response(null, { status: 202 });
   })
   .post("/api/v2/runs/:run_id/actions/cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -1322,7 +1322,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return new Response(null, { status: 202 });
   })
   .post("/api/v2/runs/:run_id/actions/force-cancel", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -1354,7 +1354,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return new Response(null, { status: 202 });
   })
   .post("/api/v2/runs/:run_id/actions/override-policy", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "policy-override"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -1373,7 +1373,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: { id: runId, type: "runs", attributes: { status: "planned" } } };
   })
   .post("/api/v2/runs/:run_id/actions/force-execute", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -1410,7 +1410,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return new Response(null, { status: 202 });
   })
   .post("/api/v2/runs/:run_id/actions/queue", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
@@ -1436,7 +1436,7 @@ export const runRoutes = new Elysia({ name: "runs" })
   })
   // --- Comments ---
   .get("/api/v2/runs/:run_id/comments", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const page = pageRequest(request);
@@ -1459,14 +1459,14 @@ export const runRoutes = new Elysia({ name: "runs" })
     };
   })
   .post("/api/v2/runs/:run_id/comments", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    if (data?.type !== "comments") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be comments" }] }; }
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const textVal = attrs.body ?? payload.body;
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    if (data?.["type"] !== "comments") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be comments" }] }; }
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const textVal = attrs["body"] ?? payload["body"];
     const text = typeof textVal === "string" ? textVal : "";
     if (text === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
     const { id, createdAt } = await createRunComment({ runId, userId: user?.id ?? null, body: text, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
@@ -1478,7 +1478,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return { data: commentResource({ id, runId, body: text, userId: user?.id ?? null, createdAt, ...actor }) };
   })
   .delete("/api/v2/comments/:comment_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const commentId = params.comment_id ?? "";
+    const commentId = params["comment_id"] ?? "";
     const c = await db.query.runComments.findFirst({ where: eq(runComments.id, commentId) });
     if (c === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const authorized = await findAuthorizedRun(c.runId, user?.id, orgId ?? null, teamId ?? null);
@@ -1488,7 +1488,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return {};
   })
   .get("/api/v2/comments/:comment_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const commentId = params.comment_id ?? "";
+    const commentId = params["comment_id"] ?? "";
     const comment = await db.query.runComments.findFirst({ where: eq(runComments.id, commentId) });
     if (comment === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const authorized = await findAuthorizedRun(comment.runId, user?.id, orgId ?? null, teamId ?? null);
@@ -1498,7 +1498,7 @@ export const runRoutes = new Elysia({ name: "runs" })
   })
   // --- Plan JSON Output ---
   .get("/api/v2/plans/:plan_id/json-output", async ({ params, user, orgId, teamId, run: runContext, set }: ParamCtx): Promise<unknown> => {
-    const planId = params.plan_id ?? "";
+    const planId = params["plan_id"] ?? "";
     const runId = planId.replace(/^plan-/, "");
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -1518,7 +1518,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return planJson;
   })
   .get("/api/v2/runs/:run_id/plan/json-output", async ({ params, user, orgId, teamId, run: runContext, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined || await authorizedPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null) === undefined) {
       (set as { status: number }).status = 404;
@@ -1533,7 +1533,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return planJson;
   })
   .get("/api/v2/plans/:plan_id/json-output-redacted", async ({ params, user, orgId, teamId, run: runContext, set }: ParamCtx): Promise<unknown> => {
-    const planId = params.plan_id ?? "";
+    const planId = params["plan_id"] ?? "";
     const runId = planId.replace(/^plan-/, "");
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -1544,7 +1544,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return sanitizedPlanArtifactResponse(runId, run, set);
   })
   .get("/api/v2/plans/:plan_id/sanitized-plan", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const planId = params.plan_id ?? "";
+    const planId = params["plan_id"] ?? "";
     const runId = planId.replace(/^plan-/, "");
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined || await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId ?? null, teamId ?? null) === undefined) {
@@ -1554,7 +1554,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     return sanitizedPlanArtifactResponse(runId, run, set);
   })
   .get("/api/v2/runs/:run_id/plan/sanitized-plan", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined || await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId ?? null, teamId ?? null) === undefined) {
       (set as { status: number }).status = 404;

@@ -175,8 +175,8 @@ describe("VCS-backed registry modules", () => {
       "commit-sha": "sha-123",
       "source-directory": "modules/subnet",
     });
-    const metadata = firstVersion!.attributes.metadata as Record<string, unknown>;
-    expect(metadata.readme).toContain("Subnet submodule");
+    const metadata = firstVersion!.attributes["metadata"] as Record<string, unknown>;
+    expect(metadata["readme"]).toContain("Subnet submodule");
     const stored = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, firstVersion!.id) });
     const listing = Bun.spawn(["tar", "-tzf", stored!.archivePath!], { stdout: "pipe" });
     const listed = await new Response(listing.stdout).text();
@@ -208,7 +208,7 @@ describe("VCS-backed registry modules", () => {
   test("publishes an immutable branch revision with an initial version", async () => {
     const payload = vcsPayload("branch-networking", { version: "2.0.0" });
     const vcsRepo = payload.data.attributes["vcs-repo"] as Record<string, unknown>;
-    vcsRepo.branch = "release";
+    vcsRepo["branch"] = "release";
     const created = await request(`/api/v2/organizations/${orgName}/registry-modules/vcs`, "POST", payload);
     expect(created.status).toBe(201);
     const moduleId = (await created.json()).data.id as string;

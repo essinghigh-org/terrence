@@ -1645,7 +1645,7 @@ describe("fine-grained org-level read grants", () => {
       expect(detail.status).toBe(200);
       const detailBody = await detail.json() as { data: { attributes: Record<string, unknown>; relationships: Record<string, unknown> }; included?: unknown[] };
       expect(detailBody.included).toBeUndefined();
-      expect(detailBody.data.relationships.users).toBeUndefined();
+      expect(detailBody.data.relationships["users"]).toBeUndefined();
       // The team size is roster data too; without members:read it must not leak.
       expect(detailBody.data.attributes["users-count"]).toBe(0);
 

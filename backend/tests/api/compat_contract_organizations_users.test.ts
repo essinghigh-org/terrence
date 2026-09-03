@@ -55,7 +55,7 @@ describe("remote-workflow organizations and users contract", () => {
       201,
       "organizations",
     );
-    expect(resource.attributes.name).toBe(extraOrgName);
+    expect(resource.attributes["name"]).toBe(extraOrgName);
     // the reference format emits an opaque uuid; Terrence returns the org row id (opaque to clients).
     expect(resource.attributes["external-id"]).toBeTypeOf("string");
     expect(resource.attributes["external-id"]).not.toBe("");
@@ -63,7 +63,7 @@ describe("remote-workflow organizations and users contract", () => {
     expect(resource.attributes["cost-estimation-enabled"]).toBe(false);
     expect(resource.attributes["default-execution-mode"]).toBe("remote");
     expect(resource.attributes["user-tokens-enabled"]).toBe(true);
-    expect(resource.attributes.permissions).toMatchObject({
+    expect(resource.attributes["permissions"]).toMatchObject({
       "can-update": true,
       "can-destroy": true,
       "can-manage-workspaces": true,
@@ -81,9 +81,9 @@ describe("remote-workflow organizations and users contract", () => {
       200,
       "organizations",
     );
-    expect(resource.attributes.name).toBe(seed.orgName);
+    expect(resource.attributes["name"]).toBe(seed.orgName);
     expect(resource.attributes["external-id"]).toBeTypeOf("string");
-    expect(resource.attributes.permissions).toBeTypeOf("object");
+    expect(resource.attributes["permissions"]).toBeTypeOf("object");
     expectSelfLink(resource, "/api/v2/organizations/");
   });
 
@@ -112,7 +112,7 @@ describe("remote-workflow organizations and users contract", () => {
       "organizations",
     );
     // the reference format persists the email; Terrence does not store one for this org.
-    expect(resource.attributes.email === null || resource.attributes.email === "new-owner@example.com").toBe(true);
+    expect(resource.attributes["email"] === null || resource.attributes["email"] === "new-owner@example.com").toBe(true);
   });
 
   it("creates and lists organization memberships", async () => {
@@ -131,15 +131,15 @@ describe("remote-workflow organizations and users contract", () => {
       "organization-memberships",
     );
     membershipId = created.id;
-    expect(created.attributes.status).toBe("active");
-    expect(created.attributes.role).toBe("member");
+    expect(created.attributes["status"]).toBe("active");
+    expect(created.attributes["role"]).toBe("member");
     // The membership resource carries the user's username so org user lists
     // can render it without a follow-up fetch.
-    expect(created.attributes.username).toBe(memberUsername);
-    expect(created.relationships?.user).toMatchObject({
+    expect(created.attributes["username"]).toBe(memberUsername);
+    expect(created.relationships?.["user"]).toMatchObject({
       data: { id: memberId, type: "users" },
     });
-    expect(created.relationships?.organization).toMatchObject({
+    expect(created.relationships?.["organization"]).toMatchObject({
       data: { id: seed.orgName, type: "organizations" },
     });
 
@@ -174,11 +174,11 @@ describe("remote-workflow organizations and users contract", () => {
 
   it("shows the current user", async () => {
     const resource = await expectSuccessResponse(await request(`/api/v2/users/${seed.userId}`, { headers }), 200, "users");
-    expect(resource.attributes.username).toBe(seed.username);
+    expect(resource.attributes["username"]).toBe(seed.username);
     expect(resource.attributes["is-service-account"]).toBe(false);
     expect(resource.attributes["auth-method"]).toBe("password");
     expect(resource.attributes["avatar-url"]).toBeTypeOf("string");
-    expect(resource.attributes.permissions).toMatchObject({
+    expect(resource.attributes["permissions"]).toMatchObject({
       "can-create-organizations": true,
       "can-change-email": true,
     });

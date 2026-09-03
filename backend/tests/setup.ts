@@ -7,18 +7,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 process.env.NODE_ENV ??= "test";
-process.env.TERRENCE_ENABLE_LOCAL_SIGNUP ??= "true";
+process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"] ??= "true";
 // The run sandbox is fail-closed by default; CI/dev hosts usually lack
 // the Landlock ABI the sandbox needs, so tests explicitly opt out.
-process.env.TERRENCE_RUN_SANDBOX ??= "false";
+process.env["TERRENCE_RUN_SANDBOX"] ??= "false";
 // app.ts boots the worker queue at import time via a dynamic import; in Bun
 // the first poll can fire before the top-level-await ./db module finishes
 // evaluating (TDZ ReferenceError, cascading 500s across API test files).
 // Tests drive the queue explicitly (pollWorkerQueue/executeRun) or spawn
 // dedicated processes, so the background loop must stay off here. Spawns
 // that need it opt back in with TERRENCE_DISABLE_WORKER=0.
-process.env.TERRENCE_DISABLE_WORKER ??= "1";
-process.env.TERRENCE_SETUP_RAN = "yes";
+process.env["TERRENCE_DISABLE_WORKER"] ??= "1";
+process.env["TERRENCE_SETUP_RAN"] = "yes";
 
 export function makeTestDbName(prefix: string): string {
   const name = `${prefix}_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
@@ -27,14 +27,14 @@ export function makeTestDbName(prefix: string): string {
 }
 
 const testDir = mkdtempSync(join(tmpdir(), "terrence-test-"));
-process.env.DATABASE_URL ??= `file:${join(testDir, "terrence.db")}`;
-process.env.STORAGE_DIR ??= join(testDir, "storage");
+process.env["DATABASE_URL"] ??= `file:${join(testDir, "terrence.db")}`;
+process.env["STORAGE_DIR"] ??= join(testDir, "storage");
 
 // The production image bundles the pinned configuration inspector (the
 // `terraform-config-inspect` tool). Tests use a
 // deterministic stand-in so archive/API coverage remains offline and does not
 // require Go on every developer or CI machine.
-if (process.env.TERRAFORM_CONFIG_INSPECT_PATH === undefined) {
+if (process.env["TERRAFORM_CONFIG_INSPECT_PATH"] === undefined) {
   const inspector = join(testDir, "terraform-config-inspect");
   writeFileSync(inspector, `#!/usr/bin/env bun
 const directory = Bun.argv.at(-1) ?? "";
@@ -55,7 +55,7 @@ const value = subnet ? {
 process.stdout.write(JSON.stringify(value));
 `);
   chmodSync(inspector, 0o755);
-  process.env.TERRAFORM_CONFIG_INSPECT_PATH = inspector;
+  process.env["TERRAFORM_CONFIG_INSPECT_PATH"] = inspector;
 }
 
 // Each test file's run of this preload creates a fresh tmpfs-backed temp dir
@@ -81,7 +81,7 @@ afterAll(() => {
 // the cgroup's RAM and accumulate quickly under parallel workers. Spawned
 // test backends inherit this via process.env, so they cache-hit instead of
 // re-downloading into their own fresh storage dirs too.
-process.env.TERRENCE_BINARY_CACHE_DIR ??= join(import.meta.dir, "..", "storage", "binaries");
+process.env["TERRENCE_BINARY_CACHE_DIR"] ??= join(import.meta.dir, "..", "storage", "binaries");
 
 // PostgreSQL test databases need the drizzle/pg schema before any query, and
 // each test FILE gets its own database (mirroring the per-file sqlite temp
@@ -90,7 +90,7 @@ process.env.TERRENCE_BINARY_CACHE_DIR ??= join(import.meta.dir, "..", "storage",
 // database, rewrites DATABASE_URL, migrates it, and drops it after the
 // file's tests complete. Orphaned databases (crashed workers) can be listed
 // with `SELECT datname FROM pg_database WHERE datname LIKE 'terrence_test_%'`.
-const testDbUrl = process.env.DATABASE_URL ?? "";
+const testDbUrl = process.env["DATABASE_URL"] ?? "";
 if (testDbUrl.startsWith("postgres")) {
   const { SQL } = await import("bun");
   const dbName = makeTestDbName("terrence_test");
@@ -102,7 +102,7 @@ if (testDbUrl.startsWith("postgres")) {
   }
   const fileUrl = new URL(testDbUrl);
   fileUrl.pathname = `/${dbName}`;
-  process.env.DATABASE_URL = fileUrl.toString();
+  process.env["DATABASE_URL"] = fileUrl.toString();
   const { applyPgMigrations } = await import("../src/db");
   await applyPgMigrations();
   afterAll(async (): Promise<void> => {

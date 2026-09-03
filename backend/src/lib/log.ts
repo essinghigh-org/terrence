@@ -45,7 +45,7 @@ function environmentTargetString(): string | undefined {
 }
 
 function environmentConfiguration(): LoggingConfiguration {
-  const logLevel = resolveLogLevel(process.env.LOG_LEVEL);
+  const logLevel = resolveLogLevel(process.env["LOG_LEVEL"]);
   const syslogTargets = parseSyslogTargets(environmentTargetString());
   return {
     enabled: syslogTargets.length > 0,
@@ -94,7 +94,7 @@ export function applyLoggingSettings(settings: Readonly<Record<string, unknown>>
   const configuredLogLevel = settingString(settings, "log-level");
   const configuredSyslogLevel = settingString(settings, "syslog-level");
   const configuredTargets = settingTargets(settings);
-  const configuredEnabled = settings.enabled;
+  const configuredEnabled = settings["enabled"];
   const configuredFormat = settingString(settings, "syslog-format");
   const next: LoggingConfiguration = {
     enabled: typeof configuredEnabled === "boolean"
@@ -188,8 +188,8 @@ function serializeLogErrorInternal(error: Error, depth: number, active: Set<Erro
       name: truncateLogString(value.name, MAX_ERROR_STRING_LENGTH),
       message: truncateLogString(value.message, MAX_ERROR_STRING_LENGTH),
     };
-    if (value.stack !== undefined) serialized.stack = truncateLogString(value.stack, MAX_ERROR_STRING_LENGTH);
-    if (value.cause !== undefined) serialized.cause = serializeNestedError(value.cause, depth + 1, active);
+    if (value.stack !== undefined) serialized["stack"] = truncateLogString(value.stack, MAX_ERROR_STRING_LENGTH);
+    if (value.cause !== undefined) serialized["cause"] = serializeNestedError(value.cause, depth + 1, active);
     if (Array.isArray(value.errors)) {
       const errors = value.errors
         .slice(0, MAX_ERROR_COLLECTION_ITEMS)
@@ -197,7 +197,7 @@ function serializeLogErrorInternal(error: Error, depth: number, active: Set<Erro
       if (value.errors.length > MAX_ERROR_COLLECTION_ITEMS) {
         errors.push(`[${value.errors.length - MAX_ERROR_COLLECTION_ITEMS} additional errors omitted]`);
       }
-      serialized.errors = errors;
+      serialized["errors"] = errors;
     }
 
     const details: Record<string, SafeErrorScalar> = {};
@@ -216,7 +216,7 @@ function serializeLogErrorInternal(error: Error, depth: number, active: Set<Erro
       const safeValue = safeErrorScalar(detail, MAX_ERROR_DETAIL_STRING_LENGTH);
       if (safeValue !== undefined) details[key] = safeValue;
     }
-    if (Object.keys(details).length > 0) serialized.details = details;
+    if (Object.keys(details).length > 0) serialized["details"] = details;
     return serialized;
   } finally {
     active.delete(error);

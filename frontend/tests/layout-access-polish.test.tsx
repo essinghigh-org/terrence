@@ -31,7 +31,7 @@ afterEach((): void => {
 
 test("shows identity, organization switching, and site administration when authorized", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "alice", "is-site-admin": true } } });
@@ -45,7 +45,7 @@ test("shows identity, organization switching, and site administration when autho
       });
     }
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -77,7 +77,7 @@ test("redirects non-administrators before loading site data", async () => {
   const fetchMock = mock(async (): Promise<Response> => {
     throw new Error("Admin data must not be requested");
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/admin"]}>
@@ -98,7 +98,7 @@ test("redirects non-administrators before loading site data", async () => {
 
 test("uses one contextual sidebar across organization settings", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "alice", "is-site-admin": false } } });
@@ -130,7 +130,7 @@ test("uses one contextual sidebar across organization settings", async () => {
       || url === "/api/v2/organizations/acme/organization-memberships"
     ) return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/settings?tab=teams"]}>
@@ -179,7 +179,7 @@ test("keeps General visible and gates managed organization navigation independen
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -238,7 +238,7 @@ test("fails closed while organization permissions change or fail to load", async
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -286,14 +286,14 @@ test("fails closed while organization permissions change or fail to load", async
 
 test("uses contextual account navigation", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({ data: { attributes: { username: "alice", "is-site-admin": false } } });
     }
     if (url === "/api/v2/organizations?page[size]=100") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/account"]}>
@@ -319,7 +319,7 @@ test("uses contextual account navigation", async () => {
 
 test("only shows password navigation while a password change is required", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({
@@ -334,7 +334,7 @@ test("only shows password navigation while a password change is required", async
     }
     if (url === "/api/v2/organizations?page[size]=100") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/account"]}>
@@ -356,7 +356,7 @@ test("only shows password navigation while a password change is required", async
 
 test("scrolls contextual account links after account data loads", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       return json({
@@ -369,7 +369,7 @@ test("scrolls contextual account links after account data loads", async () => {
     if (url === "/api/v2/users/user-1/authentication-tokens") return json({ data: [] });
     if (url === "/api/v2/organizations?page[size]=100") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/account"]}>
@@ -398,7 +398,7 @@ test("scrolls contextual account links after account data loads", async () => {
 test("keeps failed account details read-only until retry succeeds", async () => {
   let detailsRequests = 0;
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     if (url === "/api/v2/account/details") {
       detailsRequests += 1;
@@ -414,7 +414,7 @@ test("keeps failed account details read-only until retry succeeds", async () => 
     }
     if (url === "/api/v2/users/user-1/authentication-tokens") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/account"]}>

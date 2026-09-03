@@ -84,10 +84,10 @@ async function scimGroupResource(group: typeof scimGroups.$inferSelect): Promise
 }
 
 function scimEmail(payload: ScimPayload): string | null {
-  const emails = Array.isArray(payload.emails) ? payload.emails : [];
-  const primary = emails.find((email): boolean => email !== null && typeof email === "object" && (email as Record<string, unknown>).primary === true);
+  const emails = Array.isArray(payload["emails"]) ? payload["emails"] : [];
+  const primary = emails.find((email): boolean => email !== null && typeof email === "object" && (email as Record<string, unknown>)["primary"] === true);
   const first = primary ?? emails[0];
-  const value = first !== null && typeof first === "object" ? (first as Record<string, unknown>).value : undefined;
+  const value = first !== null && typeof first === "object" ? (first as Record<string, unknown>)["value"] : undefined;
   // Lowercase to the canonical form used by every other identity path (SSO,
   // invitations, membership add). Without this, a mixed-case SCIM email
   // bypasses the exact-match lookups and provisions duplicate users.
@@ -99,7 +99,7 @@ function scimMemberIds(value: unknown): string[] | null {
   if (!Array.isArray(value)) return null;
   const ids = value.map((item): string => {
     if (item === null || typeof item !== "object") return "";
-    const id = (item as Record<string, unknown>).value;
+    const id = (item as Record<string, unknown>)["value"];
     return typeof id === "string" ? id : "";
   });
   return ids.every((id): boolean => id !== "") ? [...new Set(ids)] : null;
@@ -213,7 +213,7 @@ export const scimRoutes = new Elysia({ name: "scim" })
     if (!(await validateScimToken(request, set))) return scimError(set, 401, "Unauthorized");
     set.headers["Content-Type"] = "application/scim+json";
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const userName = typeof payload.userName === "string" ? payload.userName.trim() : "";
+    const userName = typeof payload["userName"] === "string" ? payload["userName"].trim() : "";
     if (userName === "") return scimError(set, 400, "userName is required");
 
     const email = scimEmail(payload);
@@ -238,12 +238,12 @@ export const scimRoutes = new Elysia({ name: "scim" })
             email,
             passwordHash,
             isSiteAdmin: false,
-            isSuspended: payload.active === false,
+            isSuspended: payload["active"] === false,
             mustChangePassword: false,
           });
         } else {
-          await tx.update(users).set({ isSuspended: payload.active === false }).where(eq(users.id, existing.id));
-          if (payload.active === false) {
+          await tx.update(users).set({ isSuspended: payload["active"] === false }).where(eq(users.id, existing.id));
+          if (payload["active"] === false) {
             await tx.delete(apiTokens).where(eq(apiTokens.userId, existing.id));
             await tx.update(refreshSessions).set({ revokedAt: Date.now() }).where(and(eq(refreshSessions.userId, existing.id), isNull(refreshSessions.revokedAt)));
           }
@@ -252,7 +252,7 @@ export const scimRoutes = new Elysia({ name: "scim" })
           id: scimIdentityId,
           userId: linkedUserId,
           username: userName,
-          externalId: typeof payload.externalId === "string" ? payload.externalId : null,
+          externalId: typeof payload["externalId"] === "string" ? payload["externalId"] : null,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         });
@@ -280,7 +280,7 @@ export const scimRoutes = new Elysia({ name: "scim" })
   .get("/scim/v2/Users/:id", async ({ params, request, set }: RequestCtx): Promise<unknown> => {
     if (!(await validateScimToken(request, set))) return scimError(set, 401, "Unauthorized");
     set.headers["Content-Type"] = "application/scim+json";
-    const identity = await db.query.scimUserIdentities.findFirst({ where: eq(scimUserIdentities.id, params.id ?? "") });
+    const identity = await db.query.scimUserIdentities.findFirst({ where: eq(scimUserIdentities.id, params["id"] ?? "") });
     if (!identity) return scimError(set, 404, "User not found");
     const u = await db.query.users.findFirst({ where: eq(users.id, identity.userId) });
 
@@ -289,7 +289,7 @@ export const scimRoutes = new Elysia({ name: "scim" })
   .delete("/scim/v2/Users/:id", async ({ params, request, set }: RequestCtx): Promise<unknown> => {
     if (!(await validateScimToken(request, set))) return scimError(set, 401, "Unauthorized");
     set.headers["Content-Type"] = "application/scim+json";
-    const identity = await db.query.scimUserIdentities.findFirst({ where: eq(scimUserIdentities.id, params.id ?? "") });
+    const identity = await db.query.scimUserIdentities.findFirst({ where: eq(scimUserIdentities.id, params["id"] ?? "") });
     if (!identity) return scimError(set, 404, "User not found");
 
     await db.transaction(async (tx): Promise<void> => {
@@ -315,10 +315,10 @@ export const scimRoutes = new Elysia({ name: "scim" })
   .put("/scim/v2/Users/:id", async ({ params, body, request, set }: RequestCtx): Promise<unknown> => {
     if (!(await validateScimToken(request, set))) return scimError(set, 401, "Unauthorized");
     set.headers["Content-Type"] = "application/scim+json";
-    const identity = await db.query.scimUserIdentities.findFirst({ where: eq(scimUserIdentities.id, params.id ?? "") });
+    const identity = await db.query.scimUserIdentities.findFirst({ where: eq(scimUserIdentities.id, params["id"] ?? "") });
     if (identity === undefined) return scimError(set, 404, "User not found");
     const payload = body !== null && typeof body === "object" ? body as ScimPayload : {};
-    const userName = typeof payload.userName === "string" && payload.userName.trim() !== "" ? payload.userName.trim() : identity.username;
+    const userName = typeof payload["userName"] === "string" && payload["userName"].trim() !== "" ? payload["userName"].trim() : identity.username;
     const email = scimEmail(payload);
     if (email === null) return scimError(set, 400, "emails is required");
     const currentUser = await db.query.users.findFirst({ where: eq(users.id, identity.userId) });
@@ -330,13 +330,13 @@ export const scimRoutes = new Elysia({ name: "scim" })
           username: userName,
           email,
           ...(email !== currentUser.email ? { emailVerifiedAt: null } : {}),
-          ...(typeof payload.active === "boolean" ? { isSuspended: !payload.active } : {}),
+          ...(typeof payload["active"] === "boolean" ? { isSuspended: !payload["active"] } : {}),
         }).where(eq(users.id, identity.userId));
-        if (payload.active === false) {
+        if (payload["active"] === false) {
           await tx.delete(apiTokens).where(eq(apiTokens.userId, identity.userId));
           await tx.update(refreshSessions).set({ revokedAt: Date.now() }).where(and(eq(refreshSessions.userId, identity.userId), isNull(refreshSessions.revokedAt)));
         }
-        await tx.update(scimUserIdentities).set({ username: userName, externalId: typeof payload.externalId === "string" ? payload.externalId : null, updatedAt }).where(eq(scimUserIdentities.id, identity.id));
+        await tx.update(scimUserIdentities).set({ username: userName, externalId: typeof payload["externalId"] === "string" ? payload["externalId"] : null, updatedAt }).where(eq(scimUserIdentities.id, identity.id));
         await tx.update(identityLinks).set({ emailAtLinkTime: email }).where(and(
           eq(identityLinks.userId, identity.userId),
           eq(identityLinks.provider, "scim"),
@@ -355,36 +355,36 @@ export const scimRoutes = new Elysia({ name: "scim" })
   .patch("/scim/v2/Users/:id", async ({ params, body, request, set }: RequestCtx): Promise<unknown> => {
     if (!(await validateScimToken(request, set))) return scimError(set, 401, "Unauthorized");
     set.headers["Content-Type"] = "application/scim+json";
-    const identity = await db.query.scimUserIdentities.findFirst({ where: eq(scimUserIdentities.id, params.id ?? "") });
+    const identity = await db.query.scimUserIdentities.findFirst({ where: eq(scimUserIdentities.id, params["id"] ?? "") });
     if (identity === undefined) return scimError(set, 404, "User not found");
     const payload = body !== null && typeof body === "object" ? body as ScimPayload : {};
-    const operations = Array.isArray(payload.Operations) ? payload.Operations : [];
+    const operations = Array.isArray(payload["Operations"]) ? payload["Operations"] : [];
     if (operations.length > 100) return scimError(set, 400, "Too many operations");
     const updates: ScimPayload = {};
     for (const rawOperation of operations) {
       if (rawOperation === null || typeof rawOperation !== "object") return scimError(set, 400, "Invalid PATCH operation");
       const operation = rawOperation as ScimPayload;
-      const op = typeof operation.op === "string" ? operation.op.toLowerCase() : "";
-      const rawPath = typeof operation.path === "string" ? operation.path : "";
+      const op = typeof operation["op"] === "string" ? operation["op"].toLowerCase() : "";
+      const rawPath = typeof operation["path"] === "string" ? operation["path"] : "";
       const path = rawPath.toLowerCase();
       if (!["add", "replace", "remove"].includes(op)) return scimError(set, 400, "Unsupported PATCH operation");
       if (op === "remove") {
         if (path !== "externalid") return scimError(set, 400, "Only externalId can be removed");
-        updates.externalId = null;
+        updates["externalId"] = null;
         continue;
       }
       if (path === "") {
-        if (operation.value === null || typeof operation.value !== "object") return scimError(set, 400, "PATCH value must be an object");
-        Object.assign(updates, operation.value as ScimPayload);
+        if (operation["value"] === null || typeof operation["value"] !== "object") return scimError(set, 400, "PATCH value must be an object");
+        Object.assign(updates, operation["value"] as ScimPayload);
       } else if (["active", "username", "externalid", "emails"].includes(path)) {
-        updates[path === "username" ? "userName" : path === "externalid" ? "externalId" : path] = operation.value;
+        updates[path === "username" ? "userName" : path === "externalid" ? "externalId" : path] = operation["value"];
       } else return scimError(set, 400, "Unsupported PATCH path");
     }
     const currentUser = await db.query.users.findFirst({ where: eq(users.id, identity.userId) });
     if (currentUser === undefined) return scimError(set, 404, "User not found");
-    const userName = typeof updates.userName === "string" && updates.userName.trim() !== "" ? updates.userName.trim() : currentUser.username;
-    const email = updates.emails === undefined ? currentUser.email : scimEmail({ emails: updates.emails });
-    if (updates.emails !== undefined && email === null) return scimError(set, 400, "emails cannot be cleared");
+    const userName = typeof updates["userName"] === "string" && updates["userName"].trim() !== "" ? updates["userName"].trim() : currentUser.username;
+    const email = updates["emails"] === undefined ? currentUser.email : scimEmail({ emails: updates["emails"] });
+    if (updates["emails"] !== undefined && email === null) return scimError(set, 400, "emails cannot be cleared");
     const updatedAt = Date.now();
     try {
       await db.transaction(async (tx): Promise<void> => {
@@ -392,13 +392,13 @@ export const scimRoutes = new Elysia({ name: "scim" })
           username: userName,
           email,
           ...(email !== currentUser.email ? { emailVerifiedAt: null } : {}),
-          ...(typeof updates.active === "boolean" ? { isSuspended: !updates.active } : {}),
+          ...(typeof updates["active"] === "boolean" ? { isSuspended: !updates["active"] } : {}),
         }).where(eq(users.id, currentUser.id));
-        if (updates.active === false) {
+        if (updates["active"] === false) {
           await tx.delete(apiTokens).where(eq(apiTokens.userId, currentUser.id));
           await tx.update(refreshSessions).set({ revokedAt: Date.now() }).where(and(eq(refreshSessions.userId, currentUser.id), isNull(refreshSessions.revokedAt)));
         }
-        await tx.update(scimUserIdentities).set({ username: userName, ...(updates.externalId !== undefined ? { externalId: typeof updates.externalId === "string" ? updates.externalId : null } : {}), updatedAt }).where(eq(scimUserIdentities.id, identity.id));
+        await tx.update(scimUserIdentities).set({ username: userName, ...(updates["externalId"] !== undefined ? { externalId: typeof updates["externalId"] === "string" ? updates["externalId"] : null } : {}), updatedAt }).where(eq(scimUserIdentities.id, identity.id));
         await tx.update(identityLinks).set({ emailAtLinkTime: email }).where(and(
           eq(identityLinks.userId, currentUser.id),
           eq(identityLinks.provider, "scim"),
@@ -433,14 +433,14 @@ export const scimRoutes = new Elysia({ name: "scim" })
     if (!(await validateScimToken(request, set))) return scimError(set, 401, "Unauthorized");
     set.headers["Content-Type"] = "application/scim+json";
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const displayName = typeof payload.displayName === "string" ? payload.displayName.trim() : "";
+    const displayName = typeof payload["displayName"] === "string" ? payload["displayName"].trim() : "";
     if (displayName === "") return scimError(set, 400, "displayName is required");
 
     const id = `scimgroup-${crypto.randomUUID()}`;
-    const memberIds = payload.members === undefined ? [] : scimMemberIds(payload.members);
+    const memberIds = payload["members"] === undefined ? [] : scimMemberIds(payload["members"]);
     if (memberIds === null) return scimError(set, 400, "members must be an array of SCIM user identifiers");
     const createdAt = Date.now();
-    await db.insert(scimGroups).values({ id, name: displayName, externalId: typeof payload.externalId === "string" ? payload.externalId : null, createdAt, updatedAt: createdAt });
+    await db.insert(scimGroups).values({ id, name: displayName, externalId: typeof payload["externalId"] === "string" ? payload["externalId"] : null, createdAt, updatedAt: createdAt });
     if (!(await replaceScimGroupMembers(id, memberIds))) {
       await db.delete(scimGroups).where(eq(scimGroups.id, id));
       return scimError(set, 404, "Referenced SCIM user not found");
@@ -454,7 +454,7 @@ export const scimRoutes = new Elysia({ name: "scim" })
   .get("/scim/v2/Groups/:id", async ({ params, request, set }: RequestCtx): Promise<unknown> => {
     if (!(await validateScimToken(request, set))) return scimError(set, 401, "Unauthorized");
     set.headers["Content-Type"] = "application/scim+json";
-    const g = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, params.id ?? "") });
+    const g = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, params["id"] ?? "") });
     if (!g) return scimError(set, 404, "Group not found");
 
     return scimGroupResource(g);
@@ -462,7 +462,7 @@ export const scimRoutes = new Elysia({ name: "scim" })
   .delete("/scim/v2/Groups/:id", async ({ params, request, set }: RequestCtx): Promise<unknown> => {
     if (!(await validateScimToken(request, set))) return scimError(set, 401, "Unauthorized");
     set.headers["Content-Type"] = "application/scim+json";
-    const g = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, params.id ?? "") });
+    const g = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, params["id"] ?? "") });
     if (!g) { (set as { status: number }).status = 204; return {}; }
     const settings = await db.query.scimSettings.findFirst({ where: eq(scimSettings.id, "scim") });
     if (settings?.siteAdminGroupScimId === g.id) await db.update(scimSettings).set({ siteAdminGroupScimId: null, updatedAt: Date.now() }).where(eq(scimSettings.id, "scim"));
@@ -475,11 +475,11 @@ export const scimRoutes = new Elysia({ name: "scim" })
   .put("/scim/v2/Groups/:id", async ({ params, body, request, set }: RequestCtx): Promise<unknown> => {
     if (!(await validateScimToken(request, set))) return scimError(set, 401, "Unauthorized");
     set.headers["Content-Type"] = "application/scim+json";
-    const group = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, params.id ?? "") });
+    const group = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, params["id"] ?? "") });
     if (group === undefined) return scimError(set, 404, "Group not found");
     const payload = body !== null && typeof body === "object" ? body as ScimPayload : {};
-    const name = typeof payload.displayName === "string" && payload.displayName.trim() !== "" ? payload.displayName.trim() : group.name;
-    const memberIds = payload.members === undefined ? undefined : scimMemberIds(payload.members);
+    const name = typeof payload["displayName"] === "string" && payload["displayName"].trim() !== "" ? payload["displayName"].trim() : group.name;
+    const memberIds = payload["members"] === undefined ? undefined : scimMemberIds(payload["members"]);
     if (memberIds === null) return scimError(set, 400, "members must be an array of SCIM user identifiers");
     let missingMember = false;
     await db.transaction(async (tx): Promise<void> => {
@@ -489,7 +489,7 @@ export const scimRoutes = new Elysia({ name: "scim" })
       }
       if (memberIds !== undefined) await reconcileMappedTeams(group.id, tx);
       await reconcileScimSiteAdmins(tx);
-      await tx.update(scimGroups).set({ name, ...(payload.externalId !== undefined ? { externalId: typeof payload.externalId === "string" ? payload.externalId : null } : {}), updatedAt: Date.now() }).where(eq(scimGroups.id, group.id));
+      await tx.update(scimGroups).set({ name, ...(payload["externalId"] !== undefined ? { externalId: typeof payload["externalId"] === "string" ? payload["externalId"] : null } : {}), updatedAt: Date.now() }).where(eq(scimGroups.id, group.id));
     });
     if (missingMember) return scimError(set, 404, "Referenced SCIM user not found");
     const updated = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, group.id) });
@@ -498,10 +498,10 @@ export const scimRoutes = new Elysia({ name: "scim" })
   .patch("/scim/v2/Groups/:id", async ({ params, body, request, set }: RequestCtx): Promise<unknown> => {
     if (!(await validateScimToken(request, set))) return scimError(set, 401, "Unauthorized");
     set.headers["Content-Type"] = "application/scim+json";
-    const group = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, params.id ?? "") });
+    const group = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, params["id"] ?? "") });
     if (group === undefined) return scimError(set, 404, "Group not found");
     const payload = body !== null && typeof body === "object" ? body as ScimPayload : {};
-    const operations = Array.isArray(payload.Operations) ? payload.Operations : [];
+    const operations = Array.isArray(payload["Operations"]) ? payload["Operations"] : [];
     if (operations.length > 100) return scimError(set, 400, "Too many operations");
     let name = group.name;
     let externalId: string | null | undefined = undefined;
@@ -510,16 +510,16 @@ export const scimRoutes = new Elysia({ name: "scim" })
     for (const rawOperation of operations) {
       if (rawOperation === null || typeof rawOperation !== "object") return scimError(set, 400, "Invalid PATCH operation");
       const operation = rawOperation as ScimPayload;
-      const op = typeof operation.op === "string" ? operation.op.toLowerCase() : "";
-      const rawPath = typeof operation.path === "string" ? operation.path : "";
+      const op = typeof operation["op"] === "string" ? operation["op"].toLowerCase() : "";
+      const rawPath = typeof operation["path"] === "string" ? operation["path"] : "";
       const path = rawPath.toLowerCase();
       if (!["add", "replace", "remove"].includes(op)) return scimError(set, 400, "Unsupported PATCH operation");
-      if (path === "" && operation.value !== null && typeof operation.value === "object") {
-        const value = operation.value as ScimPayload;
-        if (typeof value.displayName === "string" && value.displayName.trim() !== "") name = value.displayName.trim();
-        if (value.externalId !== undefined) externalId = typeof value.externalId === "string" ? value.externalId : null;
-        if (value.members !== undefined) {
-          const ids = scimMemberIds(value.members);
+      if (path === "" && operation["value"] !== null && typeof operation["value"] === "object") {
+        const value = operation["value"] as ScimPayload;
+        if (typeof value["displayName"] === "string" && value["displayName"].trim() !== "") name = value["displayName"].trim();
+        if (value["externalId"] !== undefined) externalId = typeof value["externalId"] === "string" ? value["externalId"] : null;
+        if (value["members"] !== undefined) {
+          const ids = scimMemberIds(value["members"]);
           if (ids === null) return scimError(set, 400, "members must be an array of SCIM user identifiers");
           memberIds = ids;
           membersChanged = true;
@@ -527,12 +527,12 @@ export const scimRoutes = new Elysia({ name: "scim" })
         continue;
       }
       if (path === "displayname") {
-        if (op === "remove" || typeof operation.value !== "string" || operation.value.trim() === "") return scimError(set, 400, "displayName is required");
-        name = operation.value.trim();
+        if (op === "remove" || typeof operation["value"] !== "string" || operation["value"].trim() === "") return scimError(set, 400, "displayName is required");
+        name = operation["value"].trim();
       } else if (path === "externalid") {
-        externalId = op === "remove" ? null : typeof operation.value === "string" ? operation.value : null;
+        externalId = op === "remove" ? null : typeof operation["value"] === "string" ? operation["value"] : null;
       } else if (path === "members") {
-        const ids = scimMemberIds(operation.value);
+        const ids = scimMemberIds(operation["value"]);
         if (ids === null) return scimError(set, 400, "members must be an array of SCIM user identifiers");
         memberIds = op === "add" ? [...new Set([...memberIds, ...ids])] : op === "remove" ? memberIds.filter((id) => !new Set(ids).has(id)) : ids;
         membersChanged = true;

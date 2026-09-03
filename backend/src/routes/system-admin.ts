@@ -90,7 +90,7 @@ const SUPPORT_BUNDLE_COMPATIBILITY_PATH = "/api/v1/support-bundle-requests";
 let diagnosticsRunning = false;
 
 function storageDirectory(): string {
-  return resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
+  return resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"));
 }
 
 function supportBundleDirectory(): string {
@@ -169,7 +169,7 @@ async function diagnosticGroups(
   if (selected.get("task-worker")?.has("running") === true) {
     checks.set("task-worker.running", Promise.resolve({
       name: "running",
-      status: envEnabled(process.env.TERRENCE_DISABLE_WORKER) ? "WARNING" : "OK",
+      status: envEnabled(process.env["TERRENCE_DISABLE_WORKER"]) ? "WARNING" : "OK",
     }));
   }
   if (selected.get("runtime")?.has("version") === true) {
@@ -186,7 +186,7 @@ async function diagnosticGroups(
       data: {
         abi,
         required: runSandboxRequired(),
-        extraRwAllowed: envEnabled(process.env.TERRENCE_SANDBOX_EXTRA_RW_ALLOWED),
+        extraRwAllowed: envEnabled(process.env["TERRENCE_SANDBOX_EXTRA_RW_ALLOWED"]),
         access: flags,
       },
     }));
@@ -199,7 +199,7 @@ async function diagnosticGroups(
   if (selected.get("security")?.has("extra_rw") === true) {
     // Todo 66: surface TERRENCE_SANDBOX_EXTRA_RW_ALLOWED as a warning so
     // operators (and the UI) notice when the sandbox allow-list is widened.
-    const enabled = envEnabled(process.env.TERRENCE_SANDBOX_EXTRA_RW_ALLOWED);
+    const enabled = envEnabled(process.env["TERRENCE_SANDBOX_EXTRA_RW_ALLOWED"]);
     checks.set("security.extra_rw", Promise.resolve({
       name: "extra_rw",
       status: enabled ? "WARNING" : "OK",
@@ -250,8 +250,8 @@ async function activeControlPlaneNodes(): Promise<readonly (typeof controlPlaneN
   return [{
     id: readinessNodeId(),
     hostname: readinessNodeId(),
-    address: process.env.TERRENCE_NODE_ADDRESS ?? null,
-    version: process.env.BUILD_VERSION ?? "dev",
+    address: process.env["TERRENCE_NODE_ADDRESS"] ?? null,
+    version: process.env["BUILD_VERSION"] ?? "dev",
     status: "active",
     readinessChecks: [],
     registeredAt: now,
@@ -318,11 +318,11 @@ async function collectDiagnostics(
       if (result === null || typeof result !== "object") return diagnosticFailure(node.id, "invalid_response");
       const record = result as Record<string, unknown>;
       return {
-        node: typeof record.node === "string" ? record.node : node.id,
-        status: ["OK", "WARNING", "ERROR"].includes(String(record.status)) ? record.status as Status : "ERROR",
-        createdAt: typeof record.created_at === "string" ? record.created_at : new Date().toISOString(),
-        duration: typeof record.duration === "number" ? record.duration : 0,
-        checks: Array.isArray(record.checks) ? record.checks as DiagnosticGroup[] : [],
+        node: typeof record["node"] === "string" ? record["node"] : node.id,
+        status: ["OK", "WARNING", "ERROR"].includes(String(record["status"])) ? record["status"] as Status : "ERROR",
+        createdAt: typeof record["created_at"] === "string" ? record["created_at"] : new Date().toISOString(),
+        duration: typeof record["duration"] === "number" ? record["duration"] : 0,
+        checks: Array.isArray(record["checks"]) ? record["checks"] as DiagnosticGroup[] : [],
       };
     } catch {
       return diagnosticFailure(node.id, "node_unreachable");
@@ -357,7 +357,7 @@ async function createUsageBundle(): Promise<Record<string, unknown>> {
         mode: "write",
       },
     },
-    product_version: process.env.BUILD_VERSION ?? "dev",
+    product_version: process.env["BUILD_VERSION"] ?? "dev",
     license_id: "unlicensed",
     metadata: {},
   };
@@ -375,17 +375,17 @@ async function createUsageBundle(): Promise<Record<string, unknown>> {
 function isBundleRecord(value: unknown): value is BundleRecord {
   if (value === null || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  const nodes = record.nodes;
-  return typeof record.id === "string"
-    && BUNDLE_ID_PATTERN.test(record.id)
-    && ["generating", "finished", "errored", "deleted"].includes(String(record.status))
-    && typeof record.createdAt === "string"
+  const nodes = record["nodes"];
+  return typeof record["id"] === "string"
+    && BUNDLE_ID_PATTERN.test(record["id"])
+    && ["generating", "finished", "errored", "deleted"].includes(String(record["status"]))
+    && typeof record["createdAt"] === "string"
     && Array.isArray(nodes)
     && nodes.every((node): boolean => node !== null
       && typeof node === "object"
-      && typeof (node as Record<string, unknown>).node === "string"
+      && typeof (node as Record<string, unknown>)["node"] === "string"
       && ["generating", "finished", "errored", "deleted"].includes(
-        String((node as Record<string, unknown>).status),
+        String((node as Record<string, unknown>)["status"]),
       ));
 }
 
@@ -468,8 +468,8 @@ async function generateSupportBundle(record: BundleRecord, authorization: string
       entries[`${prefix}/diagnostics.json`] = `${JSON.stringify([diagnosticResource(diagnostic)], null, 2)}\n`;
       entries[`${prefix}/usage.json`] = `${JSON.stringify(usage, null, 2)}\n`;
       entries[`${prefix}/instance.json`] = `${JSON.stringify({
-        version: process.env.BUILD_VERSION ?? "dev",
-        build: process.env.BUILD_SHA ?? "unknown",
+        version: process.env["BUILD_VERSION"] ?? "dev",
+        build: process.env["BUILD_SHA"] ?? "unknown",
         node: diagnostic.node,
         created_at: record.createdAt,
       }, null, 2)}\n`;
@@ -517,14 +517,14 @@ function requestedNodes(url: QueryUrl): readonly string[] | undefined {
 
 async function createSupportBundle({ body, request, set }: SystemContext): Promise<unknown> {
   const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-  const suppliedNodes = payload.nodes;
+  const suppliedNodes = payload["nodes"];
   if (suppliedNodes !== undefined && (!Array.isArray(suppliedNodes)
     || suppliedNodes.length === 0
     || suppliedNodes.some((node): boolean => typeof node !== "string" || node === ""))) {
     return errorResponse(set, 400, "Bad Request", "nodes must be a non-empty array of node identifiers");
   }
   const activeNodes = await activeControlPlaneNodes();
-  const nodes = payload.all === true
+  const nodes = payload["all"] === true
     ? activeNodes.map((node): string => node.id)
     : suppliedNodes === undefined ? [readinessNodeId()] : [...new Set(suppliedNodes as string[])];
   if (nodes.some((node): boolean => !activeNodes.some((active): boolean => active.id === node))) {
@@ -593,7 +593,7 @@ async function listSupportBundles({ request, set }: SystemContext): Promise<unkn
 }
 
 async function downloadSupportBundle({ params, request, set }: SystemContext): Promise<unknown> {
-  const id = params.id ?? "";
+  const id = params["id"] ?? "";
   const record = await loadBundle(id);
   if (record === undefined) return errorResponse(set, 404, "Not Found", "Support bundle request not found");
   if (record.status === "deleted") return errorResponse(set, 410, "Gone", "Support bundle was deleted");
@@ -611,14 +611,14 @@ async function downloadSupportBundle({ params, request, set }: SystemContext): P
 }
 
 async function getSupportBundle({ params, set }: SystemContext): Promise<unknown> {
-  const record = await loadBundle(params.id ?? "");
+  const record = await loadBundle(params["id"] ?? "");
   if (record === undefined) return errorResponse(set, 404, "Not Found", "Support bundle request not found");
   if (record.status === "deleted") return errorResponse(set, 410, "Gone", "Support bundle was deleted");
   return { data: bundleResource(record) };
 }
 
 async function deleteSupportBundle({ params, set }: SystemContext): Promise<unknown> {
-  const record = await loadBundle(params.id ?? "");
+  const record = await loadBundle(params["id"] ?? "");
   if (record === undefined) return errorResponse(set, 404, "Not Found", "Support bundle request not found");
   if (record.status === "deleted") return errorResponse(set, 410, "Gone", "Support bundle was deleted");
   if (record.status === "generating") return errorResponse(set, 409, "Conflict", "Support bundle is still generating");

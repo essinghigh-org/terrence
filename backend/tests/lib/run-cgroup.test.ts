@@ -29,7 +29,7 @@ function envWith(root: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
     TERRENCE_RUN_CGROUP_ROOT: root,
-    TERRENCE_RUN_SANDBOX: process.env.TERRENCE_RUN_SANDBOX,
+    TERRENCE_RUN_SANDBOX: process.env["TERRENCE_RUN_SANDBOX"],
   };
 }
 
@@ -75,7 +75,7 @@ describe("run cgroups (kanban 8/9)", () => {
       TERRENCE_RUN_CGROUPS_DISABLED: "1",
       TERRENCE_RUN_CGROUP_ROOT: "",
     };
-    delete (env as Record<string, unknown>).TERRENCE_RUN_CGROUP_ROOT;
+    delete (env as Record<string, unknown>)["TERRENCE_RUN_CGROUP_ROOT"];
     expect(cgroupEnabled({ ...env, TERRENCE_RUN_CGROUPS_DISABLED: "true" })).toBeFalse();
   });
 
@@ -211,10 +211,10 @@ describe("run cgroups (kanban 8/9)", () => {
     const root = makeFakeRoot();
     created.push(root);
     const previous = {
-      root: process.env.TERRENCE_RUN_CGROUP_ROOT,
-      memory: process.env.TERRENCE_RUN_CGROUP_MEMORY_MAX,
-      pids: process.env.TERRENCE_RUN_CGROUP_PIDS_MAX,
-      cpu: process.env.TERRENCE_RUN_CGROUP_CPU_WEIGHT,
+      root: process.env["TERRENCE_RUN_CGROUP_ROOT"],
+      memory: process.env["TERRENCE_RUN_CGROUP_MEMORY_MAX"],
+      pids: process.env["TERRENCE_RUN_CGROUP_PIDS_MAX"],
+      cpu: process.env["TERRENCE_RUN_CGROUP_CPU_WEIGHT"],
     };
     Object.assign(process.env, {
       TERRENCE_RUN_CGROUP_ROOT: root,

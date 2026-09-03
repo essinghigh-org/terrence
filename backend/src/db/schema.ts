@@ -15,7 +15,7 @@ import { join, resolve } from "node:path";
 const moduleDir = typeof import.meta?.dir === "string" && import.meta.dir !== ""
   ? import.meta.dir
   : process.cwd();
-const storageDir = resolve(process.env.STORAGE_DIR ?? join(moduleDir, "../../storage"));
+const storageDir = resolve(process.env["STORAGE_DIR"] ?? join(moduleDir, "../../storage"));
 const activeDriver = resolveDatabaseConfig(process.env, storageDir).driver;
 // Built lazily: constructing the pg mirror walks every sqlite table object,
 // which is wasted work on the sqlite path and can throw on exotic schema

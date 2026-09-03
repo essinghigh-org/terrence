@@ -360,7 +360,7 @@ describe("AI plan explainer (21.2)", () => {
       expect(body.errors[0]?.detail ?? "").toContain("unreachable");
     } else {
       const body = (await response.json()) as { data: { attributes: Record<string, unknown> } };
-      expect(String(body.data.attributes.status ?? body.data.attributes["job-id"] ?? "queued")).toMatch(/queued|running|failed/);
+      expect(String(body.data.attributes["status"] ?? body.data.attributes["job-id"] ?? "queued")).toMatch(/queued|running|failed/);
     }
   });
 
@@ -371,7 +371,7 @@ describe("AI plan explainer (21.2)", () => {
 
   it("still reads settings after the feature group was written", async () => {
     const settings = await getSettings("plan-explainer");
-    expect(settings.enabled).toBe(true);
+    expect(settings["enabled"]).toBe(true);
   });
 });
 
@@ -495,7 +495,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     if (first.status === 202) { await new Promise(r => setTimeout(r, 200)); }
     if (first.status === 202) {
       const env = (await first.json()) as { data: { attributes: Record<string, unknown> } };
-      expect(String(env.data.attributes.status ?? "queued")).toMatch(/queued|running/);
+      expect(String(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
       // Job is async with worker off; ensure at least the enqueue happened
       expect(upstreamCalls).toBe(0);
     } else {
@@ -549,7 +549,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     if (generated.status === 202) { await new Promise(r => setTimeout(r, 200)); }
     if (generated.status === 202) {
       const env = (await generated.json()) as { data: { attributes: Record<string, unknown> } };
-      expect(String(env.data.attributes.status ?? "queued")).toMatch(/queued|running/);
+      expect(String(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
     } else {
       const generatedBody = (await generated.json()) as { data: { attributes: { explanation: string; cached: boolean } } };
       expect(generatedBody.data.attributes.explanation).toContain("adds one instance");
@@ -697,7 +697,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     if (response.status === 202) { await new Promise(r => setTimeout(r, 200)); }
     if (response.status === 202) {
       const env = (await response.json()) as { data: { attributes: Record<string, unknown> } };
-      expect(String(env.data.attributes.status ?? "queued")).toMatch(/queued|running/);
+      expect(String(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
     } else {
       const body = (await response.json()) as { data: { attributes: { explanation: string } } };
       expect(body.data.attributes.explanation).toContain("adds one instance");
@@ -758,7 +758,7 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
       expect(cachedBody.data.attributes.model).toBe("test-model");
     } else {
       const env = (await cached.json()) as { data: { attributes: Record<string, unknown> } };
-      expect(String(env.data.attributes.status ?? "queued")).toMatch(/queued|running/);
+      expect(String(env.data.attributes["status"] ?? "queued")).toMatch(/queued|running/);
     }
     expect(upstreamCalls >= 0).toBe(true);
     await setSettings("plan-explainer", { enabled: true, provider: "openrouter", "endpoint-url": endpointUrl, "api-key": null, model: "test-model", "reasoning-effort": "xhigh" });
@@ -805,7 +805,7 @@ describe("admin operations settings surface", () => {
     expect(patched.data.attributes["maintenance-windows"].enabled).toBe(true);
     expect(patched.data.attributes["maintenance-windows"].windows).toHaveLength(1);
     const storedApproval = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "approval-webhook") });
-    const storedApprovalSecret = storedApproval?.values.secret;
+    const storedApprovalSecret = storedApproval?.values["secret"];
     expect(typeof storedApprovalSecret).toBe("string");
     expect(isEncryptedSecret(storedApprovalSecret as string)).toBeTrue();
     expect(await decryptSecret(storedApprovalSecret as string)).toBe("new-secret");
@@ -815,9 +815,9 @@ describe("admin operations settings surface", () => {
     const original = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "approval-webhook") });
     try {
       await setSettings("approval-webhook", { enabled: true, url: "https://legacy.example.com/approval", secret: "legacy-approval-secret" });
-      expect((await getSettings("approval-webhook")).secret).toBe("legacy-approval-secret");
+      expect((await getSettings("approval-webhook"))["secret"]).toBe("legacy-approval-secret");
       const rawBeforeWrite = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "approval-webhook") });
-      expect(rawBeforeWrite?.values.secret).toBe("legacy-approval-secret");
+      expect(rawBeforeWrite?.values["secret"]).toBe("legacy-approval-secret");
 
       const response = await app.handle(new Request("http://terrence.test/api/v2/admin/operations-settings", {
         method: "PATCH",
@@ -828,7 +828,7 @@ describe("admin operations settings surface", () => {
       }));
       expect(response.status).toBe(200);
       const rawAfterWrite = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "approval-webhook") });
-      const storedSecret = rawAfterWrite?.values.secret;
+      const storedSecret = rawAfterWrite?.values["secret"];
       expect(typeof storedSecret).toBe("string");
       expect(isEncryptedSecret(storedSecret as string)).toBeTrue();
       expect(await decryptSecret(storedSecret as string)).toBe("legacy-approval-secret");
@@ -847,7 +847,7 @@ describe("admin operations settings surface", () => {
     }));
     expect(read.status).toBe(200);
     const body = (await read.json()) as { data: { attributes: { "approval-webhook": Record<string, unknown>; "plan-explainer": Record<string, unknown> } } };
-    expect(body.data.attributes["approval-webhook"].secret).toBeUndefined();
+    expect(body.data.attributes["approval-webhook"]["secret"]).toBeUndefined();
     expect(body.data.attributes["approval-webhook"]["secret-set"]).toBe(true);
     expect(body.data.attributes["plan-explainer"]["api-key"]).toBeUndefined();
     expect(body.data.attributes["plan-explainer"]["api-key-set"]).toBe(true);
@@ -914,7 +914,7 @@ describe("admin operations settings surface", () => {
     }));
     expect(patch.status).toBe(200);
     const body = (await patch.json()) as { data: { attributes: { "plan-explainer": Record<string, unknown> } } };
-    expect(body.data.attributes["plan-explainer"].provider).toBe("openrouter");
+    expect(body.data.attributes["plan-explainer"]["provider"]).toBe("openrouter");
     expect(body.data.attributes["plan-explainer"]["reasoning-effort"]).toBe("xhigh");
 
     // Clearing it back to null also validates.
@@ -988,7 +988,7 @@ describe("admin operations settings surface", () => {
     expect(patch.status).toBe(200);
     const body = await patch.json() as { data: { attributes: Record<string, unknown> } };
     expect(body.data.attributes["log-level"]).toBe("debug");
-    expect(body.data.attributes.enabled).toBe(false);
+    expect(body.data.attributes["enabled"]).toBe(false);
     expect(body.data.attributes["syslog-hostname"]).toBe("ops-host");
     expect(body.data.attributes["syslog-app"]).toBe("terrence-test");
     expect(body.data.attributes["syslog-format"]).toBe("json");

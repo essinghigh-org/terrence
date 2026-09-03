@@ -54,7 +54,7 @@ export const KDF_SALT_RECREATED_WARNING =
  * concurrent processes race safely.
  */
 async function loadKdfSalt(): Promise<Buffer> {
-  const currentStorageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
+  const currentStorageDir = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"));
   if (cachedKdfSaltStorageDir !== currentStorageDir) {
     cachedKdfSalt = undefined;
     cachedKdfSaltStorageDir = currentStorageDir;
@@ -137,7 +137,7 @@ async function readExistingSaltWithRetry(saltPath: string): Promise<Buffer> {
 }
 
 async function loadEncryptionKey(): Promise<Buffer> {
-  const currentStorageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
+  const currentStorageDir = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"));
   if (cachedStorageDir !== currentStorageDir) {
     cachedKey = undefined;
     cachedKeyInFlight = undefined;
@@ -146,7 +146,7 @@ async function loadEncryptionKey(): Promise<Buffer> {
   }
   if (cachedKey !== undefined) return cachedKey;
 
-  const password = process.env.ENCRYPTION_PASSWORD;
+  const password = process.env["ENCRYPTION_PASSWORD"];
   if (password !== undefined && password !== "") {
     cachedKey = scryptSync(password, await loadKdfSalt(), KEY_LENGTH);
     if (saltWasRecreatedOnLoad) {
@@ -164,7 +164,7 @@ async function loadEncryptionKey(): Promise<Buffer> {
 
   cachedKeyInFlightDir = currentStorageDir;
   cachedKeyInFlight = (async (): Promise<Buffer> => {
-    const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
+    const storageDir = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"));
     const keyPath = join(storageDir, KEY_FILE_NAME);
     await mkdir(storageDir, { recursive: true });
 
@@ -372,7 +372,7 @@ function loadEncryptionKeySync(storageDir: string): Buffer {
     return cachedKey;
   }
 
-  const password = process.env.ENCRYPTION_PASSWORD;
+  const password = process.env["ENCRYPTION_PASSWORD"];
   const key = password !== undefined && password !== ""
     ? loadPasswordDerivedKeySync(resolvedDir, password)
     : loadFileEncryptionKeySync(resolvedDir);

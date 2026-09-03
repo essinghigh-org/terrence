@@ -256,7 +256,7 @@ async function runJob(job: DurableJob, handler: DurableJobHandler): Promise<void
 export function startDurableJobWorker(
   handlers: Readonly<Partial<Record<DurableJobKind, DurableJobHandler>>>,
 ): void {
-  if (envEnabled(process.env.TERRENCE_DISABLE_WORKER) || workerRunning) return;
+  if (envEnabled(process.env["TERRENCE_DISABLE_WORKER"]) || workerRunning) return;
   workerRunning = true;
   const workerId = `durable-${process.pid}-${crypto.randomUUID()}`;
   const kinds = Object.keys(handlers) as DurableJobKind[];

@@ -56,7 +56,7 @@ test("only shows state and variable navigation for the current workspace permiss
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/private"]}>
@@ -94,7 +94,7 @@ test("only shows state and variable navigation for the current workspace permiss
 test("does not mount state-derived workspace sections without read permissions", async () => {
   const requestedUrls: string[] = [];
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = getUrl(input);
     requestedUrls.push(url);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
@@ -113,7 +113,7 @@ test("does not mount state-derived workspace sections without read permissions",
     }
     if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   let view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>

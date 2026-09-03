@@ -128,7 +128,7 @@ export function createDbExportRoutes(deps: DbExportRouteDeps = {}) {
       const outputName = typeof attrs["output-name"] === "string" && attrs["output-name"].trim() !== ""
         ? attrs["output-name"]
         : undefined;
-      const force = attrs.force === true;
+      const force = attrs["force"] === true;
 
       // Only one export may run at a time: concurrent jobs could both pass the
       // output-name existence check and write the same file. Completed and
@@ -175,7 +175,7 @@ export function createDbExportRoutes(deps: DbExportRouteDeps = {}) {
     })
     .get("/api/v2/admin/db-export/jobs/:job_id", async ({ user, params, set }: ParamCtx): Promise<unknown> => {
       if (!requireAdmin(user, set)) return errorBody(404, "Not Found", "Not Found");
-      const job = jobs.get(params.job_id ?? "");
+      const job = jobs.get(params["job_id"] ?? "");
       if (job === undefined) {
         setStatus(set, 404);
         return errorBody(404, "Not Found", "No such export job");
@@ -208,7 +208,7 @@ export function createDbExportRoutes(deps: DbExportRouteDeps = {}) {
     })
     .get("/api/v2/admin/db-export/files/:file_name", async ({ user, params, set }: ParamCtx): Promise<unknown> => {
       if (!requireAdmin(user, set)) return errorBody(404, "Not Found", "Not Found");
-      const name = params.file_name ?? "";
+      const name = params["file_name"] ?? "";
       let full: string;
       try {
         full = exportFilePath(name);
@@ -232,7 +232,7 @@ export function createDbExportRoutes(deps: DbExportRouteDeps = {}) {
     })
     .delete("/api/v2/admin/db-export/files/:file_name", async ({ user, params, set }: ParamCtx): Promise<unknown> => {
       if (!requireAdmin(user, set)) return errorBody(404, "Not Found", "Not Found");
-      const name = params.file_name ?? "";
+      const name = params["file_name"] ?? "";
       let deleted: boolean;
       try {
         deleted = deleteExportFile(name);

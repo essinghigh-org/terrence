@@ -21,14 +21,14 @@ describe("Registry module sync on tag push", () => {
   const otherHostTokenId = `oautht-modtag-other-host-${suffix}`;
   const otherInstallationId = `ghain-modtag-other-${suffix}`;
   const otherInstallationModuleId = `mod-tag-other-installation-${suffix}`;
-  const originalAppId = process.env.GITHUB_APP_ID;
-  const originalPrivateKey = process.env.GITHUB_APP_PRIVATE_KEY;
-  const originalAppApiUrl = process.env.GITHUB_APP_API_URL;
+  const originalAppId = process.env["GITHUB_APP_ID"];
+  const originalPrivateKey = process.env["GITHUB_APP_PRIVATE_KEY"];
+  const originalAppApiUrl = process.env["GITHUB_APP_API_URL"];
 
   beforeAll(async () => {
-    process.env.GITHUB_APP_ID = "";
-    process.env.GITHUB_APP_PRIVATE_KEY = "";
-    process.env.GITHUB_APP_API_URL = "https://github.example/api/v3";
+    process.env["GITHUB_APP_ID"] = "";
+    process.env["GITHUB_APP_PRIVATE_KEY"] = "";
+    process.env["GITHUB_APP_API_URL"] = "https://github.example/api/v3";
     await db.insert(organizations).values([{ id: orgId, name: `modtag-org-${suffix}` }]);
     await db.insert(githubAppInstallations).values({
       id: "ghain-missing",
@@ -160,12 +160,12 @@ describe("Registry module sync on tag push", () => {
   afterAll(async () => {
     await db.delete(registryModules).where(eq(registryModules.orgId, orgId));
     await db.delete(organizations).where(eq(organizations.id, orgId));
-    if (originalAppId === undefined) delete process.env.GITHUB_APP_ID;
-    else process.env.GITHUB_APP_ID = originalAppId;
-    if (originalPrivateKey === undefined) delete process.env.GITHUB_APP_PRIVATE_KEY;
-    else process.env.GITHUB_APP_PRIVATE_KEY = originalPrivateKey;
-    if (originalAppApiUrl === undefined) delete process.env.GITHUB_APP_API_URL;
-    else process.env.GITHUB_APP_API_URL = originalAppApiUrl;
+    if (originalAppId === undefined) delete process.env["GITHUB_APP_ID"];
+    else process.env["GITHUB_APP_ID"] = originalAppId;
+    if (originalPrivateKey === undefined) delete process.env["GITHUB_APP_PRIVATE_KEY"];
+    else process.env["GITHUB_APP_PRIVATE_KEY"] = originalPrivateKey;
+    if (originalAppApiUrl === undefined) delete process.env["GITHUB_APP_API_URL"];
+    else process.env["GITHUB_APP_API_URL"] = originalAppApiUrl;
   });
 
   it("attempts a sync for matching modules, skips others, and never throws", async () => {

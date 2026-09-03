@@ -22,7 +22,7 @@ function runCreationAttributes(args: Readonly<Record<string, unknown>>): Record<
 }
 
 function requestedRunIncludes(args: Readonly<Record<string, unknown>>): Readonly<{ plan: boolean; workspace: boolean }> {
-  const names = String(args.include ?? "").split(",").map((part): string => part.trim()).filter((part): boolean => part !== "");
+  const names = String(args["include"] ?? "").split(",").map((part): string => part.trim()).filter((part): boolean => part !== "");
   return { plan: names.includes("plan"), workspace: names.includes("workspace") };
 }
 
@@ -87,7 +87,7 @@ async function applyRunThroughAgent(
     toStatus: "apply_queued",
     ...(session.teamId !== null ? { teamId: session.teamId } : {}),
   });
-  await addRunComment(runId, args.comment, session.userId ?? null);
+  await addRunComment(runId, args["comment"], session.userId ?? null);
   return { id: authorized.run.id, status: "apply_queued" };
 }
 
@@ -112,7 +112,7 @@ async function applyRunDirectly(
     toStatus: "confirmed",
     ...(session.teamId !== null ? { teamId: session.teamId } : {}),
   });
-  await addRunComment(runId, args.comment, session.userId ?? null);
+  await addRunComment(runId, args["comment"], session.userId ?? null);
   const { executeApply } = await import("../../worker");
   executeApply(authorized.run.id).catch((err: unknown): void => { if (err !== null && err !== undefined) console.error(err); });
   return { id: authorized.run.id, status: "applying" };
@@ -140,10 +140,10 @@ export const runTools: readonly McpTool[] = [
     },
     requires: ["runs:read"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const wsId = String(args.workspace_id);
+      const wsId = String(args["workspace_id"]);
       const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "run-read");
       if (ws === undefined) return toolError("Workspace not found or not authorized");
-      const runId = typeof args.run_id === "string" ? args.run_id : undefined;
+      const runId = typeof args["run_id"] === "string" ? args["run_id"] : undefined;
       if (runId !== undefined) {
         const run = await db.query.runs.findFirst({
           where: eq(runs.id, runId),
@@ -156,14 +156,14 @@ export const runTools: readonly McpTool[] = [
         const includes = requestedRunIncludes(args);
         if (includes.plan || includes.workspace) {
           const included: Record<string, unknown> = {};
-          if (includes.plan) included.plan = { id: `plan-${run.id}`, status: planStatusForRun(run) };
-          if (includes.workspace) included.workspace = { id: ws.id, name: ws.name, locked: ws.locked };
-          result.included = included;
+          if (includes.plan) included["plan"] = { id: `plan-${run.id}`, status: planStatusForRun(run) };
+          if (includes.workspace) included["workspace"] = { id: ws.id, name: ws.name, locked: ws.locked };
+          result["included"] = included;
         }
         return result;
       }
-      const limit = Math.min(Math.max(Number(args.limit ?? 20), 1), 100);
-      const offset = Math.max(Number(args.offset ?? 0), 0);
+      const limit = Math.min(Math.max(Number(args["limit"] ?? 20), 1), 100);
+      const offset = Math.max(Number(args["offset"] ?? 0), 0);
       const rows = await db.query.runs.findMany({
         where: eq(runs.workspaceId, wsId),
         orderBy: [desc(runs.createdAt)],
@@ -198,7 +198,7 @@ export const runTools: readonly McpTool[] = [
     },
     requires: ["runs:plan"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const workspaceId = String(args.workspace_id);
+      const workspaceId = String(args["workspace_id"]);
       const attributes = runCreationAttributes(args);
       const set: { status?: number | string; headers: Record<string, string | number> } = { headers: {} };
       const result = await createRun(
@@ -217,7 +217,7 @@ export const runTools: readonly McpTool[] = [
         if (status === 403 || status === 404) return toolError(detail);
         return toolBadRequest(detail);
       }
-      return result.data;
+      return result["data"];
     },
   },
   {
@@ -233,7 +233,7 @@ export const runTools: readonly McpTool[] = [
     },
     requires: ["runs:apply"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const runId = String(args.run_id);
+      const runId = String(args["run_id"]);
       const authorized = await findAuthorizedRun(runId, session.userId ?? undefined, session.orgId, session.teamId);
       if (authorized === undefined) return toolError("Run not found or not authorized");
       if (!(await checkWorkspacePermission(authorized.workspace, session.userId ?? undefined, null, session.teamId, "apply"))) {
@@ -260,7 +260,7 @@ export const runTools: readonly McpTool[] = [
     },
     requires: ["runs:discard"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const runId = String(args.run_id);
+      const runId = String(args["run_id"]);
       const authorized = await findAuthorizedRun(runId, session.userId ?? undefined, session.orgId, session.teamId);
       if (authorized === undefined) return toolError("Run not found or not authorized");
       if (!(await checkWorkspacePermission(authorized.workspace, session.userId ?? undefined, session.orgId, session.teamId, "discard"))) {
@@ -272,8 +272,8 @@ export const runTools: readonly McpTool[] = [
         inArray(runs.status, ["pending", "planned", "planned_and_saved", "policy_soft_failed", "unreachable"]),
       )).returning();
       if (updated.length === 0) return toolBadRequest("Run is not discardable");
-      if (typeof args.comment === "string" && args.comment.trim() !== "") {
-        await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId: session.userId ?? null, body: args.comment.trim(), createdAt: Date.now() });
+      if (typeof args["comment"] === "string" && args["comment"].trim() !== "") {
+        await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId: session.userId ?? null, body: args["comment"].trim(), createdAt: Date.now() });
       }
       await auditLog("discard", "runs", runId, session.userId ?? null, authorized.workspace.orgId, {
         workspaceId: authorized.workspace.id,
@@ -295,7 +295,7 @@ export const runTools: readonly McpTool[] = [
     },
     requires: ["runs:cancel"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const runId = String(args.run_id);
+      const runId = String(args["run_id"]);
       const authorized = await findAuthorizedRun(runId, session.userId ?? undefined, session.orgId, session.teamId);
       if (authorized === undefined) return toolError("Run not found or not authorized");
       if (!(await checkWorkspacePermission(authorized.workspace, session.userId ?? undefined, session.orgId, session.teamId, "cancel"))) {
@@ -339,7 +339,7 @@ export const runTools: readonly McpTool[] = [
     },
     requires: ["runs:read"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const runId = String(args.run_id);
+      const runId = String(args["run_id"]);
       const authorized = await findAuthorizedRun(runId, session.userId ?? undefined, session.orgId, session.teamId);
       if (authorized === undefined) return toolError("Run not found or not authorized");
       if (!(await checkWorkspacePermission(authorized.workspace, session.userId ?? undefined, session.orgId, session.teamId, "run-read"))) {

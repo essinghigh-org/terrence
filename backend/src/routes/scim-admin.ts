@@ -79,14 +79,14 @@ function jsonApiAttributes(
   type: "authentication-tokens" | "scim-group-mapping" | "scim-settings",
 ): Readonly<{ attributes: Readonly<Record<string, unknown>> }> | Readonly<{ error: string }> {
   if (body === null || typeof body !== "object" || Array.isArray(body)) return { error: "Request body must be an object" };
-  const data = (body as Record<string, unknown>).data;
+  const data = (body as Record<string, unknown>)["data"];
   if (data === null || typeof data !== "object" || Array.isArray(data)) return { error: "data must be an object" };
   const record = data as Record<string, unknown>;
   const allowedTypes = new Set([type, `${type}s`, type.replace(/s$/, ""), ""]);
-  if (typeof record.type === "string" && !allowedTypes.has(record.type)) {
+  if (typeof record["type"] === "string" && !allowedTypes.has(record["type"])) {
     return { error: `data.type must be ${type}` };
   }
-  const attributes = record.attributes;
+  const attributes = record["attributes"];
   if (attributes === null || typeof attributes !== "object" || Array.isArray(attributes)) {
     return { error: "data.attributes must be an object" };
   }
@@ -203,13 +203,13 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     const current = await currentSettings();
     const attributes = input.attributes;
 
-    if (attributes.enabled !== undefined && typeof attributes.enabled !== "boolean") {
+    if (attributes["enabled"] !== undefined && typeof attributes["enabled"] !== "boolean") {
       return apiError(set, 422, "Unprocessable Entity", "enabled must be a boolean");
     }
-    if (attributes.enabled === false) {
+    if (attributes["enabled"] === false) {
       return apiError(set, 422, "Unprocessable Entity", "Use DELETE to disable SCIM");
     }
-    if (attributes.paused !== undefined && typeof attributes.paused !== "boolean") {
+    if (attributes["paused"] !== undefined && typeof attributes["paused"] !== "boolean") {
       return apiError(set, 422, "Unprocessable Entity", "paused must be a boolean");
     }
     const requestedGroup = attributes["site-admin-group-scim-id"];
@@ -219,12 +219,12 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     if (requestedGroup === "") {
       return apiError(set, 422, "Unprocessable Entity", "site-admin-group-scim-id must not be empty");
     }
-    if (attributes.enabled === true && !current.enabled) {
+    if (attributes["enabled"] === true && !current.enabled) {
       const saml = await db.query.samlSettings.findFirst({ where: eq(samlSettings.id, "saml") });
       if (saml?.enabled !== true) return apiError(set, 422, "Unprocessable Entity", "SAML must be enabled before SCIM");
     }
-    const enabled = attributes.enabled === true || current.enabled;
-    const paused = typeof attributes.paused === "boolean" ? attributes.paused : current.paused;
+    const enabled = attributes["enabled"] === true || current.enabled;
+    const paused = typeof attributes["paused"] === "boolean" ? attributes["paused"] : current.paused;
     if (paused && !enabled) return apiError(set, 422, "Unprocessable Entity", "SCIM must be enabled before it can be paused");
     if (typeof requestedGroup === "string") {
       const group = await db.query.scimGroups.findFirst({ where: eq(scimGroups.id, requestedGroup) });
@@ -278,7 +278,7 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     const denied = requireAdmin(user, set);
     if (denied !== undefined) return denied;
     const token = await db.query.scimTokens.findFirst({
-      where: eq(scimTokens.id, params.token_id ?? ""),
+      where: eq(scimTokens.id, params["token_id"] ?? ""),
     });
     return token === undefined ? apiError(set, 404, "Not Found") : { data: tokenResource(token) };
   })
@@ -287,7 +287,7 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     if (denied !== undefined) return denied;
     const input = jsonApiAttributes(body, "authentication-tokens");
     if ("error" in input) return apiError(set, 400, "Bad Request", input.error);
-    const description = input.attributes.description;
+    const description = input.attributes["description"];
     if (description !== undefined && typeof description !== "string") {
       return apiError(set, 400, "Bad Request", "description must be a string");
     }
@@ -317,7 +317,7 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     const denied = requireAdmin(user, set);
     if (denied !== undefined) return denied;
     const deleted = await db.delete(scimTokens)
-      .where(eq(scimTokens.id, params.token_id ?? ""))
+      .where(eq(scimTokens.id, params["token_id"] ?? ""))
       .returning({ id: scimTokens.id });
     if (deleted.length === 0) return apiError(set, 404, "Not Found");
     (set as { status: number }).status = 204;
@@ -345,7 +345,7 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
   .get("/api/v2/admin/teams/:external_id/scim-group-mapping", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const denied = requireAdmin(user, set, true);
     if (denied !== undefined) return denied;
-    const teamId = params.external_id ?? "";
+    const teamId = params["external_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined) return apiError(set, 404, "Not Found");
     const mapping = await db.query.teamScimGroupMappings.findFirst({ where: eq(teamScimGroupMappings.teamId, team.id) });
@@ -373,7 +373,7 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
       return apiError(set, 422, "Unprocessable Entity", "scim-group-id must be a non-empty string");
     }
     const [team, group, settings] = await Promise.all([
-      db.query.teams.findFirst({ where: eq(teams.id, params.external_id ?? "") }),
+      db.query.teams.findFirst({ where: eq(teams.id, params["external_id"] ?? "") }),
       db.query.scimGroups.findFirst({ where: eq(scimGroups.id, groupId) }),
       currentSettings(),
     ]);
@@ -412,7 +412,7 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     if ("error" in input) return apiError(set, 422, "Unprocessable Entity", input.error);
     const paused = input.attributes["scim-sync-paused"];
     if (typeof paused !== "boolean") return apiError(set, 422, "Unprocessable Entity", "scim-sync-paused must be a boolean");
-    const teamId = params.external_id ?? "";
+    const teamId = params["external_id"] ?? "";
     const [team, mapping] = await Promise.all([
       db.query.teams.findFirst({ where: eq(teams.id, teamId) }),
       db.query.teamScimGroupMappings.findFirst({ where: eq(teamScimGroupMappings.teamId, teamId) }),
@@ -436,7 +436,7 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
   .delete("/api/v2/admin/teams/:external_id/scim-group-mapping", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const denied = requireAdmin(user, set, true);
     if (denied !== undefined) return denied;
-    const teamId = params.external_id ?? "";
+    const teamId = params["external_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined) {
       (set as { status: number }).status = 204;

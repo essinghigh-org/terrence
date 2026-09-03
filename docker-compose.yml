@@ -24,6 +24,12 @@ services:
     environment:
       - PORT=3000
       - SYSTEM_API_PORT=8443
+      # The System API binds container loopback by default, which Docker port
+      # forwarding cannot reach (issue #283: the container's eth0 address is
+      # where forwarded traffic lands). Bind all container interfaces and keep
+      # the host-side publish on 127.0.0.1 (see ports above) so the
+      # administrative surface stays off the LAN.
+      - SYSTEM_API_HOST=0.0.0.0
       - STORAGE_DIR=/app/backend/storage
       # The run sandbox is FAIL-CLOSED by default: TERRENCE_RUN_SANDBOX unset
       # means "sandbox required" (Landlock, Linux >= 5.13). Hosts that cannot
@@ -33,6 +39,12 @@ services:
       # backend service identity.
       - NODE_ENV=production
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
+      # Pass through bootstrap secrets when set in the shell (issue #282):
+      # the README quick start runs ADMIN_PASSWORD="..." docker compose up,
+      # and Compose only forwards listed keys. Empty values are treated as
+      # unset by the app's readEnv helper.
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - ENCRYPTION_PASSWORD=${ENCRYPTION_PASSWORD:-}
     # Sane resource limits for a self-hosted instance. Terraform plans and
     # applies can be memory-hungry, so size mem_limit for your largest
     # expected configuration and leave headroom for the worker. cpus is a

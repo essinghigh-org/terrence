@@ -23,7 +23,7 @@ import {
 
 const API_TIMEOUT_MS = 15_000;
 const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const MODULE_STORAGE_DIR = join(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "modules");
+const MODULE_STORAGE_DIR = join(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "modules");
 
 type RegistryModule = Readonly<typeof registryModules.$inferSelect>;
 type Credentials = Readonly<{ apiUrl: string; token: string }>;
@@ -278,7 +278,7 @@ async function synchronizeRegistryModuleOnce(
       const description = prepared.at(-1)?.metadata;
       await tx.update(registryModules).set({
         status: "setup_complete",
-        description: typeof description?.description === "string" ? description.description : mod.description,
+        description: typeof description?.["description"] === "string" ? description["description"] : mod.description,
         lastSuccessfulSyncAt: completedAt,
         lastSyncAttemptAt: attemptedAt,
         lastSyncError: null,

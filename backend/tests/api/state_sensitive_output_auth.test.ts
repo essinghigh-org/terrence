@@ -102,22 +102,22 @@ describe("sensitive state output authorization (STATE-003)", () => {
   });
 
   const outputsById = (body: { data: { id: string; attributes: Record<string, unknown> }[] }) =>
-    new Map(body.data.map((o) => [o.attributes.name as string, o.attributes]));
+    new Map(body.data.map((o) => [o.attributes["name"] as string, o.attributes]));
 
   it("exposes the sensitive output value to an authorized user token (state-version-outputs)", async () => {
     const res = await request(`/api/v2/state-versions/${stateVersionId}/state-version-outputs`, userToken);
     expect(res.status).toBe(200);
     const m = outputsById(await res.json());
-    expect(m.get("secret_output")?.value).toBe("super-secret");
-    expect(m.get("secret_output")?.sensitive).toBe(true);
-    expect(m.get("plain_output")?.value).toBe("visible");
+    expect(m.get("secret_output")?.["value"]).toBe("super-secret");
+    expect(m.get("secret_output")?.["sensitive"]).toBe(true);
+    expect(m.get("plain_output")?.["value"]).toBe("visible");
   });
 
   it("exposes the sensitive output value through current-state-version-outputs", async () => {
     const res = await request(`/api/v2/workspaces/${wsId}/current-state-version-outputs`, userToken);
     expect(res.status).toBe(200);
     const m = outputsById(await res.json());
-    expect(m.get("secret_output")?.value).toBe("super-secret");
+    expect(m.get("secret_output")?.["value"]).toBe("super-secret");
   });
 
   it("masks the sensitive output value on the ?include=outputs workspace path", async () => {
@@ -126,11 +126,11 @@ describe("sensitive state output authorization (STATE-003)", () => {
     const body = await res.json();
     const included = (body.included ?? []) as { type: string; attributes: Record<string, unknown> }[];
     const outputs = included.filter((r) => r.type === "workspace-outputs");
-    const byName = new Map(outputs.map((o) => [o.attributes.name as string, o.attributes]));
+    const byName = new Map(outputs.map((o) => [o.attributes["name"] as string, o.attributes]));
     // Sensitive value is masked; the non-sensitive one is present.
-    expect(byName.get("secret_output")?.value).toBeNull();
-    expect(byName.get("plain_output")?.value).toBe("visible");
-    expect(byName.get("secret_output")?.sensitive).toBe(true);
+    expect(byName.get("secret_output")?.["value"]).toBeNull();
+    expect(byName.get("plain_output")?.["value"]).toBe("visible");
+    expect(byName.get("secret_output")?.["sensitive"]).toBe(true);
   });
 
   it("grants a run-scoped token access to sensitive outputs of its workspace", async () => {
@@ -138,7 +138,7 @@ describe("sensitive state output authorization (STATE-003)", () => {
     const res = await request(`/api/v2/state-versions/${stateVersionId}/state-version-outputs`, runToken);
     expect(res.status).toBe(200);
     const m = outputsById(await res.json());
-    expect(m.get("secret_output")?.value).toBe("super-secret");
+    expect(m.get("secret_output")?.["value"]).toBe("super-secret");
     await db.delete(runTokens).where(eq(runTokens.tokenHash, hashRunToken(runToken)));
   });
 

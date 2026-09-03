@@ -158,8 +158,8 @@ describe("concurrency: queue claim races", () => {
   });
 
   it("assessment claims are exclusive and bounded by concurrency across 20 concurrent pollers", async () => {
-    const previous = process.env.HEALTH_ASSESSMENT_CONCURRENCY;
-    process.env.HEALTH_ASSESSMENT_CONCURRENCY = "3";
+    const previous = process.env["HEALTH_ASSESSMENT_CONCURRENCY"];
+    process.env["HEALTH_ASSESSMENT_CONCURRENCY"] = "3";
     try {
       const pollers = Array.from({ length: 20 }, async (): Promise<string[]> => pollAssessmentQueue());
       const results = await Promise.all(pollers);
@@ -187,8 +187,8 @@ describe("concurrency: queue claim races", () => {
         expect(byId.get(claimed), `claimed ${claimed} should not be pending`).not.toBe("pending");
       }
     } finally {
-      if (previous === undefined) delete process.env.HEALTH_ASSESSMENT_CONCURRENCY;
-      else process.env.HEALTH_ASSESSMENT_CONCURRENCY = previous;
+      if (previous === undefined) delete process.env["HEALTH_ASSESSMENT_CONCURRENCY"];
+      else process.env["HEALTH_ASSESSMENT_CONCURRENCY"] = previous;
     }
   });
 

@@ -147,7 +147,7 @@ export async function copyTable(
     total += rows.length;
     if (rowid !== null) {
       const lastRow = rows[rows.length - 1]!;
-      const last = lastRow._terrence_rowid;
+      const last = lastRow["_terrence_rowid"];
       if (typeof last !== "number") break; // no usable keyset cursor; stop rather than loop forever
       cursor = last;
     }
@@ -294,7 +294,7 @@ export async function syncIdentitySequences(target: PostgresQueryable, tables: r
         `SELECT pg_get_serial_sequence($1, $2) AS seq`,
         [table.name, column.name],
       );
-      const sequence = sequenceRow[0]?.seq;
+      const sequence = sequenceRow[0]?.["seq"];
       if (typeof sequence !== "string" || sequence === "") continue;
       await target.unsafe(
         `SELECT setval($1::regclass, COALESCE((SELECT MAX(${quoted(column.name)}) FROM ${quoted(table.name)}), 1), (SELECT MAX(${quoted(column.name)}) FROM ${quoted(table.name)}) IS NOT NULL)`,

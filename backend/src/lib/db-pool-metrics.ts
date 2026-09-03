@@ -150,7 +150,7 @@ export type SlowQuery = Readonly<{
 }>;
 
 const SLOW_THRESHOLD_MS = (() => {
-  const raw = process.env.TERRENCE_DB_SLOW_QUERY_MS;
+  const raw = process.env["TERRENCE_DB_SLOW_QUERY_MS"];
   if (raw === undefined || raw.trim() === "") return 1000;
   const n = Number(raw.trim());
   return Number.isFinite(n) && n > 0 ? n : 1000;

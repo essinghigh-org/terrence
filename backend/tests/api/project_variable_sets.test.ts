@@ -8,7 +8,7 @@ async function api(
   token?: string,
 ): Promise<{ status: number; json: { data?: Record<string, unknown>; errors?: { status: string; title: string; detail?: string }[] } }> {
   const headers: Record<string, string> = {};
-  if (token !== undefined && token !== "") headers.Authorization = `Bearer ${token}`;
+  if (token !== undefined && token !== "") headers["Authorization"] = `Bearer ${token}`;
   if (body !== undefined) headers["Content-Type"] = "application/vnd.api+json";
   const res = await app.handle(new Request(`http://localhost${path}`, {
     method,
@@ -55,7 +55,7 @@ describe("project-owned variable sets", () => {
       data: { type: "projects", attributes: { name: "project-owned-test" } },
     }, token);
     expect(project.status).toBe(201);
-    projectId = (project.json.data?.id as string) ?? "";
+    projectId = (project.json.data?.["id"] as string) ?? "";
     expect(projectId).not.toBe("");
   });
 
@@ -67,9 +67,9 @@ describe("project-owned variable sets", () => {
       },
     }, token);
     expect(res.status).toBe(201);
-    const attrs = res.json.data?.attributes as Record<string, unknown> | undefined;
+    const attrs = res.json.data?.["attributes"] as Record<string, unknown> | undefined;
     expect(attrs?.["parent-project-id"]).toBeNull();
-    expect(attrs?.global).toBe(true);
+    expect(attrs?.["global"]).toBe(true);
   });
 
   test("creates a project-owned variable set via parent-project-id", async () => {
@@ -80,10 +80,10 @@ describe("project-owned variable sets", () => {
       },
     }, token);
     expect(res.status).toBe(201);
-    const attrs = res.json.data?.attributes as Record<string, unknown> | undefined;
+    const attrs = res.json.data?.["attributes"] as Record<string, unknown> | undefined;
     expect(attrs?.["parent-project-id"]).toBe(projectId);
     // Project-owned sets can never be global (the reference format contract)
-    expect(attrs?.global).toBe(false);
+    expect(attrs?.["global"]).toBe(false);
   });
 
   test("rejects global=true with parent-project-id (the reference format: mutually exclusive)", async () => {
@@ -108,7 +108,7 @@ describe("project-owned variable sets", () => {
     const res = await api("POST", `/api/v2/organizations/${encodeURIComponent(orgName)}/varsets`, {
       data: {
         type: "varsets",
-        attributes: { name: "Cross-org", "parent-project-id": otherProject.json.data?.id as string },
+        attributes: { name: "Cross-org", "parent-project-id": otherProject.json.data?.["id"] as string },
       },
     }, token);
     expect(res.status).toBe(422);
@@ -129,7 +129,7 @@ describe("project-owned variable sets", () => {
         attributes: { name: "Immutable parent", "parent-project-id": projectId },
       },
     }, token);
-    const varsetId = created.json.data?.id as string;
+    const varsetId = created.json.data?.["id"] as string;
     const res = await api("PATCH", `/api/v2/varsets/${varsetId}`, {
       data: { type: "varsets", attributes: { "parent-project-id": null } },
     }, token);
@@ -143,7 +143,7 @@ describe("project-owned variable sets", () => {
         attributes: { name: "Project no-global", "parent-project-id": projectId },
       },
     }, token);
-    const varsetId = created.json.data?.id as string;
+    const varsetId = created.json.data?.["id"] as string;
     const res = await api("PATCH", `/api/v2/varsets/${varsetId}`, {
       data: { type: "varsets", attributes: { global: true } },
     }, token);

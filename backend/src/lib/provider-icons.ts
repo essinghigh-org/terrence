@@ -125,11 +125,11 @@ function hasExactProviderFullName(value: unknown, source: ProviderSource): boole
 
 function exactProviderAttributes(value: unknown, source: ProviderSource): Record<string, unknown> | null {
   const entry = asRecord(value);
-  const attributes = asRecord(entry?.attributes);
+  const attributes = asRecord(entry?.["attributes"]);
   if (attributes === null) return null;
 
-  const namespace = attributes.namespace;
-  const name = attributes.name;
+  const namespace = attributes["namespace"];
+  const name = attributes["name"];
   const fullName = attributes["full-name"];
   if (!matchesOptionalProviderAttribute(namespace, source.namespace)) return null;
   if (!matchesOptionalProviderAttribute(name, source.name)) return null;
@@ -141,7 +141,7 @@ function exactProviderAttributes(value: unknown, source: ProviderSource): Record
 
 function exactRegistryProviderAttributes(body: unknown, source: ProviderSource): Record<string, unknown> | null {
   const response = asRecord(body);
-  const data = response?.data;
+  const data = response?.["data"];
   if (!Array.isArray(data)) return null;
   for (const entry of data) {
     const attributes = exactProviderAttributes(entry, source);
@@ -180,7 +180,7 @@ async function fetchGithubOwnerAvatarUrl(login: string): Promise<string | null> 
   } catch {
     return null;
   }
-  const avatarUrl = asRecord(body)?.avatar_url;
+  const avatarUrl = asRecord(body)?.["avatar_url"];
   return typeof avatarUrl === "string" ? absoluteLogoUrl(avatarUrl) : null;
 }
 

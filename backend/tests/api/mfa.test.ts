@@ -9,7 +9,7 @@ async function api(
   token?: string,
 ): Promise<{ status: number; json: { data?: { attributes?: Record<string, unknown> }; errors?: { status: string; title: string; detail?: string }[] } }> {
   const headers: Record<string, string> = {};
-  if (token !== undefined && token !== "") headers.Authorization = `Bearer ${token}`;
+  if (token !== undefined && token !== "") headers["Authorization"] = `Bearer ${token}`;
   if (body !== undefined) headers["Content-Type"] = "application/vnd.api+json";
   const res = await app.handle(new Request(`http://localhost${path}`, {
     method,
@@ -85,21 +85,21 @@ describe("mfa api", () => {
       data: { attributes: { username, password: "securepassword" } },
     });
     expect(loginRes.status).toBe(200);
-    apiToken = (loginRes.json.data?.attributes?.token as string) ?? "";
+    apiToken = (loginRes.json.data?.attributes?.["token"] as string) ?? "";
     expect(apiToken).not.toBe("");
   });
 
   test("GET /account/mfa returns disabled by default", async () => {
     const res = await api("GET", "/api/v2/account/mfa", undefined, apiToken);
     expect(res.status).toBe(200);
-    expect(res.json.data?.attributes?.enabled).toBe(false);
+    expect(res.json.data?.attributes?.["enabled"]).toBe(false);
   });
 
   test("POST /account/mfa/enroll returns a secret and otpauth URL", async () => {
     const res = await api("POST", "/api/v2/account/mfa/enroll", undefined, apiToken);
     expect(res.status).toBe(200);
     const attrs = res.json.data?.attributes ?? {};
-    mfaSecret = attrs.secret as string;
+    mfaSecret = attrs["secret"] as string;
     expect(mfaSecret).toMatch(/^[A-Z2-7]+$/);
     expect(attrs["otpauth-url"]).toContain("otpauth://totp/");
   });
@@ -114,7 +114,7 @@ describe("mfa api", () => {
     const code = generateTotpCode(mfaSecret);
     const res = await api("POST", "/api/v2/account/mfa/verify", { data: { attributes: { code } } }, apiToken);
     expect(res.status).toBe(200);
-    expect(res.json.data?.attributes?.enabled).toBe(true);
+    expect(res.json.data?.attributes?.["enabled"]).toBe(true);
   });
 
   test("POST /account/mfa/verify rejects an invalid code", async () => {
@@ -131,7 +131,7 @@ describe("mfa api", () => {
     expect(attrs["mfa-required"]).toBe(true);
     const challengeToken = attrs["mfa-challenge-token"] as string;
     expect(challengeToken).toMatch(/^mfa-/);
-    expect(attrs.token).toBeUndefined();
+    expect(attrs["token"]).toBeUndefined();
   });
 
   test("POST /users/login/mfa completes login with a valid code", async () => {
@@ -146,7 +146,7 @@ describe("mfa api", () => {
       data: { attributes: { "challenge-token": challengeToken, code } },
     });
     expect(res.status).toBe(200);
-    expect((res.json.data?.attributes?.token as string) ?? "").not.toBe("");
+    expect((res.json.data?.attributes?.["token"] as string) ?? "").not.toBe("");
   });
 
   test("POST /users/login/mfa rejects a bad code", async () => {
@@ -164,7 +164,7 @@ describe("mfa api", () => {
     const code = generateTotpCode(mfaSecret);
     const res = await api("DELETE", "/api/v2/account/mfa", { data: { attributes: { code } } }, apiToken);
     expect(res.status).toBe(200);
-    expect(res.json.data?.attributes?.enabled).toBe(false);
+    expect(res.json.data?.attributes?.["enabled"]).toBe(false);
   });
 
   test("login returns a token again after MFA is disabled", async () => {
@@ -174,6 +174,6 @@ describe("mfa api", () => {
     expect(res.status).toBe(200);
     const attrs = res.json.data?.attributes ?? {};
     expect(attrs["mfa-required"]).toBeUndefined();
-    expect((attrs.token as string) ?? "").not.toBe("");
+    expect((attrs["token"] as string) ?? "").not.toBe("");
   });
 });

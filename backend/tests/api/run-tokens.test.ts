@@ -32,7 +32,7 @@ let moduleArchivePath = "";
 
 function request(path: string, method = "GET", token?: string, body?: unknown): Request {
   const headers: Record<string, string> = {};
-  if (token !== undefined) headers.Authorization = `Bearer ${token}`;
+  if (token !== undefined) headers["Authorization"] = `Bearer ${token}`;
   if (body !== undefined) headers["Content-Type"] = "application/vnd.api+json";
   return new Request(`http://terrence.test${path}`, {
     method,

@@ -33,7 +33,7 @@ describe("Notification destination ownership verification API (kanban 7.7)", () 
   let echoServer: ReturnType<typeof Bun.serve> | undefined;
 
   beforeAll(async () => {
-    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
+    process.env["TERRENCE_ALLOW_PRIVATE_URLS"] = "true";
     echoServer = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,

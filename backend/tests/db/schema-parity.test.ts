@@ -40,8 +40,8 @@ function columnFingerprint(table: object): Readonly<Record<string, Col>> {
       primary: column.primary,
       ...(column.isUnique === true ? { isUnique: true } : {}),
       // Include default/defaultFn where present so drift in defaults is caught
-      ...((column as unknown as Record<string, unknown>).hasDefault === true ? { hasDefault: true as const, default: (column as unknown as Record<string, unknown>).default } : {}),
-      ...((column as unknown as Record<string, unknown>).hasDefaultFn === true ? { hasDefaultFn: true as const } : {}),
+      ...((column as unknown as Record<string, unknown>)["hasDefault"] === true ? { hasDefault: true as const, default: (column as unknown as Record<string, unknown>)["default"] } : {}),
+      ...((column as unknown as Record<string, unknown>)["hasDefaultFn"] === true ? { hasDefaultFn: true as const } : {}),
     } as Col;
   }
   return out;
@@ -92,12 +92,12 @@ describe("pg schema parity", () => {
 
   test("runtime jsonb columns pass objects directly to Bun.SQL", () => {
     const runtime = buildPgSchema(sqliteSchema);
-    const workspaceColumns = (runtime.workspaces as unknown as Record<PropertyKey, unknown>)[COLUMNS] as Record<
+    const workspaceColumns = (runtime["workspaces"] as unknown as Record<PropertyKey, unknown>)[COLUMNS] as Record<
       string,
       { mapToDriverValue(value: unknown): unknown }
     >;
     const value = { identifier: "hashicorp/terraform", branch: "main" };
-    expect(workspaceColumns.vcsRepo?.mapToDriverValue(value)).toBe(value);
+    expect(workspaceColumns["vcsRepo"]?.mapToDriverValue(value)).toBe(value);
   });
 
   test("indexes are identical per table", () => {
@@ -144,9 +144,9 @@ describe("pg schema parity", () => {
       expect(staticFks.length, `static FK count mismatch on ${name}`).toBe(sqliteFks.length);
       const fkDetails = (fks: unknown[]): readonly { onDelete: string; onUpdate: string; columnCount: number }[] =>
         (fks as readonly Record<string, unknown>[]).map((fk) => ({
-          onDelete: typeof fk.onDelete === "string" ? fk.onDelete : "no action",
-          onUpdate: typeof fk.onUpdate === "string" ? fk.onUpdate : "no action",
-          columnCount: Array.isArray((fk as Record<string, unknown>).columns) ? ((fk as Record<string, unknown>).columns as unknown[]).length : Array.isArray((fk as Record<string, unknown>).foreignColumns) ? ((fk as Record<string, unknown>).foreignColumns as unknown[]).length : 0,
+          onDelete: typeof fk["onDelete"] === "string" ? fk["onDelete"] : "no action",
+          onUpdate: typeof fk["onUpdate"] === "string" ? fk["onUpdate"] : "no action",
+          columnCount: Array.isArray((fk as Record<string, unknown>)["columns"]) ? ((fk as Record<string, unknown>)["columns"] as unknown[]).length : Array.isArray((fk as Record<string, unknown>)["foreignColumns"]) ? ((fk as Record<string, unknown>)["foreignColumns"] as unknown[]).length : 0,
         })).sort((a, b) => a.onDelete.localeCompare(b.onDelete));
       expect(fkDetails(runtimeFks), `runtime FK details mismatch on ${name}`).toEqual(fkDetails(sqliteFks));
       expect(fkDetails(staticFks), `static FK details mismatch on ${name}`).toEqual(fkDetails(sqliteFks));

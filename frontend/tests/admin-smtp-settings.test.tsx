@@ -37,7 +37,7 @@ test("shows secure SMTP defaults and requires an explicit plaintext opt-in", asy
     if (url === "/api/v2/admin/smtp-settings") return json({ data: { attributes: settings } });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(<AdminSmtpSettings />);
   await waitFor((): void => { expect(view.getByLabelText("Encryption")).toBeTruthy(); });
@@ -49,6 +49,6 @@ test("shows secure SMTP defaults and requires an explicit plaintext opt-in", asy
   fireEvent.click(view.getByRole("button", { name: "Save" }));
   await waitFor((): void => { expect(savedBody).toBeDefined(); });
 
-  const attributes = (savedBody?.data as JsonObject)?.attributes as JsonObject;
-  expect(attributes.encryption).toBe("plain");
+  const attributes = (savedBody?.["data"] as JsonObject)?.["attributes"] as JsonObject;
+  expect(attributes["encryption"]).toBe("plain");
 });

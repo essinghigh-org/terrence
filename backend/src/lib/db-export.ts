@@ -22,7 +22,7 @@ import { createPgSource, createSqliteTarget, transferDatabase, verifyTransfer } 
 import type { TransferSource } from "./db-transfer";
 import type { TransferReport, VerificationReport } from "./db-transfer";
 
-const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
+const storageDir = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"));
 
 /** Terminal run statuses (mirrors the run-duration baseline in routes/runs.ts). */
 export const TERMINAL_RUN_STATUSES: readonly string[] = [

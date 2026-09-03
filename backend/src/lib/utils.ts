@@ -57,7 +57,7 @@ export type DeepReadonly<T> =
             ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
             : T;
 
-const PUBLIC_URL = typeof process.env.PUBLIC_URL === "string" && process.env.PUBLIC_URL !== "" ? new URL(process.env.PUBLIC_URL) : null;
+const PUBLIC_URL = typeof process.env["PUBLIC_URL"] === "string" && process.env["PUBLIC_URL"] !== "" ? new URL(process.env["PUBLIC_URL"]) : null;
 
 /** Minimal Elysia `set` shape shared by JSON:API error helpers. */
 export type ErrorSet = { status?: number | string };
@@ -143,7 +143,7 @@ export async function auditLog(
  * self-hosters on constrained storage are not surprised by extra rows.
  */
 export function strictAuditEnabled(): boolean {
-  const v = process.env.AUDIT_STRICT;
+  const v = process.env["AUDIT_STRICT"];
   return v === "1" || v === "true";
 }
 
@@ -610,7 +610,7 @@ function allowsCustomTaskOrLock(permissions: Readonly<Record<string, unknown>>, 
 }
 
 function allowsCustomVariables(permissions: Readonly<Record<string, unknown>>, required: WorkspacePermission): boolean | null {
-  const variableAccess = typeof permissions.variables === "string" ? permissions.variables : "none";
+  const variableAccess = typeof permissions["variables"] === "string" ? permissions["variables"] : "none";
   if (required === "variables-read") return variableAccess === "read" || variableAccess === "write";
   if (required === "variables-write") return variableAccess === "write";
   return null;
@@ -625,7 +625,7 @@ function allowsCustomState(permissions: Readonly<Record<string, unknown>>, requi
 }
 
 function allowsCustomLevel(permissions: Readonly<Record<string, unknown>>, required: WorkspacePermission): boolean {
-  const runs = typeof permissions.runs === "string" ? permissions.runs : "read";
+  const runs = typeof permissions["runs"] === "string" ? permissions["runs"] : "read";
   const runResult = allowsCustomRuns(runs, required);
   if (runResult !== null) return runResult;
   const taskResult = allowsCustomTaskOrLock(permissions, required);
@@ -1147,12 +1147,12 @@ export async function findAuthorizedVariableSet(
 function isJsonApiData(item: unknown, expectedType: string): item is { readonly id: string; readonly type: string } {
   if (item === null || typeof item !== "object") return false;
   const i = item as Record<string, unknown>;
-  return i.type === expectedType && typeof i.id === "string" && i.id !== "";
+  return i["type"] === expectedType && typeof i["id"] === "string" && i["id"] !== "";
 }
 
 export function workspaceRelationshipIds(body: unknown): string[] | undefined {
   const payload = body as Record<string, unknown> | null;
-  const data = payload?.data;
+  const data = payload?.["data"];
   if (!Array.isArray(data)) return undefined;
   const items = data;
   if (items.some((item: unknown): boolean => !isJsonApiData(item, "workspaces"))) return undefined;
@@ -1164,7 +1164,7 @@ export function workspaceRelationshipIds(body: unknown): string[] | undefined {
 
 export function stackRelationshipIds(body: unknown): string[] | undefined {
   const payload = body as Record<string, unknown> | null;
-  const data = payload?.data;
+  const data = payload?.["data"];
   if (!Array.isArray(data)) return undefined;
   const items = data;
   if (items.some((item: unknown): boolean => !isJsonApiData(item, "stacks"))) return undefined;
@@ -1176,7 +1176,7 @@ export function stackRelationshipIds(body: unknown): string[] | undefined {
 
 export function projectRelationshipIds(body: unknown): string[] | undefined {
   const payload = body as Record<string, unknown> | null;
-  const data = payload?.data;
+  const data = payload?.["data"];
   if (!Array.isArray(data)) return undefined;
   const items = data;
   if (items.some((item: unknown): boolean => !isJsonApiData(item, "projects"))) return undefined;
@@ -1190,7 +1190,7 @@ type VarRelationshipResult = { many: boolean; resources: unknown[] };
 
 export function variableRelationshipResources(body: unknown): VarRelationshipResult | undefined {
   const payload = body as Record<string, unknown> | null;
-  const data = payload?.data;
+  const data = payload?.["data"];
   if (data === undefined || data === null) return undefined;
   const many = Array.isArray(data);
   const resources = many ? (data as unknown[]) : [data];
@@ -1380,7 +1380,7 @@ export function apiURL(request: RequestWithUrl, path: string): string {
  * replica may continue using the local fallback.
  */
 function loadSignedUrlSecret(): string {
-  const storage = process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage");
+  const storage = process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage");
   const path = join(storage, ".signed-url-secret");
   mkdirSync(storage, { recursive: true });
   try {
@@ -1408,7 +1408,7 @@ function loadSignedUrlSecret(): string {
   }
 }
 
-const configuredSignedUrlSecret = process.env.SIGNED_URL_SECRET?.trim();
+const configuredSignedUrlSecret = process.env["SIGNED_URL_SECRET"]?.trim();
 const SIGNED_URL_SECRET = configuredSignedUrlSecret === undefined || configuredSignedUrlSecret === ""
   ? loadSignedUrlSecret()
   : configuredSignedUrlSecret.length >= 32
@@ -1421,7 +1421,7 @@ export function sensitiveIdentifierHash(value: string): string {
 }
 
 export function signedApiURL(request: RequestWithUrl, path: string, method = "GET", ttlSeconds?: number): string {
-  const configuredTtl = ttlSeconds ?? Number(process.env.SIGNED_URL_TTL_SECONDS ?? 300);
+  const configuredTtl = ttlSeconds ?? Number(process.env["SIGNED_URL_TTL_SECONDS"] ?? 300);
   const ttl = Number.isSafeInteger(configuredTtl) && configuredTtl > 0 ? configuredTtl : 300;
   const expires = Math.floor(Date.now() / 1000) + ttl;
   const signature = createHmac("sha256", SIGNED_URL_SECRET)
@@ -1498,10 +1498,10 @@ export function parseTagBindings(data: unknown): { key: string; value: string }[
   for (const item of data) {
     const i = item as Record<string, unknown> | null;
     if (i === null) return undefined;
-    const attrs = i.attributes as Record<string, unknown> | undefined;
-    const key = attrs?.key as string | undefined;
-    const value = typeof attrs?.value === "string" ? attrs.value : "";
-    if (i.type !== "tag-bindings" || typeof key !== "string" || key.trim() === "" || typeof value !== "string") {
+    const attrs = i["attributes"] as Record<string, unknown> | undefined;
+    const key = attrs?.["key"] as string | undefined;
+    const value = typeof attrs?.["value"] === "string" ? attrs["value"] : "";
+    if (i["type"] !== "tag-bindings" || typeof key !== "string" || key.trim() === "" || typeof value !== "string") {
       return undefined;
     }
     bindings.set(key.trim(), { key: key.trim(), value });
@@ -1917,7 +1917,7 @@ export async function safeDeleteWorkspace(workspaceId: string): Promise<boolean>
         const decoded = decodeStatePayload(latest.statePayload);
         const parsed = JSON.parse(decoded) as Record<string, unknown>;
         // Check if state contains any resources
-        const resources = parsed.resources;
+        const resources = parsed["resources"];
         if (resources !== undefined && Array.isArray(resources) && resources.length > 0) {
           return false; // Has managed resources
         }
@@ -1964,7 +1964,7 @@ async function removeConfigurationArchive(archivePath: string | null): Promise<b
  *   2. Backing data whose grace period elapsed → permanently deleted
  */
 function getGraceCutoff(now: number, gracePeriodMs: number | undefined): number {
-  const configuredGraceDays = Number(process.env.GC_GRACE_PERIOD_DAYS ?? 7);
+  const configuredGraceDays = Number(process.env["GC_GRACE_PERIOD_DAYS"] ?? 7);
   const defaultGracePeriodMs = Number.isFinite(configuredGraceDays) && configuredGraceDays >= 0
     ? configuredGraceDays * 86_400_000
     : 7 * 86_400_000;

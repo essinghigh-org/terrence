@@ -174,17 +174,17 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
     // The state version should have run relationship data
     const svWithRun = (body.data as Record<string, unknown>[]).find(
       (sv: Record<string, unknown>): boolean => {
-        const rels = sv.relationships as Record<string, unknown> | null | undefined;
-        const runRel = rels?.run as Record<string, unknown> | null | undefined;
-        return runRel?.data != null;
+        const rels = sv["relationships"] as Record<string, unknown> | null | undefined;
+        const runRel = rels?.["run"] as Record<string, unknown> | null | undefined;
+        return runRel?.["data"] != null;
       }
     );
     expect(svWithRun).toBeDefined();
-    const rels = (svWithRun!).relationships as Record<string, unknown>;
-    const runRel = rels.run as Record<string, unknown>;
-    const runData = runRel.data as Record<string, unknown>;
-    expect(runData.id).toBe(runId);
-    const attrs = (svWithRun!).attributes as Record<string, unknown>;
+    const rels = (svWithRun!)["relationships"] as Record<string, unknown>;
+    const runRel = rels["run"] as Record<string, unknown>;
+    const runData = runRel["data"] as Record<string, unknown>;
+    expect(runData["id"]).toBe(runId);
+    const attrs = (svWithRun!)["attributes"] as Record<string, unknown>;
 
     // Run attributes should be included
     expect(attrs["run-status"]).toBeDefined();

@@ -25,15 +25,15 @@ export const samlRoutes = new Elysia({ name: "admin-saml" })
     }
     return withAuthSettingsLock(async (): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data !== null && typeof payload.data === "object"
-      ? payload.data as Record<string, unknown>
+    const data = payload["data"] !== null && typeof payload["data"] === "object"
+      ? payload["data"] as Record<string, unknown>
       : {};
-    if (data.type !== undefined && data.type !== "" && data.type !== "saml-settings" && data.type !== "admin-saml-settings") {
+    if (data["type"] !== undefined && data["type"] !== "" && data["type"] !== "saml-settings" && data["type"] !== "admin-saml-settings") {
       (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `data.type must be saml-settings (got ${String(data.type)})` }] };
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `data.type must be saml-settings (got ${String(data["type"])})` }] };
     }
-    const attributes = data.attributes !== null && typeof data.attributes === "object"
-      ? data.attributes as Record<string, unknown>
+    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object"
+      ? data["attributes"] as Record<string, unknown>
       : {};
     const current = await currentSamlSettings();
     const currentLinkSettings = await getSettings("saml");
@@ -50,7 +50,7 @@ export const samlRoutes = new Elysia({ name: "admin-saml" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] };
     }
     const [oidcEnabled, ldapEnabledForSso] = await Promise.all([
-      getSettings("oidc").then((settings): boolean => settings.enabled === true),
+      getSettings("oidc").then((settings): boolean => settings["enabled"] === true),
       ldapSettings().then((settings): boolean => settings.enabled),
     ]);
     const authError = await authLockoutResponse(set, {

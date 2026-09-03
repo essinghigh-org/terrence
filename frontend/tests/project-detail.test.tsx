@@ -73,7 +73,7 @@ test("links GitHub App-backed repositories in project workspace tables", async (
   const fetchMock = baseFetchMock({
     "GET /api/v2/organizations/acme/workspaces?page%5Bsize%5D=100&filter%5Bproject%5D%5Bid%5D=prj-1": () => json({ data: [workspace] }),
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = renderProject("workspaces");
   const repositoryLink = await view.findByRole("link", { name: "Open GitHub repository acme/infrastructure" });
@@ -97,7 +97,7 @@ test("renders project latest changes as relative time with an exact tooltip", as
       }],
     }),
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = renderProject("workspaces");
   await view.findByText("Apply network");
@@ -116,7 +116,7 @@ test("creates a project variable set from the project detail settings", async ()
       }, 201);
     },
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = renderProject("variable-sets");
 
@@ -175,7 +175,7 @@ test("saves a project default execution mode and agent pool", async () => {
       });
     },
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = renderProject("settings");
   const executionMode = await view.findByLabelText("Default execution mode");
@@ -226,7 +226,7 @@ test("preserves an inherited project execution mode when saving other settings",
       return json({ data: inheritedProject });
     },
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = renderProject("settings");
   const executionMode = await view.findByLabelText("Default execution mode");
@@ -258,15 +258,15 @@ test("deletes a project from the project detail settings", async () => {
       return new Response(null, { status: 204 });
     },
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const page = renderProject("settings");
 
   const deleteButtons = await page.findAllByRole("button", { name: "Delete project" });
-  fireEvent.click(deleteButtons[0]);
+  fireEvent.click(deleteButtons[0]!);
 
   const confirmButtons = await page.findAllByRole("button", { name: "Delete project" });
-  fireEvent.click(confirmButtons[confirmButtons.length - 1]);
+  fireEvent.click(confirmButtons[confirmButtons.length - 1]!);
 
   await page.findByText("Project deleted");
   expect(deleteCalled).toBe(true);

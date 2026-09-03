@@ -25,15 +25,15 @@ export const projectTools: readonly McpTool[] = [
     },
     requires: ["projects:read"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const orgName = typeof args.org === "string" ? args.org : "";
+      const orgName = typeof args["org"] === "string" ? args["org"] : "";
       const org = await cachedOrgByName(orgName);
       if (org === undefined) return toolBadRequest(`Organization "${orgName}" not found`);
       if (!(await checkOrgPermission(session.userId ?? undefined, org.id, "member", session.orgId, session.teamId))) {
         return toolError("Not authorized to access this organization");
       }
-      const search = typeof args.search === "string" ? args.search : undefined;
-      const limit = Math.min(Math.max(Number(args.limit ?? 50), 1), 200);
-      const offset = Math.max(Number(args.offset ?? 0), 0);
+      const search = typeof args["search"] === "string" ? args["search"] : undefined;
+      const limit = Math.min(Math.max(Number(args["limit"] ?? 50), 1), 200);
+      const offset = Math.max(Number(args["offset"] ?? 0), 0);
       const pattern = search === undefined ? undefined : `%${search.replace(/[\\%_]/g, "\\$&")}%`;
       const where = search !== undefined
         ? and(eq(projects.orgId, org.id), sql`${projects.name} LIKE ${pattern} ESCAPE '\\'`)
@@ -58,7 +58,7 @@ export const projectTools: readonly McpTool[] = [
     },
     requires: ["projects:read"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const projectId = String(args.project_id);
+      const projectId = String(args["project_id"]);
       const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
       if (project === undefined || !(await checkOrganizationPermission(project.orgId, session.userId ?? undefined, session.orgId, session.teamId, "read-projects"))) {
         return toolError("Project not found or not authorized");
@@ -92,8 +92,8 @@ export const projectTools: readonly McpTool[] = [
     },
     requires: ["projects:write"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const orgName = String(args.org);
-      const name = (typeof args.name === "string" ? args.name : "").trim();
+      const orgName = String(args["org"]);
+      const name = (typeof args["name"] === "string" ? args["name"] : "").trim();
       const org = await cachedOrgByName(orgName);
       if (org === undefined) return toolBadRequest(`Organization "${orgName}" not found`);
       if (!(await checkOrganizationPermission(org.id, session.userId ?? undefined, session.orgId, session.teamId, "manage-projects"))) {
@@ -108,10 +108,10 @@ export const projectTools: readonly McpTool[] = [
         id,
         orgId: org.id,
         name,
-        description: typeof args.description === "string" && args.description !== "" ? args.description.trim() : null,
+        description: typeof args["description"] === "string" && args["description"] !== "" ? args["description"].trim() : null,
         createdAt,
       });
-      return { id, name, orgId: org.id, createdAt, description: typeof args.description === "string" ? args.description.trim() : null };
+      return { id, name, orgId: org.id, createdAt, description: typeof args["description"] === "string" ? args["description"].trim() : null };
     },
   },
 ];

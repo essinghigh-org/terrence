@@ -99,21 +99,21 @@ describe("Security Regression — Configuration Version Upload Authorization", (
 });
 
 describe("Security Regression — Signup Disabled by Default", () => {
-  const previous = process.env.TERRENCE_ENABLE_LOCAL_SIGNUP;
+  const previous = process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"];
 
   it("returns signup-enabled: false from /api/v2/ping when signup is not enabled", async () => {
-    delete process.env.TERRENCE_ENABLE_LOCAL_SIGNUP;
+    delete process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"];
     try {
       const res = await app.handle(new Request("http://localhost/api/v2/ping"));
       const body = await res.json() as { "signup-enabled": boolean };
       expect(body["signup-enabled"]).toBe(false);
     } finally {
-      if (previous !== undefined) process.env.TERRENCE_ENABLE_LOCAL_SIGNUP = previous;
+      if (previous !== undefined) process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"] = previous;
     }
   });
 
   it("returns 403 when posting to /api/v2/users without TERRENCE_ENABLE_LOCAL_SIGNUP", async () => {
-    delete process.env.TERRENCE_ENABLE_LOCAL_SIGNUP;
+    delete process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"];
     try {
       const res = await app.handle(
         new Request("http://localhost/api/v2/users", {
@@ -126,15 +126,15 @@ describe("Security Regression — Signup Disabled by Default", () => {
       );
       expect(res.status).toBe(403);
     } finally {
-      if (previous !== undefined) process.env.TERRENCE_ENABLE_LOCAL_SIGNUP = previous;
+      if (previous !== undefined) process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"] = previous;
     }
   });
 });
 
 describe("Security Regression — CORS Defaults", () => {
   it("does not expose a hardcoded origin or reflect arbitrary origins without a configured allow-list", async () => {
-    const previous = process.env.CORS_ORIGIN;
-    delete process.env.CORS_ORIGIN;
+    const previous = process.env["CORS_ORIGIN"];
+    delete process.env["CORS_ORIGIN"];
     try {
       // A non-allowlisted origin must NOT receive an access-control-allow-origin
       // header — neither the (removed) localhost hardcode nor the origin itself.
@@ -143,22 +143,22 @@ describe("Security Regression — CORS Defaults", () => {
       }));
       expect(response.headers.get("access-control-allow-origin")).toBeNull();
     } finally {
-      if (previous === undefined) delete process.env.CORS_ORIGIN;
-      else process.env.CORS_ORIGIN = previous;
+      if (previous === undefined) delete process.env["CORS_ORIGIN"];
+      else process.env["CORS_ORIGIN"] = previous;
     }
   });
 
   it("reflects an origin that is explicitly allow-listed in CORS_ORIGIN", async () => {
-    const previous = process.env.CORS_ORIGIN;
-    process.env.CORS_ORIGIN = "https://app.example,https://dev.example";
+    const previous = process.env["CORS_ORIGIN"];
+    process.env["CORS_ORIGIN"] = "https://app.example,https://dev.example";
     try {
       const response = await app.handle(new Request("http://localhost/api/v2/ping", {
         headers: { Origin: "https://dev.example" },
       }));
       expect(response.headers.get("access-control-allow-origin")).toBe("https://dev.example");
     } finally {
-      if (previous === undefined) delete process.env.CORS_ORIGIN;
-      else process.env.CORS_ORIGIN = previous;
+      if (previous === undefined) delete process.env["CORS_ORIGIN"];
+      else process.env["CORS_ORIGIN"] = previous;
     }
   });
 });
@@ -235,10 +235,10 @@ describe("Security Headers — document shell (CSP, clickjacking, referrer, robo
 });
 
 describe("Security Regression — CORS Vary: Origin", () => {
-  const previous = process.env.CORS_ORIGIN;
+  const previous = process.env["CORS_ORIGIN"];
 
   it("reflects a matching origin and advertises Vary: Origin", async () => {
-    process.env.CORS_ORIGIN = "https://app.example,https://dev.example";
+    process.env["CORS_ORIGIN"] = "https://app.example,https://dev.example";
     try {
       const res = await app.handle(new Request("http://localhost/api/v2/ping", {
         headers: { Origin: "https://app.example" },
@@ -251,7 +251,7 @@ describe("Security Regression — CORS Vary: Origin", () => {
   });
 
   it("does not reflect a non-allowlisted origin but still varries by Origin", async () => {
-    process.env.CORS_ORIGIN = "https://app.example";
+    process.env["CORS_ORIGIN"] = "https://app.example";
     try {
       const res = await app.handle(new Request("http://localhost/api/v2/ping", {
         headers: { Origin: "https://evil.example" },
@@ -264,7 +264,7 @@ describe("Security Regression — CORS Vary: Origin", () => {
   });
 
   it("advertises Vary: Origin when CORS is configured even with no Origin header", async () => {
-    process.env.CORS_ORIGIN = "https://app.example";
+    process.env["CORS_ORIGIN"] = "https://app.example";
     try {
       const res = await app.handle(new Request("http://localhost/api/v2/ping"));
       expect(res.headers.get("vary")).toContain("Origin");
@@ -274,8 +274,8 @@ describe("Security Regression — CORS Vary: Origin", () => {
   });
 
   function restore(): void {
-    if (previous === undefined) delete process.env.CORS_ORIGIN;
-    else process.env.CORS_ORIGIN = previous;
+    if (previous === undefined) delete process.env["CORS_ORIGIN"];
+    else process.env["CORS_ORIGIN"] = previous;
   }
 });
 

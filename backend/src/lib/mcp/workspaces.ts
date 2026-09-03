@@ -52,8 +52,8 @@ type WorkspaceCreationOptions = Readonly<{
 
 function workspaceCreationOptions(args: Readonly<Record<string, unknown>>): WorkspaceCreationOptions {
   return {
-    name: (typeof args.name === "string" ? args.name : "").trim(),
-    description: typeof args.description === "string" && args.description !== "" ? args.description.trim() : null,
+    name: (typeof args["name"] === "string" ? args["name"] : "").trim(),
+    description: typeof args["description"] === "string" && args["description"] !== "" ? args["description"].trim() : null,
     autoApply: typeof args["auto-apply"] === "boolean" ? args["auto-apply"] : false,
     executionMode: typeof args["execution-mode"] === "string" ? args["execution-mode"] : undefined,
     terraformVersion: typeof args["terraform-version"] === "string" ? args["terraform-version"] : undefined,
@@ -71,20 +71,20 @@ async function workspaceCreationOptionError(options: WorkspaceCreationOptions, o
 type WorkspaceProjectResult = typeof projects.$inferSelect | Readonly<{ error: string }>;
 
 async function resolveWorkspaceProject(args: Readonly<Record<string, unknown>>, orgId: string): Promise<WorkspaceProjectResult> {
-  if (typeof args.project_id === "string" && args.project_id !== "") {
-    const project = await db.query.projects.findFirst({ where: and(eq(projects.id, args.project_id), eq(projects.orgId, orgId)) });
+  if (typeof args["project_id"] === "string" && args["project_id"] !== "") {
+    const project = await db.query.projects.findFirst({ where: and(eq(projects.id, args["project_id"]), eq(projects.orgId, orgId)) });
     return project ?? { error: "Project must belong to the workspace organization" };
   }
   return ensureDefaultProject(orgId);
 }
 
 function workspaceTagBindings(args: Readonly<Record<string, unknown>>): readonly { key: string; value: string }[] {
-  const rawTags = Array.isArray(args.tags) ? args.tags : [];
+  const rawTags = Array.isArray(args["tags"]) ? args["tags"] : [];
   const tagBindings = rawTags.filter((tag): boolean =>
-    tag !== null && typeof tag === "object" && typeof (tag as Record<string, unknown>).key === "string" && typeof (tag as Record<string, unknown>).value === "string");
+    tag !== null && typeof tag === "object" && typeof (tag as Record<string, unknown>)["key"] === "string" && typeof (tag as Record<string, unknown>)["value"] === "string");
   return tagBindings.map((tag): { key: string; value: string } => {
     const binding = tag as Record<string, unknown>;
-    return { key: binding.key as string, value: binding.value as string };
+    return { key: binding["key"] as string, value: binding["value"] as string };
   });
 }
 
@@ -101,13 +101,13 @@ function workspaceVariableUpdate(
   variable: typeof workspaceVariables.$inferSelect,
   args: Readonly<Record<string, unknown>>,
 ): WorkspaceVariableUpdate | Readonly<{ error: string }> {
-  const key = typeof args.key === "string" ? args.key : variable.key;
-  const value = typeof args.value === "string" ? args.value : variable.value;
-  const category = typeof args.category === "string" ? args.category : variable.category;
-  let sensitive = typeof args.sensitive === "boolean" ? args.sensitive : (variable.sensitive ?? false);
-  if ((variable.sensitive ?? false) && !sensitive && args.value === undefined) sensitive = true;
-  const hcl = typeof args.hcl === "boolean" ? args.hcl : (variable.hcl ?? false);
-  const description = typeof args.description === "string" ? args.description : variable.description;
+  const key = typeof args["key"] === "string" ? args["key"] : variable.key;
+  const value = typeof args["value"] === "string" ? args["value"] : variable.value;
+  const category = typeof args["category"] === "string" ? args["category"] : variable.category;
+  let sensitive = typeof args["sensitive"] === "boolean" ? args["sensitive"] : (variable.sensitive ?? false);
+  if ((variable.sensitive ?? false) && !sensitive && args["value"] === undefined) sensitive = true;
+  const hcl = typeof args["hcl"] === "boolean" ? args["hcl"] : (variable.hcl ?? false);
+  const description = typeof args["description"] === "string" ? args["description"] : variable.description;
   if (!validVariableAttributes({ key, value, category, sensitive, hcl, description }, true)) {
     return { error: "Invalid variable attributes" };
   }
@@ -165,7 +165,7 @@ export const workspaceTools: readonly McpTool[] = [
     },
     requires: ["workspaces:write"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const orgName = typeof args.org === "string" ? args.org : "";
+      const orgName = typeof args["org"] === "string" ? args["org"] : "";
       const org = await cachedOrgByName(orgName);
       if (org === undefined) return toolBadRequest(`Organization "${orgName}" not found`);
       if (!(await checkOrganizationPermission(org.id, session.userId ?? undefined, session.orgId, session.teamId, "manage-workspaces"))) {
@@ -210,16 +210,16 @@ export const workspaceTools: readonly McpTool[] = [
     },
     requires: ["workspaces:read"],
       handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-        const orgName = String(args.org);
+        const orgName = String(args["org"]);
         const org = await cachedOrgByName(orgName);
         if (org === undefined) return toolBadRequest(`Organization "${orgName}" not found`);
         if (!(await checkOrgPermission(session.userId ?? undefined, org.id, "member", session.orgId, session.teamId))) {
         return toolError("Not authorized to access this organization");
       }
-      const exactName = typeof args.name === "string" ? args.name : undefined;
-      const search = typeof args.search === "string" ? args.search : undefined;
-      const limit = Math.min(Math.max(Number(args.limit ?? 50), 1), 200);
-      const offset = Math.max(Number(args.offset ?? 0), 0);
+      const exactName = typeof args["name"] === "string" ? args["name"] : undefined;
+      const search = typeof args["search"] === "string" ? args["search"] : undefined;
+      const limit = Math.min(Math.max(Number(args["limit"] ?? 50), 1), 200);
+      const offset = Math.max(Number(args["offset"] ?? 0), 0);
       if (exactName !== undefined) return exactWorkspaceResult(org.id, orgName, exactName, session.userId, session.orgId, session.teamId);
       const authorizedIds = await workspaceIdsForPermission(org.id, session.userId ?? undefined, session.orgId, session.teamId, "read");
       if (authorizedIds === null || authorizedIds.length === 0) return [];
@@ -251,11 +251,11 @@ export const workspaceTools: readonly McpTool[] = [
     },
     requires: ["variables:read"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const wsId = String(args.workspace_id);
+      const wsId = String(args["workspace_id"]);
       const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "variables-read");
       if (ws === undefined) return toolError("Workspace not found or not authorized");
-      const limit = Math.min(Math.max(Number(args.limit ?? 100), 1), 500);
-      const offset = Math.max(Number(args.offset ?? 0), 0);
+      const limit = Math.min(Math.max(Number(args["limit"] ?? 100), 1), 500);
+      const offset = Math.max(Number(args["offset"] ?? 0), 0);
       const rows = await db.query.workspaceVariables.findMany({
         where: eq(workspaceVariables.workspaceId, wsId),
         orderBy: [asc(workspaceVariables.key)],
@@ -284,15 +284,15 @@ export const workspaceTools: readonly McpTool[] = [
     },
     requires: ["variables:write"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const wsId = String(args.workspace_id);
+      const wsId = String(args["workspace_id"]);
       const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "variables-write");
       if (ws === undefined) return toolError("Workspace not found or not authorized");
-      const key = typeof args.key === "string" ? args.key : "";
-      const value = typeof args.value === "string" ? args.value : "";
-      const category = typeof args.category === "string" ? args.category : "terraform";
-      const sensitive = typeof args.sensitive === "boolean" ? args.sensitive : false;
-      const hcl = typeof args.hcl === "boolean" ? args.hcl : false;
-      const description = typeof args.description === "string" ? args.description : null;
+      const key = typeof args["key"] === "string" ? args["key"] : "";
+      const value = typeof args["value"] === "string" ? args["value"] : "";
+      const category = typeof args["category"] === "string" ? args["category"] : "terraform";
+      const sensitive = typeof args["sensitive"] === "boolean" ? args["sensitive"] : false;
+      const hcl = typeof args["hcl"] === "boolean" ? args["hcl"] : false;
+      const description = typeof args["description"] === "string" ? args["description"] : null;
       if (!validVariableAttributes({ key, value, category, sensitive, hcl, description })) {
         return toolBadRequest("Invalid variable attributes");
       }
@@ -324,8 +324,8 @@ export const workspaceTools: readonly McpTool[] = [
     },
     requires: ["variables:write"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const wsId = String(args.workspace_id);
-      const varId = String(args.variable_id);
+      const wsId = String(args["workspace_id"]);
+      const varId = String(args["variable_id"]);
       const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "variables-write");
       if (ws === undefined) return toolError("Workspace not found or not authorized");
       const variable = await db.query.workspaceVariables.findFirst({
@@ -352,8 +352,8 @@ export const workspaceTools: readonly McpTool[] = [
     },
     requires: ["variables:write"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const wsId = String(args.workspace_id);
-      const varId = String(args.variable_id);
+      const wsId = String(args["workspace_id"]);
+      const varId = String(args["variable_id"]);
       const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "variables-write");
       if (ws === undefined) return toolError("Workspace not found or not authorized");
       const variable = await db.query.workspaceVariables.findFirst({
@@ -377,14 +377,14 @@ export const workspaceTools: readonly McpTool[] = [
     },
     requires: ["workspaces:lock"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const wsId = String(args.workspace_id);
+      const wsId = String(args["workspace_id"]);
       const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId);
       if (ws === undefined) return toolError("Workspace not found or not authorized");
       if (!(await checkWorkspacePermission(ws, session.userId ?? undefined, session.orgId, session.teamId, "lock"))) {
         return toolError("Not authorized to lock this workspace");
       }
       if (ws.locked === true) return toolBadRequest("Workspace is already locked");
-      const reason = typeof args.reason === "string" ? args.reason.trim() : "";
+      const reason = typeof args["reason"] === "string" ? args["reason"].trim() : "";
       if (reason.length > 300) return toolBadRequest("Lock reason must be at most 300 characters");
       const principal = lockPrincipal(session.userId, session.orgId ?? ws.orgId, session.teamId);
       const locked = await db.update(workspaces).set({
@@ -407,7 +407,7 @@ export const workspaceTools: readonly McpTool[] = [
     },
     requires: ["workspaces:lock"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const wsId = String(args.workspace_id);
+      const wsId = String(args["workspace_id"]);
       const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId);
       if (ws === undefined) return toolError("Workspace not found or not authorized");
       if (!(await checkWorkspacePermission(ws, session.userId ?? undefined, session.orgId, session.teamId, "lock"))) {

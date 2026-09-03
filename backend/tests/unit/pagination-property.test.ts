@@ -108,7 +108,7 @@ describe("pageRequest (query parser)", () => {
 describe("pagination (link/meta builder)", () => {
   test("empty collection still yields a valid link graph", () => {
     const p = pagination(requestWithQuery(""), 1, 20, 0);
-    const meta = p.meta.pagination as Record<string, unknown>;
+    const meta = p.meta["pagination"] as Record<string, unknown>;
     // total-pages is the raw ceil(0/20) = 0; links still point at page 1
     expect(meta).toEqual({
       "current-page": 1,
@@ -118,41 +118,41 @@ describe("pagination (link/meta builder)", () => {
       "total-pages": 0,
       "total-count": 0,
     });
-    expect(p.links.prev).toBeNull();
-    expect(p.links.next).toBeNull();
-    expect(p.links.first).toBe(p.links.self);
-    expect(p.links.last).toBe(p.links.self);
+    expect(p.links["prev"]).toBeNull();
+    expect(p.links["next"]).toBeNull();
+    expect(p.links["first"]).toBe(p.links["self"]);
+    expect(p.links["last"]).toBe(p.links["self"]);
   });
 
   test("exact page boundary: no next link on the last full page", () => {
     // 40 items at size 20 -> exactly 2 pages
     const p = pagination(requestWithQuery(""), 2, 20, 40);
-    const meta = p.meta.pagination as Record<string, unknown>;
+    const meta = p.meta["pagination"] as Record<string, unknown>;
     expect(meta["total-pages"]).toBe(2);
-    expect(p.links.next).toBeNull();
-    expect(p.links.prev).not.toBeNull();
-    expect(p.links.last).toBe(p.links.self);
+    expect(p.links["next"]).toBeNull();
+    expect(p.links["prev"]).not.toBeNull();
+    expect(p.links["last"]).toBe(p.links["self"]);
   });
 
   test("last partial page is reachable and reported", () => {
     // 21 items at size 10 -> page 3 holds 1 item
     const p = pagination(requestWithQuery(""), 3, 10, 21);
-    const meta = p.meta.pagination as Record<string, unknown>;
+    const meta = p.meta["pagination"] as Record<string, unknown>;
     expect(meta["total-pages"]).toBe(3);
     expect(meta["total-count"]).toBe(21);
-    expect(p.links.next).toBeNull();
-    expect(p.links.prev).not.toBeNull();
+    expect(p.links["next"]).toBeNull();
+    expect(p.links["prev"]).not.toBeNull();
   });
 
   test("over-page requests keep the link graph consistent", () => {
     const p = pagination(requestWithQuery(""), 99, 20, 5);
-    const meta = p.meta.pagination as Record<string, unknown>;
+    const meta = p.meta["pagination"] as Record<string, unknown>;
     expect(meta["current-page"]).toBe(99);
     expect(meta["total-pages"]).toBe(1);
-    expect(p.links.next).toBeNull();
+    expect(p.links["next"]).toBeNull();
     // self points at the over-page; first/last point at the real range
-    expect(p.links.first).not.toBeNull();
-    expect(p.links.last).toBe(p.links.first);
+    expect(p.links["first"]).not.toBeNull();
+    expect(p.links["last"]).toBe(p.links["first"]);
   });
 
   test("fuzz: link presence/targets match ceil(total/size) for arbitrary inputs", () => {
@@ -171,8 +171,8 @@ describe("pagination (link/meta builder)", () => {
       const currentPage = 1 + Math.floor(rand() * (totalPages + 5)); // includes over-page
       const req = requestWithQuery(`page[number]=${currentPage}&page[size]=${pageSize}`);
       const p = pagination(req, currentPage, pageSize, totalCount);
-      const meta = p.meta.pagination as Record<string, unknown>;
-      const self = p.links.self!;
+      const meta = p.meta["pagination"] as Record<string, unknown>;
+      const self = p.links["self"]!;
 
       expect(meta["total-pages"]).toBe(totalPages);
       expect(meta["total-count"]).toBe(totalCount);
@@ -180,13 +180,13 @@ describe("pagination (link/meta builder)", () => {
       expect(meta["page-size"]).toBe(pageSize);
       expect(meta["prev-page"]).toBe(currentPage > 1 ? currentPage - 1 : null);
       expect(meta["next-page"]).toBe(currentPage < totalPages ? currentPage + 1 : null);
-      expect(p.links.prev).toBe(currentPage > 1 ? pageLink(req, currentPage - 1, pageSize) : null);
-      expect(p.links.next).toBe(currentPage < totalPages ? pageLink(req, currentPage + 1, pageSize) : null);
-      expect(p.links.first).toBe(pageLink(req, 1, pageSize));
-      expect(p.links.last).toBe(pageLink(req, Math.max(1, totalPages), pageSize));
+      expect(p.links["prev"]).toBe(currentPage > 1 ? pageLink(req, currentPage - 1, pageSize) : null);
+      expect(p.links["next"]).toBe(currentPage < totalPages ? pageLink(req, currentPage + 1, pageSize) : null);
+      expect(p.links["first"]).toBe(pageLink(req, 1, pageSize));
+      expect(p.links["last"]).toBe(pageLink(req, Math.max(1, totalPages), pageSize));
       expect(self).toBe(pageLink(req, currentPage, pageSize));
       // every generated link round-trips to a valid page param
-      for (const link of [p.links.self, p.links.first, p.links.prev, p.links.next, p.links.last]) {
+      for (const link of [p.links["self"], p.links["first"], p.links["prev"], p.links["next"], p.links["last"]]) {
         if (link === null || link === undefined) continue;
         const params = new URL(link).searchParams;
         const num = Number(params.get("page[number]"));

@@ -95,7 +95,7 @@ function payloadString(record: StackRecord, key: string): string | undefined {
 }
 
 function payloadFencingToken(record: StackRecord): number | undefined {
-  const value = (record.payload ?? {})["fencing-token"] ?? (record.payload ?? {}).fencingToken;
+  const value = (record.payload ?? {})["fencing-token"] ?? (record.payload ?? {})["fencingToken"];
   return typeof value === "number" && Number.isInteger(value) ? value : undefined;
 }
 
@@ -216,7 +216,7 @@ export async function heartbeatStackAgentJob(agentId: string, jobId: string): Pr
 }
 
 function stackStatePayload(result: Readonly<Record<string, unknown>> | null | undefined): string | null {
-  const state = result?.state ?? result?.json_state;
+  const state = result?.["state"] ?? result?.["json_state"];
   if (typeof state === "string") return state;
   if (state !== null && typeof state === "object") return JSON.stringify(state);
   return null;
@@ -228,7 +228,7 @@ async function persistCompletedApplyState(outcome: StackAgentCompletionOutcome):
   if (run === undefined) return;
   const statePayload = stackStatePayload(outcome.job.result);
   try {
-    if (run.payload?.destroy === true) await removeStackState(outcome.job.stackId, run.name ?? "default", run.id, outcome.fencingToken);
+    if (run.payload?.["destroy"] === true) await removeStackState(outcome.job.stackId, run.name ?? "default", run.id, outcome.fencingToken);
     else {
       if (statePayload === null) throw new Error("Stack agent apply completion must include the resulting state");
       await saveStackState(outcome.job.stackId, run.name ?? "default", run.id, statePayload, outcome.fencingToken);

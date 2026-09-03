@@ -17,10 +17,10 @@ describe("loadEncryptionKey ENOENT handling", () => {
   });
 
   it("generates a new key file when none exists (ENOENT path)", async () => {
-    const previousDir = process.env.STORAGE_DIR;
-    process.env.STORAGE_DIR = testStorageDir;
-    const previousPass = process.env.ENCRYPTION_PASSWORD;
-    delete process.env.ENCRYPTION_PASSWORD;
+    const previousDir = process.env["STORAGE_DIR"];
+    process.env["STORAGE_DIR"] = testStorageDir;
+    const previousPass = process.env["ENCRYPTION_PASSWORD"];
+    delete process.env["ENCRYPTION_PASSWORD"];
 
     try {
       const mod = await import("../../src/lib/secrets");
@@ -36,9 +36,9 @@ describe("loadEncryptionKey ENOENT handling", () => {
       const decrypted = await mod.decryptSecret(encrypted);
       expect(decrypted).toBe("hello");
     } finally {
-      if (previousDir === undefined) delete process.env.STORAGE_DIR;
-      else process.env.STORAGE_DIR = previousDir;
-      if (previousPass !== undefined) process.env.ENCRYPTION_PASSWORD = previousPass;
+      if (previousDir === undefined) delete process.env["STORAGE_DIR"];
+      else process.env["STORAGE_DIR"] = previousDir;
+      if (previousPass !== undefined) process.env["ENCRYPTION_PASSWORD"] = previousPass;
     }
   });
 });
@@ -83,19 +83,19 @@ describe("per-installation KDF salt (4.10)", () => {
   });
 
   it("creates a .encryption-salt file and derives a deterministic key per engine instance", async () => {
-    const previousDir = process.env.STORAGE_DIR;
-    const previousPass = process.env.ENCRYPTION_PASSWORD;
-    process.env.ENCRYPTION_PASSWORD = "correct horse battery staple";
+    const previousDir = process.env["STORAGE_DIR"];
+    const previousPass = process.env["ENCRYPTION_PASSWORD"];
+    process.env["ENCRYPTION_PASSWORD"] = "correct horse battery staple";
     try {
       // The module is cached across imports; the storage-dir switch is what
       // proves the salt changes the key derivation.
       const mod = await import("../../src/lib/secrets");
-      process.env.STORAGE_DIR = dirA;
+      process.env["STORAGE_DIR"] = dirA;
       const encA = await mod.encryptSecret("same secret");
       expect(existsSync(join(dirA, ".encryption-salt"))).toBe(true);
       expect(await mod.decryptSecret(encA)).toBe("same secret");
 
-      process.env.STORAGE_DIR = dirB;
+      process.env["STORAGE_DIR"] = dirB;
       const encB = await mod.encryptSecret("same secret");
       expect(existsSync(join(dirB, ".encryption-salt"))).toBe(true);
       expect(await mod.decryptSecret(encB)).toBe("same secret");
@@ -107,17 +107,17 @@ describe("per-installation KDF salt (4.10)", () => {
       const saltB = readFileSync(join(dirB, ".encryption-salt"), "utf8");
       expect(saltA).not.toBe(saltB);
     } finally {
-      if (previousDir === undefined) delete process.env.STORAGE_DIR;
-      else process.env.STORAGE_DIR = previousDir;
-      if (previousPass !== undefined) process.env.ENCRYPTION_PASSWORD = previousPass;
+      if (previousDir === undefined) delete process.env["STORAGE_DIR"];
+      else process.env["STORAGE_DIR"] = previousDir;
+      if (previousPass !== undefined) process.env["ENCRYPTION_PASSWORD"] = previousPass;
     }
   });
 
   it("salt file mode is 0600 and readable as base64", async () => {
-    const previousDir = process.env.STORAGE_DIR;
-    process.env.STORAGE_DIR = dirA;
-    const previousPass = process.env.ENCRYPTION_PASSWORD;
-    process.env.ENCRYPTION_PASSWORD = "pw";
+    const previousDir = process.env["STORAGE_DIR"];
+    process.env["STORAGE_DIR"] = dirA;
+    const previousPass = process.env["ENCRYPTION_PASSWORD"];
+    process.env["ENCRYPTION_PASSWORD"] = "pw";
     try {
       const mod = await import("../../src/lib/secrets");
       await mod.encryptSecret("hello");
@@ -130,21 +130,21 @@ describe("per-installation KDF salt (4.10)", () => {
       expect(() => Buffer.from(salt, "base64")).not.toThrow();
       expect(Buffer.from(salt, "base64").length).toBeGreaterThanOrEqual(16);
     } finally {
-      if (previousDir === undefined) delete process.env.STORAGE_DIR;
-      else process.env.STORAGE_DIR = previousDir;
-      if (previousPass !== undefined) process.env.ENCRYPTION_PASSWORD = previousPass;
+      if (previousDir === undefined) delete process.env["STORAGE_DIR"];
+      else process.env["STORAGE_DIR"] = previousDir;
+      if (previousPass !== undefined) process.env["ENCRYPTION_PASSWORD"] = previousPass;
     }
   });
 });
 
 describe("concurrent cold-start key creation (policy_vcs_sync regression)", () => {
   it("serializes concurrent encryptSecret calls on a fresh storage dir so none reads a half-written key", async () => {
-    const previousDir = process.env.STORAGE_DIR;
-    const previousPass = process.env.ENCRYPTION_PASSWORD;
+    const previousDir = process.env["STORAGE_DIR"];
+    const previousPass = process.env["ENCRYPTION_PASSWORD"];
     // A unique fresh dir ensures a true cold start (no pre-existing key).
     const coldDir = join(tmpdir(), "terrence-concurrent-cold-" + Date.now() + "-" + crypto.randomUUID());
-    process.env.STORAGE_DIR = coldDir;
-    delete process.env.ENCRYPTION_PASSWORD;
+    process.env["STORAGE_DIR"] = coldDir;
+    delete process.env["ENCRYPTION_PASSWORD"];
 
     try {
       const mod = await import("../../src/lib/secrets");
@@ -166,9 +166,9 @@ describe("concurrent cold-start key creation (policy_vcs_sync regression)", () =
 
       expect(results.length).toBe(16);
     } finally {
-      if (previousDir === undefined) delete process.env.STORAGE_DIR;
-      else process.env.STORAGE_DIR = previousDir;
-      if (previousPass !== undefined) process.env.ENCRYPTION_PASSWORD = previousPass;
+      if (previousDir === undefined) delete process.env["STORAGE_DIR"];
+      else process.env["STORAGE_DIR"] = previousDir;
+      if (previousPass !== undefined) process.env["ENCRYPTION_PASSWORD"] = previousPass;
       rmSync(coldDir, { recursive: true, force: true });
     }
   });

@@ -133,7 +133,7 @@ describe("RFC 5424 formatting", (): void => {
 
   it("serializes circular, Error, and bigint values without throwing", (): void => {
     const circular: Record<string, unknown> = { name: "loop" };
-    circular.self = circular;
+    circular["self"] = circular;
     const line = formatSyslogMessage(
       { ...base, meta: { circular, boom: new Error("kaput"), big: 10n } },
       IDENTITY,
@@ -234,16 +234,16 @@ describe("RFC 5424 formatting", (): void => {
 
 describe("hostname resolution", (): void => {
   afterEach((): void => {
-    delete process.env.TERRENCE_SYSLOG_HOSTNAME;
+    delete process.env["TERRENCE_SYSLOG_HOSTNAME"];
   });
 
   it("prefers the explicit override", (): void => {
-    process.env.TERRENCE_SYSLOG_HOSTNAME = "explicit-host";
+    process.env["TERRENCE_SYSLOG_HOSTNAME"] = "explicit-host";
     expect(resolveHostname()).toBe("explicit-host");
   });
 
   it("falls back to /etc/hostname or a deterministic stable value", (): void => {
-    delete process.env.TERRENCE_SYSLOG_HOSTNAME;
+    delete process.env["TERRENCE_SYSLOG_HOSTNAME"];
     const first = resolveHostname({ STORAGE_DIR: "/data" });
     const second = resolveHostname({ STORAGE_DIR: "/data" });
     expect(first).toBe(second);

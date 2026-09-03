@@ -21,7 +21,7 @@ type Job = Readonly<typeof durableJobs.$inferSelect>;
 type ModuleTestRun = Readonly<typeof moduleTestRuns.$inferSelect>;
 
 const MODULE_TEST_EXECUTION_DIR = join(
-  process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"),
+  process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"),
   "module-tests",
   "runs",
 );
@@ -45,7 +45,7 @@ type SupervisorInput = Readonly<{
 }>;
 
 function runIdFromJob(job: Job): string | undefined {
-  const value = job.payload.runId;
+  const value = job.payload["runId"];
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
@@ -84,8 +84,8 @@ function processAlive(pid: number): boolean {
 async function readSupervisorMarker(directory: string): Promise<SupervisorMarker | undefined> {
   try {
     const value = JSON.parse(await readFile(supervisorMarkerPath(directory), "utf8")) as Record<string, unknown>;
-    return typeof value.pid === "number" && Number.isInteger(value.pid) && value.pid > 0
-      ? { pid: value.pid, startTime: typeof value.startTime === "string" ? value.startTime : null }
+    return typeof value["pid"] === "number" && Number.isInteger(value["pid"]) && value["pid"] > 0
+      ? { pid: value["pid"], startTime: typeof value["startTime"] === "string" ? value["startTime"] : null }
       : undefined;
   } catch {
     return undefined;

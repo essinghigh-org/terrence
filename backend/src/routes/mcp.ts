@@ -98,13 +98,13 @@ export const mcpRoutes = new Elysia()
       session = await bearerSession({ headers: request.headers });
     } catch (error: unknown) {
       if (error instanceof McpAuthError) {
-        (set as Record<string, unknown>).status = 401;
+        (set as Record<string, unknown>)["status"] = 401;
         return new Response(JSON.stringify(errorRes(null, -32001, error.message)));
       }
       throw error;
     }
     if (session === null) {
-      (set as Record<string, unknown>).status = 401;
+      (set as Record<string, unknown>)["status"] = 401;
       return new Response(JSON.stringify(errorRes(null, -32001, "Unauthorized — provide Authorization: Bearer ***")));
     }
 
@@ -136,13 +136,13 @@ export const mcpRoutes = new Elysia()
       session = await bearerSession({ headers: request.headers });
     } catch (error: unknown) {
       if (error instanceof McpAuthError) {
-        (set as Record<string, unknown>).status = 401;
+        (set as Record<string, unknown>)["status"] = 401;
         return errorRes(null, -32001, error.message);
       }
       throw error;
     }
     if (session === null) {
-      (set as Record<string, unknown>).status = 401;
+      (set as Record<string, unknown>)["status"] = 401;
       return errorRes(null, -32001, "Unauthorized — provide Authorization: Bearer ***");
     }
     setRequestTokenScopes(session.scopes);
@@ -157,16 +157,16 @@ async function handleJsonRpc(session: McpSession, rawBody: unknown): Promise<unk
     return errorRes(null, -32700, "Parse error: body must be a JSON object");
   }
   const req = rawBody as Record<string, unknown>;
-  if (req.jsonrpc !== "2.0" || typeof req.method !== "string") {
+  if (req["jsonrpc"] !== "2.0" || typeof req["method"] !== "string") {
     return errorRes(null, -32600, "Invalid Request: must have jsonrpc='2.0' and method");
   }
-  const id = req.id !== undefined && (typeof req.id === "string" || typeof req.id === "number") ? String(req.id) : null;
-  const params = typeof req.params === "object" && req.params !== null
-    ? req.params as Record<string, unknown>
+  const id = req["id"] !== undefined && (typeof req["id"] === "string" || typeof req["id"] === "number") ? String(req["id"]) : null;
+  const params = typeof req["params"] === "object" && req["params"] !== null
+    ? req["params"] as Record<string, unknown>
     : {};
 
   try {
-    switch (req.method) {
+    switch (req["method"]) {
       case "initialize":
         return handleInitialize(id, params);
       case "notifications/initialized":
@@ -176,7 +176,7 @@ async function handleJsonRpc(session: McpSession, rawBody: unknown): Promise<unk
       case "tools/call":
         return await handleToolsCall(session, id, params);
       default:
-        return errorRes(id, -32601, `Method not found: ${req.method}`);
+        return errorRes(id, -32601, `Method not found: ${req["method"]}`);
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -205,7 +205,7 @@ function handleToolsList(id: string | null, session: McpSession): unknown {
 }
 
 async function handleToolsCall(session: McpSession, id: string | null, params: Record<string, unknown>): Promise<unknown> {
-  const toolName = typeof params.name === "string" ? params.name : "";
+  const toolName = typeof params["name"] === "string" ? params["name"] : "";
   const tool = allMcpTools.find((t) => t.name === toolName);
   if (tool === undefined) {
     return errorRes(id, -32602, `Unknown tool: ${toolName}`);
@@ -215,8 +215,8 @@ async function handleToolsCall(session: McpSession, id: string | null, params: R
   if (!toolPermittedTo(session, tool)) {
     return errorRes(id, -32001, `Not authorized to call tool: ${toolName}`);
   }
-  const args = typeof params.arguments === "object" && params.arguments !== null
-    ? params.arguments as Record<string, unknown>
+  const args = typeof params["arguments"] === "object" && params["arguments"] !== null
+    ? params["arguments"] as Record<string, unknown>
     : {};
   try {
     const result = await tool.handler(session, args);

@@ -416,7 +416,7 @@ describe("OIDC SSO flow", () => {
     mockAlg = "HS256";
     mockSupportedAlgorithms = ["RS256", "HS256"];
     mockPublishRsaJwks = true;
-    mockHmacSecret = Buffer.from(String(publicJwk.n), "base64url").toString("base64");
+    mockHmacSecret = Buffer.from(String(publicJwk["n"]), "base64url").toString("base64");
     const current = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "oidc") });
     const originalValues = current?.values ?? {};
     // Configure the symmetric algorithm so the flow reaches HMAC verification

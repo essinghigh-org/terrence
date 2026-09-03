@@ -52,8 +52,8 @@ describe("remote-workflow teams contract", () => {
     );
     teamId = resource.id;
     expect(teamId.startsWith("team-")).toBe(true);
-    expect(resource.attributes.name).toBe(`contract-team-${seed.suffix}`);
-    expect(resource.attributes.visibility).toBe("organization");
+    expect(resource.attributes["name"]).toBe(`contract-team-${seed.suffix}`);
+    expect(resource.attributes["visibility"]).toBe("organization");
     expect(resource.attributes["users-count"]).toBe(0);
     expect(resource.attributes["sso-team-id"]).toBeNull();
     expect(resource.attributes["organization-access"]).toMatchObject({
@@ -63,18 +63,18 @@ describe("remote-workflow teams contract", () => {
       "manage-workspaces": false,
       "manage-vcs-settings": false,
     });
-    expect(resource.attributes.permissions).toMatchObject({
+    expect(resource.attributes["permissions"]).toMatchObject({
       "can-update": true,
       "can-destroy": true,
     });
-    expect(resource.relationships?.users).toMatchObject({
+    expect(resource.relationships?.["users"]).toMatchObject({
       data: [],
     });
   });
 
   it("shows a team", async () => {
     const resource = await expectSuccessResponse(await request(`/api/v2/teams/${teamId}`, { headers }), 200, "teams");
-    expect(resource.attributes.name).toBe(`contract-team-${seed.suffix}`);
+    expect(resource.attributes["name"]).toBe(`contract-team-${seed.suffix}`);
     expect(resource.attributes["users-count"]).toBe(0);
   });
 
@@ -122,9 +122,9 @@ describe("remote-workflow teams contract", () => {
       "team-workspaces",
     );
     workspaceAccessId = resource.id;
-    expect(resource.attributes.access).toBe("write");
-    expect(resource.relationships?.team).toMatchObject({ data: { type: "teams", id: teamId } });
-    expect(resource.relationships?.workspace).toMatchObject({ data: { type: "workspaces", id: workspaceId } });
+    expect(resource.attributes["access"]).toBe("write");
+    expect(resource.relationships?.["team"]).toMatchObject({ data: { type: "teams", id: teamId } });
+    expect(resource.relationships?.["workspace"]).toMatchObject({ data: { type: "workspaces", id: workspaceId } });
   });
 
   it("shows and lists team workspace access", async () => {
@@ -133,7 +133,7 @@ describe("remote-workflow teams contract", () => {
       200,
       "team-workspaces",
     );
-    expect(shown.attributes.access).toBe("write");
+    expect(shown.attributes["access"]).toBe("write");
 
     const response = await request(`/api/v2/team-workspaces?filter[workspace][id]=${workspaceId}`, { headers });
     expect(response.status).toBe(200);
@@ -147,15 +147,15 @@ describe("remote-workflow teams contract", () => {
       201,
       "authentication-tokens",
     );
-    expect(created.attributes.token).toBeTypeOf("string");
-    expect(created.attributes.token).not.toBeNull();
+    expect(created.attributes["token"]).toBeTypeOf("string");
+    expect(created.attributes["token"]).not.toBeNull();
 
     const shown = await expectSuccessResponse(
       await request(`/api/v2/teams/${teamId}/authentication-token`, { headers }),
       200,
       "authentication-tokens",
     );
-    expect(shown.attributes.token === null || shown.attributes.token === undefined).toBe(true);
+    expect(shown.attributes["token"] === null || shown.attributes["token"] === undefined).toBe(true);
     expect(shown.attributes["created-at"]).toBeTypeOf("string");
   });
 

@@ -40,7 +40,7 @@ async function storedClientSecret(value: string): Promise<string> {
 async function oauthFetch(oc: OcItem, url: string, init?: RequestInit): Promise<Response> {
   if (!oauthUrlProtocolAllowed(url)) return new Response("OAuth endpoints must use HTTPS", { status: 422 });
   if (oc.agentPoolId !== null) return forwardFetch(oc.agentPoolId, url, init);
-  const destination = await resolveExternalUrl(url, envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS));
+  const destination = await resolveExternalUrl(url, envEnabled(process.env["TERRENCE_ALLOW_PRIVATE_VCS_URLS"]));
   if ("error" in destination) return new Response(destination.error, { status: 422 });
   const headers = Object.fromEntries(new Headers(init?.headers).entries());
   const rawBody = init?.body;
@@ -150,7 +150,7 @@ function endpoint(base: string, suffix: string): URL | null {
 
 function insecureOAuthUrlsAllowed(): boolean {
   return process.env.NODE_ENV === "test"
-    || (process.env.NODE_ENV === "development" && envEnabled(process.env.TERRENCE_ALLOW_INSECURE_OAUTH_URLS));
+    || (process.env.NODE_ENV === "development" && envEnabled(process.env["TERRENCE_ALLOW_INSECURE_OAUTH_URLS"]));
 }
 
 function oauthUrlProtocolAllowed(value: string | URL): boolean {
@@ -173,7 +173,7 @@ function configuredExternalUrlError(value: unknown, field: string): string | und
   }
   if (parsed.username !== "" || parsed.password !== "") return `${field} must not contain embedded credentials`;
   if (!oauthUrlProtocolAllowed(parsed)) return `${field} must use HTTPS`;
-  const reason = validateExternalUrl(value, envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS));
+  const reason = validateExternalUrl(value, envEnabled(process.env["TERRENCE_ALLOW_PRIVATE_VCS_URLS"]));
   return reason === null ? undefined : `${field} is unsafe: ${reason}`;
 }
 
@@ -344,13 +344,13 @@ async function oauth1TokenRequest(
   });
   if (!response.ok) return null;
   const payload = providerPayload(await response.text());
-  return typeof payload.oauth_token === "string"
-    && payload.oauth_token !== ""
-    && typeof payload.oauth_token_secret === "string"
+  return typeof payload["oauth_token"] === "string"
+    && payload["oauth_token"] !== ""
+    && typeof payload["oauth_token_secret"] === "string"
     ? {
-      token: payload.oauth_token,
-      tokenSecret: payload.oauth_token_secret,
-      callbackConfirmed: payload.oauth_callback_confirmed === "true",
+      token: payload["oauth_token"],
+      tokenSecret: payload["oauth_token_secret"],
+      callbackConfirmed: payload["oauth_callback_confirmed"] === "true",
     }
     : null;
 }
@@ -372,7 +372,7 @@ async function oauth1ProviderUser(
   if (!response.ok) return null;
   const text = (await response.text()).trim();
   const payload = providerPayload(text);
-  const username = [payload.name, payload.username, payload.slug, payload.displayName]
+  const username = [payload["name"], payload["username"], payload["slug"], payload["displayName"]]
     .find((value: unknown): value is string => typeof value === "string" && value !== "");
   return username ?? (text !== "" && !text.startsWith("{") ? text : null);
 }
@@ -423,7 +423,7 @@ async function exchangeAuthorizationCode(
     "Content-Type": "application/x-www-form-urlencoded",
   };
   if (basicTokenAuth) {
-    headers.Authorization = `Basic ${Buffer.from(`${oc.key}:${secret}`).toString("base64")}`;
+    headers["Authorization"] = `Basic ${Buffer.from(`${oc.key}:${secret}`).toString("base64")}`;
   } else {
     body.set("client_id", oc.key);
     body.set("client_secret", secret);
@@ -432,7 +432,7 @@ async function exchangeAuthorizationCode(
   const tokenResponse = await oauthFetch(oc, tokenUrl, { method: "POST", headers, body });
   if (!tokenResponse.ok) return null;
   const tokenPayload = providerPayload(await tokenResponse.text());
-  const accessToken = tokenPayload.access_token;
+  const accessToken = tokenPayload["access_token"];
   if (typeof accessToken !== "string" || accessToken === "") return null;
 
   const userResponse = await oauthFetch(oc, userUrl, {
@@ -442,7 +442,7 @@ async function exchangeAuthorizationCode(
     },
   });
   const userPayload = userResponse.ok ? providerPayload(await userResponse.text()) : {};
-  const username = [userPayload.login, userPayload.username, userPayload.nickname, userPayload.display_name]
+  const username = [userPayload["login"], userPayload["username"], userPayload["nickname"], userPayload["display_name"]]
     .find((value: unknown): value is string => typeof value === "string" && value !== "");
   return { accessToken, serviceProviderUser: username ?? null };
 }
@@ -453,37 +453,37 @@ function parseProjectIdentifiers(value: unknown): string[] | null {
   for (const item of value) {
     if (item === null || typeof item !== "object") return null;
     const identifier = item as Record<string, unknown>;
-    if (identifier.type !== "projects" || typeof identifier.id !== "string" || identifier.id === "") return null;
-    ids.add(identifier.id);
+    if (identifier["type"] !== "projects" || typeof identifier["id"] !== "string" || identifier["id"] === "") return null;
+    ids.add(identifier["id"]);
   }
   return [...ids];
 }
 
 function relationshipProjectIds(data: Readonly<Record<string, unknown>> | undefined): string[] | null | undefined {
-  if (data?.relationships === undefined) return undefined;
-  if (data.relationships === null || typeof data.relationships !== "object") return null;
-  const relationships = data.relationships as Record<string, unknown>;
+  if (data?.["relationships"] === undefined) return undefined;
+  if (data["relationships"] === null || typeof data["relationships"] !== "object") return null;
+  const relationships = data["relationships"] as Record<string, unknown>;
   if (!Object.hasOwn(relationships, "projects")) return undefined;
-  const projectRelationship = relationships.projects;
+  const projectRelationship = relationships["projects"];
   if (projectRelationship === null || typeof projectRelationship !== "object") return null;
-  return parseProjectIdentifiers((projectRelationship as Record<string, unknown>).data);
+  return parseProjectIdentifiers((projectRelationship as Record<string, unknown>)["data"]);
 }
 
 function relationshipAgentPoolId(
   data: Readonly<Record<string, unknown>> | undefined,
 ): string | null | undefined | false {
-  if (data?.relationships === undefined) return undefined;
-  if (data.relationships === null || typeof data.relationships !== "object") return false;
-  const relationships = data.relationships as Record<string, unknown>;
+  if (data?.["relationships"] === undefined) return undefined;
+  if (data["relationships"] === null || typeof data["relationships"] !== "object") return false;
+  const relationships = data["relationships"] as Record<string, unknown>;
   if (!Object.hasOwn(relationships, "agent-pool")) return undefined;
   const relationship = relationships["agent-pool"];
   if (relationship === null || typeof relationship !== "object") return false;
-  const identifier = (relationship as Record<string, unknown>).data;
+  const identifier = (relationship as Record<string, unknown>)["data"];
   if (identifier === null) return null;
   if (typeof identifier !== "object") return false;
   const resource = identifier as Record<string, unknown>;
-  return resource.type === "agent-pools" && typeof resource.id === "string" && resource.id !== ""
-    ? resource.id
+  return resource["type"] === "agent-pools" && typeof resource["id"] === "string" && resource["id"] !== ""
+    ? resource["id"]
     : false;
 }
 
@@ -628,20 +628,20 @@ async function completeOAuthHandshake(
 export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/oauth-clients", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationVcsReadPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const clientList = await db.query.oauthClients.findMany({ where: eq(oauthClients.orgId, org.id) });
     return { data: await Promise.all(clientList.map(async (oc: OcItem): Promise<Record<string, unknown>> => oauthClientResource(oc, request, org.name))) };
   })
   .post("/api/v2/organizations/:org_name/oauth-clients", async ({ params, body, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const name = typeof attributes.name === "string" ? attributes.name : "";
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
     if (name === "") return unprocessable(set, "Name is required");
     const id = `oc-${crypto.randomUUID()}`;
     const rawServiceProvider = attributes["service-provider"];
@@ -664,8 +664,8 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     if (urlError !== undefined) return unprocessable(set, urlError);
     const apiUrl = typeof apiUrlValue === "string" ? apiUrlValue : null;
     const httpUrl = typeof httpUrlValue === "string" ? httpUrlValue : null;
-    const key = typeof attributes.key === "string" ? attributes.key : null;
-    const secret = typeof attributes.secret === "string" ? attributes.secret : null;
+    const key = typeof attributes["key"] === "string" ? attributes["key"] : null;
+    const secret = typeof attributes["secret"] === "string" ? attributes["secret"] : null;
     const rsaPublicKey = typeof attributes["rsa-public-key"] === "string" ? attributes["rsa-public-key"] : null;
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
@@ -696,20 +696,20 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return { data: await oauthClientResource(created, request) };
   })
   .get("/api/v2/oauth-clients/:oc_id", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params.oc_id ?? "";
+    const ocId = params["oc_id"] ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: await oauthClientResource(oc, request) };
   })
   .patch("/api/v2/oauth-clients/:oc_id", async ({ params, body, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params.oc_id ?? "";
+    const ocId = params["oc_id"] ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const updates: Partial<typeof oauthClients.$inferInsert> = {};
-    if (typeof attributes.name === "string") updates.name = attributes.name;
+    if (typeof attributes["name"] === "string") updates.name = attributes["name"];
     if (attributes["service-provider"] !== undefined) {
       if (typeof attributes["service-provider"] !== "string" || !SERVICE_PROVIDERS.has(attributes["service-provider"])) return unprocessable(set, "Unsupported service provider");
       updates.serviceProvider = attributes["service-provider"];
@@ -732,14 +732,14 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     if (urlError !== undefined) return unprocessable(set, urlError);
     if (attributes["api-url"] !== undefined) updates.apiUrl = typeof requestedApiUrl === "string" ? requestedApiUrl : null;
     if (attributes["http-url"] !== undefined) updates.httpUrl = typeof requestedHttpUrl === "string" ? requestedHttpUrl : null;
-    if (attributes.key !== undefined) updates.key = typeof attributes.key === "string" ? attributes.key : null;
-    if (attributes.secret !== undefined) updates.secret = typeof attributes.secret === "string" ? await encryptSecret(attributes.secret) : null;
+    if (attributes["key"] !== undefined) updates.key = typeof attributes["key"] === "string" ? attributes["key"] : null;
+    if (attributes["secret"] !== undefined) updates.secret = typeof attributes["secret"] === "string" ? await encryptSecret(attributes["secret"]) : null;
     if (attributes["rsa-public-key"] !== undefined) updates.rsaPublicKey = typeof attributes["rsa-public-key"] === "string" ? attributes["rsa-public-key"] : null;
     const serviceProviderChanged = updates.serviceProvider !== undefined && updates.serviceProvider !== oc.serviceProvider;
     const endpointOriginChanged = configuredUrlOriginChanged(oc.apiUrl, requestedApiUrl)
       || configuredUrlOriginChanged(oc.httpUrl, requestedHttpUrl);
     const credentialsInvalidated = serviceProviderChanged || endpointOriginChanged;
-    if (credentialsInvalidated && attributes.secret === undefined) updates.secret = null;
+    if (credentialsInvalidated && attributes["secret"] === undefined) updates.secret = null;
     if (credentialsInvalidated || Object.keys(updates).length > 0) {
       await db.transaction(async (tx): Promise<void> => {
         if (credentialsInvalidated) await tx.delete(oauthTokens).where(eq(oauthTokens.oauthClientId, ocId));
@@ -752,11 +752,11 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return { data: await oauthClientResource(updated, request) };
   })
   .post("/api/v2/oauth-clients/:oc_id/relationships/projects", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params.oc_id ?? "";
+    const ocId = params["oc_id"] ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const projectIds = parseProjectIdentifiers(payload.data);
+    const projectIds = parseProjectIdentifiers(payload["data"]);
     if (projectIds === null) return unprocessable(set, "Projects must be valid project resource identifiers");
     if (!(await validProjectScope(projectIds, oc.orgId))) return unprocessable(set, "One or more projects do not belong to the organization");
     if (projectIds.length > 0) {
@@ -770,11 +770,11 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return {};
   })
   .delete("/api/v2/oauth-clients/:oc_id/relationships/projects", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params.oc_id ?? "";
+    const ocId = params["oc_id"] ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const projectIds = parseProjectIdentifiers(payload.data);
+    const projectIds = parseProjectIdentifiers(payload["data"]);
     if (projectIds === null) return unprocessable(set, "Projects must be valid project resource identifiers");
     if (!(await validProjectScope(projectIds, oc.orgId))) return unprocessable(set, "One or more projects do not belong to the organization");
     if (projectIds.length > 0) {
@@ -787,7 +787,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return {};
   })
   .delete("/api/v2/oauth-clients/:oc_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const ocId = params.oc_id ?? "";
+    const ocId = params["oc_id"] ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     // Serialize against workspace API writes, which take matching shared row
@@ -819,7 +819,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return {};
   })
   .get("/api/v2/oauth-clients/:oc_id/connect", async ({ params, query, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params.oc_id ?? "";
+    const ocId = params["oc_id"] ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) {
       (set as { status: number }).status = 404;
@@ -890,7 +890,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     await pruneOAuthStates();
     const stateId = stringQuery(query, "state");
     const state = await takeOAuthHandshakeState<OAuthHandshakeState>(stateId);
-    if (state?.clientId !== (params.oc_id ?? "")) {
+    if (state?.clientId !== (params["oc_id"] ?? "")) {
       return oauthFlowError(set, 400, "Invalid OAuth Callback", "OAuth state is missing, expired, or invalid");
     }
     if (stringQuery(query, "error") !== "") {
@@ -982,7 +982,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return completeOAuthHandshake(oc, exchanged.accessToken, exchanged.serviceProviderUser, request);
   })
   .get("/api/v2/oauth-clients/:oc_id/oauth-tokens", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const ocId = params.oc_id ?? "";
+    const ocId = params["oc_id"] ?? "";
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ocId) });
     if (oc === undefined || !(await checkOrganizationVcsReadPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const url = new URL(request.url);
@@ -999,7 +999,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return { data: tokenList.map(oauthTokenResource), ...pagination(request, number, size, countRows[0]?.total ?? 0) };
   })
   .get("/api/v2/oauth-tokens/:ot_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const otId = params.ot_id ?? "";
+    const otId = params["ot_id"] ?? "";
     const ot = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, otId) });
     if (ot === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });
@@ -1007,14 +1007,14 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return { data: oauthTokenResource(ot) };
   })
   .patch("/api/v2/oauth-tokens/:ot_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const otId = params.ot_id ?? "";
+    const otId = params["ot_id"] ?? "";
     const ot = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, otId) });
     if (ot === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });
     if (oc === undefined || !(await checkOrganizationPermission(oc.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-vcs-settings"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
-    const attributes = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
     if (attributes["ssh-key"] !== undefined && typeof attributes["ssh-key"] !== "string") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "ssh-key must be a string" }] };
@@ -1030,7 +1030,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     return { data: oauthTokenResource(updated) };
   })
   .delete("/api/v2/oauth-tokens/:ot_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const otId = params.ot_id ?? "";
+    const otId = params["ot_id"] ?? "";
     const ot = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, otId) });
     if (ot === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const oc = await db.query.oauthClients.findFirst({ where: eq(oauthClients.id, ot.oauthClientId) });

@@ -86,9 +86,9 @@ describe("run relationship linkage (audit finding 6)", () => {
     };
     const rels = body.data.relationships;
     expect(rels["policy-checks"]?.data).toEqual([{ id: checkId, type: "policy-checks" }]);
-    expect(rels["policy-checks"]?.links?.related).toBe(`/api/v2/runs/${runId}/policy-checks`);
+    expect(rels["policy-checks"]?.links?.["related"]).toBe(`/api/v2/runs/${runId}/policy-checks`);
     expect(rels["task-stages"]?.data).toEqual([{ id: stageId, type: "task-stages" }]);
-    expect(rels["task-stages"]?.links?.related).toBe(`/api/v2/runs/${runId}/task-stages`);
+    expect(rels["task-stages"]?.links?.["related"]).toBe(`/api/v2/runs/${runId}/task-stages`);
     expect(rels["cost-estimate"]?.data).toEqual({ id: `ce-${runId}`, type: "cost-estimates" });
   });
 

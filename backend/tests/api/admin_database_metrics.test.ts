@@ -45,7 +45,7 @@ describe("admin database metrics (kanban 4.18)", () => {
     expect(body.data.sizeBytes).toBeGreaterThan(0);
     // PostgreSQL has no WAL sidecar to fold (WAL is server-side), so
     // walSizeBytes is null there by design; SQLite reports the -wal size.
-    if ((process.env.DATABASE_URL ?? "").startsWith("postgres")) {
+    if ((process.env["DATABASE_URL"] ?? "").startsWith("postgres")) {
       expect(body.data.walSizeBytes).toBeNull();
     } else {
       expect(typeof body.data.walSizeBytes).toBe("number");

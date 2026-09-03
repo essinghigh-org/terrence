@@ -53,17 +53,17 @@ function encodedEventIdentity(parts: readonly string[]): string {
 }
 
 function gitlabRef(payload: Readonly<Record<string, unknown>>): string | undefined {
-  const attributes = objectValue(payload.object_attributes);
-  return nonEmptyString(payload.ref)
-    ?? nonEmptyString(attributes?.source_branch)
-    ?? nonEmptyString(attributes?.target_branch);
+  const attributes = objectValue(payload["object_attributes"]);
+  return nonEmptyString(payload["ref"])
+    ?? nonEmptyString(attributes?.["source_branch"])
+    ?? nonEmptyString(attributes?.["target_branch"]);
 }
 
 function gitlabEventIdentity(eventName: string, payload: Readonly<Record<string, unknown>>): string | null {
-  const repo = nonEmptyString(objectValue(payload.project)?.path_with_namespace);
+  const repo = nonEmptyString(objectValue(payload["project"])?.["path_with_namespace"]);
   const ref = gitlabRef(payload);
-  const before = nonEmptyString(payload.before);
-  const after = nonEmptyString(payload.checkout_sha) ?? nonEmptyString(payload.after);
+  const before = nonEmptyString(payload["before"]);
+  const after = nonEmptyString(payload["checkout_sha"]) ?? nonEmptyString(payload["after"]);
   return repo !== undefined && ref !== undefined && after !== undefined
     ? encodedEventIdentity(["gitlab", repo, eventName, ref, before ?? "", after])
     : null;
@@ -71,22 +71,22 @@ function gitlabEventIdentity(eventName: string, payload: Readonly<Record<string,
 
 function bitbucketChangeIdentity(value: unknown): string | undefined {
   const change = objectValue(value);
-  const next = objectValue(change?.new);
-  const previous = objectValue(change?.old);
+  const next = objectValue(change?.["new"]);
+  const previous = objectValue(change?.["old"]);
   const reference = next ?? previous;
-  const type = nonEmptyString(reference?.type);
-  const name = nonEmptyString(reference?.name);
-  const nextTarget = objectValue(next?.target);
-  const previousTarget = objectValue(previous?.target);
-  const before = nonEmptyString(previousTarget?.hash);
-  const after = nonEmptyString(nextTarget?.hash);
+  const type = nonEmptyString(reference?.["type"]);
+  const name = nonEmptyString(reference?.["name"]);
+  const nextTarget = objectValue(next?.["target"]);
+  const previousTarget = objectValue(previous?.["target"]);
+  const before = nonEmptyString(previousTarget?.["hash"]);
+  const after = nonEmptyString(nextTarget?.["hash"]);
   if (type === undefined || name === undefined || (before === undefined && after === undefined)) return undefined;
   return encodedEventIdentity([type, name, before ?? "", after ?? ""]);
 }
 
 function bitbucketEventIdentity(eventName: string, payload: Readonly<Record<string, unknown>>): string | null {
-  const repo = nonEmptyString(objectValue(payload.repository)?.full_name);
-  const changes = objectValue(payload.push)?.changes;
+  const repo = nonEmptyString(objectValue(payload["repository"])?.["full_name"]);
+  const changes = objectValue(payload["push"])?.["changes"];
   if (repo === undefined || !Array.isArray(changes) || changes.length === 0) return null;
   const changeIdentities: string[] = [];
   for (const change of changes) {
@@ -243,9 +243,9 @@ export async function retryFailedVcsWebhookDelivery(deliveryId: string): Promise
   if (existing === undefined) return false;
   await setDeliveryStatus(deliveryId, "queued");
   await enqueueVcsWebhookJob({
-    provider: existing.payload.provider as VcsWebhookProvider,
-    eventName: existing.payload.eventName as string,
-    payload: existing.payload.payload as Record<string, unknown>,
+    provider: existing.payload["provider"] as VcsWebhookProvider,
+    eventName: existing.payload["eventName"] as string,
+    payload: existing.payload["payload"] as Record<string, unknown>,
     deliveryId,
     rescheduleRunning: true,
   });

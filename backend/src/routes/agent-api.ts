@@ -265,7 +265,7 @@ async function claimedJobForArtifact(
 
 async function acknowledgeArtifact(ctx: AgentCtx): Promise<unknown> {
   const set = ctx.set as { status?: number };
-  if (await claimedJobForArtifact(ctx, ctx.params.job_id ?? "") === undefined) {
+  if (await claimedJobForArtifact(ctx, ctx.params["job_id"] ?? "") === undefined) {
     set.status = 401;
     return { errors: [{ status: "401", title: "Unauthorized" }] };
   }
@@ -273,7 +273,7 @@ async function acknowledgeArtifact(ctx: AgentCtx): Promise<unknown> {
 }
 
 function storageRoot(): string {
-  return process.env.STORAGE_DIR ?? new URL("../../storage", import.meta.url).pathname;
+  return process.env["STORAGE_DIR"] ?? new URL("../../storage", import.meta.url).pathname;
 }
 
 function sideArtifactPath(runId: string, kind: string, ext: string): string {
@@ -394,35 +394,35 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       set.status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
-    const name = typeof body.name === "string" && body.name !== "" ? body.name : "agent";
-    const arch = typeof body.arch === "string" ? body.arch : null;
+    const name = typeof body["name"] === "string" && body["name"] !== "" ? body["name"] : "agent";
+    const arch = typeof body["arch"] === "string" ? body["arch"] : null;
     if (arch !== null && !AGENT_ARCHITECTURES.has(arch)) {
       set.status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "arch must be amd64, aarch64, arm64, 386, or arm" }] };
     }
     const version = ctx.request.headers.get("tfc-agent-version");
-    const accept = typeof body.accept === "string" && body.accept !== "" ? body.accept : DEFAULT_AGENT_ACCEPT;
+    const accept = typeof body["accept"] === "string" && body["accept"] !== "" ? body["accept"] : DEFAULT_AGENT_ACCEPT;
     if (accept !== "none" && (!/^[a-z_]+(?:,[a-z_]+)*$/.test(accept) || accept.split(",").some((value): boolean => !AGENT_WORKLOAD_TYPES.includes(value)))) {
       set.status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "accept contains an unsupported workload type" }] };
     }
-    const requestForwarding = body.request_forwarding === true;
-    const hyok = body.hyok === true;
+    const requestForwarding = body["request_forwarding"] === true;
+    const hyok = body["hyok"] === true;
     // tfc-agent never sends iac-binaries; terrence-agent declares it so the
     // claim path only hands it matching jobs. Absent means terraform-only,
     // preserving the pre-capability contract.
     let iacBinaries: string[] = ["terraform"];
-    if (body.iac_binaries !== undefined) {
+    if (body["iac_binaries"] !== undefined) {
       if (
-        !Array.isArray(body.iac_binaries)
-        || body.iac_binaries.length === 0
-        || body.iac_binaries.some((binary: unknown): boolean =>
+        !Array.isArray(body["iac_binaries"])
+        || body["iac_binaries"].length === 0
+        || body["iac_binaries"].some((binary: unknown): boolean =>
           typeof binary !== "string" || (binary !== "tofu" && binary !== "terraform"))
       ) {
         set.status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "iac-binaries must be a non-empty array of 'tofu' or 'terraform'" }] };
       }
-      iacBinaries = [...new Set(body.iac_binaries as string[])];
+      iacBinaries = [...new Set(body["iac_binaries"] as string[])];
     }
 
     const now = Date.now();
@@ -475,20 +475,20 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       set.status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
-    const status = typeof body.status === "string" ? body.status : "idle";
+    const status = typeof body["status"] === "string" ? body["status"] : "idle";
     const now = Date.now();
 
-    const jobPayload = typeof body.job === "object" && body.job !== null ? body.job as Record<string, unknown> : null;
-    const jobStatus = jobPayload === null ? null : jobPayload.status;
-    const jobData = jobPayload !== null && typeof jobPayload.data === "object" && jobPayload.data !== null
-      ? jobPayload.data as Record<string, unknown>
+    const jobPayload = typeof body["job"] === "object" && body["job"] !== null ? body["job"] as Record<string, unknown> : null;
+    const jobStatus = jobPayload === null ? null : jobPayload["status"];
+    const jobData = jobPayload !== null && typeof jobPayload["data"] === "object" && jobPayload["data"] !== null
+      ? jobPayload["data"] as Record<string, unknown>
       : null;
-    const runId = jobData !== null && typeof jobData.run_id === "string" ? jobData.run_id : null;
-    const operation = jobData !== null && typeof jobData.operation === "string" ? jobData.operation : null;
+    const runId = jobData !== null && typeof jobData["run_id"] === "string" ? jobData["run_id"] : null;
+    const operation = jobData !== null && typeof jobData["operation"] === "string" ? jobData["operation"] : null;
 
     if ((jobStatus === "finished" || jobStatus === "errored") && jobPayload !== null && runId !== null) {
       const fencingToken = parseAgentFencingToken(
-        jobData?.fencing_token ?? ctx.request.headers.get("tfc-agent-fencing-token"),
+        jobData?.["fencing_token"] ?? ctx.request.headers.get("tfc-agent-fencing-token"),
       );
       // Completion signal: the agent finished (or failed) its claimed job.
       const phase = operation === "apply" ? "apply" : "plan";
@@ -504,7 +504,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
             ),
           });
       if (job !== undefined && fencingToken !== undefined) {
-        const errorMessage = typeof jobPayload.error === "string" ? jobPayload.error : null;
+        const errorMessage = typeof jobPayload["error"] === "string" ? jobPayload["error"] : null;
         const result: Record<string, unknown> = {};
         if (jobData !== null) {
           for (const key of ["has_changes", "generated_configuration", "resource_additions",
@@ -513,9 +513,9 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
             if (jobData[key] !== undefined) result[key] = jobData[key];
           }
         }
-        const statePayload = jsonStringOrNull(jobData?.state);
-        const jsonState = jsonStringOrNull(jobData?.json_state);
-        const jsonStateOutputs = jsonStringOrNull(jobData?.json_state_outputs);
+        const statePayload = jsonStringOrNull(jobData?.["state"]);
+        const jsonState = jsonStringOrNull(jobData?.["json_state"]);
+        const jsonStateOutputs = jsonStringOrNull(jobData?.["json_state_outputs"]);
         if (statePayload === undefined || jsonState === undefined || jsonStateOutputs === undefined) {
           set.status = 422;
           return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Agent state payload must be valid JSON strings" }] };
@@ -532,15 +532,15 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
           statePayload,
           jsonState,
           jsonStateOutputs,
-          resourceAdditions: numberOrNull(result.resource_additions),
-          resourceChanges: numberOrNull(result.resource_changes),
-          resourceDestructions: numberOrNull(result.resource_destructions),
-          resourceImports: numberOrNull(result.resource_imports),
+          resourceAdditions: numberOrNull(result["resource_additions"]),
+          resourceChanges: numberOrNull(result["resource_changes"]),
+          resourceDestructions: numberOrNull(result["resource_destructions"]),
+          resourceImports: numberOrNull(result["resource_imports"]),
         };
         const completed = await completeAgentJob(agent.id, job.id, fencingToken, completion);
         if (completed === undefined) return fencingConflict(set);
       } else {
-        const explicitStackJobId = jobData !== null && typeof jobData.stack_job_id === "string" ? jobData.stack_job_id : null;
+        const explicitStackJobId = jobData !== null && typeof jobData["stack_job_id"] === "string" ? jobData["stack_job_id"] : null;
         const stackJob = explicitStackJobId !== null
           ? await db.query.stackAgentJobs.findFirst({
               where: and(
@@ -574,7 +574,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
               result[key] = value;
             }
           }
-          const completed = await completeStackAgentJob(agent.id, stackJob.id, { status: jobStatus === "finished" ? "completed" : "errored", errorMessage: typeof jobPayload.error === "string" ? jobPayload.error : null, result });
+          const completed = await completeStackAgentJob(agent.id, stackJob.id, { status: jobStatus === "finished" ? "completed" : "errored", errorMessage: typeof jobPayload["error"] === "string" ? jobPayload["error"] : null, result });
           if (completed === undefined) return fencingConflict(set);
         } else {
           return fencingConflict(set);
@@ -584,7 +584,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
     } else {
       const agentStatus = status === "busy" ? "busy" : status === "exited" ? "exited" : "idle";
       await db.update(agents).set({ status: agentStatus, lastPingAt: now }).where(eq(agents.id, agent.id));
-      const explicitStackJobId = jobData !== null && typeof jobData.stack_job_id === "string" ? jobData.stack_job_id : null;
+      const explicitStackJobId = jobData !== null && typeof jobData["stack_job_id"] === "string" ? jobData["stack_job_id"] : null;
       const stackPhase = operation === "apply" || operation === "plan" ? operation : undefined;
       const stackJob = explicitStackJobId === null
         ? await activeStackJobForStatus(agent.id, stackPhase)
@@ -612,9 +612,9 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const version = process.env.TERRENCE_AGENT_UPDATE_VERSION?.trim() ?? "";
-    const url = process.env.TERRENCE_AGENT_UPDATE_URL?.trim() ?? "";
-    const sha256 = process.env.TERRENCE_AGENT_UPDATE_SHA256?.trim().toLowerCase() ?? "";
+    const version = process.env["TERRENCE_AGENT_UPDATE_VERSION"]?.trim() ?? "";
+    const url = process.env["TERRENCE_AGENT_UPDATE_URL"]?.trim() ?? "";
+    const sha256 = process.env["TERRENCE_AGENT_UPDATE_SHA256"]?.trim().toLowerCase() ?? "";
     if (version === "" || !URL.canParse(url) || !/^[0-9a-f]{64}$/.test(sha256)) {
       set.status = 204;
       return undefined;
@@ -702,19 +702,19 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const body = await jsonBodyValue(ctx);
-    const responseStatus = typeof body?.status === "number" && Number.isInteger(body.status) && body.status >= 100 && body.status <= 599 ? body.status : null;
+    const responseStatus = typeof body?.["status"] === "number" && Number.isInteger(body["status"]) && body["status"] >= 100 && body["status"] <= 599 ? body["status"] : null;
     // A forwarded response without a body is valid (204 No Content, 304 Not
     // Modified, HEAD responses). Only require responseStatus; default an
     // omitted body to "" so these responses are not rejected as 422 while a
     // non-string body (a malformed payload) still fails loudly.
-    const rawResponseBody = body?.body;
+    const rawResponseBody = body?.["body"];
     if (typeof rawResponseBody === "string" && rawResponseBody.length > MAX_FORWARDED_RESPONSE_BASE64_BYTES) {
       set.status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Forwarded response body exceeds the size limit" }] };
     }
     const responseBody = typeof rawResponseBody === "string" ? rawResponseBody : rawResponseBody === undefined ? "" : null;
-    const errorMessage = typeof body?.error === "string" ? body.error.slice(0, 2_000) : null;
-    const rawHeaders = body?.headers;
+    const errorMessage = typeof body?.["error"] === "string" ? body["error"].slice(0, 2_000) : null;
+    const rawHeaders = body?.["headers"];
     const responseHeaders: Record<string, string[]> = {};
     if (rawHeaders !== null && typeof rawHeaders === "object" && !Array.isArray(rawHeaders)) {
       for (const [name, values] of Object.entries(rawHeaders as Record<string, unknown>)) {
@@ -743,7 +743,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       headers: {},
       body: null,
     }).where(and(
-      eq(agentForwardedRequests.id, ctx.params.request_id ?? ""),
+      eq(agentForwardedRequests.id, ctx.params["request_id"] ?? ""),
       eq(agentForwardedRequests.agentId, agent.id),
       eq(agentForwardedRequests.status, "claimed"),
     )).returning({ id: agentForwardedRequests.id });
@@ -830,7 +830,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const job = await db.query.agentJobs.findFirst({
-      where: and(eq(agentJobs.id, ctx.params.job_id ?? ""), eq(agentJobs.agentId, agent.id)),
+      where: and(eq(agentJobs.id, ctx.params["job_id"] ?? ""), eq(agentJobs.agentId, agent.id)),
     });
     if (job === undefined) {
       set.status = 404;
@@ -844,9 +844,9 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
   .get("/api/agent/stack-jobs/:job_id/configuration", async (ctx: AgentCtx): Promise<unknown> => {
     const set = ctx.set as { status?: number; headers?: Record<string, string | number> };
     const agent = await agentFromRequest(ctx);
-    const claimed = agent === undefined ? undefined : await findClaimedStackAgentJob(agent.id, ctx.params.job_id ?? "");
-    const runArchivePath = typeof (claimed?.deploymentRun.payload ?? {}).archivePath === "string" ? (claimed?.deploymentRun.payload ?? {}).archivePath as string : null;
-    const configurationArchivePath = typeof (claimed?.configuration.payload ?? {}).archivePath === "string" ? (claimed?.configuration.payload ?? {}).archivePath as string : null;
+    const claimed = agent === undefined ? undefined : await findClaimedStackAgentJob(agent.id, ctx.params["job_id"] ?? "");
+    const runArchivePath = typeof (claimed?.deploymentRun.payload ?? {})["archivePath"] === "string" ? (claimed?.deploymentRun.payload ?? {})["archivePath"] as string : null;
+    const configurationArchivePath = typeof (claimed?.configuration.payload ?? {})["archivePath"] === "string" ? (claimed?.configuration.payload ?? {})["archivePath"] as string : null;
     const archivePath = runArchivePath ?? configurationArchivePath;
     if (claimed === undefined || archivePath === null || !isStackStoragePath(archivePath) || !(await Bun.file(archivePath).exists())) {
       set.status = agent === undefined ? 401 : 404;
@@ -859,7 +859,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
   // --- Artifact endpoints (agent-token + claimed-job scoped) ----------------
   .get("/api/agent/jobs/:job_id/configuration-version", async (ctx: AgentCtx): Promise<unknown> => {
     const set = ctx.set as { status?: number; headers?: Record<string, string | number> };
-    const details = await claimedJobForArtifact(ctx, ctx.params.job_id ?? "");
+    const details = await claimedJobForArtifact(ctx, ctx.params["job_id"] ?? "");
     if (details === undefined) {
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
@@ -888,7 +888,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
 
   .get("/api/agent/jobs/:job_id/filesystem", async (ctx: AgentCtx): Promise<unknown> => {
     const set = ctx.set as { status?: number; headers?: Record<string, string | number> };
-    const details = await claimedJobForArtifact(ctx, ctx.params.job_id ?? "");
+    const details = await claimedJobForArtifact(ctx, ctx.params["job_id"] ?? "");
     if (details === undefined) {
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
@@ -905,7 +905,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
 
   .put("/api/agent/jobs/:job_id/filesystem", async (ctx: AgentCtx): Promise<unknown> => {
     const set = ctx.set as { status?: number };
-    const details = await claimedJobForArtifact(ctx, ctx.params.job_id ?? "");
+    const details = await claimedJobForArtifact(ctx, ctx.params["job_id"] ?? "");
     if (details === undefined) {
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
@@ -933,7 +933,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
 
   .put("/api/agent/jobs/:job_id/plan-json", async (ctx: AgentCtx): Promise<unknown> => {
     const set = ctx.set as { status?: number };
-    const details = await claimedJobForArtifact(ctx, ctx.params.job_id ?? "");
+    const details = await claimedJobForArtifact(ctx, ctx.params["job_id"] ?? "");
     if (details === undefined || details.job.phase !== "plan") {
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
@@ -979,7 +979,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
 
 async function appendLog(ctx: AgentCtx): Promise<unknown> {
   const set = ctx.set as { status?: number };
-  const details = await claimedJobForArtifact(ctx, ctx.params.job_id ?? "");
+  const details = await claimedJobForArtifact(ctx, ctx.params["job_id"] ?? "");
   if (details === undefined) {
     set.status = 401;
     return { errors: [{ status: "401", title: "Unauthorized" }] };
@@ -1006,7 +1006,7 @@ async function appendLog(ctx: AgentCtx): Promise<unknown> {
 
 async function storeSideArtifact(ctx: AgentCtx, kind: string, ext: string): Promise<unknown> {
   const set = ctx.set as { status?: number };
-  const details = await claimedJobForArtifact(ctx, ctx.params.job_id ?? "");
+  const details = await claimedJobForArtifact(ctx, ctx.params["job_id"] ?? "");
   if (details === undefined) {
     set.status = 401;
     return { errors: [{ status: "401", title: "Unauthorized" }] };
