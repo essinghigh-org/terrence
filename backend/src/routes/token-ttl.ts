@@ -34,19 +34,19 @@ function ttlResource(r: TtlRow): Record<string, unknown> {
 export const tokenTtlRoutes = new Elysia({ name: "token-ttl" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/token-ttl-policies", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-organization-access"))) return notFound(set);
     const rows = await db.query.orgTokenTTLPolicies.findMany({ where: eq(orgTokenTTLPolicies.orgId, org.id) });
     return { data: rows.map((r: TtlRow): Record<string, unknown> => ttlResource(r)) };
   })
   .patch("/api/v2/organizations/:org_name/token-ttl-policies", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-organization-access"))) return notFound(set);
     const root = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = root.data !== null && typeof root.data === "object" ? root.data as Record<string, unknown> : {};
-    const attributes = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : undefined;
+    const data = root["data"] !== null && typeof root["data"] === "object" ? root["data"] as Record<string, unknown> : {};
+    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : undefined;
     if (attributes === undefined) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "missing data.attributes" }] };

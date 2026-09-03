@@ -60,13 +60,13 @@ const changeInput = (element: HTMLElement, value: string): void => {
 
 
 test("logs in without persisting the access token and navigates home", async () => {
-  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     const url = getUrlString(input);
     if (url === "/api/v2/ping") return json({});
     if (url === "/api/v2/users/login") return json({ data: { attributes: { token: "user-token" } } });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/login"]}>
@@ -90,7 +90,7 @@ test("logs in without persisting the access token and navigates home", async () 
   expect(localStorage.getItem("tfe_refreshable_session")).toBeNull();
   expect(isRefreshableSession()).toBe(true);
   expect(getAuthToken()).toBe("user-token");
-  const loginCall = fetchMock.mock.calls.find(([input]: [string | URL | Request]): boolean =>
+  const loginCall = fetchMock.mock.calls.find(([input]): boolean =>
     getUrlString(input) === "/api/v2/users/login");
   expect(loginCall).toBeDefined();
 // SAFETY: the captured call init is the RequestInit the component passed to fetch.
@@ -117,7 +117,7 @@ test("creates a workspace from the modal", async () => {
   const onCreated = mock((): void => {
     // Intentional callback mock
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   const view = render(
     <CreateWorkspaceModal
       orgName="acme"
@@ -175,7 +175,7 @@ test("creates a workspace from the modal", async () => {
 
 test("opens workspace creation from the workspace list", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     if (getUrlString(input) === "/api/v2/organizations/acme") {
       return json({
         data: {
@@ -188,7 +188,7 @@ test("opens workspace creation from the workspace list", async () => {
       });
     }
     return json({ data: [] });
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
       <Routes>
@@ -207,7 +207,7 @@ test("opens workspace creation from the workspace list", async () => {
 });
 
 test("rejects a partially configured workspace VCS connection", async () => {
-  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     const url = getUrlString(input);
     if (url === "/api/v2/organizations/acme/github-app/installations") {
       return json({ data: [{ id: "ghain-123", attributes: { name: "Acme GitHub" } }] });
@@ -215,7 +215,7 @@ test("rejects a partially configured workspace VCS connection", async () => {
     if (url === "/api/v2/organizations/acme/oauth-clients") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   const view = render(
     <>
       <Toaster />
@@ -247,7 +247,7 @@ test("rejects a partially configured workspace VCS connection", async () => {
 
 test("does not report a successful latest run for a workspace with no runs", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = getUrlString(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
       return json({
@@ -259,7 +259,7 @@ test("does not report a successful latest run for a workspace with no runs", asy
     }
     if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") return json({ data: [] });
     return json({ data: [] });
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
@@ -318,7 +318,7 @@ test("creates, edits, and deletes a workspace variable", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   globalThis.confirm = mock((): boolean => true);
 
   const view = render(
@@ -411,7 +411,7 @@ test("updates workspace execution and auto-apply settings", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
@@ -498,7 +498,7 @@ test("assigns an SSH key and enables workspace health assessments", async () => 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const tree = (section: WorkspaceSection): React.JSX.Element => (
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
@@ -638,7 +638,7 @@ test("manages workspace run triggers and custom team access", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   globalThis.confirm = mock((): boolean => true);
 
   const tree = (section: WorkspaceSection): React.JSX.Element => (
@@ -750,7 +750,7 @@ test("creates, verifies, edits, and deletes a workspace notification", async () 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   globalThis.confirm = mock((): boolean => true);
 
   const view = render(
@@ -857,7 +857,7 @@ test("shows effective policy sets and manages workspace VCS settings", async () 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   globalThis.confirm = mock((): boolean => true);
 
   const tree = (section: WorkspaceSection): React.JSX.Element => (
@@ -929,7 +929,7 @@ test("shows effective policy sets and manages workspace VCS settings", async () 
 });
 
 test("displays run cost and policy check results", async () => {
-  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     const url = getUrlString(input);
     if (url === "/api/v2/runs/run-policy") {
       return json({
@@ -977,7 +977,7 @@ test("displays run cost and policy check results", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-policy"]}>
@@ -1004,7 +1004,7 @@ test("displays run cost and policy check results", async () => {
 
 test("keeps advisory policy failures non-blocking and names the policy", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = getUrlString(input);
     if (url === "/api/v2/runs/run-advisory") {
       return json({
@@ -1074,7 +1074,7 @@ test("keeps advisory policy failures non-blocking and names the policy", async (
     }
     if (url.endsWith("/cost-estimate")) return json({ data: null });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-advisory"]}>
@@ -1133,7 +1133,7 @@ test("queues a run, displays its logs, and applies it", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const list = render(
     <MemoryRouter>
@@ -1145,7 +1145,7 @@ test("queues a run, displays its logs, and applies it", async () => {
     </MemoryRouter>,
   );
   await waitFor((): void => { expect(list.getByText("There is no run history for this workspace.")).toBeTruthy(); });
-  fireEvent.click(list.getAllByRole("button", { name: "Start new run" })[0]);
+  fireEvent.click(list.getAllByRole("button", { name: "Start new run" })[0]!);
   await waitFor((): void => { expect(list.getByText("Configure and start a new run for this workspace.")).toBeTruthy(); });
   fireEvent.click(list.getByRole("button", { name: "Start run" }));
   await waitFor((): void => { expect(list.getByText("Queued manually via UI")).toBeTruthy(); });
@@ -1182,7 +1182,7 @@ type VarSetItem = {
   };
   readonly relationships: {
     readonly workspaces: {
-      readonly data: readonly { readonly id: string; readonly type: string }[];
+      data: { readonly id: string; readonly type: string }[];
     };
   };
 };
@@ -1375,7 +1375,7 @@ test("keeps variable sets readable without workspace management permission", asy
     }
     throw new Error(`Unexpected request: ${url} ${init?.method ?? "GET"}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/variable-sets"]}>
@@ -1402,7 +1402,7 @@ test("keeps variable sets readable without workspace management permission", asy
 
 test("creates variable sets and toggles global scope", async () => {
   const { fetchMock } = createVarsetsFetchMock();
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/variable-sets"]}>
@@ -1466,7 +1466,7 @@ test("creates variable sets and toggles global scope", async () => {
 
 test("manages workspace attachments for variable sets", async () => {
   const { fetchMock } = createVarsetsFetchMock();
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/variable-sets"]}>
@@ -1502,7 +1502,7 @@ test("manages workspace attachments for variable sets", async () => {
 
 test("manages variables inside a variable set", async () => {
   const { fetchMock } = createVarsetsFetchMock();
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/variable-sets"]}>
@@ -1585,7 +1585,7 @@ test("manages variables inside a variable set", async () => {
 
 test("deletes variable sets", async () => {
   const { fetchMock } = createVarsetsFetchMock();
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/variable-sets"]}>

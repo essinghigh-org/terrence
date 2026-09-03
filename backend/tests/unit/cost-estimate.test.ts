@@ -130,7 +130,7 @@ describe("parseInfracostOutput", () => {
       { totalMonthlyCost: "10", projects: [], summary: {}, currency: "GBP" },
       timestamps,
     );
-    expect((result.resources as Record<string, unknown>).currency).toBe("GBP");
+    expect((result.resources as Record<string, unknown>)["currency"]).toBe("GBP");
   });
 
   it("handles project-level breakdown resources", () => {

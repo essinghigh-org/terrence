@@ -118,7 +118,7 @@ const MAX_INVALID_COMPLETION_REQUEUES = 3;
 
 export function configuredHeartbeatTimeoutMs(): number {
   const configured = Number(
-    process.env.AGENT_HEARTBEAT_TIMEOUT_MS ?? DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS,
+    process.env["AGENT_HEARTBEAT_TIMEOUT_MS"] ?? DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS,
   );
   return Number.isFinite(configured) && configured > 0
     ? configured
@@ -305,7 +305,7 @@ function agentPolicyResults(
     if (typeof rawCheck !== "object" || rawCheck === null || Array.isArray(rawCheck)) continue;
     const check = rawCheck as Record<string, unknown>;
     const policyId = check["policy-id"];
-    const status = check.status;
+    const status = check["status"];
     if (
       typeof policyId !== "string"
       || !["passed", "failed", "errored", "unreachable"].includes(
@@ -318,7 +318,7 @@ function agentPolicyResults(
       continue;
     }
     if (duplicates.has(policyId)) continue;
-    const checkResult = check.result;
+    const checkResult = check["result"];
     reported.set(policyId, {
       status: status as string,
       result: typeof checkResult === "object" && checkResult !== null && !Array.isArray(checkResult)

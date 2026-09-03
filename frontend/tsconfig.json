@@ -6,8 +6,9 @@
     }
   },
   "files": [],
+  // Only the composite app project builds with `tsc -b`; the check-only
+  // tools project (tests) runs via `tsc --noEmit -p` in the typecheck script.
   "references": [
-    { "path": "./tsconfig.app.json" },
-    { "path": "./tsconfig.tools.json" }
+    { "path": "./tsconfig.app.json" }
   ]
 }

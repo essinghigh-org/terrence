@@ -398,7 +398,7 @@ describe("team token workspace authorization", () => {
       const data = (body as { data: { id: string } }).data;
       expect(data.id).toBe(workspaceId);
       const relationships = (body as { data: { relationships: Record<string, unknown> } }).data.relationships;
-      expect(relationships.outputs).toMatchObject({
+      expect(relationships["outputs"]).toMatchObject({
         data: [
           { id: expect.any(String), type: "workspace-outputs" },
         ],

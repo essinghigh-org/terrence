@@ -39,11 +39,11 @@ function validHmacOAuth1Request(
   expected: Readonly<Record<string, string>>,
 ): boolean {
   const parameters = oauthHeaderParameters(header);
-  const signature = parameters.oauth_signature;
-  delete parameters.oauth_signature;
+  const signature = parameters["oauth_signature"];
+  delete parameters["oauth_signature"];
   if (
     signature === undefined
-    || parameters.oauth_signature_method !== "HMAC-SHA1"
+    || parameters["oauth_signature_method"] !== "HMAC-SHA1"
     || Object.entries(expected).some(([key, value]): boolean => parameters[key] !== value)
   ) return false;
 
@@ -90,13 +90,13 @@ describe("VCS OAuth handshakes", () => {
     const waiting = privateVcsUrlLock;
     privateVcsUrlLock = new Promise<void>((resolve): void => { release = resolve; });
     await waiting;
-    const previous = process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS;
-    process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS = "1";
+    const previous = process.env["TERRENCE_ALLOW_PRIVATE_VCS_URLS"];
+    process.env["TERRENCE_ALLOW_PRIVATE_VCS_URLS"] = "1";
     try {
       return await operation();
     } finally {
-      if (previous === undefined) delete process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS;
-      else process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS = previous;
+      if (previous === undefined) delete process.env["TERRENCE_ALLOW_PRIVATE_VCS_URLS"];
+      else process.env["TERRENCE_ALLOW_PRIVATE_VCS_URLS"] = previous;
       release();
     }
   };
@@ -132,10 +132,10 @@ describe("VCS OAuth handshakes", () => {
         if (url.pathname === "/plugins/servlet/oauth/request-token") {
           const oauth = oauthHeaderParameters(request.headers.get("authorization"));
           if (
-            oauth.oauth_consumer_key !== "bitbucket-dc-key"
-            || typeof oauth.oauth_callback !== "string"
+            oauth["oauth_consumer_key"] !== "bitbucket-dc-key"
+            || typeof oauth["oauth_callback"] !== "string"
             || !validHmacOAuth1Request(request.method, request.url, request.headers.get("authorization"), "", {
-              oauth_callback: oauth.oauth_callback,
+              oauth_callback: oauth["oauth_callback"],
               oauth_consumer_key: "bitbucket-dc-key",
             })
           ) return new Response("invalid signature", { status: 401 });
@@ -247,12 +247,12 @@ describe("VCS OAuth handshakes", () => {
     await putOAuthHandshakeState(id, Date.now() + 60_000, { requestTokenSecret: forged });
 
     const stored = await db.query.oauthHandshakeStates.findFirst({ where: eq(oauthHandshakeStates.id, id) });
-    const storedSecret = (stored?.payload as Record<string, unknown> | undefined)?.requestTokenSecret;
+    const storedSecret = (stored?.payload as Record<string, unknown> | undefined)?.["requestTokenSecret"];
     expect(typeof storedSecret).toBe("string");
     expect(storedSecret).not.toBe(forged);
     expect(isEncryptedSecret(storedSecret as string)).toBeTrue();
     expect(await decryptSecret(storedSecret as string)).toBe(forged);
-    expect((await takeOAuthHandshakeState(id))?.requestTokenSecret).toBe(forged);
+    expect((await takeOAuthHandshakeState(id))?.["requestTokenSecret"]).toBe(forged);
   });
 
   test("enforces organization and project scope before redirecting", async () => {
@@ -358,10 +358,10 @@ describe("VCS OAuth handshakes", () => {
     const requestTokenCall = providerRequests.findLast((item): boolean =>
       item.path === "/plugins/servlet/oauth/request-token");
     const requestTokenOAuth = oauthHeaderParameters(requestTokenCall?.authorization ?? null);
-    expect(requestTokenOAuth.oauth_signature_method).toBe("HMAC-SHA1");
-    expect(requestTokenOAuth.oauth_nonce).not.toBeEmpty();
-    expect(requestTokenOAuth.oauth_timestamp).toMatch(/^\d+$/);
-    const callbackUrl = requestTokenOAuth.oauth_callback;
+    expect(requestTokenOAuth["oauth_signature_method"]).toBe("HMAC-SHA1");
+    expect(requestTokenOAuth["oauth_nonce"]).not.toBeEmpty();
+    expect(requestTokenOAuth["oauth_timestamp"]).toMatch(/^\d+$/);
+    const callbackUrl = requestTokenOAuth["oauth_callback"];
     if (callbackUrl === undefined) throw new Error("Provider request did not include an OAuth callback");
     const providerCallback = new URL(callbackUrl);
     const state = providerCallback.searchParams.get("state");
@@ -370,7 +370,7 @@ describe("VCS OAuth handshakes", () => {
       where: eq(oauthHandshakeStates.id, state!),
     });
     const storedHandshakePayload = storedHandshake?.payload as Record<string, unknown> | undefined;
-    const storedRequestTokenSecret = storedHandshakePayload?.requestTokenSecret;
+    const storedRequestTokenSecret = storedHandshakePayload?.["requestTokenSecret"];
     expect(typeof storedRequestTokenSecret).toBe("string");
     expect(isEncryptedSecret(typeof storedRequestTokenSecret === "string" ? storedRequestTokenSecret : "")).toBeTrue();
 

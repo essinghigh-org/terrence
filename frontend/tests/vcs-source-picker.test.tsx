@@ -63,7 +63,7 @@ test("creates a VCS workspace from choices listed for a manage-workspaces-only s
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <CreateWorkspaceModal
@@ -171,7 +171,7 @@ test("switches an existing workspace to a registered OAuth connection", async ()
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/settings/version-control"]}>
@@ -231,7 +231,7 @@ test("keeps local workspace creation independent from VCS connections", async ()
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <CreateWorkspaceModal
@@ -250,16 +250,13 @@ test("keeps local workspace creation independent from VCS connections", async ()
   fireEvent.click(view.getByRole("button", { name: "Create Workspace" }));
 
   await waitFor((): void => {
-    expect(fetchMock.mock.calls.some((call: readonly [string | URL | Request, RequestInit?]): boolean => {
-      const input = call[0];
-      const init = call[1];
-      return requestUrl(input) === "/api/v2/organizations/acme/workspaces" && init?.method === "POST";
-    })).toBe(true);
+    expect(fetchMock.mock.calls.some(([input, init]): boolean =>
+      requestUrl(input) === "/api/v2/organizations/acme/workspaces" && init?.method === "POST")).toBe(true);
   });
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
   const attributes = (createBody as {
     data: { attributes: JsonObject };
   }).data.attributes;
-  expect(attributes.source).toBe("local");
+  expect(attributes["source"]).toBe("local");
   expect(Object.hasOwn(attributes, "vcs-repo")).toBe(false);
 });

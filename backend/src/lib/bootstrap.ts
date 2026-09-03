@@ -6,9 +6,9 @@ import { checkPasswordPolicy, loadPasswordPolicy } from "./password-policy";
 import { lockFirstUserElection } from "../db/first-user";
 
 function consumeAdminPassword(): string | null {
-  const password = process.env.ADMIN_PASSWORD;
+  const password = process.env["ADMIN_PASSWORD"];
   if (password === undefined || password === "") return null;
-  delete process.env.ADMIN_PASSWORD;
+  delete process.env["ADMIN_PASSWORD"];
   return password;
 }
 
@@ -22,9 +22,9 @@ function validateBootstrapPassword(password: string, username: string): void {
 
 function resolveBootstrapIdentity(username: string): { username: string; email: string | null; organizationName: string } {
   if (username === "") throw new Error("ADMIN_USERNAME cannot be empty");
-  const configuredEmail = process.env.ADMIN_EMAIL?.trim();
+  const configuredEmail = process.env["ADMIN_EMAIL"]?.trim();
   const email = configuredEmail === undefined || configuredEmail === "" ? null : configuredEmail;
-  const organizationName = (process.env.ADMIN_ORGANIZATION ?? "default").trim();
+  const organizationName = (process.env["ADMIN_ORGANIZATION"] ?? "default").trim();
   if (organizationName === "") throw new Error("ADMIN_ORGANIZATION cannot be empty");
   return { username, email, organizationName };
 }
@@ -35,7 +35,7 @@ export async function bootstrapInitialAdmin(): Promise<"created" | "disabled" | 
 
   const userCount = (await db.select({ value: count() }).from(users))[0]?.value ?? 0;
   if (userCount > 0) return "skipped";
-  const bootstrapUsername = (process.env.ADMIN_USERNAME ?? "admin").trim();
+  const bootstrapUsername = (process.env["ADMIN_USERNAME"] ?? "admin").trim();
   validateBootstrapPassword(password, bootstrapUsername);
 
   const { username, email, organizationName } = resolveBootstrapIdentity(bootstrapUsername);

@@ -9,7 +9,7 @@ import { authPlugin } from "../auth";
 import { assertArchiveExpandedSize } from "../lib/archive";
 import { persistUploadBody } from "../lib/upload-body";
 
-const rawStorageDir = process.env.STORAGE_DIR;
+const rawStorageDir = process.env["STORAGE_DIR"];
 const storageDir = typeof rawStorageDir === "string" && rawStorageDir !== "" ? rawStorageDir : join(import.meta.dir, "../storage");
 const CV_STORAGE_DIR = join(storageDir, "cv");
 
@@ -85,7 +85,7 @@ function configurationVersionResource(
 export const configurationVersionRoutes = new Elysia({ name: "configurationVersions" })
   .use(authPlugin)
   .get("/api/v2/workspaces/:workspace_id/configuration-versions", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params.workspace_id ?? "";
+    const workspaceId = params["workspace_id"] ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const { number, size } = pageRequest(request);
@@ -99,20 +99,20 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
 
   })
   .post("/api/v2/workspaces/:workspace_id/configuration-versions", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params.workspace_id ?? "";
+    const workspaceId = params["workspace_id"] ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "plan");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot create configuration versions" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
 
     const id = `cv-${crypto.randomUUID()}`;
-    const speculative = typeof attributes.speculative === "boolean" ? attributes.speculative : false;
-    const provisional = typeof attributes.provisional === "boolean" ? attributes.provisional : false;
+    const speculative = typeof attributes["speculative"] === "boolean" ? attributes["speculative"] : false;
+    const provisional = typeof attributes["provisional"] === "boolean" ? attributes["provisional"] : false;
     // The Terraform/OpenTofu CLI does not send a source attribute; detect it
     // from the User-Agent so CLI-driven runs show "Triggered via CLI" like the reference format.
-    let source = typeof attributes.source === "string" ? attributes.source : "";
+    let source = typeof attributes["source"] === "string" ? attributes["source"] : "";
     if (source === "") {
       const agent = request.headers.get("user-agent") ?? "";
       source = /^(?:terraform|tofu|terragrunt)\//i.test(agent.trim()) ? "tfe-cli" : "tfe-api";
@@ -147,7 +147,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     return { data: configurationVersionResource(cv, request, true) };
   })
   .get("/api/v2/configuration-versions/:cv_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const cvId = params.cv_id ?? "";
+    const cvId = params["cv_id"] ?? "";
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
     if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, orgId, teamId);
@@ -155,7 +155,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     return { data: configurationVersionResource(cv, request) };
   })
   .put("/api/v2/configuration-versions/:cv_id/upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const cvId = params.cv_id ?? "";
+    const cvId = params["cv_id"] ?? "";
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
     const path = `/api/v2/configuration-versions/${cvId}/upload`;
     if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -256,7 +256,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     return { data: { id: cvId, type: "configuration-versions", attributes: { status: "uploaded" } } };
   })
   .post("/api/v2/configuration-versions/:cv_id/actions/archive", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const cvId = params.cv_id ?? "";
+    const cvId = params["cv_id"] ?? "";
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
     if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, orgId, teamId, "admin");
@@ -286,7 +286,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     return {};
   })
   .get("/api/v2/configuration-versions/:cv_id/download", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const cvId = params.cv_id ?? "";
+    const cvId = params["cv_id"] ?? "";
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
     if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, orgId, teamId);
@@ -302,7 +302,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     return Bun.file(cv.archivePath);
   })
   .get("/api/v2/runs/:run_id/configuration-version/download", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const run = await db.query.runs.findFirst({ where: eq(runs.id, params.run_id ?? "") });
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, params["run_id"] ?? "") });
     if (run === undefined || run.configurationVersionId === null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId);
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, run.configurationVersionId) });
@@ -314,7 +314,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     return Bun.file(cv.archivePath);
   })
   .post("/api/v2/configuration-versions/:cv_id/actions/soft_delete_backing_data", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const cvId = params.cv_id ?? "";
+    const cvId = params["cv_id"] ?? "";
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
     if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, orgId, teamId, "admin");
@@ -346,7 +346,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     return {};
   })
   .post("/api/v2/configuration-versions/:cv_id/actions/restore_backing_data", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const cvId = params.cv_id ?? "";
+    const cvId = params["cv_id"] ?? "";
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
     if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, orgId, teamId, "admin");
@@ -360,7 +360,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     return {};
   })
   .post("/api/v2/configuration-versions/:cv_id/actions/permanently_delete_backing_data", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const cvId = params.cv_id ?? "";
+    const cvId = params["cv_id"] ?? "";
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
     if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, orgId, teamId, "admin");
@@ -379,7 +379,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
   })
   // --- Config Version Ingress Attributes ---
   .get("/api/v2/configuration-versions/:cv_id/ingress-attributes", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const cvId = params.cv_id ?? "";
+    const cvId = params["cv_id"] ?? "";
     const cv = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
     if (cv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await findAuthorizedWorkspace(cv.workspaceId, user?.id, tokenOrgId, teamId);
@@ -388,5 +388,5 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const ingress = (cv.ingressAttributes ?? {}) as Record<string, unknown>;
-    return { data: { id: cv.id, type: "ingress-attributes", attributes: { "commit-sha": ingress.commitSha ?? null, "commit-url": ingress.commitUrl ?? null, "commit-message": ingress.commitMessage ?? null, branch: ingress.branch ?? null, tag: ingress.tag ?? null, "pull-request-number": ingress.pullRequestNumber ?? null, "sender-username": ingress.senderUsername ?? null, "clone-url": ingress.cloneUrl ?? null, "compare-url": ingress.compareUrl ?? null } } };
+    return { data: { id: cv.id, type: "ingress-attributes", attributes: { "commit-sha": ingress["commitSha"] ?? null, "commit-url": ingress["commitUrl"] ?? null, "commit-message": ingress["commitMessage"] ?? null, branch: ingress["branch"] ?? null, tag: ingress["tag"] ?? null, "pull-request-number": ingress["pullRequestNumber"] ?? null, "sender-username": ingress["senderUsername"] ?? null, "clone-url": ingress["cloneUrl"] ?? null, "compare-url": ingress["compareUrl"] ?? null } } };
   });

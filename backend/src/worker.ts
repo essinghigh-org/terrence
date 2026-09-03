@@ -305,11 +305,11 @@ async function readSavedPlanMetadata(runId: string): Promise<SavedPlanMetadata |
     throw new Error(`Saved plan metadata for run ${runId} has an invalid shape.`);
   }
   const value = parsed as Record<string, unknown>;
-  if (typeof value.sha256 !== "string" || typeof value.stateSerial !== "number") {
+  if (typeof value["sha256"] !== "string" || typeof value["stateSerial"] !== "number") {
     throw new Error(`Saved plan metadata for run ${runId} has an invalid shape.`);
   }
-  const stateId = value.stateId;
-  const configurationVersionId = value.configurationVersionId;
+  const stateId = value["stateId"];
+  const configurationVersionId = value["configurationVersionId"];
   if (
     !Object.hasOwn(value, "stateId")
     || !Object.hasOwn(value, "configurationVersionId")
@@ -319,9 +319,9 @@ async function readSavedPlanMetadata(runId: string): Promise<SavedPlanMetadata |
     throw new Error(`Saved plan metadata for run ${runId} has an invalid shape.`);
   }
   return {
-    sha256: value.sha256,
+    sha256: value["sha256"],
     stateId: stateId as string | null,
-    stateSerial: value.stateSerial,
+    stateSerial: value["stateSerial"],
     configurationVersionId: configurationVersionId as string | null,
   };
 }
@@ -452,7 +452,7 @@ function spawnRunProcess(
     detached: true,
   };
   if (cgroup !== null && cgroup !== "") {
-    spawnOpts.cgroup = cgroup;
+    spawnOpts["cgroup"] = cgroup;
   }
   const proc = spawn(args as string[], spawnOpts as never);
   return trackRunProcess(runId, proc);
@@ -755,23 +755,23 @@ function checkStatus(value: unknown): "passed" | "failed" | "errored" | "unknown
 }
 
 function checkAddress(check: JsonObject, index: number): { address: string; kind: string } {
-  const address = asObject(check.address);
-  const kind = typeof address?.kind === "string" ? address.kind : "check";
-  if (typeof address?.to_display === "string") return { address: address.to_display, kind };
-  const parts = [address?.type, address?.name].filter((part: unknown): part is string =>
+  const address = asObject(check["address"]);
+  const kind = typeof address?.["kind"] === "string" ? address["kind"] : "check";
+  if (typeof address?.["to_display"] === "string") return { address: address["to_display"], kind };
+  const parts = [address?.["type"], address?.["name"]].filter((part: unknown): part is string =>
     typeof part === "string" && part !== "");
   return { address: parts.length > 0 ? `${kind}.${parts.join(".")}` : `check.${String(index + 1)}`, kind };
 }
 
 function checkMessage(check: JsonObject): string | null {
-  const messages = (Array.isArray(check.instances) ? check.instances : [])
+  const messages = (Array.isArray(check["instances"]) ? check["instances"] : [])
     .flatMap((instance: unknown): unknown[] => {
       const value = asObject(instance);
-      return Array.isArray(value?.problems) ? value.problems : [];
+      return Array.isArray(value?.["problems"]) ? value["problems"] : [];
     })
     .map((problem: unknown): string | undefined => {
       const value = asObject(problem);
-      return typeof value?.message === "string" ? value.message : undefined;
+      return typeof value?.["message"] === "string" ? value["message"] : undefined;
     })
     .filter((message: string | undefined): message is string => message !== undefined);
   return messages.length === 0 ? null : messages.join("\n");
@@ -782,7 +782,7 @@ async function storePlanCheckResults(
   planJson: JsonObject,
   association: Readonly<{ assessmentResultId?: string; runId?: string }>,
 ): Promise<StoredCheckSummary> {
-  const rawChecks = Array.isArray(planJson.checks) ? planJson.checks : [];
+  const rawChecks = Array.isArray(planJson["checks"]) ? planJson["checks"] : [];
   if (association.runId !== undefined) {
     await db.delete(assessmentCheckResults).where(eq(assessmentCheckResults.runId, association.runId));
   } else if (association.assessmentResultId !== undefined) {
@@ -795,7 +795,7 @@ async function storePlanCheckResults(
   for (const [index, rawCheck] of rawChecks.entries()) {
     const check = asObject(rawCheck);
     if (check === undefined) continue;
-    const normalizedStatus = checkStatus(check.status);
+    const normalizedStatus = checkStatus(check["status"]);
     summary[normalizedStatus] += 1;
     const address = checkAddress(check, index);
     rows.push({
@@ -895,10 +895,10 @@ async function infracostEnvironment(gcpCredentialsPath: string): Promise<Record<
   const gcpCredentials = settings["gcp-credentials"];
   if (typeof gcpCredentials === "string" && gcpCredentials !== "") {
     await writeFile(gcpCredentialsPath, gcpCredentials, { mode: 0o600 });
-    environment.GOOGLE_APPLICATION_CREDENTIALS = gcpCredentialsPath;
+    environment["GOOGLE_APPLICATION_CREDENTIALS"] = gcpCredentialsPath;
   } else if (gcpCredentials !== null && typeof gcpCredentials === "object") {
     await writeFile(gcpCredentialsPath, JSON.stringify(gcpCredentials), { mode: 0o600 });
-    environment.GOOGLE_APPLICATION_CREDENTIALS = gcpCredentialsPath;
+    environment["GOOGLE_APPLICATION_CREDENTIALS"] = gcpCredentialsPath;
   }
   return environment;
 }
@@ -1013,14 +1013,14 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
 }
 
 function assessmentResourceCounts(planJson: JsonObject): { drifted: number; undrifted: number } {
-  const resourceChanges = Array.isArray(planJson.resource_changes) ? planJson.resource_changes : [];
+  const resourceChanges = Array.isArray(planJson["resource_changes"]) ? planJson["resource_changes"] : [];
   let drifted = 0;
   let undrifted = 0;
   for (const rawChange of resourceChanges) {
     const change = asObject(rawChange);
-    if (change?.mode === "data") continue;
-    const detail = asObject(change?.change);
-    const actions = Array.isArray(detail?.actions) ? detail.actions : [];
+    if (change?.["mode"] === "data") continue;
+    const detail = asObject(change?.["change"]);
+    const actions = Array.isArray(detail?.["actions"]) ? detail["actions"] : [];
     if (actions.length === 0 || actions.every((action: unknown): boolean => action === "no-op" || action === "read")) {
       undrifted += 1;
     } else {
@@ -1414,7 +1414,7 @@ type RunTaskExecution = Readonly<{
 }>;
 
 function runTaskTransportError(taskUrl: string, stage: RunTaskStage, isGlobal: boolean): string | undefined {
-  if ((stage !== "pre_apply" && !isGlobal) || envEnabled(process.env.TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS)) return undefined;
+  if ((stage !== "pre_apply" && !isGlobal) || envEnabled(process.env["TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS"])) return undefined;
   try {
     return new URL(taskUrl).protocol === "https:"
       ? undefined
@@ -1460,7 +1460,7 @@ async function executeRunTasks(
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
   const taskAccessToken = (await runTokenStateFor(runId, workspace)).token;
   let proceed = true;
-  const configuredTimeout = Number(process.env.RUN_TASK_TIMEOUT_MS ?? 3_600_000);
+  const configuredTimeout = Number(process.env["RUN_TASK_TIMEOUT_MS"] ?? 3_600_000);
   const timeoutMs = Number.isSafeInteger(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 3_600_000;
 
   // Batch-insert all pending run-task results in one statement instead of
@@ -1489,8 +1489,8 @@ async function executeRunTasks(
   }
 
   for (const { enforcementLevel, isGlobal, task, resultId } of entryList) {
-    const port = process.env.PORT ?? "3000";
-    const callbackBase = process.env.PUBLIC_URL ?? `http://localhost:${port}`;
+    const port = process.env["PORT"] ?? "3000";
+    const callbackBase = process.env["PUBLIC_URL"] ?? `http://localhost:${port}`;
     const callbackPath = `/api/v2/task-results/${resultId}/callback`;
     const callbackUrl = signedApiURL(
       { url: callbackBase },
@@ -1529,7 +1529,7 @@ async function executeRunTasks(
     let resultUrl: string | null = null;
     const transportError = runTaskTransportError(task.url, stage, isGlobal);
     const destination = transportError === undefined
-      ? await resolveExternalUrl(task.url, envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_URLS))
+      ? await resolveExternalUrl(task.url, envEnabled(process.env["TERRENCE_ALLOW_PRIVATE_URLS"]))
       : { error: transportError };
     if ("error" in destination) {
       status = "failed";
@@ -1552,17 +1552,17 @@ async function executeRunTasks(
         if (responseText !== "") {
           try {
             const parsed = JSON.parse(responseText) as Record<string, unknown>;
-            const rawData = parsed.data;
+            const rawData = parsed["data"];
             const data = rawData !== null && typeof rawData === "object"
               ? rawData as Record<string, unknown>
               : parsed;
-            const rawAttributes = data.attributes;
+            const rawAttributes = data["attributes"];
             const attributes = rawAttributes !== null && typeof rawAttributes === "object"
               ? rawAttributes as Record<string, unknown>
               : data;
-            if (["running", "passed", "failed"].includes(String(attributes.status))) status = String(attributes.status);
-            if (typeof attributes.message === "string") message = attributes.message;
-            if (typeof attributes.url === "string") resultUrl = attributes.url;
+            if (["running", "passed", "failed"].includes(String(attributes["status"]))) status = String(attributes["status"]);
+            if (typeof attributes["message"] === "string") message = attributes["message"];
+            if (typeof attributes["url"] === "string") resultUrl = attributes["url"];
           } catch (error: unknown) {
             logBestEffortFailure(
               "Run task returned an invalid JSON response; using its HTTP status",
@@ -1916,7 +1916,7 @@ async function executeRunImpl(runId: string): Promise<void> {
       }
     }
     const envVars = { ...buildSanitizedEnv(vars), ...extraTfVars, ...(await runTerraformEnv(run.id, workspace, "plan", vars)) };
-    if (run.debuggingMode) envVars.TF_LOG = "TRACE";
+    if (run.debuggingMode) envVars["TF_LOG"] = "TRACE";
     const tfVarsLines = vars
       .filter((variable: { readonly category: string }): boolean => variable.category === "terraform")
       .map((variable: { readonly key: string; readonly hcl: boolean; readonly value: string }): string => `${variable.key} = ${variable.hcl ? variable.value : JSON.stringify(variable.value)}`);
@@ -1932,7 +1932,7 @@ async function executeRunImpl(runId: string): Promise<void> {
     const currentDirFiles = await readdir(executionDir);
     const hasTfFiles = currentDirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
 
-    const isSimulatedAllowed = envEnabled(process.env.SIMULATED_RUNS) || Reflect.get(process.env, "NODE_ENV") === "test";
+    const isSimulatedAllowed = envEnabled(process.env["SIMULATED_RUNS"]) || Reflect.get(process.env, "NODE_ENV") === "test";
     if (!isSimulatedAllowed) {
       await writeLog(runId, "plan", `[terrence] Resolving binary for ${requestedTool} (version: ${requestedVersion})...`);
     }
@@ -2027,7 +2027,7 @@ async function executeRunImpl(runId: string): Promise<void> {
     }
 
     const planJson = isSimulatedAllowed
-      ? parseJsonObject(process.env.SIMULATED_PLAN_JSON ?? "{}")
+      ? parseJsonObject(process.env["SIMULATED_PLAN_JSON"] ?? "{}")
       : await readPlanJson(runId, executionDir, resolved?.binaryPath, planTimeoutMs);
     if (planJson !== undefined) {
       await writePlanJsonArtifact(runId, planJson);
@@ -2120,8 +2120,8 @@ async function executeRunImpl(runId: string): Promise<void> {
 
       // Check if the plan has drift that needs to be applied to state
       const hasDrift = planJson !== undefined
-        && Array.isArray((planJson as Record<string, unknown>).resource_drift)
-        && ((planJson as Record<string, unknown>).resource_drift as unknown[]).length > 0;
+        && Array.isArray((planJson as Record<string, unknown>)["resource_drift"])
+        && ((planJson as Record<string, unknown>)["resource_drift"] as unknown[]).length > 0;
 
       if (run.operation === "action_only") {
         // Action-only runs still need the run-cancellation check and the
@@ -2545,7 +2545,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
     // directory `terraform apply` is about to see.
     dirFiles = (await exists(executionDir)) ? await readdir(executionDir) : [];
     hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
-    const isSimulatedAllowed = envEnabled(process.env.SIMULATED_RUNS) || Reflect.get(process.env, "NODE_ENV") === "test";
+    const isSimulatedAllowed = envEnabled(process.env["SIMULATED_RUNS"]) || Reflect.get(process.env, "NODE_ENV") === "test";
     let resolved: Awaited<ReturnType<typeof ensureBinary>> | null = null;
     if (!isSimulatedAllowed) {
       try {
@@ -2604,7 +2604,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
       if (runSandbox !== null) await runSandbox.ensureTool(resolved.tool, resolved.version, binary);
       const vars = await executionVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
       const envVars = { ...buildSanitizedEnv(vars), ...(await runTerraformEnv(run.id, workspace, "apply", vars)) };
-      if (run.debuggingMode) envVars.TF_LOG = "TRACE";
+      if (run.debuggingMode) envVars["TF_LOG"] = "TRACE";
       const applyTimeoutMs = await executionTimeoutMs("apply");
 
       if (savedPlanRequired && resolved !== null) {
@@ -2670,8 +2670,8 @@ async function executeApplyImpl(runId: string): Promise<void> {
         let jsonStateOutputs: string | null = null;
         try {
           const parsed = JSON.parse(statePayload) as Record<string, unknown>;
-          jsonStateOutputs = parsed.outputs !== null && parsed.outputs !== undefined
-            ? JSON.stringify(parsed.outputs)
+          jsonStateOutputs = parsed["outputs"] !== null && parsed["outputs"] !== undefined
+            ? JSON.stringify(parsed["outputs"])
             : null;
         } catch (error: unknown) {
           jsonState = null;
@@ -2689,8 +2689,8 @@ async function executeApplyImpl(runId: string): Promise<void> {
             columns: { ingressAttributes: true },
           });
           const ingress = cfg?.ingressAttributes as Record<string, unknown> | null | undefined;
-          if (typeof ingress?.commitSha === "string" && ingress.commitSha !== "") vcsCommitSha = ingress.commitSha;
-          if (typeof ingress?.commitUrl === "string" && ingress.commitUrl !== "") vcsCommitUrl = ingress.commitUrl;
+          if (typeof ingress?.["commitSha"] === "string" && ingress["commitSha"] !== "") vcsCommitSha = ingress["commitSha"];
+          if (typeof ingress?.["commitUrl"] === "string" && ingress["commitUrl"] !== "") vcsCommitUrl = ingress["commitUrl"];
         }
         const nextSerial = await insertStateVersionWithSerialRetry({
           id: crypto.randomUUID(),
@@ -3007,7 +3007,7 @@ export async function runPolicyChecks(
           ["opa", "eval", "--data", policyPath, "--input", dataPath, opaQuerySafe],
           {
             cwd: workDir,
-            env: { PATH: process.env.PATH ?? "" },
+            env: { PATH: process.env["PATH"] ?? "" },
             stdout: "pipe",
             stderr: "pipe",
           },
@@ -3019,10 +3019,10 @@ export async function runPolicyChecks(
         const [opaExit, [opaStdout]] = await waitForTrackedProcess(runId, "policy", opaProc, opaOutput, planTimeoutMs);
         if (opaExit === 0) {
           checkResult = JSON.parse(opaStdout !== "" ? opaStdout : "{}") as Record<string, unknown>;
-          const resultList = checkResult.result as Record<string, unknown>[] | undefined;
-          const exprList = resultList?.[0]?.expressions as Record<string, unknown>[] | undefined;
-          const valObj = exprList?.[0]?.value as Record<string, unknown> | undefined;
-          const violated = valObj?.violations;
+          const resultList = checkResult["result"] as Record<string, unknown>[] | undefined;
+          const exprList = resultList?.[0]?.["expressions"] as Record<string, unknown>[] | undefined;
+          const valObj = exprList?.[0]?.["value"] as Record<string, unknown> | undefined;
+          const violated = valObj?.["violations"];
           if (violated !== undefined && Array.isArray(violated) && violated.length > 0) {
             checkStatus = "failed";
           } else {
@@ -3043,7 +3043,7 @@ export async function runPolicyChecks(
         const policyPath = join(workDir, "policy.sentinel");
         await writeFile(policyPath, policySource, { mode: 0o600 });
         const args = [
-          process.env.SENTINEL_BINARY_PATH ?? "sentinel",
+          process.env["SENTINEL_BINARY_PATH"] ?? "sentinel",
           "apply",
           "-json",
           "-timeout=30s",
@@ -3060,7 +3060,7 @@ export async function runPolicyChecks(
 
         // Use the Landlock sandbox if available for policy evaluation.
 // In simulated mode (tests) or when disabled, run unsandboxed.
-        const isSimulatedAllowed = envEnabled(process.env.SIMULATED_RUNS);
+        const isSimulatedAllowed = envEnabled(process.env["SIMULATED_RUNS"]);
         const sandboxRequired = !isSimulatedAllowed && runSandboxRequired();
         if (sandboxRequired && (!RunSandbox.isUsable() || !RunSandbox.hasRunner())) {
           throw new Error("Landlock sandbox is required but unavailable for policy evaluation");
@@ -3071,7 +3071,7 @@ export async function runPolicyChecks(
           args,
           {
             cwd: workDir,
-            env: { PATH: process.env.PATH ?? "" },
+            env: { PATH: process.env["PATH"] ?? "" },
             stdout: "pipe",
             stderr: "pipe",
           },
@@ -3091,7 +3091,7 @@ export async function runPolicyChecks(
         } catch {
           sentinel = { output: sentinelStdout };
         }
-        if (sentinelStderr !== "") sentinel.stderr = sentinelStderr;
+        if (sentinelStderr !== "") sentinel["stderr"] = sentinelStderr;
         if (sentinelExit === 0 || sentinelExit === 1 || sentinelExit === 2) {
           const passed = sentinelExit === 0;
           checkStatus = passed ? "passed" : "failed";
@@ -3102,7 +3102,7 @@ export async function runPolicyChecks(
             "hard-failed": !passed && policy.enforcementLevel === "hard-mandatory" ? 1 : 0,
             "soft-failed": !passed && policy.enforcementLevel === "soft-mandatory" ? 1 : 0,
             "advisory-failed": !passed && policy.enforcementLevel === "advisory" ? 1 : 0,
-            "duration-ms": typeof sentinel.duration === "number" ? sentinel.duration : 0,
+            "duration-ms": typeof sentinel["duration"] === "number" ? sentinel["duration"] : 0,
             sentinel,
           };
         } else {
@@ -3195,7 +3195,7 @@ async function captureProcess(
 }
 
 function assessmentIntervalMs(): number {
-  const configured = Number(process.env.HEALTH_ASSESSMENT_INTERVAL_MS ?? 86_400_000);
+  const configured = Number(process.env["HEALTH_ASSESSMENT_INTERVAL_MS"] ?? 86_400_000);
   return Number.isSafeInteger(configured) && configured > 0 ? configured : 86_400_000;
 }
 
@@ -3552,13 +3552,13 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
       throw new Error("No successfully applied configuration is available for assessment.");
     }
 
-    const simulated = envEnabled(process.env.SIMULATED_RUNS) || Reflect.get(process.env, "NODE_ENV") === "test";
+    const simulated = envEnabled(process.env["SIMULATED_RUNS"]) || Reflect.get(process.env, "NODE_ENV") === "test";
     let planJson: JsonObject;
     let providerSchema: JsonObject = {};
 
     if (simulated) {
-      planJson = parseJsonObject(process.env.SIMULATED_ASSESSMENT_JSON ?? '{"resource_changes":[],"checks":[]}');
-      providerSchema = parseJsonObject(process.env.SIMULATED_ASSESSMENT_SCHEMA ?? "{}");
+      planJson = parseJsonObject(process.env["SIMULATED_ASSESSMENT_JSON"] ?? '{"resource_changes":[],"checks":[]}');
+      providerSchema = parseJsonObject(process.env["SIMULATED_ASSESSMENT_SCHEMA"] ?? "{}");
       appendOutput("[terrence] Simulated health assessment completed.");
     } else {
       const configuration = await db.query.configurationVersions.findFirst({
@@ -3799,7 +3799,7 @@ export async function pollAssessmentQueue(): Promise<string[]> {
   return withQueueGate("assessment", async (): Promise<string[]> => {
   if (isMaintenanceActive()) return [];
   if (workerQueueDraining()) return [];
-  const configured = Number(process.env.HEALTH_ASSESSMENT_CONCURRENCY ?? 2);
+  const configured = Number(process.env["HEALTH_ASSESSMENT_CONCURRENCY"] ?? 2);
   const maximum = Number.isSafeInteger(configured) && configured > 0 ? configured : 2;
   const running = await db.query.assessmentResults.findMany({
     where: eq(assessmentResults.status, "running"),
@@ -4267,7 +4267,7 @@ function pollIntervalMs(raw: string | undefined, fallback: number, minimum: numb
  * the apply schedule on this cadence). Configurable for low-power homelab
  * installs that want a gentler query load.
  */
-const WORKER_POLL_INTERVAL_MS = pollIntervalMs(process.env.TERRENCE_WORKER_POLL_MS, 1500, 100);
+const WORKER_POLL_INTERVAL_MS = pollIntervalMs(process.env["TERRENCE_WORKER_POLL_MS"], 1500, 100);
 
 /**
  * Auto-destroy scan cadence, independent of the run-queue poll. The sweep
@@ -4276,14 +4276,14 @@ const WORKER_POLL_INTERVAL_MS = pollIntervalMs(process.env.TERRENCE_WORKER_POLL_
  * review: full-table sweep per 1.5s tick is O(all history) even with zero
  * workspaces using auto-destroy).
  */
-const AUTO_DESTROY_POLL_INTERVAL_MS = pollIntervalMs(process.env.TERRENCE_AUTO_DESTROY_POLL_MS, 30_000, 5_000);
+const AUTO_DESTROY_POLL_INTERVAL_MS = pollIntervalMs(process.env["TERRENCE_AUTO_DESTROY_POLL_MS"], 30_000, 5_000);
 
 /**
  * Health-assessment discovery cadence. Assessments become due in minutes to
  * days; discovering them every 1.5s reloads every workspace and organization
  * for nothing. Default 60s (scratch review).
  */
-const ASSESSMENT_POLL_INTERVAL_MS = pollIntervalMs(process.env.TERRENCE_ASSESSMENT_POLL_MS, 60_000, 5_000);
+const ASSESSMENT_POLL_INTERVAL_MS = pollIntervalMs(process.env["TERRENCE_ASSESSMENT_POLL_MS"], 60_000, 5_000);
 
 // --- Graceful-drain state (shutdown) ---
 // SIGTERM sets the draining flag: the pollers stop claiming new work while
@@ -4353,7 +4353,7 @@ async function trackLocalExecution<T>(promise: Promise<T>): Promise<T> {
 }
 
 function localRunConcurrencyLimit(): number {
-  const configured = Number(process.env.TERRENCE_RUN_CONCURRENCY ?? 5);
+  const configured = Number(process.env["TERRENCE_RUN_CONCURRENCY"] ?? 5);
   return Number.isSafeInteger(configured) && configured > 0 ? configured : 5;
 }
 
@@ -4453,7 +4453,7 @@ async function runTokenStateFor(
 
 function registryHostname(): string {
   let hostname = "localhost";
-  const configured = process.env.PUBLIC_URL;
+  const configured = process.env["PUBLIC_URL"];
   if (typeof configured === "string" && configured !== "") {
     try {
       hostname = new URL(configured).hostname;
@@ -4585,7 +4585,7 @@ async function captureInterruptedApplyState(runId: string): Promise<boolean> {
 }
 
 async function pruneInterruptedApplyRecovery(): Promise<void> {
-  const rawRetention = process.env.TERRENCE_RECOVERY_RETENTION_MS;
+  const rawRetention = process.env["TERRENCE_RECOVERY_RETENTION_MS"];
   const parsedRetention = rawRetention === undefined || rawRetention === "" ? 7 * 24 * 60 * 60 * 1000 : Number(rawRetention);
   const retentionMs = Number.isSafeInteger(parsedRetention) && parsedRetention >= 0 ? parsedRetention : 7 * 24 * 60 * 60 * 1000;
   const cutoff = Date.now() - retentionMs;
@@ -4762,7 +4762,7 @@ export function startWorkerQueue(): void {
   // Off switch for benchmarks/tests that must run in a process with no
   // background DB activity (the polling loop otherwise injects queries
   // and CPU into measurements).
-  if (envEnabled(process.env.TERRENCE_DISABLE_WORKER)) return;
+  if (envEnabled(process.env["TERRENCE_DISABLE_WORKER"])) return;
   if (isWorkerLoopRunning) return;
   isWorkerLoopRunning = true;
   startDurableJobWorker({

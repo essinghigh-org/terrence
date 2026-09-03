@@ -12,7 +12,7 @@ import {
 // via TERRENCE_VERSION_CACHE_FILE so real storage stays untouched.
 
 const originalFetch = globalThis.fetch;
-const originalCacheFile = process.env.TERRENCE_VERSION_CACHE_FILE;
+const originalCacheFile = process.env["TERRENCE_VERSION_CACHE_FILE"];
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -29,13 +29,13 @@ describe("provider version lookup", () => {
   beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), "terrence-prov-ver-"));
     cacheFile = join(dir, "version-cache.json");
-    process.env.TERRENCE_VERSION_CACHE_FILE = cacheFile;
+    process.env["TERRENCE_VERSION_CACHE_FILE"] = cacheFile;
   });
 
   afterAll(() => {
     globalThis.fetch = originalFetch;
-    if (originalCacheFile === undefined) delete process.env.TERRENCE_VERSION_CACHE_FILE;
-    else process.env.TERRENCE_VERSION_CACHE_FILE = originalCacheFile;
+    if (originalCacheFile === undefined) delete process.env["TERRENCE_VERSION_CACHE_FILE"];
+    else process.env["TERRENCE_VERSION_CACHE_FILE"] = originalCacheFile;
     rmSync(dir, { recursive: true, force: true });
   });
 

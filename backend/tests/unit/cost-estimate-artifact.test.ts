@@ -5,22 +5,22 @@ import { join } from "node:path";
 
 // costEstimateDirectory is resolved lazily from STORAGE_DIR, so we can point
 // it at a throwaway temp dir for the duration of this suite.
-const previousStorageDir = process.env.STORAGE_DIR;
+const previousStorageDir = process.env["STORAGE_DIR"];
 const storage = mkdtempSync(join(tmpdir(), "cost-artifact-"));
 
 let cost: typeof import("../../src/lib/cost-estimate");
 let costDir: string;
 
 beforeAll(async (): Promise<void> => {
-  process.env.STORAGE_DIR = storage;
+  process.env["STORAGE_DIR"] = storage;
   cost = await import("../../src/lib/cost-estimate");
   costDir = join(storage, "cost-estimates");
 });
 
 afterAll((): void => {
   rmSync(storage, { recursive: true, force: true });
-  if (previousStorageDir === undefined) delete process.env.STORAGE_DIR;
-  else process.env.STORAGE_DIR = previousStorageDir;
+  if (previousStorageDir === undefined) delete process.env["STORAGE_DIR"];
+  else process.env["STORAGE_DIR"] = previousStorageDir;
 });
 
 const estimateFixture = {

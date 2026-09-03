@@ -2,7 +2,7 @@ import { decryptSecretSync, encryptSecret, isEncryptedSecret } from "./secrets";
 import { join } from "node:path";
 
 function stateStorageDir(): string {
-  return process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage");
+  return process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage");
 }
 
 /** Encrypt state fields at rest while keeping the API/parser representation plain. */
@@ -68,13 +68,13 @@ export function validVariableAttributes(attributes: unknown, partial = false): b
   const allowedFields = ["key", "value", "category", "sensitive", "hcl", "description"] as const;
   if (!hasOnlyAllowedFields(fields, allowedFields)) return false;
   if (isInvalidPartialEmpty(partial, fields)) return false;
-  if (isMissingRequiredValue(partial, attrs.value)) return false;
-  if (!isValidKeyField(attrs.key, partial)) return false;
-  if (!isValidOptionalString(attrs.value)) return false;
-  if (!isValidCategoryField(attrs.category)) return false;
-  if (!isValidOptionalBoolean(attrs.sensitive)) return false;
-  if (!isValidOptionalBoolean(attrs.hcl)) return false;
-  if (!isValidDescriptionField(attrs.description)) return false;
+  if (isMissingRequiredValue(partial, attrs["value"])) return false;
+  if (!isValidKeyField(attrs["key"], partial)) return false;
+  if (!isValidOptionalString(attrs["value"])) return false;
+  if (!isValidCategoryField(attrs["category"])) return false;
+  if (!isValidOptionalBoolean(attrs["sensitive"])) return false;
+  if (!isValidOptionalBoolean(attrs["hcl"])) return false;
+  if (!isValidDescriptionField(attrs["description"])) return false;
   return true;
 }
 
@@ -85,12 +85,12 @@ export function validVariableSetVariableAttributes(attributes: unknown, partial 
   const allowedFields = ["key", "value", "category", "sensitive", "hcl", "description"] as const;
   if (!hasOnlyAllowedFields(fields, allowedFields)) return false;
   if (isInvalidPartialEmpty(partial, fields)) return false;
-  if (!isValidKeyField(attrs.key, partial)) return false;
-  if (!isValidOptionalString(attrs.value)) return false;
-  if (!isValidCategoryField(attrs.category)) return false;
-  if (!isValidOptionalBoolean(attrs.sensitive)) return false;
-  if (!isValidOptionalBoolean(attrs.hcl)) return false;
-  if (!isValidDescriptionField(attrs.description)) return false;
+  if (!isValidKeyField(attrs["key"], partial)) return false;
+  if (!isValidOptionalString(attrs["value"])) return false;
+  if (!isValidCategoryField(attrs["category"])) return false;
+  if (!isValidOptionalBoolean(attrs["sensitive"])) return false;
+  if (!isValidOptionalBoolean(attrs["hcl"])) return false;
+  if (!isValidDescriptionField(attrs["description"])) return false;
   return true;
 }
 
@@ -101,22 +101,22 @@ export function validVariableSetAttributes(attributes: unknown, partial = false)
   if (fields.length === 0) return false;
   const allowed = ["name", "description", "global", "priority", "parent-project-id"] as const;
   if (!hasOnlyAllowedFields(fields, allowed)) return false;
-  if (!isValidVariableName(attrs.name, partial)) return false;
-  if (!isValidDescriptionField(attrs.description)) return false;
-  if (!isValidOptionalBoolean(attrs.global)) return false;
-  if (!isValidOptionalBoolean(attrs.priority)) return false;
+  if (!isValidVariableName(attrs["name"], partial)) return false;
+  if (!isValidDescriptionField(attrs["description"])) return false;
+  if (!isValidOptionalBoolean(attrs["global"])) return false;
+  if (!isValidOptionalBoolean(attrs["priority"])) return false;
   if (!isValidParentProjectId(attrs["parent-project-id"])) return false;
   return true;
 }
 
 export function isUniqueConstraintError(error: unknown): boolean {
-  const items: unknown[] = [error, (error as Record<string, unknown> | undefined)?.cause];
+  const items: unknown[] = [error, (error as Record<string, unknown> | undefined)?.["cause"]];
   return items.some((item: unknown): boolean => {
     const i = item as Record<string, unknown> | undefined;
-    return i?.code === "SQLITE_CONSTRAINT_UNIQUE"
-      || i?.code === "23505" // PostgreSQL unique_violation
-      || (typeof i?.message === "string" && i.message.includes("UNIQUE constraint failed"))
-      || (typeof i?.message === "string" && i.message.includes("duplicate key value violates unique constraint"));
+    return i?.["code"] === "SQLITE_CONSTRAINT_UNIQUE"
+      || i?.["code"] === "23505" // PostgreSQL unique_violation
+      || (typeof i?.["message"] === "string" && i["message"].includes("UNIQUE constraint failed"))
+      || (typeof i?.["message"] === "string" && i["message"].includes("duplicate key value violates unique constraint"));
   });
 }
 
@@ -162,23 +162,23 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isTerraformStateInstance(value: unknown): boolean {
-  if (!isObjectRecord(value) || !isObjectRecord(value.attributes)) return false;
-  return (value.schema_version === undefined || Number.isSafeInteger(value.schema_version))
-    && (value.sensitive_attributes === undefined || Array.isArray(value.sensitive_attributes))
-    && (value.dependencies === undefined || Array.isArray(value.dependencies));
+  if (!isObjectRecord(value) || !isObjectRecord(value["attributes"])) return false;
+  return (value["schema_version"] === undefined || Number.isSafeInteger(value["schema_version"]))
+    && (value["sensitive_attributes"] === undefined || Array.isArray(value["sensitive_attributes"]))
+    && (value["dependencies"] === undefined || Array.isArray(value["dependencies"]));
 }
 
 function isTerraformStateResource(value: unknown): boolean {
   if (!isObjectRecord(value)) return false;
-  return (value.mode === "managed" || value.mode === "data")
-    && typeof value.type === "string"
-    && value.type !== ""
-    && typeof value.name === "string"
-    && value.name !== ""
-    && typeof value.provider === "string"
-    && value.provider !== ""
-    && Array.isArray(value.instances)
-    && value.instances.every((instance: unknown): boolean => isTerraformStateInstance(instance));
+  return (value["mode"] === "managed" || value["mode"] === "data")
+    && typeof value["type"] === "string"
+    && value["type"] !== ""
+    && typeof value["name"] === "string"
+    && value["name"] !== ""
+    && typeof value["provider"] === "string"
+    && value["provider"] !== ""
+    && Array.isArray(value["instances"])
+    && value["instances"].every((instance: unknown): boolean => isTerraformStateInstance(instance));
 }
 
 /** Validate the core Terraform/OpenTofu v4 state shape without rejecting optional fields. */
@@ -186,16 +186,16 @@ export function parseTerraformStatePayload(payload: string | null): Record<strin
   const state = parseStatePayload(payload);
   if (
     state === null
-    || state.version !== 4
-    || !Number.isSafeInteger(state.serial)
-    || (state.serial as number) < 0
-    || typeof state.lineage !== "string"
-    || state.lineage === ""
-    || !Array.isArray(state.resources)
-    || !state.resources.every((resource: unknown): boolean => isTerraformStateResource(resource))
+    || state["version"] !== 4
+    || !Number.isSafeInteger(state["serial"])
+    || (state["serial"] as number) < 0
+    || typeof state["lineage"] !== "string"
+    || state["lineage"] === ""
+    || !Array.isArray(state["resources"])
+    || !state["resources"].every((resource: unknown): boolean => isTerraformStateResource(resource))
   ) return null;
 
-  if (state.terraform_version !== undefined && typeof state.terraform_version !== "string") return null;
-  if (state.outputs !== undefined && !isObjectRecord(state.outputs)) return null;
+  if (state["terraform_version"] !== undefined && typeof state["terraform_version"] !== "string") return null;
+  if (state["outputs"] !== undefined && !isObjectRecord(state["outputs"])) return null;
   return state;
 }

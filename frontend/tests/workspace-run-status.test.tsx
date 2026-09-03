@@ -35,7 +35,7 @@ afterEach((): void => {
 
 test("shows the latest run status instead of treating an unlocked workspace as a status", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url.includes("/workspaces?")) {
       return json({
@@ -54,7 +54,7 @@ test("shows the latest run status instead of treating an unlocked workspace as a
       return json({ data: { attributes: { permissions: { "can-manage-workspaces": false } } } });
     }
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -71,7 +71,7 @@ test("shows the latest run status instead of treating an unlocked workspace as a
 
 test("fails closed when workspace management permission cannot be loaded", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme") {
       return json({ errors: [{ status: "500", title: "Internal Server Error" }] }, 500);
@@ -80,7 +80,7 @@ test("fails closed when workspace management permission cannot be loaded", async
       return json({ data: [] });
     }
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -96,7 +96,7 @@ test("fails closed when workspace management permission cannot be loaded", async
 
 test("keeps workspaces visible when project metadata cannot be loaded", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url.includes("/workspaces?")) {
       return json({
@@ -115,7 +115,7 @@ test("keeps workspaces visible when project metadata cannot be loaded", async ()
       return json({ data: { attributes: { permissions: { "can-manage-workspaces": false } } } });
     }
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -130,7 +130,7 @@ test("keeps workspaces visible when project metadata cannot be loaded", async ()
 
 test("KPI totals stay org-wide when a status filter is active", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url.includes("current-run")) {
       // Server-filtered view: only the applying workspace matches, and its
@@ -159,7 +159,7 @@ test("KPI totals stay org-wide when a status filter is active", async () => {
       return json({ data: { attributes: { permissions: { "can-manage-workspaces": false } } } });
     }
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -183,7 +183,7 @@ test("KPI totals stay org-wide when a status filter is active", async () => {
 test("KPI totals degrade visibly when the org-wide count cannot be loaded", async () => {
   let failUnfiltered = false;
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url.includes("current-run")) {
       return json({
@@ -212,7 +212,7 @@ test("KPI totals degrade visibly when the org-wide count cannot be loaded", asyn
       return json({ data: { attributes: { permissions: { "can-manage-workspaces": false } } } });
     }
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>

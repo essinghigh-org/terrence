@@ -55,8 +55,8 @@ describe("formatDate", () => {
     // Bare calendar date must keep its calendar day in LA (naive new Date()
     // drift would render 2026-08-06; fixed helper renders 2026-08-07):
     const parsed = runWithTZ("America/Los_Angeles", script);
-    expect(parsed.sameDay).toBe(true);
-    expect(parsed.drifted).toBe(false);
+    expect(parsed["sameDay"]).toBe(true);
+    expect(parsed["drifted"]).toBe(false);
   });
 
   it("handles years 00-99 as literal years (no 1900s normalization)", () => {
@@ -67,7 +67,7 @@ describe("formatDate", () => {
       d.setFullYear(26, 7, 7);
       console.log(JSON.stringify({ matches: out === d.toLocaleDateString(), out }));
     `;
-    expect(runWithTZ("UTC", script).matches).toBe(true);
+    expect(runWithTZ("UTC", script)["matches"]).toBe(true);
   });
 });
 
@@ -91,8 +91,8 @@ describe("formatDateTime", () => {
         console.log(JSON.stringify({ sameLocal: out === local, drifted: naive === local }));
       `;
       const parsed = runWithTZ("America/Los_Angeles", script);
-      expect(parsed.sameLocal).toBe(true);
-      expect(parsed.drifted).toBe(false);
+      expect(parsed["sameLocal"]).toBe(true);
+      expect(parsed["drifted"]).toBe(false);
     });
 });
 
@@ -106,8 +106,8 @@ describe("formatDateTimeExact", () => {
       const { formatDateTimeExact } = await import(${JSON.stringify(UTILS_PATH)});
       console.log(JSON.stringify({ out: formatDateTimeExact("2026-08-07T22:14:03.000Z") }));
     `;
-    expect(runWithTZ("America/Los_Angeles", script).out).toBe("2026-08-07T22:14:03.000Z");
-    expect(runWithTZ("Asia/Tokyo", script).out).toBe("2026-08-07T22:14:03.000Z");
+    expect(runWithTZ("America/Los_Angeles", script)["out"]).toBe("2026-08-07T22:14:03.000Z");
+    expect(runWithTZ("Asia/Tokyo", script)["out"]).toBe("2026-08-07T22:14:03.000Z");
   });
 
   it("never throws on bad input and returns Unknown", () => {

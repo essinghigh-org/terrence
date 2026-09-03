@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { extractValidatedModuleArchive, moduleRootPath } from "./registry-module-archive";
 
 const MODULE_TEST_DIR = resolve(
-  process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"),
+  process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"),
   "module-tests",
 );
 
@@ -53,8 +53,8 @@ function parseModuleTestVariables(rawVariables: unknown): ParsedModuleTestVariab
   for (const rawVariable of rawVariables) {
     if (rawVariable === null || typeof rawVariable !== "object") return { error: "variables entries must be objects" };
     const variable = rawVariable as Record<string, unknown>;
-    const key = variable.key;
-    const rawValue = variable.value;
+    const key = variable["key"];
+    const rawValue = variable["value"];
     if (typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
       return { error: "variable keys must be valid Terraform identifiers" };
     }
@@ -71,20 +71,20 @@ function parseModuleTestVariables(rawVariables: unknown): ParsedModuleTestVariab
 
 function moduleTestInputFields(input: unknown): ModuleTestInputFields {
   const payload = input !== null && typeof input === "object" ? input as Record<string, unknown> : {};
-  const rawData = payload.data;
+  const rawData = payload["data"];
   const data = rawData !== null && typeof rawData === "object" ? rawData as Record<string, unknown> : {};
-  if (data.type !== undefined && data.type !== "module-tests" && data.type !== "test-runs") {
+  if (data["type"] !== undefined && data["type"] !== "module-tests" && data["type"] !== "test-runs") {
     return { error: "data.type must be module-tests or test-runs" };
   }
-  const rawAttributes = data.attributes;
+  const rawAttributes = data["attributes"];
   const attributes = rawAttributes !== null && typeof rawAttributes === "object"
     ? rawAttributes as Record<string, unknown>
     : {};
   return {
-    verbose: attributes.verbose ?? false,
-    rawFilters: attributes.filters ?? [],
+    verbose: attributes["verbose"] ?? false,
+    rawFilters: attributes["filters"] ?? [],
     testDirectory: attributes["test-directory"] ?? "tests",
-    rawVariables: attributes.variables ?? [],
+    rawVariables: attributes["variables"] ?? [],
   };
 }
 
@@ -121,13 +121,13 @@ function summary(output: string): Readonly<{ passed: number; failed: number; err
   for (const line of output.split("\n")) {
     try {
       const event = JSON.parse(line) as Record<string, unknown>;
-      const rawSummary = event.test_summary;
+      const rawSummary = event["test_summary"];
       if (rawSummary !== null && typeof rawSummary === "object") {
         const testSummary = rawSummary as Record<string, unknown>;
-        passed = typeof testSummary.passed === "number" ? testSummary.passed : passed;
-        failed = typeof testSummary.failed === "number" ? testSummary.failed : failed;
-        errored = typeof testSummary.errored === "number" ? testSummary.errored : errored;
-        skipped = typeof testSummary.skipped === "number" ? testSummary.skipped : skipped;
+        passed = typeof testSummary["passed"] === "number" ? testSummary["passed"] : passed;
+        failed = typeof testSummary["failed"] === "number" ? testSummary["failed"] : failed;
+        errored = typeof testSummary["errored"] === "number" ? testSummary["errored"] : errored;
+        skipped = typeof testSummary["skipped"] === "number" ? testSummary["skipped"] : skipped;
       }
     } catch {
       // Non-JSON stderr and older CLI output are parsed below.
@@ -223,7 +223,7 @@ export async function runModuleTest(
   try {
     await extractValidatedModuleArchive(archivePath, staging);
     const root = await moduleRootPath(staging);
-    const binary = process.env.TERRAFORM_TEST_BINARY_PATH ?? "terraform";
+    const binary = process.env["TERRAFORM_TEST_BINARY_PATH"] ?? "terraform";
     const args = [
       binary,
       "test",

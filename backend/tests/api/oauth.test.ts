@@ -138,7 +138,7 @@ describe("Terraform login OAuth", () => {
     const baseParams = await authorizationParameters();
 
     const missingChallengeParams = { ...baseParams } as Record<string, string>;
-    delete missingChallengeParams.code_challenge;
+    delete missingChallengeParams["code_challenge"];
     const missingRes = await oauthApp.handle(new Request(
       `http://localhost/oauth/authorization?${new URLSearchParams(missingChallengeParams)}`,
     ));

@@ -52,7 +52,7 @@ test("fails closed and deletes only after exact confirmation and a successful re
   const onDeleted = mock((): void => {
     // Callback assertion below.
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter>
@@ -63,7 +63,7 @@ test("fails closed and deletes only after exact confirmation and a successful re
     </MemoryRouter>,
   );
 
-  const closedButton = view.getByRole("button", { name: "Delete workspace" });
+  const closedButton = view.getByRole("button", { name: "Delete workspace" }) as HTMLButtonElement;
   expect(closedButton.disabled).toBe(true);
   fireEvent.click(closedButton);
   expect(fetchMock).not.toHaveBeenCalled();
@@ -83,10 +83,10 @@ test("fails closed and deletes only after exact confirmation and a successful re
 
   const confirmation = view.getByLabelText("Workspace name");
   changeInput(confirmation, "Production");
-  expect(view.getByRole("button", { name: "Delete workspace permanently" }).disabled)
+  expect((view.getByRole("button", { name: "Delete workspace permanently" }) as HTMLButtonElement).disabled)
     .toBe(true);
   changeInput(confirmation, "production");
-  expect(view.getByRole("button", { name: "Delete workspace permanently" }).disabled)
+  expect((view.getByRole("button", { name: "Delete workspace permanently" }) as HTMLButtonElement).disabled)
     .toBe(false);
 
   await act(async (): Promise<void> => {
@@ -134,7 +134,7 @@ test("updates destroy-plan permission and navigates to the queued destroy run", 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   const onDeleted = mock((): void => {
     // Delete behavior is covered separately.
   });
@@ -171,8 +171,8 @@ test("updates destroy-plan permission and navigates to the queued destroy run", 
   );
 
   const view = render(renderComponent(false));
-  const setting = view.getByRole("checkbox", { name: "Allow destroy plans" });
-  const queueButton = view.getByRole("button", { name: "Queue destroy plan" });
+  const setting = view.getByRole("checkbox", { name: "Allow destroy plans" }) as HTMLInputElement;
+  const queueButton = view.getByRole("button", { name: "Queue destroy plan" }) as HTMLButtonElement;
   expect(setting.disabled).toBe(true);
   expect(queueButton.disabled).toBe(true);
   expect(view.getByRole("button", { name: "Delete workspace" })).toBeTruthy();
@@ -183,7 +183,7 @@ test("updates destroy-plan permission and navigates to the queued destroy run", 
   await waitFor((): void => {
     expect(view.getByRole("checkbox", { name: "Allow destroy plans" }).getAttribute("aria-checked")).toBe("true");
   });
-  expect(view.getByRole("button", { name: "Queue destroy plan" }).disabled).toBe(false);
+  expect((view.getByRole("button", { name: "Queue destroy plan" }) as HTMLButtonElement).disabled).toBe(false);
   expect(patchBody).toMatchObject({
     data: {
       id: "ws/1",

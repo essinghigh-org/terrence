@@ -36,14 +36,14 @@ function error(set: SetObj, status: number, detail: string): Record<string, unkn
 }
 
 function tokenFromContext(ctx: Pick<Ctx, "params" | "query" | "body">): string {
-  const fromParams = ctx.params?.token;
+  const fromParams = ctx.params?.["token"];
   if (typeof fromParams === "string" && fromParams !== "") return fromParams;
-  const fromQuery = ctx.query?.token;
+  const fromQuery = ctx.query?.["token"];
   if (typeof fromQuery === "string" && fromQuery !== "") return fromQuery;
   const body = ctx.body !== null && typeof ctx.body === "object" ? ctx.body as Record<string, unknown> : {};
-  const data = body.data !== null && typeof body.data === "object" ? body.data as Record<string, unknown> : {};
-  const attrs = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
-  return typeof attrs.token === "string" ? attrs.token : "";
+  const data = body["data"] !== null && typeof body["data"] === "object" ? body["data"] as Record<string, unknown> : {};
+  const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+  return typeof attrs["token"] === "string" ? attrs["token"] : "";
 }
 
 function escapeHtml(value: string): string {
@@ -81,9 +81,9 @@ export const emailVerificationRoutes = new Elysia({ name: "email-verification" }
     });
     if (recent !== undefined) return error(set, 429, "A verification email was sent recently");
     const smtp = await getSettings("smtp");
-    const host = typeof smtp.host === "string" ? smtp.host.trim() : "";
+    const host = typeof smtp["host"] === "string" ? smtp["host"].trim() : "";
     const senderEmail = typeof smtp["sender-email"] === "string" ? smtp["sender-email"].trim() : "";
-    if (smtp.enabled !== true || host === "" || senderEmail === "") return error(set, 503, "Email delivery is not configured");
+    if (smtp["enabled"] !== true || host === "" || senderEmail === "") return error(set, 503, "Email delivery is not configured");
     const rawToken = generateAuthenticationToken("email");
     const tokenHash = hashAuthenticationToken(rawToken);
     const now = Date.now();
@@ -105,12 +105,12 @@ export const emailVerificationRoutes = new Elysia({ name: "email-verification" }
       await sendEmail(
         {
           host,
-          port: typeof smtp.port === "number" ? smtp.port : 25,
-          username: typeof smtp.username === "string" && smtp.username !== "" ? smtp.username : null,
-          password: typeof smtp.password === "string" ? smtp.password : null,
+          port: typeof smtp["port"] === "number" ? smtp["port"] : 25,
+          username: typeof smtp["username"] === "string" && smtp["username"] !== "" ? smtp["username"] : null,
+          password: typeof smtp["password"] === "string" ? smtp["password"] : null,
           senderEmail,
-          auth: smtp.auth === "none" || smtp.auth === "login" || smtp.auth === "plain" ? smtp.auth : "plain",
-          encryption: isSmtpEncryption(smtp.encryption) ? smtp.encryption : null,
+          auth: smtp["auth"] === "none" || smtp["auth"] === "login" || smtp["auth"] === "plain" ? smtp["auth"] : "plain",
+          encryption: isSmtpEncryption(smtp["encryption"]) ? smtp["encryption"] : null,
         },
         smtpMessage(email, verificationUrl),
       );

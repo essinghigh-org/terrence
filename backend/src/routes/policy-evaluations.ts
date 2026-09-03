@@ -131,7 +131,7 @@ export function tfPolicySetOutcomeResource(
 export const policyEvaluationRoutes = new Elysia({ name: "policyEvaluations" })
   .use(authPlugin)
   .get("/api/v2/task-stages/:task_stage_id/policy-evaluations", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const stageId = params.task_stage_id ?? "";
+    const stageId = params["task_stage_id"] ?? "";
     const stage = (await db.select().from(taskStages).where(eq(taskStages.id, stageId)))[0];
     if (stage === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const authorized = await findAuthorizedRun(stage.runId, user?.id, orgId, teamId);
@@ -141,7 +141,7 @@ export const policyEvaluationRoutes = new Elysia({ name: "policyEvaluations" })
     return { data: evals.map(evaluationResource) };
   })
   .get("/api/v2/policy-evaluations/:policy_evaluation_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const evalId = params.policy_evaluation_id ?? "";
+    const evalId = params["policy_evaluation_id"] ?? "";
     const evalRecord = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, evalId)))[0];
     if (evalRecord === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (evalRecord.runId !== null && evalRecord.runId !== undefined) {
@@ -152,7 +152,7 @@ export const policyEvaluationRoutes = new Elysia({ name: "policyEvaluations" })
     return { data: evaluationResource(evalRecord) };
   })
   .get("/api/v2/policy-evaluations/:policy_evaluation_id/policy-set-outcomes", async ({ params, request, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const evalId = params.policy_evaluation_id ?? "";
+    const evalId = params["policy_evaluation_id"] ?? "";
     const evalRecord = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, evalId)))[0];
     if (evalRecord === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (evalRecord.runId !== null && evalRecord.runId !== undefined) {
@@ -187,7 +187,7 @@ export const policyEvaluationRoutes = new Elysia({ name: "policyEvaluations" })
     };
   })
   .get("/api/v2/policy-set-outcomes/:policy_set_outcome_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const outcomeId = params.policy_set_outcome_id ?? "";
+    const outcomeId = params["policy_set_outcome_id"] ?? "";
     const outcome = (await db.select().from(policySetOutcomes).where(eq(policySetOutcomes.id, outcomeId)))[0];
     if (outcome === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const evaluation = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, outcome.policyEvaluationId)))[0];
@@ -215,7 +215,7 @@ export const policyEvaluationRoutes = new Elysia({ name: "policyEvaluations" })
     };
   })
   .get("/api/v2/tf-policy-evaluations/:tf_policy_evaluation_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const evalId = params.tf_policy_evaluation_id ?? "";
+    const evalId = params["tf_policy_evaluation_id"] ?? "";
     const evalRecord = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, evalId)))[0];
     if (evalRecord === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (evalRecord.runId !== null && evalRecord.runId !== undefined) {
@@ -228,7 +228,7 @@ export const policyEvaluationRoutes = new Elysia({ name: "policyEvaluations" })
     // Audit finding 3: the exact path go-tfe TFPolicyEvaluationOutcomes.List
     // GETs (with page + filter[status]/filter[enforcement-level] support) so
     // the CLI renders per-stage TF policy outcomes instead of skipping them.
-    const evalId = params.tf_policy_evaluation_id ?? "";
+    const evalId = params["tf_policy_evaluation_id"] ?? "";
     const evalRecord = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, evalId)))[0];
     if (evalRecord === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (evalRecord.runId !== null && evalRecord.runId !== undefined) {
@@ -265,7 +265,7 @@ export const policyEvaluationRoutes = new Elysia({ name: "policyEvaluations" })
     };
   })
   .get("/api/v2/runs/:run_id/tf-policy-evaluations", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId, teamId);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const evals = await db.select().from(policyEvaluations).where(eq(policyEvaluations.runId, runId));
@@ -276,7 +276,7 @@ export const policyEvaluationRoutes = new Elysia({ name: "policyEvaluations" })
     };
   })
   .get("/api/v2/tf-policy-set-outcomes/:tf_policy_set_outcome_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const outcomeId = params.tf_policy_set_outcome_id ?? "";
+    const outcomeId = params["tf_policy_set_outcome_id"] ?? "";
     const outcome = (await db.select().from(policySetOutcomes).where(eq(policySetOutcomes.id, outcomeId)))[0];
     if (outcome === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const evaluation = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, outcome.policyEvaluationId)))[0];

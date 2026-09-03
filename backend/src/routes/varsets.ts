@@ -35,7 +35,7 @@ type ResItem = Readonly<{
 export const varsetRoutes = new Elysia({ name: "varsets" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/varsets", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, orgId, teamId, "read-varsets"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -150,21 +150,21 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     return { data, ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/organizations/:org_name/varsets", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, orgId, teamId, "manage-varsets"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : undefined;
-    if (data?.type !== "varsets" || attributes === undefined || attributes === null || !validVariableSetAttributes(attributes)) {
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : undefined;
+    if (data?.["type"] !== "varsets" || attributes === undefined || attributes === null || !validVariableSetAttributes(attributes)) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable set attributes" }] };
     }
-    const name = typeof attributes.name === "string" ? attributes.name.trim() : "";
-    const description = typeof attributes.description === "string" ? attributes.description : null;
-    const global = typeof attributes.global === "boolean" ? attributes.global : false;
-    const priority = typeof attributes.priority === "boolean" ? attributes.priority : false;
+    const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
+    const description = typeof attributes["description"] === "string" ? attributes["description"] : null;
+    const global = typeof attributes["global"] === "boolean" ? attributes["global"] : false;
+    const priority = typeof attributes["priority"] === "boolean" ? attributes["priority"] : false;
     const parentProjectId = typeof attributes["parent-project-id"] === "string"
       ? attributes["parent-project-id"]
       : null;
@@ -194,19 +194,19 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     return { data: await variableSetResource(record) };
   })
   .get("/api/v2/varsets/:varset_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const varsetId = params.varset_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId);
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: await variableSetResource(record) };
   })
   .patch("/api/v2/varsets/:varset_id", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<unknown> => {
-    const varsetId = params.varset_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : undefined;
-    if (data?.type !== "varsets" || !attributes || !validVariableSetAttributes(attributes, true)) {
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : undefined;
+    if (data?.["type"] !== "varsets" || !attributes || !validVariableSetAttributes(attributes, true)) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable set attributes" }] };
     }
     if (attributes["parent-project-id"] !== undefined) {
@@ -214,10 +214,10 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The owning project of a variable set cannot be changed" }] };
     }
     const updated = {
-      name: typeof attributes.name === "string" ? attributes.name.trim() : record.name,
-      description: attributes.description === undefined ? record.description : (typeof attributes.description === "string" ? attributes.description : null),
-      global: typeof attributes.global === "boolean" ? attributes.global : record.global,
-      priority: typeof attributes.priority === "boolean" ? attributes.priority : record.priority,
+      name: typeof attributes["name"] === "string" ? attributes["name"].trim() : record.name,
+      description: attributes["description"] === undefined ? record.description : (typeof attributes["description"] === "string" ? attributes["description"] : null),
+      global: typeof attributes["global"] === "boolean" ? attributes["global"] : record.global,
+      priority: typeof attributes["priority"] === "boolean" ? attributes["priority"] : record.priority,
     };
     if (record.parentProjectId !== null && updated.global === true) {
       (set as { status: number }).status = 422;
@@ -227,7 +227,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     return { data: await variableSetResource({ ...record, ...updated }) };
   })
   .delete("/api/v2/varsets/:varset_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const varsetId = params.varset_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(variableSets).where(eq(variableSets.id, record.id));
@@ -236,7 +236,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
   })
   // relationships/workspaces
   .post("/api/v2/varsets/:varset_id/relationships/workspaces", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const varsetId = params.varset_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const workspaceIds = workspaceRelationshipIds(body);
@@ -252,7 +252,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     return {};
   })
   .get("/api/v2/varsets/:varset_id/relationships/workspaces", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const varsetId = params.varset_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId);
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const links = await db.query.variableSetWorkspaces.findMany({
@@ -262,7 +262,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     return { data: links.map((link: { readonly workspaceId: string }): Record<string, string> => ({ id: link.workspaceId, type: "workspaces" })) };
   })
   .delete("/api/v2/varsets/:varset_id/relationships/workspaces", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const varsetId = params.varset_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const workspaceIds = workspaceRelationshipIds(body);
@@ -275,7 +275,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
   })
   // relationships/projects
   .post("/api/v2/varsets/:varset_id/relationships/projects", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const varsetId = params.varset_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const projectIds = projectRelationshipIds(body);
@@ -291,7 +291,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     return {};
   })
   .delete("/api/v2/varsets/:varset_id/relationships/projects", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const varsetId = params.varset_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const projectIds = projectRelationshipIds(body);
@@ -304,7 +304,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
   })
   // relationships/stacks (tfe_stack_variable_set — go-tfe VariableSets.ApplyToStacks / RemoveFromStacks)
   .post("/api/v2/varsets/:varset_id/relationships/stacks", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const varsetId = params.varset_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const stackIds = stackRelationshipIds(body);
@@ -320,7 +320,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     return {};
   })
   .delete("/api/v2/varsets/:varset_id/relationships/stacks", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const varsetId = params.varset_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const stackIds = stackRelationshipIds(body);
@@ -333,7 +333,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
   })
   // relationships/vars
   .get("/api/v2/varsets/:varset_id/relationships/vars", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const varsetId = params.varset_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId);
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const { number, size } = pageRequest(request);
@@ -346,29 +346,29 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     return { data: variables.map((v: VarItem): Record<string, unknown> => variableSetVariableResource(v)), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/varsets/:varset_id/relationships/vars/:var_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const varsetId = params.varset_id ?? "";
-    const varId = params.var_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
+    const varId = params["var_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId);
     const variable = record !== undefined ? await db.query.variableSetVariables.findFirst({ where: and(eq(variableSetVariables.id, varId), eq(variableSetVariables.variableSetId, record.id)) }) : undefined;
     if (variable === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: variableSetVariableResource(variable) };
   })
   .post("/api/v2/varsets/:varset_id/relationships/vars", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<unknown> => {
-    const varsetId = params.varset_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : undefined;
-    if (data?.type !== "vars" || !validVariableSetVariableAttributes(attributes)) {
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : undefined;
+    if (data?.["type"] !== "vars" || !validVariableSetVariableAttributes(attributes)) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] };
     }
-    const key = typeof attributes?.key === "string" ? attributes.key : "";
-    const rawValue = typeof attributes?.value === "string" ? attributes.value : "";
-    const category = typeof attributes?.category === "string" ? attributes.category : "terraform";
-    const sensitive = typeof attributes?.sensitive === "boolean" ? attributes.sensitive : false;
-    const hcl = typeof attributes?.hcl === "boolean" ? attributes.hcl : false;
-    const description = typeof attributes?.description === "string" ? attributes.description : null;
+    const key = typeof attributes?.["key"] === "string" ? attributes["key"] : "";
+    const rawValue = typeof attributes?.["value"] === "string" ? attributes["value"] : "";
+    const category = typeof attributes?.["category"] === "string" ? attributes["category"] : "terraform";
+    const sensitive = typeof attributes?.["sensitive"] === "boolean" ? attributes["sensitive"] : false;
+    const hcl = typeof attributes?.["hcl"] === "boolean" ? attributes["hcl"] : false;
+    const description = typeof attributes?.["description"] === "string" ? attributes["description"] : null;
     // Sensitive values are encrypted at rest (todo 167/168).
     const stored = await variableValueForWrite(sensitive, rawValue);
     const variable = { id: `var-${crypto.randomUUID()}`, variableSetId: record.id, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description };
@@ -380,7 +380,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     return { data: variableSetVariableResource(variable) };
   })
   .patch("/api/v2/varsets/:varset_id/relationships/vars", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<unknown> => {
-    const varsetId = params.varset_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const relationship = variableRelationshipResources(body);
@@ -400,15 +400,15 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       const v = byId.get(item.id);
       if (v === undefined) throw new Error("Variable not found");
       const base = variableSetVariableUpdate(v, item.attributes as Parameters<typeof variableSetVariableUpdate>[1]);
-      const sensitiveNow = base.sensitive === true;
-      const valueChanged = base.value !== v.value;
+      const sensitiveNow = base["sensitive"] === true;
+      const valueChanged = base["value"] !== v.value;
       const sensitiveChanged = sensitiveNow !== (v.sensitive === true);
       if (valueChanged || sensitiveChanged) {
-        const stored = await variableValueForWrite(sensitiveNow, base.value as string);
-        base.value = stored.value;
-        (base).valueEncrypted = stored.valueEncrypted;
+        const stored = await variableValueForWrite(sensitiveNow, base["value"] as string);
+        base["value"] = stored.value;
+        (base)["valueEncrypted"] = stored.valueEncrypted;
       } else {
-        (base).valueEncrypted = v.valueEncrypted;
+        (base)["valueEncrypted"] = v.valueEncrypted;
       }
       return { variable: v, values: base };
     }));
@@ -431,7 +431,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     return { data: relationship.many ? resources : resources[0] };
   })
   .delete("/api/v2/varsets/:varset_id/relationships/vars", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const varsetId = params.varset_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const relationship = variableRelationshipResources(body);
@@ -448,28 +448,28 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     return {};
   })
   .patch("/api/v2/varsets/:varset_id/relationships/vars/:var_id", async ({ params, user, orgId, teamId, body, set }: ParamCtx): Promise<unknown> => {
-    const varsetId = params.varset_id ?? "";
-    const varId = params.var_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
+    const varId = params["var_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     const variable = record !== undefined ? await db.query.variableSetVariables.findFirst({ where: and(eq(variableSetVariables.id, varId), eq(variableSetVariables.variableSetId, record.id)) }) : undefined;
     if (record === undefined || variable === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : undefined;
-    if (data?.type !== "vars" || !validVariableSetVariableAttributes(attributes, true)) {
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : undefined;
+    if (data?.["type"] !== "vars" || !validVariableSetVariableAttributes(attributes, true)) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] };
     }
     const updated = variableSetVariableUpdate(variable, attributes as Parameters<typeof variableSetVariableUpdate>[1]);
     // Re-encrypt when the value or sensitive flag changed (todo 167-169).
-    const sensitiveNow = updated.sensitive === true;
-    const valueChanged = updated.value !== variable.value;
+    const sensitiveNow = updated["sensitive"] === true;
+    const valueChanged = updated["value"] !== variable.value;
     const sensitiveChanged = sensitiveNow !== (variable.sensitive === true);
     if (valueChanged || sensitiveChanged) {
-      const stored = await variableValueForWrite(sensitiveNow, updated.value as string);
-      updated.value = stored.value;
-      updated.valueEncrypted = stored.valueEncrypted;
+      const stored = await variableValueForWrite(sensitiveNow, updated["value"] as string);
+      updated["value"] = stored.value;
+      updated["valueEncrypted"] = stored.valueEncrypted;
     } else {
-      updated.valueEncrypted = variable.valueEncrypted;
+      updated["valueEncrypted"] = variable.valueEncrypted;
     }
     try { await db.update(variableSetVariables).set(updated).where(eq(variableSetVariables.id, variable.id)); } catch (error: unknown) {
       if (isUniqueConstraintError(error)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this set" }] }; }
@@ -478,8 +478,8 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     return { data: variableSetVariableResource({ ...variable, ...updated }) };
   })
   .delete("/api/v2/varsets/:varset_id/relationships/vars/:var_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const varsetId = params.varset_id ?? "";
-    const varId = params.var_id ?? "";
+    const varsetId = params["varset_id"] ?? "";
+    const varId = params["var_id"] ?? "";
     const record = await findAuthorizedVariableSet(varsetId, user?.id, orgId, teamId, "manage-varsets");
     const variable = record !== undefined ? await db.query.variableSetVariables.findFirst({ where: and(eq(variableSetVariables.id, varId), eq(variableSetVariables.variableSetId, record.id)) }) : undefined;
     if (record === undefined || variable === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }

@@ -69,7 +69,7 @@ export const orgTools: readonly McpTool[] = [
     },
     requires: ["settings:read"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const orgName = typeof args.org === "string" ? args.org : "";
+      const orgName = typeof args["org"] === "string" ? args["org"] : "";
       const org = await db.query.organizations.findFirst({
         where: eq(organizations.name, orgName),
       });

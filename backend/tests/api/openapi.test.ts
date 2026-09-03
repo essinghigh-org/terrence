@@ -11,14 +11,14 @@ describe("openapi contract", () => {
     const res = await app.handle(new Request("http://terrence.test/openapi.json"));
     expect(res.status).toBe(200);
     spec = (await res.json()) as Record<string, unknown>;
-    paths = spec.paths as Record<string, Record<string, unknown>>;
+    paths = spec["paths"] as Record<string, Record<string, unknown>>;
   });
 
   it("is valid OAS 3.1 with required top-level fields", () => {
-    expect(spec.openapi).toMatch(/^3\./);
-    expect((spec.info as { title?: string }).title).toBeTruthy();
-    expect((spec.info as { version?: string }).version).toBeTruthy();
-    expect(spec.paths).toBeDefined();
+    expect(spec["openapi"]).toMatch(/^3\./);
+    expect((spec["info"] as { title?: string }).title).toBeTruthy();
+    expect((spec["info"] as { version?: string }).version).toBeTruthy();
+    expect(spec["paths"]).toBeDefined();
     expect(typeof paths).toBe("object");
   });
 
@@ -65,7 +65,7 @@ describe("openapi contract", () => {
   });
 
   it("documents create-style bulk actions with their 201 response", () => {
-    const operation = paths["/api/v2/organizations/{org_name}/explorer/bulk-actions"]?.post as {
+    const operation = paths["/api/v2/organizations/{org_name}/explorer/bulk-actions"]?.["post"] as {
       responses?: Record<string, unknown>;
     } | undefined;
     expect(operation?.responses?.["201"]).toBeDefined();
@@ -73,7 +73,7 @@ describe("openapi contract", () => {
   });
 
   it("documents provider artwork as an image response", () => {
-    const operation = paths["/api/v2/provider-icons/{hostname}/{namespace}/{name}"]?.get as {
+    const operation = paths["/api/v2/provider-icons/{hostname}/{namespace}/{name}"]?.["get"] as {
       responses?: Record<string, { content?: Record<string, unknown> }>;
     } | undefined;
     expect(operation?.responses?.["200"]?.content?.["image/svg+xml"]).toEqual({

@@ -42,11 +42,11 @@ function request(path: string, method = "GET", token = adminToken, body?: unknow
 }
 
 async function withStrict<T>(fn: () => Promise<T>): Promise<T> {
-  process.env.AUDIT_STRICT = "1";
+  process.env["AUDIT_STRICT"] = "1";
   try {
     return await fn();
   } finally {
-    delete process.env.AUDIT_STRICT;
+    delete process.env["AUDIT_STRICT"];
   }
 }
 
@@ -92,7 +92,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  delete process.env.AUDIT_STRICT;
+  delete process.env["AUDIT_STRICT"];
   if (sensitiveVarId !== "") await db.delete(workspaceVariables).where(eq(workspaceVariables.id, sensitiveVarId));
   if (plainVarId !== "") await db.delete(workspaceVariables).where(eq(workspaceVariables.id, plainVarId));
   if (sshKeyId !== "") await db.delete(sshKeys).where(eq(sshKeys.id, sshKeyId));
@@ -110,19 +110,19 @@ describe("admin system-info (kanban 12.10)", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { data: Record<string, unknown> };
     const data = body.data;
-    expect(typeof data.version).toBe("string");
+    expect(typeof data["version"]).toBe("string");
     expect(typeof data["uptime-seconds"]).toBe("number");
     expect((data["uptime-seconds"] as number)).toBeGreaterThan(0);
     expect(typeof data["started-at"]).toBe("string");
-    expect((data.storage as { dir: string }).dir).toBeTruthy();
-    expect(typeof (data.database as Record<string, unknown>).sizeBytes).toBe("number");
-    expect(typeof (data.database as Record<string, unknown>).journalMode).toBe("string");
-    expect(typeof (data.worker as { enabled: boolean }).enabled).toBe("boolean");
-    expect((data.worker as { enabled: boolean }).enabled).toBe(process.env.TERRENCE_DISABLE_WORKER !== "1");
-    expect((data.worker as { "drain-mode": boolean })["drain-mode"]).toBe(process.env.TERRENCE_DISABLE_WORKER === "1");
-    expect(typeof (data.sandbox as { abi: number }).abi).toBe("number");
-    expect(typeof (data.integrations as { "saml-enabled": boolean })["saml-enabled"]).toBe("boolean");
-    expect(typeof (data.agents as { total: number }).total).toBe("number");
+    expect((data["storage"] as { dir: string }).dir).toBeTruthy();
+    expect(typeof (data["database"] as Record<string, unknown>)["sizeBytes"]).toBe("number");
+    expect(typeof (data["database"] as Record<string, unknown>)["journalMode"]).toBe("string");
+    expect(typeof (data["worker"] as { enabled: boolean }).enabled).toBe("boolean");
+    expect((data["worker"] as { enabled: boolean }).enabled).toBe(process.env["TERRENCE_DISABLE_WORKER"] !== "1");
+    expect((data["worker"] as { "drain-mode": boolean })["drain-mode"]).toBe(process.env["TERRENCE_DISABLE_WORKER"] === "1");
+    expect(typeof (data["sandbox"] as { abi: number }).abi).toBe("number");
+    expect(typeof (data["integrations"] as { "saml-enabled": boolean })["saml-enabled"]).toBe("boolean");
+    expect(typeof (data["agents"] as { total: number }).total).toBe("number");
   });
 
   it("rejects non-admins with 404", async () => {
@@ -146,7 +146,7 @@ describe("strict audit mode (kanban 12.16)", () => {
       ),
     });
     expect(offRow).toBeDefined();
-    expect((offRow?.details as Record<string, unknown> | null)?.description).toBe("strict-off-token");
+    expect((offRow?.details as Record<string, unknown> | null)?.["description"]).toBe("strict-off-token");
 
     // Still audited when the flag is on.
     const onResponse = await withStrict(async () =>
@@ -163,7 +163,7 @@ describe("strict audit mode (kanban 12.16)", () => {
       ),
     });
     expect(onRow).toBeDefined();
-    expect((onRow?.details as Record<string, unknown> | null)?.description).toBe("strict-on-token");
+    expect((onRow?.details as Record<string, unknown> | null)?.["description"]).toBe("strict-on-token");
   });
 
   it("records SSH key access and mutation when AUDIT_STRICT is enabled", async () => {
@@ -209,7 +209,7 @@ describe("strict audit mode (kanban 12.16)", () => {
       ),
     });
     expect(sensitiveRow).toBeDefined();
-    expect((sensitiveRow?.details as Record<string, unknown> | null)?.sensitive).toBe(true);
+    expect((sensitiveRow?.details as Record<string, unknown> | null)?.["sensitive"]).toBe(true);
     const plainRow = await db.query.auditLogs.findFirst({
       where: and(
         eq(auditLogs.action, "read"),

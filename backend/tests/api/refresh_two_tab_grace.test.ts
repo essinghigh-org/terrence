@@ -62,8 +62,8 @@ describe("refresh token two-tab concurrency grace", () => {
 
     const bodyA = (await tabA.json()) as { data: { attributes: Record<string, unknown> } };
     const bodyB = (await tabB.json()) as { data: { attributes: Record<string, unknown> } };
-    expect(bodyA.data.attributes.token).toBeTruthy();
-    expect(bodyB.data.attributes.token).toBeTruthy();
+    expect(bodyA.data.attributes["token"]).toBeTruthy();
+    expect(bodyB.data.attributes["token"]).toBeTruthy();
 
     // The family survives: exactly two live sessions (successor + grace
     // session reuse does not create a new family), none revoked.

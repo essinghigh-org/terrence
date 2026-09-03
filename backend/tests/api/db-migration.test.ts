@@ -17,13 +17,13 @@ import { isMaintenanceActive, exitMaintenance } from "../../src/lib/maintenance"
 import { readBootConfigFile } from "../../src/lib/boot-config";
 import { storageDir } from "../../src/db/driver";
 import { makeTestDbName } from "../setup";
-const isPostgresEnv = !!process.env.PG_ADMIN_URL || (process.env.DATABASE_URL?.includes("postgres") ?? false);
+const isPostgresEnv = !!process.env["PG_ADMIN_URL"] || (process.env["DATABASE_URL"]?.includes("postgres") ?? false);
 
 
-process.env.TERRENCE_DISABLE_RESTART ??= "1";
-process.env.MIGRATION_SKIP_DRAIN = "true";
+process.env["TERRENCE_DISABLE_RESTART"] ??= "1";
+process.env["MIGRATION_SKIP_DRAIN"] = "true";
 
-const PG_ADMIN_URL = process.env.PG_TEST_ADMIN_URL ?? "postgres://terrence:terrence@127.0.0.1:5432/terrence_test";
+const PG_ADMIN_URL = process.env["PG_TEST_ADMIN_URL"] ?? "postgres://terrence:terrence@127.0.0.1:5432/terrence_test";
 
 let adminToken = "";
 let adminId = "";
@@ -184,7 +184,7 @@ describe.skipIf(!isPostgresEnv)("SQLite -> PostgreSQL migration wizard", () => {
     };
     // The wizard is SQLite->Postgres only; on Postgres DATABASE_URL the
     // source is null (no sqlite file to migrate).
-    const isPg = (process.env.DATABASE_URL ?? "").startsWith("postgres");
+    const isPg = (process.env["DATABASE_URL"] ?? "").startsWith("postgres");
     if (isPg) {
       expect(body.data["source-database"]).toBeNull();
     } else {
@@ -226,7 +226,7 @@ describe.skipIf(!isPostgresEnv)("SQLite -> PostgreSQL migration wizard", () => {
   test("runs the full migration, verifies, switches the backend, and writes the manifest", async (): Promise<void> => {
     if (!postgresAvailable) return;
     // Wizard is SQLite->Postgres only; skip when already on Postgres.
-    if ((process.env.DATABASE_URL ?? "").startsWith("postgres")) return;
+    if ((process.env["DATABASE_URL"] ?? "").startsWith("postgres")) return;
     const start = await app.handle(adminRequest("/api/v2/admin/db-migration/start", "POST", {
       data: { attributes: { url: targetUrl } },
     }));
@@ -290,14 +290,14 @@ describe.skipIf(!isPostgresEnv)("SQLite -> PostgreSQL migration wizard", () => {
     };
     expect(manifest.source).toBe("sqlite");
     expect(manifest.destination).toBe("postgres");
-    expect(manifest.tables.organizations).toBe(expectedOrgs);
-    expect(manifest.tables.workspaces).toBe(expectedWorkspaces);
-    expect(manifest.tables.runs).toBe(expectedRuns);
+    expect(manifest.tables["organizations"]).toBe(expectedOrgs);
+    expect(manifest.tables["workspaces"]).toBe(expectedWorkspaces);
+    expect(manifest.tables["runs"]).toBe(expectedRuns);
 
     // Switch writes the boot config. The wizard refuses while DATABASE_URL
     // is set (it would override the boot config at startup), so the switch
     // must run with the env override removed, as in a real deployment.
-    delete process.env.DATABASE_URL;
+    delete process.env["DATABASE_URL"];
     const switched = await app.handle(adminRequest("/api/v2/admin/db-migration/switch", "POST"));
     expect(switched.status).toBe(200);
     const config = readBootConfigFile(storageDir);
@@ -308,7 +308,7 @@ describe.skipIf(!isPostgresEnv)("SQLite -> PostgreSQL migration wizard", () => {
 
   test("cannot start a second migration after switching", async (): Promise<void> => {
     if (!postgresAvailable) return;
-    if ((process.env.DATABASE_URL ?? "").startsWith("postgres")) return;
+    if ((process.env["DATABASE_URL"] ?? "").startsWith("postgres")) return;
     const second = await app.handle(adminRequest("/api/v2/admin/db-migration/start", "POST", {
       data: { attributes: { url: targetUrl } },
     }));

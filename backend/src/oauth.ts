@@ -180,7 +180,7 @@ async function approveForUser(
 function oauthError(set: { status?: number | string; headers: Record<string, string | number> }, error: string): { error: string } { // eslint-disable-line @typescript-eslint/prefer-readonly-parameter-types
   set.status = 400;
   set.headers["Cache-Control"] = "no-store";
-  set.headers.Pragma = "no-cache";
+  set.headers["Pragma"] = "no-cache";
   return { error };
 }
 
@@ -303,7 +303,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
 
 
     const accessToken = `user-${crypto.randomUUID()}`;
-    const cliTokenTtlMs = Number(process.env.CLI_TOKEN_TTL_MS);
+    const cliTokenTtlMs = Number(process.env["CLI_TOKEN_TTL_MS"]);
 
 
     if (!Number.isFinite(cliTokenTtlMs) || cliTokenTtlMs <= 0) {
@@ -329,6 +329,6 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     }
 
     set.headers["Cache-Control"] = "no-store";
-    set.headers.Pragma = "no-cache";
+    set.headers["Pragma"] = "no-cache";
     return { access_token: accessToken, token_type: "bearer" };
   });

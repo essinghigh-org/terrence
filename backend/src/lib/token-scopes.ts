@@ -203,8 +203,8 @@ const PERMISSION_KEYS = new Set<string>(ALL_PERMISSION_GRANTS);
 
 function isTagFilter(value: unknown): value is TokenScopeTagFilter {
   return typeof value === "object" && value !== null
-    && typeof (value as Record<string, unknown>).key === "string" && (value as Record<string, unknown>).key !== ""
-    && typeof (value as Record<string, unknown>).value === "string";
+    && typeof (value as Record<string, unknown>)["key"] === "string" && (value as Record<string, unknown>)["key"] !== ""
+    && typeof (value as Record<string, unknown>)["value"] === "string";
 }
 
 function isCombinator(value: unknown): value is "AND" | "OR" {
@@ -225,13 +225,13 @@ function parseTagRule(raw: unknown, path: string, depth = 0): TokenScopeTagRule 
     throw new Error(`${path} must be a tag filter or a rule group`);
   }
   const obj = raw as Record<string, unknown>;
-  if (obj.combinator !== undefined) {
-    if (!isCombinator(obj.combinator)) throw new Error(`${path}.combinator must be "AND" or "OR"`);
-    if (!Array.isArray(obj.rules)) throw new Error(`${path}.rules must be an array`);
-    if (obj.rules.length === 0) throw new Error(`${path}.rules must contain at least one rule`);
+  if (obj["combinator"] !== undefined) {
+    if (!isCombinator(obj["combinator"])) throw new Error(`${path}.combinator must be "AND" or "OR"`);
+    if (!Array.isArray(obj["rules"])) throw new Error(`${path}.rules must be an array`);
+    if (obj["rules"].length === 0) throw new Error(`${path}.rules must contain at least one rule`);
     return {
-      combinator: obj.combinator,
-      rules: obj.rules.map((rule: unknown, index: number): TokenScopeTagRule => parseTagRule(rule, `${path}.rules[${index}]`, depth + 1)),
+      combinator: obj["combinator"],
+      rules: obj["rules"].map((rule: unknown, index: number): TokenScopeTagRule => parseTagRule(rule, `${path}.rules[${index}]`, depth + 1)),
     };
   }
   if (!isTagFilter(obj)) {
@@ -261,12 +261,12 @@ function parseTagExpression(raw: unknown): TokenScopeTags | null {
   }
   if (typeof raw !== "object") throw new Error("scopes.tags must be an object or an array");
   const obj = raw as Record<string, unknown>;
-  if (!isCombinator(obj.combinator)) throw new Error('scopes.tags.combinator must be "AND" or "OR"');
-  if (!Array.isArray(obj.rules)) throw new Error("scopes.tags.rules must be an array");
-  if (obj.rules.length === 0) throw new Error("scopes.tags.rules must contain at least one rule");
+  if (!isCombinator(obj["combinator"])) throw new Error('scopes.tags.combinator must be "AND" or "OR"');
+  if (!Array.isArray(obj["rules"])) throw new Error("scopes.tags.rules must be an array");
+  if (obj["rules"].length === 0) throw new Error("scopes.tags.rules must contain at least one rule");
   return {
-    combinator: obj.combinator,
-    rules: obj.rules.map((rule: unknown, index: number): TokenScopeTagRule => parseTagRule(rule, `scopes.tags.rules[${index}]`)),
+    combinator: obj["combinator"],
+    rules: obj["rules"].map((rule: unknown, index: number): TokenScopeTagRule => parseTagRule(rule, `scopes.tags.rules[${index}]`)),
   };
 }
 
@@ -290,27 +290,27 @@ function assertScopesObject(parsed: unknown): Record<string, unknown> {
 }
 
 function parseOrgsField(obj: Readonly<Record<string, unknown>>): string[] {
-  const orgs = obj.orgs;
+  const orgs = obj["orgs"];
   if (!Array.isArray(orgs) || orgs.length === 0 || orgs.some((o): boolean => typeof o !== "string" || o === "")) throw new Error("scopes.orgs must be a non-empty array of organization IDs");
   return orgs as string[];
 }
 
 function parseProjectsField(obj: Readonly<Record<string, unknown>>): string[] | null {
-  const projects = obj.projects;
+  const projects = obj["projects"];
   if (projects === null || projects === undefined) return null;
   if (!(Array.isArray(projects) && projects.every((p): boolean => typeof p === "string" && p !== ""))) throw new Error("scopes.projects must be an array of project IDs or null");
   return projects as string[];
 }
 
 function parseWorkspacesField(obj: Readonly<Record<string, unknown>>): string[] | null {
-  const workspaces = obj.workspaces;
+  const workspaces = obj["workspaces"];
   if (workspaces === null || workspaces === undefined) return null;
   if (!(Array.isArray(workspaces) && workspaces.every((w): boolean => typeof w === "string" && w !== ""))) throw new Error("scopes.workspaces must be an array of workspace IDs or null");
   return workspaces as string[];
 }
 
 function parsePermissionsField(obj: Readonly<Record<string, unknown>>): Readonly<Record<string, boolean>> {
-  const permissions = obj.permissions;
+  const permissions = obj["permissions"];
   if (typeof permissions !== "object" || permissions === null || Array.isArray(permissions)) throw new Error("scopes.permissions must be an object");
   for (const [key, value] of Object.entries(permissions as Record<string, unknown>)) {
     if (!PERMISSION_KEYS.has(key)) throw new Error(`scopes.permissions contains unknown permission: ${key}`);
@@ -323,11 +323,11 @@ export function parseTokenScopes(raw: unknown): TokenScopes | null {
   if (raw === null || raw === undefined || raw === "") return null;
   const parsed = parseScopesRaw(raw);
   const obj = assertScopesObject(parsed);
-  if (obj.version !== 1) throw new Error("scopes.version must be 1");
+  if (obj["version"] !== 1) throw new Error("scopes.version must be 1");
   const orgs = parseOrgsField(obj);
   const projects = parseProjectsField(obj);
   const workspaces = parseWorkspacesField(obj);
-  const tags = parseTagExpression(obj.tags);
+  const tags = parseTagExpression(obj["tags"]);
   const permissions = parsePermissionsField(obj);
   const scope: TokenScopes = { version: 1, orgs, projects, workspaces, tags, permissions };
   return scope;

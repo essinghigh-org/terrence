@@ -88,11 +88,11 @@ beforeAll(async () => {
     publicKeyEncoding: { type: "spki", format: "pem" },
   });
   publicKey = keys.publicKey;
-  process.env.GITHUB_APP_ID = "12345";
-  process.env.GITHUB_APP_PRIVATE_KEY = keys.privateKey;
-  process.env.GITHUB_APP_SLUG = "terrence-test";
-  delete process.env.GITHUB_APP_API_URL;
-  delete process.env.GITHUB_APP_HTTP_URL;
+  process.env["GITHUB_APP_ID"] = "12345";
+  process.env["GITHUB_APP_PRIVATE_KEY"] = keys.privateKey;
+  process.env["GITHUB_APP_SLUG"] = "terrence-test";
+  delete process.env["GITHUB_APP_API_URL"];
+  delete process.env["GITHUB_APP_HTTP_URL"];
 
   const mockFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = input instanceof Request ? input.url : input.toString();
@@ -106,7 +106,7 @@ beforeAll(async () => {
     });
     if (url.includes("/access_tokens")) {
       const payload: Record<string, unknown> = { token: "installation-token" };
-      if (accessTokenPermissions !== undefined) payload.permissions = accessTokenPermissions;
+      if (accessTokenPermissions !== undefined) payload["permissions"] = accessTokenPermissions;
       return Response.json(payload);
     }
     if (url.includes("/installation/repositories")) {
@@ -180,7 +180,7 @@ beforeEach(async () => {
   providerName = "octo-organization";
   accessTokenPermissions = { statuses: "write" };
   providerRequests.length = 0;
-  process.env.GITHUB_APP_SLUG = "terrence-test";
+  process.env["GITHUB_APP_SLUG"] = "terrence-test";
   await db.insert(organizationMemberships).values({
     id: `mem-github-app-${suffix}`,
     orgId,
@@ -220,9 +220,9 @@ describe("GitHub App installation setup", () => {
     expect((await request(`/api/v2/organizations/${orgName}/github-app/installations/setup`, null)).status).toBe(404);
     expect((await request(`/api/v2/organizations/${orgName}/github-app/installations/setup`, outsiderToken)).status).toBe(404);
 
-    delete process.env.GITHUB_APP_SLUG;
+    delete process.env["GITHUB_APP_SLUG"];
     expect((await request(`/api/v2/organizations/${orgName}/github-app/installations/setup`)).status).toBe(422);
-    process.env.GITHUB_APP_SLUG = "terrence-test";
+    process.env["GITHUB_APP_SLUG"] = "terrence-test";
 
     const { response, state } = await startSetup();
     expect(response.status).toBe(302);
@@ -336,8 +336,8 @@ describe("GitHub App installation setup", () => {
 
   test("discovers all installation repositories across bounded Link pages", async () => {
     const localId = `ghain-pagination-${suffix}`;
-    const previousApiUrl = process.env.GITHUB_APP_API_URL;
-    process.env.GITHUB_APP_API_URL = "https://github.example/api/v3";
+    const previousApiUrl = process.env["GITHUB_APP_API_URL"];
+    process.env["GITHUB_APP_API_URL"] = "https://github.example/api/v3";
     await db.insert(githubAppInstallations).values({
       id: localId,
       orgId,
@@ -355,8 +355,8 @@ describe("GitHub App installation setup", () => {
       expect(providerRequests.filter((entry): boolean => entry.url.includes("/installation/repositories"))).toHaveLength(2);
     } finally {
       await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, localId));
-      if (previousApiUrl === undefined) delete process.env.GITHUB_APP_API_URL;
-      else process.env.GITHUB_APP_API_URL = previousApiUrl;
+      if (previousApiUrl === undefined) delete process.env["GITHUB_APP_API_URL"];
+      else process.env["GITHUB_APP_API_URL"] = previousApiUrl;
     }
   });
 

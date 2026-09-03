@@ -100,24 +100,24 @@ function parseDefaultAgentPool(
   data: Readonly<Record<string, unknown>> | undefined,
   attributes: Readonly<Record<string, unknown>>,
 ): Readonly<{ provided: boolean; value: string | null }> | Readonly<{ error: string }> {
-  const relationships = typeof data?.relationships === "object" && data.relationships !== null
-    ? data.relationships as Record<string, unknown>
+  const relationships = typeof data?.["relationships"] === "object" && data["relationships"] !== null
+    ? data["relationships"] as Record<string, unknown>
     : {};
   if (Object.prototype.hasOwnProperty.call(relationships, "default-agent-pool")) {
     const relationship = relationships["default-agent-pool"];
     if (relationship === null || typeof relationship !== "object") {
       return { error: "default-agent-pool relationship is invalid" };
     }
-    const poolData = (relationship as Record<string, unknown>).data;
+    const poolData = (relationship as Record<string, unknown>)["data"];
     if (poolData === null) return { provided: true, value: null };
     if (typeof poolData !== "object") {
       return { error: "default-agent-pool relationship is invalid" };
     }
     const resource = poolData as Record<string, unknown>;
-    if (typeof resource.id !== "string" || (resource.type !== undefined && resource.type !== "agent-pools")) {
+    if (typeof resource["id"] !== "string" || (resource["type"] !== undefined && resource["type"] !== "agent-pools")) {
       return { error: "default-agent-pool relationship is invalid" };
     }
-    return { provided: true, value: resource.id };
+    return { provided: true, value: resource["id"] };
   }
   if (!Object.prototype.hasOwnProperty.call(attributes, "default-agent-pool")) {
     return { provided: false, value: null };
@@ -226,7 +226,7 @@ export async function ensureDefaultProject(orgId: string): Promise<typeof projec
 export const projectRoutes = new Elysia({ name: "projects" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/projects", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await ensureDefaultProject(org.id);
@@ -259,13 +259,13 @@ export const projectRoutes = new Elysia({ name: "projects" })
     })), ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/organizations/:org_name/projects", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const name = typeof attributes.name === "string" ? attributes.name : "";
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
     if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
     await ensureDefaultProject(org.id);
     const id = newProjectId();
@@ -274,7 +274,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: settings.error }] };
     }
-    const description = typeof attributes.description === "string" ? attributes.description : null;
+    const description = typeof attributes["description"] === "string" ? attributes["description"] : null;
     const newProj: typeof projects.$inferInsert = {
       id,
       orgId: org.id,
@@ -296,7 +296,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
     return { data: await projectResource(created, 0, 0) };
   })
   .get("/api/v2/projects/:project_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params.project_id ?? "";
+    const projectId = params["project_id"] ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const projectCounts = (await countsByProject([projectId])).get(projectId) ?? { workspaceCount: 0, teamCount: 0 };
@@ -308,17 +308,17 @@ export const projectRoutes = new Elysia({ name: "projects" })
     }) };
   })
   .patch("/api/v2/projects/:project_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params.project_id ?? "";
+    const projectId = params["project_id"] ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    if (data !== null && typeof data === "object" && "type" in data && (data as Record<string, unknown>).type !== undefined && (data as Record<string, unknown>).type !== "projects") {
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    if (data !== null && typeof data === "object" && "type" in data && (data as Record<string, unknown>)["type"] !== undefined && (data as Record<string, unknown>)["type"] !== "projects") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid type" }] };
     }
-    if (attributes.name !== undefined && typeof attributes.name === "string" && attributes.name.trim() === "") {
+    if (attributes["name"] !== undefined && typeof attributes["name"] === "string" && attributes["name"].trim() === "") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] };
     }
@@ -328,8 +328,8 @@ export const projectRoutes = new Elysia({ name: "projects" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: settings.error }] };
     }
     const updates: Partial<typeof projects.$inferInsert> = {};
-    if (typeof attributes.name === "string") updates.name = attributes.name;
-    if (attributes.description !== undefined) updates.description = typeof attributes.description === "string" ? attributes.description : null;
+    if (typeof attributes["name"] === "string") updates.name = attributes["name"];
+    if (attributes["description"] !== undefined) updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
     Object.assign(updates, settings.value);
     const projectWorkspaces = await db.query.workspaces.findMany({ where: eq(workspaces.projectId, projectId) });
     try {
@@ -379,7 +379,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
     return { data: await projectResource(updated, updatedCounts.workspaceCount, updatedCounts.teamCount) };
   })
   .delete("/api/v2/projects/:project_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params.project_id ?? "";
+    const projectId = params["project_id"] ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (project.isDefault) {
@@ -397,29 +397,29 @@ export const projectRoutes = new Elysia({ name: "projects" })
   })
   // --- Project Tag Bindings ---
   .get("/api/v2/projects/:project_id/tag-bindings", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params.project_id ?? "";
+    const projectId = params["project_id"] ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const tags = await db.query.projectTags.findMany({ where: eq(projectTags.projectId, projectId) });
     return { data: tags.map((t: Readonly<typeof projectTags.$inferSelect>): Record<string, unknown> => projectTagBindingResource(t)) };
   })
   .get("/api/v2/projects/:project_id/effective-tag-bindings", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params.project_id ?? "";
+    const projectId = params["project_id"] ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const tags = await db.query.projectTags.findMany({ where: eq(projectTags.projectId, projectId) });
     return { data: tags.map((t: Readonly<typeof projectTags.$inferSelect>): Record<string, unknown> => projectTagBindingResource(t, true)) };
   })
   .patch("/api/v2/projects/:project_id/tag-bindings", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params.project_id ?? "";
+    const projectId = params["project_id"] ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const items = Array.isArray(payload.data) ? payload.data : payload.data === undefined ? [] : [payload.data];
+    const items = Array.isArray(payload["data"]) ? payload["data"] : payload["data"] === undefined ? [] : [payload["data"]];
     const entries: TagEntry[] = items.map((item): TagEntry => {
       const resource = item !== null && typeof item === "object" ? item as Record<string, unknown> : {};
-      const attrs = resource.attributes !== null && typeof resource.attributes === "object" ? resource.attributes as Record<string, unknown> : {};
-      return { key: typeof attrs.key === "string" ? attrs.key : "", value: typeof attrs.value === "string" ? attrs.value : null };
+      const attrs = resource["attributes"] !== null && typeof resource["attributes"] === "object" ? resource["attributes"] as Record<string, unknown> : {};
+      return { key: typeof attrs["key"] === "string" ? attrs["key"] : "", value: typeof attrs["value"] === "string" ? attrs["value"] : null };
     });
     if (entries.some((entry): boolean => entry.key === "" || entry.value === null || entry.value === "")) {
       (set as { status: number }).status = 422;
@@ -436,15 +436,15 @@ export const projectRoutes = new Elysia({ name: "projects" })
     return { data: tags.map((tag): Record<string, unknown> => projectTagBindingResource(tag)) };
   })
   .post("/api/v2/projects/:project_id/tag-bindings", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params.project_id ?? "";
+    const projectId = params["project_id"] ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = Array.isArray(payload.data) ? payload.data : payload.data === undefined ? [] : [payload.data];
+    const items = Array.isArray(payload["data"]) ? payload["data"] : payload["data"] === undefined ? [] : [payload["data"]];
     const entries: TagEntry[] = items.map((item: unknown): TagEntry => {
       const resource = item !== null && typeof item === "object" ? (item as Record<string, unknown>) : {};
-      const attrs = resource.attributes !== null && typeof resource.attributes === "object" ? (resource.attributes as Record<string, unknown>) : {};
-      return { key: typeof attrs.key === "string" ? attrs.key : "", value: typeof attrs.value === "string" ? attrs.value : null };
+      const attrs = resource["attributes"] !== null && typeof resource["attributes"] === "object" ? (resource["attributes"] as Record<string, unknown>) : {};
+      return { key: typeof attrs["key"] === "string" ? attrs["key"] : "", value: typeof attrs["value"] === "string" ? attrs["value"] : null };
     });
     if (entries.some((entry): boolean => entry.key === "" || entry.value === null || entry.value === "")) {
       (set as { status: number }).status = 422;
@@ -470,34 +470,34 @@ export const projectRoutes = new Elysia({ name: "projects" })
     return { data: created };
   })
   .delete("/api/v2/projects/:project_id/tag-bindings", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const projectId = params.project_id ?? "";
+    const projectId = params["project_id"] ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload.data;
+    const items = payload["data"];
     const tagList = Array.isArray(items) ? items : [items];
     const keys = tagList.map((item: unknown): string => {
       const i = item !== null && typeof item === "object" ? (item as Record<string, unknown>) : {};
-      const attrs = typeof i.attributes === "object" && i.attributes !== null ? (i.attributes as Record<string, unknown>) : {};
-      return typeof attrs.key === "string" ? attrs.key : (typeof i.key === "string" ? i.key : "");
+      const attrs = typeof i["attributes"] === "object" && i["attributes"] !== null ? (i["attributes"] as Record<string, unknown>) : {};
+      return typeof attrs["key"] === "string" ? attrs["key"] : (typeof i["key"] === "string" ? i["key"] : "");
     }).filter((k: string): boolean => k !== "");
     if (keys.length > 0) await db.delete(projectTags).where(and(eq(projectTags.projectId, projectId), inArray(projectTags.key, keys)));
     (set as { status: number }).status = 204;
     return {};
   })
   .post("/api/v2/projects/:project_id/relationships/workspaces", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const projectId = params.project_id ?? "";
+    const projectId = params["project_id"] ?? "";
     const destination = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (destination === undefined || !(await checkOrganizationPermission(destination.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const items = Array.isArray(payload.data) ? payload.data : [];
+    const items = Array.isArray(payload["data"]) ? payload["data"] : [];
     const workspaceIds = items.map((item): string => {
       if (item === null || typeof item !== "object") return "";
       const value = item as Record<string, unknown>;
-      return typeof value.id === "string" && (value.type === undefined || value.type === "workspaces") ? value.id : "";
+      return typeof value["id"] === "string" && (value["type"] === undefined || value["type"] === "workspaces") ? value["id"] : "";
     }).filter((id): boolean => id !== "");
     if (workspaceIds.length !== items.length || workspaceIds.length === 0) {
       (set as { status: number }).status = 422;

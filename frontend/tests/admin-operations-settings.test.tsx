@@ -45,7 +45,7 @@ test("uses provider defaults and saves an optional base URL without an endpoint 
     if (url.startsWith("/api/v2/admin/operations-settings/explainer/models?provider=")) return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(<AdminPlanExplainer />);
   await waitFor((): void => { expect(view.getByLabelText("Base URL (optional)")).toBeTruthy(); });
@@ -61,7 +61,7 @@ test("uses provider defaults and saves an optional base URL without an endpoint 
   await waitFor((): void => { expect(savedBody).toBeDefined(); });
 
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const attributes = (savedBody?.data as JsonObject)?.attributes as JsonObject;
+  const attributes = (savedBody?.["data"] as JsonObject)?.["attributes"] as JsonObject;
   expect(Object.keys(attributes)).toEqual(["plan-explainer"]);
   expect(attributes["approval-webhook"]).toBeUndefined();
   expect(attributes["maintenance-windows"]).toBeUndefined();
@@ -78,7 +78,7 @@ test("uses provider defaults and saves an optional base URL without an endpoint 
 test("AdminLoggingSettings loads and saves logging configuration independently", async () => {
   const { AdminLoggingSettings } = await import("../src/views/AdminLoggingSettings");
   let patchBody: JsonObject | undefined;
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/admin/logging-settings" && init?.method === "PATCH") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
@@ -89,7 +89,7 @@ test("AdminLoggingSettings loads and saves logging configuration independently",
       return json({ data: { attributes: { enabled: true, "log-level": "info", "syslog-targets": ["udp://syslog.local:514"] } } });
     }
     throw new Error(`Unexpected request: ${url}`);
-  });
+  })) as unknown as typeof fetch;
 
   const view = render(<AdminLoggingSettings />);
   await waitFor((): void => { expect(view.getByLabelText("Remote destinations")).toBeTruthy(); });
@@ -97,7 +97,7 @@ test("AdminLoggingSettings loads and saves logging configuration independently",
   fireEvent.click(view.getByRole("button", { name: "Save changes" }));
   await waitFor((): void => { expect(patchBody).toBeDefined(); });
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const attributes = (patchBody?.data as JsonObject)?.attributes as JsonObject;
+  const attributes = (patchBody?.["data"] as JsonObject)?.["attributes"] as JsonObject;
   expect(attributes).toEqual({
     enabled: true,
     "log-level": "info",
@@ -113,7 +113,7 @@ test("AdminLoggingSettings loads and saves logging configuration independently",
 test("AdminApprovalWebhook loads and saves webhook configuration independently", async () => {
   const { AdminApprovalWebhook } = await import("../src/views/AdminApprovalWebhook");
   let patchBody: JsonObject | undefined;
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/admin/operations-settings" && init?.method === "PATCH") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
@@ -124,7 +124,7 @@ test("AdminApprovalWebhook loads and saves webhook configuration independently",
       return json({ data: { attributes: { "approval-webhook": { enabled: false, url: null, "secret-set": false } } } });
     }
     throw new Error(`Unexpected request: ${url}`);
-  });
+  })) as unknown as typeof fetch;
 
   const view = render(<AdminApprovalWebhook />);
   await waitFor((): void => { expect(view.getByLabelText("Callback URL (optional)")).toBeTruthy(); });
@@ -132,7 +132,7 @@ test("AdminApprovalWebhook loads and saves webhook configuration independently",
   fireEvent.click(view.getByRole("button", { name: "Save changes" }));
   await waitFor((): void => { expect(patchBody).toBeDefined(); });
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const attributes = (patchBody?.data as JsonObject)?.attributes as JsonObject;
+  const attributes = (patchBody?.["data"] as JsonObject)?.["attributes"] as JsonObject;
   expect(Object.keys(attributes)).toEqual(["approval-webhook"]);
   expect(attributes).toEqual({
     "approval-webhook": {
@@ -148,7 +148,7 @@ test("AdminApprovalWebhook loads and saves webhook configuration independently",
 test("AdminMaintenanceWindows loads and saves maintenance windows independently", async () => {
   const { AdminMaintenanceWindows } = await import("../src/views/AdminMaintenanceWindows");
   let patchBody: JsonObject | undefined;
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/admin/operations-settings" && init?.method === "PATCH") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
@@ -159,7 +159,7 @@ test("AdminMaintenanceWindows loads and saves maintenance windows independently"
       return json({ data: { attributes: { "maintenance-windows": { enabled: false, windows: [] } } } });
     }
     throw new Error(`Unexpected request: ${url}`);
-  });
+  })) as unknown as typeof fetch;
 
   const view = render(<AdminMaintenanceWindows />);
   await waitFor((): void => { expect(view.getByText("No maintenance windows yet")).toBeTruthy(); });
@@ -168,7 +168,7 @@ test("AdminMaintenanceWindows loads and saves maintenance windows independently"
   fireEvent.click(view.getByRole("button", { name: "Save changes" }));
   await waitFor((): void => { expect(patchBody).toBeDefined(); });
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const attributes = (patchBody?.data as JsonObject)?.attributes as JsonObject;
+  const attributes = (patchBody?.["data"] as JsonObject)?.["attributes"] as JsonObject;
   expect(Object.keys(attributes)).toEqual(["maintenance-windows"]);
   expect(attributes).toEqual({
     "maintenance-windows": {

@@ -34,11 +34,11 @@ test("renders the provider surface catalog with counts and filters", async () =>
     ],
   };
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/admin/provider-surface") return json({ data: surface });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/admin/compatibility"]}>
@@ -89,11 +89,11 @@ test("flags a stale catalog against the latest available release", async () => {
     data_sources: [],
   };
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/admin/provider-surface") return json({ data: surface });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/admin/compatibility"]}>
@@ -120,11 +120,11 @@ test("reports up to date when the catalog matches the latest release", async () 
     data_sources: [],
   };
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/admin/provider-surface") return json({ data: surface });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/admin/compatibility"]}>
@@ -151,11 +151,11 @@ test("hides the freshness line when no latest release is reported", async () => 
     data_sources: [],
   };
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/admin/provider-surface") return json({ data: surface });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/admin/compatibility"]}>

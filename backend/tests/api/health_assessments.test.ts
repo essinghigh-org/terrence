@@ -170,26 +170,26 @@ test("schedules eligible assessments separately from runs and records drift, che
     SIMULATED_ASSESSMENT_JSON: JSON.stringify(assessmentPlan),
   });
 
-  expect(result.firstWorkspaces).toEqual(["enabled", "forced"]);
-  expect(result.firstStatuses).toEqual(["completed", "completed"]);
-  expect(result.enqueuedCount).toBe(2);
-  expect(result.claimedCount).toBe(2);
-  expect(result.firstCounts).toEqual([
+  expect(result["firstWorkspaces"]).toEqual(["enabled", "forced"]);
+  expect(result["firstStatuses"]).toEqual(["completed", "completed"]);
+  expect(result["enqueuedCount"]).toBe(2);
+  expect(result["claimedCount"]).toBe(2);
+  expect(result["firstCounts"]).toEqual([
     { drifted: 1, undrifted: 1, passed: 1, failed: 1, allPassed: false },
     { drifted: 1, undrifted: 1, passed: 1, failed: 1, allPassed: false },
   ]);
-  expect(result.checkAssociations).toEqual([
+  expect(result["checkAssociations"]).toEqual([
     { assessment: true, run: null, status: "failed", message: "certificate expires too soon" },
     { assessment: true, run: null, status: "failed", message: "certificate expires too soon" },
     { assessment: true, run: null, status: "passed", message: null },
     { assessment: true, run: null, status: "passed", message: null },
   ]);
-  expect(result.tooSoon).toEqual([]);
-  expect(result.dueAgainCount).toBe(2);
-  expect(result.ordinaryRunCount).toBe(5);
-  expect(result.notificationTriggers).toEqual(["assessment:drifted", "assessment:check_failure"]);
-  expect(result.notificationScope).toBe("assessment");
-  expect(typeof result.notificationResultId).toBe("string");
+  expect(result["tooSoon"]).toEqual([]);
+  expect(result["dueAgainCount"]).toBe(2);
+  expect(result["ordinaryRunCount"]).toBe(5);
+  expect(result["notificationTriggers"]).toEqual(["assessment:drifted", "assessment:check_failure"]);
+  expect(result["notificationScope"]).toBe("assessment");
+  expect(typeof result["notificationResultId"]).toBe("string");
 });
 
 test("evaluates and stores plan checks before apply without turning advisory checks into blockers", async () => {
@@ -221,8 +221,8 @@ test("evaluates and stores plan checks before apply without turning advisory che
     SIMULATED_PLAN_JSON: JSON.stringify(assessmentPlan),
   });
 
-  expect(result.runStatus).toBe("applied");
-  expect(result.checks).toEqual([
+  expect(result["runStatus"]).toBe("applied");
+  expect(result["checks"]).toEqual([
     {
       address: "check.certificate",
       assessmentResultId: null,
@@ -314,14 +314,14 @@ test("serves assessment summaries, check results, and admin-only artifacts", asy
     process.exit(0);
   `);
 
-  expect(result.summaryStatus).toBe(200);
-  expect((result.summary as Record<string, unknown>).id).toBe("asmtres-api");
-  expect(((result.summary as Record<string, unknown>).attributes as Record<string, unknown>)["checks-failed"]).toBe(1);
-  expect((result.checks as Record<string, unknown>[])[0]?.id).toBe("checkrs-api");
-  expect(result.json).toEqual({ format_version: "1.2" });
-  expect(result.jsonContentType).toContain("application/json");
-  expect(result.schema).toEqual({ format_version: "1.0" });
-  expect(result.log).toBe("assessment log");
-  expect(result.logContentType).toContain("text/plain");
-  expect(result.anonymousStatus).toBe(404);
+  expect(result["summaryStatus"]).toBe(200);
+  expect((result["summary"] as Record<string, unknown>)["id"]).toBe("asmtres-api");
+  expect(((result["summary"] as Record<string, unknown>)["attributes"] as Record<string, unknown>)["checks-failed"]).toBe(1);
+  expect((result["checks"] as Record<string, unknown>[])[0]?.["id"]).toBe("checkrs-api");
+  expect(result["json"]).toEqual({ format_version: "1.2" });
+  expect(result["jsonContentType"]).toContain("application/json");
+  expect(result["schema"]).toEqual({ format_version: "1.0" });
+  expect(result["log"]).toBe("assessment log");
+  expect(result["logContentType"]).toContain("text/plain");
+  expect(result["anonymousStatus"]).toBe(404);
 });

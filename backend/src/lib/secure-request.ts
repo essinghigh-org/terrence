@@ -5,7 +5,7 @@ type RequestInfo = Readonly<{ url: string }>;
 // PUBLIC_URL is the source of truth when a proxy terminates TLS. It is parsed
 // once so malformed configuration cannot turn into a per-request exception.
 const publicUrl = (() => {
-  const raw = process.env.PUBLIC_URL;
+  const raw = process.env["PUBLIC_URL"];
   if (raw === undefined || raw === "") return null;
   try {
     return new URL(raw);

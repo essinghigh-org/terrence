@@ -37,9 +37,9 @@ type Subscription = Readonly<{ id: string; type: "workspaces" | "projects" | "te
 
 function attributesFrom(body: unknown): Record<string, unknown> {
   if (body === null || typeof body !== "object") return {};
-  const data = (body as Record<string, unknown>).data;
+  const data = (body as Record<string, unknown>)["data"];
   if (data === null || typeof data !== "object") return {};
-  const attributes = (data as Record<string, unknown>).attributes;
+  const attributes = (data as Record<string, unknown>)["attributes"];
   return attributes !== null && typeof attributes === "object"
     ? attributes as Record<string, unknown>
     : {};
@@ -73,21 +73,21 @@ function isEmailAddressArray(value: unknown): value is readonly string[] {
 
 function relationshipUserIds(body: unknown): readonly string[] | false | undefined {
   if (body === null || typeof body !== "object") return undefined;
-  const data = (body as Record<string, unknown>).data;
+  const data = (body as Record<string, unknown>)["data"];
   if (data === null || typeof data !== "object") return undefined;
-  const relationships = (data as Record<string, unknown>).relationships;
+  const relationships = (data as Record<string, unknown>)["relationships"];
   if (relationships === null || typeof relationships !== "object") return undefined;
-  const usersRelationship = (relationships as Record<string, unknown>).users;
+  const usersRelationship = (relationships as Record<string, unknown>)["users"];
   if (usersRelationship === undefined) return undefined;
   if (usersRelationship === null || typeof usersRelationship !== "object") return false;
-  const usersData = (usersRelationship as Record<string, unknown>).data;
+  const usersData = (usersRelationship as Record<string, unknown>)["data"];
   if (!Array.isArray(usersData)) return false;
   const ids: string[] = [];
   for (const user of usersData) {
     if (user === null || typeof user !== "object") return false;
     const resource = user as Record<string, unknown>;
-    if (resource.type !== "users" || typeof resource.id !== "string" || resource.id === "") return false;
-    ids.push(resource.id);
+    if (resource["type"] !== "users" || typeof resource["id"] !== "string" || resource["id"] === "") return false;
+    ids.push(resource["id"]);
   }
   return [...new Set(ids)];
 }
@@ -246,25 +246,25 @@ function createValues(
   body: unknown,
   scope: Readonly<{ workspaceId?: string; projectId?: string; teamId?: string }>,
 ): typeof notificationConfigurations.$inferInsert | undefined {
-  const data = body !== null && typeof body === "object" ? (body as Record<string, unknown>).data : undefined;
-  if (data === null || typeof data !== "object" || (data as Record<string, unknown>).type !== "notification-configurations") return undefined;
+  const data = body !== null && typeof body === "object" ? (body as Record<string, unknown>)["data"] : undefined;
+  if (data === null || typeof data !== "object" || (data as Record<string, unknown>)["type"] !== "notification-configurations") return undefined;
   const attributes = attributesFrom(body);
-  const name = typeof attributes.name === "string" ? attributes.name.trim() : "";
-  const url = typeof attributes.url === "string" ? attributes.url : "";
+  const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
+  const url = typeof attributes["url"] === "string" ? attributes["url"] : "";
   const destinationType = typeof attributes["destination-type"] === "string"
     ? attributes["destination-type"]
     : "";
   const emailAddresses = attributes["email-addresses"];
-  if (isEncryptedTokenInput(attributes.token)) return undefined;
+  if (isEncryptedTokenInput(attributes["token"])) return undefined;
   const emailUserIds = notificationUserIds(body, attributes);
   if (emailUserIds === false) return undefined;
   const emailAllMembers = typeof attributes["email-all-members"] === "boolean"
     ? attributes["email-all-members"]
     : (scope.projectId !== undefined || scope.teamId !== undefined) && emailUserIds.length === 0;
-  const triggers = attributes.triggers === undefined
+  const triggers = attributes["triggers"] === undefined
     ? []
-    : Array.isArray(attributes.triggers) && attributes.triggers.every(isNotificationTrigger)
-      ? [...attributes.triggers]
+    : Array.isArray(attributes["triggers"]) && attributes["triggers"].every(isNotificationTrigger)
+      ? [...attributes["triggers"]]
       : null;
   const valid = name !== ""
     && isNotificationDestination(destinationType)
@@ -286,8 +286,8 @@ function createValues(
     emailAllMembers: destinationType === "email" && emailAllMembers,
     emailUserIds: destinationType === "email" ? [...emailUserIds] : [],
     triggers: triggers ?? [],
-    enabled: typeof attributes.enabled === "boolean" ? attributes.enabled : true,
-    token: typeof attributes.token === "string" ? attributes.token : null,
+    enabled: typeof attributes["enabled"] === "boolean" ? attributes["enabled"] : true,
+    token: typeof attributes["token"] === "string" ? attributes["token"] : null,
     createdAt: Date.now(),
   };
 }
@@ -347,7 +347,7 @@ async function decryptedNotification(configuration: NcItem): Promise<NcItem> {
 export const notificationRoutes = new Elysia({ name: "notifications" })
   .use(authPlugin)
   .get("/api/v2/workspaces/:workspace_id/notification-configurations", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params.workspace_id ?? "";
+    const workspaceId = params["workspace_id"] ?? "";
     if ((await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null)) === undefined) return notFound(set);
     const where = eq(notificationConfigurations.workspaceId, workspaceId);
     const { number, size } = pageRequest(request);
@@ -359,18 +359,18 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     return { data: configurations.map((configuration: NcItem): Record<string, unknown> => notificationResource(configuration)), ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/workspaces/:workspace_id/notification-configurations", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params.workspace_id ?? "";
+    const workspaceId = params["workspace_id"] ?? "";
     const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null, "admin");
     if (workspace === undefined) return notFound(set);
     const values = createValues(body, { workspaceId });
     if (values === undefined) {
       const attributes = attributesFrom(body);
       const errors = createValidationErrors(
-        typeof attributes.name === "string" ? attributes.name.trim() : "",
-        typeof attributes.url === "string" ? attributes.url : "",
+        typeof attributes["name"] === "string" ? attributes["name"].trim() : "",
+        typeof attributes["url"] === "string" ? attributes["url"] : "",
         typeof attributes["destination-type"] === "string" ? attributes["destination-type"] : "",
         attributes["email-addresses"],
-        attributes.token,
+        attributes["token"],
       );
       (set as { status: number }).status = 422;
       return { errors: errors.length > 0 ? errors : [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url or email-addresses, and destination-type are required" }] };
@@ -394,7 +394,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     return { data: notificationResource(created ?? values as NcItem) };
   })
   .get("/api/v2/projects/:project_id/notification-configurations", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params.project_id ?? "";
+    const projectId = params["project_id"] ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))) return notFound(set);
     const where = eq(notificationConfigurations.projectId, projectId);
@@ -407,18 +407,18 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     return { data: configurations.map((configuration: NcItem): Record<string, unknown> => notificationResource(configuration)), ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/projects/:project_id/notification-configurations", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const projectId = params.project_id ?? "";
+    const projectId = params["project_id"] ?? "";
     const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (project === undefined || !(await checkOrganizationPermission(project.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-projects"))) return notFound(set);
     const values = createValues(body, { projectId });
     if (values === undefined) {
       const attributes = attributesFrom(body);
       const errors = createValidationErrors(
-        typeof attributes.name === "string" ? attributes.name.trim() : "",
-        typeof attributes.url === "string" ? attributes.url : "",
+        typeof attributes["name"] === "string" ? attributes["name"].trim() : "",
+        typeof attributes["url"] === "string" ? attributes["url"] : "",
         typeof attributes["destination-type"] === "string" ? attributes["destination-type"] : "",
         attributes["email-addresses"],
-        attributes.token,
+        attributes["token"],
       );
       (set as { status: number }).status = 422;
       return { errors: errors.length > 0 ? errors : [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url or email-addresses, and destination-type are required" }] };
@@ -442,7 +442,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     return { data: notificationResource(created ?? values as NcItem) };
   })
   .get("/api/v2/teams/:team_id/notification-configurations", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const teamId = params.team_id ?? "";
+    const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId, tokenTeamId ?? null))) return notFound(set);
     const where = eq(notificationConfigurations.teamId, teamId);
@@ -455,18 +455,18 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     return { data: configurations.map((configuration: NcItem): Record<string, unknown> => notificationResource(configuration)), ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/teams/:team_id/notification-configurations", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const teamId = params.team_id ?? "";
+    const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) return notFound(set);
     const values = createValues(body, { teamId });
     if (values === undefined) {
       const attributes = attributesFrom(body);
       const errors = createValidationErrors(
-        typeof attributes.name === "string" ? attributes.name.trim() : "",
-        typeof attributes.url === "string" ? attributes.url : "",
+        typeof attributes["name"] === "string" ? attributes["name"].trim() : "",
+        typeof attributes["url"] === "string" ? attributes["url"] : "",
         typeof attributes["destination-type"] === "string" ? attributes["destination-type"] : "",
         attributes["email-addresses"],
-        attributes.token,
+        attributes["token"],
       );
       (set as { status: number }).status = 422;
       return { errors: errors.length > 0 ? errors : [{ status: "422", title: "Unprocessable Entity", detail: "Valid name, url or email-addresses, and destination-type are required" }] };
@@ -488,11 +488,11 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     return { data: notificationResource(created ?? values as NcItem) };
   })
   .get("/api/v2/notification-configurations/:nc_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const configuration = await authorizedConfiguration(params.nc_id ?? "", user?.id, tokenOrgId, tokenTeamId, "read");
+    const configuration = await authorizedConfiguration(params["nc_id"] ?? "", user?.id, tokenOrgId, tokenTeamId, "read");
     return configuration === undefined ? notFound(set) : { data: notificationResource(configuration) };
   })
   .get("/api/v2/notification-configurations/:nc_id/relationships/workspaces", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const configuration = await authorizedConfiguration(params.nc_id ?? "", user?.id, tokenOrgId, tokenTeamId, "read");
+    const configuration = await authorizedConfiguration(params["nc_id"] ?? "", user?.id, tokenOrgId, tokenTeamId, "read");
     if (configuration === undefined || configuration.projectId === null) return notFound(set);
     const rows = await db.query.notificationConfigurationWorkspaceExclusions.findMany({
       where: eq(notificationConfigurationWorkspaceExclusions.notificationConfigurationId, configuration.id),
@@ -500,15 +500,15 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     return { data: rows.map((row): Record<string, string> => ({ id: row.workspaceId, type: "workspaces" })) };
   })
   .post("/api/v2/notification-configurations/:nc_id/relationships/workspaces", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const configuration = await authorizedConfiguration(params.nc_id ?? "", user?.id, tokenOrgId, tokenTeamId, "manage");
+    const configuration = await authorizedConfiguration(params["nc_id"] ?? "", user?.id, tokenOrgId, tokenTeamId, "manage");
     if (configuration === undefined || configuration.projectId === null) return notFound(set);
     const project = await db.query.projects.findFirst({ where: eq(projects.id, configuration.projectId) });
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const raw = Array.isArray(payload.data) ? payload.data : [];
+    const raw = Array.isArray(payload["data"]) ? payload["data"] : [];
     const validResources = raw.every((item): boolean => item !== null && typeof item === "object"
-      && (item as Record<string, unknown>).type === "workspaces"
-      && typeof (item as Record<string, unknown>).id === "string");
-    const ids = validResources ? raw.map((item): string => (item as Record<string, string>).id ?? "") : [];
+      && (item as Record<string, unknown>)["type"] === "workspaces"
+      && typeof (item as Record<string, unknown>)["id"] === "string");
+    const ids = validResources ? raw.map((item): string => (item as Record<string, string>)["id"] ?? "") : [];
     if (project === undefined || ids.length === 0 || !validResources) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data must contain workspace resources" }] };
@@ -527,37 +527,37 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     return { data: [...new Set(ids)].map((id): Record<string, string> => ({ id, type: "workspaces" })) };
   })
   .delete("/api/v2/notification-configurations/:nc_id/relationships/workspaces", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const configuration = await authorizedConfiguration(params.nc_id ?? "", user?.id, tokenOrgId, tokenTeamId, "manage");
+    const configuration = await authorizedConfiguration(params["nc_id"] ?? "", user?.id, tokenOrgId, tokenTeamId, "manage");
     if (configuration === undefined || configuration.projectId === null) return notFound(set);
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const raw = Array.isArray(payload.data) ? payload.data : [];
+    const raw = Array.isArray(payload["data"]) ? payload["data"] : [];
     const validResources = raw.every((item): boolean => item !== null && typeof item === "object"
-      && (item as Record<string, unknown>).type === "workspaces"
-      && typeof (item as Record<string, unknown>).id === "string");
-    const ids = validResources ? raw.map((item): string => (item as Record<string, string>).id ?? "") : [];
+      && (item as Record<string, unknown>)["type"] === "workspaces"
+      && typeof (item as Record<string, unknown>)["id"] === "string");
+    const ids = validResources ? raw.map((item): string => (item as Record<string, string>)["id"] ?? "") : [];
     if (ids.length === 0 || !validResources) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
     await db.delete(notificationConfigurationWorkspaceExclusions).where(and(eq(notificationConfigurationWorkspaceExclusions.notificationConfigurationId, configuration.id), inArray(notificationConfigurationWorkspaceExclusions.workspaceId, [...new Set(ids)])));
     (set as { status: number }).status = 204;
     return new Response(null, { status: 204 });
   })
   .patch("/api/v2/notification-configurations/:nc_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const id = params.nc_id ?? "";
+    const id = params["nc_id"] ?? "";
     const configuration = await authorizedConfiguration(id, user?.id, tokenOrgId, tokenTeamId, "manage");
     if (configuration === undefined) return notFound(set);
 
     const attributes = attributesFrom(body);
-    const data = body !== null && typeof body === "object" ? (body as Record<string, unknown>).data : undefined;
-    if (data === null || typeof data !== "object" || (data as Record<string, unknown>).type !== "notification-configurations") {
+    const data = body !== null && typeof body === "object" ? (body as Record<string, unknown>)["data"] : undefined;
+    if (data === null || typeof data !== "object" || (data as Record<string, unknown>)["type"] !== "notification-configurations") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be notification-configurations" }] };
     }
     const updates: Partial<typeof notificationConfigurations.$inferInsert> = {};
-    if (attributes.name !== undefined) {
-      if (typeof attributes.name !== "string" || attributes.name.trim() === "") {
+    if (attributes["name"] !== undefined) {
+      if (typeof attributes["name"] !== "string" || attributes["name"].trim() === "") {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "name must be a non-empty string" }] };
       }
-      updates.name = attributes.name.trim();
+      updates.name = attributes["name"].trim();
     }
     if (attributes["destination-type"] !== undefined) {
       if (typeof attributes["destination-type"] !== "string" || !isNotificationDestination(attributes["destination-type"])) {
@@ -566,12 +566,12 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
       }
       updates.destinationType = attributes["destination-type"];
     }
-    if (attributes.url !== undefined) {
-      if (typeof attributes.url !== "string") {
+    if (attributes["url"] !== undefined) {
+      if (typeof attributes["url"] !== "string") {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "url must be a string" }] };
       }
-      updates.url = attributes.url;
+      updates.url = attributes["url"];
     }
     if (attributes["email-addresses"] !== undefined) {
       if (!isEmailAddressArray(attributes["email-addresses"])) {
@@ -580,20 +580,20 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
       }
       updates.emailAddresses = [...attributes["email-addresses"]];
     }
-    if (attributes.triggers !== undefined) {
-      if (!Array.isArray(attributes.triggers) || !attributes.triggers.every(isNotificationTrigger)) {
+    if (attributes["triggers"] !== undefined) {
+      if (!Array.isArray(attributes["triggers"]) || !attributes["triggers"].every(isNotificationTrigger)) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "triggers contains an unsupported notification trigger" }] };
       }
-      updates.triggers = [...attributes.triggers];
+      updates.triggers = [...attributes["triggers"]];
     }
-    if (typeof attributes.enabled === "boolean") updates.enabled = attributes.enabled;
-    if (attributes.token !== undefined) {
-      if (isEncryptedTokenInput(attributes.token)) {
+    if (typeof attributes["enabled"] === "boolean") updates.enabled = attributes["enabled"];
+    if (attributes["token"] !== undefined) {
+      if (isEncryptedTokenInput(attributes["token"])) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "token must be plaintext" }] };
       }
-      updates.token = typeof attributes.token === "string" ? attributes.token : null;
+      updates.token = typeof attributes["token"] === "string" ? attributes["token"] : null;
     }
     if (typeof attributes["email-all-members"] === "boolean") updates.emailAllMembers = attributes["email-all-members"];
     const relationshipIds = relationshipUserIds(body);
@@ -650,7 +650,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
         return { errors: [{ status: "400", title: "Bad Request", detail: "Notification verification did not return a successful response" }] };
       }
       const persistedUpdates = { ...updates };
-      if (attributes.token !== undefined) persistedUpdates.token = await encryptNotificationToken(persistedUpdates.token);
+      if (attributes["token"] !== undefined) persistedUpdates.token = await encryptNotificationToken(persistedUpdates.token);
       await db.update(notificationConfigurations).set(persistedUpdates).where(eq(notificationConfigurations.id, id));
     }
     const updated = await db.query.notificationConfigurations.findFirst({
@@ -659,7 +659,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     return updated === undefined ? notFound(set) : { data: notificationResource(updated) };
   })
   .delete("/api/v2/notification-configurations/:nc_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const id = params.nc_id ?? "";
+    const id = params["nc_id"] ?? "";
     const configuration = await authorizedConfiguration(id, user?.id, tokenOrgId, tokenTeamId, "manage");
     if (configuration === undefined) return notFound(set);
     await db.transaction(async (tx: unknown): Promise<void> => {
@@ -679,12 +679,12 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     return {};
   })
   .post("/api/v2/notification-configurations/:nc_id/actions/verify", async ({ params, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx & { query: Record<string, string | undefined> }): Promise<unknown> => {
-    const configuration = await authorizedConfiguration(params.nc_id ?? "", user?.id, tokenOrgId, tokenTeamId, "manage");
+    const configuration = await authorizedConfiguration(params["nc_id"] ?? "", user?.id, tokenOrgId, tokenTeamId, "manage");
     if (configuration === undefined) return notFound(set);
     // Send a realistic run sample (7.5) mirroring the production payload
     // shape so a mis-configured adapter surfaces immediately. The sample body
     // is shared with the preview path (7.10) so what you see is what is sent.
-    const configuredUrl = process.env.PUBLIC_URL ?? "";
+    const configuredUrl = process.env["PUBLIC_URL"] ?? "";
     const baseUrl = URL.canParse(configuredUrl) ? configuredUrl : "http://localhost";
     const samplePayload: Record<string, unknown> = {
       payload_version: 1,
@@ -709,7 +709,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     // Template preview (7.10): when ?preview=true, return the exact body that
     // would be POSTed without sending it, so the caller can render the webhook
     // template before enabling the destination.
-    if (query?.preview === "true") {
+    if (query?.["preview"] === "true") {
       return {
         status: "preview",
         data: {
@@ -732,7 +732,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     };
   })
   .post("/api/v2/notification-configurations/:nc_id/actions/verify-ownership", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const configuration = await authorizedConfiguration(params.nc_id ?? "", user?.id, tokenOrgId, tokenTeamId, "manage");
+    const configuration = await authorizedConfiguration(params["nc_id"] ?? "", user?.id, tokenOrgId, tokenTeamId, "manage");
     if (configuration === undefined) return notFound(set);
 
     // Ownership verification (7.7): POST a one-time challenge token and require
@@ -762,7 +762,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     };
   })
   .get("/api/v2/notification-configurations/:nc_id/ownership-verified", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const configuration = await authorizedConfiguration(params.nc_id ?? "", user?.id, tokenOrgId, tokenTeamId, "read");
+    const configuration = await authorizedConfiguration(params["nc_id"] ?? "", user?.id, tokenOrgId, tokenTeamId, "read");
     if (configuration === undefined) return notFound(set);
     return { data: { id: configuration.id, ownership_verified: isOwnershipVerified(configuration.id) } };
   });

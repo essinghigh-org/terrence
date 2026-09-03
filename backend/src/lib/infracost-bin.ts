@@ -21,12 +21,12 @@ import { log } from "./log";
 // zip-based manager would bloat the tofu/terraform path with no benefit.
 // ---------------------------------------------------------------------------
 
-const STORAGE_DIR = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
+const STORAGE_DIR = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"));
 // Tests may redirect the binary cache (setup.ts shares one disk cache across the
 // test worker and spawned backends via TERRENCE_BINARY_CACHE_DIR).
 const BINARY_BASE_DIR = resolve(
-  process.env.TERRENCE_BINARY_CACHE_DIR !== undefined && process.env.TERRENCE_BINARY_CACHE_DIR !== ""
-    ? process.env.TERRENCE_BINARY_CACHE_DIR
+  process.env["TERRENCE_BINARY_CACHE_DIR"] !== undefined && process.env["TERRENCE_BINARY_CACHE_DIR"] !== ""
+    ? process.env["TERRENCE_BINARY_CACHE_DIR"]
     : join(STORAGE_DIR, "binaries"),
 );
 
@@ -272,12 +272,12 @@ async function cleanupFailedInfracostInstall(stagingDir: string): Promise<void> 
  * existing missing-tooling semantics.
  */
 export async function resolveInfracostBinary(): Promise<{ binaryPath: string; version: string } | null> {
-  const override = (process.env.INFRACOST_BINARY ?? "").trim();
+  const override = (process.env["INFRACOST_BINARY"] ?? "").trim();
   if (override !== "") {
     return { binaryPath: override, version: "override" };
   }
 
-  const version = (process.env.INFRACOST_VERSION ?? DEFAULT_INFRACOST_VERSION).trim().replace(/^v/, "");
+  const version = (process.env["INFRACOST_VERSION"] ?? DEFAULT_INFRACOST_VERSION).trim().replace(/^v/, "");
   if (version === "" || !validateVersion(version)) {
     log.warn(`[terrence] Invalid INFRACOST_VERSION "${version}"; cannot install Infracost`);
     return null;

@@ -28,8 +28,8 @@ export async function putOAuthHandshakeState(
   payload: Readonly<OAuthHandshakePayload>,
 ): Promise<void> {
   const storedPayload: OAuthHandshakePayload = { ...payload };
-  if (typeof storedPayload.requestTokenSecret === "string") {
-    storedPayload.requestTokenSecret = await encryptSecret(storedPayload.requestTokenSecret, { force: true });
+  if (typeof storedPayload["requestTokenSecret"] === "string") {
+    storedPayload["requestTokenSecret"] = await encryptSecret(storedPayload["requestTokenSecret"], { force: true });
   }
   await db.insert(oauthHandshakeStates).values({ id, expiresAt, payload: storedPayload })
     .onConflictDoUpdate({ target: oauthHandshakeStates.id, set: { expiresAt, payload: storedPayload } });
@@ -54,10 +54,10 @@ export async function takeOAuthHandshakeState<T extends OAuthHandshakePayload>(
   // unexpired, so two concurrent callbacks (or two replicas) can never both
   // receive the same state.
   const payload = row?.payload as T | undefined;
-  if (payload === undefined || typeof payload.requestTokenSecret !== "string") return payload;
+  if (payload === undefined || typeof payload["requestTokenSecret"] !== "string") return payload;
   return {
     ...payload,
-    requestTokenSecret: await decryptSecret(payload.requestTokenSecret),
+    requestTokenSecret: await decryptSecret(payload["requestTokenSecret"]),
   };
 }
 

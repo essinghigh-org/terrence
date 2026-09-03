@@ -58,11 +58,11 @@ export const operationsRoutes = new Elysia({ name: "operations" })
     // still means kind="plan", no refresh, JSON response.
 
     .get("/api/v2/runs/:run_id/explain", async ({ params, user, orgId, teamId, set, request }: ParamCtx): Promise<unknown> => {
-      const runId = params.run_id ?? "";
+      const runId = params["run_id"] ?? "";
       const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "run-read");
       if (authorized === undefined) return notFound(set);
       const settings = await getSettings("plan-explainer");
-      if (settings.enabled !== true) return notFound(set);
+      if (settings["enabled"] !== true) return notFound(set);
       const reasoningEffort = configuredReasoningEffort(settings["reasoning-effort"]);
       const kindOrError = parseExplainKind(new URL(request.url).searchParams.get("kind"), set);
       if (typeof kindOrError !== "string") return kindOrError.body;
@@ -94,18 +94,18 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       return notFound(set);
     })
     .post("/api/v2/runs/:run_id/explain", async ({ params, body, user, orgId, teamId, set, request }: ParamCtx): Promise<unknown> => {
-      const runId = params.run_id ?? "";
+      const runId = params["run_id"] ?? "";
       const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "run-read");
       if (authorized === undefined) return notFound(set);
       const settings = await getSettings("plan-explainer");
-      if (settings.enabled !== true) return notFound(set);
+      if (settings["enabled"] !== true) return notFound(set);
       const reasoningEffort = configuredReasoningEffort(settings["reasoning-effort"]);
       const attributes = readExplainAttributes(body);
-      const kindOrError = parseExplainKind(attributes.kind, set);
+      const kindOrError = parseExplainKind(attributes["kind"], set);
       if (typeof kindOrError !== "string") return kindOrError.body;
       const kind = kindOrError;
-      const refresh = attributes.refresh === true;
-      const streamRequested = attributes.stream === true;
+      const refresh = attributes["refresh"] === true;
+      const streamRequested = attributes["stream"] === true;
       if (!refresh) {
         const cached = await findExplanation(runId, kind);
         if (cached !== undefined) {
@@ -118,7 +118,7 @@ export const operationsRoutes = new Elysia({ name: "operations" })
         (set as { status: number }).status = 503;
         return { errors: [{ status: "503", title: "Service Unavailable", detail: "Plan explainer is not fully configured" }] };
       }
-      const model = resolvedSettings.model as string;
+      const model = resolvedSettings["model"] as string;
       const source = await buildExplainSource(runId, kind);
       if (source === undefined) {
         const err = explainError(409, "Conflict", explainMissingArtifactDetail(kind));
@@ -159,8 +159,8 @@ export const operationsRoutes = new Elysia({ name: "operations" })
 
   function readExplainAttributes(body: unknown): Readonly<Record<string, unknown>> {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data;
-    const attributes = data !== null && typeof data === "object" ? (data as Record<string, unknown>).attributes : undefined;
+    const data = payload["data"];
+    const attributes = data !== null && typeof data === "object" ? (data as Record<string, unknown>)["attributes"] : undefined;
     return attributes !== null && typeof attributes === "object" ? (attributes as Record<string, unknown>) : {};
   }
 

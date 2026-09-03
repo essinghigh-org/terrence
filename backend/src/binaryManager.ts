@@ -5,13 +5,13 @@ import { envEnabled } from "./lib/env";
 import { log } from "./lib/log";
 import { isVersionCacheFresh, loadVersionCacheFile, saveVersionCacheFile } from "./lib/version-cache";
 
-const STORAGE_DIR = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../storage"));
+const STORAGE_DIR = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../storage"));
 // TERRENCE_BINARY_CACHE_DIR lets tests share one disk-backed binary cache
 // across the test worker and every spawned backend instead of re-downloading
 // into each per-test tmpfs storage dir (which is charged to cgroup RAM).
 const BINARY_BASE_DIR = resolve(
-  process.env.TERRENCE_BINARY_CACHE_DIR !== undefined && process.env.TERRENCE_BINARY_CACHE_DIR !== ""
-    ? process.env.TERRENCE_BINARY_CACHE_DIR
+  process.env["TERRENCE_BINARY_CACHE_DIR"] !== undefined && process.env["TERRENCE_BINARY_CACHE_DIR"] !== ""
+    ? process.env["TERRENCE_BINARY_CACHE_DIR"]
     : join(STORAGE_DIR, "binaries"),
 );
 
@@ -300,7 +300,7 @@ export async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<
       // Unauthenticated GitHub API allows 60 req/hr per IP; CI runners share an
       // IP across parallel jobs and exhaust it. Authenticate when a token is
       // available (5000 req/hr).
-      const githubToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? "";
+      const githubToken = process.env["GITHUB_TOKEN"] ?? process.env["GH_TOKEN"] ?? "";
       const authHeaders: Record<string, string> = githubToken !== ""
         ? { Authorization: `Bearer ${githubToken}` }
         : {};
@@ -311,7 +311,7 @@ export async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<
       guardUpstreamRateLimit(res, "releases/latest");
       if (res.ok) {
         const data = (await res.json()) as Record<string, unknown>;
-        const tagName = data.tag_name;
+        const tagName = data["tag_name"];
         const tag = typeof tagName === "string" ? tagName.replace(/^v/, "") : undefined;
         if (tag !== undefined && validateVersion(tag)) return tag;
       }
@@ -322,7 +322,7 @@ export async function resolveLatestVersion(tool: "tofu" | "terraform"): Promise<
       });
       if (res.ok) {
         const data = (await res.json()) as Record<string, unknown>;
-        const currentVersion = data.current_version;
+        const currentVersion = data["current_version"];
         if (typeof currentVersion === "string" && validateVersion(currentVersion)) return currentVersion;
       }
     }
@@ -369,7 +369,7 @@ async function lastKnownGoodVersion(tool: "tofu" | "terraform"): Promise<string 
 const versionCache = new Map<string, { versions: string[]; fetchedAt: number }>();
 const VERSION_CACHE_FILE = join(STORAGE_DIR, "version-cache.json");
 function resolveVersionCacheTtl(): number {
-  const configured = Number(process.env.TERRENCE_VERSION_CACHE_TTL_MS);
+  const configured = Number(process.env["TERRENCE_VERSION_CACHE_TTL_MS"]);
   return Number.isFinite(configured) && configured > 0 ? configured : 24 * 60 * 60 * 1000;
 }
 const VERSION_CACHE_TTL_MS = resolveVersionCacheTtl();
@@ -387,7 +387,7 @@ async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<strin
     assertNotRateLimited(tool === "tofu" ? "releases enumeration" : "hashicorp index");
     // Same GitHub-token discipline as resolveLatestVersion: CI runners share an
     // egress IP and the unauthenticated 60 req/hr ceiling is easily exhausted.
-    const githubToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? "";
+    const githubToken = process.env["GITHUB_TOKEN"] ?? process.env["GH_TOKEN"] ?? "";
     const authHeaders: Record<string, string> = githubToken !== ""
       ? { Authorization: `Bearer ${githubToken}` }
       : {};
@@ -416,7 +416,7 @@ async function fetchAvailableVersions(tool: "tofu" | "terraform"): Promise<strin
         if (!Array.isArray(data) || data.length === 0) break;
         versions.push(...data
           .map((r: Readonly<Record<string, unknown>>): string | undefined => {
-            const tagName = r.tag_name;
+            const tagName = r["tag_name"];
             return typeof tagName === "string" ? tagName.replace(/^v/, "") : undefined;
           })
           .filter((v: string | undefined): v is string => v !== undefined && /^[0-9]+\.[0-9]+\.[0-9]+$/.test(v)));
@@ -480,7 +480,7 @@ async function calculateSha256(buffer: Readonly<ArrayBuffer>): Promise<string> {
 
 async function verifySha256(tool: "tofu" | "terraform", version: string, filename: string, buffer: Readonly<ArrayBuffer>): Promise<boolean> {
 
-  const allowBypass = envEnabled(process.env.ALLOW_UNVERIFIED_CHECKSUMS);
+  const allowBypass = envEnabled(process.env["ALLOW_UNVERIFIED_CHECKSUMS"]);
   try {
     let checksumUrl = "";
     if (tool === "tofu") {
@@ -531,7 +531,7 @@ async function systemBinaryFallback(
     const binaryPath = (await new Response(which.stdout).text()).trim();
     if (binaryPath === "") return null;
     const versionProcess = spawn([binaryPath, "version"]);
-    const configuredProbeTimeout = Number(process.env.TERRENCE_BINARY_PROBE_TIMEOUT_MS);
+    const configuredProbeTimeout = Number(process.env["TERRENCE_BINARY_PROBE_TIMEOUT_MS"]);
     const probeTimeout = Number.isSafeInteger(configuredProbeTimeout) && configuredProbeTimeout > 0 ? configuredProbeTimeout : 10_000;
     const output = await new Promise<string | null>((resolve): void => {
       let settled = false;
@@ -779,7 +779,7 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
   }
 
   // Alternate-tool fallback ONLY if opt-in via environment flag
-  if (envEnabled(process.env.ALLOW_TOOL_FALLBACK)) {
+  if (envEnabled(process.env["ALLOW_TOOL_FALLBACK"])) {
     const fallbackTool = tool === "tofu" ? "terraform" : "tofu";
     try {
       const sysAlt = spawn(["which", fallbackTool]);

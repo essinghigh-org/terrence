@@ -200,7 +200,7 @@ test("separates phase logs and only renders backend-authorized run actions", asy
     if (url.endsWith("/policy-checks")) return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   const writeText = mock(async (text: string): Promise<void> => {
     expect(text).toBe("run-polished");
   });
@@ -299,7 +299,6 @@ test("separates phase logs and only renders backend-authorized run actions", asy
   expect(applyBody).toMatchObject({
     data: { attributes: { comment: "Approved after reviewing the dependency graph" } },
   });
-  const finishedApply = view.getByRole("heading", { name: "Apply finished" }).closest("details");
   expect(view.getByText("Actions", { selector: "dt" }).closest("div")?.textContent).toContain("2 invoked");
   expect(view.getByText("Resources changed", { selector: "dt" }).closest("div")?.textContent).toContain("&4 to import");
   expect(view.getByText("Less than a minute")).toBeTruthy();
@@ -318,7 +317,7 @@ test("opens a requested run dialog, sends the selected run type, and navigates t
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs?new-run=true"]}>
@@ -386,7 +385,7 @@ test("clones an existing run's settings into the new-run dialog", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs"]}>
@@ -444,10 +443,10 @@ test("clones an existing run's settings into the new-run dialog", async () => {
 
 test("closing a deep-linked new-run dialog clears the query", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     if (requestUrl(input) === "/api/v2/workspaces/ws-1/runs" || requestUrl(input) === "/api/v2/workspaces/ws-1/runs?sort=-created-at") return json({ data: [] });
     throw new Error(`Unexpected request: ${requestUrl(input)}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs?new-run=true"]}>
@@ -478,10 +477,10 @@ test("closing a deep-linked new-run dialog clears the query", async () => {
 
 test("does not offer run creation without workspace permission", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     if (requestUrl(input) === "/api/v2/workspaces/ws-readonly/runs" || requestUrl(input) === "/api/v2/workspaces/ws-readonly/runs?sort=-created-at") return json({ data: [] });
     throw new Error(`Unexpected request: ${requestUrl(input)}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter>
@@ -502,7 +501,7 @@ test("does not offer run creation without workspace permission", async () => {
 
 test("omits stages that cannot run for a finished plan-only run", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/runs/run-speculative") {
       return json({
@@ -534,7 +533,7 @@ test("omits stages that cannot run for a finished plan-only run", async () => {
     }
     if (url.endsWith("/cost-estimate")) return json({ data: null });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-speculative"]}>
@@ -559,7 +558,7 @@ test("omits stages that cannot run for a finished plan-only run", async () => {
 
 test("opens failed applies and presents their diagnostics", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/runs/run-apply-error") {
       return json({
@@ -615,7 +614,7 @@ test("opens failed applies and presents their diagnostics", async () => {
       return json({ data: [] });
     }
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-apply-error"]}>
@@ -652,7 +651,7 @@ test("clears stale activity immediately when navigating to another run", async (
     resolveSecondEvents = resolve;
   });
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     const runId = url.includes("run-activity-second") ? "run-activity-second" : "run-activity-first";
     if (url === `/api/v2/runs/${runId}`) {
@@ -695,7 +694,7 @@ test("clears stale activity immediately when navigating to another run", async (
       return json({ data: [] });
     }
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-activity-first"]}>
@@ -726,7 +725,7 @@ test("clears stale activity immediately when navigating to another run", async (
 
 test("shows a slow-run indicator when duration exceeds the recent baseline", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/runs/run-slow") {
       return json({
@@ -767,7 +766,7 @@ test("shows a slow-run indicator when duration exceeds the recent baseline", asy
     if (url === "/api/v2/runs/run-slow/logs") return json({ data: [] });
     if (url.endsWith("/cost-estimate")) return json({ data: null });
     return json({ data: [] });
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-slow"]}>

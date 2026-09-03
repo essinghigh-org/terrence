@@ -75,7 +75,7 @@ async function organizationResourceForPrincipal(
   return {
     ...resource,
     attributes: {
-      ...(resource.attributes as Record<string, unknown>),
+      ...(resource["attributes"] as Record<string, unknown>),
       "cost-estimation-enabled": costEnabled,
       permissions: {
         "can-update": canManageOrganization,
@@ -102,12 +102,12 @@ async function organizationResourceForPrincipal(
 
 function reservedTagKeyInput(body: unknown): Readonly<{ key: string; disableOverrides: boolean }> | Readonly<{ error: string }> {
   const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-  const rawData = payload.data;
+  const rawData = payload["data"];
   const data = rawData !== null && typeof rawData === "object" ? rawData as Record<string, unknown> : {};
-  const rawAttributes = data.attributes;
+  const rawAttributes = data["attributes"];
   const attributes = rawAttributes !== null && typeof rawAttributes === "object" ? rawAttributes as Record<string, unknown> : {};
-  if (data.type !== "reserved-tag-keys") return { error: "data.type must be reserved-tag-keys" };
-  const rawKey = attributes.key;
+  if (data["type"] !== "reserved-tag-keys") return { error: "data.type must be reserved-tag-keys" };
+  const rawKey = attributes["key"];
   if (typeof rawKey !== "string" || typeof attributes["disable-overrides"] !== "boolean") {
     return { error: "key and disable-overrides are required" };
   }
@@ -139,20 +139,20 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
   .use(authPlugin)
   .post("/api/v2/organizations", async ({ user, orgId: tokenOrgId, teamId: tokenTeamId, body, set }: ParamCtx): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    if (data?.type !== "organizations") {
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    if (data?.["type"] !== "organizations") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be organizations" }] };
     }
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const name = typeof attributes.name === "string" ? attributes.name.trim() : "";
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
     const defaultIacBinary = typeof attributes["default-iac-binary"] === "string" ? attributes["default-iac-binary"] : "terraform";
     const defaultTerraformVersion = typeof attributes["default-terraform-version"] === "string" ? attributes["default-terraform-version"].trim() : "latest";
     const assessmentsEnforced = attributes["assessments-enforced"] === true;
-    const email = attributes.email === undefined
+    const email = attributes["email"] === undefined
       ? null
-      : typeof attributes.email === "string"
-        ? attributes.email.trim() === "" ? null : attributes.email.trim()
+      : typeof attributes["email"] === "string"
+        ? attributes["email"].trim() === "" ? null : attributes["email"].trim()
         : null;
     const allowForceDeleteWorkspaces = attributes["allow-force-delete-workspaces"] !== false;
     const stacksEnabled = attributes["stacks-enabled"] === true;
@@ -193,7 +193,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     }
     try {
       const id = crypto.randomUUID();
-      if ((user as unknown as Record<string, unknown>).isProvisional === true) {
+      if ((user as unknown as Record<string, unknown>)["isProvisional"] === true) {
         (set as { status: number }).status = 403;
         return { errors: [{ status: "403", title: "Forbidden", detail: "Provisional accounts cannot create organizations" }] };
       }
@@ -281,7 +281,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     return { data: orgs.map((o: Readonly<typeof organizations.$inferSelect>): Record<string, unknown> => organizationResource(o)), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/organizations/:org_name/reserved-tag-keys", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId, null, "settings:read"))) {
       (set as { status: number }).status = 404;
@@ -303,7 +303,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     };
   })
   .post("/api/v2/organizations/:org_name/reserved-tag-keys", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
       (set as { status: number }).status = 404;
@@ -336,7 +336,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     return { data: await reservedTagKeyResource(tag) };
   })
   .patch("/api/v2/reserved-tags/:reserved_tag_key_id", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
-    const tagId = params.reserved_tag_key_id ?? "";
+    const tagId = params["reserved_tag_key_id"] ?? "";
     const tag = await db.query.reservedTagKeys.findFirst({ where: eq(reservedTagKeys.id, tagId) });
     if (tag === undefined || !(await checkOrgPermission(user?.id, tag.orgId, "owner", orgId))) {
       (set as { status: number }).status = 404;
@@ -364,7 +364,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     return { data: await reservedTagKeyResource(updated) };
   })
   .delete("/api/v2/reserved-tags/:reserved_tag_key_id", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
-    const tagId = params.reserved_tag_key_id ?? "";
+    const tagId = params["reserved_tag_key_id"] ?? "";
     const tag = await db.query.reservedTagKeys.findFirst({ where: eq(reservedTagKeys.id, tagId) });
     if (tag === undefined || !(await checkOrgPermission(user?.id, tag.orgId, "owner", orgId))) {
       (set as { status: number }).status = 404;
@@ -375,7 +375,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     return {};
   })
   .get("/api/v2/organizations/:org_name", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId ?? null, teamId ?? null, "settings:read"))) {
       (set as { status: number }).status = 404;
@@ -384,7 +384,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     return { data: await organizationResourceForPrincipal(org, user?.id, orgId, teamId) };
   })
   .get("/api/v2/organizations/:org_name/entitlement-set", async ({ params, user, orgId, run, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     const runScoped = run !== undefined && run !== null && org !== undefined && run.organizationId === org.id;
     if (org === undefined || (!runScoped && !(await checkOrgPermission(user?.id, org.id, "member", orgId, null, "settings:read")))) {
@@ -399,15 +399,15 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       data: {
         id: org.id, type: "entitlement-sets",
         attributes: {
-          operations: capabilities.operations === true,
+          operations: capabilities["operations"] === true,
           "state-storage": capabilities["state-storage"] === true,
-          teams: capabilities.teams === true,
+          teams: capabilities["teams"] === true,
           "vcs-integrations": capabilities["vcs-integrations"] === true,
           "policy-enforcement": capabilities["policy-enforcement"] === true,
           "cost-estimation": costEnabled,
           "private-module-registry": capabilities["private-module-registry"] === true,
-          agents: capabilities.agents === true,
-          sso: capabilities.sso === true,
+          agents: capabilities["agents"] === true,
+          sso: capabilities["sso"] === true,
           "run-tasks": capabilities["run-tasks"] === true,
           "global-run-tasks": capabilities["global-run-tasks"] === true,
           "private-run-tasks": capabilities["private-run-tasks"] === true,
@@ -420,8 +420,8 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
           "module-testing": capabilities["module-testing"] === true,
           "no-code": capabilities["no-code"] === true,
           "private-policy-agents": capabilities["private-policy-agents"] === true,
-          sentinel: capabilities.sentinel === true,
-          opa: capabilities.opa === true,
+          sentinel: capabilities["sentinel"] === true,
+          opa: capabilities["opa"] === true,
           "stacks": org.stacksEnabled === true,
           "self-serve-billing": false,
           "usage-reporting": capabilities["usage-reporting"] === true,
@@ -445,7 +445,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     };
   })
   .get("/api/v2/organizations/:org_name/relationships/data-retention-policy", async ({ params, user, orgId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId, null, "settings:read"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -468,18 +468,18 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     };
   })
   .post("/api/v2/organizations/:org_name/relationships/data-retention-policy", async ({ params, body, user, orgId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null
-      ? data.attributes as Record<string, unknown>
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null
+      ? data["attributes"] as Record<string, unknown>
       : {};
-    const policyType = typeof data?.type === "string" ? data.type : null;
-    const rawDeleteOlderThanNDays = attributes["delete-older-than-n-days"] ?? attributes.deleteOlderThanNDays;
+    const policyType = typeof data?.["type"] === "string" ? data["type"] : null;
+    const rawDeleteOlderThanNDays = attributes["delete-older-than-n-days"] ?? attributes["deleteOlderThanNDays"];
     if (
       policyType === "data-retention-policy-delete-olders"
       && !(typeof rawDeleteOlderThanNDays === "number" && Number.isInteger(rawDeleteOlderThanNDays) && rawDeleteOlderThanNDays > 0)
@@ -532,7 +532,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     };
   })
   .delete("/api/v2/organizations/:org_name/relationships/data-retention-policy", async ({ params, user, orgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -542,19 +542,19 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     return {};
   })
   .patch("/api/v2/organizations/:org_name", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    if (data !== null && typeof data === "object" && "type" in data && (data as Record<string, unknown>).type !== undefined && (data as Record<string, unknown>).type !== "organizations") {
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    if (data !== null && typeof data === "object" && "type" in data && (data as Record<string, unknown>)["type"] !== undefined && (data as Record<string, unknown>)["type"] !== "organizations") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid type" }] };
     }
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const newName = attributes.name === undefined ? org.name : (typeof attributes.name === "string" ? attributes.name.trim() : "");
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const newName = attributes["name"] === undefined ? org.name : (typeof attributes["name"] === "string" ? attributes["name"].trim() : "");
     const defaultIacBinary = typeof attributes["default-iac-binary"] === "string" ? attributes["default-iac-binary"] : (org.defaultIacBinary ?? "terraform");
     const defaultTerraformVersion = typeof attributes["default-terraform-version"] === "string" ? attributes["default-terraform-version"] : (org.defaultTerraformVersion ?? "latest");
     const assessmentsEnforced = attributes["assessments-enforced"] === undefined
@@ -567,11 +567,11 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
         : attributes["owners-team-saml-role-id"] === null
           ? null
           : undefined;
-    const email = attributes.email === undefined
+    const email = attributes["email"] === undefined
       ? org.email
-      : typeof attributes.email === "string"
-        ? attributes.email.trim() === "" ? null : attributes.email.trim()
-        : attributes.email === null
+      : typeof attributes["email"] === "string"
+        ? attributes["email"].trim() === "" ? null : attributes["email"].trim()
+        : attributes["email"] === null
           ? null
           : undefined;
     const allowForceDeleteWorkspaces = attributes["allow-force-delete-workspaces"] === undefined
@@ -703,7 +703,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     }
   })
   .delete("/api/v2/organizations/:org_name", async ({ params, user, orgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -720,7 +720,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     return {};
   })
   .get("/api/v2/organizations/:org_name/relationships/module-producers", async ({ params, user, request, orgId, set }: ParamCtx): Promise<unknown> => {
-    const org = await cachedOrgByName(params.org_name ?? "");
+    const org = await cachedOrgByName(params["org_name"] ?? "");
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId ?? null))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -737,7 +737,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     return { data: resources.slice((number - 1) * size, number * size), ...pagination(request, number, size, resources.length) };
   })
   .get("/api/v2/organizations/:org_name/tags", async ({ params, user, request, orgId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -779,14 +779,14 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     return { data: paginated, ...pagination(request, number, size, total) };
   })
   .delete("/api/v2/organizations/:org_name/tags", async ({ params, user, body, orgId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", orgId))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const dataList = Array.isArray(payload.data) ? payload.data : [];
-    const tagIds = dataList.map((item) => (item as Record<string, unknown>)?.id).filter((id): id is string => typeof id === "string");
+    const dataList = Array.isArray(payload["data"]) ? payload["data"] : [];
+    const tagIds = dataList.map((item) => (item as Record<string, unknown>)?.["id"]).filter((id): id is string => typeof id === "string");
 
     if (tagIds.length > 0) {
       const wsList = await db.query.workspaces.findMany({ where: eq(workspaces.orgId, org.id), columns: { id: true } });
@@ -801,7 +801,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     return {};
   })
   .post("/api/v2/tags/:tag_id/relationships/workspaces", async ({ params, user, body, orgId, set }: ParamCtx): Promise<unknown> => {
-    const tagId = params.tag_id ?? "";
+    const tagId = params["tag_id"] ?? "";
     const tagBody = tagId.startsWith("tag-") ? tagId.slice(4) : "";
     const tagParts = tagBody.split("-");
     const candidateNames = tagParts.slice(1).map((_, index): string => tagParts.slice(0, index + 1).join("-"));
@@ -819,7 +819,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data;
+    const data = payload["data"];
     if (!Array.isArray(data)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data must be an array" }] };
@@ -827,7 +827,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     const parsedIds = data.flatMap((item): string[] => {
       if (typeof item !== "object" || item === null) return [];
       const resource = item as Record<string, unknown>;
-      return resource.type === "workspaces" && typeof resource.id === "string" ? [resource.id] : [];
+      return resource["type"] === "workspaces" && typeof resource["id"] === "string" ? [resource["id"]] : [];
     });
     if (parsedIds.length !== data.length) {
       (set as { status: number }).status = 422;
@@ -859,7 +859,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     return {};
   })
   .get("/api/v2/organizations/:org_name/vcs-events", async ({ params, user, orgId, request, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", orgId, null, "settings:read"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };

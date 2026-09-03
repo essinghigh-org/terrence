@@ -21,8 +21,8 @@ ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
 
 ### Code Style
 
-- **TypeScript strict mode** is enforced. Run `cd backend && bun run typecheck` before committing.
-- **ESLint** is configured for both backend and frontend. Run `cd backend && bun run lint` (if available).
+- **TypeScript strict mode** is enforced. Run `bun run typecheck` from the repo root before committing (it typechecks backend and frontend).
+- **ESLint** is configured for backend, frontend, and scripts. Run `bun run lint` from the repo root. Lint output is informational; the `lint:budget` gate fails only when the error count grows — do not grow it, and ratchet `scripts/lint-budget.ts` down when you fix a class of findings.
 - **Prettier** formatting is not enforced — use your editor defaults.
 
 ### Testing
@@ -68,17 +68,18 @@ Use conventional commits:
 
 1. Create a feature branch from `master`
 2. Make focused, reviewable commits
-3. Run `cd backend && bun run typecheck` — must produce **0 errors**
-4. Run `cd backend && bun test` — all **289 tests** must pass
-5. Run `cd frontend && bun test` — all **36 tests** must pass
-6. Open a PR against `master`
+3. Run `bun run typecheck` from the repo root — must produce **0 errors**
+4. Run `bun run test:backend` — the full backend suite must pass
+5. Run `bun run test:frontend` — the full frontend suite must pass
+6. If you touched dependencies: `bun run deps:dedupe:check`, `bun run deps:audit`, and `bun run knip` must pass; CI also enforces `check:bun-version`, `check:bundle-size`, `lint:budget`, and the dependency release-age policy (see `.github/workflows/ci.yml`)
+7. Open a PR against `master` using `.github/pull_request_template.md` — including the AI-assistance disclosure when applicable (required by `AGENTS.md`)
 
 ## Architecture Notes
 
 ### Backend
 
 - **Framework**: [Elysia](https://elysiajs.com/) — a Bun-native HTTP framework
-- **Database**: SQLite via [Drizzle ORM](https://orm.drizzle.team/)
+- **Database**: SQLite (default, `DATABASE_URL=file:...`) or PostgreSQL (`DATABASE_URL=postgres://...`) via [Drizzle ORM](https://orm.drizzle.team/) — a dedicated `backend-postgres` CI job covers the pg backend, and there are 37+ pg migrations
 - **API Format**: JSON:API (compatible with the Terraform CLI remote-workflow format)
 - **Auth**: Bearer token with session rotation
 - **Run Execution**: Background worker using `Bun.spawn()` for OpenTofu/Terraform
@@ -93,7 +94,7 @@ Key directories:
 
 - **Framework**: React 19 + TypeScript
 - **Build**: Bun native bundler (`Bun.build`) with `bun-plugin-tailwind`
-- **UI**: Tailwind CSS UI components (built on Radix UI)
+- **UI**: Tailwind CSS UI components (built on Base UI, `@base-ui/react`)
 - **Testing**: `bun:test` + `Bun.WebView` browser testing + axe-core accessibility
 - **State**: Local state with `useState`/`useEffect` — no global state manager
 - **API Client**: Custom `fetchApi()` wrapper with token refresh
@@ -117,8 +118,8 @@ Key patterns:
 ## Environment Setup
 
 ```bash
-# Development
-cp backend/.env.example backend/.env  # if available
+# Development (the example file lives at the repo root)
+cp .env.example .env  # if needed
 # Defaults work out of the box with SQLite
 
 # VCS Integration (GitHub App)
@@ -151,4 +152,4 @@ Should produce **0 errors** in strict mode. If you see new errors, check:
 docker build --no-cache -t terrence .
 ```
 
-If SHA256 verification fails for tofu/terraform/infracost, the binary versions may need updating in the Dockerfile.
+If SHA256 verification fails for tofu/terraform, the binary versions may need updating. Infracost is intentionally not baked into the image — it is installed on demand at runtime into the storage directory (see `Dockerfile`), so there is no Dockerfile SHA to verify for it.

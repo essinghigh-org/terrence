@@ -166,10 +166,10 @@ export function splitInlineThinking(raw: string): CompletionParts {
 export function upstreamRequest(settings: Readonly<Record<string, unknown>>, prompt: string, stream: boolean): Request {
   const baseUrl = settings["base-url"] as string;
   const endpointUrl = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
-  const model = settings.model as string;
+  const model = settings["model"] as string;
   const apiKey = typeof settings["api-key"] === "string" && settings["api-key"] !== "" ? settings["api-key"] : undefined;
   const reasoningEffort = configuredReasoningEffort(settings["reasoning-effort"]);
-  const provider = typeof settings.provider === "string" ? settings.provider.toLowerCase() : "";
+  const provider = typeof settings["provider"] === "string" ? settings["provider"].toLowerCase() : "";
   const reasoningOptions = reasoningEffort === null
     ? {}
     : provider === "openrouter"
@@ -186,8 +186,8 @@ export function upstreamRequest(settings: Readonly<Record<string, unknown>>, pro
 }
 
 function reasoningFromMessage(message: Readonly<Record<string, unknown>> | undefined): string {
-  const reasoningContent = message?.reasoning_content;
-  const reasoning = message?.reasoning;
+  const reasoningContent = message?.["reasoning_content"];
+  const reasoning = message?.["reasoning"];
   if (typeof reasoningContent === "string" && reasoningContent !== "") return reasoningContent;
   if (typeof reasoning === "string" && reasoning !== "") return reasoning;
   if (typeof reasoning === "object" && reasoning !== null) {
@@ -201,7 +201,7 @@ function reasoningFromMessage(message: Readonly<Record<string, unknown>> | undef
 export function parseCompletionBody(parsed: unknown): CompletionParts {
   const choices = (parsed as Readonly<{ choices?: readonly Readonly<{ message?: Readonly<Record<string, unknown>> }>[] }>)?.choices;
   const message = choices?.[0]?.message;
-  const contentValue = message?.content;
+  const contentValue = message?.["content"];
   let content = typeof contentValue === "string" ? contentValue : "";
   let thinking = reasoningFromMessage(message);
   const split = splitInlineThinking(content);
@@ -246,8 +246,8 @@ async function emitInlineContent(
 }
 
 function reasoningDelta(delta: Readonly<Record<string, unknown>>): string {
-  const reasoningContent = delta.reasoning_content;
-  const reasoning = delta.reasoning;
+  const reasoningContent = delta["reasoning_content"];
+  const reasoning = delta["reasoning"];
   if (typeof reasoningContent === "string" && reasoningContent !== "") return reasoningContent;
   if (typeof reasoning === "string" && reasoning !== "") return reasoning;
   return "";
@@ -270,7 +270,7 @@ async function processUpstreamLine(
   }
   const delta = (chunk as Readonly<{ choices?: readonly Readonly<{ delta?: Readonly<Record<string, unknown>> }>[] }>)?.choices?.[0]?.delta;
   if (delta === undefined) return;
-  const content = delta.content;
+  const content = delta["content"];
   if (typeof content === "string" && content !== "") await emitInlineContent(state, onDelta, content);
   const thinkingPart = reasoningDelta(delta);
   if (thinkingPart !== "") await onDelta("thinking", thinkingPart);

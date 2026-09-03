@@ -54,12 +54,12 @@ function normalizedCustomAccess(projectAccess: unknown, workspaceAccess: unknown
   const workspace = rawWorkspace as Record<string, unknown>;
   if (!Object.keys(project).every((key): boolean => PROJECT_ACCESS_KEYS.has(key))
     || !Object.keys(workspace).every((key): boolean => WORKSPACE_ACCESS_KEYS.has(key))) return undefined;
-  if (project.settings !== undefined && !["read", "update", "delete"].includes(String(project.settings))) return undefined;
-  if (project.teams !== undefined && !["none", "read", "manage"].includes(String(project.teams))) return undefined;
+  if (project["settings"] !== undefined && !["read", "update", "delete"].includes(String(project["settings"]))) return undefined;
+  if (project["teams"] !== undefined && !["none", "read", "manage"].includes(String(project["teams"]))) return undefined;
   const booleanKeys = ["create", "move", "locking", "delete", "run-tasks", "policy-overrides"];
   if (booleanKeys.some((key): boolean => workspace[key] !== undefined && typeof workspace[key] !== "boolean")) return undefined;
-  if (workspace.runs !== undefined && !["read", "plan", "apply"].includes(String(workspace.runs))) return undefined;
-  if (workspace.variables !== undefined && !["none", "read", "write"].includes(String(workspace.variables))) return undefined;
+  if (workspace["runs"] !== undefined && !["read", "plan", "apply"].includes(String(workspace["runs"]))) return undefined;
+  if (workspace["variables"] !== undefined && !["none", "read", "write"].includes(String(workspace["variables"]))) return undefined;
   if (workspace["state-versions"] !== undefined && !["none", "read-outputs", "read", "write"].includes(String(workspace["state-versions"]))) return undefined;
   if (workspace["sentinel-mocks"] !== undefined && !["none", "read"].includes(String(workspace["sentinel-mocks"]))) return undefined;
   return {
@@ -110,17 +110,17 @@ export const teamProjectRoutes = new Elysia({ name: "team-projects" })
   })
   .post("/api/v2/team-projects", async ({ body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    if (data?.type !== "team-projects") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be team-projects" }] }; }
-    const attributes = (data?.attributes as Record<string, unknown>) ?? {};
-    const rels = (data?.relationships as Record<string, unknown>) ?? {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    if (data?.["type"] !== "team-projects") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be team-projects" }] }; }
+    const attributes = (data?.["attributes"] as Record<string, unknown>) ?? {};
+    const rels = (data?.["relationships"] as Record<string, unknown>) ?? {};
 
-    const teamRel = rels.team as Record<string, unknown> | undefined;
-    const projRel = rels.project as Record<string, unknown> | undefined;
-    const teamData = teamRel?.data as Record<string, unknown> | undefined;
-    const projectData = projRel?.data as Record<string, unknown> | undefined;
-    const teamId = teamData?.type === "teams" && typeof teamData.id === "string" ? teamData.id : "";
-    const projectId = projectData?.type === "projects" && typeof projectData.id === "string" ? projectData.id : "";
+    const teamRel = rels["team"] as Record<string, unknown> | undefined;
+    const projRel = rels["project"] as Record<string, unknown> | undefined;
+    const teamData = teamRel?.["data"] as Record<string, unknown> | undefined;
+    const projectData = projRel?.["data"] as Record<string, unknown> | undefined;
+    const teamId = teamData?.["type"] === "teams" && typeof teamData["id"] === "string" ? teamData["id"] : "";
+    const projectId = projectData?.["type"] === "projects" && typeof projectData["id"] === "string" ? projectData["id"] : "";
 
     const [team, project] = await Promise.all([
       db.query.teams.findFirst({ where: eq(teams.id, teamId) }),
@@ -133,7 +133,7 @@ export const teamProjectRoutes = new Elysia({ name: "team-projects" })
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
 
-    const access = typeof attributes.access === "string" ? attributes.access : "";
+    const access = typeof attributes["access"] === "string" ? attributes["access"] : "";
     if (!ACCESS_LEVELS.has(access)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid access level" }] }; }
     const customAccess = access === "custom" ? normalizedCustomAccess(attributes["project-access"], attributes["workspace-access"]) : undefined;
     if (access === "custom" && customAccess === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid custom permission map" }] }; }
@@ -167,7 +167,7 @@ export const teamProjectRoutes = new Elysia({ name: "team-projects" })
     return { data: teamProjectResource(tp) };
   })
   .get("/api/v2/team-projects/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const tp = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, params.id ?? "") });
+    const tp = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, params["id"] ?? "") });
     if (!tp) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const [project, team] = await Promise.all([
       db.query.projects.findFirst({ where: eq(projects.id, tp.projectId) }),
@@ -179,7 +179,7 @@ export const teamProjectRoutes = new Elysia({ name: "team-projects" })
     return { data: teamProjectResource(tp) };
   })
   .patch("/api/v2/team-projects/:id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const tp = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, params.id ?? "") });
+    const tp = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, params["id"] ?? "") });
     if (!tp) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const [project, team] = await Promise.all([
       db.query.projects.findFirst({ where: eq(projects.id, tp.projectId) }),
@@ -189,20 +189,20 @@ export const teamProjectRoutes = new Elysia({ name: "team-projects" })
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    if (data?.type !== "team-projects") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be team-projects" }] }; }
-    const attributes = (data?.attributes as Record<string, unknown>) ?? {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    if (data?.["type"] !== "team-projects") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be team-projects" }] }; }
+    const attributes = (data?.["attributes"] as Record<string, unknown>) ?? {};
 
     const updates: Record<string, unknown> = {};
-    const nextAccess = typeof attributes.access === "string" ? attributes.access : tp.access;
+    const nextAccess = typeof attributes["access"] === "string" ? attributes["access"] : tp.access;
     if (!ACCESS_LEVELS.has(nextAccess)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid access level" }] }; }
     const nextProjectAccess = attributes["project-access"] !== undefined ? attributes["project-access"] : (tp.access === "custom" ? tp.projectAccess : undefined);
     const nextWorkspaceAccess = attributes["workspace-access"] !== undefined ? attributes["workspace-access"] : (tp.access === "custom" ? tp.workspaceAccess : undefined);
     const customAccess = nextAccess === "custom" ? normalizedCustomAccess(nextProjectAccess, nextWorkspaceAccess) : undefined;
     if (nextAccess === "custom" && customAccess === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid custom permission map" }] }; }
-    updates.access = nextAccess;
-    updates.projectAccess = customAccess?.projectAccess ?? null;
-    updates.workspaceAccess = customAccess?.workspaceAccess ?? null;
+    updates["access"] = nextAccess;
+    updates["projectAccess"] = customAccess?.projectAccess ?? null;
+    updates["workspaceAccess"] = customAccess?.workspaceAccess ?? null;
 
     await db.update(teamProjects).set(updates).where(eq(teamProjects.id, tp.id));
     const updated = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, tp.id) });
@@ -210,7 +210,7 @@ export const teamProjectRoutes = new Elysia({ name: "team-projects" })
     return { data: teamProjectResource(updated) };
   })
   .delete("/api/v2/team-projects/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const tp = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, params.id ?? "") });
+    const tp = await db.query.teamProjects.findFirst({ where: eq(teamProjects.id, params["id"] ?? "") });
     if (!tp) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const [project, team] = await Promise.all([
       db.query.projects.findFirst({ where: eq(projects.id, tp.projectId) }),

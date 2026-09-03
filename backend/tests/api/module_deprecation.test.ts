@@ -16,7 +16,7 @@ describe("Module Deprecation, Revocation & Tests API", () => {
   let orgId: string;
   let userId: string;
   let fixtureDirectory: string;
-  const originalTerraformTestBinary = process.env.TERRAFORM_TEST_BINARY_PATH;
+  const originalTerraformTestBinary = process.env["TERRAFORM_TEST_BINARY_PATH"];
 
   beforeAll(async () => {
     userId = `usr-${crypto.randomUUID()}`;
@@ -32,7 +32,7 @@ describe("Module Deprecation, Revocation & Tests API", () => {
       writeFile(terraform, "#!/bin/sh\nexit 0\n", { mode: 0o755 }),
     ]);
     await chmod(terraform, 0o755);
-    process.env.TERRAFORM_TEST_BINARY_PATH = terraform;
+    process.env["TERRAFORM_TEST_BINARY_PATH"] = terraform;
 
     await db.insert(users).values({
       id: userId,
@@ -86,8 +86,8 @@ describe("Module Deprecation, Revocation & Tests API", () => {
     await db.delete(apiTokens).where(eq(apiTokens.userId, userId));
     await db.delete(users).where(eq(users.id, userId));
     await rm(fixtureDirectory, { recursive: true, force: true });
-    if (originalTerraformTestBinary === undefined) delete process.env.TERRAFORM_TEST_BINARY_PATH;
-    else process.env.TERRAFORM_TEST_BINARY_PATH = originalTerraformTestBinary;
+    if (originalTerraformTestBinary === undefined) delete process.env["TERRAFORM_TEST_BINARY_PATH"];
+    else process.env["TERRAFORM_TEST_BINARY_PATH"] = originalTerraformTestBinary;
   });
 
   test("POST /registry-module-versions/:id/actions/revoke revokes module version", async () => {

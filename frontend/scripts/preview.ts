@@ -7,7 +7,7 @@ function parsePort(): number {
     const p = Number(process.argv[portArgIdx + 1]);
     if (Number.isFinite(p) && p > 0) return p;
   }
-  const envPort = Number(process.env.PORT);
+  const envPort = Number(process.env["PORT"]);
   if (Number.isFinite(envPort) && envPort > 0) return envPort;
   return 4173;
 }
@@ -18,7 +18,7 @@ function parseHost(): string {
     const val = process.argv[hostArgIdx + 1];
     if (typeof val === "string" && val !== "") return val;
   }
-  return process.env.HOST ?? "127.0.0.1";
+  return process.env["HOST"] ?? "127.0.0.1";
 }
 
 const port = parsePort();

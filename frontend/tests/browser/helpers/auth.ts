@@ -3,7 +3,7 @@ import type { BrowserPage } from "./browser";
 export const DEFAULT_MOCK_TOKEN = "terr_test_mock_admin_token_1234567890abcdef";
 
 export function getAdminToken(): string {
-  return process.env.TERRENCE_E2E_ADMIN_TOKEN ?? DEFAULT_MOCK_TOKEN;
+  return process.env["TERRENCE_E2E_ADMIN_TOKEN"] ?? DEFAULT_MOCK_TOKEN;
 }
 
 export function authInitStorage(token: string = getAdminToken()): Record<string, string> {

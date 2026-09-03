@@ -22,8 +22,8 @@ function hidden(set: ParamCtx["set"]): Record<string, unknown> {
 
 function smtpSettingsResource(values: Readonly<Record<string, unknown>>): Record<string, unknown> {
   const safe = { ...values };
-  const password = safe.password;
-  delete safe.password;
+  const password = safe["password"];
+  delete safe["password"];
   safe["password-set"] = typeof password === "string" && password !== "";
   return settingResource("smtp-settings", safe);
 }
@@ -59,7 +59,7 @@ type LoggingValidation = Readonly<
 function validateLoggingAttributes(
   attrs: Readonly<Record<string, unknown>>,
 ): LoggingValidation {
-  const enabled = attrs.enabled;
+  const enabled = attrs["enabled"];
   if (enabled !== undefined && enabled !== null && typeof enabled !== "boolean") {
     return { ok: false, error: "enabled must be a boolean or null" };
   }
@@ -111,8 +111,8 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
   .patch("/api/v2/admin/logging-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
-    const attrs = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
     const validated = validateLoggingAttributes(attrs);
     if (!validated.ok) return loggingSettingError(set, validated.error);
     const updated = await updateSettings("logging", validated.values);
@@ -132,8 +132,8 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
   .patch("/api/v2/admin/cost-estimation-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     return redactedSettingsResource("cost-estimation-settings", await updateSettings("cost", attrs), [
       "infracost-api-key",
       "aws-access-key-id",
@@ -150,9 +150,9 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
   .patch("/api/v2/admin/smtp-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    if (attrs.encryption !== undefined && !isSmtpEncryption(attrs.encryption)) {
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    if (attrs["encryption"] !== undefined && !isSmtpEncryption(attrs["encryption"])) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "encryption must be one of starttls, tls, plain" }] };
     }
@@ -164,12 +164,12 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
     if (user?.isSiteAdmin !== true) return hidden(set);
     const settings = await getSettings("smtp");
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
-    const attrs = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
-    const recipient = typeof attrs.email === "string" ? normalizeEmail(attrs.email) : null;
-    const host = typeof settings.host === "string" ? settings.host.trim() : "";
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+    const recipient = typeof attrs["email"] === "string" ? normalizeEmail(attrs["email"]) : null;
+    const host = typeof settings["host"] === "string" ? settings["host"].trim() : "";
     const senderEmail = typeof settings["sender-email"] === "string" ? settings["sender-email"].trim() : "";
-    if (settings.enabled !== true || host === "" || senderEmail === "" || recipient === null) {
+    if (settings["enabled"] !== true || host === "" || senderEmail === "" || recipient === null) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "SMTP must be enabled and configured, and a valid email is required" }] };
     }
@@ -177,12 +177,12 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
       await sendEmail(
         {
           host,
-          port: typeof settings.port === "number" ? settings.port : 25,
-          username: typeof settings.username === "string" && settings.username !== "" ? settings.username : null,
-          password: typeof settings.password === "string" ? settings.password : null,
+          port: typeof settings["port"] === "number" ? settings["port"] : 25,
+          username: typeof settings["username"] === "string" && settings["username"] !== "" ? settings["username"] : null,
+          password: typeof settings["password"] === "string" ? settings["password"] : null,
           senderEmail,
-          auth: settings.auth === "none" || settings.auth === "login" || settings.auth === "plain" ? settings.auth : "plain",
-          encryption: isSmtpEncryption(settings.encryption) ? settings.encryption : null,
+          auth: settings["auth"] === "none" || settings["auth"] === "login" || settings["auth"] === "plain" ? settings["auth"] : "plain",
+          encryption: isSmtpEncryption(settings["encryption"]) ? settings["encryption"] : null,
         },
         {
           to: [recipient],
@@ -206,21 +206,21 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
   .patch("/api/v2/admin/twilio-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     return redactedSettingsResource("twilio-settings", await updateSettings("twilio", attrs), ["auth-token"]);
   })
   .post("/api/v2/admin/twilio-settings/verify", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
     const settings = await getSettings("twilio");
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
-    const attrs = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
     const testNumber = typeof attrs["test-number"] === "string" ? attrs["test-number"].trim() : "";
     const accountSid = typeof settings["account-sid"] === "string" ? settings["account-sid"] : "";
     const authToken = typeof settings["auth-token"] === "string" ? settings["auth-token"] : "";
     const fromNumber = typeof settings["from-number"] === "string" ? settings["from-number"] : "";
-    if (settings.enabled !== true || testNumber === "" || accountSid === "" || authToken === "" || fromNumber === "") {
+    if (settings["enabled"] !== true || testNumber === "" || accountSid === "" || authToken === "" || fromNumber === "") {
       (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: "Twilio must be enabled and fully configured, and test-number is required" }] };
     }
@@ -260,8 +260,8 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
   .patch("/api/v2/admin/customization-settings", async ({ user, body, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) return hidden(set);
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     return settingResource("customization-settings", await updateSettings("customization", attrs));
   })
   // --- B.8 OIDC Settings ---
@@ -273,10 +273,10 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
     if (user?.isSiteAdmin !== true) return hidden(set);
     return withAuthSettingsLock(async (): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const current = await getSettings("oidc");
-    if (attrs.enabled !== undefined && typeof attrs.enabled !== "boolean") {
+    if (attrs["enabled"] !== undefined && typeof attrs["enabled"] !== "boolean") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "enabled must be a boolean" }] };
     }
@@ -290,10 +290,10 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a string or null` }] };
       }
     }
-    const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : current.enabled === true;
-    const issuerValue = attrs.issuer === undefined
-      ? current.issuer
-      : typeof attrs.issuer === "string" ? attrs.issuer.trim() : null;
+    const enabled = typeof attrs["enabled"] === "boolean" ? attrs["enabled"] : current["enabled"] === true;
+    const issuerValue = attrs["issuer"] === undefined
+      ? current["issuer"]
+      : typeof attrs["issuer"] === "string" ? attrs["issuer"].trim() : null;
     const clientId = attrs["client-id"] === undefined
       ? current["client-id"]
       : typeof attrs["client-id"] === "string" ? attrs["client-id"].trim() : null;
@@ -435,8 +435,8 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
     if (user?.isSiteAdmin !== true) return hidden(set);
     return withAuthSettingsLock(async (): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const current = await getSettings("ldap");
     for (const key of ["enabled", "link-by-email"] as const) {
       if (attrs[key] !== undefined && typeof attrs[key] !== "boolean") {
@@ -450,18 +450,18 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a string or null` }] };
       }
     }
-    const port = attrs.port === undefined ? current.port : attrs.port;
+    const port = attrs["port"] === undefined ? current["port"] : attrs["port"];
     if (!(typeof port === "number" && Number.isInteger(port) && port > 0 && port <= 65535)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "port must be an integer between 1 and 65535" }] };
     }
-    const encryption = attrs.encryption === undefined ? current.encryption : attrs.encryption;
+    const encryption = attrs["encryption"] === undefined ? current["encryption"] : attrs["encryption"];
     if (encryption !== "plain" && encryption !== "starttls" && encryption !== "ldaps") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "encryption must be one of plain, starttls, ldaps" }] };
     }
-    const enabled = typeof attrs.enabled === "boolean" ? attrs.enabled : current.enabled === true;
-    const host = attrs.host === null ? null : typeof attrs.host === "string" ? attrs.host.trim() : current.host;
+    const enabled = typeof attrs["enabled"] === "boolean" ? attrs["enabled"] : current["enabled"] === true;
+    const host = attrs["host"] === null ? null : typeof attrs["host"] === "string" ? attrs["host"].trim() : current["host"];
     const baseDn = attrs["base-dn"] === null ? null : typeof attrs["base-dn"] === "string" ? attrs["base-dn"].trim() : current["base-dn"];
     // A blank or absent value falls back to the attribute's default; the
     // helper guarantees the result is never an empty string.
@@ -513,7 +513,7 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
     }
     const [samlEnabledForSso, oidcEnabledForSso] = await Promise.all([
       currentSamlSettings().then((settings): boolean => settings.enabled),
-      getSettings("oidc").then((settings): boolean => settings.enabled === true),
+      getSettings("oidc").then((settings): boolean => settings["enabled"] === true),
     ]);
     const authError = await authLockoutResponse(set, {
       saml: samlEnabledForSso,
@@ -526,7 +526,7 @@ export const settingsmoreRoutes = new Elysia({ name: "admin-settings-more" })
       encryption,
       "attr-username": attrUsername,
       "attr-email": attrEmail,
-      ...(attrs.host === undefined ? {} : { host }),
+      ...(attrs["host"] === undefined ? {} : { host }),
       ...(attrs["base-dn"] === undefined ? {} : { "base-dn": baseDn }),
       // Clearing the bind DN removes the service account: drop the stored
       // bind password with it so no orphaned secret lingers.

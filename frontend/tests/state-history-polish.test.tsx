@@ -40,7 +40,7 @@ test("loads every state-version page without showing a false empty state", async
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(<StateHistory workspaceId="ws-1" />);
 
@@ -78,7 +78,7 @@ test("shows a retryable error separately from the empty state", async () => {
       ? json({ errors: [{ status: "503", detail: "State service unavailable" }] }, 503)
       : json({ data: [], meta: { pagination: { "next-page": null } } });
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(<StateHistory workspaceId="ws-1" />);
 
@@ -108,7 +108,7 @@ test("uploads a Terraform state file and adds the new state version", async () =
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(<StateHistory workspaceId="ws-1" />);
   await waitFor((): void => {
@@ -137,7 +137,7 @@ test("falls back to the raw state payload when the fetched state JSON cannot be 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(<StateHistory workspaceId="ws-1" />);
   await waitFor((): void => {
@@ -153,7 +153,7 @@ test("falls back to the raw state payload when the fetched state JSON cannot be 
 });
 
 test("uses the canonical run status label in state history", async () => {
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     expect(requestUrl(input)).toBe("/api/v2/workspaces/ws-1/state-versions");
     return json({
       data: [{
@@ -168,7 +168,7 @@ test("uses the canonical run status label in state history", async () => {
       }],
       meta: { pagination: { "next-page": null } },
     });
-  });
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter>

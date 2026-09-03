@@ -43,11 +43,11 @@ export type RunCgroupLimits = Readonly<{
 }>;
 
 export function resolveCgroupLimits(env: NodeJS.ProcessEnv = process.env): RunCgroupLimits {
-  const rawMemory = env.TERRENCE_RUN_CGROUP_MEMORY_MAX?.trim();
+  const rawMemory = env["TERRENCE_RUN_CGROUP_MEMORY_MAX"]?.trim();
   return {
     memoryMax: rawMemory !== undefined && rawMemory !== "" ? rawMemory : DEFAULT_MEMORY_MAX,
-    pidMax: parsePositiveInt(env.TERRENCE_RUN_CGROUP_PIDS_MAX) ?? DEFAULT_PID_LIMIT,
-    cpuWeight: env.TERRENCE_RUN_CGROUP_CPU_WEIGHT?.trim() || CPU_WEIGHT,
+    pidMax: parsePositiveInt(env["TERRENCE_RUN_CGROUP_PIDS_MAX"]) ?? DEFAULT_PID_LIMIT,
+    cpuWeight: env["TERRENCE_RUN_CGROUP_CPU_WEIGHT"]?.trim() || CPU_WEIGHT,
   };
 }
 
@@ -60,11 +60,11 @@ function parsePositiveInt(raw: string | undefined): number | undefined {
 /** Writable cgroup v2 root for per-run groups, or null when unavailable.
  * Probed once per call site via {@link probeCgroupRoot} (cached). */
 export function findCgroupRoot(env: NodeJS.ProcessEnv = process.env): string | null {
-  const configured = env.TERRENCE_RUN_CGROUP_ROOT?.trim();
+  const configured = env["TERRENCE_RUN_CGROUP_ROOT"]?.trim();
   if (configured !== undefined && configured !== "") {
     return isWritableCgroupRoot(configured) ? configured : null;
   }
-  if (!env.TERRENCE_RUN_CGROUPS_DISABLED?.match(/^(1|true|yes)$/i)) {
+  if (!env["TERRENCE_RUN_CGROUPS_DISABLED"]?.match(/^(1|true|yes)$/i)) {
     // Standard delegation point and the plain mount, both common.
     for (const candidate of ["/sys/fs/cgroup/terrence", "/sys/fs/cgroup"]) {
       if (isWritableCgroupRoot(candidate)) return candidate;

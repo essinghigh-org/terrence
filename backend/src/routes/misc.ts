@@ -163,7 +163,7 @@ async function durableWebhookEnqueue(input: Readonly<{
       .values({ id: input.deliveryId, status: "queued", receivedAt: Date.now() })
       .onConflictDoNothing();
   }
-  if (envEnabled(process.env.TERRENCE_DISABLE_WORKER)) {
+  if (envEnabled(process.env["TERRENCE_DISABLE_WORKER"])) {
     const { processVcsWebhookPayload } = await import("../lib/webhook-jobs");
     await processVcsWebhookPayload({
       provider: input.provider,
@@ -294,7 +294,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
   .use(authPlugin)
   // --- Webhook Receivers ---
     .post("/api/webhooks/github", async ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): Promise<unknown> => {
-    const secret = process.env.GITHUB_WEBHOOK_SECRET;
+    const secret = process.env["GITHUB_WEBHOOK_SECRET"];
     const signature = request.headers.get("x-hub-signature-256");
     const rawBody = typeof body === "string" ? body : await request.text().catch((): string => "");
     if (typeof secret !== "string" || secret.length === 0) {
@@ -350,7 +350,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     return { data: { id: "webhook-received", type: "webhooks", attributes: { status: "acknowledged" } } };
   })
   .post("/api/webhooks/gitlab", async ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): Promise<unknown> => {
-    const secret = process.env.GITLAB_WEBHOOK_SECRET;
+    const secret = process.env["GITLAB_WEBHOOK_SECRET"];
     if (typeof secret !== "string" || secret === "") {
       return webhookUnauthorized(set, "GitLab webhook secret is not configured");
     }
@@ -377,7 +377,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
   .post("/api/webhooks/bitbucket", async ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): Promise<unknown> => {
     const parsed = webhookPayload(body);
     if (parsed === undefined) return webhookUnprocessable(set, "Invalid webhook payload");
-    const secret = process.env.BITBUCKET_WEBHOOK_SECRET;
+    const secret = process.env["BITBUCKET_WEBHOOK_SECRET"];
     if (typeof secret !== "string" || secret === "") {
       return webhookUnauthorized(set, "Bitbucket webhook secret is not configured");
     }
@@ -400,10 +400,10 @@ export const miscRoutes = new Elysia({ name: "misc" })
   // Signature: `X-Terrence-Signature: <sha256 hex HMAC of the raw body>`.
   .post("/api/v2/webhooks/run-approval", async ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): Promise<unknown> => {
     const settings = await getSettings("approval-webhook");
-    if (settings.enabled !== true) {
+    if (settings["enabled"] !== true) {
       return webhookUnprocessable(set, "External apply approval is not enabled");
     }
-    const secret = settings.secret;
+    const secret = settings["secret"];
     if (typeof secret !== "string" || secret === "") {
       return webhookUnauthorized(set, "Approval webhook secret is not configured");
     }
@@ -425,9 +425,9 @@ export const miscRoutes = new Elysia({ name: "misc" })
     } catch {
       return webhookUnprocessable(set, "Invalid JSON payload");
     }
-    const runId = typeof parsed.run === "string" ? parsed.run : typeof parsed.run_id === "string" ? parsed.run_id : "";
+    const runId = typeof parsed["run"] === "string" ? parsed["run"] : typeof parsed["run_id"] === "string" ? parsed["run_id"] : "";
     if (runId === "") return webhookUnprocessable(set, "Missing run id");
-    const action = typeof parsed.action === "string" ? parsed.action : "";
+    const action = typeof parsed["action"] === "string" ? parsed["action"] : "";
     if (action !== "confirm") {
       return webhookUnprocessable(set, "Invalid action; expected \"confirm\"");
     }
@@ -454,11 +454,11 @@ export const miscRoutes = new Elysia({ name: "misc" })
       id: "entitlements",
       type: "entitlements",
       attributes: {
-        agents: capabilities.agents === true,
+        agents: capabilities["agents"] === true,
         audit_logging: capabilities["audit-logging"] === true,
-        sentinel: capabilities.sentinel === true,
+        sentinel: capabilities["sentinel"] === true,
         state_storage: capabilities["state-storage"] === true,
-        teams: capabilities.teams === true,
+        teams: capabilities["teams"] === true,
         vcs_integrations: capabilities["vcs-integrations"] === true,
         run_tasks: capabilities["run-tasks"] === true,
         configuration_designer: capabilities["no-code"] === true,
@@ -539,44 +539,44 @@ export const miscRoutes = new Elysia({ name: "misc" })
   })
   .post("/api/v2/vars", async ({ body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
-    const attributes = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
-    const relationships = data.relationships !== null && typeof data.relationships === "object" ? data.relationships as Record<string, unknown> : {};
-    const workspaceRelationship = relationships.workspace !== null && typeof relationships.workspace === "object"
-      ? relationships.workspace as Record<string, unknown>
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+    const relationships = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
+    const workspaceRelationship = relationships["workspace"] !== null && typeof relationships["workspace"] === "object"
+      ? relationships["workspace"] as Record<string, unknown>
       : {};
-    const workspaceData = workspaceRelationship.data !== null && typeof workspaceRelationship.data === "object"
-      ? workspaceRelationship.data as Record<string, unknown>
+    const workspaceData = workspaceRelationship["data"] !== null && typeof workspaceRelationship["data"] === "object"
+      ? workspaceRelationship["data"] as Record<string, unknown>
       : {};
-    const workspaceId = typeof workspaceData.id === "string" ? workspaceData.id : "";
+    const workspaceId = typeof workspaceData["id"] === "string" ? workspaceData["id"] : "";
     const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "variables-write");
     const normalizedAttributes: Record<string, unknown> & { value: string } = {
       ...attributes,
-      value: typeof attributes.value === "string" ? attributes.value : "",
+      value: typeof attributes["value"] === "string" ? attributes["value"] : "",
     };
     if (
       workspace === undefined
-      || data.type !== "vars"
-      || workspaceData.type !== "workspaces"
+      || data["type"] !== "vars"
+      || workspaceData["type"] !== "workspaces"
       || !validVariableAttributes(normalizedAttributes)
     ) {
       (set as { status: number }).status = workspace === undefined ? 404 : 422;
       return { errors: [{ status: String(workspace === undefined ? 404 : 422), title: workspace === undefined ? "Not Found" : "Unprocessable Entity" }] };
     }
-    const categoryValue: unknown = normalizedAttributes.category;
-    const descriptionValue: unknown = normalizedAttributes.description;
-    const sensitiveValue = normalizedAttributes.sensitive === true;
+    const categoryValue: unknown = normalizedAttributes["category"];
+    const descriptionValue: unknown = normalizedAttributes["description"];
+    const sensitiveValue = normalizedAttributes["sensitive"] === true;
     // Sensitive values are encrypted at rest (todo 167/168).
     const stored = await variableValueForWrite(sensitiveValue, normalizedAttributes.value);
     const variable: typeof workspaceVariables.$inferInsert = {
       id: `var-${crypto.randomUUID()}`,
       workspaceId,
-      key: normalizedAttributes.key as string,
+      key: normalizedAttributes["key"] as string,
       value: stored.value,
       valueEncrypted: stored.valueEncrypted,
       category: categoryValue === "env" ? "env" : "terraform",
       sensitive: sensitiveValue,
-      hcl: normalizedAttributes.hcl === true,
+      hcl: normalizedAttributes["hcl"] === true,
       description: typeof descriptionValue === "string" ? descriptionValue : null,
     };
     await db.insert(workspaceVariables).values(variable);
@@ -584,7 +584,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     return { data: globalVariableResource(variable as WorkspaceVariable) };
   })
   .patch("/api/v2/vars/:var_id", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const variableId = params.var_id ?? "";
+    const variableId = params["var_id"] ?? "";
     const variable = await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, variableId) });
     const workspace = variable === undefined
       ? undefined
@@ -594,35 +594,35 @@ export const miscRoutes = new Elysia({ name: "misc" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
-    const attributes = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
-    if ((data.type !== undefined && data.type !== "vars") || !validVariableAttributes(attributes, true)) {
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+    if ((data["type"] !== undefined && data["type"] !== "vars") || !validVariableAttributes(attributes, true)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
-    let sensitive = typeof attributes.sensitive === "boolean" ? attributes.sensitive : variable.sensitive === true;
-    if (variable.sensitive === true && !sensitive && attributes.value === undefined) sensitive = true;
+    let sensitive = typeof attributes["sensitive"] === "boolean" ? attributes["sensitive"] : variable.sensitive === true;
+    if (variable.sensitive === true && !sensitive && attributes["value"] === undefined) sensitive = true;
     // Re-encrypt when the value or sensitive flag changed; flipping sensitive
     // on encrypts the existing plaintext (todo 169).
-    const suppliedValue = typeof attributes.value === "string" ? attributes.value : null;
+    const suppliedValue = typeof attributes["value"] === "string" ? attributes["value"] : null;
     const effectiveValue = suppliedValue ?? (sensitive ? await variableValueForRead(variable) : variable.value);
     const stored = await variableValueForWrite(sensitive, effectiveValue);
     const updates: Partial<typeof workspaceVariables.$inferInsert> = {
-      key: typeof attributes.key === "string" ? attributes.key : variable.key,
+      key: typeof attributes["key"] === "string" ? attributes["key"] : variable.key,
       value: stored.value,
       valueEncrypted: stored.valueEncrypted,
-      category: typeof attributes.category === "string" ? attributes.category : variable.category,
+      category: typeof attributes["category"] === "string" ? attributes["category"] : variable.category,
       sensitive,
-      hcl: typeof attributes.hcl === "boolean" ? attributes.hcl : variable.hcl === true,
-      description: attributes.description === null
+      hcl: typeof attributes["hcl"] === "boolean" ? attributes["hcl"] : variable.hcl === true,
+      description: attributes["description"] === null
         ? null
-        : typeof attributes.description === "string" ? attributes.description : variable.description,
+        : typeof attributes["description"] === "string" ? attributes["description"] : variable.description,
     };
     await db.update(workspaceVariables).set(updates).where(eq(workspaceVariables.id, variable.id));
     return { data: globalVariableResource({ ...variable, ...updates } as WorkspaceVariable) };
   })
   .delete("/api/v2/vars/:var_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const variableId = params.var_id ?? "";
+    const variableId = params["var_id"] ?? "";
     const variable = await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, variableId) });
     const workspace = variable === undefined
       ? undefined
@@ -642,7 +642,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     return { data: (await auditTrailResources(logsList)).map((resource): Record<string, unknown> => ({ ...resource, type: "audit-logs" })) };
   })
   .get("/api/v2/organizations/:org_name/audit-logs", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId, null, "audit-logs:read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const logsList = await db.query.auditLogs.findMany({ where: eq(auditLogs.orgId, org.id), limit: 100, orderBy: [desc(auditLogs.createdAt)] });
@@ -652,7 +652,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     // go-tfe OrganizationAuditConfigurations.Read. Fields that the cloud
     // platform gates behind paid tiers are null for a reference-style
     // deployment; audit trails are always enabled here.
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId, null, "audit-logs:read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return {
@@ -697,13 +697,13 @@ export const miscRoutes = new Elysia({ name: "misc" })
   })
   // --- Cost Estimation ---
   .get("/api/v2/runs/:run_id/cost-estimate", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId, teamId);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: costEstimateResource(authorized.run, await readCostEstimateArtifact(runId), await costEstimationEnabledForOrganization(authorized.workspace.orgId)) };
   })
   .get("/api/v2/cost-estimates/:ce_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const ceId = params.ce_id ?? "";
+    const ceId = params["ce_id"] ?? "";
     const runId = ceId.replace(/^ce-/, "");
     if (runId === "") { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const authorized = await findAuthorizedRun(runId, user?.id, orgId, teamId);
@@ -712,7 +712,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
   })
   // --- Run Triggers ---
   .get("/api/v2/workspaces/:workspace_id/run-triggers", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params.workspace_id ?? "";
+    const workspaceId = params["workspace_id"] ?? "";
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (ws === undefined || (await findAuthorizedWorkspace(ws.id, user?.id, tokenOrgId, tokenTeamId)) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const rawFilterType = request !== undefined ? new URL(request.url).searchParams.get("filter[run-trigger][type]") : null;
@@ -748,16 +748,16 @@ export const miscRoutes = new Elysia({ name: "misc" })
     })) };
   })
   .post("/api/v2/workspaces/:workspace_id/run-triggers", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params.workspace_id ?? "";
+    const workspaceId = params["workspace_id"] ?? "";
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (ws === undefined || (await findAuthorizedWorkspace(ws.id, user?.id, tokenOrgId, tokenTeamId, "admin")) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
-    const sourceable = rels.sourceable as Record<string, unknown> | undefined;
-    const srcData = typeof sourceable?.data === "object" && sourceable.data !== null ? (sourceable.data as Record<string, unknown>) : undefined;
-    const srcId = typeof srcData?.id === "string" ? srcData.id : "";
-    if (srcData?.type !== "workspaces" || srcId === "") {
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
+    const sourceable = rels["sourceable"] as Record<string, unknown> | undefined;
+    const srcData = typeof sourceable?.["data"] === "object" && sourceable["data"] !== null ? (sourceable["data"] as Record<string, unknown>) : undefined;
+    const srcId = typeof srcData?.["id"] === "string" ? srcData["id"] : "";
+    if (srcData?.["type"] !== "workspaces" || srcId === "") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Sourceable workspace must be a workspace resource identifier" }] };
     }
@@ -770,7 +770,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     return { data: { id, type: "run-triggers", attributes: { "created-at": new Date().toISOString(), "sourceable-name": srcWs.name, "workspace-name": ws.name }, relationships: { sourceable: { data: { id: srcId, type: "workspaces" } }, "sourceable-workspace": { data: { id: srcId, type: "workspaces" } }, workspace: { data: { id: workspaceId, type: "workspaces" } } } } };
   })
   .get("/api/v2/run-triggers/:run_trigger_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const triggerId = params.run_trigger_id ?? "";
+    const triggerId = params["run_trigger_id"] ?? "";
     const trigger = triggerId !== "" ? await db.query.runTriggers.findFirst({ where: eq(runTriggers.id, triggerId) }) : undefined;
     if (trigger === undefined || (await findAuthorizedWorkspace(trigger.workspaceId, user?.id, tokenOrgId, tokenTeamId)) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const [tw, sw] = await Promise.all([
@@ -780,7 +780,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     return { data: { id: trigger.id, type: "run-triggers", attributes: { "created-at": new Date(trigger.createdAt).toISOString(), "sourceable-name": sw?.name ?? "", "workspace-name": tw?.name ?? "" }, relationships: { sourceable: { data: { id: trigger.sourceWorkspaceId, type: "workspaces" } }, "sourceable-workspace": { data: { id: trigger.sourceWorkspaceId, type: "workspaces" } }, workspace: { data: { id: trigger.workspaceId, type: "workspaces" } } } } };
   })
   .delete("/api/v2/run-triggers/:run_trigger_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const triggerId = params.run_trigger_id ?? "";
+    const triggerId = params["run_trigger_id"] ?? "";
     const trigger = triggerId !== "" ? await db.query.runTriggers.findFirst({ where: eq(runTriggers.id, triggerId) }) : undefined;
     if (trigger === undefined || (await findAuthorizedWorkspace(trigger.workspaceId, user?.id, tokenOrgId, tokenTeamId, "admin")) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(runTriggers).where(eq(runTriggers.id, triggerId));
@@ -788,11 +788,11 @@ export const miscRoutes = new Elysia({ name: "misc" })
     return {};
   })
   .post("/api/v2/workspaces/:workspace_id/relationships/run-triggers", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const workspaceId = params.workspace_id ?? "";
+    const workspaceId = params["workspace_id"] ?? "";
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (ws === undefined || (await findAuthorizedWorkspace(ws.id, user?.id, tokenOrgId, tokenTeamId, "admin")) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload.data;
+    const items = payload["data"];
     if (!Array.isArray(items)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Run trigger relationships must be an array of workspace resource identifiers" }] };
@@ -804,11 +804,11 @@ export const miscRoutes = new Elysia({ name: "misc" })
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Run trigger source must be a workspace resource identifier" }] };
       }
       const identifier = item as Record<string, unknown>;
-      if (identifier.type !== "workspaces" || typeof identifier.id !== "string" || identifier.id === "") {
+      if (identifier["type"] !== "workspaces" || typeof identifier["id"] !== "string" || identifier["id"] === "") {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Run trigger source must be a workspace resource identifier" }] };
       }
-      sourceIds.push(identifier.id);
+      sourceIds.push(identifier["id"]);
     }
     const uniqueSourceIds = [...new Set(sourceIds)];
     const sourceWorkspaces = uniqueSourceIds.length === 0
@@ -830,13 +830,13 @@ export const miscRoutes = new Elysia({ name: "misc" })
     return {};
   })
   .delete("/api/v2/workspaces/:workspace_id/relationships/run-triggers", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const workspaceId = params.workspace_id ?? "";
+    const workspaceId = params["workspace_id"] ?? "";
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (ws === undefined || (await findAuthorizedWorkspace(ws.id, user?.id, tokenOrgId, tokenTeamId, "admin")) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload.data;
+    const items = payload["data"];
     if (Array.isArray(items)) {
-      const srcIds = items.map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>).id === "string") ? (i as Record<string, unknown>).id as string : "").filter((s: string): boolean => s !== "");
+      const srcIds = items.map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>)["id"] === "string") ? (i as Record<string, unknown>)["id"] as string : "").filter((s: string): boolean => s !== "");
       if (srcIds.length > 0) {
         await db.delete(runTriggers).where(and(eq(runTriggers.workspaceId, workspaceId), inArray(runTriggers.sourceWorkspaceId, srcIds)));
       }

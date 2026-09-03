@@ -26,16 +26,16 @@ import {
  */
 
 const defaultRunner = join(import.meta.dir, "../../bin/landlock-runner");
-const runnerPath = process.env.TERRENCE_LANDLOCK_RUNNER ?? defaultRunner;
+const runnerPath = process.env["TERRENCE_LANDLOCK_RUNNER"] ?? defaultRunner;
 const hasRunner = RunSandbox.hasRunner();
 
 // Preserve an externally supplied runner override across the suite; cleanup
 // restores it instead of deleting it unconditionally.
-const originalRunnerEnv = process.env.TERRENCE_LANDLOCK_RUNNER;
+const originalRunnerEnv = process.env["TERRENCE_LANDLOCK_RUNNER"];
 
 function restoreRunnerEnv(): void {
-  if (originalRunnerEnv === undefined) delete process.env.TERRENCE_LANDLOCK_RUNNER;
-  else process.env.TERRENCE_LANDLOCK_RUNNER = originalRunnerEnv;
+  if (originalRunnerEnv === undefined) delete process.env["TERRENCE_LANDLOCK_RUNNER"];
+  else process.env["TERRENCE_LANDLOCK_RUNNER"] = originalRunnerEnv;
 }
 
 afterAll(() => {
@@ -124,7 +124,7 @@ describe("landlock fail-closed on ABI-0 hosts", () => {
     const cwd = join(fakeDir, "work");
     await mkdir(cwd, { recursive: true });
     try {
-      process.env.TERRENCE_LANDLOCK_RUNNER = fakeRunner;
+      process.env["TERRENCE_LANDLOCK_RUNNER"] = fakeRunner;
       resetLandlockAbiCache();
       expect(probeLandlockAbi()).toBe(0);
 

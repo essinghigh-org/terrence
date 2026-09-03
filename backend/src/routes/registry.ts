@@ -57,8 +57,8 @@ import { isUniqueConstraintError } from "../lib/validation";
 import { cancelDurableJobs, enqueueDurableJob } from "../lib/durable-jobs";
 import { moduleTestIdentityEnvironment, revokeWorkloadIdentityTokens, type CredentialProvider } from "../lib/workload-identity";
 
-const CV_STORAGE_DIR = join(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "cv");
-const REGISTRY_MODULE_STORAGE_DIR = join(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "modules");
+const CV_STORAGE_DIR = join(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "cv");
+const REGISTRY_MODULE_STORAGE_DIR = join(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "modules");
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
 async function moduleTestEnvironmentFactory(moduleId: string, moduleName: string, orgId: string, runId: string): Promise<ModuleTestEnvironmentFactory> {
@@ -188,15 +188,15 @@ type ProviderDependency = Readonly<{ name: string; source: string | null }>;
 
 function metadataProviderDependencies(metadata: unknown): readonly ProviderDependency[] {
   if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) return [];
-  const providers = (metadata as Record<string, unknown>).providers;
+  const providers = (metadata as Record<string, unknown>)["providers"];
   if (!Array.isArray(providers)) return [];
   return providers.flatMap((value): ProviderDependency[] => {
     if (value === null || typeof value !== "object" || Array.isArray(value)) return [];
     const provider = value as Record<string, unknown>;
-    if (typeof provider.name !== "string" || provider.name === "") return [];
+    if (typeof provider["name"] !== "string" || provider["name"] === "") return [];
     return [{
-      name: provider.name,
-      source: typeof provider.source === "string" && provider.source !== "" ? provider.source : null,
+      name: provider["name"],
+      source: typeof provider["source"] === "string" && provider["source"] !== "" ? provider["source"] : null,
     }];
   });
 }
@@ -353,7 +353,7 @@ async function createRegistryModuleVersion(
   attributes: Readonly<Record<string, unknown>>,
   set: SetObj,
 ): Promise<unknown> {
-  const version = typeof attributes.version === "string" ? attributes.version.replace(/^v/, "") : "";
+  const version = typeof attributes["version"] === "string" ? attributes["version"].replace(/^v/, "") : "";
   if (!validModuleVersion(version)) {
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Version must be a semantic module version" }] };
@@ -441,7 +441,7 @@ async function registrySigningKey(
 function matchesMirrorHostname(provider: ProvItem, hostname: string, requestUrl: string): boolean {
   const origin = provider.registryName === "public"
     ? "registry.terraform.io"
-    : new URL(process.env.PUBLIC_URL ?? requestUrl).host;
+    : new URL(process.env["PUBLIC_URL"] ?? requestUrl).host;
   return hostname === origin;
 }
 
@@ -583,15 +583,15 @@ function variableOptionsInput(raw: unknown): readonly VariableOptionInput[] | Re
   for (const entry of raw) {
     if (entry === null || typeof entry !== "object") return { error: "variable-options entries must be objects" };
     const item = entry as Record<string, unknown>;
-    if (item.type !== "variable-options") return { error: "variable-options type must be variable-options" };
-    const id = item.id;
+    if (item["type"] !== "variable-options") return { error: "variable-options type must be variable-options" };
+    const id = item["id"];
     if (id !== undefined && (typeof id !== "string" || id === "")) return { error: "variable-options id must be a non-empty string" };
-    const attributes = item.attributes;
+    const attributes = item["attributes"];
     if (attributes === null || typeof attributes !== "object") return { error: "variable-options attributes are required" };
     const values = attributes as Record<string, unknown>;
     const variableName = values["variable-name"];
     const variableType = values["variable-type"];
-    const options = values.options;
+    const options = values["options"];
     if (typeof variableName !== "string" || !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(variableName)) {
       return { error: "variable-name must be a valid Terraform variable name" };
     }
@@ -616,24 +616,24 @@ function variableOptionsInput(raw: unknown): readonly VariableOptionInput[] | Re
 
 function noCodeInput(body: unknown, requireModule: boolean): NoCodeInput | Readonly<{ error: string }> {
   const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-  const rawData = payload.data;
+  const rawData = payload["data"];
   if (rawData === null || typeof rawData !== "object") return { error: "data is required" };
   const data = rawData as Record<string, unknown>;
-  if (data.type !== "no-code-modules") return { error: "data.type must be no-code-modules" };
+  if (data["type"] !== "no-code-modules") return { error: "data.type must be no-code-modules" };
 
-  const rawAttributes = data.attributes;
+  const rawAttributes = data["attributes"];
   if (rawAttributes !== undefined && (rawAttributes === null || typeof rawAttributes !== "object")) {
     return { error: "data.attributes must be an object" };
   }
   const attributes = (rawAttributes ?? {}) as Record<string, unknown>;
-  const enabled = attributes.enabled;
+  const enabled = attributes["enabled"];
   const versionPin = attributes["version-pin"];
   if (enabled !== undefined && typeof enabled !== "boolean") return { error: "enabled must be a boolean" };
   if (versionPin !== undefined && (typeof versionPin !== "string" || versionPin.trim() === "")) {
     return { error: "version-pin must be a non-empty string" };
   }
 
-  const rawRelationships = data.relationships;
+  const rawRelationships = data["relationships"];
   if (rawRelationships !== undefined && (rawRelationships === null || typeof rawRelationships !== "object")) {
     return { error: "data.relationships must be an object" };
   }
@@ -646,18 +646,18 @@ function noCodeInput(body: unknown, requireModule: boolean): NoCodeInput | Reado
     const registryModule = rawRegistryModule !== null && typeof rawRegistryModule === "object"
       ? rawRegistryModule as Record<string, unknown>
       : {};
-    const rawRegistryData = registryModule.data;
+    const rawRegistryData = registryModule["data"];
     const registryData = rawRegistryData !== null && typeof rawRegistryData === "object"
       ? rawRegistryData as Record<string, unknown>
       : {};
     if (
-      (registryData.type !== "registry-module" && registryData.type !== "registry-modules")
-      || typeof registryData.id !== "string"
-      || registryData.id === ""
+      (registryData["type"] !== "registry-module" && registryData["type"] !== "registry-modules")
+      || typeof registryData["id"] !== "string"
+      || registryData["id"] === ""
     ) {
       return { error: "registry-module relationship is invalid" };
     }
-    moduleId = registryData.id;
+    moduleId = registryData["id"];
   }
   if (requireModule && moduleId === undefined) return { error: "registry-module relationship is required" };
 
@@ -667,7 +667,7 @@ function noCodeInput(body: unknown, requireModule: boolean): NoCodeInput | Reado
     if (rawVariableOptions === null || typeof rawVariableOptions !== "object") {
       return { error: "variable-options relationship is invalid" };
     }
-    const options = variableOptionsInput((rawVariableOptions as Record<string, unknown>).data);
+    const options = variableOptionsInput((rawVariableOptions as Record<string, unknown>)["data"]);
     if ("error" in options) return options;
     variableOptions = options;
   }
@@ -969,13 +969,13 @@ async function testRunConfigurationArchive(
 
 function testVariableInput(body: unknown, requireKey: boolean): Readonly<{ key?: string; value?: string; sensitive?: boolean; hcl?: boolean; category?: string; description?: string | null }> | Readonly<{ error: string }> {
   const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-  const data = payload.data;
+  const data = payload["data"];
   if (data === null || typeof data !== "object") return { error: "data is required" };
-  const attributes = (data as Record<string, unknown>).attributes;
+  const attributes = (data as Record<string, unknown>)["attributes"];
   if (attributes === null || typeof attributes !== "object") return { error: "data.attributes is required" };
   const attrs = attributes as Record<string, unknown>;
-  const key = attrs.key;
-  const category = attrs.category;
+  const key = attrs["key"];
+  const category = attrs["category"];
   if (typeof category !== "undefined" && category !== null && typeof category !== "string") return { error: "category must be a string" };
   if (requireKey && (typeof key !== "string" || key.trim() === "")) return { error: "key is required" };
   if (typeof key !== "undefined" && key !== null && typeof key !== "string") return { error: "key must be a string" };
@@ -986,10 +986,10 @@ function testVariableInput(body: unknown, requireKey: boolean): Readonly<{ key?:
   // category preserves the stored one (create defaults to "terraform").
   if (typeof category === "string") result.category = cat;
   if (typeof key === "string") result.key = key;
-  if (typeof attrs.value === "string") result.value = attrs.value;
-  if (typeof attrs.sensitive === "boolean") result.sensitive = attrs.sensitive;
-  if (typeof attrs.hcl === "boolean") result.hcl = attrs.hcl;
-  if (typeof attrs.description === "string") result.description = attrs.description;
+  if (typeof attrs["value"] === "string") result.value = attrs["value"];
+  if (typeof attrs["sensitive"] === "boolean") result.sensitive = attrs["sensitive"];
+  if (typeof attrs["hcl"] === "boolean") result.hcl = attrs["hcl"];
+  if (typeof attrs["description"] === "string") result.description = attrs["description"];
   return result;
 }
 
@@ -1016,19 +1016,19 @@ export const registryRoutes = new Elysia({ name: "registry" })
   .use(authPlugin)
   // --- Module Registry Protocol ---
   .get("/api/registry/v1/modules/:namespace/:name/:provider/versions", async ({ params, user, orgId: tokenOrgId, run, set }: ParamCtx): Promise<unknown> => {
-    const namespace = params.namespace ?? "";
-    const name = params.name ?? "";
-    const provider = params.provider ?? "";
+    const namespace = params["namespace"] ?? "";
+    const name = params["name"] ?? "";
+    const provider = params["provider"] ?? "";
     const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
     if (mod === undefined) return registryNotFound(set);
     const verList = await availableModuleVersions(mod.id);
     return { modules: [{ versions: verList.map((v: ModVerItem): Record<string, string> => ({ version: v.version })) }] };
   })
   .get("/api/registry/v1/modules/:namespace/:name/:provider/:version", async ({ params, user, orgId: tokenOrgId, run, set }: ParamCtx): Promise<unknown> => {
-    const namespace = params.namespace ?? "";
-    const name = params.name ?? "";
-    const provider = params.provider ?? "";
-    const version = params.version ?? "";
+    const namespace = params["namespace"] ?? "";
+    const name = params["name"] ?? "";
+    const provider = params["provider"] ?? "";
+    const version = params["version"] ?? "";
     const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
     if (mod === undefined) return registryNotFound(set);
     const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
@@ -1036,10 +1036,10 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { id: `${namespace}/${name}/${provider}/${version}`, owner: namespace, namespace, name, provider, version: ver.version, status: ver.status, download_url: `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/download` };
   })
   .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/download", async ({ params, user, orgId: tokenOrgId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const namespace = params.namespace ?? "";
-    const name = params.name ?? "";
-    const provider = params.provider ?? "";
-    const version = params.version ?? "";
+    const namespace = params["namespace"] ?? "";
+    const name = params["name"] ?? "";
+    const provider = params["provider"] ?? "";
+    const version = params["version"] ?? "";
     const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
     if (mod === undefined) return registryNotFound(set);
     const ver = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, version)) });
@@ -1054,10 +1054,10 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return undefined;
   })
   .get("/api/registry/v1/modules/:namespace/:name/:provider/:version/archive.tar.gz", async ({ params, user, orgId: tokenOrgId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const namespace = params.namespace ?? "";
-    const name = params.name ?? "";
-    const provider = params.provider ?? "";
-    const version = params.version ?? "";
+    const namespace = params["namespace"] ?? "";
+    const name = params["name"] ?? "";
+    const provider = params["provider"] ?? "";
+    const version = params["version"] ?? "";
     const archivePath = `/api/registry/v1/modules/${namespace}/${name}/${provider}/${version}/archive.tar.gz`;
     // Terraform fetches the archive without an Authorization header; a valid
     // signed URL (issued by the download endpoint) authorizes the fetch.
@@ -1075,8 +1075,8 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return Bun.file(ver.archivePath);
   })
   .get("/api/registry/v1/modules/:namespace/:name", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
-    const namespace = params.namespace ?? "";
-    const name = params.name ?? "";
+    const namespace = params["namespace"] ?? "";
+    const name = params["name"] ?? "";
     const found = await db.query.registryModules.findMany({ where: and(eq(registryModules.namespace, namespace), eq(registryModules.name, name)) });
     const readable = await Promise.all(found.map(async (mod): Promise<boolean> => checkRegistryReadPermission(user?.id, mod.orgId, "modules", tokenOrgId)));
     const mods = found.filter((_, index): boolean => readable[index] === true);
@@ -1084,9 +1084,9 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { modules: mods.map((m: ModItem): Record<string, unknown> => ({ id: `${namespace}/${name}/${m.provider}`, owner: namespace, namespace, name, provider: m.provider, versions: [] })) };
   })
   .get("/api/registry/v1/modules/:namespace/:name/:provider", async ({ params, user, orgId: tokenOrgId, run, set }: ParamCtx): Promise<unknown> => {
-    const namespace = params.namespace ?? "";
-    const name = params.name ?? "";
-    const provider = params.provider ?? "";
+    const namespace = params["namespace"] ?? "";
+    const name = params["name"] ?? "";
+    const provider = params["provider"] ?? "";
     const mod = await findRegistryModule(namespace, name, provider, user?.id, tokenOrgId, run);
     if (mod === undefined) return registryNotFound(set);
     const verList = await availableModuleVersions(mod.id);
@@ -1095,7 +1095,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { id: `${namespace}/${name}/${provider}/${latestVersion}`, owner: namespace, namespace, name, provider, version: latestVersion, status, versions: verList.map((v: ModVerItem): Record<string, string> => ({ version: v.version })) };
   })
   .get("/api/registry/v1/modules/:namespace", async ({ params, user, orgId: tokenOrgId }: ParamCtx): Promise<unknown> => {
-    const namespace = params.namespace ?? "";
+    const namespace = params["namespace"] ?? "";
     const found = await db.query.registryModules.findMany({ where: eq(registryModules.namespace, namespace) });
     const readable = await Promise.all(found.map(async (mod): Promise<boolean> => checkRegistryReadPermission(user?.id, mod.orgId, "modules", tokenOrgId)));
     const mods = found.filter((_, index): boolean => readable[index] === true);
@@ -1106,7 +1106,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { modules };
   })
   .get("/api/registry/v1/modules", async ({ query, user, orgId: tokenOrgId }: ParamCtx): Promise<unknown> => {
-    const searchQuery = (query?.q ?? "").trim();
+    const searchQuery = (query?.["q"] ?? "").trim();
     let mods: (typeof registryModules.$inferSelect)[];
     if (searchQuery !== "") {
       mods = await db.query.registryModules.findMany({ where: or(caseInsensitiveLike(registryModules.name, `%${searchQuery}%`), caseInsensitiveLike(registryModules.namespace, `%${searchQuery}%`), caseInsensitiveLike(registryModules.provider, `%${searchQuery}%`)), limit: 50 });
@@ -1122,7 +1122,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   // --- Provider Registry Protocol ---
   .get("/api/registry/v1/providers/-/versions", async ({ query, user, orgId: tokenOrgId }: ParamCtx): Promise<unknown> => {
-    const searchQuery = (query?.q ?? "").trim();
+    const searchQuery = (query?.["q"] ?? "").trim();
     let provs: (typeof registryProviders.$inferSelect)[];
     if (searchQuery !== "") {
       provs = await db.query.registryProviders.findMany({ where: or(caseInsensitiveLike(registryProviders.namespace, `%${searchQuery}%`), caseInsensitiveLike(registryProviders.type, `%${searchQuery}%`)), limit: 50 });
@@ -1137,8 +1137,8 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { versions };
   })
   .get("/api/registry/v1/providers/:namespace/:type/versions", async ({ params, user, orgId: tokenOrgId }: ParamCtx): Promise<unknown> => {
-    const namespace = params.namespace ?? "";
-    const type = params.type ?? "";
+    const namespace = params["namespace"] ?? "";
+    const type = params["type"] ?? "";
     const prov = await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.namespace, namespace), eq(registryProviders.type, type)) });
     if (prov === undefined || !(await checkRegistryReadPermission(user?.id, prov.orgId, "providers", tokenOrgId))) { return { versions: [] }; }
     const verList = sortModuleVersionsDescending(await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, prov.id) }));
@@ -1149,11 +1149,11 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { versions };
   })
   .get("/api/registry/v1/providers/:namespace/:type/:version/download/:os/:arch", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
-    const namespace = params.namespace ?? "";
-    const type = params.type ?? "";
-    const version = params.version ?? "";
-    const os = params.os ?? "";
-    const arch = params.arch ?? "";
+    const namespace = params["namespace"] ?? "";
+    const type = params["type"] ?? "";
+    const version = params["version"] ?? "";
+    const os = params["os"] ?? "";
+    const arch = params["arch"] ?? "";
     const prov = await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.namespace, namespace), eq(registryProviders.type, type)) });
     if (prov === undefined || !(await checkRegistryReadPermission(user?.id, prov.orgId, "providers", tokenOrgId))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ver = await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, prov.id), eq(registryProviderVersions.version, version)) });
@@ -1178,11 +1178,11 @@ export const registryRoutes = new Elysia({ name: "registry" })
   // --- Provider Network Mirror Protocol ---
   .get("/api/registry/v1/provider-mirror/:hostname/:namespace/:type/index.json", async ({ params, request, user, orgId: tokenOrgId }: ParamCtx): Promise<Response> => {
     const prov = await db.query.registryProviders.findFirst({
-      where: and(eq(registryProviders.namespace, params.namespace ?? ""), eq(registryProviders.type, params.type ?? "")),
+      where: and(eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["type"] ?? "")),
     });
     if (
       prov === undefined
-      || !matchesMirrorHostname(prov, params.hostname ?? "", request.url)
+      || !matchesMirrorHostname(prov, params["hostname"] ?? "", request.url)
       || !(await checkRegistryReadPermission(user?.id, prov.orgId, "providers", tokenOrgId))
     ) {
       return new Response(null, { status: 404 });
@@ -1192,16 +1192,16 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   .get("/api/registry/v1/provider-mirror/:hostname/:namespace/:type/:version", async ({ params, request, user, orgId: tokenOrgId }: ParamCtx): Promise<Response> => {
     const prov = await db.query.registryProviders.findFirst({
-      where: and(eq(registryProviders.namespace, params.namespace ?? ""), eq(registryProviders.type, params.type ?? "")),
+      where: and(eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["type"] ?? "")),
     });
     if (
       prov === undefined
-      || !matchesMirrorHostname(prov, params.hostname ?? "", request.url)
+      || !matchesMirrorHostname(prov, params["hostname"] ?? "", request.url)
       || !(await checkRegistryReadPermission(user?.id, prov.orgId, "providers", tokenOrgId))
     ) {
       return new Response(null, { status: 404 });
     }
-    const versionParam = params.version ?? "";
+    const versionParam = params["version"] ?? "";
     if (!versionParam.endsWith(".json")) return new Response(null, { status: 404 });
     const requestedVersion = versionParam.slice(0, -".json".length);
     const ver = await db.query.registryProviderVersions.findFirst({
@@ -1218,7 +1218,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   // --- Module Management API (the reference format v2) ---
   .get("/api/v2/organizations/:org_name/registry-modules", async ({ params, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const query = new URL(request.url).searchParams;
@@ -1278,15 +1278,15 @@ export const registryRoutes = new Elysia({ name: "registry" })
     };
   })
   .post("/api/v2/organizations/:org_name/registry-modules", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const name = typeof attributes.name === "string" ? attributes.name.trim() : "";
-    const provider = typeof attributes.provider === "string" ? attributes.provider.trim() : "";
-    const namespace = attributes.namespace;
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const name = typeof attributes["name"] === "string" ? attributes["name"].trim() : "";
+    const provider = typeof attributes["provider"] === "string" ? attributes["provider"].trim() : "";
+    const namespace = attributes["namespace"];
     const registryName = attributes["registry-name"];
     if (!/^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?$/.test(name) || !/^[a-z0-9]{1,64}$/.test(provider)) {
       (set as { status: number }).status = 422;
@@ -1322,36 +1322,36 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: await registryModuleResource(mod, org.name, true) };
   })
   .post("/api/v2/organizations/:org_name/registry-modules/vcs", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await cachedOrgByName(params.org_name ?? "");
+    const org = await cachedOrgByName(params["org_name"] ?? "");
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
-    const attributes = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
     const vcsRepo = attributes["vcs-repo"] !== null && typeof attributes["vcs-repo"] === "object"
       ? attributes["vcs-repo"] as Record<string, unknown>
       : {};
-    const identifier = typeof vcsRepo.identifier === "string" ? vcsRepo.identifier.trim() : "";
+    const identifier = typeof vcsRepo["identifier"] === "string" ? vcsRepo["identifier"].trim() : "";
     const repositoryName = identifier.split("/").at(-1) ?? "";
     const conventional = /^terraform-([a-z0-9]+)-([A-Za-z0-9][A-Za-z0-9_-]*)$/.exec(repositoryName);
-    const rawModuleName = attributes["module-name"] ?? attributes.name;
-    const rawProvider = attributes["module-provider"] ?? attributes.provider;
+    const rawModuleName = attributes["module-name"] ?? attributes["name"];
+    const rawProvider = attributes["module-provider"] ?? attributes["provider"];
     const name = typeof rawModuleName === "string" ? rawModuleName.trim() : conventional?.[2] ?? "";
     const provider = typeof rawProvider === "string" ? rawProvider.trim() : conventional?.[1] ?? "";
     const githubAppInstallationId = vcsRepo["github-app-installation-id"];
     const oauthTokenId = vcsRepo["oauth-token-id"];
     const connectionCount = Number(typeof githubAppInstallationId === "string" && githubAppInstallationId !== "")
       + Number(typeof oauthTokenId === "string" && oauthTokenId !== "");
-    const branch = typeof vcsRepo.branch === "string" && vcsRepo.branch.trim() !== "" ? vcsRepo.branch.trim() : null;
+    const branch = typeof vcsRepo["branch"] === "string" && vcsRepo["branch"].trim() !== "" ? vcsRepo["branch"].trim() : null;
     const rawSourceDirectory = attributes["source-directory"] ?? vcsRepo["source-directory"];
     const rawTagPrefix = attributes["tag-prefix"] ?? vcsRepo["tag-prefix"];
     const sourceDirectory = typeof rawSourceDirectory === "string" ? rawSourceDirectory.trim() : "";
     const tagPrefix = typeof rawTagPrefix === "string" ? rawTagPrefix.trim() : "";
-    const rawInitialVersion = attributes["initial-version"] ?? attributes.version;
+    const rawInitialVersion = attributes["initial-version"] ?? attributes["version"];
     const initialVersion = typeof rawInitialVersion === "string" ? rawInitialVersion.replace(/^v/, "") : "0.0.0";
     const identifierParts = identifier.split("/");
     const identifierValid = identifierParts.length === 2
       && identifierParts.every((part): boolean => /^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,100}$/.test(part));
-    if (data.type !== "registry-modules" || !identifierValid || connectionCount !== 1) {
+    if (data["type"] !== "registry-modules" || !identifierValid || connectionCount !== 1) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A repository identifier and exactly one VCS connection are required" }] };
     }
@@ -1373,7 +1373,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       connectionAvailable = await db.query.githubAppInstallations.findFirst({
         where: and(eq(githubAppInstallations.id, githubAppInstallationId), eq(githubAppInstallations.orgId, org.id)),
       }) !== undefined;
-      repositoryBaseUrl = process.env.GITHUB_APP_HTTP_URL ?? "https://github.com";
+      repositoryBaseUrl = process.env["GITHUB_APP_HTTP_URL"] ?? "https://github.com";
     } else {
       const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId as string) });
       const client = token === undefined ? undefined : await db.query.oauthClients.findFirst({
@@ -1428,7 +1428,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
         repositoryIdentifier: identifier,
         repositoryDisplayIdentifier: typeof vcsRepo["display-identifier"] === "string"
           ? vcsRepo["display-identifier"]
-          : typeof vcsRepo.display_identifier === "string" ? vcsRepo.display_identifier : identifier,
+          : typeof vcsRepo["display_identifier"] === "string" ? vcsRepo["display_identifier"] : identifier,
         repositoryUrl,
         sourceDirectory,
         tagPrefix,
@@ -1456,10 +1456,10 @@ export const registryRoutes = new Elysia({ name: "registry" })
     }
   })
   .get("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
-    const namespace = params.namespace ?? "";
-    const moduleName = params.module_name ?? "";
-    const provider = params.provider ?? "";
+    const orgName = params["org_name"] ?? "";
+    const namespace = params["namespace"] ?? "";
+    const moduleName = params["module_name"] ?? "";
+    const provider = params["provider"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const mod = await db.query.registryModules.findFirst({
@@ -1475,41 +1475,41 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: await registryModuleResource(mod, org.name, canManage) };
   })
   .get("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/:version", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params.registry_name !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params.org_name ?? "");
+    if (params["registry_name"] !== "private") return registryNotFound(set);
+    const org = await cachedOrgByName(params["org_name"] ?? "");
     const mod = org === undefined ? undefined : await db.query.registryModules.findFirst({
       where: and(
         eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, params.namespace ?? ""),
-        eq(registryModules.name, params.module_name ?? ""),
-        eq(registryModules.provider, params.provider ?? ""),
+        eq(registryModules.namespace, params["namespace"] ?? ""),
+        eq(registryModules.name, params["module_name"] ?? ""),
+        eq(registryModules.provider, params["provider"] ?? ""),
       ),
     });
     if (org === undefined || mod === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null))) return registryNotFound(set);
-    const version = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, params.version ?? "")) });
+    const version = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, params["version"] ?? "")) });
     return version === undefined ? registryNotFound(set) : { data: registryModuleVersionResource(version) };
   })
   .patch("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/:version", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params.registry_name !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params.org_name ?? "");
+    if (params["registry_name"] !== "private") return registryNotFound(set);
+    const org = await cachedOrgByName(params["org_name"] ?? "");
     const mod = org === undefined ? undefined : await db.query.registryModules.findFirst({
       where: and(
         eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, params.namespace ?? ""),
-        eq(registryModules.name, params.module_name ?? ""),
-        eq(registryModules.provider, params.provider ?? ""),
+        eq(registryModules.namespace, params["namespace"] ?? ""),
+        eq(registryModules.name, params["module_name"] ?? ""),
+        eq(registryModules.provider, params["provider"] ?? ""),
       ),
     });
     if (org === undefined || mod === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
-    const version = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, params.version ?? "")) });
+    const version = await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, params["version"] ?? "")) });
     if (version === undefined) return registryNotFound(set);
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
-    const attrs = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
-    const deprecation = attrs.deprecation !== null && typeof attrs.deprecation === "object" ? attrs.deprecation as Record<string, unknown> : {};
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+    const deprecation = attrs["deprecation"] !== null && typeof attrs["deprecation"] === "object" ? attrs["deprecation"] as Record<string, unknown> : {};
     const status = deprecation["deprecated-status"];
-    const deprecated = typeof attrs.deprecated === "boolean"
-      ? attrs.deprecated
+    const deprecated = typeof attrs["deprecated"] === "boolean"
+      ? attrs["deprecated"]
       : status === "Deprecated"
         ? true
         : status === "Undeprecated"
@@ -1524,17 +1524,17 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return updated === undefined ? registryNotFound(set) : { data: registryModuleVersionResource(updated) };
   })
   .delete("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/:version", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    if (params.registry_name !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params.org_name ?? "");
+    if (params["registry_name"] !== "private") return registryNotFound(set);
+    const org = await cachedOrgByName(params["org_name"] ?? "");
     const mod = org === undefined ? undefined : await db.query.registryModules.findFirst({
       where: and(
         eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, params.namespace ?? ""),
-        eq(registryModules.name, params.module_name ?? ""),
-        eq(registryModules.provider, params.provider ?? ""),
+        eq(registryModules.namespace, params["namespace"] ?? ""),
+        eq(registryModules.name, params["module_name"] ?? ""),
+        eq(registryModules.provider, params["provider"] ?? ""),
       ),
     });
-    const version = mod === undefined ? undefined : await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, params.version ?? "")) });
+    const version = mod === undefined ? undefined : await db.query.registryModuleVersions.findFirst({ where: and(eq(registryModuleVersions.moduleId, mod.id), eq(registryModuleVersions.version, params["version"] ?? "")) });
     if (org === undefined || mod === undefined || version === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
     await db.delete(registryModuleVersions).where(eq(registryModuleVersions.id, version.id));
     if (version.archivePath !== null) await rm(version.archivePath, { force: true });
@@ -1542,7 +1542,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return {};
   })
   .get("/api/v2/registry-modules/:module_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const moduleId = params.module_id ?? "";
+    const moduleId = params["module_id"] ?? "";
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
     if (mod === undefined || !(await checkRegistryManagementRead(user?.id, mod.orgId, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, mod.orgId) });
@@ -1550,7 +1550,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: await registryModuleResource(mod, org?.name ?? mod.orgId, canManage) };
   })
   .post("/api/v2/registry-modules/:module_id/actions/resync", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, params.module_id ?? "") });
+    const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, params["module_id"] ?? "") });
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
     if (mod.publishingMechanism !== "vcs" || mod.publishingWorkflow !== "tag") {
       (set as { status: number }).status = 422;
@@ -1568,24 +1568,24 @@ export const registryRoutes = new Elysia({ name: "registry" })
     }
   })
   .patch("/api/v2/organizations/:org_name/registry-modules/private/:namespace/:module_name/:provider", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await cachedOrgByName(params.org_name ?? "");
+    const org = await cachedOrgByName(params["org_name"] ?? "");
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
     const mod = await db.query.registryModules.findFirst({
       where: and(
         eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, params.namespace ?? ""),
-        eq(registryModules.name, params.module_name ?? ""),
-        eq(registryModules.provider, params.provider ?? ""),
+        eq(registryModules.namespace, params["namespace"] ?? ""),
+        eq(registryModules.name, params["module_name"] ?? ""),
+        eq(registryModules.provider, params["provider"] ?? ""),
       ),
     });
     if (mod === undefined) return registryNotFound(set);
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
-    const attributes = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
     const sourceDirectory = attributes["source-directory"];
     const tagPrefix = attributes["tag-prefix"];
     const vcsRepo = attributes["vcs-repo"] !== null && typeof attributes["vcs-repo"] === "object" ? attributes["vcs-repo"] as Record<string, unknown> : {};
-    const requestedBranch = vcsRepo.branch;
+    const requestedBranch = vcsRepo["branch"];
     if (sourceDirectory !== undefined && (typeof sourceDirectory !== "string" || sourceDirectory.startsWith("/") || sourceDirectory.includes("\\") || sourceDirectory.split("/").includes(".."))) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "source-directory must be a safe relative path" }] };
@@ -1611,10 +1611,10 @@ export const registryRoutes = new Elysia({ name: "registry" })
     // go-tfe RegistryModules.ReadVersion — resolves a single published module
     // version by ?module_version=. The tfe_no_code_module create polls this
     // until the pinned version is published.
-    const orgName = params.org_name ?? "";
-    const namespace = params.namespace ?? "";
-    const moduleName = params.module_name ?? "";
-    const provider = params.provider ?? "";
+    const orgName = params["org_name"] ?? "";
+    const namespace = params["namespace"] ?? "";
+    const moduleName = params["module_name"] ?? "";
+    const provider = params["provider"] ?? "";
     const version = new URL(request.url).searchParams.get("module_version") ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "modules", tokenOrgId, teamId ?? null)) || version === "") { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -1627,7 +1627,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: { id: ver.id, type: "registry-module-versions", attributes: { version: ver.version, status: ver.status, "created-at": new Date(ver.createdAt).toISOString() } } };
   })
   .delete("/api/v2/registry-modules/:module_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const moduleId = params.module_id ?? "";
+    const moduleId = params["module_id"] ?? "";
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await deleteRegistryModuleAndArchives(moduleId);
@@ -1635,10 +1635,10 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return {};
   })
   .delete("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const orgName = params.org_name ?? "";
-    const namespace = params.namespace ?? "";
-    const moduleName = params.module_name ?? "";
-    const provider = params.provider ?? "";
+    const orgName = params["org_name"] ?? "";
+    const namespace = params["namespace"] ?? "";
+    const moduleName = params["module_name"] ?? "";
+    const provider = params["provider"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const mod = await db.query.registryModules.findFirst({
@@ -1656,7 +1656,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   // --- No-Code Module Allowlist ---
   .post("/api/v2/organizations/:org_name/no-code-modules", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     const hasSupportedPrincipal = user !== null && user !== undefined || teamId !== null && teamId !== undefined;
     if (
@@ -1715,7 +1715,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: noCodeResource(noCode, org, mod, version, options) };
   })
   .get("/api/v2/organizations/:org_name/no-code-modules", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (
       org === undefined
@@ -1746,13 +1746,13 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: resources };
   })
   .get("/api/v2/no-code-modules/:id", async ({ params, query, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const includeRaw = query?.include;
+    const includeRaw = query?.["include"];
     const include = typeof includeRaw === "string" ? includeRaw : undefined;
     if (include !== undefined && include !== "variable_options" && include !== "variable-options") {
       (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: "include must be variable_options" }] };
     }
-    const details = await noCodeDetails(params.id ?? "");
+    const details = await noCodeDetails(params["id"] ?? "");
     if (
       details === undefined
       || !(
@@ -1772,7 +1772,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     };
   })
   .patch("/api/v2/no-code-modules/:id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const details = await noCodeDetails(params.id ?? "");
+    const details = await noCodeDetails(params["id"] ?? "");
     const hasSupportedPrincipal = user !== null && user !== undefined || teamId !== null && teamId !== undefined;
     if (
       details === undefined
@@ -1842,7 +1842,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: noCodeResource(updated, details.org, targetModule, targetVersion, options) };
   })
   .delete("/api/v2/no-code-modules/:id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const id = params.id ?? "";
+    const id = params["id"] ?? "";
     const noCode = await db.query.noCodeModules.findFirst({ where: eq(noCodeModules.id, id) });
     const mod = noCode === undefined
       ? undefined
@@ -1863,14 +1863,14 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   // --- Provider Management API (the reference format v2) ---
   .get("/api/v2/organizations/:org_name/registry-providers", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const provList = await db.query.registryProviders.findMany({ where: eq(registryProviders.orgId, org.id) });
     return { data: provList.map((p: ProvItem): Record<string, unknown> => registryProviderResource(p, org.name)), meta: { "total-count": provList.length } };
       })
       .get("/api/v2/registry-providers/:provider_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-        const providerId = params.provider_id ?? "";
+        const providerId = params["provider_id"] ?? "";
         const p = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
         if (p === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
         const org = await db.query.organizations.findFirst({ where: eq(organizations.id, p.orgId) });
@@ -1879,9 +1879,9 @@ export const registryRoutes = new Elysia({ name: "registry" })
         return { data: registryProviderResource(p, org.name) };
       })
       .get("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-        const orgName = params.org_name ?? "";
-        const namespace = params.namespace ?? "";
-        const name = params.name ?? "";
+        const orgName = params["org_name"] ?? "";
+        const namespace = params["namespace"] ?? "";
+        const name = params["name"] ?? "";
         const org = await cachedOrgByName(orgName);
         if (org === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
         const p = await db.query.registryProviders.findFirst({
@@ -1891,23 +1891,23 @@ export const registryRoutes = new Elysia({ name: "registry" })
         return { data: registryProviderResource(p, org.name) };
       })
       .post("/api/v2/organizations/:org_name/registry-providers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-        const orgName = params.org_name ?? "";
+        const orgName = params["org_name"] ?? "";
         const org = await cachedOrgByName(orgName);
         if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
         const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-        const data = payload.data as Record<string, unknown> | undefined;
-        const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-        const name = typeof attributes.name === "string" ? attributes.name : "";
+        const data = payload["data"] as Record<string, unknown> | undefined;
+        const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+        const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
         if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name (type) is required" }] }; }
         const id = `prov-${crypto.randomUUID()}`;
-        const namespace = typeof attributes.namespace === "string" ? attributes.namespace : org.name;
+        const namespace = typeof attributes["namespace"] === "string" ? attributes["namespace"] : org.name;
         const registryName = typeof attributes["registry-name"] === "string" ? attributes["registry-name"] : "private";
         await db.insert(registryProviders).values({ id, orgId: org.id, namespace, type: name, registryName, createdAt: Date.now() });
         (set as { status: number }).status = 201;
         return { data: registryProviderResource({ id, orgId: org.id, namespace, type: name, registryName, createdAt: Date.now() }, org.name) };
       })
   .delete("/api/v2/registry-providers/:provider_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const providerId = params.provider_id ?? "";
+    const providerId = params["provider_id"] ?? "";
     const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
     if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(registryProviders).where(eq(registryProviders.id, providerId));
@@ -1915,9 +1915,9 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return {};
   })
   .delete("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const orgName = params.org_name ?? "";
-    const namespace = params.namespace ?? "";
-    const name = params.name ?? "";
+    const orgName = params["org_name"] ?? "";
+    const namespace = params["namespace"] ?? "";
+    const name = params["name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const prov = await db.query.registryProviders.findFirst({
@@ -1930,20 +1930,20 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   // --- Provider Versions ---
   .get("/api/v2/registry-providers/:provider_id/versions", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const providerId = params.provider_id ?? "";
+    const providerId = params["provider_id"] ?? "";
     const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
     if (prov === undefined || !(await checkRegistryManagementRead(user?.id, prov.orgId, "providers", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const versions = sortModuleVersionsDescending(await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, providerId), orderBy: [desc(registryProviderVersions.createdAt)] }));
     return { data: versions.map((v: ProvVerItem): Record<string, unknown> => ({ id: v.id, type: "registry-provider-versions", attributes: { version: v.version, "key-id": v.keyId, protocols: v.protocols, "shasums-url": v.shasumsUrl, "shasums-signature-url": v.shasumsSignatureUrl, "created-at": new Date(v.createdAt).toISOString() } })) };
   })
   .post("/api/v2/registry-providers/:provider_id/versions", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const providerId = params.provider_id ?? "";
+    const providerId = params["provider_id"] ?? "";
     const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, providerId) });
     if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const version = typeof attributes.version === "string" ? attributes.version : "";
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const version = typeof attributes["version"] === "string" ? attributes["version"] : "";
     if (version === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Version is required" }] }; }
     const rawKeyId = attributes["key-id"];
     if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) {
@@ -1956,7 +1956,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key in the provider namespace" }] };
     }
     const id = `provver-${crypto.randomUUID()}`;
-    const protocols = Array.isArray(attributes.protocols) ? (attributes.protocols as string[]) : ["5.0"];
+    const protocols = Array.isArray(attributes["protocols"]) ? (attributes["protocols"] as string[]) : ["5.0"];
     const shasumsUrl = typeof attributes["shasums-url"] === "string" ? attributes["shasums-url"] : null;
     const shasumsSignatureUrl = typeof attributes["shasums-signature-url"] === "string" ? attributes["shasums-signature-url"] : null;
     try {
@@ -1970,7 +1970,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: { id, type: "registry-provider-versions", attributes: { version, "key-id": keyId, protocols, "shasums-url": shasumsUrl, "shasums-signature-url": shasumsSignatureUrl, "created-at": new Date().toISOString() } } };
   })
   .delete("/api/v2/registry-provider-versions/:version_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const versionId = params.version_id ?? "";
+    const versionId = params["version_id"] ?? "";
     const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, versionId) });
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
@@ -1981,7 +1981,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   // --- Provider Version Platforms ---
   .get("/api/v2/registry-provider-versions/:version_id/platforms", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params.version_id ?? "";
+    const versionId = params["version_id"] ?? "";
     const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, versionId) });
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
@@ -1990,19 +1990,19 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: platforms.map((p: PlatItem): Record<string, unknown> => ({ id: p.id, type: "registry-provider-platforms", attributes: { os: p.os, arch: p.arch, filename: p.filename, "download-url": p.downloadUrl, shasum: p.shasum } })) };
   })
   .post("/api/v2/registry-provider-versions/:version_id/platforms", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params.version_id ?? "";
+    const versionId = params["version_id"] ?? "";
     const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, versionId) });
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const prov = await db.query.registryProviders.findFirst({ where: eq(registryProviders.id, ver.providerId) });
     if (prov === undefined || !(await checkOrganizationPermission(prov.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const os = typeof attributes.os === "string" ? attributes.os : "";
-    const arch = typeof attributes.arch === "string" ? attributes.arch : "";
-    const filename = typeof attributes.filename === "string" ? attributes.filename : "";
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const os = typeof attributes["os"] === "string" ? attributes["os"] : "";
+    const arch = typeof attributes["arch"] === "string" ? attributes["arch"] : "";
+    const filename = typeof attributes["filename"] === "string" ? attributes["filename"] : "";
     const downloadUrl = typeof attributes["download-url"] === "string" ? attributes["download-url"] : "";
-    const shasum = typeof attributes.shasum === "string" ? attributes.shasum : "";
+    const shasum = typeof attributes["shasum"] === "string" ? attributes["shasum"] : "";
     if (os === "" || arch === "" || filename === "" || downloadUrl === "" || shasum === "") {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "os, arch, filename, download-url, and shasum are required" }] };
     }
@@ -2012,7 +2012,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: { id, type: "registry-provider-platforms", attributes: { os, arch, filename, "download-url": downloadUrl, shasum } } };
   })
   .delete("/api/v2/registry-provider-platforms/:platform_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const platformId = params.platform_id ?? "";
+    const platformId = params["platform_id"] ?? "";
     const platform = await db.query.registryProviderPlatforms.findFirst({ where: eq(registryProviderPlatforms.id, platformId) });
     if (platform === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ver = await db.query.registryProviderVersions.findFirst({ where: eq(registryProviderVersions.id, platform.versionId) });
@@ -2026,37 +2026,37 @@ export const registryRoutes = new Elysia({ name: "registry" })
   // Canonical organization-scoped provider version/platform paths. The
   // generic resource-ID endpoints above remain available to Terrence clients.
   .get("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params.registry_name !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params.org_name ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params.namespace ?? ""), eq(registryProviders.type, params.name ?? ""), eq(registryProviders.registryName, "private")) });
+    if (params["registry_name"] !== "private") return registryNotFound(set);
+    const org = await cachedOrgByName(params["org_name"] ?? "");
+    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
     if (org === undefined || provider === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) return registryNotFound(set);
     const versions = sortModuleVersionsDescending(await db.query.registryProviderVersions.findMany({ where: eq(registryProviderVersions.providerId, provider.id), orderBy: [desc(registryProviderVersions.createdAt)] }));
     return { data: versions.map(registryProviderVersionResource) };
   })
   .get("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params.registry_name !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params.org_name ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params.namespace ?? ""), eq(registryProviders.type, params.name ?? ""), eq(registryProviders.registryName, "private")) });
+    if (params["registry_name"] !== "private") return registryNotFound(set);
+    const org = await cachedOrgByName(params["org_name"] ?? "");
+    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
     if (org === undefined || provider === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) return registryNotFound(set);
-    const version = await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params.version ?? "")) });
+    const version = await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
     return version === undefined ? registryNotFound(set) : { data: registryProviderVersionResource(version) };
   })
   .post("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params.registry_name !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params.org_name ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params.namespace ?? ""), eq(registryProviders.type, params.name ?? ""), eq(registryProviders.registryName, "private")) });
+    if (params["registry_name"] !== "private") return registryNotFound(set);
+    const org = await cachedOrgByName(params["org_name"] ?? "");
+    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
     if (org === undefined || provider === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return registryNotFound(set);
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
-    const attrs = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
-    const version = typeof attrs.version === "string" ? attrs.version : "";
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+    const version = typeof attrs["version"] === "string" ? attrs["version"] : "";
     if (version === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Version is required" }] }; }
     const rawKeyId = attrs["key-id"];
     if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key" }] }; }
     const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
     if (keyId !== null && await registrySigningKey(org.id, provider.namespace, keyId) === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key in the provider namespace" }] }; }
     const id = `provver-${crypto.randomUUID()}`;
-    const protocols = Array.isArray(attrs.protocols) ? (attrs.protocols as string[]) : ["5.0"];
+    const protocols = Array.isArray(attrs["protocols"]) ? (attrs["protocols"] as string[]) : ["5.0"];
     const createdAt = Date.now();
     try {
       await db.insert(registryProviderVersions).values({ id, providerId: provider.id, version, keyId, protocols, shasumsUrl: typeof attrs["shasums-url"] === "string" ? attrs["shasums-url"] : null, shasumsSignatureUrl: typeof attrs["shasums-signature-url"] === "string" ? attrs["shasums-signature-url"] : null, createdAt });
@@ -2070,30 +2070,30 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return created === undefined ? registryNotFound(set) : { data: registryProviderVersionResource(created) };
   })
   .delete("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    if (params.registry_name !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params.org_name ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params.namespace ?? ""), eq(registryProviders.type, params.name ?? ""), eq(registryProviders.registryName, "private")) });
+    if (params["registry_name"] !== "private") return registryNotFound(set);
+    const org = await cachedOrgByName(params["org_name"] ?? "");
+    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
     if (org === undefined || provider === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return registryNotFound(set);
-    const version = await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params.version ?? "")) });
+    const version = await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
     if (version === undefined) return registryNotFound(set);
     await db.delete(registryProviderVersions).where(eq(registryProviderVersions.id, version.id));
     (set as { status: number }).status = 204;
     return {};
   })
   .post("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params.registry_name !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params.org_name ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params.namespace ?? ""), eq(registryProviders.type, params.name ?? ""), eq(registryProviders.registryName, "private")) });
-    const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params.version ?? "")) });
+    if (params["registry_name"] !== "private") return registryNotFound(set);
+    const org = await cachedOrgByName(params["org_name"] ?? "");
+    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
+    const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
     if (org === undefined || provider === undefined || version === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return registryNotFound(set);
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
-    const attrs = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
-    const os = typeof attrs.os === "string" ? attrs.os : "";
-    const arch = typeof attrs.arch === "string" ? attrs.arch : "";
-    const filename = typeof attrs.filename === "string" ? attrs.filename : "";
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+    const os = typeof attrs["os"] === "string" ? attrs["os"] : "";
+    const arch = typeof attrs["arch"] === "string" ? attrs["arch"] : "";
+    const filename = typeof attrs["filename"] === "string" ? attrs["filename"] : "";
     const downloadUrl = typeof attrs["download-url"] === "string" ? attrs["download-url"] : "";
-    const shasum = typeof attrs.shasum === "string" ? attrs.shasum : "";
+    const shasum = typeof attrs["shasum"] === "string" ? attrs["shasum"] : "";
     if (os === "" || arch === "" || filename === "" || downloadUrl === "" || shasum === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "os, arch, filename, download-url, and shasum are required" }] }; }
     const id = `provplat-${crypto.randomUUID()}`;
     try {
@@ -2108,29 +2108,29 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return created === undefined ? registryNotFound(set) : { data: registryProviderPlatformResource(created) };
   })
   .get("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params.registry_name !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params.org_name ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params.namespace ?? ""), eq(registryProviders.type, params.name ?? ""), eq(registryProviders.registryName, "private")) });
-    const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params.version ?? "")) });
+    if (params["registry_name"] !== "private") return registryNotFound(set);
+    const org = await cachedOrgByName(params["org_name"] ?? "");
+    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
+    const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
     if (org === undefined || provider === undefined || version === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) return registryNotFound(set);
     const platforms = await db.query.registryProviderPlatforms.findMany({ where: eq(registryProviderPlatforms.versionId, version.id) });
     return { data: platforms.map(registryProviderPlatformResource) };
   })
   .get("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms/:os/:arch", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params.registry_name !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params.org_name ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params.namespace ?? ""), eq(registryProviders.type, params.name ?? ""), eq(registryProviders.registryName, "private")) });
-    const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params.version ?? "")) });
-    const platform = version === undefined ? undefined : await db.query.registryProviderPlatforms.findFirst({ where: and(eq(registryProviderPlatforms.versionId, version.id), eq(registryProviderPlatforms.os, params.os ?? ""), eq(registryProviderPlatforms.arch, params.arch ?? "")) });
+    if (params["registry_name"] !== "private") return registryNotFound(set);
+    const org = await cachedOrgByName(params["org_name"] ?? "");
+    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
+    const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
+    const platform = version === undefined ? undefined : await db.query.registryProviderPlatforms.findFirst({ where: and(eq(registryProviderPlatforms.versionId, version.id), eq(registryProviderPlatforms.os, params["os"] ?? ""), eq(registryProviderPlatforms.arch, params["arch"] ?? "")) });
     if (org === undefined || provider === undefined || version === undefined || platform === undefined || !(await checkRegistryManagementRead(user?.id, org.id, "providers", tokenOrgId, teamId ?? null))) return registryNotFound(set);
     return { data: registryProviderPlatformResource(platform) };
   })
   .delete("/api/v2/organizations/:org_name/registry-providers/:registry_name/:namespace/:name/versions/:version/platforms/:os/:arch", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    if (params.registry_name !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params.org_name ?? "");
-    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params.namespace ?? ""), eq(registryProviders.type, params.name ?? ""), eq(registryProviders.registryName, "private")) });
-    const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params.version ?? "")) });
-    const platform = version === undefined ? undefined : await db.query.registryProviderPlatforms.findFirst({ where: and(eq(registryProviderPlatforms.versionId, version.id), eq(registryProviderPlatforms.os, params.os ?? ""), eq(registryProviderPlatforms.arch, params.arch ?? "")) });
+    if (params["registry_name"] !== "private") return registryNotFound(set);
+    const org = await cachedOrgByName(params["org_name"] ?? "");
+    const provider = org === undefined ? undefined : await db.query.registryProviders.findFirst({ where: and(eq(registryProviders.orgId, org.id), eq(registryProviders.namespace, params["namespace"] ?? ""), eq(registryProviders.type, params["name"] ?? ""), eq(registryProviders.registryName, "private")) });
+    const version = provider === undefined ? undefined : await db.query.registryProviderVersions.findFirst({ where: and(eq(registryProviderVersions.providerId, provider.id), eq(registryProviderVersions.version, params["version"] ?? "")) });
+    const platform = version === undefined ? undefined : await db.query.registryProviderPlatforms.findFirst({ where: and(eq(registryProviderPlatforms.versionId, version.id), eq(registryProviderPlatforms.os, params["os"] ?? ""), eq(registryProviderPlatforms.arch, params["arch"] ?? "")) });
     if (org === undefined || provider === undefined || version === undefined || platform === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-providers"))) return registryNotFound(set);
     await db.delete(registryProviderPlatforms).where(eq(registryProviderPlatforms.id, platform.id));
     (set as { status: number }).status = 204;
@@ -2138,44 +2138,44 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   // --- Module Versions ---
   .post("/api/v2/organizations/:org_name/registry-modules/:registry_name/:namespace/:module_name/:provider/versions", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await cachedOrgByName(params.org_name ?? "");
-    if (org === undefined || params.registry_name !== "private" || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
+    const org = await cachedOrgByName(params["org_name"] ?? "");
+    if (org === undefined || params["registry_name"] !== "private" || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
     const mod = await db.query.registryModules.findFirst({
       where: and(
         eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, params.namespace ?? ""),
-        eq(registryModules.name, params.module_name ?? ""),
-        eq(registryModules.provider, params.provider ?? ""),
+        eq(registryModules.namespace, params["namespace"] ?? ""),
+        eq(registryModules.name, params["module_name"] ?? ""),
+        eq(registryModules.provider, params["provider"] ?? ""),
       ),
     });
     if (mod === undefined) return registryNotFound(set);
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
-    if (data.type !== undefined && data.type !== "registry-module-versions") {
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+    if (data["type"] !== undefined && data["type"] !== "registry-module-versions") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be registry-module-versions" }] };
     }
-    const attributes = data.attributes !== null && typeof data.attributes === "object" ? data.attributes as Record<string, unknown> : {};
+    const attributes = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
     return createRegistryModuleVersion(mod, attributes, set);
   })
   .get("/api/v2/registry-modules/:module_id/versions", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const moduleId = params.module_id ?? "";
+    const moduleId = params["module_id"] ?? "";
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
     if (mod === undefined || !(await checkRegistryManagementRead(user?.id, mod.orgId, "modules", tokenOrgId, teamId ?? null))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const versions = sortModuleVersionsDescending(await db.query.registryModuleVersions.findMany({ where: eq(registryModuleVersions.moduleId, moduleId), orderBy: [desc(registryModuleVersions.createdAt)] }));
     return { data: versions.map(registryModuleVersionResource) };
   })
   .post("/api/v2/registry-modules/:module_id/versions", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const moduleId = params.module_id ?? "";
+    const moduleId = params["module_id"] ?? "";
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, moduleId) });
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     return createRegistryModuleVersion(mod, attributes, set);
   })
   .post("/api/v2/registry-modules/:module_id/versions/:version/test", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const target = await moduleTestTarget(params.module_id ?? "", params.version ?? "");
+    const target = await moduleTestTarget(params["module_id"] ?? "", params["version"] ?? "");
     if (
       target === undefined
       || !(await checkOrganizationPermission(target.mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
@@ -2207,7 +2207,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: moduleTestResource(result, target.mod.id, target.version.version) };
   })
   .get("/api/v2/registry-modules/:module_id/versions/:version/test", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const target = await moduleTestTarget(params.module_id ?? "", params.version ?? "");
+    const target = await moduleTestTarget(params["module_id"] ?? "", params["version"] ?? "");
     if (
       target === undefined
       || !(await checkOrganizationPermission(target.mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))
@@ -2223,7 +2223,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: moduleTestResource(result, target.mod.id, target.version.version) };
   })
   .delete("/api/v2/registry-module-versions/:version_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const versionId = params.version_id ?? "";
+    const versionId = params["version_id"] ?? "";
     const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
@@ -2235,7 +2235,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   // --- Module Version Upload ---
   .put("/api/v2/registry-module-versions/:version_id/upload", async ({ params, body, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params.version_id ?? "";
+    const versionId = params["version_id"] ?? "";
     const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
@@ -2306,27 +2306,27 @@ export const registryRoutes = new Elysia({ name: "registry" })
     }
   })
   .patch("/api/v2/registry-module-versions/:version_id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params.version_id ?? "";
+    const versionId = params["version_id"] ?? "";
     const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
 
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes: Record<string, unknown> = (data?.attributes ?? {}) as Record<string, unknown>;
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes: Record<string, unknown> = (data?.["attributes"] ?? {}) as Record<string, unknown>;
 
-    if (typeof attributes.deprecated !== "boolean") {
+    if (typeof attributes["deprecated"] !== "boolean") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "deprecated must be a boolean" }] };
     }
-    await db.update(registryModuleVersions).set({ isDeprecated: attributes.deprecated, updatedAt: Date.now() }).where(eq(registryModuleVersions.id, versionId));
+    await db.update(registryModuleVersions).set({ isDeprecated: attributes["deprecated"], updatedAt: Date.now() }).where(eq(registryModuleVersions.id, versionId));
     const updated = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
     if (updated === undefined) throw new Error("Updated registry module version could not be loaded");
     return { data: registryModuleVersionResource(updated) };
   })
   .delete("/api/v2/registry-module-versions/:version_id/actions/revert-deprecation", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params.version_id ?? "";
+    const versionId = params["version_id"] ?? "";
     const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
@@ -2346,9 +2346,9 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: testConfigurationVersionResource({ id, moduleId: mod.id, archivePath: null, status: "pending", createdAt: now, uploadedAt: null }, mod.id, request) };
   })
   .put("/api/v2/module-test-configuration-versions/:configuration_version_id/upload", async ({ params, body, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const configuration = await db.query.moduleTestConfigurationVersions.findFirst({ where: eq(moduleTestConfigurationVersions.id, params.configuration_version_id ?? "") });
+    const configuration = await db.query.moduleTestConfigurationVersions.findFirst({ where: eq(moduleTestConfigurationVersions.id, params["configuration_version_id"] ?? "") });
     const mod = configuration === undefined ? undefined : await db.query.registryModules.findFirst({ where: eq(registryModules.id, configuration.moduleId) });
-    const path = `/api/v2/module-test-configuration-versions/${params.configuration_version_id ?? ""}/upload`;
+    const path = `/api/v2/module-test-configuration-versions/${params["configuration_version_id"] ?? ""}/upload`;
     const authorized = mod !== undefined && (await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"));
     if (configuration === undefined || mod === undefined || (!authorized && !validSignedApiURL(request, path, "PUT"))) return registryNotFound(set);
     const contentLength = Number(request.headers.get("content-length"));
@@ -2401,12 +2401,12 @@ export const registryRoutes = new Elysia({ name: "registry" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: configuration.error }] };
     }
     const rawPayload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = rawPayload.data !== null && typeof rawPayload.data === "object" ? rawPayload.data as Record<string, unknown> : {};
-    const relationships = data.relationships !== null && typeof data.relationships === "object" ? data.relationships as Record<string, unknown> : {};
+    const data = rawPayload["data"] !== null && typeof rawPayload["data"] === "object" ? rawPayload["data"] as Record<string, unknown> : {};
+    const relationships = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
     const configurationRelationship = relationships["configuration-version"];
-    const configurationData = configurationRelationship !== null && typeof configurationRelationship === "object" ? (configurationRelationship as Record<string, unknown>).data : undefined;
-    const configurationVersionId = configurationData !== null && typeof configurationData === "object" && typeof (configurationData as Record<string, unknown>).id === "string"
-      ? (configurationData as Record<string, unknown>).id as string
+    const configurationData = configurationRelationship !== null && typeof configurationRelationship === "object" ? (configurationRelationship as Record<string, unknown>)["data"] : undefined;
+    const configurationVersionId = configurationData !== null && typeof configurationData === "object" && typeof (configurationData as Record<string, unknown>)["id"] === "string"
+      ? (configurationData as Record<string, unknown>)["id"] as string
       : undefined;
     const selected = await testRunConfigurationArchive(mod.id, configurationVersionId, mod.orgId);
     if (configurationVersionId !== undefined && selected.archivePath === null) {
@@ -2479,14 +2479,14 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   .get("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs/:test_run_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const mod = await findTestRunModule(params);
-    const run = mod === undefined ? undefined : await db.query.moduleTestRuns.findFirst({ where: and(eq(moduleTestRuns.id, params.test_run_id ?? ""), eq(moduleTestRuns.moduleId, mod.id)) });
+    const run = mod === undefined ? undefined : await db.query.moduleTestRuns.findFirst({ where: and(eq(moduleTestRuns.id, params["test_run_id"] ?? ""), eq(moduleTestRuns.moduleId, mod.id)) });
     if (mod === undefined || run === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
     const version = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, run.versionId) });
     return { data: testRunResource(run, mod.id, version?.version ?? run.versionId) };
   })
   .post("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs/:test_run_id/cancel", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const mod = await findTestRunModule(params);
-    const run = mod === undefined ? undefined : await db.query.moduleTestRuns.findFirst({ where: and(eq(moduleTestRuns.id, params.test_run_id ?? ""), eq(moduleTestRuns.moduleId, mod.id)) });
+    const run = mod === undefined ? undefined : await db.query.moduleTestRuns.findFirst({ where: and(eq(moduleTestRuns.id, params["test_run_id"] ?? ""), eq(moduleTestRuns.moduleId, mod.id)) });
     if (mod === undefined || run === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
     if (!(["queued", "pending", "running"] as string[]).includes(run.status)) {
       (set as { status: number }).status = 409;
@@ -2506,7 +2506,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
   })
   .post("/api/v2/organizations/:org_name/tests/registry-modules/:registry_name/:namespace/:module_name/:provider/test-runs/:test_run_id/force-cancel", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const mod = await findTestRunModule(params);
-    const run = mod === undefined ? undefined : await db.query.moduleTestRuns.findFirst({ where: and(eq(moduleTestRuns.id, params.test_run_id ?? ""), eq(moduleTestRuns.moduleId, mod.id)) });
+    const run = mod === undefined ? undefined : await db.query.moduleTestRuns.findFirst({ where: and(eq(moduleTestRuns.id, params["test_run_id"] ?? ""), eq(moduleTestRuns.moduleId, mod.id)) });
     if (mod === undefined || run === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
     if (!(["queued", "pending", "running"] as string[]).includes(run.status)) {
       (set as { status: number }).status = 409;
@@ -2599,7 +2599,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return {};
   })
   .post("/api/v2/registry-module-versions/:version_id/actions/revoke", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params.version_id ?? "";
+    const versionId = params["version_id"] ?? "";
     const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
@@ -2620,7 +2620,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     };
   })
   .post("/api/v2/registry-module-versions/:version_id/actions/revert-revocation", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const versionId = params.version_id ?? "";
+    const versionId = params["version_id"] ?? "";
     const ver = await db.query.registryModuleVersions.findFirst({ where: eq(registryModuleVersions.id, versionId) });
     if (ver === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const mod = await db.query.registryModules.findFirst({ where: eq(registryModules.id, ver.moduleId) });
@@ -2641,14 +2641,14 @@ export const registryRoutes = new Elysia({ name: "registry" })
     };
   })
   .get("/api/v2/registry-modules/:module_id/:namespace/:name/:provider/test-configuration", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params.module_id !== "private") return registryNotFound(set);
-    const org = await cachedOrgByName(params.namespace ?? "");
+    if (params["module_id"] !== "private") return registryNotFound(set);
+    const org = await cachedOrgByName(params["namespace"] ?? "");
     const mod = org === undefined ? undefined : await db.query.registryModules.findFirst({
       where: and(
         eq(registryModules.orgId, org.id),
-        eq(registryModules.namespace, params.namespace ?? ""),
-        eq(registryModules.name, params.name ?? ""),
-        eq(registryModules.provider, params.provider ?? ""),
+        eq(registryModules.namespace, params["namespace"] ?? ""),
+        eq(registryModules.name, params["name"] ?? ""),
+        eq(registryModules.provider, params["provider"] ?? ""),
       ),
     });
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
@@ -2663,7 +2663,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     };
   })
   .patch("/api/v2/registry-modules/:module_id/:namespace/:name/:provider/test-configuration", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    if (params.module_id !== "private") return registryNotFound(set);
+    if (params["module_id"] !== "private") return registryNotFound(set);
     const { namespace, name, provider } = params;
     const org = await cachedOrgByName(namespace ?? "");
     const mod = await db.query.registryModules.findFirst({
@@ -2673,8 +2673,8 @@ export const registryRoutes = new Elysia({ name: "registry" })
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = (data?.attributes as Record<string, unknown>) ?? {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attrs = (data?.["attributes"] as Record<string, unknown>) ?? {};
     const rawEnabled = attrs["oidc-enabled"];
     const rawProvider = attrs["oidc-provider"];
     const rawConfiguration = attrs["oidc-configuration"];
@@ -2728,8 +2728,8 @@ export const registryRoutes = new Elysia({ name: "registry" })
     };
   })
   .post("/api/v2/registry-modules/:module_id/versions/:version/actions/test", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const modId = params.module_id ?? "";
-    const versionStr = params.version ?? "";
+    const modId = params["module_id"] ?? "";
+    const versionStr = params["version"] ?? "";
     const ver = await db.query.registryModuleVersions.findFirst({
       where: and(eq(registryModuleVersions.moduleId, modId), eq(registryModuleVersions.version, versionStr)),
     });
@@ -2757,8 +2757,8 @@ export const registryRoutes = new Elysia({ name: "registry" })
     return { data: moduleTestResource(result, mod.id, ver.version) };
   })
   .get("/api/v2/registry-modules/:module_id/versions/:version/tests", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const modId = params.module_id ?? "";
-    const versionStr = params.version ?? "";
+    const modId = params["module_id"] ?? "";
+    const versionStr = params["version"] ?? "";
     const ver = await db.query.registryModuleVersions.findFirst({
       where: and(eq(registryModuleVersions.moduleId, modId), eq(registryModuleVersions.version, versionStr)),
     });

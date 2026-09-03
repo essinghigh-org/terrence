@@ -67,7 +67,7 @@ export const userRoutes = new Elysia({ name: "users" })
   .use(authPlugin)
   .get("/api/v2/users", async ({ query, user, set }: ParamCtx): Promise<unknown> => {
     if (user === null || user === undefined) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
-    const filterParam = query["filter[username]"] ?? query.q;
+    const filterParam = query["filter[username]"] ?? query["q"];
     const usernameFilter = typeof filterParam === "string" ? filterParam.trim() : "";
     let allUsers: Readonly<typeof users.$inferSelect>[];
     if (user.isSiteAdmin === true) {
@@ -104,7 +104,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: visible.map((u: Readonly<typeof users.$inferSelect>): Record<string, unknown> => userResource(u)) };
   })
   .get("/api/v2/users/:user_id", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    const userId = params.user_id ?? "";
+    const userId = params["user_id"] ?? "";
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined || targetUser.deletedAt !== null || user === null || user === undefined) {
       (set as { status: number }).status = 404;
@@ -128,30 +128,30 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: userResource(targetUser) };
   })
   .patch("/api/v2/users/:user_id", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    const userId = params.user_id ?? "";
+    const userId = params["user_id"] ?? "";
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined || user?.id !== userId) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    if (data !== undefined && typeof data.type === "string" && data.type !== "users") {
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    if (data !== undefined && typeof data["type"] === "string" && data["type"] !== "users") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be \"users\"" }] };
     }
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     if ((targetUser as unknown as { deletedAt?: unknown }).deletedAt != null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (targetUser.isSuspended === true) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Suspended accounts cannot be modified" }] }; }
     const updates: Partial<typeof users.$inferInsert> = {};
-    if (typeof attrs.username === "string" && attrs.username.trim() !== "") {
-      const nu = normalizeUsername(attrs.username);
+    if (typeof attrs["username"] === "string" && attrs["username"].trim() !== "") {
+      const nu = normalizeUsername(attrs["username"]);
       if (nu === null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid username" }] }; }
       updates.username = nu;
     }
-    if (typeof attrs.email === "string") {
-      const ne = attrs.email.trim() === "" ? null : normalizeEmail(attrs.email);
-      if (attrs.email.trim() !== "" && ne === null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email" }] }; }
+    if (typeof attrs["email"] === "string") {
+      const ne = attrs["email"].trim() === "" ? null : normalizeEmail(attrs["email"]);
+      if (attrs["email"].trim() !== "" && ne === null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email" }] }; }
       // Reject emails already claimed by ANOTHER account up front; the users
       // table enforces this with a UNIQUE constraint whose raw violation would
       // otherwise surface as an opaque 500.
@@ -162,12 +162,12 @@ export const userRoutes = new Elysia({ name: "users" })
           return { errors: [{ status: "409", title: "Conflict", detail: "That email address is already in use" }] };
         }
       }
-      updates.email = ne ?? attrs.email.trim();
-      if (ne === null && attrs.email.trim() === "") updates.email = null;
+      updates.email = ne ?? attrs["email"].trim();
+      if (ne === null && attrs["email"].trim() === "") updates.email = null;
       if (updates.email !== targetUser.email) updates.emailVerifiedAt = null;
     }
-    if (typeof attrs.username === "string" && attrs.username.trim() !== "") {
-      const nu2 = normalizeUsername(attrs.username);
+    if (typeof attrs["username"] === "string" && attrs["username"].trim() !== "") {
+      const nu2 = normalizeUsername(attrs["username"]);
       if (nu2 !== null && nu2 !== targetUser.username) {
         const nameClaimant = await db.query.users.findFirst({ where: eq(users.username, nu2), columns: { id: true } });
         if (nameClaimant !== undefined && nameClaimant.id !== userId) {
@@ -192,7 +192,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: userResource(updated) };
   })
   .delete("/api/v2/users/:user_id", async ({ params, user, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const userId = params.user_id ?? "";
+    const userId = params["user_id"] ?? "";
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (targetUser === undefined || user?.id !== userId) {
       (set as { status: number }).status = 404;
@@ -298,44 +298,44 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: await Promise.all(memberships.map(async (membership): Promise<Record<string, unknown>> => orgMembershipResource(membership, user, teamIdsByOrg.get(membership.orgId) ?? []))) };
   })
   .post("/api/v2/organizations/:org_name/organization-memberships", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    if (data !== undefined && typeof data.type === "string" && data.type !== "organization-memberships") {
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    if (data !== undefined && typeof data["type"] === "string" && data["type"] !== "organization-memberships") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be \"organization-memberships\"" }] };
     }
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const rawEmail = typeof attrs.email === "string" ? attrs.email : undefined;
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const rawEmail = typeof attrs["email"] === "string" ? attrs["email"] : undefined;
     const email = rawEmail === undefined ? undefined : normalizeEmail(rawEmail);
     if (rawEmail !== undefined && email === null) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid email address" }] };
     }
-    const username = typeof attrs.username === "string" ? attrs.username : undefined;
+    const username = typeof attrs["username"] === "string" ? attrs["username"] : undefined;
     let targetUser: Readonly<typeof users.$inferSelect> | undefined;
     if (email !== undefined && email !== null) targetUser = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
     if (targetUser === undefined && username !== undefined) targetUser = await db.query.users.findFirst({ where: eq(users.username, username) });
     const memId = `orgmem-${crypto.randomUUID()}`;
     const allowedStatuses = new Set(["active", "invited"]);
-    const rawRequestedStatus = typeof attrs.status === "string" ? attrs.status : undefined;
+    const rawRequestedStatus = typeof attrs["status"] === "string" ? attrs["status"] : undefined;
     if (rawRequestedStatus !== undefined && !allowedStatuses.has(rawRequestedStatus)) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "status must be one of: active, invited" }] };
     }
     // Pre-validate relationships.teams before inserting the membership so a 422
     // does not leave an orphan organizationMembership row behind.
-    const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
-    if (Object.hasOwn(rels, "teams") && (rels.teams === null || typeof rels.teams !== "object" || Array.isArray(rels.teams))) {
+    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
+    if (Object.hasOwn(rels, "teams") && (rels["teams"] === null || typeof rels["teams"] !== "object" || Array.isArray(rels["teams"]))) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "relationships.teams must be an object" }] };
     }
-    const teamsRel = typeof rels.teams === "object" && rels.teams !== null ? (rels.teams as Record<string, unknown>) : {};
-    const teamRelData = teamsRel.data;
+    const teamsRel = typeof rels["teams"] === "object" && rels["teams"] !== null ? (rels["teams"] as Record<string, unknown>) : {};
+    const teamRelData = teamsRel["data"];
     const candidateIds: string[] = [];
     let validatedTeams: { id: string; orgId: string }[] | null = null;
     if (teamRelData !== undefined && !Array.isArray(teamRelData)) {
@@ -344,16 +344,16 @@ export const userRoutes = new Elysia({ name: "users" })
     }
     if (Array.isArray(teamRelData)) {
       for (const t of teamRelData) {
-        if (t === null || typeof t !== "object" || Array.isArray(t) || typeof (t as Record<string, unknown>).id !== "string" || (t as Record<string, unknown>).id === "") {
+        if (t === null || typeof t !== "object" || Array.isArray(t) || typeof (t as Record<string, unknown>)["id"] !== "string" || (t as Record<string, unknown>)["id"] === "") {
           (set as { status: number }).status = 422;
           return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "relationships.teams.data[] must contain team resource identifiers" }] };
         }
-        if (t !== null && typeof t === "object" && typeof (t as Record<string, unknown>).type === "string" && (t as Record<string, unknown>).type !== "teams") {
+        if (t !== null && typeof t === "object" && typeof (t as Record<string, unknown>)["type"] === "string" && (t as Record<string, unknown>)["type"] !== "teams") {
           (set as { status: number }).status = 422;
           return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "relationships.teams.data[].type must be \"teams\"" }] };
         }
-        if (t !== null && typeof t === "object" && typeof (t as Record<string, unknown>).id === "string") {
-          candidateIds.push((t as Record<string, unknown>).id as string);
+        if (t !== null && typeof t === "object" && typeof (t as Record<string, unknown>)["id"] === "string") {
+          candidateIds.push((t as Record<string, unknown>)["id"] as string);
         }
       }
       if (candidateIds.length > 0) {
@@ -452,13 +452,13 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: await orgMembershipResource(mem, targetUser, result.teamIds) };
   })
   .get("/api/v2/organizations/:org_name/organization-memberships", async ({ params, query, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId ?? null, "members:read"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const url = new URL(request.url);
-    const q = (query.q ?? url.searchParams.get("q") ?? "").trim().toLowerCase();
+    const q = (query["q"] ?? url.searchParams.get("q") ?? "").trim().toLowerCase();
     const filterStatus = (query["filter[status]"] ?? url.searchParams.get("filter[status]") ?? "").trim();
     const filterEmail = (query["filter[email]"] ?? url.searchParams.get("filter[email]") ?? "").trim().toLowerCase();
     if (filterStatus !== "" && !["active", "invited"].includes(filterStatus)) {
@@ -504,7 +504,7 @@ export const userRoutes = new Elysia({ name: "users" })
     const userIds = page.map((m: Readonly<{ readonly userId: string }>): string => m.userId);
     const userList = userIds.length > 0 ? await db.query.users.findMany({ where: inArray(users.id, userIds) }) : [];
     const userMap = new Map(userList.map((u: Readonly<typeof users.$inferSelect>): [string, typeof u] => [u.id, u]));
-    const includeQuery = query.include;
+    const includeQuery = query["include"];
     const includeUsers = typeof includeQuery === "string" && includeQuery.split(",").includes("user");
     const data = await Promise.all(page.map(async (m: Readonly<typeof organizationMemberships.$inferSelect>): Promise<Record<string, unknown>> => orgMembershipResource(m, userMap.get(m.userId) ?? null)));
     const result: { data: Record<string, unknown>[]; included?: Record<string, unknown>[]; meta?: Record<string, unknown>; links?: Record<string, string | null> } = {
@@ -520,7 +520,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return result;
   })
   .get("/api/v2/organizations/:org_name/users", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId ?? null, "members:read"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -544,7 +544,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data, ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/organization-memberships/:id", async ({ params, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const memId = params.id ?? "";
+    const memId = params["id"] ?? "";
     const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
     if (mem === undefined || !(await checkOrgPermission(user?.id, mem.orgId, "member", tokenOrgId, tokenTeamId ?? null, "members:read"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -554,7 +554,7 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const includeQuery = query.include;
+    const includeQuery = query["include"];
     const includeUsers = typeof includeQuery === "string" && includeQuery.split(",").includes("user");
     const result: { data: Record<string, unknown>; included?: Record<string, unknown>[] } = { data: await orgMembershipResource(mem, targetUser) };
     if (includeUsers && targetUser !== undefined) {
@@ -563,7 +563,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return result;
   })
   .delete("/api/v2/organization-memberships/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const memId = params.id ?? "";
+    const memId = params["id"] ?? "";
     const mem = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
     if (mem === undefined || !(await checkOrganizationPermission(mem.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -617,31 +617,31 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    if (data !== undefined && typeof data.type === "string" && data.type !== "organization-memberships") {
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    if (data !== undefined && typeof data["type"] === "string" && data["type"] !== "organization-memberships") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be \"organization-memberships\"" }] };
     }
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const updates: Partial<typeof organizationMemberships.$inferInsert> = {};
 
     // Status: invited <-> active is the activation path for provisioned members.
-    if (attrs.status !== undefined) {
-      if (typeof attrs.status !== "string" || !["active", "invited"].includes(attrs.status)) {
+    if (attrs["status"] !== undefined) {
+      if (typeof attrs["status"] !== "string" || !["active", "invited"].includes(attrs["status"])) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "status must be one of: active, invited" }] };
       }
-      updates.status = attrs.status;
+      updates.status = attrs["status"];
     }
 
     // Role: owner promotion/demotion. The final owner guard is repeated inside
     // the write lock below so status changes cannot bypass it.
-    if (attrs.role !== undefined) {
-      if (typeof attrs.role !== "string" || !["owner", "member"].includes(attrs.role)) {
+    if (attrs["role"] !== undefined) {
+      if (typeof attrs["role"] !== "string" || !["owner", "member"].includes(attrs["role"])) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "role must be one of: owner, member" }] };
       }
-      if (mem.role !== attrs.role) updates.role = attrs.role;
+      if (mem.role !== attrs["role"]) updates.role = attrs["role"];
     }
 
     if (Object.keys(updates).length === 0) {
@@ -696,7 +696,7 @@ export const userRoutes = new Elysia({ name: "users" })
   })
   // --- Auth Tokens ---
   .get("/api/v2/users/:user_id/authentication-tokens", async ({ params, user, request, set }: ParamCtx): Promise<unknown> => {
-    const userId = params.user_id ?? "";
+    const userId = params["user_id"] ?? "";
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined || user?.id !== userId) {
       (set as { status: number }).status = 404;
@@ -718,7 +718,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: tokens.map((token: Readonly<typeof apiTokens.$inferSelect>): Record<string, unknown> => tokenResource(token)), ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/users/:user_id/authentication-tokens", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
-    const userId = params.user_id ?? "";
+    const userId = params["user_id"] ?? "";
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined || user?.id !== userId) {
       (set as { status: number }).status = 404;
@@ -737,9 +737,9 @@ export const userRoutes = new Elysia({ name: "users" })
       return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot create additional tokens" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const description = typeof attributes.description === "string" ? attributes.description.trim() : "API token";
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const description = typeof attributes["description"] === "string" ? attributes["description"].trim() : "API token";
     const requestedExpiry = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
     if (description === "" || description.length > TOKEN_DESCRIPTION_MAX_LENGTH || Number.isNaN(requestedExpiry)) {
       (set as { status: number }).status = 422;
@@ -760,9 +760,9 @@ export const userRoutes = new Elysia({ name: "users" })
     // Fine-grained scopes (optional): when present, the token is restricted
     // to the listed orgs/projects/workspaces/tags and permission grants.
     let scopes: TokenScopes | null = null;
-    if (attributes.scopes !== undefined) {
+    if (attributes["scopes"] !== undefined) {
       try {
-        scopes = parseTokenScopes(attributes.scopes);
+        scopes = parseTokenScopes(attributes["scopes"]);
       } catch (error: unknown) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Invalid scopes" }] };
@@ -792,7 +792,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
   .get("/api/v2/authentication-tokens/:token_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const tokenId = params.token_id ?? "";
+    const tokenId = params["token_id"] ?? "";
     const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) });
     if (token !== undefined && user?.id === token.userId) {
       return { data: tokenResource(token) };
@@ -833,7 +833,7 @@ export const userRoutes = new Elysia({ name: "users" })
     };
   })
   .delete("/api/v2/authentication-tokens/:token_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const tokenId = params.token_id ?? "";
+    const tokenId = params["token_id"] ?? "";
     const token = await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) });
     if (token !== undefined && user?.id === token.userId) {
       await db.delete(apiTokens).where(eq(apiTokens.id, tokenId));
@@ -881,13 +881,13 @@ export const userRoutes = new Elysia({ name: "users" })
       return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot create additional tokens" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
-    const orgRel = typeof rels.organization === "object" && rels.organization !== null ? (rels.organization as Record<string, unknown>) : {};
-    const orgData = typeof orgRel.data === "object" && orgRel.data !== null ? (orgRel.data as Record<string, unknown>) : {};
-    const description = typeof attributes.description === "string" ? attributes.description : "API token";
-    const orgId = typeof orgData.id === "string" ? orgData.id : undefined;
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
+    const orgRel = typeof rels["organization"] === "object" && rels["organization"] !== null ? (rels["organization"] as Record<string, unknown>) : {};
+    const orgData = typeof orgRel["data"] === "object" && orgRel["data"] !== null ? (orgRel["data"] as Record<string, unknown>) : {};
+    const description = typeof attributes["description"] === "string" ? attributes["description"] : "API token";
+    const orgId = typeof orgData["id"] === "string" ? orgData["id"] : undefined;
     const requestedExpiry = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
     if (Number.isNaN(requestedExpiry)) {
       (set as { status: number }).status = 422;
@@ -910,9 +910,9 @@ export const userRoutes = new Elysia({ name: "users" })
     // Fine-grained scopes (optional): when present, the token is restricted
     // to the listed orgs/projects/workspaces/tags and permission grants.
     let scopes: TokenScopes | null = null;
-    if (attributes.scopes !== undefined) {
+    if (attributes["scopes"] !== undefined) {
       try {
-        scopes = parseTokenScopes(attributes.scopes);
+        scopes = parseTokenScopes(attributes["scopes"]);
       } catch (error: unknown) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: error instanceof Error ? error.message : "Invalid scopes" }] };
@@ -964,7 +964,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
   .get("/api/v2/organizations/:org_name/authentication-token", async ({ params, request, user, orgId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || (orgId !== org.id && !(await checkOrgPermission(user?.id, org.id, "owner")))) {
       (set as { status: number }).status = 404;
@@ -993,7 +993,7 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot mint unscoped organization tokens" }] };
     }
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || (orgId !== org.id && !(await checkOrgPermission(user?.id, org.id, "owner")))) {
       (set as { status: number }).status = 404;
@@ -1008,8 +1008,8 @@ export const userRoutes = new Elysia({ name: "users" })
     }
     const tokenType = validated === "organization" ? "" : validated;
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const requestedExpiry = tokenExpiry(typeof attributes["expired-at"] === "string" ? attributes["expired-at"] : undefined);
     if (Number.isNaN(requestedExpiry)) {
       (set as { status: number }).status = 422;
@@ -1064,7 +1064,7 @@ export const userRoutes = new Elysia({ name: "users" })
     return { data: tokenResource({ ...createdToken, _rawToken: rawToken }, true) };
   })
   .delete("/api/v2/organizations/:org_name/authentication-token", async ({ params, request, user, orgId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || (orgId !== org.id && !(await checkOrgPermission(user?.id, org.id, "owner")))) {
       (set as { status: number }).status = 404;

@@ -28,17 +28,17 @@ type StackItem = Readonly<typeof stacks.$inferSelect>;
 type StackRecordItem = Readonly<typeof stackRecords.$inferSelect>;
 
 function recordFencingToken(record: StackRecordItem): number | undefined {
-  const value = (record.payload ?? {})["fencing-token"] ?? (record.payload ?? {}).fencingToken;
+  const value = (record.payload ?? {})["fencing-token"] ?? (record.payload ?? {})["fencingToken"];
   return typeof value === "number" && Number.isInteger(value) ? value : undefined;
 }
 
-const STACK_STORAGE_DIR = join(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "stacks");
+const STACK_STORAGE_DIR = join(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "stacks");
 
 function stackResource(stack: StackItem, _projectName: string | null): Record<string, unknown> {
   const vcsRepo: Record<string, unknown> = {};
   if (stack.vcsIdentifier !== null || stack.vcsServiceProvider !== null || stack.vcsRepositoryHttpUrl !== null) {
-    vcsRepo.identifier = stack.vcsIdentifier;
-    vcsRepo.branch = stack.vcsBranch ?? "";
+    vcsRepo["identifier"] = stack.vcsIdentifier;
+    vcsRepo["branch"] = stack.vcsBranch ?? "";
     vcsRepo["tags-regex"] = stack.vcsTagsRegex;
     vcsRepo["sparse-checkout-pattern"] = stack.vcsSparseCheckoutPattern ?? "";
     vcsRepo["display-identifier"] = stack.vcsDisplayIdentifier ?? stack.vcsIdentifier;
@@ -50,7 +50,7 @@ function stackResource(stack: StackItem, _projectName: string | null): Record<st
   }
   const relationships: Record<string, unknown> = {};
   if (stack.projectId !== null) {
-    relationships.project = { data: { id: stack.projectId, type: "projects" } };
+    relationships["project"] = { data: { id: stack.projectId, type: "projects" } };
   }
   relationships["agent-pool"] = { data: stack.agentPoolId === null ? null : { id: stack.agentPoolId, type: "agent-pools" } };
   relationships["stack-configurations"] = { links: { related: `/api/v2/stacks/${stack.id}/stack-configurations` } };
@@ -101,8 +101,8 @@ function stackVcsRepoAttributes(attributes: Record<string, unknown>): StackVcsAt
     };
   }
   const repo = vcs as Record<string, unknown>;
-  const identifier = typeof repo.identifier === "string" ? repo.identifier.trim() : "";
-  const branch = typeof repo.branch === "string" ? repo.branch : "";
+  const identifier = typeof repo["identifier"] === "string" ? repo["identifier"].trim() : "";
+  const branch = typeof repo["branch"] === "string" ? repo["branch"] : "";
   const serviceProvider = typeof repo["service-provider"] === "string"
     ? repo["service-provider"]
     : typeof attributes["service-provider"] === "string" ? attributes["service-provider"] : "";
@@ -176,7 +176,7 @@ function recordDate(value: unknown): string | null {
 
 function stackRecordResource(record: StackRecordItem): Record<string, unknown> {
   const payload = record.payload ?? {};
-  const approval = typeof payload.approvalId === "string" ? { id: payload.approvalId, type: "stack-approvals" } : null;
+  const approval = typeof payload["approvalId"] === "string" ? { id: payload["approvalId"], type: "stack-approvals" } : null;
   const timestamps = {
     "created-at": recordDate(record.createdAt),
     "updated-at": recordDate(record.updatedAt),
@@ -189,9 +189,9 @@ function stackRecordResource(record: StackRecordItem): Record<string, unknown> {
         status: record.status,
         "sequence-number": payload["sequence-number"] ?? 1,
         ...timestamps,
-        speculative: payload.speculative === true,
-        components: Array.isArray(payload.components) ? payload.components : [],
-        deployments: Array.isArray(payload.deployments) ? payload.deployments : [],
+        speculative: payload["speculative"] === true,
+        components: Array.isArray(payload["components"]) ? payload["components"] : [],
+        deployments: Array.isArray(payload["deployments"]) ? payload["deployments"] : [],
       },
       relationships: {
         stack: { data: { id: record.stackId, type: "stacks" } },
@@ -219,10 +219,10 @@ function stackRecordResource(record: StackRecordItem): Record<string, unknown> {
     return {
       id: record.id,
       type: record.recordType,
-      attributes: { status: record.status, deployment: record.name, ...timestamps, "plan-mode": payload["plan-mode"] ?? "normal", component: payload.component ?? null, "component-index": payload.componentIndex ?? 0, cycle: payload.cycle ?? 0, destroy: payload.destroy === true, "lock-acquired": payload.lockAcquired === true, error: payload.error ?? null },
+      attributes: { status: record.status, deployment: record.name, ...timestamps, "plan-mode": payload["plan-mode"] ?? "normal", component: payload["component"] ?? null, "component-index": payload["componentIndex"] ?? 0, cycle: payload["cycle"] ?? 0, destroy: payload["destroy"] === true, "lock-acquired": payload["lockAcquired"] === true, error: payload["error"] ?? null },
       relationships: {
         "stack-deployment-group": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-deployment-groups" } },
-        "stack-configuration": { data: typeof payload.configurationId === "string" ? { id: payload.configurationId, type: "stack-configurations" } : null },
+        "stack-configuration": { data: typeof payload["configurationId"] === "string" ? { id: payload["configurationId"], type: "stack-configurations" } : null },
         "stack-deployment-steps": { links: { related: `/api/v2/stack-deployment-runs/${record.id}/stack-deployment-steps` } },
         "stack-approval": { data: approval },
       },
@@ -233,7 +233,7 @@ function stackRecordResource(record: StackRecordItem): Record<string, unknown> {
     return {
       id: record.id,
       type: record.recordType,
-      attributes: { status: record.status, "operation-type": payload["operation-type"] ?? "plan", phase: payload.phase ?? null, "component-index": payload.componentIndex ?? 0, "requires-state-lock": payload["requires-state-lock"] === true, "has-changes": payload["has-changes"] === true || payload.hasChanges === true, "deferred-changes": payload["deferred-changes"] === true || payload.deferredChanges === true, output: payload.output ?? null, ...timestamps },
+      attributes: { status: record.status, "operation-type": payload["operation-type"] ?? "plan", phase: payload["phase"] ?? null, "component-index": payload["componentIndex"] ?? 0, "requires-state-lock": payload["requires-state-lock"] === true, "has-changes": payload["has-changes"] === true || payload["hasChanges"] === true, "deferred-changes": payload["deferred-changes"] === true || payload["deferredChanges"] === true, output: payload["output"] ?? null, ...timestamps },
       relationships: {
         "stack-deployment-run": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-deployment-runs" } },
         "stack-diagnostics": { links: { related: `/api/v2/stack-deployment-steps/${record.id}/stack-diagnostics` }, meta: { count: 0 } },
@@ -247,14 +247,14 @@ function stackRecordResource(record: StackRecordItem): Record<string, unknown> {
       id: record.id,
       type: record.recordType,
       attributes: {
-        generation: payload.generation ?? 1,
+        generation: payload["generation"] ?? 1,
         status: record.status,
         deployment: record.name,
-        components: Array.isArray(payload.components) ? payload.components : [],
+        components: Array.isArray(payload["components"]) ? payload["components"] : [],
         "is-current": payload["is-current"] !== false,
         "resource-instance-count": payload["resource-instance-count"] ?? 0,
       },
-      relationships: { stack: { data: { id: record.stackId, type: "stacks" } }, "stack-deployment-run": { data: typeof payload.runId === "string" ? { id: payload.runId, type: "stack-deployment-runs" } : null } },
+      relationships: { stack: { data: { id: record.stackId, type: "stacks" } }, "stack-deployment-run": { data: typeof payload["runId"] === "string" ? { id: payload["runId"], type: "stack-deployment-runs" } : null } },
       links: { self: `/api/v2/stack-states/${record.id}`, description: `/api/v2/stack-states/${record.id}/description` },
     };
   }
@@ -262,13 +262,13 @@ function stackRecordResource(record: StackRecordItem): Record<string, unknown> {
     return {
       id: record.id,
       type: record.recordType,
-      attributes: { severity: payload.severity ?? "error", summary: payload.summary ?? "", detail: payload.detail ?? "", diags: payload.diags ?? null, acknowledged: payload.acknowledged === true, "acknowledged-at": payload["acknowledged-at"] ?? null, "created-at": recordDate(record.createdAt) },
+      attributes: { severity: payload["severity"] ?? "error", summary: payload["summary"] ?? "", detail: payload["detail"] ?? "", diags: payload["diags"] ?? null, acknowledged: payload["acknowledged"] === true, "acknowledged-at": payload["acknowledged-at"] ?? null, "created-at": recordDate(record.createdAt) },
       relationships: { "stack-configuration": { data: record.parentId === null ? null : { id: record.parentId, type: "stack-configurations" } } },
       links: { self: `/api/v2/stack-diagnostics/${record.id}` },
     };
   }
   if (record.recordType === "stack-approvals") {
-    return { id: record.id, type: record.recordType, attributes: { reason: payload.reason ?? null, "created-at": recordDate(record.createdAt) }, relationships: { user: { data: typeof payload.userId === "string" ? { id: payload.userId, type: "users" } : null } } };
+    return { id: record.id, type: record.recordType, attributes: { reason: payload["reason"] ?? null, "created-at": recordDate(record.createdAt) }, relationships: { user: { data: typeof payload["userId"] === "string" ? { id: payload["userId"], type: "users" } : null } } };
   }
   return { id: record.id, type: record.recordType, attributes: { ...payload, ...timestamps } };
 }
@@ -339,10 +339,10 @@ async function createStackConfigurationRecord(stack: StackItem, source: string, 
       payload: {
         source,
         "sequence-number": sequence,
-        speculative: attributes.speculative === true,
+        speculative: attributes["speculative"] === true,
         "destroy-all": attributes["destroy-all"] === true,
         components: [],
-        archivePath: source === "reuse" && typeof latestPayload.archivePath === "string" ? latestPayload.archivePath : null,
+        archivePath: source === "reuse" && typeof latestPayload["archivePath"] === "string" ? latestPayload["archivePath"] : null,
       },
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -356,15 +356,15 @@ export const stackRoutes = new Elysia({ name: "stacks" })
   .use(authPlugin)
   .post("/api/v2/stacks", async ({ body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data;
+    const data = payload["data"];
     if (data === null || typeof data !== "object") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data is required" }] }; }
-    const attributes = (data as Record<string, unknown>).attributes;
+    const attributes = (data as Record<string, unknown>)["attributes"];
     const attrs = attributes !== null && typeof attributes === "object" ? attributes as Record<string, unknown> : {};
-    const relationships = (data as Record<string, unknown>).relationships;
+    const relationships = (data as Record<string, unknown>)["relationships"];
     const rels = relationships !== null && typeof relationships === "object" ? relationships as Record<string, unknown> : {};
-    const name = typeof attrs.name === "string" ? attrs.name.trim() : "";
-    const description = typeof attrs.description === "string" ? attrs.description : "";
-    const projectData = (rels.project as { data?: { id?: unknown } } | undefined)?.data;
+    const name = typeof attrs["name"] === "string" ? attrs["name"].trim() : "";
+    const description = typeof attrs["description"] === "string" ? attrs["description"] : "";
+    const projectData = (rels["project"] as { data?: { id?: unknown } } | undefined)?.data;
     const projectId = typeof projectData?.id === "string" ? projectData.id : "";
     const agentPoolData = (rels["agent-pool"] as { data?: { id?: unknown } } | undefined)?.data;
     const agentPoolId = typeof agentPoolData?.id === "string" ? agentPoolData.id : undefined;
@@ -405,14 +405,14 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     return { data: stackResource(row as StackItem, project.name) };
   })
   .get("/api/v2/stacks/:stack_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const details = await stackDetails(params.stack_id ?? "");
+    const details = await stackDetails(params["stack_id"] ?? "");
     if (details === undefined || !(await checkOrganizationPermission(details.stack.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     return { data: stackResource(details.stack, details.projectName) };
   })
   .get("/api/v2/organizations/:org_name/stacks", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -421,7 +421,7 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     return { data: rows.map((stack): Record<string, unknown> => stackResource(stack, null)) };
   })
   .get("/api/v2/stacks/:stack_id/stack-configuration-summaries", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const details = await stackDetails(params.stack_id ?? "");
+    const details = await stackDetails(params["stack_id"] ?? "");
     if (details === undefined || !(await checkOrganizationPermission(details.stack.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -436,7 +436,7 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     return { data: summaries.slice((number - 1) * size, number * size), ...pagination(request, number, size, summaries.length) };
   })
   .post("/api/v2/stacks/:stack_id/stack-configurations", async ({ params, body, request, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const details = await stackDetails(params.stack_id ?? "");
+    const details = await stackDetails(params["stack_id"] ?? "");
     if (details === undefined || !(await checkOrganizationPermission(details.stack.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -448,9 +448,9 @@ export const stackRoutes = new Elysia({ name: "stacks" })
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "fetch requires a VCS-backed stack" }] };
     }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data;
-    const attrs = data !== null && typeof data === "object" && (data as Record<string, unknown>).attributes !== null && typeof (data as Record<string, unknown>).attributes === "object"
-      ? (data as Record<string, unknown>).attributes as Record<string, unknown>
+    const data = payload["data"];
+    const attrs = data !== null && typeof data === "object" && (data as Record<string, unknown>)["attributes"] !== null && typeof (data as Record<string, unknown>)["attributes"] === "object"
+      ? (data as Record<string, unknown>)["attributes"] as Record<string, unknown>
       : {};
     for (const key of ["speculative", "destroy-all"] as const) {
       if (attrs[key] !== undefined && typeof attrs[key] !== "boolean") {
@@ -458,7 +458,7 @@ export const stackRoutes = new Elysia({ name: "stacks" })
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `${key} must be a boolean` }] };
       }
     }
-    if (source === "manual" && details.stack.vcsIdentifier !== null && attrs.speculative !== true) {
+    if (source === "manual" && details.stack.vcsIdentifier !== null && attrs["speculative"] !== true) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "manual configurations for VCS-backed stacks must be speculative" }] };
     }
@@ -471,7 +471,7 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     return { data: stackRecordResource(configuration) };
   })
   .get("/api/v2/stacks/:stack_id/stack-configurations", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const details = await stackDetails(params.stack_id ?? "");
+    const details = await stackDetails(params["stack_id"] ?? "");
     if (details === undefined || !(await checkOrganizationPermission(details.stack.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -480,12 +480,12 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     return { data, ...page };
   })
   .get("/api/v2/stack-configurations/:stack_configuration_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_configuration_id ?? "", user, tokenOrgId, teamId, "stack-configurations");
+    const authorized = await authorizedStackRecord(params["stack_configuration_id"] ?? "", user, tokenOrgId, teamId, "stack-configurations");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: stackRecordResource(authorized.record) };
   })
   .get("/api/v2/stack-configurations/:stack_configuration_id/stack-deployment-group-summaries", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_configuration_id ?? "", user, tokenOrgId, teamId, "stack-configurations");
+    const authorized = await authorizedStackRecord(params["stack_configuration_id"] ?? "", user, tokenOrgId, teamId, "stack-configurations");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const groups = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.parentId, authorized.record.id), eq(stackRecords.recordType, "stack-deployment-groups")), orderBy: [desc(stackRecords.createdAt)] });
     const summaries = groups.map((group): Record<string, unknown> => ({ id: `sdgs-${group.id.slice(4)}`, type: "stack-deployment-group-summaries", attributes: { name: group.name, status: group.status, "status-counts": { [group.status]: 1 } }, relationships: { "stack-deployment-group": { data: { id: group.id, type: "stack-deployment-groups" } } } }));
@@ -493,19 +493,19 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     return { data: summaries.slice((number - 1) * size, number * size), ...pagination(request, number, size, summaries.length) };
   })
   .get("/api/v2/stack-configurations/:stack_configuration_id/stack-diagnostics", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_configuration_id ?? "", user, tokenOrgId, teamId, "stack-configurations");
+    const authorized = await authorizedStackRecord(params["stack_configuration_id"] ?? "", user, tokenOrgId, teamId, "stack-configurations");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const records = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.parentId, authorized.record.id), eq(stackRecords.recordType, "stack-diagnostics")), orderBy: [desc(stackRecords.createdAt)] });
     const { data, pagination: page } = pagedStackRecords(records, request);
     return { data, ...page };
   })
   .get("/api/v2/stack-configurations/:stack_configuration_id/upload-url", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_configuration_id ?? "", user, tokenOrgId, teamId, "stack-configurations");
+    const authorized = await authorizedStackRecord(params["stack_configuration_id"] ?? "", user, tokenOrgId, teamId, "stack-configurations");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: { "source-upload-url": signedApiURL(request, `/api/v2/stack-configurations/${authorized.record.id}/upload`, "PUT") }, links: { self: `/api/v2/stack-configurations/${authorized.record.id}/upload-url` } };
   })
   .put("/api/v2/stack-configurations/:stack_configuration_id/upload", async ({ params, body, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const recordId = params.stack_configuration_id ?? "";
+    const recordId = params["stack_configuration_id"] ?? "";
     const authorized = await authorizedStackRecord(recordId, user, tokenOrgId, teamId, "stack-configurations");
     if (authorized === undefined && !validSignedApiURL(request, `/api/v2/stack-configurations/${recordId}/upload`, "PUT")) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
@@ -513,7 +513,7 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     const record = authorized?.record ?? await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, recordId), eq(stackRecords.recordType, "stack-configurations")) });
     if (record === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const recordPayload = record.payload ?? {};
-    const existingPath = typeof recordPayload.archivePath === "string" ? recordPayload.archivePath : null;
+    const existingPath = typeof recordPayload["archivePath"] === "string" ? recordPayload["archivePath"] : null;
     if (record.status !== "pending" || existingPath !== null) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict" }] }; }
     const contentLength = Number(request.headers.get("content-length"));
     if (Number.isFinite(contentLength) && contentLength > 100 * 1024 * 1024) {
@@ -538,29 +538,29 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     return { data: { id: record.id, type: "stack-configurations", attributes: { status: "ready" } } };
   })
   .get("/api/v2/stack-configurations/:stack_configuration_id/source-bundle", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_configuration_id ?? "", user, tokenOrgId, teamId, "stack-configurations");
+    const authorized = await authorizedStackRecord(params["stack_configuration_id"] ?? "", user, tokenOrgId, teamId, "stack-configurations");
     const archivePath = authorized === undefined ? null : (() => {
       const payload = authorized.record.payload ?? {};
-      return typeof payload.archivePath === "string" ? payload.archivePath : null;
+      return typeof payload["archivePath"] === "string" ? payload["archivePath"] : null;
     })();
     if (authorized === undefined || archivePath === null || !isStackStoragePath(archivePath) || !(await Bun.file(archivePath).exists())) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const location = signedApiURL(request, `/api/v2/stack-configurations/${authorized.record.id}/source-bundle/download`, "GET");
-    (set.headers as Record<string, string>) .Location = location;
+    (set.headers as Record<string, string>) ["Location"] = location;
     (set as { status: number }).status = 302;
     return {};
   })
   .get("/api/v2/stack-configurations/:stack_configuration_id/source-bundle/download", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const record = await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, params.stack_configuration_id ?? ""), eq(stackRecords.recordType, "stack-configurations")) });
+    const record = await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, params["stack_configuration_id"] ?? ""), eq(stackRecords.recordType, "stack-configurations")) });
     const details = record === undefined ? undefined : await stackDetails(record.stackId);
     if (record === undefined || details === undefined || (!(await checkOrganizationPermission(details.stack.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects")) && !validSignedApiURL(request, `/api/v2/stack-configurations/${record.id}/source-bundle/download`, "GET"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const recordPayload = record.payload ?? {};
-    const archivePath = typeof recordPayload.archivePath === "string" ? recordPayload.archivePath : null;
+    const archivePath = typeof recordPayload["archivePath"] === "string" ? recordPayload["archivePath"] : null;
     if (archivePath === null || !isStackStoragePath(archivePath) || !(await Bun.file(archivePath).exists())) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     (set.headers as Record<string, string>)["Content-Type"] = "application/gzip";
     return Bun.file(archivePath);
   })
   .get("/api/v2/stacks/:stack_id/stack-deployments", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const details = await stackDetails(params.stack_id ?? "");
+    const details = await stackDetails(params["stack_id"] ?? "");
     if (details === undefined || !(await checkOrganizationPermission(details.stack.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const groups = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, details.stack.id), eq(stackRecords.recordType, "stack-deployment-groups")), orderBy: [desc(stackRecords.createdAt)] });
     const seen = new Set<string>();
@@ -568,92 +568,92 @@ export const stackRoutes = new Elysia({ name: "stacks" })
       const name = group.name ?? group.id;
       if (seen.has(name)) return [];
       seen.add(name);
-      const run = (group.payload ?? {}).latestRunId;
+      const run = (group.payload ?? {})["latestRunId"];
       return [{ id: `${details.stack.id}-std-${name}`, type: "stack-deployments", attributes: { name }, relationships: { stack: { data: { id: details.stack.id, type: "stacks" } }, "latest-deployment-run": { data: typeof run === "string" ? { id: run, type: "stack-deployment-runs" } : null } }, links: { self: `/api/v2/stacks/${details.stack.id}/stack-deployments/${encodeURIComponent(name)}`, "stack-deployment-runs": `/api/v2/stacks/${details.stack.id}/stack-deployments/${encodeURIComponent(name)}/stack-deployment-runs` } }];
     });
     const { number, size } = pageRequest(request);
     return { data: deployments.slice((number - 1) * size, number * size), ...pagination(request, number, size, deployments.length) };
   })
   .get("/api/v2/stack-configurations/:stack_configuration_id/stack-deployment-groups", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_configuration_id ?? "", user, tokenOrgId, teamId, "stack-configurations");
+    const authorized = await authorizedStackRecord(params["stack_configuration_id"] ?? "", user, tokenOrgId, teamId, "stack-configurations");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const records = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.parentId, authorized.record.id), eq(stackRecords.recordType, "stack-deployment-groups")), orderBy: [desc(stackRecords.createdAt)] });
     const { data, pagination: page } = pagedStackRecords(records, request);
     return { data, ...page };
   })
   .get("/api/v2/stack-configurations/:stack_configuration_id/stack-deployment-groups/:stack_deployment_group_name", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_configuration_id ?? "", user, tokenOrgId, teamId, "stack-configurations");
-    const group = authorized === undefined ? undefined : await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.parentId, authorized.record.id), eq(stackRecords.recordType, "stack-deployment-groups"), eq(stackRecords.name, params.stack_deployment_group_name ?? "")) });
+    const authorized = await authorizedStackRecord(params["stack_configuration_id"] ?? "", user, tokenOrgId, teamId, "stack-configurations");
+    const group = authorized === undefined ? undefined : await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.parentId, authorized.record.id), eq(stackRecords.recordType, "stack-deployment-groups"), eq(stackRecords.name, params["stack_deployment_group_name"] ?? "")) });
     if (group === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: stackRecordResource(group) };
   })
   .get("/api/v2/stack-deployment-groups/:stack_deployment_group_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_deployment_group_id ?? "", user, tokenOrgId, teamId, "stack-deployment-groups");
+    const authorized = await authorizedStackRecord(params["stack_deployment_group_id"] ?? "", user, tokenOrgId, teamId, "stack-deployment-groups");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: stackRecordResource(authorized.record) };
   })
   .get("/api/v2/stack-configurations/:stack_configuration_id/stack-deployment-runs", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_configuration_id ?? "", user, tokenOrgId, teamId, "stack-configurations");
+    const authorized = await authorizedStackRecord(params["stack_configuration_id"] ?? "", user, tokenOrgId, teamId, "stack-configurations");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const records = (await db.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, authorized.record.stackId), eq(stackRecords.recordType, "stack-deployment-runs")), orderBy: [desc(stackRecords.createdAt)] })).filter((record) => (record.payload ?? {}).configurationId === authorized.record.id);
+    const records = (await db.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, authorized.record.stackId), eq(stackRecords.recordType, "stack-deployment-runs")), orderBy: [desc(stackRecords.createdAt)] })).filter((record) => (record.payload ?? {})["configurationId"] === authorized.record.id);
     const { data, pagination: page } = pagedStackRecords(records, request);
     return { data, ...page };
   })
   .get("/api/v2/stack-deployment-groups/:stack_deployment_group_id/stack-deployment-runs", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_deployment_group_id ?? "", user, tokenOrgId, teamId, "stack-deployment-groups");
+    const authorized = await authorizedStackRecord(params["stack_deployment_group_id"] ?? "", user, tokenOrgId, teamId, "stack-deployment-groups");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const records = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.parentId, authorized.record.id), eq(stackRecords.recordType, "stack-deployment-runs")), orderBy: [desc(stackRecords.createdAt)] });
     const { data, pagination: page } = pagedStackRecords(records, request);
     return { data, ...page };
   })
   .get("/api/v2/stack-deployment-runs/:stack_deployment_run_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_deployment_run_id ?? "", user, tokenOrgId, teamId, "stack-deployment-runs");
+    const authorized = await authorizedStackRecord(params["stack_deployment_run_id"] ?? "", user, tokenOrgId, teamId, "stack-deployment-runs");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: stackRecordResource(authorized.record) };
   })
   .get("/api/v2/stack-deployment-runs/:stack_deployment_run_id/stack-deployment-steps", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_deployment_run_id ?? "", user, tokenOrgId, teamId, "stack-deployment-runs");
+    const authorized = await authorizedStackRecord(params["stack_deployment_run_id"] ?? "", user, tokenOrgId, teamId, "stack-deployment-runs");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const records = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.parentId, authorized.record.id), eq(stackRecords.recordType, "stack-deployment-steps")), orderBy: [desc(stackRecords.createdAt)] });
     const { data, pagination: page } = pagedStackRecords(records, request);
     return { data, ...page };
   })
   .get("/api/v2/stack-deployment-steps/:stack_deployment_step_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_deployment_step_id ?? "", user, tokenOrgId, teamId, "stack-deployment-steps");
+    const authorized = await authorizedStackRecord(params["stack_deployment_step_id"] ?? "", user, tokenOrgId, teamId, "stack-deployment-steps");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: stackRecordResource(authorized.record) };
   })
   .get("/api/v2/stack-deployment-steps/:stack_deployment_step_id/stack-diagnostics", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_deployment_step_id ?? "", user, tokenOrgId, teamId, "stack-deployment-steps");
+    const authorized = await authorizedStackRecord(params["stack_deployment_step_id"] ?? "", user, tokenOrgId, teamId, "stack-deployment-steps");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const records = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.parentId, authorized.record.id), eq(stackRecords.recordType, "stack-diagnostics")), orderBy: [desc(stackRecords.createdAt)] });
     const { data, pagination: page } = pagedStackRecords(records, request);
     return { data, ...page };
   })
   .get("/api/v2/stack-deployment-steps/:stack_deployment_step_id/artifacts", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_deployment_step_id ?? "", user, tokenOrgId, teamId, "stack-deployment-steps");
+    const authorized = await authorizedStackRecord(params["stack_deployment_step_id"] ?? "", user, tokenOrgId, teamId, "stack-deployment-steps");
     const name = new URL(request.url).searchParams.get("name") ?? "";
     if (authorized === undefined || !["plan-description", "plan-debug-log", "apply-description", "apply-debug-log"].includes(name)) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const artifact = await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.parentId, authorized.record.id), eq(stackRecords.recordType, "stack-artifacts"), eq(stackRecords.name, name)) });
-    const path = (artifact?.payload ?? {}).path;
+    const path = (artifact?.payload ?? {})["path"];
     if (typeof path !== "string" || !isStackStoragePath(path) || !(await Bun.file(path).exists())) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return new Response(Bun.file(path), { headers: { "Content-Type": "application/octet-stream" } });
   })
   .get("/api/v2/stack-approvals/:stack_approval_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_approval_id ?? "", user, tokenOrgId, teamId, "stack-approvals");
+    const authorized = await authorizedStackRecord(params["stack_approval_id"] ?? "", user, tokenOrgId, teamId, "stack-approvals");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: stackRecordResource(authorized.record) };
   })
   .post("/api/v2/stack-deployment-groups/:stack_deployment_group_id/approve-all-plans", async ({ params, user, body, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_deployment_group_id ?? "", user, tokenOrgId, teamId, "stack-deployment-groups");
+    const authorized = await authorizedStackRecord(params["stack_deployment_group_id"] ?? "", user, tokenOrgId, teamId, "stack-deployment-groups");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    await approveStackRecord(authorized.record, user?.id ?? null, typeof payload.reason === "string" ? payload.reason : null);
+    await approveStackRecord(authorized.record, user?.id ?? null, typeof payload["reason"] === "string" ? payload["reason"] : null);
     (set as { status: number }).status = 204;
     return {};
   })
   .post("/api/v2/stack-deployment-groups/:stack_deployment_group_id/rerun", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_deployment_group_id ?? "", user, tokenOrgId, teamId, "stack-deployment-groups");
+    const authorized = await authorizedStackRecord(params["stack_deployment_group_id"] ?? "", user, tokenOrgId, teamId, "stack-deployment-groups");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const now = Date.now();
     const rerunIds: string[] = [];
@@ -687,15 +687,15 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     return {};
   })
   .post("/api/v2/stack-deployment-runs/:stack_deployment_run_id/approve-all-plans", async ({ params, user, body, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_deployment_run_id ?? "", user, tokenOrgId, teamId, "stack-deployment-runs");
+    const authorized = await authorizedStackRecord(params["stack_deployment_run_id"] ?? "", user, tokenOrgId, teamId, "stack-deployment-runs");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    await approveStackRecord(authorized.record, user?.id ?? null, typeof payload.reason === "string" ? payload.reason : null);
+    await approveStackRecord(authorized.record, user?.id ?? null, typeof payload["reason"] === "string" ? payload["reason"] : null);
     (set as { status: number }).status = 204;
     return {};
   })
   .post("/api/v2/stack-deployment-runs/:stack_deployment_run_id/cancel", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_deployment_run_id ?? "", user, tokenOrgId, teamId, "stack-deployment-runs");
+    const authorized = await authorizedStackRecord(params["stack_deployment_run_id"] ?? "", user, tokenOrgId, teamId, "stack-deployment-runs");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const canceled = await db.transaction(async (tx): Promise<boolean> => {
       const now = Date.now();
@@ -715,7 +715,7 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     return {};
   })
   .post("/api/v2/stack-deployment-steps/:stack_deployment_step_id/advance", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_deployment_step_id ?? "", user, tokenOrgId, teamId, "stack-deployment-steps");
+    const authorized = await authorizedStackRecord(params["stack_deployment_step_id"] ?? "", user, tokenOrgId, teamId, "stack-deployment-steps");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.update(stackRecords).set({ status: "completed", updatedAt: Date.now() }).where(eq(stackRecords.id, authorized.record.id));
     if (authorized.record.parentId !== null) await enqueueDurableJob("stack-deployment", { runId: authorized.record.parentId }, { dedupeKey: `stack-run:${authorized.record.parentId}:advance:${authorized.record.id}` });
@@ -723,55 +723,55 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     return {};
   })
   .get("/api/v2/stacks/:stack_id/stack-states", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const details = await stackDetails(params.stack_id ?? "");
+    const details = await stackDetails(params["stack_id"] ?? "");
     if (details === undefined || !(await checkOrganizationPermission(details.stack.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const records = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, details.stack.id), eq(stackRecords.recordType, "stack-states")), orderBy: [desc(stackRecords.createdAt)] });
     const { data, pagination: page } = pagedStackRecords(records, request);
     return { data, ...page };
   })
   .get("/api/v2/stack_states/:stack_state_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_state_id ?? "", user, tokenOrgId, teamId, "stack-states");
+    const authorized = await authorizedStackRecord(params["stack_state_id"] ?? "", user, tokenOrgId, teamId, "stack-states");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: stackRecordResource(authorized.record) };
   })
   .get("/api/v2/stack-states/:stack_state_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_state_id ?? "", user, tokenOrgId, teamId, "stack-states");
+    const authorized = await authorizedStackRecord(params["stack_state_id"] ?? "", user, tokenOrgId, teamId, "stack-states");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: stackRecordResource(authorized.record) };
   })
   .get("/api/v2/stack-states/:stack_state_id/description", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const authorized = await authorizedStackRecord(params.stack_state_id ?? "", user, tokenOrgId, teamId, "stack-states");
-    const path = (authorized?.record.payload ?? {}).descriptionPath;
+    const authorized = await authorizedStackRecord(params["stack_state_id"] ?? "", user, tokenOrgId, teamId, "stack-states");
+    const path = (authorized?.record.payload ?? {})["descriptionPath"];
     if (authorized === undefined || typeof path !== "string" || !isStackStoragePath(path) || !(await Bun.file(path).exists())) { (set as { status: number }).status = 204; return {}; }
     const location = signedApiURL(request, `/api/v2/stack-states/${authorized.record.id}/description/download`, "GET");
-    (set.headers as Record<string, string>).Location = location;
+    (set.headers as Record<string, string>)["Location"] = location;
     (set as { status: number }).status = 307;
     return {};
   })
   .get("/api/v2/stack-states/:stack_state_id/description/download", async ({ params, user, request, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const record = await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, params.stack_state_id ?? ""), eq(stackRecords.recordType, "stack-states")) });
+    const record = await db.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, params["stack_state_id"] ?? ""), eq(stackRecords.recordType, "stack-states")) });
     const details = record === undefined ? undefined : await stackDetails(record.stackId);
     if (record === undefined || details === undefined || (!(await checkOrganizationPermission(details.stack.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects")) && !validSignedApiURL(request, `/api/v2/stack-states/${record.id}/description/download`, "GET"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const path = (record.payload ?? {}).descriptionPath;
+    const path = (record.payload ?? {})["descriptionPath"];
     if (typeof path !== "string" || !isStackStoragePath(path) || !(await Bun.file(path).exists())) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return Bun.file(path);
   })
   .patch("/api/v2/stacks/:stack_id", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const details = await stackDetails(params.stack_id ?? "");
+    const details = await stackDetails(params["stack_id"] ?? "");
     if (details === undefined || !(await checkOrganizationPermission(details.stack.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const raw = body;
     const payload = raw !== null && typeof raw === "object" ? raw as Record<string, unknown> : {};
-    const data = payload.data;
-    const attrs = (data !== null && typeof data === "object" ? (data as Record<string, unknown>).attributes : null);
+    const data = payload["data"];
+    const attrs = (data !== null && typeof data === "object" ? (data as Record<string, unknown>)["attributes"] : null);
     const attributes = attrs !== null && typeof attrs === "object" ? attrs as Record<string, unknown> : {};
-    const relationships = data !== null && typeof data === "object" && (data as Record<string, unknown>).relationships !== null && typeof (data as Record<string, unknown>).relationships === "object"
-      ? (data as Record<string, unknown>).relationships as Record<string, unknown>
+    const relationships = data !== null && typeof data === "object" && (data as Record<string, unknown>)["relationships"] !== null && typeof (data as Record<string, unknown>)["relationships"] === "object"
+      ? (data as Record<string, unknown>)["relationships"] as Record<string, unknown>
       : {};
     const updates: Partial<typeof stacks.$inferInsert> = { updatedAt: Date.now() };
-    if (typeof attributes.name === "string" && attributes.name.trim() !== "") updates.name = attributes.name.trim();
-    if (typeof attributes.description === "string") updates.description = attributes.description;
+    if (typeof attributes["name"] === "string" && attributes["name"].trim() !== "") updates.name = attributes["name"].trim();
+    if (typeof attributes["description"] === "string") updates.description = attributes["description"];
     if (typeof attributes["speculative-enabled"] === "boolean") updates.speculativeEnabled = attributes["speculative-enabled"];
     if (typeof attributes["working-directory"] === "string") updates.workingDirectory = attributes["working-directory"];
     if (Array.isArray(attributes["trigger-patterns"])) updates.triggerPatterns = (attributes["trigger-patterns"] as unknown[]).filter((item): item is string => typeof item === "string");
@@ -822,11 +822,11 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     }
     if (typeof attributes["execution-mode"] === "string") updates.executionMode = attributes["execution-mode"];
     await db.update(stacks).set(updates).where(eq(stacks.id, details.stack.id));
-    const updated = await db.query.stacks.findFirst({ where: eq(stacks.id, params.stack_id ?? "") });
+    const updated = await db.query.stacks.findFirst({ where: eq(stacks.id, params["stack_id"] ?? "") });
     return { data: updated === undefined ? undefined : stackResource(updated, details.projectName) };
   })
   .delete("/api/v2/stacks/:stack_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const details = await stackDetails(params.stack_id ?? "");
+    const details = await stackDetails(params["stack_id"] ?? "");
     if (details === undefined || !(await checkOrganizationPermission(details.stack.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -835,7 +835,7 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     return {};
   })
   .post("/api/v2/stacks/:stack_id/fetch-latest-from-vcs", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const details = await stackDetails(params.stack_id ?? "");
+    const details = await stackDetails(params["stack_id"] ?? "");
     if (details === undefined || !(await checkOrganizationPermission(details.stack.orgId, user?.id, tokenOrgId ?? null, teamId ?? null, "manage-projects"))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }

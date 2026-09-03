@@ -109,13 +109,13 @@ export const actionsRoutes = new Elysia({ name: "actions" })
   })
   .post("/api/v2/actions", async ({ body, user, orgId: tokenOrgId, teamId, set }: Ctx): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? (payload.data as Record<string, unknown>) : {};
-    const attrs = data.attributes !== null && typeof data.attributes === "object" ? (data.attributes as Record<string, unknown>) : {};
-    const rels = data.relationships !== null && typeof data.relationships === "object" ? (data.relationships as Record<string, unknown>) : {};
-    const orgRel = rels.organization !== null && typeof rels.organization === "object" ? (rels.organization as Record<string, unknown>) : {};
-    const orgData = orgRel.data !== null && typeof orgRel.data === "object" ? (orgRel.data as Record<string, unknown>) : {};
-    const orgName = typeof orgData.id === "string" ? orgData.id : typeof attrs.organization === "string" ? String(attrs.organization) : "";
-    const name = typeof attrs.name === "string" ? attrs.name.trim() : "";
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? (payload["data"] as Record<string, unknown>) : {};
+    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? (data["attributes"] as Record<string, unknown>) : {};
+    const rels = data["relationships"] !== null && typeof data["relationships"] === "object" ? (data["relationships"] as Record<string, unknown>) : {};
+    const orgRel = rels["organization"] !== null && typeof rels["organization"] === "object" ? (rels["organization"] as Record<string, unknown>) : {};
+    const orgData = orgRel["data"] !== null && typeof orgRel["data"] === "object" ? (orgRel["data"] as Record<string, unknown>) : {};
+    const orgName = typeof orgData["id"] === "string" ? orgData["id"] : typeof attrs["organization"] === "string" ? String(attrs["organization"]) : "";
+    const name = typeof attrs["name"] === "string" ? attrs["name"].trim() : "";
     if (orgName === "" || name === "") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "organization and name are required" }] };
@@ -126,8 +126,8 @@ export const actionsRoutes = new Elysia({ name: "actions" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const actionType = typeof attrs["action-type"] === "string" ? String(attrs["action-type"]) : "custom";
-    const description = typeof attrs.description === "string" ? attrs.description : null;
-    const configuration = attrs.configuration !== null && typeof attrs.configuration === "object" ? (attrs.configuration as Record<string, unknown>) : {};
+    const description = typeof attrs["description"] === "string" ? attrs["description"] : null;
+    const configuration = attrs["configuration"] !== null && typeof attrs["configuration"] === "object" ? (attrs["configuration"] as Record<string, unknown>) : {};
     const id = `action-${crypto.randomUUID()}`;
     const now = Date.now();
     await db.insert(actions).values({ id, orgId: org.id, name, description, actionType, status: "active", configuration, createdAt: now, updatedAt: now });
@@ -137,7 +137,7 @@ export const actionsRoutes = new Elysia({ name: "actions" })
     return { data: actionResource(row) };
   })
   .get("/api/v2/actions/:id", async ({ user, params, set }: Ctx): Promise<unknown> => {
-    const id = params.id ?? "";
+    const id = params["id"] ?? "";
     if (user === null || user === undefined) {
       (set as unknown as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
@@ -150,7 +150,7 @@ export const actionsRoutes = new Elysia({ name: "actions" })
     return { data: actionResource(row) };
   })
   .delete("/api/v2/actions/:id", async ({ params, user, orgId: tokenOrgId, teamId, set }: Ctx): Promise<unknown> => {
-    const id = params.id ?? "";
+    const id = params["id"] ?? "";
     const row = await db.query.actions.findFirst({ where: eq(actions.id, id) });
     if (row === undefined) {
       (set as { status: number }).status = 404;
@@ -165,7 +165,7 @@ export const actionsRoutes = new Elysia({ name: "actions" })
     return null;
   })
   .post("/api/v2/actions/:id/invocations", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: Ctx): Promise<unknown> => {
-    const actionId = params.id ?? "";
+    const actionId = params["id"] ?? "";
     const action = await db.query.actions.findFirst({ where: eq(actions.id, actionId) });
     if (action === undefined) {
       (set as { status: number }).status = 404;
@@ -176,10 +176,10 @@ export const actionsRoutes = new Elysia({ name: "actions" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? (payload.data as Record<string, unknown>) : {};
-    const attrs = data.attributes !== null && typeof data.attributes === "object" ? (data.attributes as Record<string, unknown>) : {};
-    const runId = typeof attrs["run-id"] === "string" ? String(attrs["run-id"]) : typeof attrs.runId === "string" ? String(attrs.runId) : null;
-    const stackId = typeof attrs["stack-id"] === "string" ? String(attrs["stack-id"]) : typeof attrs.stackId === "string" ? String(attrs.stackId) : null;
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? (payload["data"] as Record<string, unknown>) : {};
+    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? (data["attributes"] as Record<string, unknown>) : {};
+    const runId = typeof attrs["run-id"] === "string" ? String(attrs["run-id"]) : typeof attrs["runId"] === "string" ? String(attrs["runId"]) : null;
+    const stackId = typeof attrs["stack-id"] === "string" ? String(attrs["stack-id"]) : typeof attrs["stackId"] === "string" ? String(attrs["stackId"]) : null;
     if (runId !== null) {
       const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
       if (run === undefined) {
@@ -196,14 +196,14 @@ export const actionsRoutes = new Elysia({ name: "actions" })
     }
     const id = `actinv-${crypto.randomUUID()}`;
     const now = Date.now();
-    const output = attrs.output !== null && typeof attrs.output === "object" ? (attrs.output as Record<string, unknown>) : null;
+    const output = attrs["output"] !== null && typeof attrs["output"] === "object" ? (attrs["output"] as Record<string, unknown>) : null;
     await db.insert(actionInvocations).values({
       id,
       actionId,
       orgId: action.orgId,
       runId,
       stackId,
-      deploymentId: typeof attrs.deploymentId === "string" ? String(attrs.deploymentId) : null,
+      deploymentId: typeof attrs["deploymentId"] === "string" ? String(attrs["deploymentId"]) : null,
       status: "pending",
       output,
       createdAt: now,
@@ -215,7 +215,7 @@ export const actionsRoutes = new Elysia({ name: "actions" })
     return { data: invocationResource(row) };
   })
   .get("/api/v2/runs/:run_id/actions", async ({ params, user, set }: Ctx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     if (user === null || user === undefined) {
       (set as unknown as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
@@ -240,7 +240,7 @@ export const actionsRoutes = new Elysia({ name: "actions" })
     return { data: rows.map(invocationResource), meta: { pagination: { "current-page": 1, "total-pages": 1, "total-count": rows.length } } };
   })
   .get("/api/v2/actions/:id/output", async ({ user, params, set }: Ctx): Promise<unknown> => {
-    const id = params.id ?? "";
+    const id = params["id"] ?? "";
     if (user === null || user === undefined) {
       (set as unknown as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
@@ -268,7 +268,7 @@ export const actionsRoutes = new Elysia({ name: "actions" })
     return { errors: [{ status: "404", title: "Not Found", detail: `Action ${id} has no output` }] };
   })
   .get("/api/v2/stacks/:stack_id/actions", async ({ params, user, set }: Ctx): Promise<unknown> => {
-    const stackId = params.stack_id ?? "";
+    const stackId = params["stack_id"] ?? "";
     if (user === null || user === undefined) {
       (set as unknown as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };

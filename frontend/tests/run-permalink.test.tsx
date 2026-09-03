@@ -32,7 +32,7 @@ test("copies the canonical run permalink", async () => {
   Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
 
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/runs/run-copy") {
       return json({
@@ -54,7 +54,7 @@ test("copies the canonical run permalink", async () => {
     if (url === "/api/v2/runs/run-copy/cost-estimate") return json({ data: null });
     if (url === "/api/v2/plans/plan-run-copy/json-output") return json({ terraform_version: "1.11.0", resource_changes: [] });
     return json({ data: [] });
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-copy"]}>

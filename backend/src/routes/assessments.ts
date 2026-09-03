@@ -124,7 +124,7 @@ async function artifactResponse(
 export const assessmentRoutes = new Elysia({ name: "assessments" })
   .use(authPlugin)
   .get("/api/v2/workspaces/:workspace_id/assessment-results", async (context: ParamContext): Promise<unknown> => {
-    const workspaceId = context.params.workspace_id ?? "";
+    const workspaceId = context.params["workspace_id"] ?? "";
     if ((await findAuthorizedWorkspace(workspaceId, context.user?.id, context.orgId ?? null, context.teamId ?? null)) === undefined) {
       return notFound(context.set);
     }
@@ -136,12 +136,12 @@ export const assessmentRoutes = new Elysia({ name: "assessments" })
     return { data: results.map((result: Assessment): Record<string, unknown> => assessmentResource(result)) };
   })
   .get("/api/v2/assessment-results/:assessment_result_id", async (context: ParamContext): Promise<unknown> => {
-    const id = context.params.assessment_result_id ?? "";
+    const id = context.params["assessment_result_id"] ?? "";
     const result = await findAuthorizedAssessment(id, context.user?.id, context.orgId ?? null, context.teamId ?? null);
     return result === undefined ? notFound(context.set) : { data: assessmentResource(result) };
   })
   .get("/api/v2/assessment-results/:assessment_result_id/check-results", async (context: ParamContext): Promise<unknown> => {
-    const id = context.params.assessment_result_id ?? "";
+    const id = context.params["assessment_result_id"] ?? "";
     const result = await findAuthorizedAssessment(id, context.user?.id, context.orgId ?? null, context.teamId ?? null);
     if (result === undefined) return notFound(context.set);
     const checks = await db.query.assessmentCheckResults.findMany({
@@ -152,7 +152,7 @@ export const assessmentRoutes = new Elysia({ name: "assessments" })
     };
   })
   .get("/api/v2/runs/:run_id/check-results", async (context: ParamContext): Promise<unknown> => {
-    const runId = context.params.run_id ?? "";
+    const runId = context.params["run_id"] ?? "";
     if ((await findAuthorizedRun(runId, context.user?.id, context.orgId ?? null, context.teamId ?? null)) === undefined) return notFound(context.set);
     const checks = await db.query.assessmentCheckResults.findMany({
       where: eq(assessmentCheckResults.runId, runId),
@@ -162,8 +162,8 @@ export const assessmentRoutes = new Elysia({ name: "assessments" })
     };
   })
   .get("/api/v2/assessment-results/:assessment_result_id/json-output", async (context: ParamContext): Promise<unknown> =>
-    artifactResponse(context.params.assessment_result_id ?? "", "jsonOutput", context))
+    artifactResponse(context.params["assessment_result_id"] ?? "", "jsonOutput", context))
   .get("/api/v2/assessment-results/:assessment_result_id/json-schema", async (context: ParamContext): Promise<unknown> =>
-    artifactResponse(context.params.assessment_result_id ?? "", "jsonSchema", context))
+    artifactResponse(context.params["assessment_result_id"] ?? "", "jsonSchema", context))
   .get("/api/v2/assessment-results/:assessment_result_id/log-output", async (context: ParamContext): Promise<unknown> =>
-    artifactResponse(context.params.assessment_result_id ?? "", "logOutput", context));
+    artifactResponse(context.params["assessment_result_id"] ?? "", "logOutput", context));

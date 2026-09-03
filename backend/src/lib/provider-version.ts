@@ -11,11 +11,11 @@ import {
 // simply omits the chip) and the persistent cache absorbs GitHub's
 // unauthenticated rate limit (one request per TTL window).
 
-const STORAGE_DIR = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
+const STORAGE_DIR = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"));
 const CACHE_FILE = join(STORAGE_DIR, "version-cache.json");
 
 function resolveTtl(): number {
-  const configured = Number(process.env.TERRENCE_VERSION_CACHE_TTL_MS);
+  const configured = Number(process.env["TERRENCE_VERSION_CACHE_TTL_MS"]);
   return Number.isFinite(configured) && configured > 0 ? configured : 24 * 60 * 60 * 1000;
 }
 
@@ -46,7 +46,7 @@ let lastFailedAt = 0;
  * FAILURE_BACKOFF_MS so a flaky GitHub API cannot trigger a request on every
  * dashboard load. The cache file can be overridden for tests and scripts. */
 export async function getLatestTfeProviderVersion(): Promise<string | null> {
-  const file = process.env.TERRENCE_VERSION_CACHE_FILE ?? CACHE_FILE;
+  const file = process.env["TERRENCE_VERSION_CACHE_FILE"] ?? CACHE_FILE;
   const ttl = resolveTtl();
   const cached = loadVersionCacheFile(file)["tfe-provider"];
   if (cached !== undefined && isVersionCacheFresh(cached, ttl)) {

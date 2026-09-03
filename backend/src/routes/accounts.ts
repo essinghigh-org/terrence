@@ -412,13 +412,13 @@ async function resolveMfaSeed(mfa: Readonly<{ secret: string; secretEncrypted: s
 export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
   .post("/admin/initial-admin-user", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
-    const configuredToken = process.env.IACT_TOKEN;
+    const configuredToken = process.env["IACT_TOKEN"];
     // the reference format's installer passes the token as a query parameter.
     // Query-token compatibility is OPT-IN (todo 142: the default is the
     // safer header-only flow) — set IACT_QUERY_TOKEN_ENABLED=1 to restore the
     // reference installer behavior. The header alternative keeps the secret
     // out of proxy logs, browser history, and traces entirely.
-    const queryEnabled = envEnabled(process.env.IACT_QUERY_TOKEN_ENABLED);
+    const queryEnabled = envEnabled(process.env["IACT_QUERY_TOKEN_ENABLED"]);
     const queryToken = request === undefined || !queryEnabled ? null : new URL(request.url).searchParams.get("token");
     const headerToken = request === undefined ? null
       : request.headers.get("x-iact-token")
@@ -441,9 +441,9 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { status: "error", error: "Not found" };
     }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const username = typeof payload.username === "string" ? normalizeUsername(payload.username) ?? "" : "";
-    const email = typeof payload.email === "string" ? normalizeEmail(payload.email) ?? "" : "";
-    const password = typeof payload.password === "string" ? payload.password : "";
+    const username = typeof payload["username"] === "string" ? normalizeUsername(payload["username"]) ?? "" : "";
+    const email = typeof payload["email"] === "string" ? normalizeEmail(payload["email"]) ?? "" : "";
+    const password = typeof payload["password"] === "string" ? payload["password"] : "";
     if (username === "" || email === "" || password === "") {
       (set as { status: number }).status = 422;
       return { status: "error", error: "Username, email, and password are required" };
@@ -456,7 +456,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
 
     const userId = `user-${crypto.randomUUID()}`;
     const organizationId = `org-${crypto.randomUUID()}`;
-    const configuredOrganizationName = (process.env.ADMIN_ORGANIZATION ?? "default").trim();
+    const configuredOrganizationName = (process.env["ADMIN_ORGANIZATION"] ?? "default").trim();
     const organizationName = configuredOrganizationName === "" ? "default" : configuredOrganizationName;
     const token = generateAuthenticationToken("user");
     const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
@@ -504,7 +504,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 404;
       return { status: "error", error: "Not found" };
     }
-    delete process.env.IACT_TOKEN;
+    delete process.env["IACT_TOKEN"];
     await auditLog("create", "users", userId, userId, createdOrganizationId, { username, source: "IACT_TOKEN" });
     return { status: "created", token };
   })
@@ -522,8 +522,8 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     }
 
     const attrs = payload?.data?.attributes ?? {};
-    const username = typeof attrs.username === "string" ? attrs.username : "";
-    const password = typeof attrs.password === "string" ? attrs.password : "";
+    const username = typeof attrs["username"] === "string" ? attrs["username"] : "";
+    const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
     const browserSession = attrs["browser-session"] === true;
 
     if (username === "" || password === "") {
@@ -642,7 +642,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     }
     const attrs = payload?.data?.attributes ?? {};
     const challengeToken = typeof attrs["challenge-token"] === "string" ? attrs["challenge-token"] : "";
-    const code = typeof attrs.code === "string" ? attrs.code : "";
+    const code = typeof attrs["code"] === "string" ? attrs["code"] : "";
     const browserSession = attrs["browser-session"] === true;
 
     if (challengeToken === "" || code === "") {
@@ -898,14 +898,14 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     return undefined;
   })
   .post("/api/v2/users", async ({ body, set }: ReqCtx): Promise<unknown> => {
-    if (!envEnabled(process.env.TERRENCE_ENABLE_LOCAL_SIGNUP)) {
+    if (!envEnabled(process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"])) {
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden", detail: "Local signup is disabled on this instance. Set TERRENCE_ENABLE_LOCAL_SIGNUP=true or use ADMIN_PASSWORD bootstrap." }] };
     }
     const attrs = extractAttrs(body) ?? {};
-    const username = typeof attrs.username === "string" ? normalizeUsername(attrs.username) ?? "" : "";
-    const password = typeof attrs.password === "string" ? attrs.password : "";
-    const email = attrs.email;
+    const username = typeof attrs["username"] === "string" ? normalizeUsername(attrs["username"]) ?? "" : "";
+    const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
+    const email = attrs["email"];
 
     if (username === "" || password === "") {
       (set as { status: number }).status = 400;
@@ -1022,7 +1022,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     return undefined;
   })
   .delete("/api/v2/account/sessions/:family_id", async ({ params, request, server, user, token, set }: AuthReqCtx): Promise<unknown> => {
-    const familyId = params?.family_id ?? "";
+    const familyId = params?.["family_id"] ?? "";
     if (user === null || user === undefined || familyId === "") {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -1065,11 +1065,11 @@ export const accountRoutes = new Elysia({ name: "accounts" })
 
     const changes: { username?: string; email?: string | null; emailVerifiedAt?: number | null; theme?: string } = {};
     if (Object.hasOwn(attrs, "username")) {
-      if (typeof attrs.username !== "string" || attrs.username.trim() === "") {
+      if (typeof attrs["username"] !== "string" || attrs["username"].trim() === "") {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username cannot be empty" }] };
       }
-      const normalizedUsername = normalizeUsername(attrs.username);
+      const normalizedUsername = normalizeUsername(attrs["username"]);
       if (normalizedUsername === null) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Username contains invalid characters" }] };
@@ -1077,7 +1077,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       changes.username = normalizedUsername;
     }
     if (Object.hasOwn(attrs, "email")) {
-      const emailVal = attrs.email;
+      const emailVal = attrs["email"];
       if (emailVal !== null && (typeof emailVal !== "string" || emailVal.trim() === "")) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Email must be a string or null" }] };
@@ -1091,11 +1091,11 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       if (normalizedEmail !== user.email) changes.emailVerifiedAt = null;
     }
     if (Object.hasOwn(attrs, "theme")) {
-      if (typeof attrs.theme !== "string" || attrs.theme.length > 64 || !THEME_ID_PATTERN.test(attrs.theme)) {
+      if (typeof attrs["theme"] !== "string" || attrs["theme"].length > 64 || !THEME_ID_PATTERN.test(attrs["theme"])) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Theme must be a valid theme id" }] };
       }
-      changes.theme = attrs.theme;
+      changes.theme = attrs["theme"];
     }
     if (Object.keys(changes).length === 0) {
       (set as { status: number }).status = 422;
@@ -1121,9 +1121,9 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     }
 
     const attrs = extractAttrs(body) ?? {};
-    const currentPassword = typeof attrs.current_password === "string" ? attrs.current_password : (typeof attrs["current-password"] === "string" ? attrs["current-password"] : "");
-    const password = typeof attrs.password === "string" ? attrs.password : "";
-    const confirmation = typeof attrs.password_confirmation === "string" ? attrs.password_confirmation : (typeof attrs["password-confirmation"] === "string" ? attrs["password-confirmation"] : "");
+    const currentPassword = typeof attrs["current_password"] === "string" ? attrs["current_password"] : (typeof attrs["current-password"] === "string" ? attrs["current-password"] : "");
+    const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
+    const confirmation = typeof attrs["password_confirmation"] === "string" ? attrs["password_confirmation"] : (typeof attrs["password-confirmation"] === "string" ? attrs["password-confirmation"] : "");
     if (currentPassword === "" || password === "" || password !== confirmation) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid password change request" }] };
@@ -1208,7 +1208,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const attrs = extractAttrs(body) ?? {};
-    const code = typeof attrs.code === "string" ? attrs.code : "";
+    const code = typeof attrs["code"] === "string" ? attrs["code"] : "";
     if (code === "") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Code is required" }] };
@@ -1250,7 +1250,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const attrs = extractAttrs(body) ?? {};
-    const code = typeof attrs.code === "string" ? attrs.code : "";
+    const code = typeof attrs["code"] === "string" ? attrs["code"] : "";
     if (code === "") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Code is required" }] };

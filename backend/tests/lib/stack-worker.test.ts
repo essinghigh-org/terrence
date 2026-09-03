@@ -34,26 +34,26 @@ describe("Stack deployment worker", () => {
   const stackId = `stack-worker-stack-${crypto.randomUUID()}`;
   let archiveDirectory = "";
   let archivePath = "";
-  const previousRuns = process.env.SIMULATED_RUNS;
-  const previousChanges = process.env.SIMULATED_STACK_PLAN_CHANGES;
-  const previousDeferred = process.env.SIMULATED_STACK_DEFERRED;
+  const previousRuns = process.env["SIMULATED_RUNS"];
+  const previousChanges = process.env["SIMULATED_STACK_PLAN_CHANGES"];
+  const previousDeferred = process.env["SIMULATED_STACK_DEFERRED"];
 
   beforeAll(async () => {
     const archiveValue = await archive();
     archiveDirectory = archiveValue.directory;
     archivePath = archiveValue.path;
-    process.env.SIMULATED_RUNS = "true";
+    process.env["SIMULATED_RUNS"] = "true";
     await db.insert(organizations).values({ id: orgId, name: orgId });
     await db.insert(stacks).values({ id: stackId, orgId, projectId: null, executionMode: "remote", name: "stack-worker", createdAt: Date.now(), updatedAt: Date.now() });
   });
 
   afterAll(async () => {
-    if (previousRuns === undefined) delete process.env.SIMULATED_RUNS;
-    else process.env.SIMULATED_RUNS = previousRuns;
-    if (previousChanges === undefined) delete process.env.SIMULATED_STACK_PLAN_CHANGES;
-    else process.env.SIMULATED_STACK_PLAN_CHANGES = previousChanges;
-    if (previousDeferred === undefined) delete process.env.SIMULATED_STACK_DEFERRED;
-    else process.env.SIMULATED_STACK_DEFERRED = previousDeferred;
+    if (previousRuns === undefined) delete process.env["SIMULATED_RUNS"];
+    else process.env["SIMULATED_RUNS"] = previousRuns;
+    if (previousChanges === undefined) delete process.env["SIMULATED_STACK_PLAN_CHANGES"];
+    else process.env["SIMULATED_STACK_PLAN_CHANGES"] = previousChanges;
+    if (previousDeferred === undefined) delete process.env["SIMULATED_STACK_DEFERRED"];
+    else process.env["SIMULATED_STACK_DEFERRED"] = previousDeferred;
     await db.delete(stacks).where(eq(stacks.id, stackId));
     await db.delete(organizations).where(eq(organizations.id, orgId));
     if (archiveDirectory !== "") await rm(archiveDirectory, { recursive: true, force: true });
@@ -92,13 +92,13 @@ describe("Stack deployment worker", () => {
       { id: runId, stackId, parentId: groupId, recordType: "stack-deployment-runs", name: "locked", status: "planning", payload: { configurationId, componentIndex: 0, cycle: 0 }, createdAt: Date.now(), updatedAt: Date.now() },
       { id: stepId, stackId, parentId: runId, recordType: "stack-deployment-steps", name: "a", status: "queued", payload: { phase: "plan", "operation-type": "plan", componentIndex: 0 }, createdAt: Date.now(), updatedAt: Date.now() },
     ]);
-    process.env.SIMULATED_STACK_PLAN_CHANGES = "false";
-    process.env.SIMULATED_STACK_DEFERRED = "true";
+    process.env["SIMULATED_STACK_PLAN_CHANGES"] = "false";
+    process.env["SIMULATED_STACK_DEFERRED"] = "true";
     await runStackDeploymentJob(job(runId), context);
     await db.update(stackRecords).set({ status: "approved" }).where(eq(stackRecords.id, runId));
     await runStackDeploymentJob(job(runId), context);
     expect((await db.query.stackStateLocks.findFirst({ where: eq(stackStateLocks.runId, runId) }))?.runId).toBe(runId);
-    process.env.SIMULATED_STACK_DEFERRED = "false";
+    process.env["SIMULATED_STACK_DEFERRED"] = "false";
     await runStackDeploymentJob(job(runId), context);
     await runStackDeploymentJob(job(runId), context);
     const run = await db.query.stackRecords.findFirst({ where: eq(stackRecords.id, runId) });

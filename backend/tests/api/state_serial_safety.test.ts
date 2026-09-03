@@ -31,12 +31,12 @@ describe("state-version serial safety", () => {
   ): Promise<Response> => {
     const attributes: Record<string, unknown> = { serial };
     if (options.state !== undefined) {
-      attributes.state = options.state;
-      attributes.md5 = createHash("md5").update(options.state).digest("base64");
+      attributes["state"] = options.state;
+      attributes["md5"] = createHash("md5").update(options.state).digest("base64");
     }
     const data: Record<string, unknown> = { type: "state-versions", attributes };
     if (options.runId !== undefined) {
-      data.relationships = { run: { data: { type: "runs", id: options.runId } } };
+      data["relationships"] = { run: { data: { type: "runs", id: options.runId } } };
     }
     return request(`/api/v2/workspaces/${workspaceId}/state-versions`, {
       method: "POST",
@@ -62,7 +62,7 @@ describe("state-version serial safety", () => {
 
   it("rejects a lower serial even when a run relationship is supplied", async () => {
     const initial = stateForSerial(1);
-    expect((await expectSuccessResponse(await createStateVersion(1, { state: initial }), 201, "state-versions")).attributes.serial).toBe(1);
+    expect((await expectSuccessResponse(await createStateVersion(1, { state: initial }), 201, "state-versions")).attributes["serial"]).toBe(1);
 
     const stale = await createStateVersion(0, { runId });
     expect(stale.status).toBe(409);
@@ -70,7 +70,7 @@ describe("state-version serial safety", () => {
   });
 
   it("maps a duplicate serial hidden by a pending row to 409", async () => {
-    expect((await expectSuccessResponse(await createStateVersion(2), 201, "state-versions")).attributes.serial).toBe(2);
+    expect((await expectSuccessResponse(await createStateVersion(2), 201, "state-versions")).attributes["serial"]).toBe(2);
 
     const duplicate = await createStateVersion(2, { runId });
     expect(duplicate.status).toBe(409);

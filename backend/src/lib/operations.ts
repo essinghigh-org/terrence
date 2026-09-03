@@ -87,8 +87,8 @@ export function isValidMaintenanceWindow(window: MaintenanceWindow): boolean {
 /** True when an apply must be blocked because the site has maintenance
  * windows configured and `now` is outside every one of them. */
 export function maintenanceWindowsBlockApply(settings: Settings, now: Date): boolean {
-  if (settings.enabled !== true) return false;
-  const windows = Array.isArray(settings.windows) ? settings.windows as MaintenanceWindow[] : [];
+  if (settings["enabled"] !== true) return false;
+  const windows = Array.isArray(settings["windows"]) ? settings["windows"] as MaintenanceWindow[] : [];
   if (windows.length === 0) return false;
   if (windows.every((window: MaintenanceWindow): boolean => !isValidMaintenanceWindow(window))) {
     // A malformed window never matches, so with only malformed windows the
@@ -104,7 +104,7 @@ export function maintenanceWindowsBlockApply(settings: Settings, now: Date): boo
 
 /** True when the site requires external approval before applies (21.8). */
 export function approvalWebhookBlocksApply(settings: Settings): boolean {
-  return settings.enabled === true;
+  return settings["enabled"] === true;
 }
 
 /** Reason an apply must be blocked right now, or null when applies are

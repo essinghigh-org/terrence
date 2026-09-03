@@ -26,7 +26,7 @@ const CUSTOM_PROVIDER: CatalogProvider = Object.freeze({
 });
 
 const catalogDirectory = resolve(
-  process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"),
+  process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"),
   "model-catalog",
 );
 const catalogCacheFile = join(catalogDirectory, "catalog.json");
@@ -80,9 +80,9 @@ function asObject(value: unknown): Readonly<Record<string, unknown>> | undefined
  * Models with no modalities metadata are assumed text-capable (default
  * behavior for the curated majors). */
 function canOutputText(model: Readonly<Record<string, unknown>>): boolean {
-  const modalities = asObject(model.modalities);
+  const modalities = asObject(model["modalities"]);
   if (modalities === undefined) return true;
-  const output = modalities.output;
+  const output = modalities["output"];
   return Array.isArray(output) && output.includes("text");
 }
 
@@ -92,11 +92,11 @@ function parseCatalogModel(modelId: string, rawModel: unknown): CatalogModel | u
   const model = asObject(rawModel);
   if (model === undefined) return undefined;
   if (!canOutputText(model)) return undefined;
-  const contextRaw = asObject(model.limit)?.context;
+  const contextRaw = asObject(model["limit"])?.["context"];
   return {
     id: modelId,
-    name: typeof model.name === "string" && model.name !== "" ? model.name : modelId,
-    reasoning: model.reasoning === true,
+    name: typeof model["name"] === "string" && model["name"] !== "" ? model["name"] : modelId,
+    reasoning: model["reasoning"] === true,
     context: typeof contextRaw === "number" && Number.isFinite(contextRaw) && contextRaw > 0 ? contextRaw : null,
   };
 }
@@ -104,7 +104,7 @@ function parseCatalogModel(modelId: string, rawModel: unknown): CatalogModel | u
 function parseCatalogProvider(id: string, rawProvider: unknown): CatalogProvider | undefined {
   const provider = asObject(rawProvider);
   if (provider === undefined) return undefined;
-  const rawModels = asObject(provider.models);
+  const rawModels = asObject(provider["models"]);
   if (rawModels === undefined) return undefined;
   const models: CatalogModel[] = [];
   for (const [modelId, rawModel] of Object.entries(rawModels)) {
@@ -112,12 +112,12 @@ function parseCatalogProvider(id: string, rawProvider: unknown): CatalogProvider
     if (model !== undefined) models.push(model);
   }
   if (models.length === 0) return undefined;
-  const baseUrl = typeof provider.api === "string" && provider.api !== ""
-    ? provider.api
+  const baseUrl = typeof provider["api"] === "string" && provider["api"] !== ""
+    ? provider["api"]
     : (CURATED_BASE_URLS[id] ?? null);
   return {
     id,
-    name: typeof provider.name === "string" && provider.name !== "" ? provider.name : id,
+    name: typeof provider["name"] === "string" && provider["name"] !== "" ? provider["name"] : id,
     baseUrl,
     models: models.sort((a, b) => a.name.localeCompare(b.name)),
   };
@@ -154,8 +154,8 @@ export async function loadModelCatalogFile(): Promise<ModelCatalog | null> {
     const raw = await readFile(catalogCacheFile, "utf8");
     const value = JSON.parse(raw) as unknown;
     const obj = asObject(value);
-    if (obj === undefined || typeof obj.fetchedAt !== "number" || !Array.isArray(obj.providers)) return null;
-    return { fetchedAt: obj.fetchedAt, providers: obj.providers as CatalogProvider[] };
+    if (obj === undefined || typeof obj["fetchedAt"] !== "number" || !Array.isArray(obj["providers"])) return null;
+    return { fetchedAt: obj["fetchedAt"], providers: obj["providers"] as CatalogProvider[] };
   } catch {
     return null;
   }

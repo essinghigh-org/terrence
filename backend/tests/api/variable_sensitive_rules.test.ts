@@ -162,9 +162,9 @@ describe("workspace variable sensitive rules (VAR-006)", () => {
     const list = await request(`/api/v2/workspaces/${wsId}/vars`);
     expect(list.status).toBe(200);
     const body = await list.json() as { data: { attributes: Record<string, unknown> }[] };
-    const byKey = new Map(body.data.map((v) => [v.attributes.key as string, v.attributes]));
-    expect(byKey.get("listsecret")?.value).toBeNull();
-    expect(byKey.get("listsecret")?.sensitive).toBe(true);
-    expect(byKey.get("listplain")?.value).toBe("plainval");
+    const byKey = new Map(body.data.map((v) => [v.attributes["key"] as string, v.attributes]));
+    expect(byKey.get("listsecret")?.["value"]).toBeNull();
+    expect(byKey.get("listsecret")?.["sensitive"]).toBe(true);
+    expect(byKey.get("listplain")?.["value"]).toBe("plainval");
   });
 });

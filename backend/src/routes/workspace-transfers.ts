@@ -111,17 +111,17 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = (data?.attributes as Record<string, unknown>) ?? {};
-    const rels = (data?.relationships as Record<string, unknown>) ?? {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = (data?.["attributes"] as Record<string, unknown>) ?? {};
+    const rels = (data?.["relationships"] as Record<string, unknown>) ?? {};
 
     const srcWsRel = rels["source-workspace"] as Record<string, unknown> | undefined;
     const destOrgRel = rels["destination-organization"] as Record<string, unknown> | undefined;
     const destProjRel = rels["destination-project"] as Record<string, unknown> | undefined;
 
-    const sourceWorkspaceId = typeof (srcWsRel?.data as Record<string, unknown>)?.id === "string" ? ((srcWsRel?.data as Record<string, unknown>).id as string) : null;
-    const destinationOrgId = typeof (destOrgRel?.data as Record<string, unknown>)?.id === "string" ? ((destOrgRel?.data as Record<string, unknown>).id as string) : null;
-    const destinationProjectId = typeof (destProjRel?.data as Record<string, unknown>)?.id === "string" ? ((destProjRel?.data as Record<string, unknown>).id as string) : null;
+    const sourceWorkspaceId = typeof (srcWsRel?.["data"] as Record<string, unknown>)?.["id"] === "string" ? ((srcWsRel?.["data"] as Record<string, unknown>)["id"] as string) : null;
+    const destinationOrgId = typeof (destOrgRel?.["data"] as Record<string, unknown>)?.["id"] === "string" ? ((destOrgRel?.["data"] as Record<string, unknown>)["id"] as string) : null;
+    const destinationProjectId = typeof (destProjRel?.["data"] as Record<string, unknown>)?.["id"] === "string" ? ((destProjRel?.["data"] as Record<string, unknown>)["id"] as string) : null;
 
     if (sourceWorkspaceId === null || destinationOrgId === null) {
       (set as { status: number }).status = 422;
@@ -243,7 +243,7 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const transfer = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, params.transfer_id ?? "") });
+    const transfer = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, params["transfer_id"] ?? "") });
     const visibleOrgIds = await visibleTransferOrgIds(user);
     if (transfer === undefined || !(await canSeeTransfer(visibleOrgIds, transfer))) {
       (set as { status: number }).status = 404;
@@ -256,7 +256,7 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const id = params.transfer_id ?? "";
+    const id = params["transfer_id"] ?? "";
     const transfer = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
     const visibleOrgIds = await visibleTransferOrgIds(user);
     if (transfer === undefined || !(await canSeeTransfer(visibleOrgIds, transfer))) {
@@ -273,7 +273,7 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const id = params.transfer_id ?? "";
+    const id = params["transfer_id"] ?? "";
     const transfer = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
     const visibleOrgIds = await visibleTransferOrgIds(user);
     if (transfer === undefined || !(await canSeeTransfer(visibleOrgIds, transfer))) {

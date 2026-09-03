@@ -52,17 +52,17 @@ describe("remote-workflow runs contract", () => {
         // the reference format emits ids prefixed with "run-"; Terrence uses bare UUIDs (opaque to clients).
     expect(runId).toBeTypeOf("string");
     expect(runId).not.toBe("");
-    expect(resource.attributes.status).toBe("pending");
-    expect(resource.attributes.message).toBe("contract test run");
+    expect(resource.attributes["status"]).toBe("pending");
+    expect(resource.attributes["message"]).toBe("contract test run");
     expect(resource.attributes["auto-apply"]).toBe(false);
     expect(resource.attributes["is-destroy"]).toBe(false);
     expect(resource.attributes["has-changes"]).toBe(false);
-    expect(resource.attributes.source).toBe("tfe-api");
+    expect(resource.attributes["source"]).toBe("tfe-api");
     expect(resource.attributes["trigger-reason"]).toBe("manual");
     expect(resource.attributes["plan-only"]).toBe(false);
     expect(resource.attributes["allow-empty-apply"]).toBe(false);
     expect(resource.attributes["allow-config-generation"]).toBe(false);
-    expect(resource.attributes.actions).toMatchObject({
+    expect(resource.attributes["actions"]).toMatchObject({
       "is-cancelable": expect.any(Boolean),
       "is-confirmable": expect.any(Boolean),
       "is-discardable": expect.any(Boolean),
@@ -70,19 +70,19 @@ describe("remote-workflow runs contract", () => {
     });
     expect(resource.attributes["status-timestamps"]).toBeTypeOf("object");
     expect(resource.attributes["created-at"]).toBeTypeOf("string");
-    expect(resource.attributes.permissions).toMatchObject({
+    expect(resource.attributes["permissions"]).toMatchObject({
       "can-apply": expect.any(Boolean),
       "can-cancel": expect.any(Boolean),
       "can-discard": expect.any(Boolean),
       "can-comment": expect.any(Boolean),
     });
-    expect(resource.relationships?.workspace).toMatchObject({
+    expect(resource.relationships?.["workspace"]).toMatchObject({
       data: { id: workspaceId, type: "workspaces" },
     });
-    expect(resource.relationships?.plan).toMatchObject({
+    expect(resource.relationships?.["plan"]).toMatchObject({
       data: { id: `plan-${runId}`, type: "plans" },
     });
-    expect(resource.relationships?.apply).toMatchObject({
+    expect(resource.relationships?.["apply"]).toMatchObject({
       data: { id: `apply-${runId}`, type: "applies" },
     });
     expect(resource.relationships?.["created-by"]).toMatchObject({
@@ -93,7 +93,7 @@ describe("remote-workflow runs contract", () => {
 
   it("shows a run", async () => {
     const resource = await expectSuccessResponse(await request(`/api/v2/runs/${runId}`, { headers }), 200, "runs");
-    expect(resource.attributes.status).toBe("pending");
+    expect(resource.attributes["status"]).toBe("pending");
     expect(resource.attributes["status-timestamps"]).toBeTypeOf("object");
   });
 
@@ -165,12 +165,12 @@ describe("remote-workflow runs contract", () => {
   it("shows plan and apply resources for the run", async () => {
     const plan = await expectSuccessResponse(await request(`/api/v2/runs/${runId}/plan`, { headers }), 200, "plans");
     expect(plan.id).toBe(`plan-${runId}`);
-    expect(plan.attributes.status).toBeTypeOf("string");
+    expect(plan.attributes["status"]).toBeTypeOf("string");
     expectSelfLink(plan, "/api/v2/plans/");
 
     const apply = await expectSuccessResponse(await request(`/api/v2/applies/apply-${runId}`, { headers }), 200, "applies");
     expect(apply.id).toBe(`apply-${runId}`);
-    expect(apply.attributes.status).toBeTypeOf("string");
+    expect(apply.attributes["status"]).toBeTypeOf("string");
     expect(apply.attributes["status-timestamps"]).toBeTypeOf("object");
     expectSelfLink(apply, "/api/v2/applies/");
   });

@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { isDiskFullError, markStorageDegraded } from "./storage-health";
 
 const planJsonDirectory = resolve(
-  process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"),
+  process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"),
   "plan-json",
 );
 
@@ -25,14 +25,14 @@ function asObject(value: unknown): Readonly<Record<string, unknown>> | undefined
 }
 
 export function planJsonResourceCounts(planJson: PlanJson): PlanResourceCounts | undefined {
-  if (!Array.isArray(planJson.resource_changes)) return undefined;
+  if (!Array.isArray(planJson["resource_changes"])) return undefined;
   const counts = { additions: 0, changes: 0, destructions: 0, imports: 0 };
-  for (const rawResourceChange of planJson.resource_changes) {
+  for (const rawResourceChange of planJson["resource_changes"]) {
     const resourceChange = asObject(rawResourceChange);
-    if (resourceChange?.mode === "data") continue;
-    const change = asObject(resourceChange?.change);
-    const actions = Array.isArray(change?.actions) ? change.actions : [];
-    if (change?.importing !== undefined && change.importing !== null) counts.imports += 1;
+    if (resourceChange?.["mode"] === "data") continue;
+    const change = asObject(resourceChange?.["change"]);
+    const actions = Array.isArray(change?.["actions"]) ? change["actions"] : [];
+    if (change?.["importing"] !== undefined && change["importing"] !== null) counts.imports += 1;
     if (actions.includes("create")) counts.additions += 1;
     if (actions.includes("update")) counts.changes += 1;
     if (actions.includes("delete")) counts.destructions += 1;
@@ -71,8 +71,8 @@ export function sanitizePlanJson(planJson: PlanJson): PlanJson {
       const base = key.slice(0, -"_sensitive".length);
       if (base in object) object[base] = redact(object[base], mask);
     }
-    if ("sensitive_values" in object && "values" in object) object.values = redact(object.values, object.sensitive_values);
-    if (object.sensitive === true && "value" in object) object.value = null;
+    if ("sensitive_values" in object && "values" in object) object["values"] = redact(object["values"], object["sensitive_values"]);
+    if (object["sensitive"] === true && "value" in object) object["value"] = null;
     return object;
   };
   return visit(planJson) as PlanJson;

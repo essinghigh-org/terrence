@@ -37,9 +37,9 @@ function requestUrl(input: string | URL | Request): string {
 
 test("sends a temporary administrator to the password page", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (): Promise<Response> =>
+  globalThis.fetch = (mock(async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> =>
     json({ data: { attributes: { token: "temporary-token", "must-change-password": true } } }),
-  ) as typeof fetch;
+  )) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/login"]}>
@@ -86,7 +86,7 @@ test("uses the account API to clear a forced password change", async () => {
     if (url === "/api/v2/users/user-1/authentication-tokens") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter>
@@ -108,7 +108,7 @@ test("uses the account API to clear a forced password change", async () => {
   await waitFor((): void => {
     expect(view.queryByText("Change the temporary administrator password before continuing.")).toBeNull();
   });
-  const passwordCall = fetchMock.mock.calls.find(([url]: [string | URL | Request]): boolean =>
+  const passwordCall = fetchMock.mock.calls.find(([url]): boolean =>
     url === "/api/v2/account/password");
   expect(passwordCall).toBeDefined();
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.

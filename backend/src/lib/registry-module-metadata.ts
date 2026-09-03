@@ -86,7 +86,7 @@ async function readLimited(
 }
 
 async function inspectorBinary(): Promise<string> {
-  const configured = process.env.TERRAFORM_CONFIG_INSPECT_PATH;
+  const configured = process.env["TERRAFORM_CONFIG_INSPECT_PATH"];
   if (configured !== undefined && configured !== "" && await Bun.file(configured).exists()) return configured;
   const bundled = join(import.meta.dir, "../../bin/terraform-config-inspect");
   if (await Bun.file(bundled).exists()) return bundled;
@@ -154,47 +154,47 @@ async function inspectSection(directory: string, path: string): Promise<Readonly
     scanTerraformModuleVariables(directory),
     readReadme(directory).catch((): string => ""),
   ]);
-  const variableMap = record(value.variables);
+  const variableMap = record(value["variables"]);
   const inputs = variables.map((variable) => {
     const inspected = record(variableMap[variable.name]);
     return {
       name: variable.name,
-      type: renderedType(inspected.type ?? variable.type),
-      description: stringOrNull(inspected.description) ?? variable.description,
+      type: renderedType(inspected["type"] ?? variable.type),
+      description: stringOrNull(inspected["description"]) ?? variable.description,
       ...(variable.hasDefault ? { defaultValue: variable.defaultValue } : {}),
-      required: inspected.required === true || !variable.hasDefault,
-      sensitive: inspected.sensitive === true || variable.sensitive,
+      required: inspected["required"] === true || !variable.hasDefault,
+      sensitive: inspected["sensitive"] === true || variable.sensitive,
       nullable: variable.nullable,
     };
   });
-  const outputs = Object.entries(record(value.outputs)).map(([name, raw]) => {
+  const outputs = Object.entries(record(value["outputs"])).map(([name, raw]) => {
     const output = record(raw);
-    return { name, description: stringOrNull(output.description), sensitive: output.sensitive === true };
+    return { name, description: stringOrNull(output["description"]), sensitive: output["sensitive"] === true };
   });
-  const providers = Object.entries(record(value.required_providers)).map(([name, raw]) => {
+  const providers = Object.entries(record(value["required_providers"])).map(([name, raw]) => {
     const provider = record(raw);
     return {
       name,
-      source: stringOrNull(provider.source),
-      versionConstraint: constraint(provider.version_constraints),
+      source: stringOrNull(provider["source"]),
+      versionConstraint: constraint(provider["version_constraints"]),
     };
   });
-  const modules = Object.entries(record(value.module_calls)).map(([name, raw]) => {
+  const modules = Object.entries(record(value["module_calls"])).map(([name, raw]) => {
     const module = record(raw);
     return {
       name,
-      source: stringOrNull(module.source),
-      versionConstraint: constraint(module.version),
+      source: stringOrNull(module["source"]),
+      versionConstraint: constraint(module["version"]),
     };
   });
   const resources = ([
-    ["managed", value.managed_resources],
-    ["data", value.data_resources],
+    ["managed", value["managed_resources"]],
+    ["data", value["data_resources"]],
   ] as const).flatMap(([mode, raw]) => Object.entries(record(raw)).map(([address, item]) => {
     const resource = record(item);
     return {
-      name: stringOrNull(resource.name) ?? address,
-      type: stringOrNull(resource.type) ?? address.split(".")[0] ?? address,
+      name: stringOrNull(resource["name"]) ?? address,
+      type: stringOrNull(resource["type"]) ?? address.split(".")[0] ?? address,
       mode,
     };
   }));

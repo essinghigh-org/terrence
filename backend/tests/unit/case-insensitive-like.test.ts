@@ -9,7 +9,7 @@ test("uses SQLite LIKE for case-insensitive search predicates", async () => {
     process.stdout.write(JSON.stringify(query));
   `;
   const childEnv: Record<string, string> = { ...Bun.env, TERRENCE_DISABLE_WORKER: "1" };
-  delete childEnv.DATABASE_URL;
+  delete childEnv["DATABASE_URL"];
   const child = Bun.spawn([Bun.which("bun")!, "-e", script], {
     cwd: new URL("../..", import.meta.url).pathname,
     env: childEnv,

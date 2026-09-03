@@ -51,10 +51,10 @@ describe("Notification rich destination adapters (kanban 7.11)", () => {
     expect(slack.text).toBe("Run Completed");
     // A header block plus an actions block with the run's link button.
     expect(slack.blocks[0]).toMatchObject({ type: "header" });
-    const button = slack.blocks.find((block) => block.type === "actions") as
+    const button = slack.blocks.find((block) => block["type"] === "actions") as
       | { elements?: Record<string, unknown>[] }
       | undefined;
-    expect(button?.elements?.[0]).toMatchObject({ type: "button", url: runPayload.run_url as string });
+    expect(button?.elements?.[0]).toMatchObject({ type: "button", url: runPayload["run_url"] as string });
     // Structured fields include workspace + org + actor.
     const body = render.body;
     expect(body).toContain("*Workspace:*");
@@ -74,7 +74,7 @@ describe("Notification rich destination adapters (kanban 7.11)", () => {
 
   it("keeps destination rendering alive for non-JSON payload values", () => {
     const cyclic: Record<string, unknown> = {};
-    cyclic.self = cyclic;
+    cyclic["self"] = cyclic;
     const payload = {
       ...runPayload,
       run_message: { nested: BigInt(1) },
@@ -100,7 +100,7 @@ describe("Notification rich destination adapters (kanban 7.11)", () => {
     expect(card.title).toBe("Run Completed");
     expect(card.sections?.[0]?.facts).toContainEqual({ name: "Workspace", value: "prod" });
     expect(card.potentialAction?.[0]).toMatchObject({ name: "Open run" });
-    expect(card.potentialAction?.[0]?.targets?.[0]?.uri).toBe(runPayload.run_url as string);
+    expect(card.potentialAction?.[0]?.targets?.[0]?.uri).toBe(runPayload["run_url"] as string);
   });
 
   it("assessment notifications surface drift/check context in both adapters", () => {
@@ -133,13 +133,13 @@ describe("Notification rich destination adapters (kanban 7.11)", () => {
 });
 
 describe("Notification destination ownership verification (kanban 7.7)", () => {
-  const prevAllow = process.env.TERRENCE_ALLOW_PRIVATE_URLS;
+  const prevAllow = process.env["TERRENCE_ALLOW_PRIVATE_URLS"];
   beforeAll(() => {
-    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
+    process.env["TERRENCE_ALLOW_PRIVATE_URLS"] = "true";
   });
   afterAll(() => {
-    if (prevAllow === undefined) delete process.env.TERRENCE_ALLOW_PRIVATE_URLS;
-    else process.env.TERRENCE_ALLOW_PRIVATE_URLS = prevAllow;
+    if (prevAllow === undefined) delete process.env["TERRENCE_ALLOW_PRIVATE_URLS"];
+    else process.env["TERRENCE_ALLOW_PRIVATE_URLS"] = prevAllow;
   });
 
   it("does NOT verify when the challenge is echoed only in the response body (header is the proof)", async () => {

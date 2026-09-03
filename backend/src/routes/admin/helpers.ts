@@ -42,9 +42,9 @@ export async function operationsSettingsResource(): Promise<Record<string, unkno
   ]);
   const approvalSafe: Record<string, unknown> = {
     ...approval,
-    "secret-set": typeof approval.secret === "string" && approval.secret !== "",
+    "secret-set": typeof approval["secret"] === "string" && approval["secret"] !== "",
   };
-  delete approvalSafe.secret;
+  delete approvalSafe["secret"];
   const explainerSafe: Record<string, unknown> = {
     ...explainer,
     "base-url": normalizePlanExplainerBaseUrl(explainer["base-url"])
@@ -309,7 +309,7 @@ export function samlInput(
   const attrGroups = requiredString("attr-groups", current.attrGroups);
   const attrSiteAdmin = requiredString("attr-site-admin", current.attrSiteAdmin);
   const siteAdminRole = requiredString("site-admin-role", current.siteAdminRole);
-  const enabled = typeof attributes.enabled === "boolean" ? attributes.enabled : current.enabled;
+  const enabled = typeof attributes["enabled"] === "boolean" ? attributes["enabled"] : current.enabled;
   if (idpCert !== null && idpCert !== "" && (
     !idpCert.includes("-----BEGIN CERTIFICATE-----")
     || !idpCert.includes("-----END CERTIFICATE-----")
@@ -326,7 +326,7 @@ export function samlInput(
     values: {
       id: SAML_SETTINGS_ID,
       enabled,
-      debug: typeof attributes.debug === "boolean" ? attributes.debug : current.debug,
+      debug: typeof attributes["debug"] === "boolean" ? attributes["debug"] : current.debug,
       oldIdpCert: idpCert !== null && idpCert !== current.idpCert && current.idpCert !== null
         ? current.idpCert
         : current.oldIdpCert,
@@ -371,11 +371,11 @@ export function adminUserResource(u: UserItem): Record<string, unknown> {
     attributes: {
       username: u.username,
       email: u.email,
-      "email-verified": (u as Record<string, unknown>).emailVerifiedAt !== null && (u as Record<string, unknown>).emailVerifiedAt !== undefined,
+      "email-verified": (u as Record<string, unknown>)["emailVerifiedAt"] !== null && (u as Record<string, unknown>)["emailVerifiedAt"] !== undefined,
       "is-site-admin": u.isSiteAdmin === true,
       "is-admin": u.isSiteAdmin === true,
-      "is-site-auditor": (u as Record<string, unknown>).isSiteAuditor === true,
-      "is-suspended": (u as Record<string, unknown>).isSuspended === true,
+      "is-site-auditor": (u as Record<string, unknown>)["isSiteAuditor"] === true,
+      "is-suspended": (u as Record<string, unknown>)["isSuspended"] === true,
       "avatar-url": gravatarUrl(u.email),
     },
   };

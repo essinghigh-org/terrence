@@ -26,7 +26,7 @@ export type MaintenanceState = Readonly<{
 
 const INACTIVE: MaintenanceState = { active: false, reason: null, enteredAt: null, source: null };
 
-const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
+const storageDir = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"));
 
 export function maintenanceFilePath(storageDirOverride?: string): string {
   return join(storageDirOverride ?? storageDir, "maintenance.json");
@@ -35,12 +35,12 @@ export function maintenanceFilePath(storageDirOverride?: string): string {
 function parseState(raw: unknown): MaintenanceState {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return INACTIVE;
   const record = raw as Record<string, unknown>;
-  if (record.active !== true) return INACTIVE;
+  if (record["active"] !== true) return INACTIVE;
   return {
     active: true,
-    reason: typeof record.reason === "string" ? record.reason : null,
-    enteredAt: typeof record.enteredAt === "string" ? record.enteredAt : null,
-    source: record.source === "migration-wizard" ? "migration-wizard" : null,
+    reason: typeof record["reason"] === "string" ? record["reason"] : null,
+    enteredAt: typeof record["enteredAt"] === "string" ? record["enteredAt"] : null,
+    source: record["source"] === "migration-wizard" ? "migration-wizard" : null,
   };
 }
 

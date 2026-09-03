@@ -11,12 +11,12 @@ import { bootstrapInitialAdmin } from "../../src/lib/bootstrap";
 // concurrent-signup race where two requests both counted zero users and both
 // inserted a site admin on PostgreSQL.
 describe("initial site-admin election", () => {
-  const previousAdminPassword = process.env.ADMIN_PASSWORD;
-  const previousSignup = process.env.TERRENCE_ENABLE_LOCAL_SIGNUP;
+  const previousAdminPassword = process.env["ADMIN_PASSWORD"];
+  const previousSignup = process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"];
   let savedUsers: (typeof users.$inferSelect)[] = [];
 
   beforeAll(async () => {
-    process.env.TERRENCE_ENABLE_LOCAL_SIGNUP = "true";
+    process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"] = "true";
     savedUsers = await db.query.users.findMany();
     if (savedUsers.length > 0) {
       await db.delete(users);
@@ -24,10 +24,10 @@ describe("initial site-admin election", () => {
   });
 
   afterAll(async () => {
-    if (previousAdminPassword === undefined) delete process.env.ADMIN_PASSWORD;
-    else process.env.ADMIN_PASSWORD = previousAdminPassword;
-    if (previousSignup === undefined) delete process.env.TERRENCE_ENABLE_LOCAL_SIGNUP;
-    else process.env.TERRENCE_ENABLE_LOCAL_SIGNUP = previousSignup;
+    if (previousAdminPassword === undefined) delete process.env["ADMIN_PASSWORD"];
+    else process.env["ADMIN_PASSWORD"] = previousAdminPassword;
+    if (previousSignup === undefined) delete process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"];
+    else process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"] = previousSignup;
 
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, "default") });
     if (org !== undefined) {
@@ -40,7 +40,7 @@ describe("initial site-admin election", () => {
   });
 
   test("bootstrap creates the initial site admin on an empty instance", async () => {
-    process.env.ADMIN_PASSWORD = "bootstrap-admin-1";
+    process.env["ADMIN_PASSWORD"] = "bootstrap-admin-1";
     let adminId = "";
     try {
       const result = await bootstrapInitialAdmin();
@@ -83,7 +83,7 @@ describe("initial site-admin election", () => {
       }),
     }));
     expect(signup.status).toBe(201);
-    process.env.ADMIN_PASSWORD = "bootstrap-admin-2";
+    process.env["ADMIN_PASSWORD"] = "bootstrap-admin-2";
     let adminId = "";
     try {
       const result = await bootstrapInitialAdmin();

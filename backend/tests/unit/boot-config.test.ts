@@ -32,13 +32,13 @@ const writeFile = (name: string, content: string): void => {
  * afterwards (same pattern as tests/unit/secrets.test.ts).
  */
 async function withStorageDir<T>(fn: () => Promise<T>): Promise<T> {
-  const previous = process.env.STORAGE_DIR;
-  process.env.STORAGE_DIR = testDir;
+  const previous = process.env["STORAGE_DIR"];
+  process.env["STORAGE_DIR"] = testDir;
   try {
     return await fn();
   } finally {
-    if (previous === undefined) delete process.env.STORAGE_DIR;
-    else process.env.STORAGE_DIR = previous;
+    if (previous === undefined) delete process.env["STORAGE_DIR"];
+    else process.env["STORAGE_DIR"] = previous;
   }
 }
 
@@ -188,7 +188,7 @@ describe("parseBootConfig", () => {
 
   it("preserves unknown top-level keys", () => {
     const config = parseBootConfig({ telemetry: { enabled: false } }, "test");
-    expect(config.telemetry).toEqual({ enabled: false });
+    expect(config["telemetry"]).toEqual({ enabled: false });
   });
 });
 

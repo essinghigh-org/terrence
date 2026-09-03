@@ -14,18 +14,18 @@ import {
   resolveProviderIconUrl,
 } from "../../src/lib/provider-icons";
 
-const originalStorageDir = process.env.STORAGE_DIR;
+const originalStorageDir = process.env["STORAGE_DIR"];
 let fixtureDirectory: string | null = null;
 
 function setFixtureStorage(directory: string): void {
-  process.env.STORAGE_DIR = directory;
+  process.env["STORAGE_DIR"] = directory;
 }
 
 async function removeFixtureStorage(): Promise<void> {
   if (fixtureDirectory !== null) await rm(fixtureDirectory, { recursive: true, force: true });
   fixtureDirectory = null;
-  if (originalStorageDir === undefined) delete process.env.STORAGE_DIR;
-  else process.env.STORAGE_DIR = originalStorageDir;
+  if (originalStorageDir === undefined) delete process.env["STORAGE_DIR"];
+  else process.env["STORAGE_DIR"] = originalStorageDir;
 }
 
 afterEach(async (): Promise<void> => {

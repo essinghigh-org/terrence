@@ -25,7 +25,7 @@ type MockChild = Readonly<{ id: string; name: string }>;
 type PostedBody = { data: { type: string; attributes: JsonObject } } | null;
 
 /** Token resource passed to onCreated. */
-type CreatedToken = { id: string; attributes: JsonObject };
+type CreatedToken = { id: string; type: string; attributes: JsonObject };
 
 function mockApi(options: { orgs?: MockOrg[]; projects?: MockChild[]; workspaces?: MockChild[] } = {}) {
   const orgs: MockOrg[] = options.orgs ?? [{ id: "acme-org", externalId: "org-111" }];
@@ -112,7 +112,7 @@ test("lists organizations from JSON:API attributes and scopes the token to the r
     projects: [{ id: "prj-1", name: "payments" }],
     workspaces: [{ id: "ws-1", name: "prod-us" }],
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   let created: CreatedToken | null = null;
   const view = render(
@@ -150,7 +150,7 @@ test("lists organizations from JSON:API attributes and scopes the token to the r
     expect(postedBody()).not.toBeNull();
   });
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-  const attributes = (postedBody() as { data: { attributes: JsonObject } }).data.attributes;
+  const attributes = postedBody()!.data.attributes;
   expect(attributes["scopes"]).toEqual({
     version: 1,
     orgs: ["org-111"],
@@ -163,12 +163,12 @@ test("lists organizations from JSON:API attributes and scopes the token to the r
       "runs:apply": true,
     },
   });
-  expect(created).toEqual({ id: "tok-1", type: "tokens", attributes: { token: "secret", scopes: null } });
+  expect(created!).toEqual({ id: "tok-1", type: "tokens", attributes: { token: "secret", scopes: null } });
 });
 
 test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
   const { postedBody, fetchMock } = mockApi();
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const dialog = await openFineGrainedDialog();
   await waitFor((): void => {
@@ -215,7 +215,7 @@ test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
     expect(postedBody()).not.toBeNull();
   });
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-  const attributes = (postedBody() as { data: { attributes: JsonObject } }).data.attributes;
+  const attributes = postedBody()!.data.attributes;
   expect(attributes["scopes"]).toEqual({
     version: 1,
     orgs: ["org-111"],
@@ -234,7 +234,7 @@ test("builds a (foo=bar AND baz=bing) OR xyz=abc tag rule", async () => {
 
 test("root combinator changes leave nested groups untouched, and empty rows are pruned", async () => {
   const { postedBody, fetchMock } = mockApi();
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const dialog = await openFineGrainedDialog();
   await waitFor((): void => {
@@ -273,7 +273,7 @@ test("root combinator changes leave nested groups untouched, and empty rows are 
     expect(postedBody()).not.toBeNull();
   });
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-  const attributes = (postedBody() as { data: { attributes: JsonObject } }).data.attributes;
+  const attributes = postedBody()!.data.attributes;
   expect(attributes["scopes"]).toEqual({
     version: 1,
     orgs: ["org-111"],
@@ -294,7 +294,7 @@ test("supports permission presets (Read-only, All, Clear) and search filtering",
     projects: [{ id: "prj-1", name: "payments" }, { id: "prj-2", name: "auth" }],
     workspaces: [{ id: "ws-1", name: "prod-us" }, { id: "ws-2", name: "staging" }],
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const dialog = await openFineGrainedDialog();
   await waitFor((): void => {
@@ -331,7 +331,7 @@ test("supports permission presets (Read-only, All, Clear) and search filtering",
     expect(postedBody()).not.toBeNull();
   });
 
-  const attributes = (postedBody() as { data: { attributes: JsonObject } }).data.attributes;
+  const attributes = postedBody()!.data.attributes;
   const scopes = attributes["scopes"] as { projects: string[]; permissions: Record<string, boolean> };
   expect(scopes.projects).toEqual(["prj-1", "prj-2"]);
   expect(scopes.permissions["workspaces:read"]).toBe(true);

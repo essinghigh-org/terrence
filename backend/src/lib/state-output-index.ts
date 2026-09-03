@@ -12,7 +12,7 @@ export function stateOutputIndexRows(
   const parsed = parseStatePayload(statePayload ?? jsonState);
   const isBareOutputs = parsed !== null
     && !["version", "terraform_version", "serial", "lineage", "resources", "check_results", "outputs"].some((key): boolean => key in parsed);
-  const outputs = parsed?.outputs ?? (statePayload === null && isBareOutputs ? parsed : undefined);
+  const outputs = parsed?.["outputs"] ?? (statePayload === null && isBareOutputs ? parsed : undefined);
   if (outputs === null || outputs === undefined || typeof outputs !== "object" || Array.isArray(outputs)) return [];
   return Object.keys(outputs).map((name): typeof stateOutputIndex.$inferInsert => ({
     outputId: `wsout-${createHash("sha256").update(`${stateVersionId}\0${name}`).digest("hex")}`,

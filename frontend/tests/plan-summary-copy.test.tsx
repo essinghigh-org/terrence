@@ -65,7 +65,7 @@ test("copies the plan summary as markdown from the toolbar", async () => {
   const writeText = mock(async (): Promise<void> => undefined);
   Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (): Promise<Response> => json(planFixture())) as typeof fetch;
+  globalThis.fetch = (mock(async (): Promise<Response> => json(planFixture()))) as unknown as typeof fetch;
 
   const view = render(<PlanOutput runId="run-summary" status="planned" />);
   await waitFor((): void => {

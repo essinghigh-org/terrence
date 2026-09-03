@@ -32,11 +32,11 @@ import type { Subprocess } from "bun";
  */
 
 const SANDBOX_DISABLED = ["false", "0", "none", "no", "off"].includes(
-  (process.env.TERRENCE_RUN_SANDBOX ?? "true").toLowerCase(),
+  (process.env["TERRENCE_RUN_SANDBOX"] ?? "true").toLowerCase(),
 );
 
 export function runNetPolicy(): "allow" | "deny" {
-  const raw = (process.env.TERRENCE_RUN_NET_POLICY ?? "allow").toLowerCase().trim();
+  const raw = (process.env["TERRENCE_RUN_NET_POLICY"] ?? "allow").toLowerCase().trim();
   return raw === "deny" ? "deny" : "allow";
 }
 export function runNetDenyEnabled(): boolean {
@@ -56,7 +56,7 @@ export function runSandboxRequired(): boolean {
 /** Candidate locations for the landlock-runner helper binary. */
 function runnerCandidates(): string[] {
   const candidates: string[] = [];
-  const envPath = process.env.TERRENCE_LANDLOCK_RUNNER;
+  const envPath = process.env["TERRENCE_LANDLOCK_RUNNER"];
   if (typeof envPath === "string" && envPath !== "") candidates.push(envPath);
   candidates.push(join(import.meta.dir, "../../bin/landlock-runner"));
   candidates.push("/usr/local/bin/landlock-runner");
@@ -77,7 +77,7 @@ function findExecutable(name: string): string | null {
   if (name === "") return null;
   if (isAbsolute(name)) return (existsSync(name) && statIsExecutable(name)) ? name : null;
   if (name.includes("/")) return null;
-  const pathDirs = (process.env.PATH ?? "").split(":").filter(Boolean);
+  const pathDirs = (process.env["PATH"] ?? "").split(":").filter(Boolean);
   for (const dir of pathDirs) {
     if (dir === "") continue;
     const candidate = join(resolve(dir), name);
@@ -261,7 +261,7 @@ export class RunSandbox {
         PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         HOME: workDir,
         TMPDIR: join(workDir, "tmp"),
-        USER: process.env.USER ?? "nobody",
+        USER: process.env["USER"] ?? "nobody",
       };
 
       const runnerArgs = [
@@ -286,7 +286,7 @@ export class RunSandbox {
         detached: true,
       };
       if (typeof opts.cgroup === "string" && opts.cgroup !== "") {
-        spawnOpts.cgroup = opts.cgroup;
+        spawnOpts["cgroup"] = opts.cgroup;
       }
 
       return Bun.spawn(runnerArgs, spawnOpts as never);
@@ -355,10 +355,10 @@ function storageProtectionPrefix(allowStorage: boolean): string | null {
  * only the paths variable.
  */
 function extraRwArgs(): string[] {
-  if (!envEnabled(process.env.TERRENCE_SANDBOX_EXTRA_RW_ALLOWED)) return [];
-  const raw = process.env.TERRENCE_SANDBOX_EXTRA_RW_PATHS;
+  if (!envEnabled(process.env["TERRENCE_SANDBOX_EXTRA_RW_ALLOWED"])) return [];
+  const raw = process.env["TERRENCE_SANDBOX_EXTRA_RW_PATHS"];
   if (raw === undefined || raw === "") return [];
-  const allowStorage = envEnabled(process.env.TERRENCE_SANDBOX_EXTRA_RW_ALLOW_STORAGE);
+  const allowStorage = envEnabled(process.env["TERRENCE_SANDBOX_EXTRA_RW_ALLOW_STORAGE"]);
   const storagePrefix = storageProtectionPrefix(allowStorage);
   const out: string[] = [];
   for (const p of raw.split(":")) {

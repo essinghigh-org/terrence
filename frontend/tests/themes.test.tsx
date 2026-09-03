@@ -42,7 +42,7 @@ afterEach((): void => {
 test("lists extensible light/dark themes and persists a selection", async () => {
   let updatedTheme = "";
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/account/details") return account();
     if (url === "/api/v2/users/user-1/authentication-tokens") return json({ data: [] });
@@ -55,7 +55,7 @@ test("lists extensible light/dark themes and persists a selection", async () => 
       return account(updatedTheme);
     }
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(<MemoryRouter><AccountSettings /></MemoryRouter>);
 // SAFETY: the component renders this element type for the queried role/label.
@@ -71,7 +71,7 @@ test("lists extensible light/dark themes and persists a selection", async () => 
   });
   expect(updatedTheme).toBe("dracula");
   expect(localStorage.getItem("terrence-theme")).toBe("dracula");
-  expect(document.documentElement.dataset.theme).toBe("dracula");
+  expect(document.documentElement.dataset["theme"]).toBe("dracula");
   expect(document.documentElement.classList.contains("dark")).toBeTrue();
   expect(document.documentElement.style.getPropertyValue("--topbar")).toBe("232 18% 15%");
   expect(document.documentElement.style.getPropertyValue("--topbar-foreground")).toBe("60 30% 96%");
@@ -86,7 +86,7 @@ test("changes the display timezone locally without an account update", async () 
     if (url === "/api/v2/account/mfa") return json({ data: { attributes: { enabled: false } } });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(<MemoryRouter><AccountSettings /></MemoryRouter>);
 // SAFETY: the component renders this element type for the queried role/label.
@@ -106,7 +106,7 @@ test("ignores an account theme read that started before a newer theme selection"
   applyTheme("dracula");
 
   expect(applyThemeIfUnchanged("original-light", accountReadRevision)).toBeFalse();
-  expect(document.documentElement.dataset.theme).toBe("dracula");
+  expect(document.documentElement.dataset["theme"]).toBe("dracula");
 });
 
 test("applies the locally stored theme without an account request", (): void => {
@@ -114,7 +114,7 @@ test("applies the locally stored theme without an account request", (): void => 
 
   applyTheme();
 
-  expect(document.documentElement.dataset.theme).toBe("nord-dark");
+  expect(document.documentElement.dataset["theme"]).toBe("nord-dark");
   expect(document.documentElement.classList.contains("dark")).toBeTrue();
 });
 
@@ -134,7 +134,7 @@ test("expanded catalog ships balanced light and dark families", (): void => {
 test("selects and applies a newly added dark theme end to end", async () => {
   let updatedTheme = "";
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/account/details") return account();
     if (url === "/api/v2/users/user-1/authentication-tokens") return json({ data: [] });
@@ -147,7 +147,7 @@ test("selects and applies a newly added dark theme end to end", async () => {
       return account(updatedTheme);
     }
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(<MemoryRouter><AccountSettings /></MemoryRouter>);
 // SAFETY: the component renders this element type for the queried role/label.
@@ -162,7 +162,7 @@ test("selects and applies a newly added dark theme end to end", async () => {
   });
   expect(updatedTheme).toBe("kanagawa-wave");
   expect(localStorage.getItem("terrence-theme")).toBe("kanagawa-wave");
-  expect(document.documentElement.dataset.theme).toBe("kanagawa-wave");
+  expect(document.documentElement.dataset["theme"]).toBe("kanagawa-wave");
   expect(document.documentElement.classList.contains("dark")).toBeTrue();
   expect(document.documentElement.style.getPropertyValue("--primary")).toBe("167 46% 62%");
 });

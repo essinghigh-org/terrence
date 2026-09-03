@@ -35,7 +35,7 @@ export function boolEnv(name: string, fallback: boolean): boolean {
 }
 
 export function loadPasswordPolicy(): PasswordPolicyRules {
-  const rawMin = process.env.TERRENCE_PASSWORD_MIN_LENGTH;
+  const rawMin = process.env["TERRENCE_PASSWORD_MIN_LENGTH"];
   const parsedMin = rawMin === undefined || rawMin === "" ? NaN : Number(rawMin);
   const minLength = Number.isFinite(parsedMin) && parsedMin >= 1 ? Math.floor(parsedMin) : 10;
   return {

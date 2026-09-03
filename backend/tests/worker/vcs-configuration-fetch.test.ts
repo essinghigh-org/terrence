@@ -122,7 +122,7 @@ test("a run claimed while the VCS tarball is still pending waits for the archive
 
   // The webhook download "settles" mid-flight: real tarball lands on disk
   // and the CV transitions to uploaded.
-  const archivePath = join(process.env.TEST_DIR ?? "/tmp", `vcs-config-${Date.now()}.tar.gz`);
+  const archivePath = join(process.env["TEST_DIR"] ?? "/tmp", `vcs-config-${Date.now()}.tar.gz`);
   await makeTarball(archivePath);
   await db.update(configurationVersions)
     .set({ status: "uploaded", archivePath })
@@ -143,7 +143,7 @@ test("a settled configuration version without a readable archive fails loudly", 
     workspaceId,
     status: "uploaded",
     source: "github",
-    archivePath: join(process.env.TEST_DIR ?? "/tmp", "does-not-exist.tar.gz"),
+    archivePath: join(process.env["TEST_DIR"] ?? "/tmp", "does-not-exist.tar.gz"),
     error: null,
   });
   await createRun(runId, workspaceId, cvId);

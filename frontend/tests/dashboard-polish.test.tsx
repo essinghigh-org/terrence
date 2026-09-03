@@ -29,7 +29,7 @@ test("creates an organization and opens the working destination", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app"]}>
@@ -64,13 +64,13 @@ test("creates an organization and opens the working destination", async () => {
 
 test("resumes the last selected organization on a fresh page load", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations?page[size]=100") {
       return json({ data: [{ id: "org-acme", attributes: { name: "acme" } }] });
     }
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
   window.localStorage.setItem("terrence-last-org", "acme");
 
   const view = render(
@@ -89,13 +89,13 @@ test("resumes the last selected organization on a fresh page load", async () => 
 
 test("does not resume an organization that no longer exists", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations?page[size]=100") {
       return json({ data: [{ id: "org-acme", attributes: { name: "acme" } }] });
     }
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
   window.localStorage.setItem("terrence-last-org", "deleted-org");
 
   const view = render(

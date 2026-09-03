@@ -1,48 +1,21 @@
 {
+  // Extends the repo-root tsconfig (issue #428); frontend overrides below are
+  // DOM/ES2020 targeting for the browser bundle. Everything strict inherits.
+  "extends": "../tsconfig.json",
   "compilerOptions": {
     "composite": true,
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
     "target": "ES2020",
     "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "lib": ["ES2020", "DOM", "DOM.Iterable", "ES2022.Object"],
     "module": "ESNext",
-    "skipLibCheck": true,
+    "resolveJsonModule": true,
     "paths": {
       "@/*": ["./src/*"]
     },
-
-    // ── Bundler mode ─────────────────────────────────────────────────────
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "moduleDetection": "force",
-    "noEmit": true,
-    "jsx": "react-jsx",
-
-    // ── Full strict mode — every single strict flag ON ───────────────────
-    "strict": true,
-    "strictNullChecks": true,
-    "strictFunctionTypes": true,
-    "strictBindCallApply": true,
-    "strictPropertyInitialization": true,
-    "noImplicitAny": true,
-    "noImplicitThis": true,
-    "alwaysStrict": true,
-    "useUnknownInCatchVariables": true,
-
-    // ── Additional strictness ────────────────────────────────────────────
-    "exactOptionalPropertyTypes": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitOverride": true,
-    "noPropertyAccessFromIndexSignature": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true,
-    "strictBuiltinIteratorReturn": true,
-    "forceConsistentCasingInFileNames": true,
-    "verbatimModuleSyntax": true
+    // Load-bearing (issue #429): third-party .d.ts files do not compile with
+    // it off; first-party code is clean. See root tsconfig.json.
+    "skipLibCheck": true
   },
   "include": ["src"]
 }

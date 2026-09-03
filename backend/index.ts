@@ -23,7 +23,10 @@ const readEnv = (name: string): string | undefined => {
 const systemHost = readEnv("SYSTEM_API_HOST") ?? "127.0.0.1";
 const systemTlsCertPath = readEnv("SYSTEM_API_TLS_CERT");
 const systemTlsKeyPath = readEnv("SYSTEM_API_TLS_KEY");
-const systemIsRemote = !["127.0.0.1", "::1", "localhost"].includes(systemHost);
+// "0.0.0.0"/"::" bind every local interface including loopback; inside a
+// container that is how Docker-forwarded loopback traffic arrives (issue
+// #283), so they are local bindings, not remote exposure.
+const systemIsRemote = !["127.0.0.1", "::1", "localhost", "0.0.0.0", "::"].includes(systemHost);
 if ((systemTlsCertPath === undefined) !== (systemTlsKeyPath === undefined)) {
   throw new Error("SYSTEM_API_TLS_CERT and SYSTEM_API_TLS_KEY must be configured together.");
 }

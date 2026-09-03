@@ -502,7 +502,7 @@ export async function startStaticServer(customDistDir?: string): Promise<TestSer
 
       // Handle /api requests
       if (url.pathname.startsWith("/api/")) {
-        const backendUrl = process.env.TERRENCE_API_URL;
+        const backendUrl = process.env["TERRENCE_API_URL"];
         if (backendUrl) {
           const target = new URL(url.pathname + url.search, backendUrl);
           try {

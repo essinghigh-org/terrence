@@ -3,7 +3,7 @@ export type ExecutorBackend = "landlock" | "container" | "kubernetes" | "agent" 
 export const EXECUTOR_BACKENDS: ExecutorBackend[] = ["landlock","container","kubernetes","agent","microvm"] as const;
 
 export function executorBackendFromEnv(): ExecutorBackend {
-  const raw = (process.env.TERRENCE_EXECUTOR_BACKEND ?? "").trim().toLowerCase();
+  const raw = (process.env["TERRENCE_EXECUTOR_BACKEND"] ?? "").trim().toLowerCase();
   if ((EXECUTOR_BACKENDS as readonly string[]).includes(raw)) return raw as ExecutorBackend;
   return "landlock";
 }

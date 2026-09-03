@@ -138,7 +138,7 @@ test("rotates an expired browser session before sending the API request", async 
     calls.push({
       url,
       authorization: new Headers(init?.headers).get("Authorization"),
-      credentials: init?.credentials,
+      ...(init?.credentials === undefined ? {} : { credentials: init.credentials }),
     });
     if (url.endsWith("/users/refresh")) {
       return Response.json({
@@ -160,10 +160,10 @@ test("rotates an expired browser session before sending the API request", async 
   }) as typeof fetch;
 
   try {
-    expect(await fetchApi("/account/details")).toEqual({ data: { id: "user-1" } });
+    expect(await fetchApi<{ data: { id: string } }>("/account/details")).toEqual({ data: { id: "user-1" } });
     expect(calls).toEqual([
       { url: "/api/v2/users/refresh", authorization: null, credentials: "same-origin" },
-      { url: "/api/v2/account/details", authorization: "Bearer rotated-access", credentials: undefined },
+      { url: "/api/v2/account/details", authorization: "Bearer rotated-access" },
     ]);
     expect(getAuthToken()).toBe("rotated-access");
     expect(isRefreshableSession()).toBeTrue();
@@ -371,7 +371,7 @@ test("extractFieldErrors ignores malformed pointers and empty details", () => {
 test("fetchApi surfaces field-level 422 details on ApiError", async () => {
   const originalFetch = globalThis.fetch;
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (async (): Promise<Response> => new Response(
+  globalThis.fetch = ((async (): Promise<Response> => new Response(
     JSON.stringify({
       errors: [
         { status: "422", title: "Unprocessable Entity", detail: "Name is required", source: { pointer: "/data/attributes/name" } },
@@ -379,7 +379,7 @@ test("fetchApi surfaces field-level 422 details on ApiError", async () => {
       ],
     }),
     { status: 422, headers: { "Content-Type": "application/vnd.api+json" } },
-  )) as typeof fetch;
+  ))) as unknown as typeof fetch;
 
   try {
     setAuthToken("tk", Date.now() + 60_000);

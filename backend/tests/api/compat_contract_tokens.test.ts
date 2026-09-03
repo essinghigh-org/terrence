@@ -44,9 +44,9 @@ describe("remote-workflow authentication tokens contract", () => {
       "authentication-tokens",
     );
     tokenId = resource.id;
-    expect(resource.attributes.token).toBeTypeOf("string");
-    expect(resource.attributes.token).not.toBeNull();
-    expect(resource.attributes.description).toBe("contract test token");
+    expect(resource.attributes["token"]).toBeTypeOf("string");
+    expect(resource.attributes["token"]).not.toBeNull();
+    expect(resource.attributes["description"]).toBe("contract test token");
     expect(resource.attributes["created-at"]).toBeTypeOf("string");
     expect(resource.relationships?.["created-by"]).toMatchObject({
       data: { id: seed.userId, type: "users" },
@@ -66,7 +66,7 @@ describe("remote-workflow authentication tokens contract", () => {
       200,
       "authentication-tokens",
     );
-    expect(resource.attributes.token).toBeNull();
+    expect(resource.attributes["token"]).toBeNull();
     expect(resource.attributes["created-at"]).toBeTypeOf("string");
   });
 
@@ -87,8 +87,8 @@ describe("remote-workflow authentication tokens contract", () => {
       201,
       "authentication-tokens",
     );
-    expect(created.attributes.token).toBeTypeOf("string");
-    expect(created.attributes.token).not.toBeNull();
+    expect(created.attributes["token"]).toBeTypeOf("string");
+    expect(created.attributes["token"]).not.toBeNull();
     tokenId = created.id;
 
     const shown = await expectSuccessResponse(
@@ -96,7 +96,7 @@ describe("remote-workflow authentication tokens contract", () => {
       200,
       "authentication-tokens",
     );
-    expect(shown.attributes.token).toBeNull();
+    expect(shown.attributes["token"]).toBeNull();
     expect(shown.attributes["created-at"]).toBeTypeOf("string");
   });
 

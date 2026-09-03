@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { createSocket, type Socket } from "node:dgram";
 import { applyLoggingSettings, log } from "../../src/lib/log";
 
-const originalSyslogTarget = process.env.TERRENCE_SYSLOG_TARGET;
-const originalSyslogTargets = process.env.TERRENCE_SYSLOG_TARGETS;
+const originalSyslogTarget = process.env["TERRENCE_SYSLOG_TARGET"];
+const originalSyslogTargets = process.env["TERRENCE_SYSLOG_TARGETS"];
 
 type UdpCollector = Readonly<{
   socket: Socket;
@@ -28,10 +28,10 @@ async function openCollector(): Promise<UdpCollector> {
 
 afterEach((): void => {
   applyLoggingSettings({ enabled: false, "syslog-targets": [] });
-  if (originalSyslogTarget === undefined) delete process.env.TERRENCE_SYSLOG_TARGET;
-  else process.env.TERRENCE_SYSLOG_TARGET = originalSyslogTarget;
-  if (originalSyslogTargets === undefined) delete process.env.TERRENCE_SYSLOG_TARGETS;
-  else process.env.TERRENCE_SYSLOG_TARGETS = originalSyslogTargets;
+  if (originalSyslogTarget === undefined) delete process.env["TERRENCE_SYSLOG_TARGET"];
+  else process.env["TERRENCE_SYSLOG_TARGET"] = originalSyslogTarget;
+  if (originalSyslogTargets === undefined) delete process.env["TERRENCE_SYSLOG_TARGETS"];
+  else process.env["TERRENCE_SYSLOG_TARGETS"] = originalSyslogTargets;
 });
 
 describe("runtime logging configuration", () => {
@@ -61,7 +61,7 @@ describe("runtime logging configuration", () => {
       /* suppress test output */
     });
     try {
-      process.env.TERRENCE_SYSLOG_TARGET = `udp://127.0.0.1:${String(collector.port)}`;
+      process.env["TERRENCE_SYSLOG_TARGET"] = `udp://127.0.0.1:${String(collector.port)}`;
       applyLoggingSettings({ enabled: false, "syslog-targets": null, "syslog-level": "debug" });
       log.error("disabled remote message");
       await Bun.sleep(25);
@@ -96,7 +96,7 @@ describe("runtime logging configuration", () => {
       /* suppress test output */
     });
     try {
-      process.env.TERRENCE_SYSLOG_TARGET = `udp://127.0.0.1:${String(collector.port)}`;
+      process.env["TERRENCE_SYSLOG_TARGET"] = `udp://127.0.0.1:${String(collector.port)}`;
       applyLoggingSettings({
         enabled: true,
         "log-level": "debug",

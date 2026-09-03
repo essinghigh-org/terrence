@@ -66,7 +66,7 @@ afterEach((): void => {
 });
 
 test("attach dialog shows the empty state when the organization has no variable sets", async () => {
-  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     const path = new URL(url, "http://terrence.local").pathname;
     if (path === "/api/v2/workspaces/ws-1/vars") return json({ data: [] });
@@ -74,7 +74,7 @@ test("attach dialog shows the empty state when the organization has no variable 
     if (path === "/api/v2/organizations/essighigh/varsets") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(<WorkspaceVariables workspaceId="ws-1" orgName="essighigh" canUpdate={true} />);
   fireEvent.click(view.getByRole("button", { name: "Attach variable set" }));
@@ -86,7 +86,7 @@ test("attach dialog shows the empty state when the organization has no variable 
 });
 
 test("renders workspace variables and attached variable sets as separate sections", async () => {
-  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
     const path = new URL(url, "http://terrence.local").pathname;
     if (path === "/api/v2/workspaces/ws-1/vars") {
@@ -100,7 +100,7 @@ test("renders workspace variables and attached variable sets as separate section
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(<WorkspaceVariables workspaceId="ws-1" orgName="essighigh" canUpdate />);
   await waitFor((): void => { expect(view.getByText("LOCAL_KEY")).toBeTruthy(); });
@@ -135,7 +135,7 @@ test("ignores an attached variable-set response from the previous workspace", as
     if (path === "/api/v2/workspaces/ws-2/varsets") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(<WorkspaceVariables workspaceId="ws-1" orgName="essighigh" canUpdate />);
   await waitFor((): void => { expect(staleRequested).toBe(true); });
@@ -184,7 +184,7 @@ test("attaches and detaches variable sets from the workspace", async () => {
     }
     throw new Error(`Unexpected request: ${url} (${method})`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(<WorkspaceVariables workspaceId="ws-1" orgName="essighigh" canUpdate />);
   await waitFor((): void => { expect(view.getByText("github-provider")).toBeTruthy(); });

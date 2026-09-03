@@ -152,7 +152,7 @@ class WizardAbortError extends Error {
   }
 }
 
-const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../../storage"));
+const storageDir = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../../storage"));
 
 export function wizardFilePath(storageDirOverride?: string): string {
   return join(storageDirOverride ?? storageDir, "migration-wizard.json");
@@ -184,16 +184,16 @@ export function maskPostgresUrl(url: string): string {
 }
 
 function drainTimeoutMs(): number {
-  const configured = Number(process.env.MIGRATION_DRAIN_TIMEOUT_MS);
+  const configured = Number(process.env["MIGRATION_DRAIN_TIMEOUT_MS"]);
   return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_DRAIN_TIMEOUT_MS;
 }
 
 export function restartDisabled(): boolean {
-  return envEnabled(process.env.TERRENCE_DISABLE_RESTART);
+  return envEnabled(process.env["TERRENCE_DISABLE_RESTART"]);
 }
 
 export function environmentDatabaseUrlWarning(): string | null {
-  const envUrl = process.env.DATABASE_URL;
+  const envUrl = process.env["DATABASE_URL"];
   if (envUrl === undefined || envUrl === "") return null;
   return "DATABASE_URL is set in the environment (image ENV or compose) and overrides the boot configuration file at startup. The switch step will refuse to run until it is removed or set to an empty value.";
 }
@@ -201,32 +201,32 @@ export function environmentDatabaseUrlWarning(): string | null {
 function parseWizardState(raw: unknown): WizardState | null {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
   const record = raw as Record<string, unknown>;
-  if (typeof record.id !== "string" || typeof record.phase !== "string") return null;
-  const steps = Array.isArray(record.steps)
-    ? (record.steps as readonly unknown[]).filter((step): boolean => step !== null && typeof step === "object")
+  if (typeof record["id"] !== "string" || typeof record["phase"] !== "string") return null;
+  const steps = Array.isArray(record["steps"])
+    ? (record["steps"] as readonly unknown[]).filter((step): boolean => step !== null && typeof step === "object")
       .map((step): WizardStep => {
         const s = step as Record<string, unknown>;
         return {
-          key: s.key as WizardStepKey,
-          status: s.status as StepStatus,
-          startedAt: typeof s.startedAt === "string" ? s.startedAt : null,
-          finishedAt: typeof s.finishedAt === "string" ? s.finishedAt : null,
-          detail: typeof s.detail === "string" ? s.detail : null,
-          error: typeof s.error === "string" ? s.error : null,
+          key: s["key"] as WizardStepKey,
+          status: s["status"] as StepStatus,
+          startedAt: typeof s["startedAt"] === "string" ? s["startedAt"] : null,
+          finishedAt: typeof s["finishedAt"] === "string" ? s["finishedAt"] : null,
+          detail: typeof s["detail"] === "string" ? s["detail"] : null,
+          error: typeof s["error"] === "string" ? s["error"] : null,
         };
       })
     : [];
   return {
-    id: record.id,
-    phase: record.phase as WizardPhase,
-    createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date().toISOString(),
-    updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : new Date().toISOString(),
-    targetUrl: typeof record.targetUrl === "string" ? record.targetUrl : "",
-    targetMasked: typeof record.targetMasked === "string" ? record.targetMasked : "",
+    id: record["id"],
+    phase: record["phase"] as WizardPhase,
+    createdAt: typeof record["createdAt"] === "string" ? record["createdAt"] : new Date().toISOString(),
+    updatedAt: typeof record["updatedAt"] === "string" ? record["updatedAt"] : new Date().toISOString(),
+    targetUrl: typeof record["targetUrl"] === "string" ? record["targetUrl"] : "",
+    targetMasked: typeof record["targetMasked"] === "string" ? record["targetMasked"] : "",
     steps,
     verification: null,
     report: null,
-    error: typeof record.error === "string" ? record.error : null,
+    error: typeof record["error"] === "string" ? record["error"] : null,
     copyProgress: null,
   };
 }
@@ -885,7 +885,7 @@ function closeSourceSnapshot(client: Readonly<Database>): void {
 }
 
 async function checkpointWithRetries(): Promise<void> {
-  const configured = Number(process.env.MIGRATION_CHECKPOINT_RETRIES);
+  const configured = Number(process.env["MIGRATION_CHECKPOINT_RETRIES"]);
   // Only a positive finite value is honored; anything else (unset, NaN,
   // zero, negative) falls back to the default so the loop always runs at
   // least once.
@@ -902,7 +902,7 @@ async function checkpointWithRetries(): Promise<void> {
 }
 
 async function waitForDrain(ctx: Readonly<JobContext>): Promise<void> {
-  if (envEnabled(process.env.MIGRATION_SKIP_DRAIN)) {
+  if (envEnabled(process.env["MIGRATION_SKIP_DRAIN"])) {
     ctx.setState({
       ...ctx.state,
       steps: ctx.state.steps.map((step): WizardStep =>

@@ -152,7 +152,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     };
   })
   .get("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params.workspace_id ?? "";
+    const workspaceId = params["workspace_id"] ?? "";
     const ws = run !== null && run.workspaceId === workspaceId
     ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
     : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-read");
@@ -184,7 +184,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     };
   })
   .get("/api/v2/workspaces/:workspace_id/current-state-version", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params.workspace_id ?? "";
+    const workspaceId = params["workspace_id"] ?? "";
     const ws = run !== null && run.workspaceId === workspaceId
       ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
       : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-read");
@@ -210,7 +210,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return { data: stateVersionResource(sv, request, true, runData ?? null) };
   })
   .get("/api/v2/workspaces/:workspace_id/current-state-version-outputs", async ({ params, user, orgId, teamId, run, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params.workspace_id ?? "";
+    const workspaceId = params["workspace_id"] ?? "";
     const ws = run !== null && run.workspaceId === workspaceId
       ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
       : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-outputs");
@@ -231,17 +231,17 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return { data: stateOutputResources(sv) };
   })
   .patch("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params.workspace_id ?? "";
+    const workspaceId = params["workspace_id"] ?? "";
     const workspace = await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-write");
     if (workspace === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot roll back state" }] }; }
     if (!ownsWorkspaceLock(workspace, lockPrincipal(user?.id, orgId, teamId))) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before rollback" }] }; }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    const data = payload.data !== null && typeof payload.data === "object" ? payload.data as Record<string, unknown> : {};
-    const relationships = data.relationships !== null && typeof data.relationships === "object" ? data.relationships as Record<string, unknown> : {};
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+    const relationships = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
     const rollback = relationships["rollback-state-version"];
-    const rollbackData = rollback !== null && typeof rollback === "object" ? (rollback as Record<string, unknown>).data : null;
-    const sourceId = rollbackData !== null && typeof rollbackData === "object" && typeof (rollbackData as Record<string, unknown>).id === "string" ? (rollbackData as Record<string, unknown>).id as string : "";
+    const rollbackData = rollback !== null && typeof rollback === "object" ? (rollback as Record<string, unknown>)["data"] : null;
+    const sourceId = rollbackData !== null && typeof rollbackData === "object" && typeof (rollbackData as Record<string, unknown>)["id"] === "string" ? (rollbackData as Record<string, unknown>)["id"] as string : "";
     if (sourceId === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "rollback-state-version is required" }] }; }
     const source = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, sourceId) });
     if (source === undefined || source.workspaceId !== workspaceId || source.status !== "finalized" || source.statePayload === null) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State version cannot be rolled back" }] }; }
@@ -274,7 +274,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return { data: stateVersionResource(created, request) };
   })
   .get("/api/v2/state-versions/:state_version_id", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params.state_version_id ?? "";
+    const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
@@ -292,7 +292,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if ((user === undefined || user === null) && orgId === null && teamId === null && run === null) {
       (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const stateVersionId = params.state_version_id ?? "";
+    const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
@@ -309,7 +309,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if ((user === undefined || user === null) && orgId === null && teamId === null && run === null) {
       (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const stateVersionId = params.state_version_id ?? "";
+    const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
@@ -323,7 +323,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if ((user === undefined || user === null) && orgId === null && teamId === null && run === null) {
       (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
-    const stateVersionOutputId = params.state_version_output_id ?? "";
+    const stateVersionOutputId = params["state_version_output_id"] ?? "";
     if (!/^wsout-[a-f0-9]{64}$/.test(stateVersionOutputId)) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
@@ -378,7 +378,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return { errors: [{ status: "404", title: "Not Found" }] };
   })
   .get("/api/v2/state-versions/:state_version_id/json-download", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params.state_version_id ?? "";
+    const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
@@ -402,7 +402,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return decodeStatePayload(sv.jsonState);
   })
   .delete("/api/v2/state-versions/:state_version_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const stateVersionId = params.state_version_id ?? "";
+    const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
@@ -412,7 +412,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return {};
   })
   .get("/api/v2/state-versions/:state_version_id/download", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params.state_version_id ?? "";
+    const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
@@ -437,7 +437,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return payload;
   })
   .put("/api/v2/state-versions/:state_version_id/upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params.state_version_id ?? "";
+    const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
@@ -465,7 +465,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return {};
   })
   .put("/api/v2/state-versions/:state_version_id/json-upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params.state_version_id ?? "";
+    const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
@@ -493,7 +493,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return {};
   })
   .put("/api/v2/state-versions/:state_version_id/json-outputs-upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params.state_version_id ?? "";
+    const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
@@ -518,7 +518,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return {};
   })
   .post("/api/v2/state-versions/:state_version_id/actions/rollback", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params.state_version_id ?? "";
+    const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
@@ -562,7 +562,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return { data: stateVersionResource(newSv, request) };
   })
   .post("/api/v2/state-versions/:state_version_id/actions/soft_delete_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params.state_version_id ?? "";
+    const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
@@ -586,7 +586,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return { data: stateVersionResource({ ...sv, status: "backing_data_soft_deleted", softDeletedAt }, request) };
   })
   .post("/api/v2/state-versions/:state_version_id/actions/restore_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params.state_version_id ?? "";
+    const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
@@ -601,7 +601,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return { data: stateVersionResource({ ...sv, status: "finalized", softDeletedAt: null }, request) };
   })
   .post("/api/v2/state-versions/:state_version_id/actions/permanently_delete_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const stateVersionId = params.state_version_id ?? "";
+    const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, sv.workspaceId) });
@@ -634,7 +634,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     };
   })
   .get("/api/v2/runs/:run_id/recovery-state", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     const workspace = run === undefined ? undefined : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "admin");
     if (run === undefined || workspace === undefined) {
@@ -656,7 +656,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return new Response(payload, { headers: { "Content-Type": "application/json" } });
   })
   .post("/api/v2/runs/:run_id/actions/recover-state", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
-    const runId = params.run_id ?? "";
+    const runId = params["run_id"] ?? "";
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     const workspace = run === undefined ? undefined : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "state-write");
     if (run === undefined || workspace === undefined) {
@@ -691,7 +691,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     });
     if (latest?.statePayload !== null && latest?.statePayload !== undefined) {
       const previous = parseTerraformStatePayload(decodeStatePayload(latest.statePayload));
-      if (previous?.lineage !== undefined && parsed.lineage !== previous.lineage) {
+      if (previous?.["lineage"] !== undefined && parsed["lineage"] !== previous["lineage"]) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Recovered state lineage does not match the workspace history" }] };
       }
@@ -710,9 +710,9 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         runId,
         statePayload: await encryptStatePayload(rawState),
         jsonState: await encryptStatePayload(rawState),
-        jsonStateOutputs: await encryptStatePayload(parsed.outputs === undefined ? null : JSON.stringify(parsed.outputs)),
+        jsonStateOutputs: await encryptStatePayload(parsed["outputs"] === undefined ? null : JSON.stringify(parsed["outputs"])),
         status: "finalized",
-        terraformVersion: typeof parsed.terraform_version === "string" ? parsed.terraform_version : null,
+        terraformVersion: typeof parsed["terraform_version"] === "string" ? parsed["terraform_version"] : null,
         intermediate: false,
         createdAt: Date.now(),
       });
@@ -730,25 +730,25 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return { data: stateVersionResource(stateVersion, request) };
   })
   .post("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, body, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params.workspace_id ?? "";
+    const workspaceId = params["workspace_id"] ?? "";
     const ws = run !== null && run.workspaceId === workspaceId
       ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
       : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-write");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    if (data?.type !== "state-versions") {
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    if (data?.["type"] !== "state-versions") {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be state-versions" }] };
     }
     if (orgId !== null && orgId !== undefined) {
       (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot create state versions" }] };
     }
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
-    const runRel = typeof rels.run === "object" && rels.run !== null ? (rels.run as Record<string, unknown>) : {};
-    const runData = typeof runRel.data === "object" && runRel.data !== null ? (runRel.data as Record<string, unknown>) : {};
-    const serial = typeof attributes.serial === "number" ? attributes.serial : undefined;
-    const inlineState = typeof attributes.state === "string" ? attributes.state : undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
+    const runRel = typeof rels["run"] === "object" && rels["run"] !== null ? (rels["run"] as Record<string, unknown>) : {};
+    const runData = typeof runRel["data"] === "object" && runRel["data"] !== null ? (runRel["data"] as Record<string, unknown>) : {};
+    const serial = typeof attributes["serial"] === "number" ? attributes["serial"] : undefined;
+    const inlineState = typeof attributes["state"] === "string" ? attributes["state"] : undefined;
     const statePayload = inlineState !== undefined && inlineState !== "" ? decodeStatePayload(inlineState) : null;
     const inlineJsonState = typeof attributes["json-state"] === "string" ? attributes["json-state"] : undefined;
     const jsonState = inlineJsonState !== undefined && inlineJsonState !== "" ? decodeStatePayload(inlineJsonState) : null;
@@ -756,8 +756,8 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const jsonStateOutputs = inlineJsonStateOutputs !== undefined && inlineJsonStateOutputs !== ""
       ? decodeStatePayload(inlineJsonStateOutputs)
       : null;
-    const runId = typeof runData.id === "string" ? runData.id : null;
-    const intermediate = attributes.intermediate === true;
+    const runId = typeof runData["id"] === "string" ? runData["id"] : null;
+    const intermediate = attributes["intermediate"] === true;
     if (serial === undefined) {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "param is missing or the value is empty: serial" }] };
     }
@@ -783,15 +783,15 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (statePayload !== null && parseStatePayload(statePayload) === null) {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State content must be valid JSON" }] };
     }
-    if (parsedTerraformState !== null && parsedTerraformState.serial !== serial) {
+    if (parsedTerraformState !== null && parsedTerraformState["serial"] !== serial) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial does not match the Terraform state payload" }] };
     }
-    if (statePayload !== null && typeof attributes.md5 !== "string") {
+    if (statePayload !== null && typeof attributes["md5"] !== "string") {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "md5 is required when state is supplied" }] };
     }
-    if (statePayload !== null && typeof attributes.md5 === "string") {
+    if (statePayload !== null && typeof attributes["md5"] === "string") {
       const expected = createHash("md5").update(statePayload).digest("base64");
-      if (attributes.md5 !== expected && attributes.md5 !== createHash("md5").update(statePayload).digest("hex")) {
+      if (attributes["md5"] !== expected && attributes["md5"] !== createHash("md5").update(statePayload).digest("hex")) {
         (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "md5 does not match the state payload" }] };
       }
     }
@@ -804,7 +804,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     if (parsedTerraformState !== null && latestState?.statePayload !== null && latestState?.statePayload !== undefined) {
       const previous = parseTerraformStatePayload(decodeStatePayload(latestState.statePayload));
-      if (previous?.lineage !== undefined && parsedTerraformState.lineage !== previous.lineage) {
+      if (previous?.["lineage"] !== undefined && parsedTerraformState["lineage"] !== previous["lineage"]) {
         (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State lineage does not match the workspace history" }] };
       }
     }
@@ -853,7 +853,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     return { data: stateVersionResource(sv, request) };
   })
   .post("/api/v2/workspaces/:workspace_id/state-versions/upload", async ({ params, body, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
-    const workspaceId = params.workspace_id ?? "";
+    const workspaceId = params["workspace_id"] ?? "";
     const ws = run !== null && run.workspaceId === workspaceId
       ? await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) })
       : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-write");
@@ -888,13 +888,13 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       orderBy: [desc(stateVersions.serial)],
       columns: { serial: true, statePayload: true },
     });
-    if (parsed.serial !== (latestImportedState?.serial ?? 0) + 1) {
+    if (parsed["serial"] !== (latestImportedState?.serial ?? 0) + 1) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial must be the next workspace state serial" }] };
     }
     if (latestImportedState?.statePayload !== null && latestImportedState?.statePayload !== undefined) {
       const previous = parseTerraformStatePayload(decodeStatePayload(latestImportedState.statePayload));
-      if (previous?.lineage !== undefined && parsed.lineage !== previous.lineage) {
+      if (previous?.["lineage"] !== undefined && parsed["lineage"] !== previous["lineage"]) {
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "State lineage does not match the workspace history" }] };
       }
@@ -918,9 +918,9 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         serial: (latest?.serial ?? 0) + 1,
         statePayload: await encryptStatePayload(rawState),
         jsonState: await encryptStatePayload(rawState),
-        jsonStateOutputs: await encryptStatePayload(parsed.outputs === undefined ? null : JSON.stringify(parsed.outputs)),
+        jsonStateOutputs: await encryptStatePayload(parsed["outputs"] === undefined ? null : JSON.stringify(parsed["outputs"])),
         status: "finalized",
-        terraformVersion: typeof parsed.terraform_version === "string" ? parsed.terraform_version : null,
+        terraformVersion: typeof parsed["terraform_version"] === "string" ? parsed["terraform_version"] : null,
         intermediate: false,
         createdAt: Date.now(),
       });

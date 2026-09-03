@@ -19,7 +19,7 @@ let memoizedCsp: string | null = null;
 
 /** Build the CSP (memoized; the policy is static per process). */
 export function buildContentSecurityPolicy(options?: Readonly<{ strict?: boolean }>): string {
-  const strict = options?.strict ?? process.env.TERRENCE_CSP_STRICT === "1";
+  const strict = options?.strict ?? process.env["TERRENCE_CSP_STRICT"] === "1";
   if (memoizedCsp !== null && !strict) return memoizedCsp;
   const imgSrc = DEFAULT_IMG_SRC.join(" ");
   const styleSrc = strict

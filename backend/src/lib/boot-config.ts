@@ -98,7 +98,7 @@ function assertDatabaseObject(db: unknown, source: string): Record<string, unkno
 }
 
 function parseDatabaseDriver(db: Readonly<Record<string, unknown>>, source: string): DatabaseDriver {
-  const driver = db.driver;
+  const driver = db["driver"];
   if (driver !== "sqlite" && driver !== "postgres") throw new BootConfigError(`Invalid boot configuration in ${source}: "database.driver" must be "sqlite" or "postgres", got ${String(driver)}`);
   return driver;
 }
@@ -121,14 +121,14 @@ function validateDriverSpecificFields(driver: DatabaseDriver, url: string | unde
 export function parseBootConfig(raw: unknown, source: string): BootConfig {
   const record = assertBootObject(raw, source);
   const result: Record<string, unknown> = { ...record };
-  if (record.database === undefined) return result;
-  const db = assertDatabaseObject(record.database, source);
+  if (record["database"] === undefined) return result;
+  const db = assertDatabaseObject(record["database"], source);
   const driver = parseDatabaseDriver(db, source);
-  const url = typeof db.url === "string" ? db.url : undefined;
-  const urlSecret = typeof db.urlSecret === "string" ? db.urlSecret : undefined;
+  const url = typeof db["url"] === "string" ? db["url"] : undefined;
+  const urlSecret = typeof db["urlSecret"] === "string" ? db["urlSecret"] : undefined;
   validateDatabaseUrlFields(url, urlSecret, source);
   validateDriverSpecificFields(driver, url, urlSecret, source);
-  result.database = { driver, ...(url !== undefined ? { url } : {}), ...(urlSecret !== undefined ? { urlSecret } : {}) };
+  result["database"] = { driver, ...(url !== undefined ? { url } : {}), ...(urlSecret !== undefined ? { urlSecret } : {}) };
   return result;
 }
 
@@ -222,7 +222,7 @@ export function resolveDatabaseConfig(
   env: Readonly<Record<string, string | undefined>>,
   storageDir: string,
 ): ResolvedDatabaseConfig {
-  const envUrl = env.DATABASE_URL;
+  const envUrl = env["DATABASE_URL"];
   if (envUrl !== undefined && envUrl !== "") {
     if (/^postgres(ql)?:\/\//i.test(envUrl)) {
       validatePostgresUrl(envUrl, "DATABASE_URL");

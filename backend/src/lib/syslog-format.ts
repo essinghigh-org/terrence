@@ -322,7 +322,7 @@ export function formatSyslogMessage(
 export function resolveHostname(env: NodeJS.ProcessEnv = process.env, override?: string | null): string {
   const overrideValue = override?.trim();
   const configured = overrideValue === undefined || overrideValue === ""
-    ? env.TERRENCE_SYSLOG_HOSTNAME?.trim()
+    ? env["TERRENCE_SYSLOG_HOSTNAME"]?.trim()
     : overrideValue;
   if (configured !== undefined && configured !== "") return configured;
   try {
@@ -331,5 +331,5 @@ export function resolveHostname(env: NodeJS.ProcessEnv = process.env, override?:
   } catch {
     /* fall through */
   }
-  return createHash("sha256").update(env.STORAGE_DIR ?? "terrence").digest("hex").slice(0, 12);
+  return createHash("sha256").update(env["STORAGE_DIR"] ?? "terrence").digest("hex").slice(0, 12);
 }

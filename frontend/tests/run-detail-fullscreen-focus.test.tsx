@@ -31,7 +31,7 @@ afterEach((): void => {
 function buildFetchMock(
   options: Readonly<{ readonly rejectWorkspace?: boolean }> = {},
 ): ReturnType<typeof mock> {
-  return mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  return mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
       if (options.rejectWorkspace === true) {
@@ -119,7 +119,7 @@ function buildFetchMock(
 }
 
 function renderRunDetail(fetchMock: ReturnType<typeof mock>): ReturnType<typeof render> {
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   return render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-focus"]}>
       <Routes>

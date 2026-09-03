@@ -23,7 +23,7 @@ export const stateTools: readonly McpTool[] = [
     },
     requires: ["state:read"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const wsId = String(args.workspace_id);
+      const wsId = String(args["workspace_id"]);
       const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "state-read");
       if (ws === undefined) return toolError("Workspace not found or not authorized");
       const sv = await db.query.stateVersions.findFirst({
@@ -40,15 +40,15 @@ export const stateTools: readonly McpTool[] = [
       if (sv.jsonState !== null) {
         try {
           const parsed = JSON.parse(decodeStatePayload(sv.jsonState)) as Record<string, unknown>;
-          result.resources = parsed.resources ?? [];
-          result.outputs = parsed.outputs ?? {};
+          result["resources"] = parsed["resources"] ?? [];
+          result["outputs"] = parsed["outputs"] ?? {};
         } catch {
           // not parseable
         }
       }
       if (sv.jsonStateOutputs !== null) {
         try {
-          result.outputs = JSON.parse(decodeStatePayload(sv.jsonStateOutputs));
+          result["outputs"] = JSON.parse(decodeStatePayload(sv.jsonStateOutputs));
         } catch {
           // not parseable
         }
@@ -68,7 +68,7 @@ export const stateTools: readonly McpTool[] = [
     },
     requires: ["state:read"],
     handler: async (session: McpSession, args: Readonly<Record<string, unknown>>): Promise<unknown> => {
-      const wsId = String(args.workspace_id);
+      const wsId = String(args["workspace_id"]);
       const ws = await findAuthorizedWorkspace(wsId, session.userId ?? undefined, session.orgId, session.teamId, "state-read");
       if (ws === undefined) return toolError("Workspace not found or not authorized");
       const ar = await db.query.assessmentResults.findMany({

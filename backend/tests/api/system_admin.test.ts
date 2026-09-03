@@ -80,7 +80,7 @@ describe("System administration API contract", () => {
 
   afterAll(async () => {
     if (bundleId !== undefined) {
-      const storage = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
+      const storage = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"));
       await unlink(join(storage, "support-bundles", `${bundleId}.json`)).catch((): undefined => undefined);
       await unlink(join(storage, "support-bundles", `${bundleId}.tar.gz`)).catch((): undefined => undefined);
     }

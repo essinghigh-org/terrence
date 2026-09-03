@@ -81,7 +81,7 @@ afterEach((): void => {
 });
 
 test("offers only registry-supported VCS connections with an honest provider boundary", async () => {
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const base = baseResponse(url);
     if (base !== null && !url.endsWith("/oauth-clients")) return base;
@@ -95,7 +95,7 @@ test("offers only registry-supported VCS connections with an honest provider bou
     if (url === "/api/v2/oauth-clients/github-token/oauth-tokens") return json({ data: [] });
     if (url === "/api/v2/organizations/acme/vcs-connections/oauth-token%3Agithub-token/repositories") return json({ data: [] });
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
   const view = renderRegistry();
   await openPublish(view);
   const connectionSelect = await view.findByLabelText("VCS connection");
@@ -107,19 +107,19 @@ test("offers only registry-supported VCS connections with an honest provider bou
 });
 
 test("publishes a tag-based VCS module with the existing keyboard repository picker", async () => {
-  let payload: JsonObject | null = null;
+  let payload: { data: { attributes: JsonObject } } | null = null;
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const base = baseResponse(url);
     if (base !== null) return base;
     if (url === "/api/v2/organizations/acme/registry-modules/vcs" && init?.method === "POST") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
-      payload = JSON.parse(init.body as string) as JsonObject;
+      payload = JSON.parse(init.body as string) as { data: { attributes: JsonObject } };
       return json({ data: moduleResource("mod-vcs", "network", "aws") }, 201);
     }
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = renderRegistry();
   await openPublish(view);
@@ -132,7 +132,7 @@ test("publishes a tag-based VCS module with the existing keyboard repository pic
   await view.findByText("Module detail landing");
 
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  const attributes = ((payload?.data as JsonObject).attributes as JsonObject);
+  const attributes = payload!.data.attributes;
   expect(attributes["module-name"]).toBe("network");
   expect(attributes["module-provider"]).toBe("aws");
   expect(attributes["source-directory"]).toBe("modules/network");
@@ -147,7 +147,7 @@ test("publishes a tag-based VCS module with the existing keyboard repository pic
 test("publishes branch configuration with branch and initial version", async () => {
   let attributes: JsonObject | null = null;
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const base = baseResponse(url);
     if (base !== null) return base;
@@ -158,7 +158,7 @@ test("publishes branch configuration with branch and initial version", async () 
       return json({ data: moduleResource("mod-branch", "network", "azurerm") }, 201);
     }
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = renderRegistry();
   await openPublish(view);
@@ -171,11 +171,11 @@ test("publishes branch configuration with branch and initial version", async () 
   changeInput(view.getByLabelText("Initial version"), "3.2.1");
   fireEvent.click(view.getByRole("button", { name: "Publish from VCS" }));
   await view.findByText("Module detail landing");
-  expect(attributes?.["source-directory"]).toBe("terraform/module");
-  expect(attributes?.version).toBe("3.2.1");
+  expect(attributes!["source-directory"]).toBe("terraform/module");
+  expect(attributes!["version"]).toBe("3.2.1");
 // SAFETY: the fixture object is read as a record; each field is typed below.
-  expect((attributes?.["vcs-repo"] as JsonObject)["branch"]).toBe("release");
-  expect(attributes?.["tag-prefix"]).toBe("");
+  expect((attributes!["vcs-repo"] as JsonObject)["branch"]).toBe("release");
+  expect(attributes!["tag-prefix"]).toBe("");
 });
 
 test("manual publication uploads the selected archive bytes and retries without duplicate records", async () => {
@@ -184,7 +184,7 @@ test("manual publication uploads the selected archive bytes and retries without 
   let moduleCreates = 0;
   let versionCreates = 0;
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const base = baseResponse(url);
     if (base !== null) return base;
@@ -204,7 +204,7 @@ test("manual publication uploads the selected archive bytes and retries without 
     }
     if (url === "/api/v2/registry-modules/mod-manual") return json({ data: moduleResource("mod-manual", "network", "aws", "manual") });
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = renderRegistry();
   await openPublish(view);
@@ -229,7 +229,7 @@ test("manual publication uploads the selected archive bytes and retries without 
 test("cancelling after a failed manual upload removes the staged module", async () => {
   let deleted = false;
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     const base = baseResponse(url);
     if (base !== null) return base;
@@ -238,7 +238,7 @@ test("cancelling after a failed manual upload removes the staged module", async 
     if (url === "/api/v2/registry-module-versions/version-staged/upload" && init?.method === "PUT") return json({ errors: [{ detail: "Expanded archive is too large" }] }, 422);
     if (url === "/api/v2/registry-modules/mod-staged" && init?.method === "DELETE") { deleted = true; return new Response(null, { status: 204 }); }
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = renderRegistry();
   await openPublish(view);

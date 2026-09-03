@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { adminSettings, organizations } from "../db/schema";
 import { CUSTOM_PROVIDER_ID, getCatalogProviderModels } from "./model-catalog";
+import { envEnabled } from "./env";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "./secrets";
 
 export type Settings = Record<string, unknown>;
@@ -81,8 +82,8 @@ function effectiveSettings(group: string, defaults: Readonly<Settings>, values: 
   // Older SMTP rows have no encryption key. Keep port 465's established
   // implicit-TLS behavior while making every other legacy configuration
   // require STARTTLS instead of silently downgrading.
-  if (group === "smtp" && (values.encryption === undefined || values.encryption === null)) {
-    merged.encryption = merged.port === 465 ? "tls" : "starttls";
+  if (group === "smtp" && (values["encryption"] === undefined || values["encryption"] === null)) {
+    merged["encryption"] = merged["port"] === 465 ? "tls" : "starttls";
   }
   return merged;
 }
@@ -120,11 +121,15 @@ export async function getSettings(group: string): Promise<Settings> {
 
 /** Resolve the one effective cost-estimation gate used by API and workers. */
 export async function costEstimationEnabledForOrganization(orgId: string): Promise<boolean> {
+  // INFRACOST_ENABLED is the documented operator kill-switch (issue #293):
+  // the container image defaults it to false, so cost estimation stays off
+  // until the operator opts in AND enables it in settings AND on the org.
+  if (!envEnabled(process.env["INFRACOST_ENABLED"])) return false;
   const [settings, organization] = await Promise.all([
     getSettings("cost"),
     db.query.organizations.findFirst({ where: eq(organizations.id, orgId), columns: { costEstimationEnabled: true } }),
   ]);
-  return settings.enabled === true && organization?.costEstimationEnabled === true;
+  return settings["enabled"] === true && organization?.costEstimationEnabled === true;
 }
 
 /** Normalize an optional provider base URL and accept the old full endpoint. */
@@ -145,10 +150,10 @@ export function normalizePlanExplainerBaseUrl(value: unknown): string | null {
 
 /** Resolve a configured override or the selected provider's models.dev URL. */
 export async function resolvePlanExplainerSettings(settings: Readonly<Settings>): Promise<Settings | null> {
-  if (settings.enabled !== true || typeof settings.model !== "string" || settings.model.trim() === "") return null;
+  if (settings["enabled"] !== true || typeof settings["model"] !== "string" || settings["model"].trim() === "") return null;
   let baseUrl = normalizePlanExplainerBaseUrl(settings["base-url"])
     ?? normalizePlanExplainerBaseUrl(settings["endpoint-url"]);
-  const provider = typeof settings.provider === "string" ? settings.provider.trim() : "";
+  const provider = typeof settings["provider"] === "string" ? settings["provider"].trim() : "";
   if (baseUrl === null && provider !== "" && provider !== CUSTOM_PROVIDER_ID) {
     baseUrl = (await getCatalogProviderModels(provider))?.baseUrl ?? null;
   }
@@ -199,7 +204,7 @@ export async function getSiteCapabilities(): Promise<Readonly<Record<string, boo
     teams: true,
     "usage-reporting": true,
     "vcs-integrations": true,
-    "cost-estimation": cost.enabled === true,
+    "cost-estimation": cost["enabled"] === true,
     "plan-explainer": await planExplainerUsable(explainer),
   };
 }

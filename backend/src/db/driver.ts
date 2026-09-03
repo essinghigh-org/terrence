@@ -11,7 +11,7 @@ import { join, resolve } from "node:path";
 import { resolveDatabaseConfig, type DatabaseDriver } from "../lib/boot-config";
 
 export const storageDir = resolve(
-  process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"),
+  process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"),
 );
 
 export const resolvedDatabase = resolveDatabaseConfig(process.env, storageDir);

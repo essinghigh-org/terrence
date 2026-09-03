@@ -115,7 +115,7 @@ async function fetchVcsUrlWithRedirects(
   init: VcsFetchInit,
   fetcher: VcsResolvedFetcher,
 ): Promise<Response> {
-  const allowPrivate = envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_VCS_URLS);
+  const allowPrivate = envEnabled(process.env["TERRENCE_ALLOW_PRIVATE_VCS_URLS"]);
   const requestInit = normalizedVcsFetchInit(init);
   let currentUrl = url;
   const requestHeaders = new Headers(requestInit.headers);
@@ -177,9 +177,9 @@ function commitSubject(message: string): string {
 }
 
 function changedFiles(payload: WebhookPayload): ReadonlySet<string> | undefined {
-  if (!Array.isArray(payload.commits)) return undefined;
+  if (!Array.isArray(payload["commits"])) return undefined;
   const files = new Set<string>();
-  for (const value of payload.commits) {
+  for (const value of payload["commits"]) {
     const commit = asRecord(value);
     if (commit === undefined) return undefined;
     for (const key of ["added", "removed", "modified"]) {
@@ -194,11 +194,11 @@ function changedFiles(payload: WebhookPayload): ReadonlySet<string> | undefined 
 
 
 function extractDeliveryInstallationId(payload: WebhookPayload): number | undefined {
-  const installation = asRecord(payload.installation);
-  if (typeof installation?.id !== "number") return undefined;
-  if (!Number.isSafeInteger(installation.id)) return undefined;
-  if (installation.id <= 0) return undefined;
-  return installation.id;
+  const installation = asRecord(payload["installation"]);
+  if (typeof installation?.["id"] !== "number") return undefined;
+  if (!Number.isSafeInteger(installation["id"])) return undefined;
+  if (installation["id"] <= 0) return undefined;
+  return installation["id"];
 }
 
 function parseRefBranchTag(ref: string): { branch?: string; tag?: string } | undefined {
@@ -222,11 +222,11 @@ function validateGithubPushFields(ref: string | undefined, commitSha: string | u
 }
 
 function parseGithubPushWebhook(payload: WebhookPayload, base: DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined; sourceIdentity: VcsSourceIdentity }>): WebhookDetails | undefined {
-  const ref = requiredString(payload.ref);
-  const commitSha = requiredString(payload.after);
-  const headCommit = asRecord(payload.head_commit);
-  const commitMessage = requiredString(headCommit?.message);
-  const commitUrl = requiredString(headCommit?.url);
+  const ref = requiredString(payload["ref"]);
+  const commitSha = requiredString(payload["after"]);
+  const headCommit = asRecord(payload["head_commit"]);
+  const commitMessage = requiredString(headCommit?.["message"]);
+  const commitUrl = requiredString(headCommit?.["url"]);
   const filesChanged = changedFiles(payload);
   if (validateGithubPushFields(ref, commitSha, commitMessage, commitUrl, filesChanged) !== undefined) return undefined;
   if (ref === undefined || commitSha === undefined || commitMessage === undefined || commitUrl === undefined || filesChanged === undefined) return undefined;
@@ -278,29 +278,29 @@ function buildGithubPrDetails(branch: string, targetBranch: string | undefined, 
 }
 
 function parseGithubPullRequestWebhook(payload: WebhookPayload, base: DeepReadonly<{ cloneUrl: string; repoFullName: string; senderUsername: string; senderAvatarUrl: string | undefined; deliveryInstallationId: number | undefined; sourceIdentity: VcsSourceIdentity }>): WebhookDetails | undefined {
-  const pullRequest = asRecord(payload.pull_request);
-  const head = asRecord(pullRequest?.head);
-  const baseRef = asRecord(pullRequest?.base);
-  const branch = requiredString(head?.ref);
-  const targetBranch = requiredString(baseRef?.ref);
-  const commitSha = requiredString(head?.sha);
-  const commitMessage = requiredString(pullRequest?.title);
-  const commitUrl = requiredString(pullRequest?.html_url);
-  const pullRequestNumber = payload.number;
+  const pullRequest = asRecord(payload["pull_request"]);
+  const head = asRecord(pullRequest?.["head"]);
+  const baseRef = asRecord(pullRequest?.["base"]);
+  const branch = requiredString(head?.["ref"]);
+  const targetBranch = requiredString(baseRef?.["ref"]);
+  const commitSha = requiredString(head?.["sha"]);
+  const commitMessage = requiredString(pullRequest?.["title"]);
+  const commitUrl = requiredString(pullRequest?.["html_url"]);
+  const pullRequestNumber = payload["number"];
   if (validateGithubPrFields(branch, commitSha, commitMessage, commitUrl, pullRequestNumber) !== undefined) return undefined;
   if (branch === undefined || commitSha === undefined || commitMessage === undefined || commitUrl === undefined || typeof pullRequestNumber !== "number" || !Number.isSafeInteger(pullRequestNumber)) return undefined;
   return buildGithubPrDetails(branch, targetBranch, base, commitMessage, commitSha, commitUrl, pullRequestNumber);
 }
 
 function extractGitlabCommits(payload: WebhookPayload): unknown[] {
-  return Array.isArray(payload.commits) ? payload.commits : [];
+  return Array.isArray(payload["commits"]) ? payload["commits"] : [];
 }
 
 /** GitLab limits the inline commit list (normally to 20 entries). A larger
  * total means the file list is incomplete and file-trigger matching is unsafe. */
 export function gitlabPushCommitListTruncated(payload: WebhookPayload): boolean {
-  const commits = payload.commits;
-  const total = payload.total_commits_count;
+  const commits = payload["commits"];
+  const total = payload["total_commits_count"];
   return Array.isArray(commits)
     && typeof total === "number"
     && Number.isSafeInteger(total)
@@ -308,14 +308,14 @@ export function gitlabPushCommitListTruncated(payload: WebhookPayload): boolean 
 }
 
 function resolveGitlabCommitUrl(headCommit: Readonly<Record<string, unknown>> | undefined, project: Readonly<Record<string, unknown>> | undefined, cloneUrl: string, commitSha: string | undefined): string {
-  const fromHead = requiredString(headCommit?.url);
+  const fromHead = requiredString(headCommit?.["url"]);
   if (fromHead !== undefined) return fromHead;
-  const webUrl = requiredString(project?.web_url) ?? cloneUrl;
+  const webUrl = requiredString(project?.["web_url"]) ?? cloneUrl;
   return `${webUrl}/-/commit/${commitSha ?? ""}`;
 }
 
 function resolveGitlabCommitSha(payload: WebhookPayload): string | undefined {
-  return requiredString(payload.checkout_sha) ?? requiredString(payload.after);
+  return requiredString(payload["checkout_sha"]) ?? requiredString(payload["after"]);
 }
 
 function validateGitlabPushFields(ref: string | undefined, commitSha: string | undefined, filesChanged: Readonly<ReadonlySet<string>> | undefined): string | undefined {
@@ -326,11 +326,11 @@ function validateGitlabPushFields(ref: string | undefined, commitSha: string | u
 }
 
 function parseGitlabPushWebhook(payload: WebhookPayload, project: Readonly<Record<string, unknown>> | undefined, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity): ParsedProviderWebhook | undefined {
-  const ref = requiredString(payload.ref);
+  const ref = requiredString(payload["ref"]);
   const commitSha = resolveGitlabCommitSha(payload);
   const commits = extractGitlabCommits(payload);
   const headCommit = asRecord(commits.at(-1));
-  const commitMessage = requiredString(headCommit?.message) ?? "VCS push";
+  const commitMessage = requiredString(headCommit?.["message"]) ?? "VCS push";
   const commitUrl = resolveGitlabCommitUrl(headCommit, project, cloneUrl, commitSha);
   const filesTruncated = gitlabPushCommitListTruncated(payload);
   const filesChanged = filesTruncated ? new Set<string>() : changedFiles(payload);
@@ -360,17 +360,17 @@ function parseGitlabPushWebhook(payload: WebhookPayload, project: Readonly<Recor
 }
 
 function resolveGitlabMrCommitMessage(attributes: Readonly<Record<string, unknown>> | undefined, lastCommit: Readonly<Record<string, unknown>> | undefined): string {
-  const fromTitle = requiredString(attributes?.title);
+  const fromTitle = requiredString(attributes?.["title"]);
   if (fromTitle !== undefined) return fromTitle;
-  const fromCommit = requiredString(lastCommit?.message);
+  const fromCommit = requiredString(lastCommit?.["message"]);
   if (fromCommit !== undefined) return fromCommit;
   return "Merge request";
 }
 
 function resolveGitlabMrCommitUrl(attributes: Readonly<Record<string, unknown>> | undefined, lastCommit: Readonly<Record<string, unknown>> | undefined): string | undefined {
-  const fromAttr = requiredString(attributes?.url);
+  const fromAttr = requiredString(attributes?.["url"]);
   if (fromAttr !== undefined) return fromAttr;
-  return requiredString(lastCommit?.url);
+  return requiredString(lastCommit?.["url"]);
 }
 
 function validateGitlabMrFields(branch: string | undefined, commitSha: string | undefined, commitUrl: string | undefined, pullRequestNumber: unknown): string | undefined {
@@ -383,16 +383,16 @@ function validateGitlabMrFields(branch: string | undefined, commitSha: string | 
 }
 
 function parseGitlabMergeRequestWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity): ParsedProviderWebhook | undefined {
-  const attributes = asRecord(payload.object_attributes);
-  const action = attributes?.action;
+  const attributes = asRecord(payload["object_attributes"]);
+  const action = attributes?.["action"];
   if (!["open", "reopen", "update"].includes(typeof action === "string" ? action : "")) return undefined;
-  const lastCommit = asRecord(attributes?.last_commit);
-  const branch = requiredString(attributes?.source_branch);
-  const targetBranch = requiredString(attributes?.target_branch);
-  const commitSha = requiredString(lastCommit?.id);
+  const lastCommit = asRecord(attributes?.["last_commit"]);
+  const branch = requiredString(attributes?.["source_branch"]);
+  const targetBranch = requiredString(attributes?.["target_branch"]);
+  const commitSha = requiredString(lastCommit?.["id"]);
   const commitMessage = resolveGitlabMrCommitMessage(attributes, lastCommit);
   const commitUrl = resolveGitlabMrCommitUrl(attributes, lastCommit);
-  const pullRequestNumber = attributes?.iid;
+  const pullRequestNumber = attributes?.["iid"];
   if (validateGitlabMrFields(branch, commitSha, commitUrl, pullRequestNumber) !== undefined) return undefined;
   if (branch === undefined || commitSha === undefined || commitUrl === undefined || typeof pullRequestNumber !== "number" || !Number.isSafeInteger(pullRequestNumber)) return undefined;
   return {
@@ -414,8 +414,8 @@ function parseGitlabMergeRequestWebhook(payload: WebhookPayload, repoFullName: s
 }
 
 function extractBitbucketChanges(payload: WebhookPayload): unknown[] | undefined {
-  const push = asRecord(payload.push);
-  const changes = push?.changes;
+  const push = asRecord(payload["push"]);
+  const changes = push?.["changes"];
   if (!Array.isArray(changes)) return undefined;
   return changes as unknown[];
 }
@@ -436,15 +436,15 @@ function parseBitbucketPushChange(
   sourceIdentity: VcsSourceIdentity,
 ): ParsedProviderWebhook | undefined {
   const change = asRecord(changeValue);
-  const reference = asRecord(change?.new);
-  const target = asRecord(reference?.target);
-  const targetLinks = asRecord(target?.links);
-  const html = asRecord(targetLinks?.html);
-  const referenceType = requiredString(reference?.type);
-  const referenceName = requiredString(reference?.name);
-  const commitSha = requiredString(target?.hash);
-  const commitMessage = requiredString(target?.message) ?? "VCS push";
-  const commitUrl = requiredString(html?.href);
+  const reference = asRecord(change?.["new"]);
+  const target = asRecord(reference?.["target"]);
+  const targetLinks = asRecord(target?.["links"]);
+  const html = asRecord(targetLinks?.["html"]);
+  const referenceType = requiredString(reference?.["type"]);
+  const referenceName = requiredString(reference?.["name"]);
+  const commitSha = requiredString(target?.["hash"]);
+  const commitMessage = requiredString(target?.["message"]) ?? "VCS push";
+  const commitUrl = requiredString(html?.["href"]);
   if (validateBitbucketPushFields(referenceType, referenceName, commitSha, commitUrl) !== undefined) return undefined;
   if ((referenceType !== "branch" && referenceType !== "tag") || referenceName === undefined || commitSha === undefined || commitUrl === undefined) return undefined;
   return {
@@ -490,28 +490,28 @@ function validateBitbucketPrFields(branch: string | undefined, commitSha: string
 }
 
 function resolveBitbucketPrCommitUrl(pullRequest: Readonly<Record<string, unknown>> | undefined, commit: Readonly<Record<string, unknown>> | undefined): string | undefined {
-  const prLinks = asRecord(pullRequest?.links);
-  const prHtml = asRecord(prLinks?.html);
-  const fromPr = requiredString(prHtml?.href);
+  const prLinks = asRecord(pullRequest?.["links"]);
+  const prHtml = asRecord(prLinks?.["html"]);
+  const fromPr = requiredString(prHtml?.["href"]);
   if (fromPr !== undefined) return fromPr;
-  const commitLinks = asRecord(commit?.links);
-  const commitHtml = asRecord(commitLinks?.html);
-  return requiredString(commitHtml?.href);
+  const commitLinks = asRecord(commit?.["links"]);
+  const commitHtml = asRecord(commitLinks?.["html"]);
+  return requiredString(commitHtml?.["href"]);
 }
 
 function parseBitbucketPullRequestWebhook(payload: WebhookPayload, repoFullName: string, cloneUrl: string, senderUsername: string, sourceIdentity: VcsSourceIdentity): ParsedProviderWebhook | undefined {
-  const pullRequest = asRecord(payload.pullrequest);
-  const source = asRecord(pullRequest?.source);
-  const destination = asRecord(pullRequest?.destination);
-  const branchValue = asRecord(source?.branch);
-  const destinationBranch = asRecord(destination?.branch);
-  const commit = asRecord(source?.commit);
-  const branch = requiredString(branchValue?.name);
-  const targetBranch = requiredString(destinationBranch?.name);
-  const commitSha = requiredString(commit?.hash);
-  const commitMessage = requiredString(pullRequest?.title) ?? "Pull request";
+  const pullRequest = asRecord(payload["pullrequest"]);
+  const source = asRecord(pullRequest?.["source"]);
+  const destination = asRecord(pullRequest?.["destination"]);
+  const branchValue = asRecord(source?.["branch"]);
+  const destinationBranch = asRecord(destination?.["branch"]);
+  const commit = asRecord(source?.["commit"]);
+  const branch = requiredString(branchValue?.["name"]);
+  const targetBranch = requiredString(destinationBranch?.["name"]);
+  const commitSha = requiredString(commit?.["hash"]);
+  const commitMessage = requiredString(pullRequest?.["title"]) ?? "Pull request";
   const commitUrl = resolveBitbucketPrCommitUrl(pullRequest, commit);
-  const pullRequestNumber = pullRequest?.id;
+  const pullRequestNumber = pullRequest?.["id"];
   if (validateBitbucketPrFields(branch, commitSha, commitUrl, pullRequestNumber) !== undefined) return undefined;
   if (branch === undefined || commitSha === undefined || commitUrl === undefined || typeof pullRequestNumber !== "number" || !Number.isSafeInteger(pullRequestNumber)) return undefined;
   return {
@@ -533,13 +533,13 @@ function parseBitbucketPullRequestWebhook(payload: WebhookPayload, repoFullName:
 }
 
 function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetails | undefined {
-  const repository = asRecord(payload.repository);
-  const sender = asRecord(payload.sender);
+  const repository = asRecord(payload["repository"]);
+  const sender = asRecord(payload["sender"]);
   const deliveryInstallationId = extractDeliveryInstallationId(payload);
-  const repoFullName = requiredString(repository?.full_name);
-  const cloneUrl = requiredString(repository?.clone_url);
-  const senderUsername = requiredString(sender?.login);
-  const senderAvatarUrl = httpsUrl(sender?.avatar_url);
+  const repoFullName = requiredString(repository?.["full_name"]);
+  const cloneUrl = requiredString(repository?.["clone_url"]);
+  const senderUsername = requiredString(sender?.["login"]);
+  const senderAvatarUrl = httpsUrl(sender?.["avatar_url"]);
   if (repoFullName === undefined) return undefined;
   if (cloneUrl === undefined) return undefined;
   if (senderUsername === undefined) return undefined;
@@ -547,16 +547,16 @@ function parseWebhook(eventName: string, payload: WebhookPayload): WebhookDetail
   if (sourceIdentity === undefined) return undefined;
   const base = { cloneUrl, repoFullName, senderUsername, senderAvatarUrl, deliveryInstallationId, sourceIdentity };
   if (eventName === "push") return parseGithubPushWebhook(payload, base);
-  if (eventName === "pull_request" && (payload.action === "opened" || payload.action === "synchronize" || payload.action === "reopened")) return parseGithubPullRequestWebhook(payload, base);
+  if (eventName === "pull_request" && (payload["action"] === "opened" || payload["action"] === "synchronize" || payload["action"] === "reopened")) return parseGithubPullRequestWebhook(payload, base);
   return undefined;
 }
 
 function gitlabWebhook(eventName: string, payload: WebhookPayload): ParsedProviderWebhook | undefined {
-  const project = asRecord(payload.project);
-  const user = asRecord(payload.user);
-  const repoFullName = requiredString(project?.path_with_namespace);
-  const cloneUrl = requiredString(project?.git_http_url) ?? requiredString(project?.web_url);
-  const senderUsername = requiredString(payload.user_username) ?? requiredString(user?.username) ?? requiredString(payload.user_name);
+  const project = asRecord(payload["project"]);
+  const user = asRecord(payload["user"]);
+  const repoFullName = requiredString(project?.["path_with_namespace"]);
+  const cloneUrl = requiredString(project?.["git_http_url"]) ?? requiredString(project?.["web_url"]);
+  const senderUsername = requiredString(payload["user_username"]) ?? requiredString(user?.["username"]) ?? requiredString(payload["user_name"]);
   if (repoFullName === undefined) return undefined;
   if (cloneUrl === undefined) return undefined;
   if (senderUsername === undefined) return undefined;
@@ -568,22 +568,22 @@ function gitlabWebhook(eventName: string, payload: WebhookPayload): ParsedProvid
 }
 
 function bitbucketCloneUrl(repository: Readonly<Record<string, unknown>>): string | undefined {
-  const links = asRecord(repository.links);
-  const cloneLinks = links?.clone;
+  const links = asRecord(repository["links"]);
+  const cloneLinks = links?.["clone"];
   if (!Array.isArray(cloneLinks)) return undefined;
   for (const value of cloneLinks) {
     const link = asRecord(value);
-    if (link?.name === "https") return requiredString(link.href);
+    if (link?.["name"] === "https") return requiredString(link["href"]);
   }
   return undefined;
 }
 
 function bitbucketWebhook(eventName: string, payload: WebhookPayload): readonly ParsedProviderWebhook[] | undefined {
-  const repository = asRecord(payload.repository);
-  const actor = asRecord(payload.actor);
-  const repoFullName = requiredString(repository?.full_name);
+  const repository = asRecord(payload["repository"]);
+  const actor = asRecord(payload["actor"]);
+  const repoFullName = requiredString(repository?.["full_name"]);
   const cloneUrl = repository === undefined ? undefined : bitbucketCloneUrl(repository);
-  const senderUsername = requiredString(actor?.username) ?? requiredString(actor?.nickname) ?? requiredString(actor?.display_name);
+  const senderUsername = requiredString(actor?.["username"]) ?? requiredString(actor?.["nickname"]) ?? requiredString(actor?.["display_name"]);
   if (repoFullName === undefined) return undefined;
   if (cloneUrl === undefined) return undefined;
   if (senderUsername === undefined) return undefined;
@@ -640,8 +640,8 @@ export type GitHubAppAccessTokenDetails = Readonly<{
 }>;
 
 export async function getGitHubAppAccessTokenDetails(installationId: number): Promise<GitHubAppAccessTokenDetails | null> {
-  const appId = process.env.GITHUB_APP_ID;
-  const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
+  const appId = process.env["GITHUB_APP_ID"];
+  const privateKey = process.env["GITHUB_APP_PRIVATE_KEY"];
   if (appId === undefined || privateKey === undefined || appId === "" || privateKey === "") {
     console.error("[terrence] GITHUB_APP_ID or GITHUB_APP_PRIVATE_KEY not configured.");
     return null;
@@ -817,7 +817,7 @@ function extractGithubPrFilenames(body: unknown): ReadonlySet<string> | undefine
   if (!Array.isArray(body)) return undefined;
   const files = new Set<string>();
   for (const item of body) {
-    const filename = asRecord(item)?.filename;
+    const filename = asRecord(item)?.["filename"];
     if (typeof filename !== "string" || filename === "") return undefined;
     files.add(filename);
   }
@@ -897,9 +897,9 @@ function extractGitlabMrFiles(body: unknown, files: Set<string>): boolean {
   if (!Array.isArray(body)) return false;
   for (const item of body) {
     const change = asRecord(item);
-    if (change?.too_large === true) return false;
-    const oldPath = change?.old_path;
-    const newPath = change?.new_path;
+    if (change?.["too_large"] === true) return false;
+    const oldPath = change?.["old_path"];
+    const newPath = change?.["new_path"];
     const oldFile = typeof oldPath === "string" && oldPath !== "" ? oldPath : undefined;
     const newFile = typeof newPath === "string" && newPath !== "" ? newPath : undefined;
     if (oldFile === undefined && newFile === undefined) return false;
@@ -974,11 +974,11 @@ type BitbucketCloudDiffstatResult = Readonly<{
 
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- file collection is intentionally accumulated in the caller-owned set
 function extractBitbucketDiffstatPaths(body: unknown, files: Set<string>): boolean {
-  const values = asRecord(body)?.values;
+  const values = asRecord(body)?.["values"];
   if (!Array.isArray(values)) return false;
   for (const item of values) {
     const entry = asRecord(item);
-    const path = asRecord(entry?.new)?.path ?? asRecord(entry?.old)?.path;
+    const path = asRecord(entry?.["new"])?.["path"] ?? asRecord(entry?.["old"])?.["path"];
     if (typeof path !== "string" || path === "") return false;
     files.add(path);
   }
@@ -986,7 +986,7 @@ function extractBitbucketDiffstatPaths(body: unknown, files: Set<string>): boole
 }
 
 export function resolveBitbucketNextUrl(body: unknown, baseUrl: string): string | null | undefined {
-  const next = asRecord(body)?.next;
+  const next = asRecord(body)?.["next"];
   if (next === undefined || next === null || next === "") return null;
   if (typeof next !== "string") return undefined;
   try {
@@ -1038,7 +1038,7 @@ async function bitbucketCommitFiles(
 }
 
 function bitbucketDataCenterPath(item: unknown): string | undefined {
-  const path = asRecord(item)?.path;
+  const path = asRecord(item)?.["path"];
   const pathRecord = asRecord(path);
   const pathValue = pathRecord === undefined ? undefined : Reflect.get(pathRecord, "toString");
   return typeof pathValue === "string"
@@ -1062,14 +1062,14 @@ async function bitbucketDataCenterPullRequestFiles(
     const dcResponse = await fetchVcsUrl(dcUrl, { headers: auth });
     if (!dcResponse.ok) return undefined;
     const dcBody = await dcResponse.json() as unknown;
-    const dcValues = asRecord(dcBody)?.values;
+    const dcValues = asRecord(dcBody)?.["values"];
     if (!Array.isArray(dcValues)) return undefined;
     for (const item of dcValues) {
       const pathName = bitbucketDataCenterPath(item);
       if (typeof pathName !== "string" || pathName === "") return undefined;
       files.add(pathName);
     }
-    const nextStart = asRecord(dcBody)?.nextPageStart;
+    const nextStart = asRecord(dcBody)?.["nextPageStart"];
     dcUrl = typeof nextStart === "number" && Number.isFinite(nextStart)
       ? `${apiUrl}/rest/api/1.0/projects/${encodedOwner}/repos/${encodedRepo}/pull-requests/${pullRequest}/changes?limit=100&start=${nextStart}`
       : null;
@@ -1213,7 +1213,7 @@ function runVcsStatusTargetUrl(
   workspace: DeepReadonly<typeof workspaces.$inferSelect>,
   organization: Readonly<{ name: string }> | undefined,
 ): string | undefined {
-  const publicUrl = process.env.PUBLIC_URL?.replace(/\/$/, "");
+  const publicUrl = process.env["PUBLIC_URL"]?.replace(/\/$/, "");
   return publicUrl === undefined || organization === undefined
     ? undefined
     : `${publicUrl}/app/${encodeURIComponent(organization.name)}/workspaces/${encodeURIComponent(workspace.name)}/runs/${encodeURIComponent(runId)}`;
@@ -1411,10 +1411,10 @@ export async function refetchConfigurationVersion(configurationVersionId: string
 
 /** Get a provider default branch from its repository response. */
 function defaultBranchFromBody(provider: VcsProvider, body: Readonly<Record<string, unknown>>): string | undefined {
-  if ((provider === "github" || provider === "gitlab") && typeof body.default_branch === "string") return body.default_branch;
-  if (provider === "bitbucket" && body.mainbranch !== null && typeof body.mainbranch === "object") {
-    const mainBranch = body.mainbranch as Record<string, unknown>;
-    if (typeof mainBranch.name === "string") return mainBranch.name;
+  if ((provider === "github" || provider === "gitlab") && typeof body["default_branch"] === "string") return body["default_branch"];
+  if (provider === "bitbucket" && body["mainbranch"] !== null && typeof body["mainbranch"] === "object") {
+    const mainBranch = body["mainbranch"] as Record<string, unknown>;
+    if (typeof mainBranch["name"] === "string") return mainBranch["name"];
   }
   return undefined;
 }
@@ -1440,7 +1440,7 @@ async function githubAppDefaultBranch(
   });
   if (!response.ok) return undefined;
   const body = await response.json() as Record<string, unknown>;
-  return typeof body.default_branch === "string" ? body.default_branch : undefined;
+  return typeof body["default_branch"] === "string" ? body["default_branch"] : undefined;
 }
 
 async function oauthDefaultBranch(
@@ -1489,15 +1489,15 @@ async function fetchDefaultBranch(workspace: DeepReadonly<typeof workspaces.$inf
 function latestShaFromBody(provider: VcsProvider, body: Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[]): string | undefined {
   if (provider === "github") {
     const commits = body as Record<string, unknown>[];
-    const sha = commits[0]?.sha;
+    const sha = commits[0]?.["sha"];
     return typeof sha === "string" ? sha : undefined;
   }
   if (provider === "gitlab") {
-    const sha = (body as Record<string, unknown>).id;
+    const sha = (body as Record<string, unknown>)["id"];
     return typeof sha === "string" ? sha : undefined;
   }
-  const target = (body as Record<string, unknown>).target as Record<string, unknown> | undefined;
-  return typeof target?.hash === "string" ? target.hash : undefined;
+  const target = (body as Record<string, unknown>)["target"] as Record<string, unknown> | undefined;
+  return typeof target?.["hash"] === "string" ? target["hash"] : undefined;
 }
 
 async function githubAppLatestCommit(
@@ -1524,7 +1524,7 @@ async function githubAppLatestCommit(
   });
   if (response.ok) {
     const body = await response.json() as Record<string, unknown>[];
-    const sha = body[0]?.sha;
+    const sha = body[0]?.["sha"];
     if (typeof sha === "string") return sha;
     console.error(`[terrence] latestCommitSha: unexpected response body for ${identifier}`);
   } else {
@@ -2218,7 +2218,7 @@ async function downloadAndSaveTarball(
   url: string,
   headers: Readonly<Record<string, string>>,
 ): Promise<void> {
-  const storageDirectory = resolve(process.env.STORAGE_DIR ?? join(process.cwd(), "storage"), "configuration_versions");
+  const storageDirectory = resolve(process.env["STORAGE_DIR"] ?? join(process.cwd(), "storage"), "configuration_versions");
   const temporaryPath = join(storageDirectory, `.${provider}-${crypto.randomUUID()}.tar.gz`);
   try {
     await mkdir(storageDirectory, { recursive: true });

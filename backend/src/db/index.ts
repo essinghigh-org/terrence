@@ -29,7 +29,7 @@ mkdirSync(storageDir, { recursive: true });
 // alongside it to also capture the SQL text.
 let queryCount = 0;
 const queryLog: string[] = [];
-let queryLogEnabled = envEnabled(process.env.TERRENCE_QUERY_LOG);
+let queryLogEnabled = envEnabled(process.env["TERRENCE_QUERY_LOG"]);
 
 // ---------------------------------------------------------------------------
 // SQLite backend (default): bun:sqlite keeps a single stable native
@@ -127,7 +127,7 @@ if (!isPostgres) {
   const originalPrepare = client.prepare.bind(client);
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- mirrors bun:sqlite's generic prepare() signature that an explicit return type cannot widen.
   prepareSqliteStatement = (sqlText: string, ...params: unknown[]): unknown => {
-    if (envEnabled(process.env.TERRENCE_QUERY_COUNT)) {
+    if (envEnabled(process.env["TERRENCE_QUERY_COUNT"])) {
       queryCount += 1;
       if (queryLogEnabled) queryLog.push(sqlText);
     }
@@ -168,17 +168,17 @@ export function wrapPgQuery<T>(queryObj: T, queryText: string): T {
   const attach = (target: unknown): void => {
     if (target === null || typeof target !== 'object' || attached.has(target)) return;
     const query = target as Record<string, unknown>;
-    if (typeof query.then !== 'function') {
+    if (typeof query["then"] !== 'function') {
       finish();
       return;
     }
     attached.add(target);
 
-    const originalThen = query.then.bind(target) as (
+    const originalThen = query["then"].bind(target) as (
       onFulfilled?: (value: unknown) => unknown,
       onRejected?: (error: unknown) => unknown,
     ) => unknown;
-    query.then = (
+    query["then"] = (
       onFulfilled?: (value: unknown) => unknown,
       onRejected?: (error: unknown) => unknown,
     ): unknown => originalThen(
@@ -193,9 +193,9 @@ export function wrapPgQuery<T>(queryObj: T, queryText: string): T {
       },
     );
 
-    if (typeof query.catch === 'function') {
-      const originalCatch = query.catch.bind(target) as (onRejected: (error: unknown) => unknown) => unknown;
-      query.catch = (onRejected: (error: unknown) => unknown): unknown => originalCatch((error: unknown): unknown => {
+    if (typeof query["catch"] === 'function') {
+      const originalCatch = query["catch"].bind(target) as (onRejected: (error: unknown) => unknown) => unknown;
+      query["catch"] = (onRejected: (error: unknown) => unknown): unknown => originalCatch((error: unknown): unknown => {
         finish();
         return onRejected(error);
       });
@@ -217,9 +217,9 @@ export function wrapPgQuery<T>(queryObj: T, queryText: string): T {
 
 let pgClient: BunSQL | null = null;
 if (isPostgres) {
-  const statementTimeoutMs = parseTimeoutMs(process.env.TERRENCE_DB_STATEMENT_TIMEOUT_MS, 30_000);
-  const lockTimeoutMs = parseTimeoutMs(process.env.TERRENCE_DB_LOCK_TIMEOUT_MS, 10_000);
-  const idleInTxTimeoutMs = parseTimeoutMs(process.env.TERRENCE_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS, 60_000);
+  const statementTimeoutMs = parseTimeoutMs(process.env["TERRENCE_DB_STATEMENT_TIMEOUT_MS"], 30_000);
+  const lockTimeoutMs = parseTimeoutMs(process.env["TERRENCE_DB_LOCK_TIMEOUT_MS"], 10_000);
+  const idleInTxTimeoutMs = parseTimeoutMs(process.env["TERRENCE_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS"], 60_000);
   pgClient = new BunSQL({
     url: databaseUrl,
     max: 10,
@@ -245,7 +245,7 @@ if (isPostgres) {
       return wrapPgQuery(queryObj, queryText);
     }) as typeof pgClient.unsafe;
   }
-  if (envEnabled(process.env.TERRENCE_QUERY_COUNT)) {
+  if (envEnabled(process.env["TERRENCE_QUERY_COUNT"])) {
     const originalUnsafe = pgClient.unsafe.bind(pgClient);
     // eslint-disable-next-line @typescript-eslint/promise-function-async -- mirrors Bun.SQL's non-async unsafe() signature; the cast below is the type boundary.
     pgClient.unsafe = ((queryText: string, values?: unknown[] | Record<string, unknown>): ReturnType<BunSQL['unsafe']> => {

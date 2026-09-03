@@ -281,7 +281,7 @@ async function doPostNotification(
 
   let lastResponse: Response | undefined;
   let lastError = "";
-  const allowPrivate = envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_URLS);
+  const allowPrivate = envEnabled(process.env["TERRENCE_ALLOW_PRIVATE_URLS"]);
   const destination = await resolveExternalUrl(configuration.url, allowPrivate);
   if ("error" in destination) {
     return { body: destination.error, code: "422", headers: {}, sentAt: new Date().toISOString(), successful: false, url: configuration.url, attempts: 0 };
@@ -345,20 +345,20 @@ function escapeHtml(value: string): string {
 }
 
 function emailContent(payload: Readonly<Record<string, unknown>>): Readonly<{ subject: string; text: string; html: string }> {
-  const notifications = Array.isArray(payload.notifications) ? payload.notifications : [];
+  const notifications = Array.isArray(payload["notifications"]) ? payload["notifications"] : [];
   const first = (notifications[0] ?? {}) as Readonly<Record<string, unknown>>;
-  const message = typeof first.message === "string" && first.message !== "" ? first.message : "Terrence notification";
-  const workspace = typeof payload.workspace_name === "string" ? payload.workspace_name : undefined;
+  const message = typeof first["message"] === "string" && first["message"] !== "" ? first["message"] : "Terrence notification";
+  const workspace = typeof payload["workspace_name"] === "string" ? payload["workspace_name"] : undefined;
   const subject = workspace === undefined ? message : `${message} - ${workspace}`;
 
   const lines: string[] = [];
   if (workspace !== undefined) lines.push(`Workspace: ${workspace}`);
-  if (typeof payload.organization_name === "string") lines.push(`Organization: ${payload.organization_name}`);
-  if (typeof payload.run_id === "string") lines.push(`Run: ${payload.run_id}`);
-  if (typeof first.trigger === "string") lines.push(`Trigger: ${first.trigger}`);
-  if (typeof first.run_status === "string") lines.push(`Status: ${first.run_status}`);
-  if (typeof payload.run_message === "string" && payload.run_message !== "") lines.push(`Message: ${payload.run_message}`);
-  if (typeof payload.run_url === "string") lines.push(`Details: ${payload.run_url}`);
+  if (typeof payload["organization_name"] === "string") lines.push(`Organization: ${payload["organization_name"]}`);
+  if (typeof payload["run_id"] === "string") lines.push(`Run: ${payload["run_id"]}`);
+  if (typeof first["trigger"] === "string") lines.push(`Trigger: ${first["trigger"]}`);
+  if (typeof first["run_status"] === "string") lines.push(`Status: ${first["run_status"]}`);
+  if (typeof payload["run_message"] === "string" && payload["run_message"] !== "") lines.push(`Message: ${payload["run_message"]}`);
+  if (typeof payload["run_url"] === "string") lines.push(`Details: ${payload["run_url"]}`);
   const text = lines.join("\n");
   const htmlLines = lines.map((line): string => {
     const separator = line.indexOf(": ");
@@ -421,12 +421,12 @@ async function smtpNotificationSettings(
 ): Promise<Parameters<typeof sendEmail>[0]> {
   return {
     host,
-    port: typeof smtp.port === "number" ? smtp.port : 25,
-    username: typeof smtp.username === "string" && smtp.username !== "" ? smtp.username : null,
-    password: typeof smtp.password === "string" ? smtp.password : null,
+    port: typeof smtp["port"] === "number" ? smtp["port"] : 25,
+    username: typeof smtp["username"] === "string" && smtp["username"] !== "" ? smtp["username"] : null,
+    password: typeof smtp["password"] === "string" ? smtp["password"] : null,
     senderEmail,
-    auth: smtp.auth === "none" || smtp.auth === "login" || smtp.auth === "plain" ? smtp.auth : "plain",
-    encryption: isSmtpEncryption(smtp.encryption) ? smtp.encryption : null,
+    auth: smtp["auth"] === "none" || smtp["auth"] === "login" || smtp["auth"] === "plain" ? smtp["auth"] : "plain",
+    encryption: isSmtpEncryption(smtp["encryption"]) ? smtp["encryption"] : null,
   };
 }
 
@@ -440,8 +440,8 @@ async function deliverEmailNotification(
   payload: Readonly<Record<string, unknown>>,
 ): Promise<NotificationDelivery> {
   const smtp = await getSettings("smtp");
-  const enabled = smtp.enabled === true;
-  const host = typeof smtp.host === "string" && smtp.host !== "" ? smtp.host : null;
+  const enabled = smtp["enabled"] === true;
+  const host = typeof smtp["host"] === "string" && smtp["host"] !== "" ? smtp["host"] : null;
   const senderEmail = typeof smtp["sender-email"] === "string" && smtp["sender-email"] !== "" ? smtp["sender-email"] : null;
   const recipientList = await emailRecipientList(configuration);
   const now = new Date().toISOString();
@@ -547,48 +547,48 @@ function stringify(value: unknown): string {
 
 function firstUrl(payload: Readonly<Record<string, unknown>>): string {
   const candidates = [
-    payload.run_url,
-    payload.change_request_url,
+    payload["run_url"],
+    payload["change_request_url"],
   ];
   for (const candidate of candidates) {
     if (typeof candidate === "string" && candidate.length > 0) return candidate;
   }
   // Assessment notifications carry the result under `details`.
-  const details = payload.details as Readonly<Record<string, unknown>> | undefined;
-  const newResult = details?.new_assessment_result as Readonly<Record<string, unknown>> | undefined;
-  if (typeof newResult?.url === "string" && newResult.url.length > 0) return newResult.url;
+  const details = payload["details"] as Readonly<Record<string, unknown>> | undefined;
+  const newResult = details?.["new_assessment_result"] as Readonly<Record<string, unknown>> | undefined;
+  if (typeof newResult?.["url"] === "string" && newResult["url"].length > 0) return newResult["url"];
   return "";
 }
 
 type NotificationRecord = Readonly<Record<string, unknown>>;
 
 function notificationMessage(payload: NotificationRecord, notification: NotificationRecord | undefined): string {
-  return typeof notification?.message === "string" && notification.message.length > 0
-    ? notification.message
-    : (typeof payload.message === "string" ? payload.message : "Terrence notification");
+  return typeof notification?.["message"] === "string" && notification["message"].length > 0
+    ? notification["message"]
+    : (typeof payload["message"] === "string" ? payload["message"] : "Terrence notification");
 }
 
 function addAssessmentFields(
   payload: NotificationRecord,
   addField: (label: string, value: unknown) => void,
 ): void {
-  const details = payload.details as NotificationRecord | null | undefined;
+  const details = payload["details"] as NotificationRecord | null | undefined;
   if (details === undefined || details === null) return;
-  const result = details.new_assessment_result as NotificationRecord | undefined;
-  const drifted = result?.resources_drifted;
+  const result = details["new_assessment_result"] as NotificationRecord | undefined;
+  const drifted = result?.["resources_drifted"];
   if (typeof drifted === "number") addField("Resources drifted", drifted);
-  const checksFailed = result?.checks_failed as number | undefined;
+  const checksFailed = result?.["checks_failed"] as number | undefined;
   if (typeof checksFailed === "number") addField("Failed checks", checksFailed);
 }
 
 function notificationStatus(payload: NotificationRecord, notification: NotificationRecord | undefined): unknown {
-  return typeof payload.run_status === "string"
-    ? payload.run_status
-    : (typeof payload.change_request_status === "string" ? payload.change_request_status : notification?.run_status);
+  return typeof payload["run_status"] === "string"
+    ? payload["run_status"]
+    : (typeof payload["change_request_status"] === "string" ? payload["change_request_status"] : notification?.["run_status"]);
 }
 
 function summarizePayload(payload: Readonly<Record<string, unknown>>): NotificationSummary {
-  const notifications = payload.notifications;
+  const notifications = payload["notifications"];
   const notification = (Array.isArray(notifications) ? notifications[0] : notifications) as NotificationRecord | undefined;
   const message = notificationMessage(payload, notification);
 
@@ -599,21 +599,21 @@ function summarizePayload(payload: Readonly<Record<string, unknown>>): Notificat
     if (text.length > 0) fields.push({ label, value: text });
   };
 
-  addField("Organization", payload.organization_name);
-  addField("Workspace", payload.workspace_name);
-  addField("Run", payload.run_id);
-  addField("Change request", payload.change_request_subject);
-  addField("Triggered by", payload.run_created_by ?? payload.run_updated_by);
-  addField("Status", payload.run_status ?? payload.change_request_status ?? notification?.run_status);
+  addField("Organization", payload["organization_name"]);
+  addField("Workspace", payload["workspace_name"]);
+  addField("Run", payload["run_id"]);
+  addField("Change request", payload["change_request_subject"]);
+  addField("Triggered by", payload["run_created_by"] ?? payload["run_updated_by"]);
+  addField("Status", payload["run_status"] ?? payload["change_request_status"] ?? notification?.["run_status"]);
 
   addAssessmentFields(payload, addField);
 
   const linkUrl = firstUrl(payload);
-  const linkLabel = typeof payload.run_id === "string" ? "Open run" : "Open workspace";
+  const linkLabel = typeof payload["run_id"] === "string" ? "Open run" : "Open workspace";
   const status = notificationStatus(payload, notification);
   return {
     title: message,
-    subtext: stringify(payload.run_message ?? payload.change_request_message),
+    subtext: stringify(payload["run_message"] ?? payload["change_request_message"]),
     fields,
     linkLabel,
     linkUrl,
@@ -657,10 +657,10 @@ function renderTeams(payload: Readonly<Record<string, unknown>>): string {
     summary: summary.title,
     title: summary.title,
   };
-  if (summary.subtext.length > 0) card.text = summary.subtext;
-  if (facts.length > 0) card.sections = [{ facts }];
+  if (summary.subtext.length > 0) card["text"] = summary.subtext;
+  if (facts.length > 0) card["sections"] = [{ facts }];
   if (summary.linkUrl.length > 0) {
-    card.potentialAction = [{ "@type": "OpenUri", name: summary.linkLabel, targets: [{ os: "default", uri: summary.linkUrl }] }];
+    card["potentialAction"] = [{ "@type": "OpenUri", name: summary.linkLabel, targets: [{ os: "default", uri: summary.linkUrl }] }];
   }
   return JSON.stringify(card);
 }
@@ -737,7 +737,7 @@ export async function verifyDestinationOwnership(
     ownership_verification: true,
   };
 
-  const allowPrivate = envEnabled(process.env.TERRENCE_ALLOW_PRIVATE_URLS);
+  const allowPrivate = envEnabled(process.env["TERRENCE_ALLOW_PRIVATE_URLS"]);
   const destination = await resolveExternalUrl(configuration.url, allowPrivate);
   if ("error" in destination) {
     return { successful: false, echoed: null, bodyLacksEcho: true, headerLacksEcho: true };
@@ -817,7 +817,7 @@ export async function deliverRunNotifications(
 
   const matching = (await withoutProjectExclusions(configurations, workspace.id)).filter((configuration: NotificationConfiguration): boolean =>
     configuration.enabled === true && configuration.triggers.includes(trigger));
-  const baseUrl = process.env.PUBLIC_URL ?? "http://localhost";
+  const baseUrl = process.env["PUBLIC_URL"] ?? "http://localhost";
   const runUrl = new URL(
     `/app/${encodeURIComponent(organization?.name ?? workspace.orgId)}/workspaces/${encodeURIComponent(workspace.name)}/runs/${encodeURIComponent(run.id)}`,
     baseUrl,
@@ -920,7 +920,7 @@ export async function deliverAssessmentNotifications(
 
   const matching = (await withoutProjectExclusions(configurations, workspace.id)).filter((configuration: NotificationConfiguration): boolean =>
     configuration.enabled === true && configuration.triggers.includes(trigger));
-  const baseUrl = process.env.PUBLIC_URL ?? "http://localhost";
+  const baseUrl = process.env["PUBLIC_URL"] ?? "http://localhost";
   const messages = {
     "assessment:drifted": "Drift Detected",
     "assessment:check_failure": "Continuous Validation Check Failed",

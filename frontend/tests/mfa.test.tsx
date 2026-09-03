@@ -28,7 +28,7 @@ afterEach((): void => {
 test("enrolls MFA after verifying an authenticator code", async () => {
   const calls: [string, RequestInit | undefined][] = [];
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const requestUrl = url(input);
     calls.push([requestUrl, init]);
     if (requestUrl === "/api/v2/account/details") return account();
@@ -38,7 +38,7 @@ test("enrolls MFA after verifying an authenticator code", async () => {
     if (requestUrl === "/api/v2/account/mfa/enroll") return json({ data: { attributes: { secret: "JBSWY3DPEHPK3PXP", "otpauth-url": "otpauth://totp/Terrence:alice" } } });
     if (requestUrl === "/api/v2/account/mfa/verify") return json({ data: { attributes: { enabled: true } } });
     throw new Error(`Unexpected request: ${requestUrl}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(<MemoryRouter><AccountSettings /></MemoryRouter>);
   await view.findByText("MFA is not enabled on this account.");
@@ -53,14 +53,14 @@ test("enrolls MFA after verifying an authenticator code", async () => {
 test("completes an MFA login challenge without exposing the password again", async () => {
   const calls: [string, RequestInit | undefined][] = [];
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const requestUrl = url(input);
     calls.push([requestUrl, init]);
     if (requestUrl === "/api/v2/ping") return json({ "signup-enabled": false });
     if (requestUrl === "/api/v2/users/login" && init?.method === "POST") return json({ data: { attributes: { "mfa-required": true, "mfa-challenge-token": "challenge-1" } } });
     if (requestUrl === "/api/v2/users/login/mfa") return json({ data: { attributes: { token: "access-1" } } });
     throw new Error(`Unexpected request: ${requestUrl}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(<MemoryRouter><Login /></MemoryRouter>);
   fireEvent.input(view.getByLabelText("Username or email address"), { target: { value: "alice" } });
@@ -78,7 +78,7 @@ test("completes an MFA login challenge without exposing the password again", asy
 
 test("disables MFA with a current authenticator code", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const requestUrl = url(input);
     if (requestUrl === "/api/v2/account/details") return account();
     if (requestUrl === "/api/v2/users/user-1/authentication-tokens") return json({ data: [] });
@@ -86,7 +86,7 @@ test("disables MFA with a current authenticator code", async () => {
     if (requestUrl === "/api/v2/account/mfa" && init?.method === undefined) return json({ data: { attributes: { enabled: true } } });
     if (requestUrl === "/api/v2/account/mfa" && init?.method === "DELETE") return new Response(null, { status: 204 });
     throw new Error(`Unexpected request: ${requestUrl}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
   const view = render(<MemoryRouter><AccountSettings /></MemoryRouter>);
   await view.findByText("Your account requires an authenticator code at sign in.");
   fireEvent.input(view.getByLabelText("Authenticator code to disable MFA"), { target: { value: "123456" } });
@@ -107,7 +107,7 @@ test("completes an MFA login challenge with oauth_state and redirects to OAuth c
     },
   };
 
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const requestUrl = url(input);
       if (requestUrl === "/api/v2/ping") return json({ "signup-enabled": false });
       if (requestUrl === "/api/v2/users/login" && init?.method === "POST") {
@@ -117,7 +117,7 @@ test("completes an MFA login challenge with oauth_state and redirects to OAuth c
         return json({ data: { attributes: { token: "access-oauth-1" } } });
       }
       throw new Error(`Unexpected request: ${requestUrl}`);
-    }) as typeof fetch;
+    })) as unknown as typeof fetch;
 
     const view = render(
       <MemoryRouter initialEntries={["/login?oauth_state=state-xyz-123"]}>

@@ -52,9 +52,9 @@ describe("Terraform/OpenTofu state import", () => {
       201,
       "state-versions",
     );
-    expect(resource.attributes.serial).toBe(1);
+    expect(resource.attributes["serial"]).toBe(1);
     expect(resource.attributes["state-version"]).toBe(4);
-    expect(resource.attributes.lineage).toBe("migration-lineage");
+    expect(resource.attributes["lineage"]).toBe("migration-lineage");
 
     const downloaded = await request(`/api/v2/state-versions/${resource.id}/download`, { headers });
     expect(downloaded.status).toBe(200);

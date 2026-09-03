@@ -14,7 +14,7 @@ export async function runPlanExplanationJob(job: DurableJob, context: DurableJob
   await context.heartbeat();
 
   const settings = await getSettings("plan-explainer");
-  if (settings.enabled !== true) {
+  if (settings["enabled"] !== true) {
     throw new Error("Plan explainer is disabled");
   }
   const resolved = await resolvePlanExplainerSettings(settings);
@@ -31,7 +31,7 @@ export async function runPlanExplanationJob(job: DurableJob, context: DurableJob
   await context.heartbeat();
   if (await context.canceled()) return;
 
-  const model = resolved.model as string;
+  const model = resolved["model"] as string;
 
   let content: string;
   const parts = await fetchUpstream(resolved, source.prompt, false, undefined, async (upstream, tick) => {

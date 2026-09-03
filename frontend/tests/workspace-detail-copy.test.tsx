@@ -24,9 +24,9 @@ afterEach((): void => {
   Object.defineProperty(navigator, "clipboard", { value: originalClipboard, configurable: true });
 });
 
-function workspaceFetchMock(clipboard: { writeText: (text: string) => Promise<void> }): typeof fetch {
+function workspaceFetchMock(_clipboard: { writeText: (text: string) => Promise<void> }): typeof fetch {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  return mock(async (input: string | URL | Request): Promise<Response> => {
+  return mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
       return json({
@@ -39,7 +39,7 @@ function workspaceFetchMock(clipboard: { writeText: (text: string) => Promise<vo
     if (url.startsWith("/api/v2/workspaces/ws-1/runs")) return json({ data: [] });
     if (url.startsWith("/api/v2/workspaces/ws-1/vars")) return json({ data: [] });
     return json({ data: [] });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 }
 
 test("copies the workspace ID to the clipboard on success", async () => {
@@ -91,7 +91,7 @@ test("shows an error toast when copying the workspace id fails", async () => {
 });
 
 test("links the configured GitHub repository and shows its working directory", async () => {
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme/workspaces/production") {
       return json({
@@ -113,7 +113,7 @@ test("links the configured GitHub repository and shows its working directory", a
     }
     if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>

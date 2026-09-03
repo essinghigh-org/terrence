@@ -9,7 +9,7 @@ import { db } from "../../src/db";
 import { users, apiTokens } from "../../src/db/schema";
 import { saveVersionCacheFile } from "../../src/lib/version-cache";
 
-const originalCacheFile = process.env.TERRENCE_VERSION_CACHE_FILE;
+const originalCacheFile = process.env["TERRENCE_VERSION_CACHE_FILE"];
 
 describe("admin provider surface (kanban 11.18)", () => {
   const suffix = Date.now().toString(36);
@@ -28,7 +28,7 @@ describe("admin provider surface (kanban 11.18)", () => {
   beforeAll(async () => {
     // The freshness lookup is cached on disk; point it at a temp file and
     // seed the cache so the response is deterministic in tests without network.
-    process.env.TERRENCE_VERSION_CACHE_FILE = cacheFile;
+    process.env["TERRENCE_VERSION_CACHE_FILE"] = cacheFile;
     saveVersionCacheFile(cacheFile, "tfe-provider", { versions: ["0.80.0"], fetchedAt: Date.now() });
 
     await db.insert(users).values([
@@ -44,8 +44,8 @@ describe("admin provider surface (kanban 11.18)", () => {
   afterAll(async () => {
     await db.delete(apiTokens).where(inArray(apiTokens.userId, [adminId, userId]));
     await db.delete(users).where(inArray(users.id, [adminId, userId]));
-    if (originalCacheFile === undefined) delete process.env.TERRENCE_VERSION_CACHE_FILE;
-    else process.env.TERRENCE_VERSION_CACHE_FILE = originalCacheFile;
+    if (originalCacheFile === undefined) delete process.env["TERRENCE_VERSION_CACHE_FILE"];
+    else process.env["TERRENCE_VERSION_CACHE_FILE"] = originalCacheFile;
     rmSync(cacheFile, { force: true });
   });
 

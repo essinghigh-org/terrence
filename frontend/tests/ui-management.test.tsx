@@ -39,12 +39,12 @@ test("edits and deletes projects through supported routes and reassigns a worksp
     if (url === "/api/v2/organizations/acme") {
       return json({ data: { attributes: { permissions: { "can-manage-projects": true } } } });
     }
-    if (url === "/api/v2/projects/project-app" && init?.method === "PATCH") return json({ data: projects[1] });
+    if (url === "/api/v2/projects/project-app" && init?.method === "PATCH") return json({ data: projects[1]! });
     if (url === "/api/v2/projects/project-app" && init?.method === "DELETE") return new Response(null, { status: 204 });
     if (url === "/api/v2/workspaces/workspace-1" && init?.method === "PATCH") return json({ data: workspace });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/projects"]}>
@@ -85,7 +85,7 @@ test("edits and deletes projects through supported routes and reassigns a worksp
 });
 
 test("keeps projects read-only without project management permission", async () => {
-  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+  const fetchMock = mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme/projects") {
       return json({ data: [{ id: "project-app", attributes: { name: "Applications" } }] });
@@ -96,7 +96,7 @@ test("keeps projects read-only without project management permission", async () 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/projects"]}>
@@ -130,7 +130,7 @@ test("ignores stale projects and permissions after changing organizations", asyn
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/projects"]}>
@@ -194,7 +194,7 @@ test("filters workspaces by run status and adds, updates, and removes tags", asy
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -220,10 +220,10 @@ test("filters workspaces by run status and adds, updates, and removes tags", asy
     fireEvent.input(view.getByLabelText("Key"), { target: { value: "environment" } });
     fireEvent.input(view.getByLabelText("Value"), { target: { value: "production" } });
   });
-  expect(view.getByLabelText("Key").value).toBe("environment");
-  expect(view.getByLabelText("Value").value).toBe("production");
+  expect((view.getByLabelText("Key") as HTMLInputElement).value).toBe("environment");
+  expect((view.getByLabelText("Value") as HTMLInputElement).value).toBe("production");
   const addTag = await waitFor((): HTMLButtonElement => {
-    const button = view.getByRole("button", { name: "Add tag" });
+    const button = view.getByRole("button", { name: "Add tag" }) as HTMLButtonElement;
     expect(button.disabled).toBeFalse();
     return button;
   });
@@ -295,7 +295,7 @@ test("manages team organization access, invites a member, and removes them", asy
     if (url === "/api/v2/teams/team-1" && init?.method === "PATCH") {
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       const payload = JSON.parse(init.body as string) as {
-        data: { attributes: { "organization-access": Record<string, boolean> } };
+        data: { attributes: { "organization-access": typeof team.attributes["organization-access"] } };
       };
       team = {
         ...team,
@@ -314,7 +314,7 @@ test("manages team organization access, invites a member, and removes them", asy
         id: "membership-invite",
         attributes: { email: "new@example.com", role: "member", status: "invited" },
       });
-      return json({ data: memberships[1] }, 201);
+      return json({ data: memberships[1]! }, 201);
     }
     if (url === "/api/v2/organization-memberships/membership-invite" && init?.method === "DELETE") {
       memberships.splice(1);
@@ -322,7 +322,7 @@ test("manages team organization access, invites a member, and removes them", asy
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/settings?tab=teams"]}>
@@ -356,9 +356,9 @@ test("manages team organization access, invites a member, and removes them", asy
     fireEvent.input(view.getByLabelText("Email"), { target: { value: "new@example.com" } });
     fireEvent.change(view.getByLabelText("Team"), { target: { value: "team-1" } });
   });
-  expect(view.getByLabelText("Email").value).toBe("new@example.com");
+  expect((view.getByLabelText("Email") as HTMLInputElement).value).toBe("new@example.com");
   const invite = await waitFor((): HTMLButtonElement => {
-    const button = view.getByRole("button", { name: "Invite" });
+    const button = view.getByRole("button", { name: "Invite" }) as HTMLButtonElement;
     expect(button.disabled).toBeFalse();
     return button;
   });
@@ -407,7 +407,7 @@ test("renders and saves the organization agent execution mode", async () => {
     if (url === "/api/v2/organizations/acme/relationships/data-retention-policy") return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/settings"]}>
@@ -452,7 +452,7 @@ test("fails closed for organization and team mutations without explicit permissi
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const teamsView = render(
     <MemoryRouter initialEntries={["/app/acme/settings?tab=teams"]}>
@@ -461,11 +461,11 @@ test("fails closed for organization and team mutations without explicit permissi
   );
 
   await teamsView.findByText("Manage access across the organization.");
-  expect(teamsView.getByPlaceholderText("New team name").disabled).toBeTrue();
-  expect(teamsView.getByRole("button", { name: "Manage permissions for Developers" }).disabled).toBeTrue();
-  expect(teamsView.getByLabelText("Email").disabled).toBeTrue();
-  expect(teamsView.getByRole("button", { name: "Invite" }).disabled).toBeTrue();
-  expect(teamsView.getByRole("button", { name: "Remove member@example.com" }).disabled).toBeTrue();
+  expect((teamsView.getByPlaceholderText("New team name") as HTMLInputElement).disabled).toBeTrue();
+  expect((teamsView.getByRole("button", { name: "Manage permissions for Developers" }) as HTMLButtonElement).disabled).toBeTrue();
+  expect((teamsView.getByLabelText("Email") as HTMLInputElement).disabled).toBeTrue();
+  expect((teamsView.getByRole("button", { name: "Invite" }) as HTMLButtonElement).disabled).toBeTrue();
+  expect((teamsView.getByRole("button", { name: "Remove member@example.com" }) as HTMLButtonElement).disabled).toBeTrue();
   teamsView.unmount();
 
   const generalView = render(
@@ -475,16 +475,16 @@ test("fails closed for organization and team mutations without explicit permissi
   );
 
   await generalView.findByText("Organization owner access is required to change these settings.");
-  expect(generalView.getByLabelText("Organization Name").disabled).toBeTrue();
-  expect(generalView.getByRole("button", { name: "Save settings" }).disabled).toBeTrue();
-  expect(generalView.getByRole("button", { name: "Delete Organization" }).disabled).toBeTrue();
+  expect((generalView.getByLabelText("Organization Name") as HTMLInputElement).disabled).toBeTrue();
+  expect((generalView.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled).toBeTrue();
+  expect((generalView.getByRole("button", { name: "Delete Organization" }) as HTMLButtonElement).disabled).toBeTrue();
   expect(fetchMock.mock.calls.every(([, init]): boolean => init?.method === undefined)).toBeTrue();
 });
 
 test("shows a retryable organization load error", async () => {
   let organizationRequests = 0;
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme") {
       organizationRequests += 1;
@@ -498,7 +498,7 @@ test("shows a retryable organization load error", async () => {
       || url === "/api/v2/organizations/acme/organization-memberships"
     ) return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/settings"]}>
@@ -518,7 +518,7 @@ test("surfaces and retries team and member load errors", async () => {
   let teamRequests = 0;
   let membershipRequests = 0;
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme") {
       return json({ data: { id: "org-1", attributes: { name: "acme", permissions: {} } } });
@@ -536,7 +536,7 @@ test("surfaces and retries team and member load errors", async () => {
         : json({ data: [] });
     }
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/settings?tab=teams"]}>
@@ -589,7 +589,7 @@ test("reloads organization settings at the renamed path", async () => {
     if (url.endsWith("/teams") || url.endsWith("/organization-memberships")) return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/settings"]}>
@@ -610,7 +610,7 @@ test("ignores an organization response after navigating to another organization"
   let resolveAcme!: (response: Response) => void;
   const acmeResponse = new Promise<Response>((resolve): void => { resolveAcme = resolve; });
 // SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
     if (url === "/api/v2/organizations/acme") return acmeResponse;
     if (url === "/api/v2/organizations/platform") {
@@ -623,7 +623,7 @@ test("ignores an organization response after navigating to another organization"
     }
     if (url.endsWith("/teams") || url.endsWith("/organization-memberships")) return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  })) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/settings"]}>
@@ -666,7 +666,7 @@ test("toggles dense table density and persists the preference", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -707,7 +707,7 @@ test("sizes workspace placeholders to the recognized visible columns", async () 
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -738,7 +738,7 @@ test("pins a workspace (star) and sorts it to the top", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -785,7 +785,7 @@ test("shows recent workspace shortcuts in the org sidebar", async () => {
     if (url.startsWith("/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100")) return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const { Layout } = await import("../src/components/Layout");
   const view = render(
@@ -819,7 +819,7 @@ test("saves, applies, and deletes a named workspace view", async () => {
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -894,7 +894,7 @@ test("column chooser hides and restores table columns with persistence", async (
     }
     throw new Error(`Unexpected request: ${url}`);
   });
-  globalThis.fetch = fetchMock;
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
     <MemoryRouter initialEntries={["/app/acme"]}>
@@ -921,8 +921,8 @@ test("column chooser hides and restores table columns with persistence", async (
     view.getAllByRole("menuitemcheckbox").find((item): boolean => item.textContent === columnName);
   await waitFor((): void => { expect(menuItem("Repository")).toBeTruthy(); });
   await act(async (): Promise<void> => {
-    fireEvent.click(menuItem("Repository"));
-    fireEvent.click(menuItem("Status"));
+    fireEvent.click(menuItem("Repository")!);
+    fireEvent.click(menuItem("Status")!);
   });
 
   await waitFor((): void => {

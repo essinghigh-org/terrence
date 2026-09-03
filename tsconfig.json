@@ -38,7 +38,11 @@
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
 
-    // We skip lib check to avoid flooding with node_module errors
+    // skipLibCheck is load-bearing, not incidental (issue #429): with it off,
+    // tsc reports ~177 errors, all inside third-party .d.ts files (elysia dist
+    // types do not compile under TS 6 stricter generics checks) and zero in
+    // first-party code. Re-probe with
+    // `tsc --noEmit --skipLibCheck false` before flipping this.
     "skipLibCheck": true
   }
 }

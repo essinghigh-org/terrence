@@ -179,12 +179,12 @@ async function scimLinked(teamId: string): Promise<boolean> {
 export const teamRoutes = new Elysia({ name: "teams" })
   .use(authPlugin)
   .get("/api/v2/organizations/:org_name/team-tokens", async ({ params, request, query, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const org = await cachedOrgByName(params.org_name ?? "");
+    const org = await cachedOrgByName(params["org_name"] ?? "");
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const search = typeof query?.q === "string" ? query.q.toLowerCase() : new URL(request.url).searchParams.get("q")?.toLowerCase() ?? "";
+    const search = typeof query?.["q"] === "string" ? query["q"].toLowerCase() : new URL(request.url).searchParams.get("q")?.toLowerCase() ?? "";
     const matchingTeams = await db.query.teams.findMany({
       where: eq(teams.orgId, org.id),
       columns: { id: true, name: true },
@@ -219,7 +219,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     };
   })
   .get("/api/v2/organizations/:org_name/teams", async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "member", tokenOrgId, tokenTeamId ?? null, "teams:read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     // Roster (member identifiers) is membership data: only include it when the
@@ -286,20 +286,20 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return { data: await Promise.all(data), ...pagination(request, number, size, totalCount) };
   })
   .post("/api/v2/organizations/:org_name/teams", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const orgName = params.org_name ?? "";
+    const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const name = typeof attributes.name === "string" ? attributes.name : "";
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
     if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
     const id = `team-${crypto.randomUUID()}`;
     const rawOrgAccess = attributes["organization-access"] !== undefined && typeof attributes["organization-access"] === "object" && attributes["organization-access"] !== null
       ? attributes["organization-access"] as Record<string, unknown>
       : {};
-    const description = typeof attributes.description === "string" ? attributes.description : null;
-    const visibility = typeof attributes.visibility === "string" ? attributes.visibility : (typeof rawOrgAccess.visibility === "string" ? rawOrgAccess.visibility : "organization");
+    const description = typeof attributes["description"] === "string" ? attributes["description"] : null;
+    const visibility = typeof attributes["visibility"] === "string" ? attributes["visibility"] : (typeof rawOrgAccess["visibility"] === "string" ? rawOrgAccess["visibility"] : "organization");
     const ssoTeamId = typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : (typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null);
     const allowMemberTokenManagement = typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false;
     const organizationAccess = parseOrganizationAccess(rawOrgAccess);
@@ -335,11 +335,11 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return { data: await teamResource(newTeam, 0, { users: [] }, undefined, { canUpdate: true, canDestroy: true }) };
   })
   .get("/api/v2/teams/:team_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, query, set }: ParamCtx): Promise<unknown> => {
-    const teamId = params.team_id ?? "";
+    const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrgPermission(user?.id, team.orgId, "member", tokenOrgId, tokenTeamId ?? null, "teams:read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const userCount = (await db.select({ val: count() }).from(teamMemberships).where(eq(teamMemberships.teamId, team.id)))[0]?.val ?? 0;
-    const includeQuery = query !== undefined ? query.include : undefined;
+    const includeQuery = query !== undefined ? query["include"] : undefined;
     const includes = typeof includeQuery === "string" ? includeQuery.split(",") : [];
     // Membership data (usernames/emails, membership refs, and the exact team
     // size) requires members:read.
@@ -377,21 +377,21 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return { data: await teamResource(team, rosterCount, undefined, scim, permissions), ...(included.length > 0 ? { included } : {}) };
   })
   .patch("/api/v2/teams/:team_id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const teamId = params.team_id ?? "";
+    const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const updates: Partial<typeof teams.$inferInsert> = {};
     const linked = await scimLinked(teamId);
-    if (linked && typeof attributes.name === "string" && attributes.name !== team.name) {
+    if (linked && typeof attributes["name"] === "string" && attributes["name"] !== team.name) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "SCIM-linked teams cannot be renamed" }] };
     }
-    if (typeof attributes.name === "string") updates.name = attributes.name;
-    if (attributes.description !== undefined) updates.description = typeof attributes.description === "string" ? attributes.description : null;
-    if (typeof attributes.visibility === "string") updates.visibility = attributes.visibility;
+    if (typeof attributes["name"] === "string") updates.name = attributes["name"];
+    if (attributes["description"] !== undefined) updates.description = typeof attributes["description"] === "string" ? attributes["description"] : null;
+    if (typeof attributes["visibility"] === "string") updates.visibility = attributes["visibility"];
     if (!linked && attributes["sso-team-id"] !== undefined) updates.ssoTeamId = typeof attributes["sso-team-id"] === "string" ? attributes["sso-team-id"] : null;
     if (attributes["organization-access"] !== undefined) {
       if (!(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-organization-access"))) {
@@ -405,7 +405,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       // inside organization-access, but the top-level attribute takes precedence
       // when present (matching the create handler), and sso-team-id is gated by
       // the linked-team guard. Column-backed keys are persisted to their columns.
-      if (attributes.visibility === undefined && typeof rawOrgAccess?.visibility === "string") updates.visibility = rawOrgAccess.visibility;
+      if (attributes["visibility"] === undefined && typeof rawOrgAccess?.["visibility"] === "string") updates.visibility = rawOrgAccess["visibility"];
       if (!linked && attributes["sso-team-id"] === undefined && rawOrgAccess?.["sso-team-id"] !== undefined) updates.ssoTeamId = typeof rawOrgAccess["sso-team-id"] === "string" ? rawOrgAccess["sso-team-id"] : null;
       if (rawOrgAccess?.["allow-member-token-management"] !== undefined) updates.allowMemberTokenManagement = typeof rawOrgAccess["allow-member-token-management"] === "boolean" ? rawOrgAccess["allow-member-token-management"] : false;
     }
@@ -437,7 +437,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return { data: await teamResource(updated, userCount, { users: memberRefs.map((m): { id: string; type: string } => ({ id: m.userId, type: "users" })) }, scim, { canUpdate: true, canDestroy: true }) };
   })
   .delete("/api/v2/teams/:team_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const teamId = params.team_id ?? "";
+    const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (await scimLinked(teamId)) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -449,18 +449,18 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return {};
   })
   .post("/api/v2/teams/:team_id/relationships/users", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const teamId = params.team_id ?? "";
+    const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (user?.isSiteAdmin !== true && (await scimLinked(teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const userItems = payload.data;
+    const userItems = payload["data"];
     if (Array.isArray(userItems)) {
       const batch: (typeof teamMemberships.$inferInsert)[] = [];
       // the reference format's Atlas convention lets `data[].id` be either a user UUID or a
       // username; the go-tfe v2 client sends usernames.
       const rawIds = userItems
-        .map((item): string => (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string") ? (item as Record<string, unknown>).id as string : "")
+        .map((item): string => (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string") ? (item as Record<string, unknown>)["id"] as string : "")
         .filter((s: string): boolean => s !== "");
       const userIds = await resolveUserIds(rawIds);
       const memberships = userIds.length === 0
@@ -482,14 +482,14 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return {};
   })
   .delete("/api/v2/teams/:team_id/relationships/users", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const teamId = params.team_id ?? "";
+    const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (user?.isSiteAdmin !== true && (await scimLinked(teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const userItems = payload.data;
+    const userItems = payload["data"];
     if (Array.isArray(userItems)) {
-      const rawIds = userItems.map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>).id === "string") ? (i as Record<string, unknown>).id as string : "").filter((s: string): boolean => s !== "");
+      const rawIds = userItems.map((i: unknown): string => (i !== null && typeof i === "object" && typeof (i as Record<string, unknown>)["id"] === "string") ? (i as Record<string, unknown>)["id"] as string : "").filter((s: string): boolean => s !== "");
       const userIds = await resolveUserIds(rawIds);
       if (userIds.length > 0) await db.delete(teamMemberships).where(and(eq(teamMemberships.teamId, teamId), inArray(teamMemberships.userId, userIds)));
     }
@@ -497,15 +497,15 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return {};
   })
   .post("/api/v2/teams/:team_id/relationships/organization-memberships", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const teamId = params.team_id ?? "";
+    const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (user?.isSiteAdmin !== true && (await scimLinked(teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload.data;
+    const items = payload["data"];
     if (Array.isArray(items)) {
       const memIds = items
-        .map((item): string => (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string") ? (item as Record<string, unknown>).id as string : "")
+        .map((item): string => (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string") ? (item as Record<string, unknown>)["id"] as string : "")
         .filter((s: string): boolean => s !== "");
       const memberships = memIds.length === 0
         ? new Map<string, typeof organizationMemberships.$inferSelect>()
@@ -527,15 +527,15 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return {};
   })
   .delete("/api/v2/teams/:team_id/relationships/organization-memberships", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const teamId = params.team_id ?? "";
+    const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-membership"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (user?.isSiteAdmin !== true && (await scimLinked(teamId))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const items = payload.data;
+    const items = payload["data"];
     if (Array.isArray(items)) {
       const memIds = items
-        .map((item): string => (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>).id === "string") ? (item as Record<string, unknown>).id as string : "")
+        .map((item): string => (item !== null && typeof item === "object" && typeof (item as Record<string, unknown>)["id"] === "string") ? (item as Record<string, unknown>)["id"] as string : "")
         .filter((s: string): boolean => s !== "");
       if (memIds.length > 0) {
         const memberships = await db.query.organizationMemberships.findMany({ where: inArray(organizationMemberships.id, memIds) });
@@ -555,7 +555,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot mint unscoped team tokens" }] };
     }
-    const teamId = params.team_id ?? "";
+    const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const rawToken = generateAuthenticationToken("team-tok");
@@ -580,7 +580,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return { data: { id, type: "authentication-tokens", attributes: { token: rawToken, "created-at": new Date().toISOString() } } };
   })
   .get("/api/v2/teams/:team_id/authentication-token", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const teamId = params.team_id ?? "";
+    const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const tok = await db.query.apiTokens.findFirst({ where: and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, true)) });
@@ -588,7 +588,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return { data: { id: tok.id, type: "authentication-tokens", attributes: { "created-at": new Date(tok.createdAt).toISOString() } } };
   })
   .delete("/api/v2/teams/:team_id/authentication-token", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const teamId = params.team_id ?? "";
+    const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const deleted = await db.delete(apiTokens).where(and(eq(apiTokens.teamId, teamId), eq(apiTokens.legacy, true))).returning({ id: apiTokens.id });
@@ -602,23 +602,23 @@ export const teamRoutes = new Elysia({ name: "teams" })
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden", detail: "Fine-grained tokens cannot mint unscoped team tokens" }] };
     }
-    const teamId = params.team_id ?? "";
+    const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const secret = generateAuthenticationToken("team");
     const tokenId = `tok-${crypto.randomUUID()}`;
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     // TFE parity: modern team tokens require an explicit description and
     // default to a two-year expiration when none is supplied. The org TTL
     // policy caps or forbids the result (todo 72-74).
-    const description = typeof attrs.description === "string" ? attrs.description.trim() : "";
+    const description = typeof attrs["description"] === "string" ? attrs["description"].trim() : "";
     if (description === "" || description.length > TOKEN_DESCRIPTION_MAX_LENGTH) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Description is required for team tokens and must be at most ${TOKEN_DESCRIPTION_MAX_LENGTH} characters` }] };
     }
-    const expiredAtVal = attrs["expired-at"] ?? attrs["expires-at"] ?? attrs.expiredAt ?? attrs.expiresAt;
+    const expiredAtVal = attrs["expired-at"] ?? attrs["expires-at"] ?? attrs["expiredAt"] ?? attrs["expiresAt"];
     const expiredAtStr = typeof expiredAtVal === "string" ? expiredAtVal : "";
     let requestedExpiry: number;
     if (expiredAtStr === "") {
@@ -659,7 +659,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return { data: { id: tokenId, type: "authentication-tokens", attributes: { token: secret, description, "created-at": new Date().toISOString(), "expired-at": expiresAt !== null ? new Date(expiresAt).toISOString() : null } } };
   })
   .get("/api/v2/teams/:team_id/authentication-tokens", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const teamId = params.team_id ?? "";
+    const teamId = params["team_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     // Modern tokens only: the legacy credential is exposed via the singular
@@ -671,8 +671,8 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return { data: tokenList.map((t): Record<string, unknown> => ({ id: t.id, type: "authentication-tokens", attributes: { description: t.description, "created-at": new Date(t.createdAt).toISOString(), "last-used-at": t.lastUsedAt !== null ? new Date(t.lastUsedAt).toISOString() : null, "expired-at": t.expiresAt !== null ? new Date(t.expiresAt).toISOString() : null } })) };
   })
   .delete("/api/v2/teams/:team_id/authentication-tokens/:token_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const teamId = params.team_id ?? "";
-    const tokenId = params.token_id ?? "";
+    const teamId = params["team_id"] ?? "";
+    const tokenId = params["token_id"] ?? "";
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     // Removing a modern token must never disturb the legacy credential.
@@ -693,17 +693,17 @@ export const teamRoutes = new Elysia({ name: "teams" })
   })
   .post("/api/v2/team-workspaces", async ({ body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const rels = typeof data?.relationships === "object" && data.relationships !== null ? (data.relationships as Record<string, unknown>) : {};
-    const teamRel = typeof rels.team === "object" && rels.team !== null ? (rels.team as Record<string, unknown>) : {};
-    const teamData = typeof teamRel.data === "object" && teamRel.data !== null ? (teamRel.data as Record<string, unknown>) : {};
-    const wsRel = typeof rels.workspace === "object" && rels.workspace !== null ? (rels.workspace as Record<string, unknown>) : {};
-    const wsData = typeof wsRel.data === "object" && wsRel.data !== null ? (wsRel.data as Record<string, unknown>) : {};
-    const attrs = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
-    const teamId = typeof teamData.id === "string" ? teamData.id : "";
-    const workspaceId = typeof wsData.id === "string" ? wsData.id : "";
-    const access = typeof attrs.access === "string" ? attrs.access : "write";
-    const permissions = (attrs.permissions as Record<string, unknown> | null) ?? null;
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
+    const teamRel = typeof rels["team"] === "object" && rels["team"] !== null ? (rels["team"] as Record<string, unknown>) : {};
+    const teamData = typeof teamRel["data"] === "object" && teamRel["data"] !== null ? (teamRel["data"] as Record<string, unknown>) : {};
+    const wsRel = typeof rels["workspace"] === "object" && rels["workspace"] !== null ? (rels["workspace"] as Record<string, unknown>) : {};
+    const wsData = typeof wsRel["data"] === "object" && wsRel["data"] !== null ? (wsRel["data"] as Record<string, unknown>) : {};
+    const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const teamId = typeof teamData["id"] === "string" ? teamData["id"] : "";
+    const workspaceId = typeof wsData["id"] === "string" ? wsData["id"] : "";
+    const access = typeof attrs["access"] === "string" ? attrs["access"] : "write";
+    const permissions = (attrs["permissions"] as Record<string, unknown> | null) ?? null;
     if (teamId === "" || workspaceId === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
     const [ws, targetTeam] = await Promise.all([
       db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) }),
@@ -720,7 +720,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return { data: { id, type: "team-workspaces", attributes: { access, permissions: permissions ?? { runs: "write", variables: "write" } }, relationships: { team: { data: { id: teamId, type: "teams" } }, workspace: { data: { id: workspaceId, type: "workspaces" } } } } };
   })
   .get("/api/v2/team-workspaces/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const id = params.id ?? "";
+    const id = params["id"] ?? "";
     const tw = await db.query.teamWorkspaces.findFirst({ where: eq(teamWorkspaces.id, id) });
     if (tw === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, tw.workspaceId) });
@@ -728,24 +728,24 @@ export const teamRoutes = new Elysia({ name: "teams" })
     return { data: { id: tw.id, type: "team-workspaces", attributes: { access: tw.access, permissions: tw.permissions ?? { runs: "write", variables: "write", "state-versions": "write" } }, relationships: { team: { data: { id: tw.teamId, type: "teams" } }, workspace: { data: { id: tw.workspaceId, type: "workspaces" } } } } };
   })
   .patch("/api/v2/team-workspaces/:id", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
-    const id = params.id ?? "";
+    const id = params["id"] ?? "";
     const tw = await db.query.teamWorkspaces.findFirst({ where: eq(teamWorkspaces.id, id) });
     if (tw === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, tw.workspaceId) });
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "admin"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-    const data = payload.data as Record<string, unknown> | undefined;
-    const attributes = typeof data?.attributes === "object" && data.attributes !== null ? (data.attributes as Record<string, unknown>) : {};
+    const data = payload["data"] as Record<string, unknown> | undefined;
+    const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const updates: Record<string, unknown> = {};
-    if (typeof attributes.access === "string") updates.access = attributes.access;
-    if (attributes.permissions !== undefined) updates.permissions = attributes.permissions;
+    if (typeof attributes["access"] === "string") updates["access"] = attributes["access"];
+    if (attributes["permissions"] !== undefined) updates["permissions"] = attributes["permissions"];
     if (Object.keys(updates).length > 0) await db.update(teamWorkspaces).set(updates).where(eq(teamWorkspaces.id, id));
     const updated = await db.query.teamWorkspaces.findFirst({ where: eq(teamWorkspaces.id, id) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     return { data: { id: updated.id, type: "team-workspaces", attributes: { access: updated.access, permissions: updated.permissions }, relationships: { team: { data: { id: updated.teamId, type: "teams" } }, workspace: { data: { id: updated.workspaceId, type: "workspaces" } } } } };
   })
   .delete("/api/v2/team-workspaces/:id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
-    const id = params.id ?? "";
+    const id = params["id"] ?? "";
     const tw = await db.query.teamWorkspaces.findFirst({ where: eq(teamWorkspaces.id, id) });
     if (tw === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, tw.workspaceId) });

@@ -25,8 +25,8 @@ const bitbucketTagWorkspaceId = "ws-provider-bitbucket-tag";
 const gitlabTokenId = "ot-provider-gitlab";
 const bitbucketTokenId = "ot-provider-bitbucket";
 const originalFetch = globalThis.fetch;
-const originalGitlabSecret = process.env.GITLAB_WEBHOOK_SECRET;
-const originalBitbucketSecret = process.env.BITBUCKET_WEBHOOK_SECRET;
+const originalGitlabSecret = process.env["GITLAB_WEBHOOK_SECRET"];
+const originalBitbucketSecret = process.env["BITBUCKET_WEBHOOK_SECRET"];
 const gitlabHeaderDeliveryUuid = "gitlab-header-delivery-uuid";
 const bitbucketHeaderDeliveryUuid = "bitbucket-header-delivery-uuid";
 const fetches: { authorization: string | null; url: string }[] = [];
@@ -99,8 +99,8 @@ function bitbucketSignature(rawBody: string): string {
 
 describe("GitLab and Bitbucket webhooks", () => {
   beforeAll(async () => {
-    process.env.GITLAB_WEBHOOK_SECRET = "gitlab-secret";
-    process.env.BITBUCKET_WEBHOOK_SECRET = "bitbucket-secret";
+    process.env["GITLAB_WEBHOOK_SECRET"] = "gitlab-secret";
+    process.env["BITBUCKET_WEBHOOK_SECRET"] = "bitbucket-secret";
     const mockFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const url = input instanceof Request ? input.url : input.toString();
       const headers = new Headers(input instanceof Request ? input.headers : init?.headers);
@@ -213,8 +213,8 @@ describe("GitLab and Bitbucket webhooks", () => {
   afterAll(() => {
     setExternalUrlTransportForTests(undefined);
     globalThis.fetch = originalFetch;
-    process.env.GITLAB_WEBHOOK_SECRET = originalGitlabSecret;
-    process.env.BITBUCKET_WEBHOOK_SECRET = originalBitbucketSecret;
+    process.env["GITLAB_WEBHOOK_SECRET"] = originalGitlabSecret;
+    process.env["BITBUCKET_WEBHOOK_SECRET"] = originalBitbucketSecret;
   });
 
   test("validates GitLab token, parses a push, queues a run, and downloads configuration", async () => {

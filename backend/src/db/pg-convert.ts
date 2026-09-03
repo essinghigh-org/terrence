@@ -135,8 +135,8 @@ const isIndexBuilder = (item: unknown): item is { config: IndexConfig } =>
 // pg-core equivalent, keyed by index name. An unlisted partial index throws
 // at build time so the mirror can never silently diverge.
 const PARTIAL_INDEX_WHERE: Readonly<Record<string, (table: Record<string, unknown>) => SQL>> = {
-  projects_org_default_idx: (table): SQL => sql`${table.isDefault} = true`,
-  organization_invitations_org_email_pending_idx: (table): SQL => sql`${table.status} = 'pending'`,
+  projects_org_default_idx: (table): SQL => sql`${table["isDefault"]} = true`,
+  organization_invitations_org_email_pending_idx: (table): SQL => sql`${table["status"]} = 'pending'`,
 };
 
 function tableName(table: SqliteTable): string {
@@ -148,7 +148,7 @@ function tableName(table: SqliteTable): string {
 }
 
 function columnName(column: AnyColumn): string {
-  const config = column.config as { name?: string };
+  const config = column["config"] as { name?: string };
   const name = typeof config?.name === "string" ? config.name : column.name;
   if (typeof name !== "string" || name === "") {
     throw new Error("pg-convert: column is missing its name metadata");
@@ -157,7 +157,7 @@ function columnName(column: AnyColumn): string {
 }
 
 function buildColumn(column: AnyColumn): unknown {
-  const config = column.config as {
+  const config = column["config"] as {
     dataType?: string;
     mode?: string;
     notNull?: boolean;
@@ -202,8 +202,8 @@ function buildColumn(column: AnyColumn): unknown {
   if (config.notNull === true) b.notNull();
   if (config.primaryKey === true) b.primaryKey();
   if (config.isUnique === true) b.unique();
-  if (typeof column.defaultFn === "function") {
-    b.$defaultFn(column.defaultFn as () => unknown);
+  if (typeof column["defaultFn"] === "function") {
+    b.$defaultFn(column["defaultFn"] as () => unknown);
   } else if (config.hasDefault === true) {
     b.default(config.default);
   }

@@ -263,7 +263,7 @@ test("workspace core routes persist settings and execute from the configured sub
         // Let the sandboxed fake-tofu write its cwd record file.
         TERRENCE_SANDBOX_EXTRA_RW_PATHS: join(testDir, "record"),
         TERRENCE_SANDBOX_EXTRA_RW_ALLOWED: "true",
-        TERRENCE_RUN_SANDBOX: process.env.TERRENCE_RUN_SANDBOX ?? (probeLandlockAbi() >= 1 ? "true" : "false"),
+        TERRENCE_RUN_SANDBOX: process.env["TERRENCE_RUN_SANDBOX"] ?? (probeLandlockAbi() >= 1 ? "true" : "false"),
       },
       stdout: "pipe",
       stderr: "pipe",

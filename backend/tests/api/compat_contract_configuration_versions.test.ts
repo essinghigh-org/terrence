@@ -54,10 +54,10 @@ describe("remote-workflow configuration versions contract", () => {
         // the reference format emits ids prefixed with "cv-"; Terrence uses bare UUIDs (opaque to clients).
     expect(cvId).toBeTypeOf("string");
     expect(cvId).not.toBe("");
-    expect(resource.attributes.source).toBe("tfe-api");
-    expect(resource.attributes.status).toBe("pending");
-    expect(resource.attributes.speculative).toBe(true);
-    expect(resource.attributes.provisional).toBe(false);
+    expect(resource.attributes["source"]).toBe("tfe-api");
+    expect(resource.attributes["status"]).toBe("pending");
+    expect(resource.attributes["speculative"]).toBe(true);
+    expect(resource.attributes["provisional"]).toBe(false);
     expect(resource.attributes["auto-queue-runs"]).toBe(true);
     expect(uploadUrl).toBeTypeOf("string");
     expect(resource.relationships?.["ingress-attributes"]).toMatchObject({
@@ -83,8 +83,8 @@ describe("remote-workflow configuration versions contract", () => {
       200,
       "configuration-versions",
     );
-    expect(resource.attributes.status).toBe("uploaded");
-    expect(resource.attributes.speculative).toBe(true);
+    expect(resource.attributes["status"]).toBe("uploaded");
+    expect(resource.attributes["speculative"]).toBe(true);
     expectSelfLink(resource, "/api/v2/configuration-versions/");
   });
 

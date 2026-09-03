@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 
-import { formatDate, formatDateTime } from "../src/lib/utils";
+import { formatDateTime } from "../src/lib/utils";
 import {
   getDisplayTimezone,
   resolveDisplayTimeZone,
@@ -43,7 +43,7 @@ describe("display timezone preference", () => {
         expected: date.toLocaleString(undefined, { timeZone: "UTC", hour12: false }),
       }));
     `);
-    expect(result.actual).toBe(result.expected);
+    expect(result["actual"]).toBe(result["expected"]);
   });
 
   it("keeps bare calendar dates on the same day when pinned to UTC in a zone ahead of UTC", () => {
@@ -56,7 +56,7 @@ describe("display timezone preference", () => {
       setDisplayTimezone("utc");
       console.log(JSON.stringify({ actual: formatDate("2026-08-07") }));
     `);
-    expect(result.actual).toBe(new Date("2026-08-07T00:00:00Z").toLocaleDateString(undefined, { timeZone: "UTC" }));
+    expect(result["actual"]).toBe(new Date("2026-08-07T00:00:00Z").toLocaleDateString(undefined, { timeZone: "UTC" }));
   });
 
   it("persists the selected timezone for the next session", () => {
@@ -80,7 +80,7 @@ describe("display timezone preference", () => {
         resolved: resolveDisplayTimeZone(),
       }));
     `);
-    expect(result.loaded).toBe("utc");
-    expect(result.resolved).toBe("UTC");
+    expect(result["loaded"]).toBe("utc");
+    expect(result["resolved"]).toBe("UTC");
   });
 });

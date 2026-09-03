@@ -46,7 +46,7 @@ function readTokenHashSecret(path: string): string {
  * replica; single-node installs get a 256-bit secret persisted in STORAGE_DIR.
  */
 function tokenHashSecret(): string {
-  const configured = process.env.TERRENCE_TOKEN_HASH_SECRET?.trim();
+  const configured = process.env["TERRENCE_TOKEN_HASH_SECRET"]?.trim();
   if (configured !== undefined && configured !== "") {
     if (Buffer.byteLength(configured, "utf8") < TOKEN_HASH_SECRET_BYTES) {
       throw new Error(`TERRENCE_TOKEN_HASH_SECRET must be at least ${TOKEN_HASH_SECRET_BYTES} bytes`);
@@ -54,7 +54,7 @@ function tokenHashSecret(): string {
     return configured;
   }
 
-  const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"));
+  const storageDir = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"));
   if (cachedTokenHashSecret?.identity === storageDir) return cachedTokenHashSecret.value;
   mkdirSync(storageDir, { recursive: true, mode: 0o700 });
   const path = join(storageDir, TOKEN_HASH_SECRET_FILE);

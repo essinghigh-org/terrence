@@ -22,10 +22,10 @@ describe("Notification suppression (kanban 7.8 / NOT-012)", () => {
   const workspaceId = `ws-suppress-${suffix}`;
   const authToken = `user-token-${suffix}`;
 
-  const priorAllowPrivateUrls = process.env.TERRENCE_ALLOW_PRIVATE_URLS;
+  const priorAllowPrivateUrls = process.env["TERRENCE_ALLOW_PRIVATE_URLS"];
 
   beforeAll(async () => {
-    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
+    process.env["TERRENCE_ALLOW_PRIVATE_URLS"] = "true";
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: organizationName }]);
     await db.insert(organizationMemberships).values([
@@ -52,9 +52,9 @@ describe("Notification suppression (kanban 7.8 / NOT-012)", () => {
     await db.delete(users).where(eq(users.username, userId));
     resetDedupForTests(true);
     if (priorAllowPrivateUrls === undefined) {
-      delete process.env.TERRENCE_ALLOW_PRIVATE_URLS;
+      delete process.env["TERRENCE_ALLOW_PRIVATE_URLS"];
     } else {
-      process.env.TERRENCE_ALLOW_PRIVATE_URLS = priorAllowPrivateUrls;
+      process.env["TERRENCE_ALLOW_PRIVATE_URLS"] = priorAllowPrivateUrls;
     }
   });
 

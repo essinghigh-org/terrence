@@ -18,7 +18,7 @@ import type { AgentJob } from "./agent-jobs";
  */
 
 const AGENT_FS_DIR = resolve(
-  process.env.STORAGE_DIR ?? new URL("../../storage", import.meta.url).pathname,
+  process.env["STORAGE_DIR"] ?? new URL("../../storage", import.meta.url).pathname,
   "agent-filesystems",
 );
 const AGENT_ARTIFACT_URL_TTL_SECONDS = 60 * 60 + 10 * 60;
@@ -50,7 +50,7 @@ export function agentFilesystemPath(runId: string): string {
 
 /** Public base URL for the job's absolute artifact URLs (caddy reverse proxy aware). */
 export function agentApiBaseUrl(request: { readonly headers: { readonly get: (name: string) => string | null } }): string {
-  const configured = process.env.PUBLIC_URL?.trim();
+  const configured = process.env["PUBLIC_URL"]?.trim();
   if (configured) return validateAgentArtifactBaseUrl(configured);
   // A Host header is attacker-controlled. Only use a loopback host for local
   // development/test; deployed instances must configure their public origin.

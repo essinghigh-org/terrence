@@ -251,7 +251,7 @@ export function TokenScopeDialog({
 }: Readonly<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated: (token: { id: string; attributes: JsonObject }) => void;
+  onCreated: (token: { id: string; type: string; attributes: JsonObject }) => void;
 }>): React.JSX.Element {
   const [description, setDescription] = useState("");
   const [fineGrained, setFineGrained] = useState(false);
@@ -486,7 +486,7 @@ export function TokenScopeDialog({
       const created = await fetchApi("/tokens", {
         method: "POST",
         body: JSON.stringify({ data: { attributes } }),
-      }) as { data: { id: string; attributes: JsonObject } };
+      }) as { data: { id: string; type: string; attributes: JsonObject } };
       onCreated(created.data);
       onOpenChange(false);
       reset();

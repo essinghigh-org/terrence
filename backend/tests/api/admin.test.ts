@@ -435,10 +435,10 @@ describe("Admin Operations API contract", () => {
       });
       expect(smtpPatch.status).toBe(200);
       const smtpAttributes = (await smtpPatch.json()).data.attributes as Record<string, unknown>;
-      expect(smtpAttributes.password).toBeUndefined();
+      expect(smtpAttributes["password"]).toBeUndefined();
       expect(smtpAttributes["password-set"]).toBeTrue();
       const storedSmtp = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "smtp") });
-      const storedSmtpPassword = storedSmtp?.values.password;
+      const storedSmtpPassword = storedSmtp?.values["password"];
       expect(typeof storedSmtpPassword).toBe("string");
       expect(isEncryptedSecret(storedSmtpPassword as string)).toBeTrue();
       expect(await decryptSecret(storedSmtpPassword as string)).toBe("secret-smtp");

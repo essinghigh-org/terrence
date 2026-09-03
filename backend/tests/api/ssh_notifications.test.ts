@@ -38,7 +38,7 @@ describe("SSH Keys & Notification Configurations API contract", () => {
     }));
 
   beforeAll(async () => {
-    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
+    process.env["TERRENCE_ALLOW_PRIVATE_URLS"] = "true";
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: orgName }]);
     await db.insert(organizationMemberships).values([
@@ -214,10 +214,10 @@ describe("SSH Keys & Notification Configurations API contract", () => {
       const previewBody = await previewRes.json();
       expect(previewBody.status).toBe("preview");
       const preview = previewBody.data.preview as Record<string, unknown>;
-      expect(preview.payload_version).toBe(1);
-      expect(preview.run_id).toBe("test-notification");
-      expect(preview.workspace_name).toBe("sample-workspace");
-      expect((preview.notifications as Record<string, unknown>[])?.[0]?.trigger).toBe("run:errored");
+      expect(preview["payload_version"]).toBe(1);
+      expect(preview["run_id"]).toBe("test-notification");
+      expect(preview["workspace_name"]).toBe("sample-workspace");
+      expect((preview["notifications"] as Record<string, unknown>[])?.[0]?.["trigger"]).toBe("run:errored");
       // The destination must NOT have been contacted in preview mode.
       expect(hits).toBe(0);
 
@@ -299,9 +299,9 @@ describe("SSH Keys & Notification Configurations API contract", () => {
       expect(results).toHaveLength(2);
       expect(results.every((result) => result.successful)).toBeTrue();
       expect(payloads).toHaveLength(2);
-      expect(payloads.every((payload) => payload.payload_version === 1)).toBeTrue();
-      expect(payloads.every((payload) => payload.run_id === runId)).toBeTrue();
-      expect(new Set(payloads.map((payload) => payload.notification_configuration_id))).toEqual(
+      expect(payloads.every((payload) => payload["payload_version"] === 1)).toBeTrue();
+      expect(payloads.every((payload) => payload["run_id"] === runId)).toBeTrue();
+      expect(new Set(payloads.map((payload) => payload["notification_configuration_id"]))).toEqual(
         new Set(createdIds),
       );
     } finally {
@@ -316,8 +316,8 @@ describe("SSH Keys & Notification Configurations API contract", () => {
   it("does not deliver to a private URL unless the private-URL escape hatch is enabled (SSRF guard)", async () => {
     // Deliveries read the escape-hatch env at call time, so clearing it here
     // exercises the default (blocking) path regardless of what beforeAll set.
-    const previous = process.env.TERRENCE_ALLOW_PRIVATE_URLS;
-    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "false";
+    const previous = process.env["TERRENCE_ALLOW_PRIVATE_URLS"];
+    process.env["TERRENCE_ALLOW_PRIVATE_URLS"] = "false";
     const ssrfsRunId = `run-ssrf-${crypto.randomUUID()}`;
     let configId = "";
     try {
@@ -353,7 +353,7 @@ describe("SSH Keys & Notification Configurations API contract", () => {
       expect(results.code).toBe("422");
       expect(results.body).toContain("private or loopback");
     } finally {
-      process.env.TERRENCE_ALLOW_PRIVATE_URLS = previous;
+      process.env["TERRENCE_ALLOW_PRIVATE_URLS"] = previous;
       await db.delete(runs).where(eq(runs.id, ssrfsRunId));
       if (configId !== "") await db.delete(notificationConfigurations).where(eq(notificationConfigurations.id, configId));
     }

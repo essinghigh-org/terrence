@@ -48,18 +48,18 @@ describe("remote-workflow workspaces contract", () => {
     // the reference format emits ids prefixed with "ws-"; Terrence uses bare UUIDs (opaque to clients).
     expect(resource.id).toBeTypeOf("string");
     expect(resource.id).not.toBe("");
-    expect(resource.attributes.name).toBe(workspaceName);
+    expect(resource.attributes["name"]).toBe(workspaceName);
     expect(resource.attributes["auto-apply"]).toBe(false);
-    expect(resource.attributes.locked).toBe(false);
-    expect(resource.attributes.operations).toBe(true);
+    expect(resource.attributes["locked"]).toBe(false);
+    expect(resource.attributes["operations"]).toBe(true);
     expect(resource.attributes["execution-mode"]).toBe("remote");
     expect(resource.attributes["created-at"]).toBeTypeOf("string");
-    expect(resource.attributes.permissions).toMatchObject({
+    expect(resource.attributes["permissions"]).toMatchObject({
       "can-queue-run": true,
       "can-update": true,
       "can-lock": true,
     });
-    expect(resource.relationships?.organization).toMatchObject({
+    expect(resource.relationships?.["organization"]).toMatchObject({
       data: { id: seed.orgName, type: "organizations" },
     });
     expectSelfLink(resource, "/api/v2/workspaces/");
@@ -74,8 +74,8 @@ describe("remote-workflow workspaces contract", () => {
       200,
       "workspaces",
     );
-    expect(resource.attributes.name).toBe(workspaceName);
-    expect(resource.relationships?.organization).toMatchObject({
+    expect(resource.attributes["name"]).toBe(workspaceName);
+    expect(resource.relationships?.["organization"]).toMatchObject({
       data: { id: seed.orgName, type: "organizations" },
     });
   });
@@ -86,7 +86,7 @@ describe("remote-workflow workspaces contract", () => {
       200,
       "workspaces",
     );
-    expect(resource.attributes.name).toBe(workspaceName);
+    expect(resource.attributes["name"]).toBe(workspaceName);
     expect(resource.attributes["auto-apply"]).toBe(false);
   });
 
@@ -111,7 +111,7 @@ describe("remote-workflow workspaces contract", () => {
     const body = await response.json();
     const items = expectCollection(body, "workspaces");
     expect(items.length).toBe(1);
-    expect(items[0]!.attributes.name).toBe(workspaceName);
+    expect(items[0]!.attributes["name"]).toBe(workspaceName);
   });
 
   it("does not leak workspaces from other organizations", async () => {
@@ -135,7 +135,7 @@ describe("remote-workflow workspaces contract", () => {
       "workspaces",
     );
     expect(resource.attributes["auto-apply"]).toBe(true);
-    expect(resource.attributes.description).toBe("updated");
+    expect(resource.attributes["description"]).toBe("updated");
   });
 
   it("validates and persists lock reasons, then clears them when unlocked", async () => {
@@ -158,7 +158,7 @@ describe("remote-workflow workspaces contract", () => {
         200,
         "workspaces",
       );
-      expect(locked.attributes.locked).toBe(true);
+      expect(locked.attributes["locked"]).toBe(true);
       expect(locked.attributes["locked-reason"]).toBe("Migrating state");
 
       const unlocked = await expectSuccessResponse(
@@ -166,7 +166,7 @@ describe("remote-workflow workspaces contract", () => {
         200,
         "workspaces",
       );
-      expect(unlocked.attributes.locked).toBe(false);
+      expect(unlocked.attributes["locked"]).toBe(false);
       expect(unlocked.attributes["locked-reason"]).toBeNull();
     } finally {
       await db.delete(workspaces).where(eq(workspaces.id, lockWorkspaceId));

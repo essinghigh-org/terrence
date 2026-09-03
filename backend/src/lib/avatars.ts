@@ -75,7 +75,7 @@ export type AvatarMeta = Readonly<{
 }>;
 
 function avatarDir(): string {
-  return resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../../storage"), "avatars");
+  return resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "avatars");
 }
 
 const KEY_RE = /^[0-9a-f]{64}$/;
@@ -388,7 +388,7 @@ async function authorizedOriginForProvider(providerId: string): Promise<string |
     return null;
   }
   if (providerId === "github-app") {
-    const httpUrl = process.env.GITHUB_APP_HTTP_URL;
+    const httpUrl = process.env["GITHUB_APP_HTTP_URL"];
     if (typeof httpUrl === "string" && httpUrl !== "") return originOf(httpUrl);
     return null;
   }
