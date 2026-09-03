@@ -9,6 +9,8 @@ import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
 const originalClipboard = navigator.clipboard;
+const originalSetTimeout = window.setTimeout.bind(window);
+const originalClearTimeout = window.clearTimeout.bind(window);
 
 function json(data: JsonValue, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -25,6 +27,8 @@ afterEach((): void => {
   cleanup();
   globalThis.fetch = originalFetch;
   Object.defineProperty(navigator, "clipboard", { value: originalClipboard, configurable: true });
+  window.setTimeout = originalSetTimeout;
+  window.clearTimeout = originalClearTimeout;
 });
 
 test("copies the canonical run permalink", async () => {
@@ -56,6 +60,18 @@ test("copies the canonical run permalink", async () => {
     return json({ data: [] });
   })) as unknown as typeof fetch;
 
+  let copiedTimer: number | undefined;
+  let copiedTimerCleared = false;
+  window.setTimeout = ((handler: TimerHandler, timeout?: number): number => {
+    const id = originalSetTimeout(handler, timeout);
+    if (timeout === 2000) copiedTimer = id;
+    return id;
+  }) as typeof window.setTimeout;
+  window.clearTimeout = ((id: number): void => {
+    if (id === copiedTimer) copiedTimerCleared = true;
+    originalClearTimeout(id);
+  }) as typeof window.clearTimeout;
+
   const view = render(
     <MemoryRouter initialEntries={["/app/acme/workspaces/production/runs/run-copy"]}>
       <Routes>
@@ -75,4 +91,7 @@ test("copies the canonical run permalink", async () => {
     expect(writeText).toHaveBeenCalledWith("http://localhost/app/acme/workspaces/production/runs/run-copy");
     expect(view.getByText("Run permalink copied")).toBeTruthy();
   });
+  expect(copiedTimer).not.toBeUndefined();
+  view.unmount();
+  expect(copiedTimerCleared).toBe(true);
 });

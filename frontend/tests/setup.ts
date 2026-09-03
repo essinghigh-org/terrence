@@ -35,6 +35,12 @@ const testGlobal = globalThis as unknown as MutableGlobal;
 testGlobal["window"] = win;
 // SAFETY: the test stubs the global with a mock before exercising the component.
 testGlobal["document"] = win.document;
+// jsdom starts hidden; application polling tests must opt into hidden state
+// explicitly so test behavior does not depend on another file's teardown.
+Object.defineProperty(win.document, "hidden", {
+  configurable: true,
+  value: false,
+});
 // SAFETY: the test stubs the global with a mock before exercising the component.
 testGlobal["navigator"] = { userAgent: "node.js" };
 

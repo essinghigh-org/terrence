@@ -1,5 +1,5 @@
 import { AlertTriangle, Check, Copy, ExternalLink, RefreshCw, Settings2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Breadcrumbs } from "../components/Breadcrumbs";
 import { MarkdownContent } from "../components/MarkdownContent";
@@ -64,6 +64,8 @@ export function RegistryModuleDetail(): React.JSX.Element {
   const [tab, setTab] = useState<DetailTab>("readme");
   const [sectionPath, setSectionPath] = useState(".");
   const [copied, setCopied] = useState<"config" | "credentials" | null>(null);
+  const copiedResetTimerRef = useRef<number | undefined>(undefined);
+  const mountedRef = useRef(true);
   const [confirmation, setConfirmation] = useState<Confirmation>(null);
   const [addVersionOpen, setAddVersionOpen] = useState(false);
   const [newVersion, setNewVersion] = useState("");
@@ -73,6 +75,14 @@ export function RegistryModuleDetail(): React.JSX.Element {
   const [sourceDirectory, setSourceDirectory] = useState("");
   const [tagPrefix, setTagPrefix] = useState("");
   const registryPath = `/app/${encodeURIComponent(orgName)}/registry`;
+
+  useEffect((): (() => void) => {
+    mountedRef.current = true;
+    return (): void => {
+      mountedRef.current = false;
+      if (copiedResetTimerRef.current !== undefined) window.clearTimeout(copiedResetTimerRef.current);
+    };
+  }, []);
 
   useEffect((): (() => void) => {
     const controller = new AbortController();
@@ -140,9 +150,15 @@ export function RegistryModuleDetail(): React.JSX.Element {
   };
 
   const copy = async (value: string, kind: "config" | "credentials"): Promise<void> => {
-    if (await copyTextToClipboard(value)) {
+    const didCopy = await copyTextToClipboard(value);
+    if (!mountedRef.current) return;
+    if (didCopy) {
       setCopied(kind);
-      window.setTimeout((): void => { setCopied(null); }, 1500);
+      if (copiedResetTimerRef.current !== undefined) window.clearTimeout(copiedResetTimerRef.current);
+      copiedResetTimerRef.current = window.setTimeout((): void => {
+        copiedResetTimerRef.current = undefined;
+        setCopied(null);
+      }, 1500);
       return;
     }
     toast.add({

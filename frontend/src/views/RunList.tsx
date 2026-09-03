@@ -536,7 +536,12 @@ export function RunList({
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-4">
-                      <StatusBadge status={run.attributes.status} />
+                      <span aria-live="polite" aria-atomic="true">
+                        <span className="sr-only">
+                          Run {shortRunId(run.id)} ({run.attributes.message ?? "Triggered via UI"}): {" "}
+                        </span>
+                        <StatusBadge status={run.attributes.status} />
+                      </span>
                       <div className="text-right text-xs text-muted-foreground min-w-[5.5rem]">
                         <time dateTime={run.attributes["created-at"]} title={formatDateTime(run.attributes["created-at"])}>
                           {formatRelativeTime(run.attributes["created-at"])}

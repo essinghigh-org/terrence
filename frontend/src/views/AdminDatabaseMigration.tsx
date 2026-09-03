@@ -250,6 +250,8 @@ export function AdminDatabaseMigration(): React.JSX.Element {
           <CardContent className="space-y-4">
             <div className="flex flex-wrap items-center gap-3">
               <span
+                aria-live="polite"
+                aria-atomic="true"
                 className={cn(
                   "font-medium",
                   active && "text-amber-600 dark:text-amber-400",

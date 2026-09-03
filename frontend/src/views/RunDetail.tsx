@@ -587,6 +587,24 @@ function PhaseMeta({
   );
 }
 
+export async function waitForAbortableDelay(signal: AbortSignal, delayMs: number): Promise<boolean> {
+  if (signal.aborted) return false;
+  return new Promise<boolean>((resolve): void => {
+    let settled = false;
+    const finish = (result: boolean): void => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve(result);
+    };
+    const onAbort = (): void => { finish(false); };
+    const timer = window.setTimeout((): void => { finish(true); }, delayMs);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) finish(false);
+  });
+}
+
 export function RunDetail({
   showBreadcrumb = true,
 }: Readonly<{ readonly showBreadcrumb?: boolean }>): React.JSX.Element {
@@ -665,6 +683,8 @@ export function RunDetail({
   const [creatorAvatarUrl, setCreatorAvatarUrl] = useState("");
   const [pendingAction, setPendingAction] = useState("");
   const [copiedPermalink, setCopiedPermalink] = useState(false);
+  const copiedPermalinkResetTimerRef = useRef<number | undefined>(undefined);
+  const mountedRef = useRef(true);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [logWrap, setLogWrap] = useState<boolean>(true);
   const [planSummary, setPlanSummary] = useState<Readonly<{
@@ -682,11 +702,25 @@ export function RunDetail({
 
   const runPermalink = `${window.location.origin}${orgPath}/workspaces/${encodeURIComponent(workspaceName)}/runs/${encodeURIComponent(runId)}`;
 
+  useEffect((): (() => void) => {
+    mountedRef.current = true;
+    return (): void => {
+      mountedRef.current = false;
+      if (copiedPermalinkResetTimerRef.current !== undefined) window.clearTimeout(copiedPermalinkResetTimerRef.current);
+    };
+  }, []);
+
   async function copyRunPermalink(): Promise<void> {
-    if (await copyTextToClipboard(runPermalink)) {
+    const didCopy = await copyTextToClipboard(runPermalink);
+    if (!mountedRef.current) return;
+    if (didCopy) {
       setCopiedPermalink(true);
       toast.add({ title: "Run permalink copied", type: "success" });
-      window.setTimeout((): void => { setCopiedPermalink(false); }, 2000);
+      if (copiedPermalinkResetTimerRef.current !== undefined) window.clearTimeout(copiedPermalinkResetTimerRef.current);
+      copiedPermalinkResetTimerRef.current = window.setTimeout((): void => {
+        copiedPermalinkResetTimerRef.current = undefined;
+        setCopiedPermalink(false);
+      }, 2000);
       return;
     }
     toast.add({ title: "Could not copy link", type: "error" });
@@ -696,7 +730,9 @@ export function RunDetail({
   // the CLI. It used to live in the workspace header that wrapped this page;
   // now that a run is its own page, the affordance belongs here.
   async function copyRunId(): Promise<void> {
-    if (await copyTextToClipboard(runId)) {
+    const didCopy = await copyTextToClipboard(runId);
+    if (!mountedRef.current) return;
+    if (didCopy) {
       toast.add({ title: "Run ID copied", type: "success" });
       return;
     }
@@ -1109,11 +1145,8 @@ export function RunDetail({
         return false;
       }
       if (Date.now() >= deadline) return false;
-      await new Promise<void>((resolve) => {
-        const t = window.setTimeout(resolve, 1500);
-        signal.addEventListener("abort", () => { window.clearTimeout(t); resolve(); }, { once: true });
-      });
-      if (signal.aborted) return false;
+      const retry = await waitForAbortableDelay(signal, 1500);
+      if (!retry) return false;
     }
   }
 

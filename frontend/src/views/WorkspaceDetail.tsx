@@ -46,6 +46,7 @@ import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { copyTextToClipboard } from "../lib/utils";
 import { formatDate, formatDateTime, formatRelativeTime } from "../lib/utils";
 import { formatRunSource, formatRunStatus } from "../lib/run-labels";
+import { useTerrenceEvent } from "../lib/event-provider";
 import { WorkspaceRepositoryLink } from "../components/WorkspaceRepositoryLink";
 import { isNumber, isString } from "../lib/type-guards";
 import type { JsonValue } from "@/lib/json";
@@ -159,6 +160,19 @@ const SETTINGS_SECTIONS: Partial<Record<WorkspaceSection, SettingsSectionMeta>> 
   },
 };
 
+const TERMINAL_RUN_STATUSES = new Set([
+  "applied",
+  "canceled",
+  "discarded",
+  "errored",
+  "failed",
+  "force_canceled",
+  "planned_and_finished",
+  "unreachable",
+]);
+
+const noop = (): void => undefined;
+
 type Workspace = {
   id: string;
   attributes: {
@@ -241,28 +255,42 @@ export function WorkspaceDetail({
   const activeWorkspaceId = useRef<string | null>(null);
   const workspaceRequest = useRef<AbortController | null>(null);
   const latestRunRequest = useRef<AbortController | null>(null);
+  const latestRunRequestGeneration = useRef(0);
+  const latestRunRefreshRef = useRef<() => void>(noop);
   const projectId = workspace?.relationships?.project?.data?.id;
 
   const loadLatestRun = useCallback(async (
     workspaceId: string,
     signal: AbortSignal,
-  ): Promise<void> => {
+    requestGeneration: number,
+  ): Promise<RunSummary | null> => {
     try {
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const runs = await fetchApi(
         `/api/v2/workspaces/${workspaceId}/runs?page[size]=1`,
         { signal },
       ) as { data: JsonValue };
-      if (signal.aborted || activeWorkspaceId.current !== workspaceId) return;
+      if (
+        signal.aborted
+        || activeWorkspaceId.current !== workspaceId
+        || latestRunRequestGeneration.current !== requestGeneration
+      ) return null;
 // SAFETY: the runs list carries RunSummary resources per the endpoint contract.
-      setLatestRun(Array.isArray(runs.data) ? (runs.data[0] as RunSummary | undefined) ?? null : null);
+      const latest = Array.isArray(runs.data) ? (runs.data[0] as RunSummary | undefined) ?? null : null;
+      setLatestRun(latest);
       setLatestRunLoading(false);
       setLatestRunError(false);
+      return latest;
     } catch {
-      if (!signal.aborted && activeWorkspaceId.current === workspaceId) {
+      if (
+        !signal.aborted
+        && activeWorkspaceId.current === workspaceId
+        && latestRunRequestGeneration.current === requestGeneration
+      ) {
         setLatestRunLoading(false);
         setLatestRunError(true);
       }
+      return null;
     }
   }, []);
 
@@ -309,24 +337,61 @@ export function WorkspaceDetail({
   }, [isRunDetail, loadWorkspace]);
 
   useEffect((): (() => void) | undefined => {
-    if (workspace === null || activeSection !== "overview") return undefined;
+    if (workspace === null || activeSection !== "overview") {
+      latestRunRefreshRef.current = noop;
+      return undefined;
+    }
     let timer: number | undefined;
+    let stopped = false;
     const controller = new AbortController();
     latestRunRequest.current?.abort();
     latestRunRequest.current = controller;
-    const refresh = async (): Promise<void> => {
-      await loadLatestRun(workspace.id, controller.signal);
-      if (!controller.signal.aborted) {
-        timer = window.setTimeout((): void => { void refresh(); }, 5000);
+    const clearTimer = (): void => {
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+        timer = undefined;
       }
     };
-    void refresh();
+    const shouldStop = (): boolean => stopped || controller.signal.aborted || document.hidden;
+    const refresh = async (): Promise<void> => {
+      if (shouldStop()) return;
+      const requestGeneration = latestRunRequestGeneration.current + 1;
+      latestRunRequestGeneration.current = requestGeneration;
+      const latest = await loadLatestRun(workspace.id, controller.signal, requestGeneration);
+      if (requestGeneration !== latestRunRequestGeneration.current) return;
+      if (latest !== null && TERMINAL_RUN_STATUSES.has(latest.attributes.status)) return;
+      if (shouldStop()) return;
+      timer = window.setTimeout((): void => { void refresh(); }, 5000);
+    };
+    const requestRefresh = (): void => {
+      clearTimer();
+      void refresh();
+    };
+    const onVisibilityChange = (): void => {
+      if (document.hidden) {
+        clearTimer();
+      } else if (!stopped) {
+        requestRefresh();
+      }
+    };
+    latestRunRefreshRef.current = requestRefresh;
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    if (!document.hidden) requestRefresh();
     return (): void => {
+      stopped = true;
       controller.abort();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       if (latestRunRequest.current === controller) latestRunRequest.current = null;
-      if (timer !== undefined) window.clearTimeout(timer);
+      if (latestRunRefreshRef.current === requestRefresh) latestRunRefreshRef.current = noop;
+      clearTimer();
     };
   }, [activeSection, loadLatestRun, workspace]);
+
+  useTerrenceEvent(
+    "run.status",
+    (data): boolean => activeSection === "overview" && data["workspace-id"] === workspace?.id,
+    (): void => { latestRunRefreshRef.current(); },
+  );
 
   useEffect((): (() => void) | undefined => {
     setProjectName(null);
@@ -699,15 +764,17 @@ export function WorkspaceDetail({
                     </div>
                   ) : (
                     <>
-                      {latestRunPath === null ? (
-                        <p className="font-semibold text-foreground">
-                          Latest run: {latestRunStatus ?? "unknown"}
-                        </p>
-                      ) : (
-                        <Link to={latestRunPath} className="font-semibold text-primary hover:underline">
-                          Latest run: {latestRunStatus ?? "unknown"}
-                        </Link>
-                      )}
+                      <div aria-live="polite" aria-atomic="true">
+                        {latestRunPath === null ? (
+                          <p className="font-semibold text-foreground">
+                            Latest run: {latestRunStatus ?? "unknown"}
+                          </p>
+                        ) : (
+                          <Link to={latestRunPath} className="font-semibold text-primary hover:underline">
+                            Latest run: {latestRunStatus ?? "unknown"}
+                          </Link>
+                        )}
+                      </div>
                       <p className="mt-1 text-sm text-foreground">
                         {latestRun.attributes.message ?? "Manual run"}
                       </p>

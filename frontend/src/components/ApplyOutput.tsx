@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/naming-convention -- Terraform plan/apply JSON fields are snake_case. */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   CheckCircle2,
@@ -67,6 +67,23 @@ type LoadState =
   | Readonly<{ kind: "unavailable" }>
   | Readonly<{ kind: "error"; message: string }>
   | Readonly<{ kind: "ready"; plan: PlanJson }>;
+
+type DerivedApplyOutput = Readonly<{
+  planJson: PlanJson;
+  changedResources: ResourceChange[];
+  execMap: Map<string, ResourceExecutionInfo>;
+  opCounts: Readonly<{
+    create: number;
+    update: number;
+    delete: number;
+    replace: number;
+    read: number;
+    import: number;
+    move: number;
+    remove: number;
+  }>;
+  filteredResources: ResourceChange[];
+}>;
 
 function parseApplyLogsToExecMap(
   logs: string,
@@ -240,16 +257,30 @@ function ApplyResourceRow({
   execution: ResourceExecutionInfo;
 }>): React.JSX.Element {
   const [copied, setCopied] = useState(false);
+  const copiedResetTimerRef = useRef<number | undefined>(undefined);
+  const mountedRef = useRef(true);
   const operation = operationForResource(resource);
   const config = operationConfig[operation];
+
+  useEffect((): (() => void) => {
+    mountedRef.current = true;
+    return (): void => {
+      mountedRef.current = false;
+      if (copiedResetTimerRef.current !== undefined) window.clearTimeout(copiedResetTimerRef.current);
+    };
+  }, []);
 
   const handleCopy = (event: React.MouseEvent): void => {
     event.preventDefault();
     event.stopPropagation();
     void copyTextToClipboard(resource.address).then((didCopy): void => {
-      if (!didCopy) return;
+      if (!didCopy || !mountedRef.current) return;
       setCopied(true);
-      setTimeout((): void => { setCopied(false); }, 1500);
+      if (copiedResetTimerRef.current !== undefined) window.clearTimeout(copiedResetTimerRef.current);
+      copiedResetTimerRef.current = window.setTimeout((): void => {
+        copiedResetTimerRef.current = undefined;
+        setCopied(false);
+      }, 1500);
     });
   };
 
@@ -319,6 +350,12 @@ export function ApplyOutput({
       try {
         const data = await fetchApi(`/plans/plan-${runId}/json-output`);
         if (cancelled) return;
+        if (data === null) {
+          // A 204 has no structured plan payload; keep the apply log fallback
+          // visible instead of treating null as a plan object.
+          setLoadState({ kind: "unavailable" });
+          return;
+        }
 // SAFETY: the run phase payload is plan JSON per the endpoint contract.
         setLoadState({ kind: "ready", plan: data as PlanJson });
       } catch (reason: unknown) {
@@ -336,6 +373,55 @@ export function ApplyOutput({
     return (): void => { cancelled = true; };
   }, [runId]);
 
+  const derived = useMemo((): DerivedApplyOutput | null => {
+    if (loadState.kind !== "ready") return null;
+    const planJson = loadState.plan;
+    const changedResources = (planJson.resource_changes ?? [])
+      .filter((resource): boolean => {
+        const op = operationForResource(resource);
+        return op !== "no-op" && op !== "read";
+      });
+    const applyFinished = applyStatus === "applied" || status === "applied";
+    const applyFailed = ["errored", "failed", "unreachable"].includes(applyStatus);
+    const execMap = parseApplyLogsToExecMap(applyLogs, changedResources, applyFinished, applyFailed);
+    const importCount = changedResources.filter((resource): boolean => resource.change.importing !== undefined).length;
+    const moveCount = changedResources.filter((resource): boolean => resource.previous_address !== undefined).length;
+    const opCounts = {
+      create: changedResources.filter((resource): boolean => operationForResource(resource) === "create").length,
+      update: changedResources.filter((resource): boolean => operationForResource(resource) === "update").length,
+      delete: changedResources.filter((resource): boolean => operationForResource(resource) === "delete").length,
+      replace: changedResources.filter((resource): boolean => operationForResource(resource) === "replace").length,
+      read: changedResources.filter((resource): boolean => operationForResource(resource) === "read").length,
+      import: importCount,
+      move: moveCount,
+      remove: changedResources.filter((resource): boolean => operationForResource(resource) === "remove").length,
+    };
+    const query = search.trim().toLocaleLowerCase();
+    const filteredResources = changedResources.filter((resource): boolean => {
+      const primaryOp = operationForResource(resource);
+      const matchesOp = selectedOps.has(primaryOp)
+        || (resource.previous_address !== undefined && selectedOps.has("move"))
+        || (resource.change.importing !== undefined && selectedOps.has("import"));
+      if (!matchesOp) return false;
+      if (query === "") return true;
+      return [
+        resource.address,
+        resource.previous_address,
+        resource.type,
+        resource.name,
+        resource.module_address,
+        resource.provider_name,
+      ].some((val): boolean => val?.toLocaleLowerCase().includes(query) === true);
+    });
+    return {
+      planJson,
+      changedResources,
+      execMap,
+      opCounts,
+      filteredResources,
+    };
+  }, [applyLogs, applyStatus, loadState, search, selectedOps, status]);
+
   if (loadState.kind === "loading") {
     return (
       <div role="status" className="flex items-center gap-2 border-t border-border px-5 py-4 text-sm text-muted-foreground">
@@ -345,7 +431,7 @@ export function ApplyOutput({
     );
   }
 
-  if (loadState.kind === "error" || loadState.kind !== "ready") {
+  if (loadState.kind === "error" || loadState.kind !== "ready" || derived === null) {
     return (
       <div role="status" className="border-t border-border bg-muted px-5 py-4 text-xs text-muted-foreground">
         Apply view is unavailable. See raw apply logs below.
@@ -353,48 +439,13 @@ export function ApplyOutput({
     );
   }
 
-  const planJson = loadState.plan;
-  const changedResources = (planJson.resource_changes ?? [])
-    .filter((resource): boolean => {
-      const op = operationForResource(resource);
-      return op !== "no-op" && op !== "read";
-    });
-
-  const applyFinished = applyStatus === "applied" || status === "applied";
-  const applyFailed = ["errored", "failed", "unreachable"].includes(applyStatus);
-  const execMap = parseApplyLogsToExecMap(applyLogs, changedResources, applyFinished, applyFailed);
-
-  const importCount = changedResources.filter((r): boolean => r.change.importing !== undefined).length;
-  const moveCount = changedResources.filter((r): boolean => r.previous_address !== undefined).length;
-
-  const opCounts = {
-    create: changedResources.filter((resource): boolean => operationForResource(resource) === "create").length,
-    update: changedResources.filter((resource): boolean => operationForResource(resource) === "update").length,
-    delete: changedResources.filter((resource): boolean => operationForResource(resource) === "delete").length,
-    replace: changedResources.filter((resource): boolean => operationForResource(resource) === "replace").length,
-    read: changedResources.filter((resource): boolean => operationForResource(resource) === "read").length,
-    import: importCount,
-    move: moveCount,
-    remove: changedResources.filter((resource): boolean => operationForResource(resource) === "remove").length,
-  };
-
-  const query = search.trim().toLocaleLowerCase();
-  const filteredResources = changedResources.filter((resource): boolean => {
-    const primaryOp = operationForResource(resource);
-    const matchesOp = selectedOps.has(primaryOp)
-      || (resource.previous_address !== undefined && selectedOps.has("move"))
-      || (resource.change.importing !== undefined && selectedOps.has("import"));
-    if (!matchesOp) return false;
-    if (query === "") return true;
-    return [
-      resource.address,
-      resource.previous_address,
-      resource.type,
-      resource.name,
-      resource.module_address,
-      resource.provider_name,
-    ].some((val): boolean => val?.toLocaleLowerCase().includes(query) === true);
-  });
+  const {
+    planJson,
+    changedResources,
+    execMap,
+    opCounts,
+    filteredResources,
+  } = derived;
 
   return (
     <section aria-label="Apply output" className="border-t border-border">

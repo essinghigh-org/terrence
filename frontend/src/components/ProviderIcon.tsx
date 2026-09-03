@@ -5,10 +5,33 @@ import { fetchApi } from "../lib/api";
 const iconCache = new Map<string, string | null>();
 let inflight: Promise<void> | null = null;
 const pending = new Set<string>();
+type IconSubscriber = () => void;
+const subscribers = new Map<string, Set<IconSubscriber>>();
 
 function providerKey(providerName: string | null | undefined): string | null {
   const key = providerName?.trim().toLowerCase() ?? "";
   return key === "" ? null : key;
+}
+
+function notifySubscribers(key: string): void {
+  const listeners = subscribers.get(key);
+  if (listeners === undefined) return;
+  for (const listener of [...listeners]) listener();
+}
+
+function cacheIcon(key: string, url: string | null): void {
+  iconCache.set(key, url);
+  notifySubscribers(key);
+}
+
+function subscribeToIcon(key: string, listener: IconSubscriber): () => void {
+  const listeners = subscribers.get(key) ?? new Set<IconSubscriber>();
+  listeners.add(listener);
+  subscribers.set(key, listeners);
+  return (): void => {
+    listeners.delete(listener);
+    if (listeners.size === 0 && subscribers.get(key) === listeners) subscribers.delete(key);
+  };
 }
 
 async function flushPending(): Promise<void> {
@@ -22,14 +45,14 @@ async function flushPending(): Promise<void> {
     };
     for (const item of res.data ?? []) {
       const key = providerKey(item.id);
-      if (key !== null) iconCache.set(key, item.attributes["icon-url"] ?? null);
+      if (key !== null) cacheIcon(key, item.attributes["icon-url"] ?? null);
     }
     for (const key of batch) {
-      if (!iconCache.has(key)) iconCache.set(key, null);
+      if (!iconCache.has(key)) cacheIcon(key, null);
     }
   } catch {
     for (const key of batch) {
-      if (!iconCache.has(key)) iconCache.set(key, null);
+      if (!iconCache.has(key)) cacheIcon(key, null);
     }
   }
 }
@@ -74,33 +97,34 @@ export function useProviderIcon(providerName: string | null | undefined): string
       setUrl(cached);
       return;
     }
+
     setUrl(undefined); // loading
-    scheduleFetch(key);
-    let cancelled = false;
-    const poll = window.setInterval((): void => {
+    let settled = false;
+    let unsubscribe = (): void => undefined;
+    const finish = (next: string | null): void => {
+      if (settled) return;
+      settled = true;
+      unsubscribe();
+      window.clearTimeout(timeout);
+      setUrl(next);
+    };
+    const update = (): void => {
       const next = iconCache.get(key);
-      if (next !== undefined && !cancelled) {
-        setUrl(next);
-        window.clearInterval(poll);
-      }
-    }, 80);
-    // Also resolve when inflight finishes
-    void inflight?.then((): void => {
-      if (cancelled) return;
-      const next = iconCache.get(key);
-      if (next !== undefined) {
-        setUrl(next);
-        window.clearInterval(poll);
-      }
-    });
-    // Safety timeout
+      if (next !== undefined) finish(next);
+    };
+
+    unsubscribe = subscribeToIcon(key, update);
     const timeout = window.setTimeout((): void => {
-      window.clearInterval(poll);
-      if (!cancelled && iconCache.get(key) === undefined) setUrl(null);
+      if (iconCache.get(key) === undefined) setUrl(null);
     }, 5000);
+    scheduleFetch(key);
+    // The cache may have been populated between the initial read and
+    // subscription registration by another mounted ProviderIcon.
+    update();
+
     return (): void => {
-      cancelled = true;
-      window.clearInterval(poll);
+      settled = true;
+      unsubscribe();
       window.clearTimeout(timeout);
     };
   }, [key]);
@@ -124,7 +148,7 @@ export function ProviderIcon({
   if (safeUrl === null) return fallback ?? null;
   return (
     <img
-      src={safeUrl ?? undefined}
+      src={safeUrl}
       alt={alt}
       width={size}
       height={size}
