@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
+import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, taskStages, runComments, auditLogs, users } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt, sql } from "drizzle-orm";
-import { runResource, planResource, applyResource, userResource } from "../lib/response";
+import { runResource, planResource, applyResource, userResource, taskStageResource, type RunRelationshipLinkage } from "../lib/response";
 import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, cursorPagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, organizationRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, readRunLogs, readRunLogsPage } from "../lib/run-logs";
@@ -359,6 +359,32 @@ async function includedUsersForRuns(runList: readonly (RunItem)[]): Promise<Reco
   return userList.map((u): Record<string, unknown> => userResource(u as Parameters<typeof userResource>[0]));
 }
 
+/** Audit finding 6: batch-load relationship linkage IDs for a run page (one
+ * query per relation, no N+1) so the CLI hydrates policy checks, cost
+ * estimates, and task stages from run reads. */
+async function linkageForRuns(runList: readonly RunItem[]): Promise<ReadonlyMap<string, RunRelationshipLinkage>> {
+  const ids = runList.map((r: RunItem): string => r.id);
+  if (ids.length === 0) return new Map();
+  const [checks, stages] = await Promise.all([
+    db.query.policyChecks.findMany({ where: inArray(policyChecks.runId, [...ids]), columns: { id: true, runId: true } }),
+    db.query.taskStages.findMany({ where: inArray(taskStages.runId, [...ids]), columns: { id: true, runId: true } }),
+  ]);
+  const linkage = new Map<string, { policyCheckIds: string[]; taskStageIds: string[] }>();
+  for (const id of ids) linkage.set(id, { policyCheckIds: [], taskStageIds: [] });
+  for (const check of checks) linkage.get(check.runId)?.policyCheckIds.push(check.id);
+  for (const stage of stages) linkage.get(stage.runId)?.taskStageIds.push(stage.id);
+  return linkage;
+}
+
+/** Audit finding 6: task-stage resources for include=task_stages sideloads
+ * (the CLI reads stages from the run include, then polls each via Read). */
+async function includedTaskStagesForRuns(runList: readonly RunItem[]): Promise<Record<string, unknown>[]> {
+  const ids = runList.map((r: RunItem): string => r.id);
+  if (ids.length === 0) return [];
+  const rows = await db.query.taskStages.findMany({ where: inArray(taskStages.runId, [...ids]) });
+  return rows.map((stage): Record<string, unknown> => taskStageResource(stage));
+}
+
 function safeRunEventDetails(event: AuditItem): Readonly<Record<string, string>> {
   const { details } = event;
   if (details === null || typeof details !== "object" || Array.isArray(details)) return {};
@@ -651,8 +677,8 @@ export const runRoutes = new Elysia({ name: "runs" })
       db.select({ total: count() }).from(runs).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
-    const origins = await originsForRuns(workspaceRuns);
-    const data = workspaceRuns.map((r: RunItem): Record<string, unknown> => runResource(r, canApply, false, origins.get(r.id)));
+    const [origins, linkage] = await Promise.all([originsForRuns(workspaceRuns), linkageForRuns(workspaceRuns)]);
+    const data = workspaceRuns.map((r: RunItem): Record<string, unknown> => runResource(r, canApply, false, origins.get(r.id), undefined, undefined, linkage.get(r.id)));
     const included = await includedUsersForRuns(workspaceRuns);
     return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
   })
@@ -673,8 +699,8 @@ export const runRoutes = new Elysia({ name: "runs" })
     ]);
     const totalCount = countRows[0]?.total ?? 0;
     const applySet = new Set(applyIds ?? []);
-    const origins = await originsForRuns(orgRuns);
-    const data = orgRuns.map((r: RunItem): Record<string, unknown> => runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id)));
+    const [origins, linkage] = await Promise.all([originsForRuns(orgRuns), linkageForRuns(orgRuns)]);
+    const data = orgRuns.map((r: RunItem): Record<string, unknown> => runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id), undefined, undefined, linkage.get(r.id)));
     const included = await includedUsersForRuns(orgRuns);
     return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
   })
@@ -742,8 +768,9 @@ export const runRoutes = new Elysia({ name: "runs" })
     let position = (runningRows[0]?.total ?? 0) + pendingBefore;
     const applySet = new Set(applyIds ?? []);
     const origins = await originsForRuns(queue);
+    const linkage = await linkageForRuns(queue);
     const data = queue.map((r: RunItem): Record<string, unknown> => {
-      const resource = runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id));
+      const resource = runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id), undefined, undefined, linkage.get(r.id));
       const isPending = CAPACITY_PENDING_STATUSES.some((s: string): boolean => s === r.status);
       if (isPending) { position += 1; }
       const attrs = typeof resource.attributes === "object" && resource.attributes !== null ? (resource.attributes as Record<string, unknown>) : {};
@@ -805,7 +832,8 @@ export const runRoutes = new Elysia({ name: "runs" })
       originsForRuns([authorized.run]),
       runDurationBaseline(authorized.run),
     ]);
-    const data = runResource(authorized.run, canApply, canOverridePolicy, origins.get(authorized.run.id), baseline, canAdmin);
+    const linkage = await linkageForRuns([authorized.run]);
+    const data = runResource(authorized.run, canApply, canOverridePolicy, origins.get(authorized.run.id), baseline, canAdmin, linkage.get(authorized.run.id));
     const detailAttributes = data.attributes as Record<string, unknown>;
     const lockedReason = authorized.workspace.lockedReason;
     detailAttributes["workspace-locked"] = authorized.workspace.locked === true;
@@ -820,6 +848,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     const includes = requestedRunIncludes(request);
     if (includes.has("plan")) included.push(planResource(authorized.run, request));
     if (includes.has("workspace")) included.push(includedWorkspaceResource(authorized.workspace));
+    if (includes.has("task_stages")) included.push(...await includedTaskStagesForRuns([authorized.run]));
     return { data, ...(included.length > 0 ? { included } : {}) };
   })
   .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {

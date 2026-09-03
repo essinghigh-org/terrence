@@ -3,7 +3,7 @@ import { db } from "../db";
 import { AvatarService } from "./avatars";
 import type {
   workspaces, stateVersions, apiTokens, variableSets, workspaceVariables,
-  projects, runs
+  projects, runs, taskStages
 } from "../db/schema";
 import { organizations, workspaceTags, variableSetWorkspaces,
   variableSetProjects, variableSetVariables, stackVariableSets
@@ -763,7 +763,21 @@ function buildRunAttributes(run: RunParam, flags: DeepReadonly<{ isPlanned: bool
   };
 }
 
-function buildRunRelationships(run: RunParam): Record<string, unknown> {
+/** Audit finding 6: linkage data the Terraform CLI hydrates from run reads.
+ * policyCheckIds/taskStageIds are real row IDs loaded by the caller;
+ * cost-estimate IDs are synthetic (`ce-<runId>`) served by the
+ * cost-estimates read route. Absent linkage serializes as an empty array
+ * (honest zero), never as fabricated IDs. */
+export type RunRelationshipLinkage = Readonly<{
+  readonly policyCheckIds?: readonly string[];
+  readonly taskStageIds?: readonly string[];
+}>;
+
+function relationshipData(ids: readonly string[], type: string): Record<string, unknown>[] {
+  return ids.map((id: string): Record<string, unknown> => ({ id, type }));
+}
+
+function buildRunRelationships(run: RunParam, linkage?: RunRelationshipLinkage): Record<string, unknown> {
   return {
     workspace: {
       data: { id: run.workspaceId, type: "workspaces" },
@@ -798,10 +812,16 @@ function buildRunRelationships(run: RunParam): Record<string, unknown> {
       data: run.agentPoolId !== null ? { id: run.agentPoolId, type: "agent-pools" } : null,
     },
     "cost-estimate": {
+      data: { id: `ce-${run.id}`, type: "cost-estimates" },
       links: { related: `/api/v2/runs/${run.id}/cost-estimate` },
     },
     "policy-checks": {
+      data: relationshipData(linkage?.policyCheckIds ?? [], "policy-checks"),
       links: { related: `/api/v2/runs/${run.id}/policy-checks` },
+    },
+    "task-stages": {
+      data: relationshipData(linkage?.taskStageIds ?? [], "task-stages"),
+      links: { related: `/api/v2/runs/${run.id}/task-stages` },
     },
     comments: {
       links: { related: `/api/v2/runs/${run.id}/comments` },
@@ -826,6 +846,7 @@ export function runResource(
     "is-slow"?: boolean;
   }> | null,
   canAdmin = canApply,
+  linkage?: RunRelationshipLinkage,
 ): Record<string, unknown> {
   const flags = getRunStatusFlags(run);
   const operation = resolveRunOperation(run);
@@ -834,8 +855,29 @@ export function runResource(
     id: run.id,
     type: "runs",
     attributes: buildRunAttributes(run, flags, operation, normalizedSource, origin, baseline, canApply, canAdmin, canOverridePolicy),
-    relationships: buildRunRelationships(run),
+    relationships: buildRunRelationships(run, linkage),
     links: { self: `/api/v2/runs/${run.id}` },
+  };
+}
+
+/** Audit finding 6: task-stage resource matching go-tfe's TaskStage shape so
+ * the CLI can poll stage status via TaskStages.Read. */
+export function taskStageResource(
+  stage: DeepReadonly<typeof taskStages.$inferSelect>,
+): Record<string, unknown> {
+  return {
+    id: stage.id,
+    type: "task-stages",
+    attributes: {
+      stage: stage.stage,
+      status: stage.status,
+      "status-timestamps": stage.statusTimestamps ?? {},
+      "created-at": new Date(stage.createdAt).toISOString(),
+    },
+    relationships: {
+      run: { data: { id: stage.runId, type: "runs" } },
+    },
+    links: { self: `/api/v2/task-stages/${stage.id}` },
   };
 }
 
