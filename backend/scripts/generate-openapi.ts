@@ -203,6 +203,29 @@ function hasImplicitSuccessReturn(source: string): boolean {
 const appErrorStatusCodes = responseStatusCodes(String(handleAppError));
 const systemAuthStatusCodes = responseStatusCodes(String(systemAuthError));
 
+type Server = Readonly<{ url: string; description: string }>;
+const configuredPublicUrl = process.env.PUBLIC_URL?.trim();
+const applicationServer: Server = {
+  // Paths below contain their complete registered prefixes (/api/v2, /api),
+  // so the server must not repeat one of those prefixes.
+  url: configuredPublicUrl === undefined || configuredPublicUrl === "" ? "/" : configuredPublicUrl,
+  description: "Terrence application API",
+};
+const loopbackOrWildcardHosts = new Set(["127.0.0.1", "::1", "localhost", "0.0.0.0", "::"]);
+const configuredSystemHost = process.env.SYSTEM_API_HOST?.trim();
+const configuredSystemTlsCert = process.env.SYSTEM_API_TLS_CERT?.trim();
+const configuredSystemPort = process.env.SYSTEM_API_PORT?.trim();
+const systemServerUrl = configuredSystemHost === undefined || configuredSystemHost === "" || loopbackOrWildcardHosts.has(configuredSystemHost)
+  ? "/"
+  : `${configuredSystemTlsCert === undefined || configuredSystemTlsCert === "" ? "http" : "https"}://${configuredSystemHost.includes(":") && !configuredSystemHost.startsWith("[") ? `[${configuredSystemHost}]` : configuredSystemHost}:${configuredSystemPort === undefined || configuredSystemPort === "" ? "8443" : configuredSystemPort}`;
+const systemServer: Server = {
+  // The default system listener is loopback-only and is not a client-reachable
+  // URL. Use a same-origin relative server for reverse-proxied deployments;
+  // explicit non-loopback configuration advertises the actual listener.
+  url: systemServerUrl,
+  description: "Terrence System API",
+};
+
 function tagForPath(path: string): string[] {
   if (path.startsWith("/api/v2/")) {
     const seg = path.slice("/api/v2/".length).split("/")[0] ?? "misc";
@@ -305,6 +328,7 @@ for (const route of routes) {
   const operation: Record<string, unknown> = {
     operationId,
     ...(tags.length > 0 ? { tags } : {}),
+    ...(route.listener === "system" ? { servers: [systemServer] } : {}),
     ...(paramNames.length > 0
       ? {
           parameters: paramNames.map((name) => ({
@@ -383,7 +407,7 @@ const document = {
     description: "Machine-readable contract generated from the registered route table. Per-route request/response schemas are added incrementally.",
     version,
   },
-  servers: [{ url: "/api/v2", description: "Terrence API v2" }],
+  servers: [applicationServer],
   paths,
   components: {
     securitySchemes: {

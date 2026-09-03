@@ -98,9 +98,20 @@ describe("openapi contract", () => {
   });
 
   it("includes system-listener operations and their delegated responses", () => {
-    const diagnostics = paths["/api/v1/diagnostics"]?.["get"] as { responses?: Record<string, unknown> } | undefined;
+    const diagnosticsPath = "/api/v1/diagnostics";
+    const diagnostics = paths[diagnosticsPath]?.["get"] as {
+      responses?: Record<string, unknown>;
+      servers?: { url?: string }[];
+    } | undefined;
     expect(diagnostics?.responses?.["401"]).toBeDefined();
     expect(diagnostics?.responses?.["503"]).toBeDefined();
+    const systemServerUrl = diagnostics?.servers?.[0]?.url;
+    expect(systemServerUrl).toBeDefined();
+    const resolvedDiagnostics = new URL(
+      diagnosticsPath,
+      new URL(systemServerUrl ?? "/", "https://terrence.test"),
+    );
+    expect(resolvedDiagnostics.pathname).toBe(diagnosticsPath);
 
     const createBundle = paths["/api/v1/support/bundle-requests"]?.["post"] as { responses?: Record<string, unknown> } | undefined;
     expect(createBundle?.responses?.["202"]).toBeDefined();

@@ -7,8 +7,8 @@
   },
   "servers": [
     {
-      "url": "/api/v2",
-      "description": "Terrence API v2"
+      "url": "/",
+      "description": "Terrence application API"
     }
   ],
   "paths": {
@@ -45035,6 +45035,12 @@
         "tags": [
           "system"
         ],
+        "servers": [
+          {
+            "url": "/",
+            "description": "Terrence System API"
+          }
+        ],
         "summary": "GET /api/v1/diagnostics",
         "responses": {
           "200": {
@@ -45083,6 +45089,12 @@
         "tags": [
           "system"
         ],
+        "servers": [
+          {
+            "url": "/",
+            "description": "Terrence System API"
+          }
+        ],
         "summary": "GET /api/v1/usage/bundle",
         "responses": {
           "200": {
@@ -45124,6 +45136,12 @@
         "operationId": "post-api-v1-support-bundle-requests",
         "tags": [
           "system"
+        ],
+        "servers": [
+          {
+            "url": "/",
+            "description": "Terrence System API"
+          }
         ],
         "summary": "POST /api/v1/support/bundle-requests",
         "responses": {
@@ -45175,6 +45193,12 @@
         "tags": [
           "system"
         ],
+        "servers": [
+          {
+            "url": "/",
+            "description": "Terrence System API"
+          }
+        ],
         "summary": "GET /api/v1/support/bundle-requests",
         "responses": {
           "200": {
@@ -45216,6 +45240,12 @@
         "operationId": "get-api-v1-support-bundle-requests-id-download",
         "tags": [
           "system"
+        ],
+        "servers": [
+          {
+            "url": "/",
+            "description": "Terrence System API"
+          }
         ],
         "parameters": [
           {
@@ -45275,6 +45305,12 @@
         "tags": [
           "system"
         ],
+        "servers": [
+          {
+            "url": "/",
+            "description": "Terrence System API"
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -45327,6 +45363,12 @@
         "operationId": "delete-api-v1-support-bundle-requests-id",
         "tags": [
           "system"
+        ],
+        "servers": [
+          {
+            "url": "/",
+            "description": "Terrence System API"
+          }
         ],
         "parameters": [
           {
@@ -45389,6 +45431,12 @@
         "tags": [
           "system"
         ],
+        "servers": [
+          {
+            "url": "/",
+            "description": "Terrence System API"
+          }
+        ],
         "summary": "POST /api/v1/support-bundle-requests",
         "responses": {
           "200": {
@@ -45439,6 +45487,12 @@
         "tags": [
           "system"
         ],
+        "servers": [
+          {
+            "url": "/",
+            "description": "Terrence System API"
+          }
+        ],
         "summary": "GET /api/v1/support-bundle-requests",
         "responses": {
           "200": {
@@ -45480,6 +45534,12 @@
         "operationId": "get-api-v1-support-bundle-requests-id-download-2",
         "tags": [
           "system"
+        ],
+        "servers": [
+          {
+            "url": "/",
+            "description": "Terrence System API"
+          }
         ],
         "parameters": [
           {
@@ -45539,6 +45599,12 @@
         "tags": [
           "system"
         ],
+        "servers": [
+          {
+            "url": "/",
+            "description": "Terrence System API"
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -45591,6 +45657,12 @@
         "operationId": "delete-api-v1-support-bundle-requests-id-2",
         "tags": [
           "system"
+        ],
+        "servers": [
+          {
+            "url": "/",
+            "description": "Terrence System API"
+          }
         ],
         "parameters": [
           {
