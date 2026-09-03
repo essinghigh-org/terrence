@@ -12,33 +12,6 @@
     }
   ],
   "paths": {
-    "/api/v2/available-versions": {
-      "get": {
-        "operationId": "get-api-v2-available-versions",
-        "tags": [
-          "available-versions"
-        ],
-        "summary": "GET /api/v2/available-versions",
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/vnd.api+json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not Found"
-          }
-        }
-      }
-    },
     "/oauth/authorization": {
       "get": {
         "operationId": "get-oauth-authorization",
@@ -91,6 +64,33 @@
       "post": {
         "operationId": "post-oauth-token",
         "summary": "POST /oauth/token",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/v2/available-versions": {
+      "get": {
+        "operationId": "get-api-v2-available-versions",
+        "tags": [
+          "available-versions"
+        ],
+        "summary": "GET /api/v2/available-versions",
         "responses": {
           "200": {
             "description": "Success",
@@ -3551,43 +3551,6 @@
         }
       }
     },
-    "/api/v2/workspaces/{workspace_id}/all-vars": {
-      "get": {
-        "operationId": "get-api-v2-workspaces-workspace-id-all-vars",
-        "tags": [
-          "workspaces"
-        ],
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "summary": "GET /api/v2/workspaces/{workspace_id}/all-vars",
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/vnd.api+json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "404": {
-            "description": "Not Found"
-          }
-        }
-      }
-    },
     "/api/v2/workspaces/{workspace_id}/tag-bindings": {
       "get": {
         "operationId": "get-api-v2-workspaces-workspace-id-tag-bindings",
@@ -3856,6 +3819,43 @@
           }
         ],
         "summary": "POST /api/v2/workspaces/{workspace_id}/vars",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
+    "/api/v2/workspaces/{workspace_id}/all-vars": {
+      "get": {
+        "operationId": "get-api-v2-workspaces-workspace-id-all-vars",
+        "tags": [
+          "workspaces"
+        ],
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "GET /api/v2/workspaces/{workspace_id}/all-vars",
         "responses": {
           "200": {
             "description": "Success",
@@ -8271,6 +8271,9 @@
           },
           "404": {
             "description": "Not Found"
+          },
+          "422": {
+            "description": "Unprocessable Entity"
           }
         }
       }
@@ -14527,15 +14530,15 @@
         }
       }
     },
-    "/api/v2/hyok-configurations/{hyok_id}": {
+    "/api/v2/hyok-configurations/{id}": {
       "get": {
-        "operationId": "get-api-v2-hyok-configurations-hyok-id",
+        "operationId": "get-api-v2-hyok-configurations-id",
         "tags": [
           "hyok-configurations"
         ],
         "parameters": [
           {
-            "name": "hyok_id",
+            "name": "id",
             "in": "path",
             "required": true,
             "schema": {
@@ -14543,7 +14546,7 @@
             }
           }
         ],
-        "summary": "GET /api/v2/hyok-configurations/{hyok_id}",
+        "summary": "GET /api/v2/hyok-configurations/{id}",
         "responses": {
           "200": {
             "description": "Success",
@@ -14562,9 +14565,7 @@
             "description": "Not Found"
           }
         }
-      }
-    },
-    "/api/v2/hyok-configurations/{id}": {
+      },
       "patch": {
         "operationId": "patch-api-v2-hyok-configurations-id",
         "tags": [
@@ -27532,7 +27533,7 @@
       "get": {
         "operationId": "get-api-v2-tf-policy-set-outcomes-tf-policy-set-outcome-id",
         "tags": [
-          "tf-policy-evaluations"
+          "tf-policy-set-outcomes"
         ],
         "parameters": [
           {

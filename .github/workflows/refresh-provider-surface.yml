@@ -43,7 +43,7 @@ jobs:
             echo "Provider surface is current; nothing to do."
             exit 0
           fi
-          VERSION="$(python3 -c "import json; print(json.load(open('backend/src/data/provider_surface.json'))['provider'].split()[-1])")"
+          VERSION="$(bun -e 'console.log(require("./backend/src/data/provider_surface.json").provider.split(/\s+/).pop())')"
           BRANCH="chore/provider-surface-${VERSION}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

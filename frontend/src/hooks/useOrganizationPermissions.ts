@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchApi } from "../lib/api";
 
 export const orgPermissionsCache = new Map<string, { permissions: Readonly<Record<string, boolean>> | undefined; expires: number }>();
@@ -80,7 +80,7 @@ export function useOrganizationPermissions(orgName: string | undefined): Organiz
     }).catch((caught: unknown): void => {
       if (controller.signal.aborted) return;
       setPermissions(undefined);
-      setLoaded(true);
+      setLoaded(false);
       setError(caught instanceof Error ? caught.message : "Failed to load organization permissions.");
     });
 
@@ -89,7 +89,10 @@ export function useOrganizationPermissions(orgName: string | undefined): Organiz
     };
   }, [orgName]);
 
-  const has = (name: OrganizationPermissionName): boolean => permissions?.[name] === true;
+  const has = useCallback((name: OrganizationPermissionName): boolean => permissions?.[name] === true, [permissions]);
 
-  return { permissions, loaded, error, has };
+  return useMemo(
+    (): OrganizationPermissions => ({ permissions, loaded, error, has }),
+    [permissions, loaded, error, has],
+  );
 }

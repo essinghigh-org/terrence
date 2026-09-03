@@ -809,6 +809,10 @@ export const healthRoutes = new Elysia({ name: "health" })
     }
 
     const format = new URL(request.url).searchParams.get("format");
+    if (format !== null && format !== "" && format !== "json" && format !== "prometheus") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "format must be 'json' or 'prometheus'" }] };
+    }
     if (format !== "prometheus") {
       return { metrics: collectionToJson(collection) };
     }

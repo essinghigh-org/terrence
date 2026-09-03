@@ -166,6 +166,9 @@ for (const route of routes) {
     delete responses["401"];
     responses["422"] = { description: "Unprocessable Entity" };
   }
+  if (m === "post" && openApiPath === "/api/v2/projects/{project_id}/relationships/workspaces") {
+    (operation.responses as Record<string, unknown>)["422"] = { description: "Unprocessable Entity" };
+  }
   paths[openApiPath][m] = operation;
 }
 

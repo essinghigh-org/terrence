@@ -3,12 +3,21 @@
 ## Getting Started
 
 1. Clone the repository
-2. Ensure Bun >= 1.4.0 is installed
-3. Run `bun install` at the project root
-4. Run `cd backend && bun run index.ts` to start the server
-5. Open `http://localhost:3000` to access the UI
+2. Ensure Bun 1.4.0 is installed
+3. Run `bun install` at the project root (this also installs the pre-commit hook)
+4. Build the frontend: `(cd frontend && bun run build)`
+5. Run `(cd backend && bun run index.ts)` to start the server
+6. Open `http://localhost:3000` to access the UI
 
 ## Development Workflow
+
+### Pre-commit Hook
+
+A pre-commit hook keeps the database schema and its migrations in lockstep. It is automatically installed via `bun run prepare` upon `bun install`, or can be linked manually:
+
+```bash
+ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+```
 
 ### Code Style
 

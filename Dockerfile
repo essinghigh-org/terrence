@@ -129,7 +129,7 @@ RUN mkdir -p /app/backend/storage && \
 VOLUME ["/app/backend/storage"]
 
 # Backend is the app entry; run from /app/backend so `bun run index.ts` resolves
-# the backend entry, not the root stub.
+# the backend entry.
 WORKDIR /app/backend
 
 USER 65532:65532

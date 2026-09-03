@@ -9,7 +9,6 @@
   "workspaces": {
     ".": {
       "entry": [
-        "index.ts",
         "scripts/*.ts"
       ]
     },
@@ -40,6 +39,6 @@
     }
   },
   "ignoreBinaries": [
-    "dedupe"
+    "tsc"
   ]
 }

@@ -151,8 +151,8 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
     (set as { status: number }).status = 201;
     return { data: await hyokResource(row, org.name) };
   })
-  .get("/api/v2/hyok-configurations/:hyok_id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
-    const id = params.hyok_id ?? "";
+  .get("/api/v2/hyok-configurations/:id", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const id = params.id ?? "";
     const row = await db.query.hyokConfigurations.findFirst({ where: eq(hyokConfigurations.id, id) });
     if (row === undefined) return notFound(set);
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, row.orgId) });

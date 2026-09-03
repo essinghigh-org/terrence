@@ -53,4 +53,4 @@ state, configuration archives, or run logs. The hyphenated
 `/api/v1/support-bundle-requests` path remains available as a compatibility
 alias for the original project specification.
 
-This project was created using `bun init` in bun v1.2.14. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.
+This project was created using `bun init` in bun v1.4.0. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.

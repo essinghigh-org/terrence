@@ -27,5 +27,5 @@ We follow coordinated vulnerability disclosure practices:
 
 ## Scope
 
-This policy covers the Terrence server, the frontend, and the `terrance-agent` client. Supply-chain vulnerabilities in third-party dependencies should be reported upstream to the respective maintainers, or to us when they affect how Terrence consumes them.
+This policy covers the Terrence server and the frontend. Supply-chain vulnerabilities in third-party dependencies should be reported upstream to the respective maintainers, or to us when they affect how Terrence consumes them.
 

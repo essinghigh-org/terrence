@@ -7,9 +7,11 @@ dist
 *.tgz
 scratch/
 
-# code coverage
+# code coverage & test artifacts
 coverage
 *.lcov
+test-results/
+frontend/test-results/
 
 # logs
 logs

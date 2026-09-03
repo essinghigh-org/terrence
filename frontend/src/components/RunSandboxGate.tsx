@@ -43,54 +43,54 @@ export function RunSandboxGate({ children }: Readonly<{ readonly children: React
 
   if (status === undefined) {
     // Still probing — render nothing to avoid a flash.
-    return <div className="min-h-screen bg-neutral-950" />;
+    return <div className="min-h-screen bg-background" />;
   }
 
   if (status !== null && status.enabled && !status.available) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-neutral-950 p-6">
-        <div className="max-w-2xl rounded-lg border border-amber-500/40 bg-neutral-900 p-8 text-neutral-100 shadow-xl">
+      <div className="flex min-h-screen items-center justify-center bg-background p-6">
+        <div className="max-w-2xl rounded-lg border border-amber-500/40 bg-card p-8 text-card-foreground shadow-xl">
           <div className="mb-3 flex items-center gap-3">
             <span className="text-3xl" role="img" aria-label="warning">⚠️</span>
             <h1 className="text-2xl font-semibold">Run sandbox is unavailable</h1>
           </div>
-          <p className="mb-4 leading-relaxed text-neutral-300">
+          <p className="mb-4 leading-relaxed text-muted-foreground">
             Terrence requires its Landlock-based run sandbox to isolate
             Terraform/OpenTofu execution from the control plane, but Landlock
             is not available on this host.
           </p>
-          <p className="mb-4 leading-relaxed text-neutral-300">
+          <p className="mb-4 leading-relaxed text-muted-foreground">
             {status.reason ?? "Unknown reason"} (probed ABI: {status.abi}).
             Terraform provider and provisioner code would otherwise be able to
             read the application database, encryption key, state archives and
             other workspaces&apos; configuration.
           </p>
-          <div className="mb-6 rounded-md border border-neutral-700 bg-neutral-800 p-4">
+          <div className="mb-6 rounded-md border border-border bg-muted/40 p-4">
             <p className="mb-2 font-medium">To continue, either:</p>
-            <ul className="list-disc space-y-1 pl-5 text-neutral-300">
+            <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
               <li>
                 Enable Landlock on the host kernel (see{" "}
                 <a
-                  className="text-sky-400 underline hover:text-sky-300"
+                  className="text-primary underline hover:text-primary/80"
                   href={safeHttpUrl(status.docs) ?? "#"}
                   target="_blank"
                   rel="noreferrer"
                 >
                   the kernel documentation
                 </a>
-                ). Requires Linux &ge; 5.13 with <code className="rounded bg-neutral-900 px-1">CONFIG_SECURITY_LANDLOCK</code>{" "}
-                and the <code className="rounded bg-neutral-900 px-1">landlock</code> LSM enabled, or
+                ). Requires Linux &ge; 5.13 with <code className="rounded bg-muted px-1">CONFIG_SECURITY_LANDLOCK</code>{" "}
+                and the <code className="rounded bg-muted px-1">landlock</code> LSM enabled, or
                 a container runtime configured to allow it.
               </li>
               <li>
                 Explicitly disable the control by setting{" "}
-                <code className="rounded bg-neutral-900 px-1">TERRENCE_RUN_SANDBOX=false</code>{" "}
+                <code className="rounded bg-muted px-1">TERRENCE_RUN_SANDBOX=false</code>{" "}
                 on the server and restarting. This acknowledges that runs are
                 <strong> not isolated</strong> and untrusted IaC can access the host filesystem.
               </li>
             </ul>
           </div>
-          <p className="text-sm text-neutral-500">
+          <p className="text-sm text-muted-foreground">
             Runs are blocked until this is resolved. This page will re-check automatically on reload.
           </p>
         </div>
