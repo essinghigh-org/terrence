@@ -55,6 +55,7 @@ async function runWorkerScriptWithFakeSandbox(
         "#!/bin/sh",
         `record_path=${JSON.stringify(recordPath)}`,
         'if [ "$1" = "--probe" ]; then echo 1; exit 0; fi',
+        'if [ "$1" = "--probe-loopback" ]; then echo ok; exit 0; fi',
         'cwd=""',
         'while [ "$#" -gt 0 ]; do',
         '  if [ "$1" = "--" ]; then shift; break; fi',
