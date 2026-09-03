@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/naming-convention -- Terraform plan JSON fields are snake_case. */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   ChevronRight,
@@ -368,6 +368,25 @@ type DiffLine = {
   replacement: boolean;
 };
 
+function semanticKeys<T>(values: readonly T[], identity: (value: T) => string): string[] {
+  const occurrences = new Map<string, number>();
+  return values.map((value): string => {
+    const base = identity(value);
+    const occurrence = occurrences.get(base) ?? 0;
+    occurrences.set(base, occurrence + 1);
+    return `${base}:${occurrence}`;
+  });
+}
+
+function diffLineIdentity(line: DiffLine): string {
+  return JSON.stringify({
+    depth: line.depth,
+    path: line.path,
+    parts: line.parts,
+    replacement: line.replacement,
+  });
+}
+
 type DiffMarker = "add" | "del" | "mod";
 const diffMarkerClasses = {
   add: "text-success",
@@ -644,24 +663,28 @@ export function AttributeDiff({
     lines.push({ depth: 0, path: "", parts: [{ text: "}", cls: "text-muted-foreground/70" }], replacement: false });
   }
 
+  const lineKeys = semanticKeys(lines, diffLineIdentity);
   return (
     <div aria-label={`Attribute changes for ${address}`} className="overflow-x-auto border-t border-border bg-muted px-4 pb-3">
       <div className="min-w-[560px] py-2 font-mono text-xs leading-5">
-        {lines.map((line, index): React.JSX.Element => (
-          <div key={index} className="flex items-baseline whitespace-pre">
-            <code>
-              <span className="text-muted-foreground/70">{" ".repeat(line.depth * 2)}</span>
-              {line.parts.map((part, partIndex): React.JSX.Element => (
-                <span key={partIndex} className={part.cls}>{part.text}</span>
-              ))}
-            </code>
-            {line.replacement && (
-              <span className="ml-1 text-2xs font-semibold uppercase tracking-wide text-warning">
-                Forces replacement
-              </span>
-            )}
-          </div>
-        ))}
+        {lines.map((line, lineIndex): React.JSX.Element => {
+          const partKeys = semanticKeys(line.parts, (part): string => JSON.stringify(part));
+          return (
+            <div key={lineKeys[lineIndex]} className="flex items-baseline whitespace-pre">
+              <code>
+                <span className="text-muted-foreground/70">{" ".repeat(line.depth * 2)}</span>
+                {line.parts.map((part, partIndex): React.JSX.Element => (
+                  <span key={partKeys[partIndex]} className={part.cls}>{part.text}</span>
+                ))}
+              </code>
+              {line.replacement && (
+                <span className="ml-1 text-2xs font-semibold uppercase tracking-wide text-warning">
+                  Forces replacement
+                </span>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -670,8 +693,14 @@ export function AttributeDiff({
 function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): React.JSX.Element {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const copiedResetTimerRef = useRef<number | undefined>(undefined);
   const operation = operationForResource(resource);
   const config = operationConfig[operation];
+  useEffect((): (() => void) => {
+    return (): void => {
+      if (copiedResetTimerRef.current !== undefined) window.clearTimeout(copiedResetTimerRef.current);
+    };
+  }, []);
   // Plan JSON always names the resource; fall back to the final address element
   // so the structured header renders for hand-built fixtures too.
   const fallbackName = resource.name
@@ -683,7 +712,11 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
     void copyTextToClipboard(resource.address).then((didCopy): void => {
       if (!didCopy) return;
       setCopied(true);
-      setTimeout((): void => { setCopied(false); }, 1500);
+      if (copiedResetTimerRef.current !== undefined) window.clearTimeout(copiedResetTimerRef.current);
+      copiedResetTimerRef.current = window.setTimeout((): void => {
+        copiedResetTimerRef.current = undefined;
+        setCopied(false);
+      }, 1500);
     });
   };
 
@@ -740,8 +773,20 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
   );
 }
 
+function actionInvocationIdentity(action: ActionInvocation): string {
+  return JSON.stringify({
+    address: action.address,
+    type: action.type,
+    name: action.name,
+    provider_name: action.provider_name,
+    lifecycle_action_trigger: action.lifecycle_action_trigger,
+    invoke_action_trigger: action.invoke_action_trigger,
+  });
+}
+
 function ActionInvocations({ actions }: Readonly<{ actions: readonly ActionInvocation[] }>): React.JSX.Element {
   if (actions.length === 0) return <></>;
+  const actionKeys = semanticKeys(actions, actionInvocationIdentity);
   return (
     <details className="border-t border-border">
       <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
@@ -754,7 +799,7 @@ function ActionInvocations({ actions }: Readonly<{ actions: readonly ActionInvoc
           const label = configuredLabel === "" ? `Action ${index + 1}` : configuredLabel;
           const trigger = action.lifecycle_action_trigger;
           return (
-            <div key={`${label}:${index}`} className="flex items-start gap-3 px-5 py-3 text-xs">
+            <div key={actionKeys[index]} className="flex items-start gap-3 px-5 py-3 text-xs">
               <span className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-xs font-semibold leading-5 text-primary">invoke</span>
               <div className="min-w-0">
                 <code className="break-all font-mono font-semibold text-foreground">{label}</code>
@@ -884,12 +929,19 @@ export function PlanOutput({
   const [search, setSearch] = useState("");
   const [selectedOps, setSelectedOps] = useState<ReadonlySet<Operation>>(new Set(DEFAULT_SELECTED_OPS));
   const [summaryCopied, setSummaryCopied] = useState(false);
+  const summaryCopiedResetTimerRef = useRef<number | undefined>(undefined);
   const activeRunId = useRef(runId);
   const readyRunId = useRef<string | null>(null);
   const degradedTimerRef = useRef<number | undefined>(undefined);
   // The latest effect's load, so the SSE handler always reloads the current
   // run even while the effect is mid-commit.
   const loadRef = useRef<() => void>(() => {});
+
+  useEffect((): (() => void) => {
+    return (): void => {
+      if (summaryCopiedResetTimerRef.current !== undefined) window.clearTimeout(summaryCopiedResetTimerRef.current);
+    };
+  }, []);
 
   useEffect((): (() => void) => {
     let cancelled = false;
@@ -994,6 +1046,77 @@ export function PlanOutput({
       : null);
   }, [loadState, onSummaryChange, runId]);
 
+  const derived = useMemo(() => {
+    if (loadState.kind !== "ready") return null;
+    const planJson = loadState.plan;
+    const changedResources = (planJson.resource_changes ?? [])
+      .filter((resource): boolean => operationForResource(resource) !== "no-op");
+    const driftResources = (planJson.resource_drift ?? [])
+      .filter((resource): boolean => operationForResource(resource) !== "no-op");
+    const counts = summaryCounts(changedResources);
+    const query = search.trim().toLocaleLowerCase();
+    const filteredResources = changedResources
+      .filter((resource): boolean => resourceMatches(resource, selectedOps, query));
+    const filteredDrift = driftResources
+      .filter((resource): boolean => resourceMatches(resource, selectedOps, query));
+    const importCount = changedResources
+      .filter((resource): boolean => resource.change.importing !== undefined).length;
+    const moveCount = changedResources
+      .filter((resource): boolean => resource.previous_address !== undefined).length;
+    const outputs = Object.entries(planJson.output_changes ?? {});
+    const actionInvocations = planJson.action_invocations ?? [];
+    const operationSummary = [
+      {
+        count: importCount,
+        label: "to import",
+        symbol: "&",
+        className: "text-foreground",
+      },
+      {
+        count: counts.add,
+        label: "to create",
+        symbol: "+",
+        className: "text-success",
+      },
+      {
+        count: counts.change,
+        label: "to change",
+        symbol: "~",
+        className: "text-primary",
+      },
+      {
+        count: counts.destroy,
+        label: "to destroy",
+        symbol: "−",
+        className: "text-destructive",
+      },
+    ].filter((item): boolean => item.count > 0);
+    const opCounts = {
+      create: changedResources.filter((resource): boolean => operationForResource(resource) === "create").length,
+      update: changedResources.filter((resource): boolean => operationForResource(resource) === "update").length,
+      delete: changedResources.filter((resource): boolean => operationForResource(resource) === "delete").length,
+      replace: changedResources.filter((resource): boolean => operationForResource(resource) === "replace").length,
+      read: changedResources.filter((resource): boolean => operationForResource(resource) === "read").length,
+      import: importCount,
+      move: moveCount,
+      remove: changedResources.filter((resource): boolean => operationForResource(resource) === "remove").length,
+    };
+    return {
+      planJson,
+      changedResources,
+      driftResources,
+      counts,
+      filteredResources,
+      filteredDrift,
+      importCount,
+      moveCount,
+      outputs,
+      actionInvocations,
+      operationSummary,
+      opCounts,
+    };
+  }, [loadState, search, selectedOps]);
+
   if (activeRunId.current !== runId || loadState.kind === "loading") {
     return (
       <div role="status" className="flex items-center gap-2 border-t border-border px-5 py-4 text-sm text-muted-foreground">
@@ -1042,60 +1165,22 @@ export function PlanOutput({
     );
   }
 
-  const planJson = loadState.plan;
-  const changedResources = (planJson.resource_changes ?? [])
-    .filter((resource): boolean => operationForResource(resource) !== "no-op");
-  const driftResources = (planJson.resource_drift ?? [])
-    .filter((resource): boolean => operationForResource(resource) !== "no-op");
-  const counts = summaryCounts(changedResources);
-  const query = search.trim().toLocaleLowerCase();
-  const filteredResources = changedResources
-    .filter((resource): boolean => resourceMatches(resource, selectedOps, query));
-  const filteredDrift = driftResources
-    .filter((resource): boolean => resourceMatches(resource, selectedOps, query));
-  const importCount = changedResources
-    .filter((resource): boolean => resource.change.importing !== undefined).length;
-  const moveCount = changedResources
-    .filter((resource): boolean => resource.previous_address !== undefined).length;
-  const outputs = Object.entries(planJson.output_changes ?? {});
-  const actionInvocations = planJson.action_invocations ?? [];
-  const operationSummary = [
-    {
-      count: importCount,
-      label: "to import",
-      symbol: "&",
-      className: "text-foreground",
-    },
-    {
-      count: counts.add,
-      label: "to create",
-      symbol: "+",
-      className: "text-success",
-    },
-    {
-      count: counts.change,
-      label: "to change",
-      symbol: "~",
-      className: "text-primary",
-    },
-    {
-      count: counts.destroy,
-      label: "to destroy",
-      symbol: "−",
-      className: "text-destructive",
-    },
-  ].filter((item): boolean => item.count > 0);
+  if (derived === null) return <></>;
 
-  const opCounts = {
-    create: changedResources.filter((resource): boolean => operationForResource(resource) === "create").length,
-    update: changedResources.filter((resource): boolean => operationForResource(resource) === "update").length,
-    delete: changedResources.filter((resource): boolean => operationForResource(resource) === "delete").length,
-    replace: changedResources.filter((resource): boolean => operationForResource(resource) === "replace").length,
-    read: changedResources.filter((resource): boolean => operationForResource(resource) === "read").length,
-    import: importCount,
-    move: moveCount,
-    remove: changedResources.filter((resource): boolean => operationForResource(resource) === "remove").length,
-  };
+  const {
+    planJson,
+    changedResources,
+    driftResources,
+    counts,
+    filteredResources,
+    filteredDrift,
+    importCount,
+    moveCount,
+    outputs,
+    actionInvocations,
+    operationSummary,
+    opCounts,
+  } = derived;
 
   return (
     <section aria-label="Plan output" className="border-t border-border">
@@ -1110,7 +1195,11 @@ export function PlanOutput({
               void copyTextToClipboard(planSummaryMarkdown({ ...counts, importCount })).then((didCopy): void => {
                 if (!didCopy) return;
                 setSummaryCopied(true);
-                window.setTimeout((): void => { setSummaryCopied(false); }, 2_000);
+                if (summaryCopiedResetTimerRef.current !== undefined) window.clearTimeout(summaryCopiedResetTimerRef.current);
+                summaryCopiedResetTimerRef.current = window.setTimeout((): void => {
+                  summaryCopiedResetTimerRef.current = undefined;
+                  setSummaryCopied(false);
+                }, 2_000);
               });
             }}
           >

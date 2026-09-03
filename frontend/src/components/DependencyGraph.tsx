@@ -402,11 +402,21 @@ function NodeDetailsPanel({
   onFocusNode: (address: string) => void;
 }>): React.JSX.Element {
   const [copied, setCopied] = useState(false);
+  const copiedResetTimerRef = useRef<number | undefined>(undefined);
+  useEffect((): (() => void) => {
+    return (): void => {
+      if (copiedResetTimerRef.current !== undefined) window.clearTimeout(copiedResetTimerRef.current);
+    };
+  }, []);
   const copy = useCallback((): void => {
     void copyTextToClipboard(node.id).then((didCopy): void => {
       if (!didCopy) return;
       setCopied(true);
-      window.setTimeout((): void => { setCopied(false); }, 1200);
+      if (copiedResetTimerRef.current !== undefined) window.clearTimeout(copiedResetTimerRef.current);
+      copiedResetTimerRef.current = window.setTimeout((): void => {
+        copiedResetTimerRef.current = undefined;
+        setCopied(false);
+      }, 1200);
     });
   }, [node.id]);
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLocation, useOutletContext, useSearchParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
 import type { LayoutOutletContext } from "../components/Layout";
@@ -73,8 +73,15 @@ export function AccountSettings(): React.JSX.Element {
   // Token Modal / Creation
   const [createdTokenSecret, setCreatedTokenSecret] = useState<string | null>(null);
   const [copiedToken, setCopiedToken] = useState(false);
+  const copiedTokenResetTimerRef = useRef<number | undefined>(undefined);
   const [deletingTokenId, setDeletingTokenId] = useState<string | null>(null);
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
+
+  useEffect((): (() => void) => {
+    return (): void => {
+      if (copiedTokenResetTimerRef.current !== undefined) window.clearTimeout(copiedTokenResetTimerRef.current);
+    };
+  }, []);
 
   // Browser Sessions
   const [sessions, setSessions] = useState<BrowserSession[]>([]);
@@ -865,7 +872,11 @@ export function AccountSettings(): React.JSX.Element {
                       void copyTextToClipboard(createdTokenSecret).then((didCopy): void => {
                         if (didCopy) {
                           setCopiedToken(true);
-                          setTimeout((): void => { setCopiedToken(false); }, 2000);
+                          if (copiedTokenResetTimerRef.current !== undefined) window.clearTimeout(copiedTokenResetTimerRef.current);
+                          copiedTokenResetTimerRef.current = window.setTimeout((): void => {
+                            copiedTokenResetTimerRef.current = undefined;
+                            setCopiedToken(false);
+                          }, 2000);
                           return;
                         }
                         toast.add({ title: "Could not copy token", type: "error" });

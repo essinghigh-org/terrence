@@ -159,6 +159,17 @@ const SETTINGS_SECTIONS: Partial<Record<WorkspaceSection, SettingsSectionMeta>> 
   },
 };
 
+const TERMINAL_RUN_STATUSES = new Set([
+  "applied",
+  "canceled",
+  "discarded",
+  "errored",
+  "failed",
+  "force_canceled",
+  "planned_and_finished",
+  "unreachable",
+]);
+
 type Workspace = {
   id: string;
   attributes: {
@@ -246,23 +257,26 @@ export function WorkspaceDetail({
   const loadLatestRun = useCallback(async (
     workspaceId: string,
     signal: AbortSignal,
-  ): Promise<void> => {
+  ): Promise<RunSummary | null> => {
     try {
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const runs = await fetchApi(
         `/api/v2/workspaces/${workspaceId}/runs?page[size]=1`,
         { signal },
       ) as { data: JsonValue };
-      if (signal.aborted || activeWorkspaceId.current !== workspaceId) return;
+      if (signal.aborted || activeWorkspaceId.current !== workspaceId) return null;
 // SAFETY: the runs list carries RunSummary resources per the endpoint contract.
-      setLatestRun(Array.isArray(runs.data) ? (runs.data[0] as RunSummary | undefined) ?? null : null);
+      const latest = Array.isArray(runs.data) ? (runs.data[0] as RunSummary | undefined) ?? null : null;
+      setLatestRun(latest);
       setLatestRunLoading(false);
       setLatestRunError(false);
+      return latest;
     } catch {
       if (!signal.aborted && activeWorkspaceId.current === workspaceId) {
         setLatestRunLoading(false);
         setLatestRunError(true);
       }
+      return null;
     }
   }, []);
 
@@ -308,25 +322,47 @@ export function WorkspaceDetail({
     };
   }, [isRunDetail, loadWorkspace]);
 
+  const latestRunTerminal = latestRun !== null && TERMINAL_RUN_STATUSES.has(latestRun.attributes.status);
+
   useEffect((): (() => void) | undefined => {
-    if (workspace === null || activeSection !== "overview") return undefined;
+    if (workspace === null || activeSection !== "overview" || latestRunTerminal) return undefined;
     let timer: number | undefined;
+    let stopped = false;
     const controller = new AbortController();
     latestRunRequest.current?.abort();
     latestRunRequest.current = controller;
-    const refresh = async (): Promise<void> => {
-      await loadLatestRun(workspace.id, controller.signal);
-      if (!controller.signal.aborted) {
-        timer = window.setTimeout((): void => { void refresh(); }, 5000);
+    const clearTimer = (): void => {
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+        timer = undefined;
       }
     };
-    void refresh();
-    return (): void => {
-      controller.abort();
-      if (latestRunRequest.current === controller) latestRunRequest.current = null;
-      if (timer !== undefined) window.clearTimeout(timer);
+    const shouldStop = (): boolean => stopped || controller.signal.aborted || document.hidden;
+    const refresh = async (): Promise<void> => {
+      if (shouldStop()) return;
+      const latest = await loadLatestRun(workspace.id, controller.signal);
+      if (latest !== null && TERMINAL_RUN_STATUSES.has(latest.attributes.status)) return;
+      if (shouldStop()) return;
+      timer = window.setTimeout((): void => { void refresh(); }, 5000);
     };
-  }, [activeSection, loadLatestRun, workspace]);
+    const onVisibilityChange = (): void => {
+      if (document.hidden) {
+        clearTimer();
+      } else if (!stopped) {
+        clearTimer();
+        void refresh();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    if (!document.hidden) void refresh();
+    return (): void => {
+      stopped = true;
+      controller.abort();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      if (latestRunRequest.current === controller) latestRunRequest.current = null;
+      clearTimer();
+    };
+  }, [activeSection, latestRunTerminal, loadLatestRun, workspace]);
 
   useEffect((): (() => void) | undefined => {
     setProjectName(null);
@@ -699,15 +735,17 @@ export function WorkspaceDetail({
                     </div>
                   ) : (
                     <>
-                      {latestRunPath === null ? (
-                        <p className="font-semibold text-foreground">
-                          Latest run: {latestRunStatus ?? "unknown"}
-                        </p>
-                      ) : (
-                        <Link to={latestRunPath} className="font-semibold text-primary hover:underline">
-                          Latest run: {latestRunStatus ?? "unknown"}
-                        </Link>
-                      )}
+                      <div aria-live="polite" aria-atomic="true">
+                        {latestRunPath === null ? (
+                          <p className="font-semibold text-foreground">
+                            Latest run: {latestRunStatus ?? "unknown"}
+                          </p>
+                        ) : (
+                          <Link to={latestRunPath} className="font-semibold text-primary hover:underline">
+                            Latest run: {latestRunStatus ?? "unknown"}
+                          </Link>
+                        )}
+                      </div>
                       <p className="mt-1 text-sm text-foreground">
                         {latestRun.attributes.message ?? "Manual run"}
                       </p>

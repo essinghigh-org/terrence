@@ -7,14 +7,31 @@ type MarkdownBlock =
   | Readonly<{ kind: "list"; ordered: boolean; items: readonly { text: string; children: string[] }[] }>
   | Readonly<{ kind: "table"; headers: string[]; rows: string[][] }>;
 
+function semanticKeys<T>(values: readonly T[], identity: (value: T) => string): string[] {
+  const occurrences = new Map<string, number>();
+  return values.map((value): string => {
+    const base = identity(value);
+    const occurrence = occurrences.get(base) ?? 0;
+    occurrences.set(base, occurrence + 1);
+    return `${base}:${occurrence}`;
+  });
+}
+
+function markdownBlockIdentity(block: MarkdownBlock): string {
+  return JSON.stringify(block);
+}
+
 export function inlineMarkdown(text: string): ReactNode {
-  return text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|~~[^~]+~~|\[[^\]]+\]\([^\)]+\))/g).map((part: string, index: number): ReactNode => {
+  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|~~[^~]+~~|\[[^\]]+\]\([^\)]+\))/g);
+  const partKeys = semanticKeys(parts, (part): string => `inline:${part}`);
+  return parts.map((part: string, partIndex: number): ReactNode => {
+    const key = partKeys[partIndex];
     if (part.startsWith("`") && part.endsWith("`")) {
-      return <code key={index} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em]">{part.slice(1, -1)}</code>;
+      return <code key={key} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em]">{part.slice(1, -1)}</code>;
     }
-    if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
-    if (part.startsWith("*") && part.endsWith("*")) return <em key={index}>{part.slice(1, -1)}</em>;
-    if (part.startsWith("~~") && part.endsWith("~~")) return <del key={index}>{part.slice(2, -2)}</del>;
+    if (part.startsWith("**") && part.endsWith("**")) return <strong key={key}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith("*") && part.endsWith("*")) return <em key={key}>{part.slice(1, -1)}</em>;
+    if (part.startsWith("~~") && part.endsWith("~~")) return <del key={key}>{part.slice(2, -2)}</del>;
     const link = /^\[([^\]]+)\]\(([^\)]+)\)$/.exec(part);
     if (link !== null) {
       const href = link[2] ?? "";
@@ -26,7 +43,7 @@ export function inlineMarkdown(text: string): ReactNode {
       const scheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.exec(trimmed);
       const safe = scheme === null || /^(https?:|mailto:)/i.test(trimmed);
       return safe
-        ? <a key={index} href={href} className="text-primary underline underline-offset-2" target={trimmed.startsWith("http") ? "_blank" : undefined} rel={trimmed.startsWith("http") ? "noreferrer" : undefined}>{link[1]}</a>
+        ? <a key={key} href={href} className="text-primary underline underline-offset-2" target={trimmed.startsWith("http") ? "_blank" : undefined} rel={trimmed.startsWith("http") ? "noreferrer" : undefined}>{link[1]}</a>
         : link[1];
     }
     return part;
@@ -138,66 +155,78 @@ function parseMarkdown(markdown: string): MarkdownBlock[] {
 }
 
 function renderListItems(items: readonly { text: string; children: string[] }[], ordered: boolean): JSX.Element[] {
-  return items.map((item, itemIndex): JSX.Element => (
-    <li key={itemIndex}>
-      {inlineMarkdown(item.text)}
-      {item.children.length > 0 && (
-        ordered
-          ? <ol className="mt-1 list-decimal space-y-1 pl-5">{item.children.map((child, childIndex): JSX.Element => <li key={childIndex}>{inlineMarkdown(child)}</li>)}</ol>
-          : <ul className="mt-1 list-disc space-y-1 pl-5">{item.children.map((child, childIndex): JSX.Element => <li key={childIndex}>{inlineMarkdown(child)}</li>)}</ul>
-      )}
-    </li>
-  ));
+  const itemKeys = semanticKeys(items, (item): string => JSON.stringify(item));
+  return items.map((item, itemIndex): JSX.Element => {
+    const childKeys = semanticKeys(item.children, (child): string => `child:${child}`);
+    return (
+      <li key={itemKeys[itemIndex]}>
+        {inlineMarkdown(item.text)}
+        {item.children.length > 0 && (
+          ordered
+            ? <ol className="mt-1 list-decimal space-y-1 pl-5">{item.children.map((child, childIndex): JSX.Element => <li key={childKeys[childIndex]}>{inlineMarkdown(child)}</li>)}</ol>
+            : <ul className="mt-1 list-disc space-y-1 pl-5">{item.children.map((child, childIndex): JSX.Element => <li key={childKeys[childIndex]}>{inlineMarkdown(child)}</li>)}</ul>
+        )}
+      </li>
+    );
+  });
 }
 
 export function MarkdownContent({ markdown, className }: Readonly<{ markdown: string; className?: string }>): JSX.Element {
+  const blocks = parseMarkdown(markdown);
+  const blockKeys = semanticKeys(blocks, markdownBlockIdentity);
   return (
     <div className={cn("space-y-4", className)}>
-      {parseMarkdown(markdown).map((block, index): JSX.Element => {
+      {blocks.map((block, blockIndex): JSX.Element => {
+        const key = blockKeys[blockIndex];
         if (block.kind === "heading") {
           const headingClassName = cn(
             "font-semibold tracking-tight",
             block.level === 1 ? "text-xl" : block.level === 2 ? "text-lg" : block.level === 3 ? "text-base" : "text-sm",
           );
-          if (block.level === 1) return <h1 key={index} className={headingClassName}>{inlineMarkdown(block.text)}</h1>;
-          if (block.level === 2) return <h2 key={index} className={headingClassName}>{inlineMarkdown(block.text)}</h2>;
-          if (block.level === 3) return <h3 key={index} className={headingClassName}>{inlineMarkdown(block.text)}</h3>;
-          if (block.level === 4) return <h4 key={index} className={headingClassName}>{inlineMarkdown(block.text)}</h4>;
-          if (block.level === 5) return <h5 key={index} className={headingClassName}>{inlineMarkdown(block.text)}</h5>;
-          return <h6 key={index} className={headingClassName}>{inlineMarkdown(block.text)}</h6>;
+          if (block.level === 1) return <h1 key={key} className={headingClassName}>{inlineMarkdown(block.text)}</h1>;
+          if (block.level === 2) return <h2 key={key} className={headingClassName}>{inlineMarkdown(block.text)}</h2>;
+          if (block.level === 3) return <h3 key={key} className={headingClassName}>{inlineMarkdown(block.text)}</h3>;
+          if (block.level === 4) return <h4 key={key} className={headingClassName}>{inlineMarkdown(block.text)}</h4>;
+          if (block.level === 5) return <h5 key={key} className={headingClassName}>{inlineMarkdown(block.text)}</h5>;
+          return <h6 key={key} className={headingClassName}>{inlineMarkdown(block.text)}</h6>;
         }
         if (block.kind === "list") {
           return block.ordered
-            ? <ol key={index} className="list-decimal space-y-1 pl-5">{renderListItems(block.items, true)}</ol>
-            : <ul key={index} className="list-disc space-y-1 pl-5">{renderListItems(block.items, false)}</ul>;
+            ? <ol key={key} className="list-decimal space-y-1 pl-5">{renderListItems(block.items, true)}</ol>
+            : <ul key={key} className="list-disc space-y-1 pl-5">{renderListItems(block.items, false)}</ul>;
         }
         if (block.kind === "table") {
+          const headerKeys = semanticKeys(block.headers, (header): string => `header:${header}`);
+          const rowKeys = semanticKeys(block.rows, (row): string => JSON.stringify(row));
           return (
-            <div key={index} className="overflow-x-auto rounded-md border">
+            <div key={key} className="overflow-x-auto rounded-md border">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
                     {block.headers.map((header, headerIndex): JSX.Element => (
-                      <th key={headerIndex} className="px-3 py-2 text-left font-semibold">{inlineMarkdown(header)}</th>
+                      <th key={headerKeys[headerIndex]} className="px-3 py-2 text-left font-semibold">{inlineMarkdown(header)}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {block.rows.map((row, rowIndex): JSX.Element => (
-                    <tr key={rowIndex} className="border-b last:border-b-0">
-                      {row.map((cell, cellIndex): JSX.Element => (
-                        <td key={cellIndex} className="px-3 py-2 align-top text-muted-foreground">{inlineMarkdown(cell)}</td>
-                      ))}
-                    </tr>
-                  ))}
+                  {block.rows.map((row, rowIndex): JSX.Element => {
+                    const cellKeys = semanticKeys(row, (cell): string => `cell:${cell}`);
+                    return (
+                      <tr key={rowKeys[rowIndex]} className="border-b last:border-b-0">
+                        {row.map((cell, cellIndex): JSX.Element => (
+                          <td key={cellKeys[cellIndex]} className="px-3 py-2 align-top text-muted-foreground">{inlineMarkdown(cell)}</td>
+                        ))}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           );
         }
-        if (block.kind === "code") return <pre key={index} className="overflow-x-auto rounded-md bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground"><code>{block.text}</code></pre>;
-        if (block.kind === "quote") return <blockquote key={index} className="border-l-2 border-primary/40 pl-4 italic text-muted-foreground">{inlineMarkdown(block.text)}</blockquote>;
-        return <p key={index}>{inlineMarkdown(block.text)}</p>;
+        if (block.kind === "code") return <pre key={key} className="overflow-x-auto rounded-md bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground"><code>{block.text}</code></pre>;
+        if (block.kind === "quote") return <blockquote key={key} className="border-l-2 border-primary/40 pl-4 italic text-muted-foreground">{inlineMarkdown(block.text)}</blockquote>;
+        return <p key={key}>{inlineMarkdown(block.text)}</p>;
       })}
     </div>
   );
