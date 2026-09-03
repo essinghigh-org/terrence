@@ -150,4 +150,44 @@ describe("rate limiting", () => {
     }
     expect((await app.handle(bootstrapRequest())).status).toBe(429);
   });
+
+  it("applies the sensitive bucket to OAuth GET and MFA verification/removal endpoints", async () => {
+    for (const [index, path] of ["/oauth/authorization", "/oauth/authorization/complete"].entries()) {
+      const request = (): Request => new Request(`http://localhost${path}`, {
+        headers: { "X-Forwarded-For": `198.51.100.${String(index + 10)}` },
+      });
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        expect((await app.handle(request())).status).toBe(400);
+      }
+      const throttled = await app.handle(request());
+      expect(throttled.status).toBe(429);
+      expect(throttled.headers.get("ratelimit-limit")).toBe("5");
+    }
+
+    const user = await seedUser(1);
+    const token = user.tokens[0];
+    expect(token).toBeDefined();
+    const mfaRequest = (method: "POST" | "DELETE", path: string): Request => new Request(`http://localhost${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/vnd.api+json",
+      },
+      body: JSON.stringify({ data: { type: "mfa", attributes: { code: "000000" } } }),
+    });
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect((await app.handle(mfaRequest("POST", "/api/v2/account/mfa/verify"))).status).toBe(401);
+    }
+    const throttledVerify = await app.handle(mfaRequest("POST", "/api/v2/account/mfa/verify"));
+    expect(throttledVerify.status).toBe(429);
+    expect(throttledVerify.headers.get("ratelimit-limit")).toBe("5");
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect((await app.handle(mfaRequest("DELETE", "/api/v2/account/mfa"))).status).toBe(404);
+    }
+    const throttledRemove = await app.handle(mfaRequest("DELETE", "/api/v2/account/mfa"));
+    expect(throttledRemove.status).toBe(429);
+    expect(throttledRemove.headers.get("ratelimit-limit")).toBe("5");
+  });
 });

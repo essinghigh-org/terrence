@@ -5,14 +5,19 @@ import {
   rateLimitClassFor,
   serverEndpointPath,
 } from "../../src/lib/endpoint-policy";
+import type { RateLimitClass } from "../../src/lib/endpoint-policy";
 
 describe("endpoint-policy (465-469)", () => {
   // Representative samples: at least one path per auth/rate/body bucket is exercised.
-  const probes: readonly { method: string; url: string; rate: import("../../src/lib/endpoint-policy").RateLimitClass }[] = [
+  const probes: readonly { method: string; url: string; rate: RateLimitClass }[] = [
     { method: "GET", url: "http://x/api/v2/workspaces/ws-1/runs", rate: "workspace-run-history" },
     { method: "DELETE", url: "http://x/api/v2/admin/scim-settings", rate: "scim-settings" },
     { method: "POST", url: "http://x/api/v2/admin/teams/t-1/scim-group-mapping", rate: "scim-mapping" },
     { method: "POST", url: "http://x/oauth/token", rate: "sensitive" },
+    { method: "GET", url: "http://x/oauth/authorization", rate: "sensitive" },
+    { method: "GET", url: "http://x/oauth/authorization/complete", rate: "sensitive" },
+    { method: "POST", url: "http://x/api/v2/account/mfa/verify", rate: "sensitive" },
+    { method: "DELETE", url: "http://x/api/v2/account/mfa", rate: "sensitive" },
     { method: "GET", url: "http://x/users/saml/auth", rate: "sso-get" },
     { method: "GET", url: "http://x/api/v2/workspaces", rate: "global" },
   ];
