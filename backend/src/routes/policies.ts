@@ -1286,6 +1286,30 @@ export const policyRoutes = new Elysia({ name: "policies" })
       : await db.query.policies.findFirst({ where: eq(policies.id, pc.policyId) });
     return { data: policyCheckResource(pc, policy) };
   })
+  .get("/api/v2/policy-checks/:check_id/output", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+    // Audit finding 4: go-tfe PolicyChecks.Logs polls Read until finished,
+    // then GETs this path and reads the RAW body as the log stream (not
+    // JSON:API), so this returns text/plain rendered from the stored
+    // evaluation outcome. Same read gate as the check itself.
+    const checkId = params.check_id ?? "";
+    const pc = await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, checkId) });
+    if (pc === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, pc.runId) });
+    if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
+    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const lines = [`Policy check ${pc.id} status: ${pc.status}`];
+    if (pc.result !== null && pc.result !== undefined) {
+      try {
+        lines.push(JSON.stringify(pc.result, null, 2) ?? "");
+      } catch {
+        lines.push("[unserializable result]");
+      }
+    }
+    return new Response(`${lines.join("\n")}\n`, {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  })
   .post("/api/v2/policy-checks/:check_id/actions/override", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const checkId = params.check_id ?? "";
     const pc = await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, checkId) });

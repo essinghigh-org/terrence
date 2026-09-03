@@ -19260,6 +19260,43 @@
         }
       }
     },
+    "/api/v2/policy-checks/{check_id}/output": {
+      "get": {
+        "operationId": "get-api-v2-policy-checks-check-id-output",
+        "tags": [
+          "policy-checks"
+        ],
+        "parameters": [
+          {
+            "name": "check_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "GET /api/v2/policy-checks/{check_id}/output",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
     "/api/v2/policy-checks/{check_id}/actions/override": {
       "post": {
         "operationId": "post-api-v2-policy-checks-check-id-actions-override",
