@@ -134,6 +134,11 @@ function truncateJsonMessage(message: string, maxBytes: number): string {
 }
 
 function truncateSyslogFrame(frame: string, jsonBody: boolean): Buffer {
+  if (jsonBody) {
+    // Bare-JSON wire format: no syslog header to preserve, so shorten the
+    // object itself into a parseable, flagged payload.
+    return Buffer.from(truncateJsonMessage(frame, MAX_UDP_PAYLOAD_BYTES), "utf8");
+  }
   const headerMatch = /^<\d+>1 \S+ \S+ \S+ \S+ \S+ /.exec(frame);
   if (headerMatch === null) return Buffer.from(truncateUtf8(frame, MAX_UDP_PAYLOAD_BYTES), "utf8");
   const header = headerMatch[0];
@@ -201,8 +206,10 @@ export function sendSyslogFrame(
           : payload;
       getUdpSocket(target.family ?? 4).send(datagram, target.port, target.host);
     } else {
-      // RFC 6587 octet counting: "LEN MSG" so messages with newlines
-      // reassemble unambiguously on the collector.
+      // Bare JSON goes newline-delimited so line-oriented collectors (Splunk
+      // TCP inputs) split events with no extra configuration; RFC 5424 keeps
+      // octet counting ("LEN MSG") so messages with newlines reassemble
+      // unambiguously on the collector.
       const key = `${target.transport}:${target.family ?? 4}:${target.host}:${target.port}`;
       let socket: TcpSocket | undefined = tcpSockets.get(key);
       if (socket === undefined || socket.destroyed) {
@@ -215,8 +222,11 @@ export function sendSyslogFrame(
         tcpSockets.set(key, socket);
       }
       if (socket.writable) {
-        socket.write(`${Buffer.byteLength(payload, "utf8")} `);
-        socket.write(payload);
+        if (options?.jsonBody === true) socket.write(`${frame}\n`);
+        else {
+          socket.write(`${Buffer.byteLength(payload, "utf8")} `);
+          socket.write(payload);
+        }
       }
     }
   } catch {

@@ -262,6 +262,8 @@ function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<
   ) {
     // Format per destination: datagram transports (UDP) need a byte-budgeted
     // body so oversized entries stay valid JSON; streams take the full body.
+    // The "json" format ships the bare JSON object (no syslog envelope) so
+    // JSON-detecting collectors auto-extract every field.
     for (const target of configuration.syslogTargets) {
       try {
         const frame = formatSyslogMessage(

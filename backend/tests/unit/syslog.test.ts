@@ -84,10 +84,10 @@ describe("RFC 5424 formatting", (): void => {
     expect(pri(1, 3)).toBe(11);
   });
 
-  it("emits a spec-shaped envelope with a JSON body", (): void => {
+  it("emits bare JSON with no syslog envelope for zero-config extraction", (): void => {
     const line = formatSyslogMessage(base, IDENTITY, JSON_OPTS);
-    expect(line.startsWith("<14>1 2026-08-26T03:00:00.000Z terrence-host terrence 4242 - ")).toBeTrue();
-    const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
+    expect(line.startsWith("{")).toBeTrue();
+    const body = JSON.parse(line) as Record<string, unknown>;
     expect(body).toEqual({
       timestamp: "2026-08-26T03:00:00.000Z",
       level: "info",
@@ -112,7 +112,7 @@ describe("RFC 5424 formatting", (): void => {
       IDENTITY,
       JSON_OPTS,
     );
-    const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
+    const body = JSON.parse(line) as Record<string, unknown>;
     expect(body["http"]).toEqual({ method: "GET", path: "/api/v2/organizations", status: 200, durationMs: 2 });
     expect(body["outcome"]).toBe("success");
   });
@@ -123,7 +123,7 @@ describe("RFC 5424 formatting", (): void => {
       IDENTITY,
       JSON_OPTS,
     );
-    const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
+    const body = JSON.parse(line) as Record<string, unknown>;
     expect(body["message"]).toBe("request completed");
     expect(body["level"]).toBe("info");
     expect(body["timestamp"]).toBe("2026-08-26T03:00:00.000Z");
@@ -139,7 +139,7 @@ describe("RFC 5424 formatting", (): void => {
       IDENTITY,
       JSON_OPTS,
     );
-    const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
+    const body = JSON.parse(line) as Record<string, unknown>;
     expect(body["circular"]).toEqual({ name: "loop", self: "[Circular]" });
     expect(body["boom"]).toEqual({ name: "Error", message: "kaput" });
     expect(body["big"]).toBe("10");
@@ -148,14 +148,14 @@ describe("RFC 5424 formatting", (): void => {
   it("preserves repeated references while still catching true cycles", (): void => {
     const shared: Record<string, unknown> = { tag: "same" };
     const line = formatSyslogMessage({ ...base, meta: { first: shared, second: shared } }, IDENTITY, JSON_OPTS);
-    const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
+    const body = JSON.parse(line) as Record<string, unknown>;
     expect(body["first"]).toEqual({ tag: "same" });
     expect(body["second"]).toEqual({ tag: "same" });
   });
 
   it("serializes Date values via toJSON instead of empty objects", (): void => {
     const line = formatSyslogMessage({ ...base, meta: { at: new Date("2026-01-02T03:04:05.000Z") } }, IDENTITY, JSON_OPTS);
-    const body = JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
+    const body = JSON.parse(line) as Record<string, unknown>;
     expect(body["at"]).toBe("2026-01-02T03:04:05.000Z");
   });
 
@@ -165,7 +165,7 @@ describe("RFC 5424 formatting", (): void => {
       IDENTITY,
       { maxBodyBytes: 896, format: "json" },
     );
-    const json = line.slice(line.indexOf("{"));
+    const json = line;
     expect(Buffer.byteLength(json, "utf8")).toBeLessThanOrEqual(896);
     const body = JSON.parse(json) as Record<string, unknown>;
     expect(body["truncated"]).toBe(true);
@@ -193,7 +193,8 @@ describe("RFC 5424 formatting", (): void => {
 
   it("falls back to a NIL timestamp for malformed stamps", (): void => {
     const line = formatSyslogMessage({ ...base, timestamp: "yesterday" }, IDENTITY, JSON_OPTS);
-    expect(line.startsWith("<14>1 - ")).toBeTrue();
+    const body = JSON.parse(line) as Record<string, unknown>;
+    expect(body["timestamp"]).toBe("-");
   });
 });
 

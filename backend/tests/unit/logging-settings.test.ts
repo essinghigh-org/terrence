@@ -116,7 +116,8 @@ describe("runtime logging configuration", () => {
       expect(collector.received).toHaveLength(2);
       expect(collector.received[1]).not.toContain("[terrence@65024");
       const second = collector.received[1] ?? "";
-      const body = JSON.parse(second.slice(second.indexOf("{"))) as Record<string, unknown>;
+      expect(second.startsWith("{")).toBeTrue();
+      const body = JSON.parse(second) as Record<string, unknown>;
       expect(body["message"]).toBe("json shape");
       expect(body["http"]).toEqual({ status: 201 });
 
