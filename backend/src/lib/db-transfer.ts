@@ -716,6 +716,9 @@ const bunSqlClient = loadBunSqlClient();
 
 const POSTGRES_COMPATIBLE_DEFAULTS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   agent_jobs: { fencing_token: "0" },
+  // Added by an idempotent boot repair rather than a generated migration;
+  // older source databases legitimately omit this nullable replay marker.
+  user_2fa: { last_accepted_counter: "NULL" },
 };
 
 export class PgTransferSource implements TransferSource {
@@ -749,6 +752,7 @@ export class PgTransferSource implements TransferSource {
   async #sourceColumns(name: string): Promise<ReadonlySet<string>> {
     const cached = this.#columns.get(name);
     if (cached !== undefined) return cached;
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- SQL row fields keep their wire names.
     const pending = this.#connection.unsafe<{ column_name: string }>(
       `WITH resolved AS (
         SELECT n.nspname AS table_schema, c.relname AS table_name
