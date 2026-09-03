@@ -1671,6 +1671,7 @@ export const user2FA = pgTable("user_2fa", {
     userId: text("user_id").notNull().primaryKey().references(() => users.id, { onDelete: "cascade" }),
     secret: text("secret").notNull(),
     secretEncrypted: text("secret_encrypted"),
+    lastAcceptedCounter: bigint("last_accepted_counter", { mode: "number" }),
     enabled: boolean("enabled").notNull().default(false),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.user2FA.createdAt.defaultFn!()),
 });

@@ -199,12 +199,16 @@ describe("terraform login.v1 OAuth flow", () => {
     const enroll = await app.handle(
       new Request("http://localhost/api/v2/account/mfa/enroll", {
         method: "POST",
-        headers: { Authorization: `Bearer ${apiToken}` },
+        headers: {
+          Authorization: `Bearer ${apiToken}`,
+          "Content-Type": "application/vnd.api+json",
+        },
+        body: JSON.stringify({ data: { attributes: { "current-password": "Sup3rS3cret!pass" } } }),
       }),
     );
     expect(enroll.status).toBe(200);
     const secret = (await enroll.json()).data.attributes.secret as string;
-    const code = generateTotpCode(secret);
+    const code = generateTotpCode(secret, Date.now() - 30_000);
     const verify = await app.handle(
       new Request("http://localhost/api/v2/account/mfa/verify", {
         method: "POST",
@@ -355,7 +359,7 @@ describe("terraform login.v1 OAuth flow", () => {
     const mfaRow = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, userId) });
     const seedRaw2 = mfaRow!.secretEncrypted ?? mfaRow!.secret;
     const seedPlain2 = isEncryptedSecret(seedRaw2) ? await decryptSecret(seedRaw2) : seedRaw2;
-    const totpCode = generateTotpCode(seedPlain2);
+    const totpCode = generateTotpCode(seedPlain2, Date.now() + 30_000);
     const mfaRes = await app.handle(
       new Request("http://localhost/api/v2/users/login/mfa", {
         method: "POST",

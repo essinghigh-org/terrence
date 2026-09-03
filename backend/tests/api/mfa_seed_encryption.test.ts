@@ -16,6 +16,7 @@ describe("TOTP seed encryption at rest", () => {
   const orgId = `org-${suffix}`;
   const orgName = `mfaenc-org-${suffix}`;
   const auth = `user-token-${suffix}`;
+  const password = "securepassword";
   // TOTP secrets are base32 (RFC 4648); derive a deterministic test secret.
   const base32 = (input: string): string => {
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -38,7 +39,8 @@ describe("TOTP seed encryption at rest", () => {
     }));
 
   beforeAll(async () => {
-    await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
+    const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
+    await db.insert(users).values({ id: userId, username: userId, passwordHash });
     await db.insert(organizations).values({ id: orgId, name: orgName });
     await db.insert(organizationMemberships).values({ id: crypto.randomUUID(), userId, orgId, role: "owner" });
     await db.insert(apiTokens).values({ id: crypto.randomUUID(), token: hashAuthenticationToken(auth), userId });
@@ -53,7 +55,7 @@ describe("TOTP seed encryption at rest", () => {
   });
 
   it("enroll stores the seed only encrypted; verify migrates legacy plaintext", async () => {
-    const enroll = await api("POST", "/api/v2/account/mfa/enroll");
+    const enroll = await api("POST", "/api/v2/account/mfa/enroll", { data: { attributes: { "current-password": password } } });
     expect(enroll.status).toBe(200);
     const row = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, userId) });
     expect(row).toBeDefined();
@@ -77,7 +79,8 @@ describe("TOTP seed encryption at rest", () => {
 
   it("legacy plaintext seed migrates on first successful verify without double-encrypting", async () => {
     const userId2 = `user-legacy-${suffix}`;
-    await db.insert(users).values({ id: userId2, username: userId2, passwordHash: "unused" });
+    const legacyPasswordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
+    await db.insert(users).values({ id: userId2, username: userId2, passwordHash: legacyPasswordHash });
     await db.insert(apiTokens).values({ id: crypto.randomUUID(), token: hashAuthenticationToken(`legacy-token-${suffix}`), userId: userId2 });
     const legacySecret = base32(`legacy-${suffix}`);
     await db.insert(user2FA).values({ userId: userId2, secret: legacySecret, enabled: false });

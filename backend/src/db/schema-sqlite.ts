@@ -1989,6 +1989,7 @@ export const user2FA = sqliteTable("user_2fa", {
   // secret layer ("enc:v1:..." prefix). NULL = plaintext seed written before
   // encryption shipped; migrated transparently on first successful verify.
   secretEncrypted: text("secret_encrypted"),
+  lastAcceptedCounter: integer("last_accepted_counter"),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 });

@@ -42,8 +42,14 @@ test("enrolls MFA after verifying an authenticator code", async () => {
 
   const view = render(<MemoryRouter><AccountSettings /></MemoryRouter>);
   await view.findByText("MFA is not enabled on this account.");
-  fireEvent.click(view.getByRole("button", { name: "Set up MFA" }));
+  const setupButton = view.getByRole("button", { name: "Set up MFA" });
+  expect((setupButton as HTMLButtonElement).disabled).toBeTrue();
+  fireEvent.input(view.getByLabelText("Current password to set up MFA"), { target: { value: "password" } });
+  expect((setupButton as HTMLButtonElement).disabled).toBeFalse();
+  fireEvent.click(setupButton);
   expect(await view.findByText("JBSWY3DPEHPK3PXP")).toBeTruthy();
+  const enrollCall = calls.find(([requestUrl]) => requestUrl === "/api/v2/account/mfa/enroll");
+  expect(enrollCall?.[1]?.body).toBe(JSON.stringify({ data: { attributes: { current_password: "password" } } }));
   fireEvent.input(view.getByLabelText("Verification code"), { target: { value: "123456" } });
   fireEvent.click(view.getByRole("button", { name: "Verify and enable MFA" }));
   await waitFor((): void => { expect(view.getByText("Multi-factor authentication enabled")).toBeTruthy(); });
@@ -76,10 +82,12 @@ test("completes an MFA login challenge without exposing the password again", asy
   expect(getAuthToken()).toBe("access-1");
 });
 
-test("disables MFA with a current authenticator code", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
+test("disables MFA with a current authenticator code and password", async () => {
+  const calls: [string, RequestInit | undefined][] = [];
+  // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const requestUrl = url(input);
+    calls.push([requestUrl, init]);
     if (requestUrl === "/api/v2/account/details") return account();
     if (requestUrl === "/api/v2/users/user-1/authentication-tokens") return json({ data: [] });
     if (requestUrl === "/api/v2/account/sessions") return json({ data: [] });
@@ -89,9 +97,16 @@ test("disables MFA with a current authenticator code", async () => {
   })) as unknown as typeof fetch;
   const view = render(<MemoryRouter><AccountSettings /></MemoryRouter>);
   await view.findByText("Your account requires an authenticator code at sign in.");
+  const disableButton = view.getByRole("button", { name: "Disable MFA" });
+  expect((disableButton as HTMLButtonElement).disabled).toBeTrue();
   fireEvent.input(view.getByLabelText("Authenticator code to disable MFA"), { target: { value: "123456" } });
-  fireEvent.click(view.getByRole("button", { name: "Disable MFA" }));
+  expect((disableButton as HTMLButtonElement).disabled).toBeTrue();
+  fireEvent.input(view.getByLabelText("Current password to disable MFA"), { target: { value: "password" } });
+  expect((disableButton as HTMLButtonElement).disabled).toBeFalse();
+  fireEvent.click(disableButton);
   expect(await view.findByText("Multi-factor authentication disabled")).toBeTruthy();
+  const disableCall = calls.find(([requestUrl, init]) => requestUrl === "/api/v2/account/mfa" && init?.method === "DELETE");
+  expect(disableCall?.[1]?.body).toBe(JSON.stringify({ data: { attributes: { code: "123456", current_password: "password" } } }));
 });
 
 test("completes an MFA login challenge with oauth_state and redirects to OAuth completion", async () => {
