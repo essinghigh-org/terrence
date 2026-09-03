@@ -210,6 +210,23 @@ function isUniqueConstraintError(err: unknown): boolean {
   return err !== null && typeof err === "object" && (("message" in err && typeof err.message === "string" && err.message.includes("UNIQUE")) || ("code" in err && err.code === "SQLITE_CONSTRAINT_UNIQUE"));
 }
 
+/** Audit finding 9: single-workspace GETs must honor include=current_run
+ * like the list endpoint does. Bounded to one row (newest run for this
+ * workspace); undefined when not requested so the relationship stays out. */
+async function currentRunForWorkspace(workspaceId: string, include: string): Promise<{ id: string } | null | undefined> {
+  const wantsCurrentRun = include
+    .split(",")
+    .map((value: string): string => value.trim())
+    .includes("current_run");
+  if (!wantsCurrentRun) return undefined;
+  const latest = await db.query.runs.findFirst({
+    where: eq(runs.workspaceId, workspaceId),
+    orderBy: [desc(runs.createdAt), asc(runs.id)],
+    columns: { id: true },
+  });
+  return latest === undefined ? null : { id: latest.id };
+}
+
 function parseLockReason(body: unknown): Readonly<{ reason: string | null; error: string | null }> {
   if (body === undefined || body === null) return { reason: null, error: null };
   if (typeof body !== "object" || Array.isArray(body)) return { reason: null, error: "Lock reason must be a string" };
@@ -837,11 +854,12 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const ws = await db.query.workspaces.findFirst({ where: and(eq(workspaces.orgId, org.id), eq(workspaces.name, workspaceName)) });
     const runScoped = run !== undefined && run !== null && ws !== undefined && run.workspaceId === ws.id;
     if (ws === undefined || (!runScoped && !(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "read")))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const currentRunByName = await currentRunForWorkspace(ws.id, new URL(request.url).searchParams.get("include") ?? "");
     const data = await workspaceResource(
       ws,
       org.defaultIacBinary,
       await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
-      { orgName: org.name },
+      { orgName: org.name, ...(currentRunByName === undefined ? {} : { currentRun: currentRunByName }) },
     );
     return maybeAttachOutputs(data, ws, new URL(request.url).searchParams.get("include") ?? "");
   })
@@ -907,11 +925,12 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       : await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const org = await cachedOrgById(ws.orgId);
+    const currentRunById = await currentRunForWorkspace(ws.id, new URL(request.url).searchParams.get("include") ?? "");
     const data = await workspaceResource(
       ws,
       org?.defaultIacBinary,
       await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
-      { orgName: org?.name ?? null },
+      { orgName: org?.name ?? null, ...(currentRunById === undefined ? {} : { currentRun: currentRunById }) },
     );
     return maybeAttachOutputs(data, ws, new URL(request.url).searchParams.get("include") ?? "");
   })
