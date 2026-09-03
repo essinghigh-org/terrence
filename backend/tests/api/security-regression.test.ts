@@ -223,11 +223,18 @@ describe("Security Headers — document shell (CSP, clickjacking, referrer, robo
   });
 
   it("serves the SPA entry page with no-cache revalidation", async () => {
-    // Skip when the frontend bundle isn't built in this environment (CI builds
-    // dist before the API suite runs; local runs may not have it).
+    // The backend CI jobs build the frontend bundle before the API suite runs
+    // (issue #290), so a missing dist under CI is a hard failure, not a
+    // silent skip. Local runs without a build keep the old skip-with-warning.
     const { existsSync } = await import("node:fs");
     const { join } = await import("node:path");
-    if (!existsSync(join(import.meta.dir, "../../../frontend/dist/index.html"))) return;
+    if (!existsSync(join(import.meta.dir, "../../../frontend/dist/index.html"))) {
+      if (process.env["CI"] !== undefined) {
+        throw new Error("frontend/dist/index.html is missing: the CI frontend-build step did not run (issue #290)");
+      }
+      console.warn("skipping no-cache assertion: frontend/dist is not built (run `bun run build` in frontend/)");
+      return;
+    }
     const res = await app.handle(new Request("http://localhost/login"));
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toContain("no-cache");
