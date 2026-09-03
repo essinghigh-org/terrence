@@ -341,12 +341,30 @@ describe("Run list sorting (kanban 14.8)", () => {
   let appliedId = "";
   let pendingId = "";
 
+  // Retry 429s on the server's Retry-After hint instead of guessing a fixed
+  // sleep (issue #382): a fixed nap fails under loaded runners when the window
+  // needs longer, and wastes time when it does not.
+  const handleWithRateLimitRetry = async (buildRequest: () => Request): Promise<Response> => {
+    let last: Response | null = null;
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const res = await app.handle(buildRequest());
+      if (res.status !== 429) return res;
+      last = res;
+      const retryAfter = Number(res.headers.get("Retry-After"));
+      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(Math.ceil(retryAfter * 1000), 5000)
+        : 250 * (attempt + 1);
+      await Bun.sleep(waitMs);
+    }
+    return last ?? app.handle(buildRequest());
+  };
+
   const listRunIds = async (sort: string | null): Promise<string[]> => {
     const url = sort === null
       ? `http://localhost/api/v2/workspaces/${TEST_WORKSPACE_ID}/runs`
       : `http://localhost/api/v2/workspaces/${TEST_WORKSPACE_ID}/runs?sort=${encodeURIComponent(sort)}`;
-    const response = await app.handle(
-      new Request(url, { headers: { "Authorization": `Bearer ${userToken}` } }),
+    const response = await handleWithRateLimitRetry(
+      () => new Request(url, { headers: { "Authorization": `Bearer ${userToken}` } }),
     );
     expect(response.status).toBe(200);
     const document = await response.json() as { data: { id: string }[] };
@@ -354,8 +372,8 @@ describe("Run list sorting (kanban 14.8)", () => {
   };
 
   const createRunFromApi = async (message: string): Promise<string> => {
-    const res = await app.handle(
-      new Request("http://localhost/api/v2/runs", {
+    const res = await handleWithRateLimitRetry(
+      () => new Request("http://localhost/api/v2/runs", {
         method: "POST",
         headers: {
           "Content-Type": "application/vnd.api+json",
@@ -383,10 +401,8 @@ describe("Run list sorting (kanban 14.8)", () => {
     await db.update(runs).set({ status: "errored", createdAt: base - 3000 }).where(eq(runs.id, erroredId));
     await db.update(runs).set({ status: "applied", createdAt: base - 2000 }).where(eq(runs.id, appliedId));
     await db.update(runs).set({ status: "pending", createdAt: base - 1000 }).where(eq(runs.id, pendingId));
-    // The API rate limit is a 30 req/s window keyed by principal; let the
-    // window opened by the earlier suite tests (same token) close before we
-    // start asserting on list endpoints.
-    await Bun.sleep(1100);
+    // No fixed sleep here: the list/create helpers above retry 429s on the
+    // server's Retry-After hint (issue #382).
   });
 
   it("defaults to newest-first", async () => {
