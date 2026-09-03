@@ -1252,7 +1252,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const secretEncrypted = await encryptSecret(secret);
     await db.insert(user2FA).values({ userId: user.id, secret: "", secretEncrypted, enabled: false }).onConflictDoUpdate({
       target: user2FA.userId,
-      set: { secret: "", secretEncrypted, enabled: false },
+      set: { secret: "", secretEncrypted, enabled: false, lastAcceptedCounter: null },
     });
     await auditLog("enroll", "mfa", user.id, user.id, null, { userId: user.id });
     return {
