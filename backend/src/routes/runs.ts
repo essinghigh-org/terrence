@@ -148,12 +148,15 @@ function includedWorkspaceResource(workspace: Readonly<typeof workspaces.$inferS
   // for `terraform show`: the workspace name for the header and its lock state
   // for the footer. Do not invent permission values or expose unrelated data
   // merely because the client requested the standard workspace relation.
+  // Audit finding 8: structured-run-output-enabled must match the full
+  // resource (always true) or the CLI never renders structured plan output.
   return {
     id: workspace.id,
     type: "workspaces",
     attributes: {
       name: workspace.name,
       locked: workspace.locked === true,
+      "structured-run-output-enabled": true,
     },
     links: { self: `/api/v2/workspaces/${workspace.id}` },
   };
