@@ -130,7 +130,10 @@ describe("terraform login.v1 OAuth flow", () => {
   test("authenticated browser skips login and is redirected with a code", async () => {
     const res = await app.handle(
       new Request(`http://localhost${AUTHZ}`, {
-        headers: { Cookie: cookieHeader(jar, ["terrence_refresh"]) },
+        headers: {
+          Cookie: cookieHeader(jar, ["terrence_refresh"]),
+          "Sec-Fetch-Site": "none",
+        },
       }),
     );
     expect(res.status).toBe(302);
@@ -147,7 +150,10 @@ describe("terraform login.v1 OAuth flow", () => {
     // Obtain a fresh code via the authenticated redirect.
     const redirect = await app.handle(
       new Request(`http://localhost${AUTHZ}`, {
-        headers: { Cookie: cookieHeader(jar, ["terrence_refresh"]) },
+        headers: {
+          Cookie: cookieHeader(jar, ["terrence_refresh"]),
+          "Sec-Fetch-Site": "none",
+        },
       }),
     );
     const code = new URL(redirect.headers.get("Location")!).searchParams.get(
@@ -370,7 +376,10 @@ describe("terraform login.v1 OAuth flow", () => {
     // 2. Hit /oauth/authorization with the MFA-verified session cookie
     const res = await app.handle(
       new Request(`http://localhost${AUTHZ}`, {
-        headers: { Cookie: cookieHeader(mfaSessionCookies, ["terrence_refresh"]) },
+        headers: {
+          Cookie: cookieHeader(mfaSessionCookies, ["terrence_refresh"]),
+          "Sec-Fetch-Site": "none",
+        },
       }),
     );
     expect(res.status).toBe(302);

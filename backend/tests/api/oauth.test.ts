@@ -39,6 +39,20 @@ function parseCookie(response: Response, name: string): string | undefined {
   return undefined;
 }
 
+async function browserRefreshCookie(): Promise<string> {
+  const login = await app.handle(new Request("http://localhost/api/v2/users/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/vnd.api+json" },
+    body: JSON.stringify({
+      data: { attributes: { username, password, "browser-session": true } },
+    }),
+  }));
+  expect(login.status).toBe(200);
+  const refreshCookie = login.headers.get("Set-Cookie");
+  expect(refreshCookie).not.toBeNull();
+  return refreshCookie!;
+}
+
 /** Drive the full OAuth handshake: GET redirects to /login and stashes state
  *  in an HttpOnly cookie; a browser session (terrence_refresh) then completes
  *  it via /oauth/authorization/complete. */
@@ -52,15 +66,7 @@ async function fullHandshake() {
   expect(oauthState).toBeDefined();
 
   // Establish a browser session the way the SPA login would (no MFA here).
-  const login = await app.handle(new Request("http://localhost/api/v2/users/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/vnd.api+json" },
-    body: JSON.stringify({
-      data: { attributes: { username, password, "browser-session": true } },
-    }),
-  }));
-  expect(login.status).toBe(200);
-  const refreshCookie = login.headers.get("Set-Cookie") ?? "";
+  const refreshCookie = await browserRefreshCookie();
   const cookies = `terraform_oauth_state=${oauthState}; ${refreshCookie}`;
 
   const complete = await oauthApp.handle(new Request(
@@ -210,6 +216,64 @@ describe("Terraform login OAuth", () => {
     const replay = await tokenRequest();
     expect(replay.status).toBe(400);
     expect(await replay.json()).toEqual({ error: "invalid_grant" });
+  });
+
+  it("does not exchange an authorization code for a blocked account", async () => {
+    const { complete } = await fullHandshake();
+    const callback = new URL(complete.headers.get("Location")!);
+    const code = callback.searchParams.get("code")!;
+    const before = await db.query.apiTokens.findMany({ where: eq(apiTokens.userId, userId) });
+    await db.update(users).set({ isSuspended: true }).where(eq(users.id, userId));
+
+    try {
+      const tokenResponse = await oauthApp.handle(new Request("http://localhost/oauth/token", {
+        method: "POST",
+        headers: {
+          "Authorization": `Basic ${btoa("terraform-cli:")}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          code,
+          code_verifier: verifier,
+          grant_type: "authorization_code",
+          redirect_uri: "http://localhost:10000/login",
+        }),
+      }));
+      expect(tokenResponse.status).toBe(400);
+      expect(await tokenResponse.json()).toEqual({ error: "invalid_grant" });
+      expect((await db.query.apiTokens.findMany({ where: eq(apiTokens.userId, userId) })).length).toBe(before.length);
+    } finally {
+      await db.update(users).set({ isSuspended: false }).where(eq(users.id, userId));
+    }
+  });
+
+  it("does not auto-approve OAuth from a cross-site browser navigation", async () => {
+    const params = await authorizationParameters();
+    const refreshCookie = await browserRefreshCookie();
+
+    const response = await oauthApp.handle(new Request(
+      `http://localhost/oauth/authorization?${new URLSearchParams(params)}`,
+      {
+        headers: {
+          Cookie: refreshCookie,
+          "Sec-Fetch-Site": "cross-site",
+        },
+      },
+    ));
+    expect(response.status).toBe(302);
+    expect(response.headers.get("Location")).toStartWith("/login?oauth_state=");
+  });
+
+  it("does not auto-approve OAuth without browser provenance", async () => {
+    const params = await authorizationParameters();
+    const refreshCookie = await browserRefreshCookie();
+    const response = await oauthApp.handle(new Request(
+      `http://localhost/oauth/authorization?${new URLSearchParams(params)}`,
+      { headers: { Cookie: refreshCookie } },
+    ));
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("Location")).toStartWith("/login?oauth_state=");
   });
 
   it("consumes a code after a failed PKCE verification", async () => {

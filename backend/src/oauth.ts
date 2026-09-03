@@ -1,10 +1,10 @@
 import { Elysia } from "elysia";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import { db } from "./db";
 import { apiTokens, user2FA, users } from "./db/schema";
 import { hashAuthenticationToken } from "./lib/token-service";
 import { peekOAuthHandshakeState, putOAuthHandshakeState, takeOAuthHandshakeState } from "./lib/oauth-handshake";
-import { browserSessionDetails } from "./routes/accounts";
+import { browserSessionDetails, isUserLoginBlocked } from "./routes/accounts";
 import { secureRequest } from "./lib/secure-request";
 
 const CLIENT_ID = "terraform-cli";
@@ -13,13 +13,13 @@ const MAX_PORT = 10010;
 const CODE_TTL_MS = 5 * 60 * 1000;
 const OAUTH_STATE_COOKIE = "terraform_oauth_state";
 
-type AuthorizationRequest = {
+type AuthorizationRequest = Readonly<{
   clientId: string;
   codeChallenge: string;
   redirectUri: string;
   responseType: string;
   state: string;
-};
+}>;
 
 // Terraform CLI OAuth state is persisted in the oauth_handshake_states table
 // (todo 338-342): pending authorizations and one-time authorization codes are
@@ -41,7 +41,7 @@ type StoredPendingAuth = {
   expiresAt: number;
 };
 
-async function putPendingAuth(id: string, value: StoredPendingAuth): Promise<void> {
+async function putPendingAuth(id: string, value: Readonly<StoredPendingAuth>): Promise<void> {
   await putOAuthHandshakeState(PENDING_AUTH_PREFIX + id, value.expiresAt, value);
 }
 async function takePendingAuth(id: string): Promise<StoredPendingAuth | undefined> {
@@ -51,7 +51,7 @@ async function peekPendingAuth(id: string): Promise<StoredPendingAuth | undefine
   const row = await peekOAuthHandshakeState(PENDING_AUTH_PREFIX + id);
   return row?.payload as StoredPendingAuth | undefined;
 }
-async function putAuthCode(id: string, value: StoredAuthCode): Promise<void> {
+async function putAuthCode(id: string, value: Readonly<StoredAuthCode>): Promise<void> {
   await putOAuthHandshakeState(AUTH_CODE_PREFIX + id, value.expiresAt, value);
 }
 async function takeAuthCode(id: string): Promise<StoredAuthCode | undefined> {
@@ -131,6 +131,39 @@ async function s256(value: string): Promise<string> {
 
 type RequestInfo = Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }>;
 
+/**
+ * Browser cookies with SameSite=Lax are sent on top-level cross-site GETs.
+ * Never let one of those navigations silently approve an OAuth request from
+ * Requests without provenance fall back to the login handoff, while explicit
+ * origin or referrer mismatches also fail closed.
+ */
+function isCrossSiteNavigation(request: RequestInfo | undefined): boolean {
+  if (request === undefined) return false;
+  const fetchSite = request.headers.get("sec-fetch-site")?.trim().toLowerCase();
+  if (fetchSite === "cross-site") return true;
+  if (fetchSite !== undefined && fetchSite !== "" && !["none", "same-origin", "same-site"].includes(fetchSite)) return true;
+
+  let requestOrigin: string;
+  try {
+    requestOrigin = new URL(request.url).origin;
+  } catch {
+    return true;
+  }
+
+  let hasProvenance = fetchSite === "none" || fetchSite === "same-origin" || fetchSite === "same-site";
+  for (const headerName of ["origin", "referer"] as const) {
+    const value = request.headers.get(headerName);
+    if (value === null || value === "") continue;
+    hasProvenance = true;
+    try {
+      if (new URL(value).origin !== requestOrigin) return true;
+    } catch {
+      return true;
+    }
+  }
+  return !hasProvenance;
+}
+
 type OAuthQueryCtx = Readonly<{
   readonly query: Record<string, unknown>;
   readonly request?: RequestInfo;
@@ -201,7 +234,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     // Already logged into the browser? Skip the login form and approve --
     // if the account enforces MFA, the session must have satisfied MFA.
     const details = await browserSessionDetails(request);
-    if (details !== null) {
+    if (details !== null && !isCrossSiteNavigation(request)) {
       const mfa = await db.query.user2FA.findFirst({
         where: eq(user2FA.userId, details.user.id),
       });
@@ -298,35 +331,37 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       return oauthError(set, "invalid_grant");
     }
 
-    const user = await db.query.users.findFirst({ where: eq(users.id, entry.userId) });
-    if (user === undefined) return oauthError(set, "invalid_grant");
-
-
     const accessToken = `user-${crypto.randomUUID()}`;
     const cliTokenTtlMs = Number(process.env["CLI_TOKEN_TTL_MS"]);
+    const defaultTtl = 30 * 24 * 60 * 60 * 1000;
+    const expiresAt = Date.now() + (Number.isFinite(cliTokenTtlMs) && cliTokenTtlMs > 0 ? cliTokenTtlMs : defaultTtl);
 
+    const issued = await db.transaction(async (tx): Promise<boolean> => {
+      const currentUser = await tx.query.users.findFirst({ where: eq(users.id, entry.userId) });
+      if (currentUser === undefined || isUserLoginBlocked(currentUser)) return false;
 
-    if (!Number.isFinite(cliTokenTtlMs) || cliTokenTtlMs <= 0) {
-      // Fall back to 30-day default when parse produces NaN, infinity, zero, or negative
-      const defaultTtl = 30 * 24 * 60 * 60 * 1000;
-      await db.insert(apiTokens).values({
+      // Acquire a row lock on PostgreSQL and a serialized write slot on
+      // SQLite without overwriting a suspension committed by another request.
+      await tx.update(users)
+        .set({ isSuspended: false })
+        .where(and(
+          eq(users.id, currentUser.id),
+          or(eq(users.isSuspended, false), isNull(users.isSuspended)),
+        ));
+      const eligibleUser = await tx.query.users.findFirst({ where: eq(users.id, currentUser.id) });
+      if (eligibleUser === undefined || isUserLoginBlocked(eligibleUser)) return false;
+
+      await tx.insert(apiTokens).values({
         id: crypto.randomUUID(),
         token: hashAuthenticationToken(accessToken),
-        userId: user.id,
+        userId: eligibleUser.id,
         description: "Terraform CLI login",
         createdAt: Date.now(),
-        expiresAt: Date.now() + defaultTtl,
+        expiresAt,
       });
-    } else {
-      await db.insert(apiTokens).values({
-        id: crypto.randomUUID(),
-        token: hashAuthenticationToken(accessToken),
-        userId: user.id,
-        description: "Terraform CLI login",
-        createdAt: Date.now(),
-        expiresAt: Date.now() + cliTokenTtlMs,
-      });
-    }
+      return true;
+    });
+    if (!issued) return oauthError(set, "invalid_grant");
 
     set.headers["Cache-Control"] = "no-store";
     set.headers["Pragma"] = "no-cache";
