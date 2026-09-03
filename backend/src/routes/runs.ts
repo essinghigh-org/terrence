@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, taskStages, runComments, auditLogs, users } from "../db/schema";
+import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, policyEvaluations, taskStages, runComments, auditLogs, users } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt, sql } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource, taskStageResource, type RunRelationshipLinkage } from "../lib/response";
+import { tfPolicyEvaluationResource, tfStageTypesForEvaluations } from "./policy-evaluations";
 import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, cursorPagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, organizationRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, readRunLogs, readRunLogsPage } from "../lib/run-logs";
@@ -368,14 +369,18 @@ async function includedUsersForRuns(runList: readonly (RunItem)[]): Promise<Reco
 async function linkageForRuns(runList: readonly RunItem[]): Promise<ReadonlyMap<string, RunRelationshipLinkage>> {
   const ids = runList.map((r: RunItem): string => r.id);
   if (ids.length === 0) return new Map();
-  const [checks, stages] = await Promise.all([
+  const [checks, stages, evals] = await Promise.all([
     db.query.policyChecks.findMany({ where: inArray(policyChecks.runId, [...ids]), columns: { id: true, runId: true } }),
     db.query.taskStages.findMany({ where: inArray(taskStages.runId, [...ids]), columns: { id: true, runId: true } }),
+    db.query.policyEvaluations.findMany({ where: inArray(policyEvaluations.runId, [...ids]), columns: { id: true, runId: true } }),
   ]);
-  const linkage = new Map<string, { policyCheckIds: string[]; taskStageIds: string[] }>();
-  for (const id of ids) linkage.set(id, { policyCheckIds: [], taskStageIds: [] });
+  const linkage = new Map<string, { policyCheckIds: string[]; taskStageIds: string[]; tfPolicyEvaluationIds: string[] }>();
+  for (const id of ids) linkage.set(id, { policyCheckIds: [], taskStageIds: [], tfPolicyEvaluationIds: [] });
   for (const check of checks) linkage.get(check.runId)?.policyCheckIds.push(check.id);
   for (const stage of stages) linkage.get(stage.runId)?.taskStageIds.push(stage.id);
+  for (const evalRecord of evals) {
+    if (evalRecord.runId !== null) linkage.get(evalRecord.runId)?.tfPolicyEvaluationIds.push(evalRecord.id);
+  }
   return linkage;
 }
 
@@ -386,6 +391,17 @@ async function includedTaskStagesForRuns(runList: readonly RunItem[]): Promise<R
   if (ids.length === 0) return [];
   const rows = await db.query.taskStages.findMany({ where: inArray(taskStages.runId, [...ids]) });
   return rows.map((stage): Record<string, unknown> => taskStageResource(stage));
+}
+
+/** Audit finding 3: TF-policy evaluation resources for the
+ * include=tf_policy_evaluations sideload the CLI renders per stage. */
+async function includedTFPolicyEvaluationsForRuns(runList: readonly RunItem[]): Promise<Record<string, unknown>[]> {
+  const ids = runList.map((r: RunItem): string => r.id);
+  if (ids.length === 0) return [];
+  const evals = await db.query.policyEvaluations.findMany({ where: inArray(policyEvaluations.runId, [...ids]) });
+  const stageTypes = await tfStageTypesForEvaluations(evals);
+  return evals.map((evalRecord): Record<string, unknown> =>
+    tfPolicyEvaluationResource(evalRecord, stageTypes.get(evalRecord.id)));
 }
 
 function safeRunEventDetails(event: AuditItem): Readonly<Record<string, string>> {
@@ -852,6 +868,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (includes.has("plan")) included.push(planResource(authorized.run, request));
     if (includes.has("workspace")) included.push(includedWorkspaceResource(authorized.workspace));
     if (includes.has("task_stages")) included.push(...await includedTaskStagesForRuns([authorized.run]));
+    if (includes.has("tf_policy_evaluations")) included.push(...await includedTFPolicyEvaluationsForRuns([authorized.run]));
     return { data, ...(included.length > 0 ? { included } : {}) };
   })
   .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {

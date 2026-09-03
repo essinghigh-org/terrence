@@ -771,6 +771,7 @@ function buildRunAttributes(run: RunParam, flags: DeepReadonly<{ isPlanned: bool
 export type RunRelationshipLinkage = Readonly<{
   readonly policyCheckIds?: readonly string[];
   readonly taskStageIds?: readonly string[];
+  readonly tfPolicyEvaluationIds?: readonly string[];
 }>;
 
 function relationshipData(ids: readonly string[], type: string): Record<string, unknown>[] {
@@ -822,6 +823,10 @@ function buildRunRelationships(run: RunParam, linkage?: RunRelationshipLinkage):
     "task-stages": {
       data: relationshipData(linkage?.taskStageIds ?? [], "task-stages"),
       links: { related: `/api/v2/runs/${run.id}/task-stages` },
+    },
+    "tf-policy-evaluations": {
+      data: relationshipData(linkage?.tfPolicyEvaluationIds ?? [], "tf-policy-evaluations"),
+      links: { related: `/api/v2/runs/${run.id}/tf-policy-evaluations` },
     },
     comments: {
       links: { related: `/api/v2/runs/${run.id}/comments` },
