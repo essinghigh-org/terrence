@@ -11,7 +11,7 @@
     "eslint": "^10.9.1",
     "knip": "^6.33.0",
     "typescript": "npm:@typescript/typescript6@6.0.2",
-    "typescript-eslint": "^8.68.0"
+    "typescript-eslint": "^8.69.0"
   },
   "overrides": {
     "brace-expansion": "5.0.9",
