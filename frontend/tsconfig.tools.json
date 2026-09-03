@@ -6,9 +6,9 @@
   "extends": "../tsconfig.json",
   "compilerOptions": {
     // Not composite (issue #428): this project typechecks tests that import
-    // src/* files owned by tsconfig.app.json. In `tsc -b` mode those imports
+    // src/* files owned by tsconfig.app.json. In `tsc6 -b` mode those imports
     // are TS6307 errors unless projects are linked with emitted declarations;
-    // as a plain check-only project `tsc --noEmit -p` handles them fine.
+    // as a plain check-only project `tsc6 --noEmit -p` handles them fine.
     "target": "ES2020",
     "useDefineForClassFields": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable", "ES2022.Array", "ES2022.Object"],

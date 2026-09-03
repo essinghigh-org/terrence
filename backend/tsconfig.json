@@ -4,7 +4,7 @@
   // esModuleInterop for CJS interop. Everything else inherits from root.
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    // lib must repeat the tsc default for target ESNext (issue #428): the
+    // lib must repeat the tsc6 default for target ESNext (issue #428): the
     // root config sets lib ESNext-only, but backend code and @types/bun rely
     // on DOM globals (Request/Response/BodyInit). Without this, Bun's own
     // Response.json(): Promise<unknown> typing takes over and ~800

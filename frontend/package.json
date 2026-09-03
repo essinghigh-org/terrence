@@ -5,12 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "bun run scripts/dev.ts",
-    "build": "tsc -b && bun run scripts/build.ts",
-    "build-dev": "tsc -b && bun run scripts/build.ts --development",
+    "build": "tsc6 -b && bun run scripts/build.ts",
+    "build-dev": "tsc6 -b && bun run scripts/build.ts --development",
     "lint": "eslint .",
     "lint:oxlint": "oxlint .",
     "test": "bun test tests/*.test.tsx tests/*.test.ts",
-    "typecheck": "tsc -b tsconfig.app.json && tsc --noEmit -p tsconfig.tools.json",
+    "typecheck": "tsc6 -b tsconfig.app.json && tsc6 --noEmit -p tsconfig.tools.json",
     "preview": "bun run scripts/preview.ts",
     "test:browser": "cd tests/browser && xvfb-run --auto-servernum bun test .",
     "test:browser:axe": "cd tests/browser && xvfb-run --auto-servernum bun test ./accessibility-*.test.ts"

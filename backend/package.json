@@ -8,7 +8,7 @@
     "dev": "bun run --watch index.ts",
     "test": "bun test --bail=5 --max-concurrency=1 --no-orphans",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc6 --noEmit",
     "coverage": "bun run scripts/coverage-report.ts",
     "tfectl": "bun run scripts/tfectl.ts",
     "db:generate": "drizzle-kit generate",

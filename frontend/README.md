@@ -2,17 +2,17 @@
 
 React 19 + TypeScript web UI for Terrence. Built with the Bun native
 bundler (`Bun.build` via `scripts/build.ts` with `bun-plugin-tailwind`);
-typechecked with `tsc -b` (`tsconfig.app.json` + `tsconfig.tools.json`).
+typechecked with `tsc6 -b` (`tsconfig.app.json` + `tsconfig.tools.json`).
 There is no Vite, no HMR plugin, and no `.oxlintrc.json` in this workspace.
 
 ## Commands (run from `frontend/`)
 
 | Command | Purpose |
 |---|---|
-| `bun run build` | Typecheck (`tsc -b`) then emit the static bundle consumed by the backend (`dist/`, served by the API). The backend `security-regression` suite asserts on this output, so build before running backend API tests. |
+| `bun run build` | Typecheck (`tsc6 -b`) then emit the static bundle consumed by the backend (`dist/`, served by the API). The backend `security-regression` suite asserts on this output, so build before running backend API tests. |
 | `bun test` | Unit tests (`tests/*.test.tsx`, `tests/*.test.ts`) under `bun:test` with mocked `fetch`. |
 | `bun run test:browser` | Browser E2E and accessibility suite (Bun.WebView). Needs `bun run build` first. |
-| `bun run typecheck` | `tsc -b` over the app and tools projects. |
+| `bun run typecheck` | `tsc6 -b` over the app and tools projects. |
 
 ## Layout
 
