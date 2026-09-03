@@ -174,6 +174,40 @@ describe("RFC 5424 formatting", (): void => {
     expect((body["message"] as string).startsWith("m")).toBeTrue();
   });
 
+  it("uses a fitting fallback when fixed fields exceed the budget", (): void => {
+    const line = formatSyslogMessage(
+      { ...base, message: "hello" },
+      IDENTITY,
+      { maxBodyBytes: 64, format: "json" },
+    );
+    expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(64);
+    expect(JSON.parse(line)).toEqual({ truncated: true });
+  });
+
+  it("keeps the body within budget when the truncation marker cannot fit", (): void => {
+    const line = formatSyslogMessage(
+      { ...base, message: "hello", meta: { requestId: "req-1" } },
+      IDENTITY,
+      { maxBodyBytes: 132, format: "json" },
+    );
+    expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(132);
+    const body = JSON.parse(line) as Record<string, unknown>;
+    expect(body["truncated"]).toBe(true);
+    expect(body["message"]).toBe("");
+  });
+
+  it("leaves small bodies untouched without a truncation flag", (): void => {
+    const line = formatSyslogMessage(
+      { ...base, message: "ok" },
+      IDENTITY,
+      { maxBodyBytes: 512, format: "json" },
+    );
+    expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(512);
+    const body = JSON.parse(line) as Record<string, unknown>;
+    expect(body["message"]).toBe("ok");
+    expect("truncated" in body).toBeFalse();
+  });
+
   it("defaults to RFC 5424 structured data and flattens nested meta", (): void => {
     const line = formatSyslogMessage(
       { ...base, meta: { requestId: "req-1", http: { method: "GET", status: 200 } } },

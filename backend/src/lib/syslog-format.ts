@@ -183,10 +183,20 @@ function jsonStringBytes(value: string): number {
   return Buffer.byteLength(JSON.stringify(value) as string, "utf8");
 }
 
+/** Return the smallest useful JSON value that fits an unusually small cap.
+ * A valid object is impossible below two bytes, so the final scalar/empty
+ * fallback is only used for pathological caller-supplied limits. */
+function fallbackJsonBody(maxBytes: number): string {
+  for (const candidate of ['{"truncated":true}', "{}", "0"]) {
+    if (Buffer.byteLength(candidate, "utf8") <= maxBytes) return candidate;
+  }
+  return "";
+}
+
 /** Shorten body to fit maxBytes while staying valid JSON: the largest
  * non-envelope meta fields are dropped first, then the remaining budget is
- * filled with the longest message prefix that fits. Envelope keys always
- * survive. */
+ * filled with the longest message prefix (plus marker) that fits. Envelope keys always
+ * survive when the requested budget permits them. */
 function fitJsonBody(body: Record<string, unknown>, maxBytes: number): string {
   const full = stringifySyslogBody(body);
   if (Buffer.byteLength(full, "utf8") <= maxBytes) return full;
@@ -209,7 +219,9 @@ function fitJsonBody(body: Record<string, unknown>, maxBytes: number): string {
     dropped.add(key);
   }
   const base = baseFor(dropped);
-  const budget = maxBytes - sizeOf(base);
+  const baseBytes = sizeOf(base);
+  if (baseBytes > maxBytes) return fallbackJsonBody(maxBytes);
+  const budget = maxBytes - baseBytes;
   // 2. Binary-search the longest message prefix (plus marker) that fits.
   const message = typeof shortened["message"] === "string" ? (shortened["message"] as string) : "";
   let lo = 0;
@@ -222,9 +234,19 @@ function fitJsonBody(body: Record<string, unknown>, maxBytes: number): string {
   }
   const final: Record<string, unknown> = {
     ...base,
-    message: lo < message.length && message !== "" ? `${message.slice(0, lo)}${TRUNCATION_MARKER}` : message,
+    message: messageForBudget(message, lo, budget),
   };
-  return stringifySyslogBody(final);
+  const fitted = stringifySyslogBody(final);
+  return Buffer.byteLength(fitted, "utf8") <= maxBytes ? fitted : fallbackJsonBody(maxBytes);
+}
+
+/** Message value for a fitted body: the full text when it fits, else the
+ * longest prefix plus marker — or "" when even the marker exceeds the
+ * remaining budget (the truncated flag still signals the shortening). */
+function messageForBudget(message: string, prefixLength: number, budget: number): string {
+  if (prefixLength >= message.length || message === "") return message;
+  if (budget >= jsonStringBytes(TRUNCATION_MARKER)) return `${message.slice(0, prefixLength)}${TRUNCATION_MARKER}`;
+  return "";
 }
 
 export type SyslogEntryInput = Readonly<{

@@ -85,7 +85,11 @@ describe("syslog UDP transport end to end", (): void => {
       expect(frame.startsWith("{")).toBeTrue();
       if (target === null) throw new Error("unreachable");
       sendSyslogFrame(target, frame, { jsonBody: true });
-      await Bun.sleep(100);
+      const expectedBytes = Buffer.byteLength(frame, "utf8") + 1;
+      const deadline = Date.now() + 3_000;
+      while (Buffer.concat(chunks).byteLength < expectedBytes && Date.now() < deadline) {
+        await Bun.sleep(10);
+      }
       const wire = Buffer.concat(chunks).toString("utf8");
       expect(wire).toBe(`${frame}\n`);
       expect((): unknown => JSON.parse(wire)).not.toThrow();
