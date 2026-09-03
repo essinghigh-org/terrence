@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { isValidElement } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -20,6 +20,7 @@ import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
+const originalClipboard = navigator.clipboard;
 const originalSetInterval = window.setInterval.bind(window);
 const originalSetTimeout = window.setTimeout.bind(window);
 const originalClearTimeout = window.clearTimeout.bind(window);
@@ -93,6 +94,7 @@ function setDocumentHidden(hidden: boolean): void {
 afterEach((): void => {
   cleanup();
   globalThis.fetch = originalFetch;
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
   window.setInterval = originalSetInterval;
   window.setTimeout = originalSetTimeout;
   window.clearTimeout = originalClearTimeout;
@@ -325,6 +327,8 @@ test("announces run status in the RunList live region", async () => {
   await waitFor((): void => { expect(view.getByText("Applied")).toBeTruthy(); });
   const liveRegion = view.container.querySelector('[aria-live="polite"]');
   expect(liveRegion?.textContent).toContain("Applied");
+  expect(liveRegion?.textContent).toContain("run-1");
+  expect(liveRegion?.textContent).toContain("Completed fixture");
 });
 
 test("announces the polled database migration phase", async () => {
@@ -389,6 +393,42 @@ test("keeps semantic inline markdown keys stable when earlier text changes", () 
   expect(afterElements).toHaveLength(1);
   expect(afterElements[0]?.key).toBe(beforeElements[0]?.key);
   expect(String(afterElements[0]?.key)).toContain("inline:");
+});
+
+test("ignores a clipboard completion after PlanOutput unmounts", async () => {
+  let resolveWrite: (() => void) | undefined;
+  const writeText = mock((): Promise<void> => new Promise<void>((resolve): void => {
+    resolveWrite = resolve;
+  }));
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  globalThis.fetch = (mock(async (): Promise<Response> => json({
+    terraform_version: "1.11.0",
+    format_version: "1.2",
+    resource_changes: [],
+  }))) as unknown as typeof fetch;
+  let resetTimerCalls = 0;
+  window.setTimeout = ((handler: TimerHandler, timeout?: number): number => {
+    if (timeout === 2_000) resetTimerCalls++;
+    return originalSetTimeout(handler, timeout);
+  }) as typeof window.setTimeout;
+
+  const view = render(<PlanOutput runId="run-copy-unmount" status="planned" />);
+  await waitFor((): void => {
+    expect(view.getByRole("button", { name: "Copy plan summary as markdown" })).toBeTruthy();
+  });
+  fireEvent.click(view.getByRole("button", { name: "Copy plan summary as markdown" }));
+  view.unmount();
+
+  if (resolveWrite === undefined) throw new Error("Expected the clipboard request to be pending");
+  await act(async (): Promise<void> => {
+    resolveWrite?.();
+    await Promise.resolve();
+  });
+  expect(writeText).toHaveBeenCalledTimes(1);
+  expect(resetTimerCalls).toBe(0);
 });
 
 test("keeps derived plan and apply output visible across rerenders", async () => {

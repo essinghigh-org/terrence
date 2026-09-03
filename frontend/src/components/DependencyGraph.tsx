@@ -403,14 +403,17 @@ function NodeDetailsPanel({
 }>): React.JSX.Element {
   const [copied, setCopied] = useState(false);
   const copiedResetTimerRef = useRef<number | undefined>(undefined);
+  const mountedRef = useRef(true);
   useEffect((): (() => void) => {
+    mountedRef.current = true;
     return (): void => {
+      mountedRef.current = false;
       if (copiedResetTimerRef.current !== undefined) window.clearTimeout(copiedResetTimerRef.current);
     };
   }, []);
   const copy = useCallback((): void => {
     void copyTextToClipboard(node.id).then((didCopy): void => {
-      if (!didCopy) return;
+      if (!didCopy || !mountedRef.current) return;
       setCopied(true);
       if (copiedResetTimerRef.current !== undefined) window.clearTimeout(copiedResetTimerRef.current);
       copiedResetTimerRef.current = window.setTimeout((): void => {

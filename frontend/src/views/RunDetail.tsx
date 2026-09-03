@@ -684,6 +684,7 @@ export function RunDetail({
   const [pendingAction, setPendingAction] = useState("");
   const [copiedPermalink, setCopiedPermalink] = useState(false);
   const copiedPermalinkResetTimerRef = useRef<number | undefined>(undefined);
+  const mountedRef = useRef(true);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [logWrap, setLogWrap] = useState<boolean>(true);
   const [planSummary, setPlanSummary] = useState<Readonly<{
@@ -702,13 +703,17 @@ export function RunDetail({
   const runPermalink = `${window.location.origin}${orgPath}/workspaces/${encodeURIComponent(workspaceName)}/runs/${encodeURIComponent(runId)}`;
 
   useEffect((): (() => void) => {
+    mountedRef.current = true;
     return (): void => {
+      mountedRef.current = false;
       if (copiedPermalinkResetTimerRef.current !== undefined) window.clearTimeout(copiedPermalinkResetTimerRef.current);
     };
   }, []);
 
   async function copyRunPermalink(): Promise<void> {
-    if (await copyTextToClipboard(runPermalink)) {
+    const didCopy = await copyTextToClipboard(runPermalink);
+    if (!mountedRef.current) return;
+    if (didCopy) {
       setCopiedPermalink(true);
       toast.add({ title: "Run permalink copied", type: "success" });
       if (copiedPermalinkResetTimerRef.current !== undefined) window.clearTimeout(copiedPermalinkResetTimerRef.current);
@@ -725,7 +730,9 @@ export function RunDetail({
   // the CLI. It used to live in the workspace header that wrapped this page;
   // now that a run is its own page, the affordance belongs here.
   async function copyRunId(): Promise<void> {
-    if (await copyTextToClipboard(runId)) {
+    const didCopy = await copyTextToClipboard(runId);
+    if (!mountedRef.current) return;
+    if (didCopy) {
       toast.add({ title: "Run ID copied", type: "success" });
       return;
     }

@@ -694,10 +694,13 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const copiedResetTimerRef = useRef<number | undefined>(undefined);
+  const mountedRef = useRef(true);
   const operation = operationForResource(resource);
   const config = operationConfig[operation];
   useEffect((): (() => void) => {
+    mountedRef.current = true;
     return (): void => {
+      mountedRef.current = false;
       if (copiedResetTimerRef.current !== undefined) window.clearTimeout(copiedResetTimerRef.current);
     };
   }, []);
@@ -710,7 +713,7 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
     event.preventDefault();
     event.stopPropagation();
     void copyTextToClipboard(resource.address).then((didCopy): void => {
-      if (!didCopy) return;
+      if (!didCopy || !mountedRef.current) return;
       setCopied(true);
       if (copiedResetTimerRef.current !== undefined) window.clearTimeout(copiedResetTimerRef.current);
       copiedResetTimerRef.current = window.setTimeout((): void => {
@@ -930,6 +933,7 @@ export function PlanOutput({
   const [selectedOps, setSelectedOps] = useState<ReadonlySet<Operation>>(new Set(DEFAULT_SELECTED_OPS));
   const [summaryCopied, setSummaryCopied] = useState(false);
   const summaryCopiedResetTimerRef = useRef<number | undefined>(undefined);
+  const mountedRef = useRef(true);
   const activeRunId = useRef(runId);
   const readyRunId = useRef<string | null>(null);
   const degradedTimerRef = useRef<number | undefined>(undefined);
@@ -938,7 +942,9 @@ export function PlanOutput({
   const loadRef = useRef<() => void>(() => {});
 
   useEffect((): (() => void) => {
+    mountedRef.current = true;
     return (): void => {
+      mountedRef.current = false;
       if (summaryCopiedResetTimerRef.current !== undefined) window.clearTimeout(summaryCopiedResetTimerRef.current);
     };
   }, []);
@@ -1193,7 +1199,7 @@ export function PlanOutput({
             className="rounded border border-border bg-background p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             onClick={(): void => {
               void copyTextToClipboard(planSummaryMarkdown({ ...counts, importCount })).then((didCopy): void => {
-                if (!didCopy) return;
+                if (!didCopy || !mountedRef.current) return;
                 setSummaryCopied(true);
                 if (summaryCopiedResetTimerRef.current !== undefined) window.clearTimeout(summaryCopiedResetTimerRef.current);
                 summaryCopiedResetTimerRef.current = window.setTimeout((): void => {

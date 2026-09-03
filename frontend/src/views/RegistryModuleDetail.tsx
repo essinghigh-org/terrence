@@ -65,6 +65,7 @@ export function RegistryModuleDetail(): React.JSX.Element {
   const [sectionPath, setSectionPath] = useState(".");
   const [copied, setCopied] = useState<"config" | "credentials" | null>(null);
   const copiedResetTimerRef = useRef<number | undefined>(undefined);
+  const mountedRef = useRef(true);
   const [confirmation, setConfirmation] = useState<Confirmation>(null);
   const [addVersionOpen, setAddVersionOpen] = useState(false);
   const [newVersion, setNewVersion] = useState("");
@@ -76,7 +77,9 @@ export function RegistryModuleDetail(): React.JSX.Element {
   const registryPath = `/app/${encodeURIComponent(orgName)}/registry`;
 
   useEffect((): (() => void) => {
+    mountedRef.current = true;
     return (): void => {
+      mountedRef.current = false;
       if (copiedResetTimerRef.current !== undefined) window.clearTimeout(copiedResetTimerRef.current);
     };
   }, []);
@@ -147,7 +150,9 @@ export function RegistryModuleDetail(): React.JSX.Element {
   };
 
   const copy = async (value: string, kind: "config" | "credentials"): Promise<void> => {
-    if (await copyTextToClipboard(value)) {
+    const didCopy = await copyTextToClipboard(value);
+    if (!mountedRef.current) return;
+    if (didCopy) {
       setCopied(kind);
       if (copiedResetTimerRef.current !== undefined) window.clearTimeout(copiedResetTimerRef.current);
       copiedResetTimerRef.current = window.setTimeout((): void => {

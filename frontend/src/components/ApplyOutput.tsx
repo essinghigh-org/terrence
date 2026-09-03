@@ -258,11 +258,14 @@ function ApplyResourceRow({
 }>): React.JSX.Element {
   const [copied, setCopied] = useState(false);
   const copiedResetTimerRef = useRef<number | undefined>(undefined);
+  const mountedRef = useRef(true);
   const operation = operationForResource(resource);
   const config = operationConfig[operation];
 
   useEffect((): (() => void) => {
+    mountedRef.current = true;
     return (): void => {
+      mountedRef.current = false;
       if (copiedResetTimerRef.current !== undefined) window.clearTimeout(copiedResetTimerRef.current);
     };
   }, []);
@@ -271,7 +274,7 @@ function ApplyResourceRow({
     event.preventDefault();
     event.stopPropagation();
     void copyTextToClipboard(resource.address).then((didCopy): void => {
-      if (!didCopy) return;
+      if (!didCopy || !mountedRef.current) return;
       setCopied(true);
       if (copiedResetTimerRef.current !== undefined) window.clearTimeout(copiedResetTimerRef.current);
       copiedResetTimerRef.current = window.setTimeout((): void => {

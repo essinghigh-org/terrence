@@ -74,11 +74,14 @@ export function AccountSettings(): React.JSX.Element {
   const [createdTokenSecret, setCreatedTokenSecret] = useState<string | null>(null);
   const [copiedToken, setCopiedToken] = useState(false);
   const copiedTokenResetTimerRef = useRef<number | undefined>(undefined);
+  const mountedRef = useRef(true);
   const [deletingTokenId, setDeletingTokenId] = useState<string | null>(null);
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
 
   useEffect((): (() => void) => {
+    mountedRef.current = true;
     return (): void => {
+      mountedRef.current = false;
       if (copiedTokenResetTimerRef.current !== undefined) window.clearTimeout(copiedTokenResetTimerRef.current);
     };
   }, []);
@@ -870,6 +873,7 @@ export function AccountSettings(): React.JSX.Element {
                     className="h-7 text-xs gap-1 bg-background text-foreground"
                     onClick={(): void => {
                       void copyTextToClipboard(createdTokenSecret).then((didCopy): void => {
+                        if (!mountedRef.current) return;
                         if (didCopy) {
                           setCopiedToken(true);
                           if (copiedTokenResetTimerRef.current !== undefined) window.clearTimeout(copiedTokenResetTimerRef.current);
