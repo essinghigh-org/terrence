@@ -65,7 +65,9 @@ Server-side execution uses Landlock isolation when the kernel supports it (Linux
 
 The sandbox is enabled by default. If Landlock is unavailable, runs fail with a clear error. Set `TERRENCE_RUN_SANDBOX=false` to disable the requirement explicitly.
 
-Sandboxed runs deny TCP bind and connect by default when the host provides Landlock ABI 4 or newer. Set `TERRENCE_RUN_NET_POLICY=allow` only for trusted configurations that require provider or provisioner network access. Any other value remains denied; with the default `deny`, a host below ABI 4 cannot execute sandboxed runs.
+Sandboxed runs deny loopback TCP connects by default: TCP to 127/8, ::1 and ::ffff:127/8 fails with EACCES, so IaC code cannot reach host-local services (databases, metadata endpoints, the Terrence API itself) via localhost. Public traffic, RFC1918, UDP (including DNS stubs on loopback) and Unix sockets keep working. Set `TERRENCE_RUN_LOOPBACK_POLICY=allow` only where runs legitimately need localhost (development without `PUBLIC_URL`, where the registry address falls back to localhost); any other value remains denied, and spawns fail with a clear error when the runner binary lacks seccomp user-notify support.
+
+Full TCP isolation stays opt-in: set `TERRENCE_RUN_NET_POLICY=deny` to deny all TCP bind and connect (requires Landlock ABI 4 or newer; a host below ABI 4 cannot execute sandboxed runs under `deny`). The default `allow` keeps provider and provisioner network access working, which trusted configurations require.
 
 The sandbox protects remote-mode runs. Local-mode runs execute on the CLI machine and are not sandboxed by the server.
 

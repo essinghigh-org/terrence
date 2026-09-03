@@ -29,6 +29,15 @@ import type { Subprocess } from "bun";
  * No privileges, no capabilities, no Docker seccomp/capability changes needed.
  * Fail-closed: the sandbox is REQUIRED by default (TERRENCE_RUN_SANDBOX unset
  * means sandboxed); disable it explicitly with TERRENCE_RUN_SANDBOX=false.
+ *
+ * Network: full TCP isolation stays opt-in (TERRENCE_RUN_NET_POLICY=deny,
+ * needs Landlock ABI >= 4). Loopback TCP isolation is ON by default
+ * (TERRENCE_RUN_LOOPBACK_POLICY unset means deny): the runner supervises
+ * connect(2) via seccomp user-notify and fails loopback TCP with EACCES,
+ * while RFC1918, public traffic, UDP and Unix sockets keep working. Set
+ * TERRENCE_RUN_LOOPBACK_POLICY=allow only where runs legitimately need
+ * localhost (dev without PUBLIC_URL); spawns fail closed when the runner
+ * lacks --deny-loopback support.
  */
 
 const SANDBOX_DISABLED = ["false", "0", "none", "no", "off"].includes(
@@ -36,11 +45,30 @@ const SANDBOX_DISABLED = ["false", "0", "none", "no", "off"].includes(
 );
 
 export function runNetPolicy(): "allow" | "deny" {
-  const raw = (process.env.TERRENCE_RUN_NET_POLICY ?? "deny").toLowerCase().trim();
-  return raw === "allow" ? "allow" : "deny";
+  const raw = (process.env.TERRENCE_RUN_NET_POLICY ?? "allow").toLowerCase().trim();
+  return raw === "deny" ? "deny" : "allow";
 }
 export function runNetDenyEnabled(): boolean {
   return runNetPolicy() === "deny";
+}
+
+/**
+ * Loopback policy for sandboxed runs. Default DENY: TCP connect(2) to
+ * loopback (127/8, ::1, ::ffff:127/8) fails with EACCES inside the sandbox,
+ * so IaC code cannot reach host-local services (databases, metadata
+ * endpoints, the Terrence API itself) via localhost. Everything else —
+ * public internet, RFC1918, UDP (DNS stubs), Unix sockets — is untouched.
+ *
+ * Escape hatch: TERRENCE_RUN_LOOPBACK_POLICY=allow (e.g. dev setups without
+ * PUBLIC_URL, where the registry address falls back to localhost). Unknown
+ * values fail closed to deny.
+ */
+export function runLoopbackPolicy(): "allow" | "deny" {
+  const raw = (process.env.TERRENCE_RUN_LOOPBACK_POLICY ?? "deny").toLowerCase().trim();
+  return raw === "allow" ? "allow" : "deny";
+}
+export function runLoopbackDenyEnabled(): boolean {
+  return runLoopbackPolicy() === "deny";
 }
 
 /**
@@ -121,6 +149,31 @@ export function resetLandlockAbiCache(): void {
   cachedAbi = null;
 }
 
+let cachedLoopbackSupport: boolean | null = null;
+
+/**
+ * Whether the resolved runner supports --deny-loopback (runner --probe-loopback
+ * exits 0 with "ok"). Cached per process; use resetLoopbackSupportCache in tests.
+ */
+export function probeLoopbackSupport(): boolean {
+  if (cachedLoopbackSupport !== null) return cachedLoopbackSupport;
+  cachedLoopbackSupport = false;
+  try {
+    const runner = findRunner();
+    if (runner === null) return false;
+    const proc = Bun.spawnSync([runner, "--probe-loopback"], { stdout: "pipe", stderr: "pipe" });
+    if (proc.exitCode === 0 && proc.stdout.toString().trim() === "ok") cachedLoopbackSupport = true;
+  } catch {
+    cachedLoopbackSupport = false;
+  }
+  return cachedLoopbackSupport;
+}
+
+/** Test hook: drop the cached --probe-loopback result. */
+export function resetLoopbackSupportCache(): void {
+  cachedLoopbackSupport = null;
+}
+
 /**
  * Mirror of landlock-runner.c's `abi_mask`: which filesystem access bits the
  * kernel accepts at a given Landlock ABI. REFER (rename/link between
@@ -135,6 +188,21 @@ function netRuleArgs(): string[] {
     throw new Error(`Run network isolation requires Landlock ABI >= 4. Host ABI is ${abi}. Upgrade the kernel or set TERRENCE_RUN_NET_POLICY=allow.`);
   }
   return ["--deny-net"];
+}
+
+/**
+ * Fail-closed loopback rule. When the loopback policy denies (the default)
+ * the runner must support --deny-loopback; otherwise spawns throw instead
+ * of running without the barrier. Operators on kernels without seccomp
+ * user-notify (or with a stale runner binary) set
+ * TERRENCE_RUN_LOOPBACK_POLICY=allow explicitly.
+ */
+function loopbackRuleArgs(): string[] {
+  if (!runLoopbackDenyEnabled()) return [];
+  if (!probeLoopbackSupport()) {
+    throw new Error("Run loopback isolation requires a landlock-runner with seccomp user-notify support (runner --probe-loopback must report ok). Upgrade the runner binary or set TERRENCE_RUN_LOOPBACK_POLICY=allow.");
+  }
+  return ["--deny-loopback"];
 }
 
 export function landlockAccessFlagsForAbi(abi: number): {
@@ -272,6 +340,7 @@ export class RunSandbox {
         "--ro=/etc",
         ...devRuleArgs(),
         ...netRuleArgs(),
+        ...loopbackRuleArgs(),
         ...(resolvDir !== null ? [`--ro=${resolvDir}`] : []),
         ...extraRwArgs(),
         `--cwd=${opts.cwd}`,

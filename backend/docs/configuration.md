@@ -62,7 +62,8 @@ Set variables through the container environment or an `.env` file.
 | Variable | Default | Purpose |
 |---|---|---|
 | `TERRENCE_RUN_SANDBOX` | enabled | Run sandbox mode. Enabled by default. `false` disables the Landlock requirement. |
-| `TERRENCE_RUN_NET_POLICY` | `deny` | Network policy inside the Landlock run sandbox. Only `allow` opts out; unknown values remain denied. `deny` requires Landlock ABI 4+. |
+| `TERRENCE_RUN_NET_POLICY` | `allow` | Full TCP policy inside the Landlock run sandbox. Opt in with `deny`; any other value allows. `deny` requires Landlock ABI 4+. |
+| `TERRENCE_RUN_LOOPBACK_POLICY` | `deny` | Loopback TCP policy inside the sandbox. Denied by default: TCP connects to 127/8, ::1 and ::ffff:127/8 fail with EACCES while RFC1918, public traffic, UDP and Unix sockets keep working. Only `allow` opts out (dev setups where the registry address falls back to localhost); unknown values remain denied. Requires a runner with seccomp user-notify support, otherwise spawns fail closed. |
 | `TERRENCE_LANDLOCK_RUNNER` | bundled | Path to the landlock runner binary. |
 | `TERRENCE_SANDBOX_EXTRA_RW_PATHS` | none | Extra read-write paths for the sandbox. |
 | `TERRENCE_SANDBOX_EXTRA_RW_ALLOWED` | off | Allow the extra paths to be specified. |

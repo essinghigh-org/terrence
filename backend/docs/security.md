@@ -25,6 +25,7 @@ Runs execute inside a Landlock sandbox:
 - The run process sees only its working directory and the binary directory.
 - Provider plugins and local-exec provisioners inherit the restrictions.
 - The database, encryption keys, and other workspaces are not visible.
+- Loopback TCP is denied by default, so runs cannot reach host-local services via localhost.
 
 The sandbox is required by default. See [Execution](execution).
 

@@ -3,7 +3,7 @@ import { writeFile, mkdir, rm, symlink, mkdtemp } from "fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { RunSandbox, probeLandlockAbi, runNetDenyEnabled } from "../../src/lib/sandbox";
+import { RunSandbox, probeLandlockAbi, runLoopbackDenyEnabled, runNetDenyEnabled } from "../../src/lib/sandbox";
 import { ensureBinary } from "../../src/binaryManager";
 
 const abi = probeLandlockAbi();
@@ -178,7 +178,7 @@ describe("landlock run sandbox", () => {
     }
   });
 
-  it("checks network connectivity under Landlock (documented: Landlock does not restrict network)", async (): Promise<void> => {
+  it("denies loopback TCP by default while leaving other traffic alone (seccomp supervisor)", async (): Promise<void> => {
     if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
     const sandbox = new RunSandbox();
     const testBase = await mkdtemp(join(tmpdir(), "terrence-sb-"));
@@ -186,13 +186,14 @@ describe("landlock run sandbox", () => {
     await mkdir(join(workDir, "tmp"), { recursive: true });
     try {
       const script = join(workDir, "probe.sh");
+      const denyLoopback = runLoopbackDenyEnabled();
       const denyNet = runNetDenyEnabled();
       await writeFile(script, `#!/bin/sh\npython3 -c "import socket; s=socket.socket(); s.settimeout(1); rc=s.connect_ex(('127.0.0.1', 9)); print('NET_DENIED' if rc==13 else ('NET_REACHABLE' if rc==111 else f'NET_RC_{rc}'))"\n`, { mode: 0o755 });
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
       const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
       expect(exitCode).toBe(0);
       const result = stdout.trim();
-      if (denyNet) expect(result).toBe("NET_DENIED");
+      if (denyNet || denyLoopback) expect(result).toBe("NET_DENIED");
       else expect(["NET_REACHABLE", "NET_DENIED", "NET_RC_101", "NET_RC_110", "NET_RC_115"]).toContain(result);
     } finally {
       await rm(testBase, { recursive: true, force: true });

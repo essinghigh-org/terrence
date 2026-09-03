@@ -7,7 +7,11 @@ import {
   RunSandbox,
   landlockAccessFlagsForAbi,
   probeLandlockAbi,
+  probeLoopbackSupport,
   resetLandlockAbiCache,
+  resetLoopbackSupportCache,
+  runLoopbackDenyEnabled,
+  runLoopbackPolicy,
   runNetDenyEnabled,
   runNetPolicy,
 } from "../../src/lib/sandbox";
@@ -43,6 +47,7 @@ function restoreRunnerEnv(): void {
 afterAll(() => {
   restoreRunnerEnv();
   resetLandlockAbiCache();
+  resetLoopbackSupportCache();
 });
 
 describe("landlock ABI rights calculation", () => {
@@ -101,10 +106,22 @@ describe("landlock runner probe contract", () => {
     expect(proc.exitCode).toBe(0);
     expect(proc.stdout.toString()).toMatch(/^landlock-runner \d+\.\d+\.\d+ \(Landlock ABI \d+\)\s*$/);
   });
+
+  it("reports loopback-deny support via --probe-loopback", (): void => {
+    if (!hasRunner) return;
+    const proc = Bun.spawnSync([runnerPath, "--probe-loopback"], { stdout: "pipe", stderr: "pipe" });
+    // Exit 0 + "ok" on kernels with seccomp user-notify; exit 2 otherwise.
+    // Either way the app-side probe must agree with the real runner.
+    expect([0, 2]).toContain(proc.exitCode);
+    if (proc.exitCode === 0) expect(proc.stdout.toString().trim()).toBe("ok");
+    resetLoopbackSupportCache();
+    expect(probeLoopbackSupport()).toBe(proc.exitCode === 0);
+    resetLoopbackSupportCache();
+  });
 });
 
-describe("landlock fail-closed network policy", () => {
-  it("passes --deny-net by default and requires an explicit allow opt-out", async (): Promise<void> => {
+describe("landlock opt-in full network policy", () => {
+  it("allows by default and passes --deny-net only on explicit deny", async (): Promise<void> => {
     const fakeDir = await mkdtemp(join(tmpdir(), "terrence-ll-net-"));
     const fakeRunner = join(fakeDir, "landlock-runner");
     const denyArgs = join(fakeDir, "deny-args");
@@ -112,6 +129,7 @@ describe("landlock fail-closed network policy", () => {
     const cwd = join(fakeDir, "work");
     const originalRunner = process.env.TERRENCE_LANDLOCK_RUNNER;
     const originalNetPolicy = process.env.TERRENCE_RUN_NET_POLICY;
+    const originalLoopbackPolicy = process.env.TERRENCE_RUN_LOOPBACK_POLICY;
     await mkdir(cwd, { recursive: true });
     await writeFile(
       fakeRunner,
@@ -121,6 +139,10 @@ describe("landlock fail-closed network policy", () => {
         "  echo 4",
         "  exit 0",
         "fi",
+        'if [ "$1" = "--probe-loopback" ]; then',
+        '  echo "ok"',
+        "  exit 0",
+        "fi",
         'printf "%s\\n" "$@" > "$RECORD_PATH"',
         "exit 0",
       ].join("\n"),
@@ -128,7 +150,25 @@ describe("landlock fail-closed network policy", () => {
     );
     try {
       process.env.TERRENCE_LANDLOCK_RUNNER = fakeRunner;
+      // Isolate the net-policy assertions from the loopback default-deny.
+      process.env.TERRENCE_RUN_LOOPBACK_POLICY = "allow";
+      resetLoopbackSupportCache();
       delete process.env.TERRENCE_RUN_NET_POLICY;
+      resetLandlockAbiCache();
+      const allowSandbox = new RunSandbox();
+      const allowProc = allowSandbox.spawn(["/bin/true"], { cwd, env: { RECORD_PATH: allowArgs } });
+      const [allowExitCode, , allowStderr] = await Promise.all([
+        allowProc.exited,
+        new Response(allowProc.stdout).text(),
+        new Response(allowProc.stderr).text(),
+      ]);
+      expect(allowExitCode).toBe(0);
+      expect(allowStderr).toBe("");
+      expect((await readFile(allowArgs, "utf8")).split("\n")).not.toContain("--deny-net");
+      expect(runNetPolicy()).toBe("allow");
+      expect(runNetDenyEnabled()).toBe(false);
+
+      process.env.TERRENCE_RUN_NET_POLICY = "deny";
       resetLandlockAbiCache();
       const denySandbox = new RunSandbox();
       const denyProc = denySandbox.spawn(["/bin/true"], { cwd, env: { RECORD_PATH: denyArgs } });
@@ -142,8 +182,73 @@ describe("landlock fail-closed network policy", () => {
       expect((await readFile(denyArgs, "utf8")).split("\n")).toContain("--deny-net");
       expect(runNetDenyEnabled()).toBe(true);
 
+      process.env.TERRENCE_RUN_NET_POLICY = "unexpected-value";
+      expect(runNetPolicy()).toBe("allow");
+      expect(runNetDenyEnabled()).toBe(false);
+    } finally {
+      if (originalRunner === undefined) delete process.env.TERRENCE_LANDLOCK_RUNNER;
+      else process.env.TERRENCE_LANDLOCK_RUNNER = originalRunner;
+      if (originalNetPolicy === undefined) delete process.env.TERRENCE_RUN_NET_POLICY;
+      else process.env.TERRENCE_RUN_NET_POLICY = originalNetPolicy;
+      if (originalLoopbackPolicy === undefined) delete process.env.TERRENCE_RUN_LOOPBACK_POLICY;
+      else process.env.TERRENCE_RUN_LOOPBACK_POLICY = originalLoopbackPolicy;
+      resetLandlockAbiCache();
+      resetLoopbackSupportCache();
+      await rm(fakeDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("landlock fail-closed loopback policy", () => {
+  it("denies loopback by default and requires an explicit allow opt-out", async (): Promise<void> => {
+    const fakeDir = await mkdtemp(join(tmpdir(), "terrence-ll-loop-"));
+    const fakeRunner = join(fakeDir, "landlock-runner");
+    const denyArgs = join(fakeDir, "deny-args");
+    const allowArgs = join(fakeDir, "allow-args");
+    const cwd = join(fakeDir, "work");
+    const originalRunner = process.env.TERRENCE_LANDLOCK_RUNNER;
+    const originalNetPolicy = process.env.TERRENCE_RUN_NET_POLICY;
+    const originalLoopbackPolicy = process.env.TERRENCE_RUN_LOOPBACK_POLICY;
+    await mkdir(cwd, { recursive: true });
+    await writeFile(
+      fakeRunner,
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "--probe" ]; then',
+        "  echo 6",
+        "  exit 0",
+        "fi",
+        'if [ "$1" = "--probe-loopback" ]; then',
+        '  echo "ok"',
+        "  exit 0",
+        "fi",
+        'printf "%s\\n" "$@" > "$RECORD_PATH"',
+        "exit 0",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    try {
+      process.env.TERRENCE_LANDLOCK_RUNNER = fakeRunner;
       process.env.TERRENCE_RUN_NET_POLICY = "allow";
       resetLandlockAbiCache();
+      delete process.env.TERRENCE_RUN_LOOPBACK_POLICY;
+      resetLoopbackSupportCache();
+      expect(probeLoopbackSupport()).toBe(true);
+      const denySandbox = new RunSandbox();
+      const denyProc = denySandbox.spawn(["/bin/true"], { cwd, env: { RECORD_PATH: denyArgs } });
+      const [denyExitCode, , denyStderr] = await Promise.all([
+        denyProc.exited,
+        new Response(denyProc.stdout).text(),
+        new Response(denyProc.stderr).text(),
+      ]);
+      expect(denyExitCode).toBe(0);
+      expect(denyStderr).toBe("");
+      expect((await readFile(denyArgs, "utf8")).split("\n")).toContain("--deny-loopback");
+      expect(runLoopbackPolicy()).toBe("deny");
+      expect(runLoopbackDenyEnabled()).toBe(true);
+
+      process.env.TERRENCE_RUN_LOOPBACK_POLICY = "allow";
+      resetLoopbackSupportCache();
       const allowSandbox = new RunSandbox();
       const allowProc = allowSandbox.spawn(["/bin/true"], { cwd, env: { RECORD_PATH: allowArgs } });
       await Promise.all([
@@ -151,19 +256,49 @@ describe("landlock fail-closed network policy", () => {
         new Response(allowProc.stdout).text(),
         new Response(allowProc.stderr).text(),
       ]);
-      expect((await readFile(allowArgs, "utf8")).split("\n")).not.toContain("--deny-net");
-      expect(runNetPolicy()).toBe("allow");
+      expect((await readFile(allowArgs, "utf8")).split("\n")).not.toContain("--deny-loopback");
+      expect(runLoopbackPolicy()).toBe("allow");
 
-      process.env.TERRENCE_RUN_NET_POLICY = "unexpected-value";
-      expect(runNetPolicy()).toBe("deny");
-      expect(runNetDenyEnabled()).toBe(true);
+      process.env.TERRENCE_RUN_LOOPBACK_POLICY = "unexpected-value";
+      expect(runLoopbackPolicy()).toBe("deny");
+      expect(runLoopbackDenyEnabled()).toBe(true);
     } finally {
       if (originalRunner === undefined) delete process.env.TERRENCE_LANDLOCK_RUNNER;
       else process.env.TERRENCE_LANDLOCK_RUNNER = originalRunner;
       if (originalNetPolicy === undefined) delete process.env.TERRENCE_RUN_NET_POLICY;
       else process.env.TERRENCE_RUN_NET_POLICY = originalNetPolicy;
+      if (originalLoopbackPolicy === undefined) delete process.env.TERRENCE_RUN_LOOPBACK_POLICY;
+      else process.env.TERRENCE_RUN_LOOPBACK_POLICY = originalLoopbackPolicy;
       resetLandlockAbiCache();
+      resetLoopbackSupportCache();
       await rm(fakeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when the runner lacks --deny-loopback support", (): void => {
+    const originalRunner = process.env.TERRENCE_LANDLOCK_RUNNER;
+    const originalLoopbackPolicy = process.env.TERRENCE_RUN_LOOPBACK_POLICY;
+    const originalNetPolicy = process.env.TERRENCE_RUN_NET_POLICY;
+    try {
+      // Point at a binary that exists but does not answer --probe-loopback.
+      process.env.TERRENCE_LANDLOCK_RUNNER = "/bin/true";
+      process.env.TERRENCE_RUN_NET_POLICY = "allow";
+      delete process.env.TERRENCE_RUN_LOOPBACK_POLICY;
+      resetLandlockAbiCache();
+      resetLoopbackSupportCache();
+      expect(probeLoopbackSupport()).toBe(false);
+      expect(() => new RunSandbox().spawn(["/bin/true"], { cwd: tmpdir(), env: {} })).toThrow(
+        /loopback isolation requires/,
+      );
+    } finally {
+      if (originalRunner === undefined) delete process.env.TERRENCE_LANDLOCK_RUNNER;
+      else process.env.TERRENCE_LANDLOCK_RUNNER = originalRunner;
+      if (originalNetPolicy === undefined) delete process.env.TERRENCE_RUN_NET_POLICY;
+      else process.env.TERRENCE_RUN_NET_POLICY = originalNetPolicy;
+      if (originalLoopbackPolicy === undefined) delete process.env.TERRENCE_RUN_LOOPBACK_POLICY;
+      else process.env.TERRENCE_RUN_LOOPBACK_POLICY = originalLoopbackPolicy;
+      resetLandlockAbiCache();
+      resetLoopbackSupportCache();
     }
   });
 });
@@ -190,13 +325,16 @@ describe("landlock fail-closed on ABI-0 hosts", () => {
     );
     const cwd = join(fakeDir, "work");
     const originalNetPolicy = process.env.TERRENCE_RUN_NET_POLICY;
+    const originalLoopbackPolicy = process.env.TERRENCE_RUN_LOOPBACK_POLICY;
     await mkdir(cwd, { recursive: true });
     try {
       process.env.TERRENCE_LANDLOCK_RUNNER = fakeRunner;
-      // Exercise the ABI-0 path itself; the default deny policy correctly
-      // rejects hosts below ABI 4 before the runner can report ABI 0.
+      // Exercise the ABI-0 path itself; isolate from the loopback
+      // default-deny (the fake has no --probe-loopback handler).
       process.env.TERRENCE_RUN_NET_POLICY = "allow";
+      process.env.TERRENCE_RUN_LOOPBACK_POLICY = "allow";
       resetLandlockAbiCache();
+      resetLoopbackSupportCache();
       expect(probeLandlockAbi()).toBe(0);
 
       const sandbox = new RunSandbox();
@@ -213,7 +351,10 @@ describe("landlock fail-closed on ABI-0 hosts", () => {
       restoreRunnerEnv();
       if (originalNetPolicy === undefined) delete process.env.TERRENCE_RUN_NET_POLICY;
       else process.env.TERRENCE_RUN_NET_POLICY = originalNetPolicy;
+      if (originalLoopbackPolicy === undefined) delete process.env.TERRENCE_RUN_LOOPBACK_POLICY;
+      else process.env.TERRENCE_RUN_LOOPBACK_POLICY = originalLoopbackPolicy;
       resetLandlockAbiCache();
+      resetLoopbackSupportCache();
     }
   });
 });
