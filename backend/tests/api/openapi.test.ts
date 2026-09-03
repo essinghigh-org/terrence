@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import { app } from "../../src/app";
+import { app, systemApiApp } from "../../src/app";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -24,7 +24,10 @@ describe("openapi contract", () => {
 
   it("covers every registered route", () => {
     type Route = Readonly<{ method: string; path: string }>;
-    const routes = (app as unknown as { routes: Route[] }).routes;
+    const routes = [
+      ...(app as unknown as { routes: Route[] }).routes,
+      ...(systemApiApp as unknown as { routes: Route[] }).routes,
+    ];
     const apiRoutes = routes.filter((r): boolean => {
       if (
         r.path === "/" ||
@@ -70,6 +73,41 @@ describe("openapi contract", () => {
     } | undefined;
     expect(operation?.responses?.["201"]).toBeDefined();
     expect(operation?.responses?.["200"]).toBeUndefined();
+  });
+
+  it("derives route-specific success and error responses", () => {
+    const createOperation = paths["/api/v2/organizations"]?.["post"] as { responses?: Record<string, unknown> } | undefined;
+    expect(createOperation?.responses?.["201"]).toBeDefined();
+    expect(createOperation?.responses?.["200"]).toBeUndefined();
+    expect(createOperation?.responses?.["409"]).toBeDefined();
+
+    const deleteOperation = paths["/api/v2/comments/{comment_id}"]?.["delete"] as { responses?: Record<string, unknown> } | undefined;
+    expect(deleteOperation?.responses?.["204"]).toBeDefined();
+    expect(deleteOperation?.responses?.["200"]).toBeUndefined();
+
+    const planOperation = paths["/api/v2/runs/{run_id}/plan/json-output"]?.["get"] as { responses?: Record<string, unknown> } | undefined;
+    expect(planOperation?.responses?.["200"]).toBeDefined();
+    expect(planOperation?.responses?.["204"]).toBeDefined();
+    expect(planOperation?.responses?.["200"]).toMatchObject({
+      content: { "application/json": { schema: { type: "object" } } },
+    });
+
+    const uploadOperation = paths["/api/v2/workspaces/{workspace_id}/state-versions/upload"]?.["post"] as { responses?: Record<string, unknown> } | undefined;
+    expect(uploadOperation?.responses?.["201"]).toBeDefined();
+    expect(uploadOperation?.responses?.["413"]).toBeDefined();
+  });
+
+  it("includes system-listener operations and their delegated responses", () => {
+    const diagnostics = paths["/api/v1/diagnostics"]?.["get"] as { responses?: Record<string, unknown> } | undefined;
+    expect(diagnostics?.responses?.["401"]).toBeDefined();
+    expect(diagnostics?.responses?.["503"]).toBeDefined();
+
+    const createBundle = paths["/api/v1/support/bundle-requests"]?.["post"] as { responses?: Record<string, unknown> } | undefined;
+    expect(createBundle?.responses?.["202"]).toBeDefined();
+
+    const deleteBundle = paths["/api/v1/support/bundle-requests/{id}"]?.["delete"] as { responses?: Record<string, unknown> } | undefined;
+    expect(deleteBundle?.responses?.["204"]).toBeDefined();
+    expect(deleteBundle?.responses?.["409"]).toBeDefined();
   });
 
   it("documents provider artwork as an image response", () => {
