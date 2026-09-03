@@ -13,6 +13,8 @@ import {
 import { RunList } from "../src/views/RunList";
 import { waitForAbortableDelay } from "../src/views/RunDetail";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
+import { EventProvider } from "../src/lib/event-provider";
+import type { EventStreamHandle, SseEvent } from "../src/lib/events";
 import { inlineMarkdown } from "../src/components/MarkdownContent";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
@@ -142,6 +144,43 @@ test("resolves duplicate provider icons by notification without per-instance int
   await waitFor((): void => { expect(view.container.querySelectorAll("img")).toHaveLength(2); });
 });
 
+test("keeps a mounted provider icon subscribed after the fallback timeout", async () => {
+  clearProviderIconCacheForTests();
+  let resolveFetch: ((response: Response) => void) | undefined;
+  const response = new Promise<Response>((resolve): void => {
+    resolveFetch = resolve;
+  });
+  const fetchMock = mock(async (): Promise<Response> => response);
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  let triggerFallback: (() => void) | undefined;
+  window.setTimeout = ((handler: TimerHandler, timeout?: number): number => {
+    if (timeout === 5000) {
+      triggerFallback = (): void => {
+        if (typeof handler === "function") handler();
+      };
+      return 0;
+    }
+    return originalSetTimeout(handler, timeout);
+  }) as typeof window.setTimeout;
+
+  const view = render(<ProviderIcon providerName="hashicorp/aws" fallback={<span>Fallback</span>} />);
+  await waitFor((): void => {
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(triggerFallback).toBeTruthy();
+  });
+  const fallbackTimer = triggerFallback;
+  if (fallbackTimer === undefined) throw new Error("Expected the provider icon fallback timer");
+  act((): void => { fallbackTimer(); });
+  expect(view.getByText("Fallback")).toBeTruthy();
+
+  const resolve = resolveFetch;
+  if (resolve === undefined) throw new Error("Expected the provider icon request to be pending");
+  resolve(json({
+    data: [{ id: "hashicorp/aws", attributes: { "icon-url": "https://example.com/aws.svg" } }],
+  }));
+  await waitFor((): void => { expect(view.container.querySelector("img")).toBeTruthy(); });
+});
+
 test("does not poll WorkspaceDetail while hidden and resumes on visibility", async () => {
   let runRequests = 0;
   globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
@@ -172,9 +211,15 @@ test("does not poll WorkspaceDetail while hidden and resumes on visibility", asy
   });
 });
 
-test("stops WorkspaceDetail polling after a terminal run and announces its status", async () => {
+test("stops WorkspaceDetail polling after a terminal run but refreshes on run status events", async () => {
   let runRequests = 0;
+  const runResolvers: ((response: Response) => void)[] = [];
   const scheduledDelays: number[] = [];
+  let emitRunStatus: ((event: SseEvent) => void) | undefined;
+  const streamFactory = (onEvent: (event: SseEvent) => void): EventStreamHandle => {
+    emitRunStatus = onEvent;
+    return { close: (): void => undefined };
+  };
   window.setTimeout = ((handler: TimerHandler, timeout?: number): number => {
     if (timeout === 5000) scheduledDelays.push(timeout);
     return originalSetTimeout(handler, timeout);
@@ -184,17 +229,72 @@ test("stops WorkspaceDetail polling after a terminal run and announces its statu
     if (url === "/api/v2/organizations/acme/workspaces/production") return json(workspaceDocument());
     if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") {
       runRequests++;
-      return json(runDocument("applied"));
+      return new Promise<Response>((resolve): void => { runResolvers.push(resolve); });
     }
     throw new Error(`Unexpected request: ${url}`);
   })) as unknown as typeof fetch;
 
-  const view = renderWorkspace();
+  const view = render(
+    <EventProvider streamFactory={streamFactory}>
+      <MemoryRouter initialEntries={["/app/acme/workspaces/production"]}>
+        <Routes>
+          <Route path="/app/:orgName/workspaces/:workspaceName" element={<WorkspaceDetail />} />
+        </Routes>
+      </MemoryRouter>
+    </EventProvider>,
+  );
+  await waitFor((): void => { expect(runResolvers).toHaveLength(1); });
+  const resolveInitial = runResolvers[0];
+  if (resolveInitial === undefined) throw new Error("Expected the initial latest-run request");
+  act((): void => { resolveInitial(json(runDocument("applied"))); });
   await waitFor((): void => { expect(view.getByText("Latest run: Applied")).toBeTruthy(); });
   expect(runRequests).toBe(1);
   expect(scheduledDelays).toHaveLength(0);
   const liveRegion = view.container.querySelector('[aria-live="polite"]');
   expect(liveRegion?.textContent).toContain("Latest run: Applied");
+
+  const emit = emitRunStatus;
+  if (emit === undefined) throw new Error("Expected the SSE stream to be connected");
+  act((): void => {
+    emit({
+      name: "run.status",
+      data: {
+        "run-id": "run-2",
+        "workspace-id": "ws-1",
+        "org-id": "org-1",
+        status: "planning",
+        at: "2026-09-03T10:00:02.000Z",
+      },
+    });
+    emit({
+      name: "run.status",
+      data: {
+        "run-id": "run-3",
+        "workspace-id": "ws-1",
+        "org-id": "org-1",
+        status: "planning",
+        at: "2026-09-03T10:00:03.000Z",
+      },
+    });
+  });
+  await waitFor((): void => { expect(runRequests).toBe(3); });
+  const resolveOlder = runResolvers[1];
+  const resolveNewest = runResolvers[2];
+  if (resolveOlder === undefined || resolveNewest === undefined) {
+    throw new Error("Expected both event-triggered latest-run requests");
+  }
+  act((): void => {
+    resolveNewest(json(runDocument("planning")));
+    resolveOlder(json(runDocument("errored")));
+  });
+  await waitFor((): void => { expect(view.getByText("Latest run: Planning")).toBeTruthy(); });
+  expect(view.queryByText("Latest run: Errored")).toBeNull();
+  expect(scheduledDelays).toHaveLength(1);
+
+  act((): void => {
+    setDocumentHidden(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
 });
 
 test("announces run status in the RunList live region", async () => {

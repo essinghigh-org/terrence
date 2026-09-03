@@ -115,7 +115,7 @@ export function useProviderIcon(providerName: string | null | undefined): string
 
     unsubscribe = subscribeToIcon(key, update);
     const timeout = window.setTimeout((): void => {
-      if (iconCache.get(key) === undefined) finish(null);
+      if (iconCache.get(key) === undefined) setUrl(null);
     }, 5000);
     scheduleFetch(key);
     // The cache may have been populated between the initial read and
