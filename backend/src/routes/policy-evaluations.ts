@@ -274,4 +274,15 @@ export const policyEvaluationRoutes = new Elysia({ name: "policyEvaluations" })
       data: evals.map((evalRecord): Record<string, unknown> =>
         tfPolicyEvaluationResource(evalRecord, stageTypes.get(evalRecord.id))),
     };
+  })
+  .get("/api/v2/tf-policy-set-outcomes/:tf_policy_set_outcome_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const outcomeId = params.tf_policy_set_outcome_id ?? "";
+    const outcome = (await db.select().from(policySetOutcomes).where(eq(policySetOutcomes.id, outcomeId)))[0];
+    if (outcome === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const evaluation = (await db.select().from(policyEvaluations).where(eq(policyEvaluations.id, outcome.policyEvaluationId)))[0];
+    if (evaluation === undefined || evaluation.runId === null || (await findAuthorizedRun(evaluation.runId, user?.id, orgId, teamId)) === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return { data: tfPolicySetOutcomeResource(outcome) };
   });

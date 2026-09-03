@@ -27528,6 +27528,43 @@
         }
       }
     },
+    "/api/v2/tf-policy-set-outcomes/{tf_policy_set_outcome_id}": {
+      "get": {
+        "operationId": "get-api-v2-tf-policy-set-outcomes-tf-policy-set-outcome-id",
+        "tags": [
+          "tf-policy-evaluations"
+        ],
+        "parameters": [
+          {
+            "name": "tf_policy_set_outcome_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "GET /api/v2/tf-policy-set-outcomes/{tf_policy_set_outcome_id}",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not Found"
+          }
+        }
+      }
+    },
     "/api/v2/docs": {
       "get": {
         "operationId": "get-api-v2-docs",

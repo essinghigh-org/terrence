@@ -139,4 +139,12 @@ describe("TF policy evaluations (audit finding 3)", () => {
     expect((await request(`/api/v2/tf-policy-evaluations/${evalId}/tf-policy-set-outcomes`, outsiderToken)).status).toBe(404);
     expect((await request(`/api/v2/tf-policy-evaluations/missing-${suffix}/tf-policy-set-outcomes`, token)).status).toBe(404);
   });
+
+  it("reads a single outcome through its self link", async () => {
+    const res = await request(`/api/v2/tf-policy-set-outcomes/outcome-pass-${suffix}`, token);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { data: { id: string; type: string } };
+    expect(body.data.type).toBe("tf-policy-set-outcomes");
+    expect((await request(`/api/v2/tf-policy-set-outcomes/outcome-pass-${suffix}`, outsiderToken)).status).toBe(404);
+  });
 });
