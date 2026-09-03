@@ -17,11 +17,11 @@ import {
   syncSamlGroupMappings,
   ssoHtmlPage,
   ssoHtmlResponse,
-  ssoBaseUrl,
   SsoConflictError,
 } from "../lib/sso";
 import { claimSsoChallenge, consumeSsoChallenge, storeSsoChallenge } from "../lib/sso-challenges";
 import { issueSsoLogin } from "../lib/sso-login";
+import { secureRequest } from "../lib/secure-request";
 import { isUserLoginBlocked } from "./accounts";
 import { browserSessionUser, revokeBrowserSession } from "./accounts";
 
@@ -87,24 +87,82 @@ const PENDING_AUTHNREQUEST_TTL_MS = 10 * 60 * 1000;
 const SAML_AUTHN_CHALLENGE_KIND = "saml-authn";
 const SAML_ASSERTION_CHALLENGE_KIND = "saml-assertion";
 const SAML_LOGOUT_CHALLENGE_KIND = "saml-logout";
+const SAML_STATE_COOKIE = "terrence_saml_state";
 const DEFAULT_SSO_API_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
 
 type SamlRow = Readonly<typeof samlSettings.$inferSelect>;
 
+function samlBaseUrl(request: RequestInfo): string {
+  const configured = process.env["PUBLIC_URL"]?.trim();
+  if (configured !== undefined && configured !== "") {
+    try {
+      const parsed = new URL(configured);
+      if ((parsed.protocol !== "http:" && parsed.protocol !== "https:")
+        || parsed.username !== "" || parsed.password !== "") {
+        throw new Error("invalid URL");
+      }
+      return parsed.toString();
+    } catch {
+      throw new Error("PUBLIC_URL must be a valid HTTP(S) URL for SAML endpoints");
+    }
+  }
+
+  let requestUrl: URL;
+  try {
+    requestUrl = new URL(request.url);
+  } catch {
+    throw new Error("PUBLIC_URL must be configured for SAML endpoints");
+  }
+  const hostname = requestUrl.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  const loopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  if (process.env.NODE_ENV === "test" || (process.env.NODE_ENV !== "production" && loopback)) {
+    return requestUrl.origin;
+  }
+  throw new Error("PUBLIC_URL must be configured for SAML endpoints");
+}
+
 function samlSpEntityId(request: RequestInfo): string {
-  return new URL("/users/saml/metadata", ssoBaseUrl(request)).toString();
+  return new URL("/users/saml/metadata", samlBaseUrl(request)).toString();
 }
 
 function acsUrl(request: RequestInfo): string {
-  return new URL("/users/saml/auth", ssoBaseUrl(request)).toString();
+  return new URL("/users/saml/auth", samlBaseUrl(request)).toString();
 }
 
 function sloUrl(request: RequestInfo): string {
-  return new URL("/users/saml/slo", ssoBaseUrl(request)).toString();
+  return new URL("/users/saml/slo", samlBaseUrl(request)).toString();
 }
 
 function logoutEndpointUrl(request: RequestInfo): string {
-  return new URL("/users/saml/logout", ssoBaseUrl(request)).toString();
+  return new URL("/users/saml/logout", samlBaseUrl(request)).toString();
+}
+
+/** Read a same-site cookie value from a request. */
+function cookieValue(request: RequestInfo, name: string): string | undefined {
+  const raw = request.headers.get("cookie") ?? "";
+  for (const part of raw.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator !== -1 && part.slice(0, separator).trim() === name) {
+      return part.slice(separator + 1).trim();
+    }
+  }
+  return undefined;
+}
+
+function samlStateCookie(request: RequestInfo, state: string, maxAge: number, server?: unknown): string {
+  const secure = secureRequest(request, server);
+  return `${SAML_STATE_COOKIE}=${state}; Path=/users/saml; HttpOnly; ${secure ? "SameSite=None; Secure" : "SameSite=Lax"}; Max-Age=${maxAge}`;
+}
+
+function clearSamlStateCookie(request: RequestInfo, response: Response, server?: unknown): void {
+  response.headers.append("Set-Cookie", samlStateCookie(request, "", 0, server));
+}
+
+function callbackResponse(request: RequestInfo, set: SetObj, body: string, status: number, server?: unknown): Response {
+  const response = ssoHtmlResponse(body, status);
+  appendSetCookies(response, set.headers["Set-Cookie"]);
+  clearSamlStateCookie(request, response, server);
+  return response;
 }
 
 function xmlEscape(value: string): string {
@@ -477,6 +535,19 @@ async function handleIdpInitiatedLogout(
     status: 400,
     headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
   });
+  let expectedSloUrl: string;
+  let expectedLogoutEndpointUrl: string;
+  let entityId: string;
+  try {
+    expectedSloUrl = sloUrl(request);
+    expectedLogoutEndpointUrl = logoutEndpointUrl(request);
+    entityId = samlSpEntityId(request);
+  } catch {
+    return new Response("SAML SSO is misconfigured. PUBLIC_URL must be configured.", {
+      status: 502,
+      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+    });
+  }
   if (rawRequest === "") return invalid("Invalid SAML logout request");
 
   let xml: string;
@@ -509,7 +580,7 @@ async function handleIdpInitiatedLogout(
   if (verifiedLogout.issuer === undefined || verifiedLogout.issuer === ""
     || verifiedLogout.issuer !== settings.idpEntityId
     || verifiedLogout.destination === undefined || verifiedLogout.destination === ""
-    || (verifiedLogout.destination !== sloUrl(request) && verifiedLogout.destination !== logoutEndpointUrl(request))) {
+    || (verifiedLogout.destination !== expectedSloUrl && verifiedLogout.destination !== expectedLogoutEndpointUrl)) {
     await auditLog("sso-failure", "saml", null, null, null, { reason: "SAML logout request issuer or destination mismatch" });
     return invalid("Invalid SAML logout request");
   }
@@ -548,7 +619,7 @@ async function handleIdpInitiatedLogout(
   // A LogoutRequest whose NameID does not match the local session cannot
   // count as a full logout: report PartialLogout per SAML 2.0 so the IdP
   // does not consider the session terminated on this SP.
-  target.searchParams.set("SAMLResponse", encodeRedirect(logoutResponseXml(samlSpEntityId(request), verifiedLogout.requestId, subjectMatches)));
+  target.searchParams.set("SAMLResponse", encodeRedirect(logoutResponseXml(entityId, verifiedLogout.requestId, subjectMatches)));
   if (relayState !== undefined) target.searchParams.set("RelayState", relayState);
   const response = new Response(null, {
     status: 302,
@@ -574,26 +645,38 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     request: RequestInfo;
   }): Promise<Response> => {
     await currentSamlSettings();
-    return new Response(spMetadataXml(samlSpEntityId(request), acsUrl(request), sloUrl(request), logoutEndpointUrl(request)), {
-      headers: {
-        "Content-Type": "application/xml; charset=utf-8",
-        "Cache-Control": "public, max-age=300",
-      },
-    });
+    try {
+      return new Response(spMetadataXml(samlSpEntityId(request), acsUrl(request), sloUrl(request), logoutEndpointUrl(request)), {
+        headers: {
+          "Content-Type": "application/xml; charset=utf-8",
+          "Cache-Control": "public, max-age=300",
+        },
+      });
+    } catch {
+      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML SSO is misconfigured. PUBLIC_URL must be configured."), 502);
+    }
   })
-  .get("/users/saml/auth", async ({ query, request }: {
+  .get("/users/saml/auth", async ({ query, request, server }: {
     query: Readonly<Record<string, unknown>>;
     request: RequestInfo;
+    server?: unknown;
   }): Promise<unknown> => {
     const settings = await currentSamlSettings();
     if (!settings.enabled || settings.ssoEndpointUrl === null || settings.idpEntityId === null) {
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML single sign-on is not enabled."), 404);
     }
+    if (!secureRequest(request, server)) {
+      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML SSO requires HTTPS."), 400);
+    }
     let target: URL;
+    let entityId: string;
+    let assertionConsumerService: string;
     try {
       target = new URL(settings.ssoEndpointUrl);
+      entityId = samlSpEntityId(request);
+      assertionConsumerService = acsUrl(request);
     } catch {
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML SSO is misconfigured."), 502);
+      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML SSO is misconfigured. PUBLIC_URL must be configured."), 502);
     }
     const requestId = `_${randomBytes(16).toString("hex")}`;
     // Record the issued AuthnRequest so the ACS can match InResponseTo and
@@ -606,7 +689,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     }
     const relayState = rawRelayState;
     await storeSsoChallenge(SAML_AUTHN_CHALLENGE_KIND, requestId, { relayState }, Date.now() + PENDING_AUTHNREQUEST_TTL_MS);
-    const authnRequest = encodeRedirect(authnRequestXml(samlSpEntityId(request), acsUrl(request), settings.ssoEndpointUrl, requestId));
+    const authnRequest = encodeRedirect(authnRequestXml(entityId, assertionConsumerService, settings.ssoEndpointUrl, requestId));
     target.searchParams.set("SAMLRequest", authnRequest);
     if (relayState !== null) target.searchParams.set("RelayState", relayState);
     return new Response(null, {
@@ -614,6 +697,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       headers: {
         "Cache-Control": "no-store",
         Location: target.toString(),
+        "Set-Cookie": samlStateCookie(request, requestId, Math.ceil(PENDING_AUTHNREQUEST_TTL_MS / 1000), server),
       },
     });
   })
@@ -627,8 +711,26 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     const settings = await currentSamlSettings();
     if (!settings.enabled || settings.ssoEndpointUrl === null) {
       (set as { status: number }).status = 404;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML single sign-on is not enabled."), 404);
+      return callbackResponse(request, set, ssoHtmlPage("SAML SSO", "SAML single sign-on is not enabled."), 404, server);
     }
+    if (!secureRequest(request, server)) {
+      (set as { status: number }).status = 400;
+      return callbackResponse(request, set, ssoHtmlPage("SAML SSO", "SAML SSO requires HTTPS."), 400, server);
+    }
+
+    let entityId: string;
+    let assertionConsumerService: string;
+    try {
+      entityId = samlSpEntityId(request);
+      assertionConsumerService = acsUrl(request);
+    } catch {
+      (set as { status: number }).status = 502;
+      return callbackResponse(request, set, ssoHtmlPage("SAML SSO", "SAML SSO is misconfigured. PUBLIC_URL must be configured."), 502, server);
+    }
+    const reject = (message: string, status: number): Response => {
+      (set as { status: number }).status = status;
+      return callbackResponse(request, set, ssoHtmlPage("SAML SSO", message), status, server);
+    };
 
     const form = (body !== null && typeof body === "object" ? body : {}) as Record<string, unknown>;
     const samlResponse = typeof form["SAMLResponse"] === "string"
@@ -641,7 +743,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       : typeof query["RelayState"] === "string" ? query["RelayState"] : null;
     if (samlResponse === "") {
       (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "Missing SAMLResponse."), 400);
+      return reject("Missing SAMLResponse.", 400);
     }
 
     let xml: string;
@@ -649,7 +751,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       xml = decodeSamlMessage(samlResponse);
     } catch {
       (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML response could not be decoded."), 400);
+      return reject("The SAML response could not be decoded.", 400);
     }
 
     // Parse the top-level response with the DOM parser so structure,
@@ -659,12 +761,12 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       responseDoc = new DOMParser({ errorHandler: (): void => undefined }).parseFromString(xml, "text/xml");
     } catch {
       (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML response could not be parsed."), 400);
+      return reject("The SAML response could not be parsed.", 400);
     }
     const responseElement = domElement(responseDoc, "Response");
     if (responseElement === null) {
       (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML response could not be parsed."), 400);
+      return reject("The SAML response could not be parsed.", 400);
     }
 
     // Reject an explicitly failed response. Status is outside an
@@ -674,7 +776,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     if (statusCode !== SAML_SUCCESS_STATUS) {
       await auditLog("sso-failure", "saml", null, null, null, { reason: "non-success status" });
       (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML response reports a failed authentication."), 400);
+      return reject("The SAML response reports a failed authentication.", 400);
     }
 
     const now = Date.now();
@@ -684,7 +786,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     if (!signature.valid) {
       await auditLog("sso-failure", "saml", null, null, null, { reason: signature.error });
       (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", signature.error), 400);
+      return reject(signature.error, 400);
     }
 
     // Parse only the assertion that was actually covered by the verified
@@ -697,7 +799,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       assertionElement = assertion;
     } catch {
       (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML response contains no assertion."), 400);
+      return reject("The SAML response contains no assertion.", 400);
     }
 
     // Reject replays: an assertion whose ID we have already consumed within
@@ -705,13 +807,12 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     const assertionIdElement = assertionElement.getAttribute("ID") ?? "";
     if (assertionIdElement === "") {
       (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML assertion has no ID."), 400);
+      return reject("The SAML assertion has no ID.", 400);
     }
 
     const responseDestination = responseElement.getAttribute("Destination");
-    if (typeof responseDestination === "string" && responseDestination !== "" && responseDestination !== acsUrl(request)) {
-      (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML assertion Destination does not match the ACS URL."), 400);
+    if (typeof responseDestination === "string" && responseDestination !== "" && responseDestination !== assertionConsumerService) {
+      return reject("SAML assertion Destination does not match the ACS URL.", 400);
     }
     const conditionsElement = domElement(assertionElement, "Conditions");
     const notBefore = conditionsElement?.getAttribute("NotBefore") ?? undefined;
@@ -720,29 +821,24 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       typeof value === "string" ? Date.parse(value) : undefined;
     const notBeforeMs = parseInstant(notBefore);
     if (notBeforeMs !== undefined && (Number.isNaN(notBeforeMs) || notBeforeMs - TIME_SKEW_MS > now)) {
-      (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML assertion is not yet valid."), 400);
+      return reject("SAML assertion is not yet valid.", 400);
     }
     const notOnOrAfterMs = parseInstant(notOnOrAfter);
     if (notOnOrAfterMs !== undefined && (Number.isNaN(notOnOrAfterMs) || notOnOrAfterMs + TIME_SKEW_MS < now)) {
-      (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML assertion has expired."), 400);
+      return reject("SAML assertion has expired.", 400);
     }
 
     const audiences = domElements(assertionElement, "AudienceRestriction").flatMap((restriction): string[] =>
       domElements(restriction, "Audience").map((audience): string => audience.textContent?.trim() ?? "")
     );
-    const entityId = samlSpEntityId(request);
     if (audiences.length === 0 || !audiences.includes(entityId)) {
-      (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML assertion audience does not match this instance."), 400);
+      return reject("SAML assertion audience does not match this instance.", 400);
     }
 
     const assertionIssuerText = domText(assertionElement, "Issuer");
     if (typeof settings.idpEntityId !== "string" || settings.idpEntityId === ""
       || assertionIssuerText !== settings.idpEntityId) {
-      (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML assertion issuer does not match the configured identity provider."), 400);
+      return reject("SAML assertion issuer does not match the configured identity provider.", 400);
     }
 
     const subjectElement = domElement(assertionElement, "Subject");
@@ -754,21 +850,23 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       const inResponseTo = data.getAttribute("InResponseTo") ?? "";
       const recipient = data.getAttribute("Recipient") ?? "";
       const notOnOrAfter = data.getAttribute("NotOnOrAfter") ?? "";
-      if (inResponseTo === "" || recipient !== acsUrl(request) || notOnOrAfter === "") return false;
+      if (inResponseTo === "" || recipient !== assertionConsumerService || notOnOrAfter === "") return false;
       const expiresAt = Date.parse(notOnOrAfter);
       return !Number.isNaN(expiresAt) && expiresAt + TIME_SKEW_MS >= now;
     });
     if (validConfirmation === undefined) {
-      (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML subject confirmation is invalid or does not match this request."), 400);
+      return reject("SAML subject confirmation is invalid or does not match this request.", 400);
     }
     const subjectData = domElement(validConfirmation, "SubjectConfirmationData");
     const inResponseTo = subjectData?.getAttribute("InResponseTo") ?? "";
 
     const nameIdText = domText(subjectElement, "NameID");
     if (nameIdText === "") {
-      (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The SAML assertion contains no NameID."), 400);
+      return reject("The SAML assertion contains no NameID.", 400);
+    }
+
+    if (cookieValue(request, SAML_STATE_COOKIE) !== inResponseTo) {
+      return reject("SAML response does not match the browser that started this sign-in.", 400);
     }
 
     const authnChallenge = typeof inResponseTo === "string"
@@ -778,8 +876,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       ? authnChallenge["relayState"]
       : undefined;
     if (issuedRelayState === undefined || issuedRelayState !== relayState) {
-      (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML response does not match an issuance from this instance."), 400);
+      return reject("SAML response does not match an issuance from this instance.", 400);
     }
     if (!(await claimSsoChallenge(
       SAML_ASSERTION_CHALLENGE_KIND,
@@ -787,8 +884,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       {},
       Date.now() + TIME_SKEW_MS + 10 * 60 * 1000,
     ))) {
-      (set as { status: number }).status = 400;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "SAML assertion has already been used."), 400);
+      return reject("SAML assertion has already been used.", 400);
     }
 
     const attributesList = domElements(assertionElement, "AttributeStatement")
@@ -833,8 +929,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     } catch (error: unknown) {
       if (error instanceof SsoConflictError) {
         await auditLog("sso-conflict", "saml", null, null, null, { username: error.username });
-        (set as { status: number }).status = 409;
-        return ssoHtmlResponse(ssoHtmlPage("SAML SSO", error.message), 409);
+        return reject(error.message, 409);
       }
       throw error;
     }
@@ -845,8 +940,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     // before the account-availability check.
     if (user.isSuspended === true || user.deletedAt !== null) {
       await auditLog("sso-failure", "saml", user.id, user.id, null, { reason: "account is suspended or deleted" });
-      (set as { status: number }).status = 403;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "This account is not available."), 403);
+      return reject("This account is not available.", 403);
     }
 
     if (attrGroupsConfigured) {
@@ -868,12 +962,12 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     const refreshedUser = await db.query.users.findFirst({ where: eq(users.id, user.id) });
     if (refreshedUser === undefined) {
       (set as { status: number }).status = 500;
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "The signed-in account is unavailable."), 500);
+      return reject("The signed-in account is unavailable.", 500);
     }
     user = refreshedUser;
     if (isUserLoginBlocked(user)) {
       await auditLog("sso-failure", "saml", user.id, user.id, null, { reason: "account is suspended or deleted" });
-      return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "This account is not available."), 403);
+      return reject("This account is not available.", 403);
     }
 
     const tokenTtlMs = typeof settings.ssoApiTokenSessionTimeout === "number" && settings.ssoApiTokenSessionTimeout > 0
@@ -891,6 +985,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     const respond = (body: string, status = 200): Response => {
       const response = ssoHtmlResponse(body, status);
       appendSetCookies(response, set.headers["Set-Cookie"]);
+      clearSamlStateCookie(request, response, server);
       return response;
     };
 
@@ -909,6 +1004,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
           },
         });
         appendSetCookies(response, set.headers["Set-Cookie"]);
+        clearSamlStateCookie(request, response, server);
         return response;
       }
       return respond(ssoHtmlPage("SAML SSO", "You are signed in.", { token: sessionToken }));
@@ -948,7 +1044,17 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       // sides. The IdP acknowledges via its own LogoutResponse; we do not
       // block the local redirect on it.
       const requestId = `_${randomBytes(16).toString("hex")}`;
-      const logoutRequest = logoutRequestXml(samlSpEntityId(request), settings.sloEndpointUrl, requestId, nameId);
+      let logoutRequest: string;
+      try {
+        logoutRequest = logoutRequestXml(samlSpEntityId(request), settings.sloEndpointUrl, requestId, nameId);
+      } catch {
+        const response = new Response(null, {
+          status: 302,
+          headers: { "Cache-Control": "no-store", Location: "/app" },
+        });
+        appendSetCookies(response, set.headers["Set-Cookie"]);
+        return response;
+      }
       let target: URL;
       try {
         target = new URL(settings.sloEndpointUrl);

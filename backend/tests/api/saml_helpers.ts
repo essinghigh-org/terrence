@@ -11,9 +11,9 @@ export const IDP_KEY = readFileSync(join(import.meta.dir, "../fixtures/idp-key.p
 export const IDP_OLD_CERT = readFileSync(join(import.meta.dir, "../fixtures/idp-old-cert.pem"), "utf8");
 export const IDP_OLD_KEY = readFileSync(join(import.meta.dir, "../fixtures/idp-old-key.pem"), "utf8");
 
-export const ACS_URL = "http://terrence.test/users/saml/auth";
-export const SLO_URL = "http://terrence.test/users/saml/slo";
-export const ENTITY_ID = "http://terrence.test/users/saml/metadata";
+export const ACS_URL = "https://terrence.test/users/saml/auth";
+export const SLO_URL = "https://terrence.test/users/saml/slo";
+export const ENTITY_ID = "https://terrence.test/users/saml/metadata";
 export const IDP_ENTITY_ID = "http://idp.example.test/metadata";
 // Attribute names the SP and the mock IdP agree on; the flow suite must
 // configure the same names or attribute mapping silently stops working.
@@ -192,7 +192,7 @@ export function inflateAndDecode(value: string): string {
 export function samlAcsRequest(samlResponse: string, relayState?: string, extraHeaders: Record<string, string> = {}): Request {
   const params = new URLSearchParams({ SAMLResponse: samlResponse });
   if (relayState !== undefined) params.set("RelayState", relayState);
-  return new Request("http://terrence.test/users/saml/auth", {
+  return new Request("https://terrence.test/users/saml/auth", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", ...extraHeaders },
     body: params.toString(),
