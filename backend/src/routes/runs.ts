@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, runComments, auditLogs, users } from "../db/schema";
+import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, policyEvaluations, taskStages, runComments, auditLogs, users } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt, sql } from "drizzle-orm";
-import { runResource, planResource, applyResource, userResource } from "../lib/response";
+import { runResource, planResource, applyResource, userResource, taskStageResource, type RunRelationshipLinkage } from "../lib/response";
+import { tfPolicyEvaluationResource, tfStageTypesForEvaluations } from "./policy-evaluations";
 import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, cursorPagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, organizationRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, readRunLogs, readRunLogsPage } from "../lib/run-logs";
@@ -136,6 +137,30 @@ function originForConfiguration(
     ...(typeof ingress?.senderProviderId === "string" ? { triggeredByProviderId: ingress.senderProviderId } : {}),
   };
   return origin;
+}
+
+function requestedRunIncludes(request: ParamCtx["request"]): ReadonlySet<string> {
+  const values = new URL(request.url).searchParams.getAll("include");
+  return new Set(values.flatMap((value: string): string[] => value.split(",").map((item: string): string => item.trim()).filter(Boolean)));
+}
+
+function includedWorkspaceResource(workspace: Readonly<typeof workspaces.$inferSelect>): Record<string, unknown> {
+  // Terraform's cloud backend only needs these fields while decoding a run
+  // for `terraform show`: the workspace name for the header and its lock state
+  // for the footer. Do not invent permission values or expose unrelated data
+  // merely because the client requested the standard workspace relation.
+  // Audit finding 8: structured-run-output-enabled must match the full
+  // resource (always true) or the CLI never renders structured plan output.
+  return {
+    id: workspace.id,
+    type: "workspaces",
+    attributes: {
+      name: workspace.name,
+      locked: workspace.locked === true,
+      "structured-run-output-enabled": true,
+    },
+    links: { self: `/api/v2/workspaces/${workspace.id}` },
+  };
 }
 
 async function originsForRuns(runList: readonly RunItem[]): Promise<ReadonlyMap<string, RunOrigin>> {
@@ -336,6 +361,47 @@ async function includedUsersForRuns(runList: readonly (RunItem)[]): Promise<Reco
     columns: { id: true, username: true, email: true, isSiteAdmin: true },
   });
   return userList.map((u): Record<string, unknown> => userResource(u as Parameters<typeof userResource>[0]));
+}
+
+/** Audit finding 6: batch-load relationship linkage IDs for a run page (one
+ * query per relation, no N+1) so the CLI hydrates policy checks, cost
+ * estimates, and task stages from run reads. */
+async function linkageForRuns(runList: readonly RunItem[]): Promise<ReadonlyMap<string, RunRelationshipLinkage>> {
+  const ids = runList.map((r: RunItem): string => r.id);
+  if (ids.length === 0) return new Map();
+  const [checks, stages, evals] = await Promise.all([
+    db.query.policyChecks.findMany({ where: inArray(policyChecks.runId, [...ids]), columns: { id: true, runId: true } }),
+    db.query.taskStages.findMany({ where: inArray(taskStages.runId, [...ids]), columns: { id: true, runId: true } }),
+    db.query.policyEvaluations.findMany({ where: inArray(policyEvaluations.runId, [...ids]), columns: { id: true, runId: true } }),
+  ]);
+  const linkage = new Map<string, { policyCheckIds: string[]; taskStageIds: string[]; tfPolicyEvaluationIds: string[] }>();
+  for (const id of ids) linkage.set(id, { policyCheckIds: [], taskStageIds: [], tfPolicyEvaluationIds: [] });
+  for (const check of checks) linkage.get(check.runId)?.policyCheckIds.push(check.id);
+  for (const stage of stages) linkage.get(stage.runId)?.taskStageIds.push(stage.id);
+  for (const evalRecord of evals) {
+    if (evalRecord.runId !== null) linkage.get(evalRecord.runId)?.tfPolicyEvaluationIds.push(evalRecord.id);
+  }
+  return linkage;
+}
+
+/** Audit finding 6: task-stage resources for include=task_stages sideloads
+ * (the CLI reads stages from the run include, then polls each via Read). */
+async function includedTaskStagesForRuns(runList: readonly RunItem[]): Promise<Record<string, unknown>[]> {
+  const ids = runList.map((r: RunItem): string => r.id);
+  if (ids.length === 0) return [];
+  const rows = await db.query.taskStages.findMany({ where: inArray(taskStages.runId, [...ids]) });
+  return rows.map((stage): Record<string, unknown> => taskStageResource(stage));
+}
+
+/** Audit finding 3: TF-policy evaluation resources for the
+ * include=tf_policy_evaluations sideload the CLI renders per stage. */
+async function includedTFPolicyEvaluationsForRuns(runList: readonly RunItem[]): Promise<Record<string, unknown>[]> {
+  const ids = runList.map((r: RunItem): string => r.id);
+  if (ids.length === 0) return [];
+  const evals = await db.query.policyEvaluations.findMany({ where: inArray(policyEvaluations.runId, [...ids]) });
+  const stageTypes = await tfStageTypesForEvaluations(evals);
+  return evals.map((evalRecord): Record<string, unknown> =>
+    tfPolicyEvaluationResource(evalRecord, stageTypes.get(evalRecord.id)));
 }
 
 function safeRunEventDetails(event: AuditItem): Readonly<Record<string, string>> {
@@ -596,6 +662,26 @@ async function authorizedPlanWorkspace(
   return findAuthorizedWorkspace(run.workspaceId, userId, tokenOrgId, tokenTeamId);
 }
 
+/**
+ * Shared sanitized plan-artifact responder for the redacted/sanitized plan
+ * endpoints. Serves the artifact as soon as it exists: the worker persists
+ * plan JSON before the run leaves its planning statuses, and Terraform
+ * treats any 2xx as success, so an empty 204 here would fail clients
+ * decoding JSON. Returns 204 only when no artifact exists yet and 404 when
+ * it never will.
+ */
+async function sanitizedPlanArtifactResponse(
+  runId: string,
+  run: Readonly<typeof runs.$inferSelect>,
+  set: SetObj,
+): Promise<unknown> {
+  const planJson = await readPlanJsonSideArtifact(runId, "sanitized") ?? await readPlanJsonArtifact(runId);
+  if (planJson !== undefined) return sanitizePlanJson(planJson);
+  if (isPlanIncompleteRunStatus(run.status)) { (set as { status: number }).status = 204; return null; }
+  (set as { status: number }).status = 404;
+  return { errors: [{ status: "404", title: "Not Found" }] };
+}
+
 export const runRoutes = new Elysia({ name: "runs" })
   .use(authPlugin)
   .get("/api/v2/workspaces/:workspace_id/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -610,8 +696,8 @@ export const runRoutes = new Elysia({ name: "runs" })
       db.select({ total: count() }).from(runs).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
-    const origins = await originsForRuns(workspaceRuns);
-    const data = workspaceRuns.map((r: RunItem): Record<string, unknown> => runResource(r, canApply, false, origins.get(r.id)));
+    const [origins, linkage] = await Promise.all([originsForRuns(workspaceRuns), linkageForRuns(workspaceRuns)]);
+    const data = workspaceRuns.map((r: RunItem): Record<string, unknown> => runResource(r, canApply, false, origins.get(r.id), undefined, undefined, linkage.get(r.id)));
     const included = await includedUsersForRuns(workspaceRuns);
     return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
   })
@@ -632,8 +718,8 @@ export const runRoutes = new Elysia({ name: "runs" })
     ]);
     const totalCount = countRows[0]?.total ?? 0;
     const applySet = new Set(applyIds ?? []);
-    const origins = await originsForRuns(orgRuns);
-    const data = orgRuns.map((r: RunItem): Record<string, unknown> => runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id)));
+    const [origins, linkage] = await Promise.all([originsForRuns(orgRuns), linkageForRuns(orgRuns)]);
+    const data = orgRuns.map((r: RunItem): Record<string, unknown> => runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id), undefined, undefined, linkage.get(r.id)));
     const included = await includedUsersForRuns(orgRuns);
     return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
   })
@@ -701,8 +787,9 @@ export const runRoutes = new Elysia({ name: "runs" })
     let position = (runningRows[0]?.total ?? 0) + pendingBefore;
     const applySet = new Set(applyIds ?? []);
     const origins = await originsForRuns(queue);
+    const linkage = await linkageForRuns(queue);
     const data = queue.map((r: RunItem): Record<string, unknown> => {
-      const resource = runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id));
+      const resource = runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id), undefined, undefined, linkage.get(r.id));
       const isPending = CAPACITY_PENDING_STATUSES.some((s: string): boolean => s === r.status);
       if (isPending) { position += 1; }
       const attrs = typeof resource.attributes === "object" && resource.attributes !== null ? (resource.attributes as Record<string, unknown>) : {};
@@ -753,7 +840,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     const cvId = typeof cvData.id === "string" ? cvData.id : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
     return createRun(workspaceId, attributes, cvId, user, orgId, teamId, set);
   })
-  .get("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -764,7 +851,8 @@ export const runRoutes = new Elysia({ name: "runs" })
       originsForRuns([authorized.run]),
       runDurationBaseline(authorized.run),
     ]);
-    const data = runResource(authorized.run, canApply, canOverridePolicy, origins.get(authorized.run.id), baseline, canAdmin);
+    const linkage = await linkageForRuns([authorized.run]);
+    const data = runResource(authorized.run, canApply, canOverridePolicy, origins.get(authorized.run.id), baseline, canAdmin, linkage.get(authorized.run.id));
     const detailAttributes = data.attributes as Record<string, unknown>;
     const lockedReason = authorized.workspace.lockedReason;
     detailAttributes["workspace-locked"] = authorized.workspace.locked === true;
@@ -776,6 +864,11 @@ export const runRoutes = new Elysia({ name: "runs" })
         ? lockedReason
         : "Locked manually";
     const included = await includedUsersForRuns([authorized.run]);
+    const includes = requestedRunIncludes(request);
+    if (includes.has("plan")) included.push(planResource(authorized.run, request));
+    if (includes.has("workspace")) included.push(includedWorkspaceResource(authorized.workspace));
+    if (includes.has("task_stages")) included.push(...await includedTaskStagesForRuns([authorized.run]));
+    if (includes.has("tf_policy_evaluations")) included.push(...await includedTFPolicyEvaluationsForRuns([authorized.run]));
     return { data, ...(included.length > 0 ? { included } : {}) };
   })
   .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
@@ -1441,6 +1534,17 @@ export const runRoutes = new Elysia({ name: "runs" })
     }
     return planJson;
   })
+  .get("/api/v2/plans/:plan_id/json-output-redacted", async ({ params, user, orgId, teamId, run: runContext, set }: ParamCtx): Promise<unknown> => {
+    const planId = params.plan_id ?? "";
+    const runId = planId.replace(/^plan-/, "");
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+    if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (await authorizedPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null) === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    return sanitizedPlanArtifactResponse(runId, run, set);
+  })
   .get("/api/v2/plans/:plan_id/sanitized-plan", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const planId = params.plan_id ?? "";
     const runId = planId.replace(/^plan-/, "");
@@ -1449,10 +1553,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    if (isPlanIncompleteRunStatus(run.status)) { (set as { status: number }).status = 204; return null; }
-    const planJson = await readPlanJsonSideArtifact(runId, "sanitized") ?? await readPlanJsonArtifact(runId);
-    if (planJson === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return sanitizePlanJson(planJson);
+    return sanitizedPlanArtifactResponse(runId, run, set);
   })
   .get("/api/v2/runs/:run_id/plan/sanitized-plan", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";
@@ -1461,8 +1562,5 @@ export const runRoutes = new Elysia({ name: "runs" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    if (isPlanIncompleteRunStatus(run.status)) { (set as { status: number }).status = 204; return null; }
-    const planJson = await readPlanJsonSideArtifact(runId, "sanitized") ?? await readPlanJsonArtifact(runId);
-    if (planJson === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return sanitizePlanJson(planJson);
+    return sanitizedPlanArtifactResponse(runId, run, set);
   });

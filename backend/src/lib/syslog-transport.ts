@@ -91,7 +91,54 @@ function structuredDataEnd(value: string): number | null {
   return null;
 }
 
-function truncateSyslogFrame(frame: string): Buffer {
+/** Suffix that closes a structurally truncated JSON object body while
+ * flagging the cut for collectors. */
+const JSON_TRUNCATION_SUFFIX = '"truncated":true}';
+
+/** Shorten a JSON object message to maxBytes while keeping it parseable:
+ * cut after the last depth-1 boundary (`{` or `,`) that fits with the
+ * truncation suffix. Falls back to a bare flagged object, then `{}`. */
+function truncateJsonMessage(message: string, maxBytes: number): string {
+  const fallback = `{"truncated":true}`;
+  if (Buffer.byteLength(fallback, "utf8") > maxBytes) return "{}";
+  if (message.trimStart().startsWith("{") === false) return fallback;
+  const boundaries: number[] = [];
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < message.length; index += 1) {
+    const ch = message[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === "\"") inString = false;
+      continue;
+    }
+    if (ch === "\"") inString = true;
+    else if (ch === "{" || ch === "[") {
+      depth += 1;
+      if (depth === 1) boundaries.push(index + 1);
+    } else if (ch === "}" || ch === "]") depth -= 1;
+    else if (ch === "," && depth === 1) boundaries.push(index + 1);
+  }
+  let lo = 0;
+  let hi = boundaries.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    const candidate = `${message.slice(0, boundaries[mid - 1] as number)}${JSON_TRUNCATION_SUFFIX}`;
+    if (Buffer.byteLength(candidate, "utf8") <= maxBytes) lo = mid;
+    else hi = mid - 1;
+  }
+  if (lo === 0) return fallback;
+  return `${message.slice(0, boundaries[lo - 1] as number)}${JSON_TRUNCATION_SUFFIX}`;
+}
+
+function truncateSyslogFrame(frame: string, jsonBody: boolean): Buffer {
+  if (jsonBody) {
+    // Bare-JSON wire format: no syslog header to preserve, so shorten the
+    // object itself into a parseable, flagged payload.
+    return Buffer.from(truncateJsonMessage(frame, MAX_UDP_PAYLOAD_BYTES), "utf8");
+  }
   const headerMatch = /^<\d+>1 \S+ \S+ \S+ \S+ \S+ /.exec(frame);
   if (headerMatch === null) return Buffer.from(truncateUtf8(frame, MAX_UDP_PAYLOAD_BYTES), "utf8");
   const header = headerMatch[0];
@@ -116,6 +163,12 @@ function truncateSyslogFrame(frame: string): Buffer {
   if (prefixBytes >= MAX_UDP_PAYLOAD_BYTES) {
     return Buffer.from(truncateUtf8(safePrefix, MAX_UDP_PAYLOAD_BYTES), "utf8");
   }
+  if (jsonBody) {
+    return Buffer.from(
+      safePrefix + truncateJsonMessage(message, MAX_UDP_PAYLOAD_BYTES - prefixBytes),
+      "utf8",
+    );
+  }
   return Buffer.from(
     truncateUtf8(safePrefix + message, MAX_UDP_PAYLOAD_BYTES),
     "utf8",
@@ -136,18 +189,27 @@ function getUdpSocket(family: 4 | 6): Socket {
 const tcpSockets = new Map<string, TcpSocket>();
 
 /** Send one already-framed datagram/segment. Never throws. */
-export function sendSyslogFrame(target: SyslogTarget, frame: string): void {
+export function sendSyslogFrame(
+  target: SyslogTarget,
+  frame: string,
+  options?: Readonly<{ jsonBody?: boolean }>,
+): void {
   const payload = Buffer.from(frame, "utf8");
   try {
     if (target.transport === "udp") {
       // RFC 5426: one syslog message per datagram; keep the frame valid while
       // truncating at 1024 bytes (the minimum every receiver must accept).
+      // JSON bodies are repaired to parseable objects, not cut mid-value.
       const datagram =
-        payload.length > MAX_UDP_PAYLOAD_BYTES ? truncateSyslogFrame(frame) : payload;
+        payload.length > MAX_UDP_PAYLOAD_BYTES
+          ? truncateSyslogFrame(frame, options?.jsonBody === true)
+          : payload;
       getUdpSocket(target.family ?? 4).send(datagram, target.port, target.host);
     } else {
-      // RFC 6587 octet counting: "LEN MSG" so messages with newlines
-      // reassemble unambiguously on the collector.
+      // Bare JSON goes newline-delimited so line-oriented collectors (Splunk
+      // TCP inputs) split events with no extra configuration; RFC 5424 keeps
+      // octet counting ("LEN MSG") so messages with newlines reassemble
+      // unambiguously on the collector.
       const key = `${target.transport}:${target.family ?? 4}:${target.host}:${target.port}`;
       let socket: TcpSocket | undefined = tcpSockets.get(key);
       if (socket === undefined || socket.destroyed) {
@@ -160,8 +222,11 @@ export function sendSyslogFrame(target: SyslogTarget, frame: string): void {
         tcpSockets.set(key, socket);
       }
       if (socket.writable) {
-        socket.write(`${Buffer.byteLength(payload, "utf8")} `);
-        socket.write(payload);
+        if (options?.jsonBody === true) socket.write(`${frame}\n`);
+        else {
+          socket.write(`${Buffer.byteLength(payload, "utf8")} `);
+          socket.write(payload);
+        }
       }
     }
   } catch {

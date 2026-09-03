@@ -964,6 +964,12 @@ describe("admin operations settings surface", () => {
       body: JSON.stringify({ data: { attributes: { "syslog-app": "bad app" } } }),
     }));
     expect(invalidHeader.status).toBe(422);
+    const invalidFormat = await app.handle(new Request("http://terrence.test/api/v2/admin/logging-settings", {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/vnd.api+json" },
+      body: JSON.stringify({ data: { attributes: { "syslog-format": "xml" } } }),
+    }));
+    expect(invalidFormat.status).toBe(422);
 
     const patch = await app.handle(new Request("http://terrence.test/api/v2/admin/logging-settings", {
       method: "PATCH",
@@ -976,6 +982,7 @@ describe("admin operations settings surface", () => {
         "syslog-targets": ["udp://collector-a.example:514", "tcp://collector-b.example:601"],
         "syslog-hostname": " ops-host ",
         "syslog-app": " terrence-test ",
+        "syslog-format": " JSON ",
       } } }),
     }));
     expect(patch.status).toBe(200);
@@ -984,6 +991,7 @@ describe("admin operations settings surface", () => {
     expect(body.data.attributes.enabled).toBe(false);
     expect(body.data.attributes["syslog-hostname"]).toBe("ops-host");
     expect(body.data.attributes["syslog-app"]).toBe("terrence-test");
+    expect(body.data.attributes["syslog-format"]).toBe("json");
     expect(body.data.attributes["syslog-targets"]).toEqual(["udp://collector-a.example:514", "tcp://collector-b.example:601"]);
     const persisted = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "logging") });
     expect(persisted?.values["syslog-targets"]).toEqual(["udp://collector-a.example:514", "tcp://collector-b.example:601"]);

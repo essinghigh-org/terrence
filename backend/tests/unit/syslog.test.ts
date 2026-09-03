@@ -3,12 +3,16 @@ import {
   formatSyslogMessage,
   pri,
   resolveHostname,
+  resolveSyslogFormat,
   severityForLevel,
   type SyslogEntryInput,
 } from "../../src/lib/syslog-format";
 import { parseSyslogTarget, parseSyslogTargets } from "../../src/lib/syslog-transport";
 
 const IDENTITY = { hostname: "terrence-host", appName: "terrence", procId: "4242" };
+
+/** Explicit opt-in to the JSON message body; the default stays RFC 5424. */
+const JSON_OPTS = { format: "json" } as const;
 
 describe("syslog target parsing", (): void => {
   it("parses udp and tcp targets", (): void => {
@@ -80,41 +84,151 @@ describe("RFC 5424 formatting", (): void => {
     expect(pri(1, 3)).toBe(11);
   });
 
-  it("emits a spec-shaped message with structured data", (): void => {
-    const line = formatSyslogMessage(base, IDENTITY);
-    expect(line.startsWith("<14>1 2026-08-26T03:00:00.000Z terrence-host terrence 4242 - ")).toBeTrue();
-    // SD-ELEMENT with private enterprise id and escaped params
-    expect(line).toContain('[terrence@65024 requestId="req-1" durationMs="42"]');
-    // Message body last
+  it("emits bare JSON with no syslog envelope for zero-config extraction", (): void => {
+    const line = formatSyslogMessage(base, IDENTITY, JSON_OPTS);
+    expect(line.startsWith("{")).toBeTrue();
+    const body = JSON.parse(line) as Record<string, unknown>;
+    expect(body).toEqual({
+      timestamp: "2026-08-26T03:00:00.000Z",
+      level: "info",
+      message: "request completed",
+      hostname: "terrence-host",
+      app: "terrence",
+      requestId: "req-1",
+      durationMs: 42,
+    });
+  });
+
+  it("keeps nested objects nested with numeric scalars for json extraction", (): void => {
+    const line = formatSyslogMessage(
+      {
+        ...base,
+        meta: {
+          requestId: "req-1",
+          http: { method: "GET", path: "/api/v2/organizations", status: 200, durationMs: 2 },
+          outcome: "success",
+        },
+      },
+      IDENTITY,
+      JSON_OPTS,
+    );
+    const body = JSON.parse(line) as Record<string, unknown>;
+    expect(body["http"]).toEqual({ method: "GET", path: "/api/v2/organizations", status: 200, durationMs: 2 });
+    expect(body["outcome"]).toBe("success");
+  });
+
+  it("lets envelope fields win over colliding meta keys", (): void => {
+    const line = formatSyslogMessage(
+      { ...base, meta: { message: "evil", level: "evil", timestamp: "evil", hostname: "evil", app: "evil" } },
+      IDENTITY,
+      JSON_OPTS,
+    );
+    const body = JSON.parse(line) as Record<string, unknown>;
+    expect(body["message"]).toBe("request completed");
+    expect(body["level"]).toBe("info");
+    expect(body["timestamp"]).toBe("2026-08-26T03:00:00.000Z");
+    expect(body["hostname"]).toBe("terrence-host");
+    expect(body["app"]).toBe("terrence");
+  });
+
+  it("serializes circular, Error, and bigint values without throwing", (): void => {
+    const circular: Record<string, unknown> = { name: "loop" };
+    circular.self = circular;
+    const line = formatSyslogMessage(
+      { ...base, meta: { circular, boom: new Error("kaput"), big: 10n } },
+      IDENTITY,
+      JSON_OPTS,
+    );
+    const body = JSON.parse(line) as Record<string, unknown>;
+    expect(body["circular"]).toEqual({ name: "loop", self: "[Circular]" });
+    expect(body["boom"]).toEqual({ name: "Error", message: "kaput" });
+    expect(body["big"]).toBe("10");
+  });
+
+  it("preserves repeated references while still catching true cycles", (): void => {
+    const shared: Record<string, unknown> = { tag: "same" };
+    const line = formatSyslogMessage({ ...base, meta: { first: shared, second: shared } }, IDENTITY, JSON_OPTS);
+    const body = JSON.parse(line) as Record<string, unknown>;
+    expect(body["first"]).toEqual({ tag: "same" });
+    expect(body["second"]).toEqual({ tag: "same" });
+  });
+
+  it("serializes Date values via toJSON instead of empty objects", (): void => {
+    const line = formatSyslogMessage({ ...base, meta: { at: new Date("2026-01-02T03:04:05.000Z") } }, IDENTITY, JSON_OPTS);
+    const body = JSON.parse(line) as Record<string, unknown>;
+    expect(body["at"]).toBe("2026-01-02T03:04:05.000Z");
+  });
+
+  it("fits oversized bodies into the byte budget as valid JSON", (): void => {
+    const line = formatSyslogMessage(
+      { ...base, message: "m".repeat(2000), meta: { big: "x".repeat(2000) } },
+      IDENTITY,
+      { maxBodyBytes: 896, format: "json" },
+    );
+    const json = line;
+    expect(Buffer.byteLength(json, "utf8")).toBeLessThanOrEqual(896);
+    const body = JSON.parse(json) as Record<string, unknown>;
+    expect(body["truncated"]).toBe(true);
+    expect(body["timestamp"]).toBe("2026-08-26T03:00:00.000Z");
+    expect(typeof body["message"]).toBe("string");
+    expect((body["message"] as string).startsWith("m")).toBeTrue();
+  });
+
+  it("uses a fitting fallback when fixed fields exceed the budget", (): void => {
+    const line = formatSyslogMessage(
+      { ...base, message: "hello" },
+      IDENTITY,
+      { maxBodyBytes: 64, format: "json" },
+    );
+    expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(64);
+    expect(JSON.parse(line)).toEqual({ truncated: true });
+  });
+
+  it("keeps the body within budget when the truncation marker cannot fit", (): void => {
+    const line = formatSyslogMessage(
+      { ...base, message: "hello", meta: { requestId: "req-1" } },
+      IDENTITY,
+      { maxBodyBytes: 132, format: "json" },
+    );
+    expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(132);
+    const body = JSON.parse(line) as Record<string, unknown>;
+    expect(body["truncated"]).toBe(true);
+    expect(body["message"]).toBe("");
+  });
+
+  it("leaves small bodies untouched without a truncation flag", (): void => {
+    const line = formatSyslogMessage(
+      { ...base, message: "ok" },
+      IDENTITY,
+      { maxBodyBytes: 512, format: "json" },
+    );
+    expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(512);
+    const body = JSON.parse(line) as Record<string, unknown>;
+    expect(body["message"]).toBe("ok");
+    expect("truncated" in body).toBeFalse();
+  });
+
+  it("defaults to RFC 5424 structured data and flattens nested meta", (): void => {
+    const line = formatSyslogMessage(
+      { ...base, meta: { requestId: "req-1", http: { method: "GET", status: 200 } } },
+      IDENTITY,
+    );
+    expect(line).toContain('[terrence@65024 requestId="req-1" http.method="GET" http.status="200"]');
     expect(line.endsWith(" request completed")).toBeTrue();
   });
 
-  it("uses the NIL value for empty structured data", (): void => {
-    const { meta: _omitted, ...withoutMeta } = base;
-    void _omitted;
-    const line = formatSyslogMessage(withoutMeta, IDENTITY);
-    expect(line).toContain(" - - request completed");
-    expect(line).not.toContain("[terrence@");
-  });
-
-  it("escapes backslashes, brackets, and control characters in param values", (): void => {
-    const line = formatSyslogMessage(
-      { ...base, meta: { detail: 'a\\b]c\nd' } },
-      IDENTITY,
-    );
-    expect(line).toContain('detail="a\\\\b\\]cd"');
-  });
-
-  it("stringifies non-string meta values", (): void => {
-    const line = formatSyslogMessage({ ...base, meta: { count: 3, nested: { ok: true } } }, IDENTITY);
-    expect(line).toContain('count="3"');
-    expect(line).toContain('nested="{\\\"ok\\\":true}"');
-    // RFC 5424 SD-PARAM: JSON-produced double quotes are escaped as \".
+  it("resolves the syslog format defensively", (): void => {
+    expect(resolveSyslogFormat("json")).toBe("json");
+    expect(resolveSyslogFormat(" JSON ")).toBe("json");
+    expect(resolveSyslogFormat("rfc5424")).toBe("rfc5424");
+    expect(resolveSyslogFormat(undefined)).toBe("rfc5424");
+    expect(resolveSyslogFormat("bogus")).toBe("rfc5424");
   });
 
   it("falls back to a NIL timestamp for malformed stamps", (): void => {
-    const line = formatSyslogMessage({ ...base, timestamp: "yesterday" }, IDENTITY);
-    expect(line.startsWith("<14>1 - ")).toBeTrue();
+    const line = formatSyslogMessage({ ...base, timestamp: "yesterday" }, IDENTITY, JSON_OPTS);
+    const body = JSON.parse(line) as Record<string, unknown>;
+    expect(body["timestamp"]).toBe("-");
   });
 });
 

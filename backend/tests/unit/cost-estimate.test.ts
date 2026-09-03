@@ -36,7 +36,7 @@ describe("emptyCostEstimate", () => {
       "pending-at": "pending",
       "finished-at": "finished",
     } as const;
-    const result = emptyCostEstimate("skipped", timestamps);
+    const result = emptyCostEstimate("skipped_due_to_targeting", timestamps);
     expect(result["status-timestamps"]).toBe(timestamps);
   });
 

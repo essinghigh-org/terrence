@@ -91,6 +91,11 @@ Site Admin value is unset:
   takes precedence over the singular variable when non-empty.
 - `TERRENCE_SYSLOG_LEVEL`, `TERRENCE_SYSLOG_HOSTNAME`, and
   `TERRENCE_SYSLOG_APP` control remote level and identity.
+- `TERRENCE_SYSLOG_FORMAT` selects the message shape: `rfc5424` (default,
+  meta as dotted structured-data params) or `json` (one bare JSON object
+  per message with no syslog envelope, auto-extracted by JSON-aware collectors
+  such as Splunk with the `_json` sourcetype: one object per UDP datagram,
+  newline-delimited objects over TCP).
 
 A persisted non-null Site Admin value overrides its environment fallback. An
 explicit empty `syslog-targets` array disables environment-configured remote

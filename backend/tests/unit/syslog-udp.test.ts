@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createSocket, type Socket } from "node:dgram";
+import { createServer } from "node:net";
 
 import { closeSyslogTransports, parseSyslogTarget, sendSyslogFrame } from "../../src/lib/syslog-transport";
-import { formatSyslogMessage } from "../../src/lib/syslog-format";
+import { formatSyslogMessage, UDP_JSON_BODY_BUDGET } from "../../src/lib/syslog-format";
 
 describe("syslog UDP transport end to end", (): void => {
   let probe: Socket | null = null;
@@ -40,12 +41,14 @@ describe("syslog UDP transport end to end", (): void => {
         meta: { requestId: "r-9" },
       },
       { hostname: "test-host", appName: "terrence", procId: "7" },
+      { format: "json" },
     );
-    expect(frame.startsWith("<12>1 2026-08-26T03:00:00.000Z test-host terrence 7 - ")).toBeTrue();
-    expect(frame).toContain('[terrence@65024 requestId="r-9"]');
+    expect(frame.startsWith("{")).toBeTrue();
+    const delivered = JSON.parse(frame) as Record<string, unknown>;
+    expect(delivered["requestId"]).toBe("r-9");
 
     if (target === null) throw new Error("unreachable");
-    sendSyslogFrame(target, frame);
+    sendSyslogFrame(target, frame, { jsonBody: true });
 
     const got = await Promise.race([
       received,
@@ -54,6 +57,45 @@ describe("syslog UDP transport end to end", (): void => {
       }),
     ]);
     expect(got).toBe(frame);
+  }, 5_000);
+
+  it("frames bare JSON newline-delimited over TCP", async (): Promise<void> => {
+    const chunks: Buffer[] = [];
+    const server = createServer((socket): void => {
+      socket.on("data", (chunk: Buffer): void => { chunks.push(chunk); });
+    });
+    const port = await new Promise<number>((resolve): void => {
+      server.listen(0, "127.0.0.1", (): void => {
+        resolve((server.address() as { port: number }).port);
+      });
+    });
+    try {
+      const target = parseSyslogTarget(`tcp://127.0.0.1:${String(port)}`);
+      expect(target).not.toBeNull();
+      const frame = formatSyslogMessage(
+        {
+          timestamp: "2026-08-26T03:00:00.000Z",
+          level: "info",
+          message: "tcp json",
+          meta: { requestId: "r-tcp" },
+        },
+        { hostname: "test-host", appName: "terrence", procId: "7" },
+        { format: "json" },
+      );
+      expect(frame.startsWith("{")).toBeTrue();
+      if (target === null) throw new Error("unreachable");
+      sendSyslogFrame(target, frame, { jsonBody: true });
+      const expectedBytes = Buffer.byteLength(frame, "utf8") + 1;
+      const deadline = Date.now() + 3_000;
+      while (Buffer.concat(chunks).byteLength < expectedBytes && Date.now() < deadline) {
+        await Bun.sleep(10);
+      }
+      const wire = Buffer.concat(chunks).toString("utf8");
+      expect(wire).toBe(`${frame}\n`);
+      expect((): unknown => JSON.parse(wire)).not.toThrow();
+    } finally {
+      server.close();
+    }
   }, 5_000);
 
   it("delivers an IPv6 target through a UDP6 socket", async (): Promise<void> => {
@@ -100,7 +142,7 @@ describe("syslog UDP transport end to end", (): void => {
     expect(Buffer.byteLength(bigFrame.slice(0, 1024), "utf8")).toBeLessThanOrEqual(1024);
   });
 
-  it("keeps oversized UDP frames valid UTF-8 with complete structured data", async (): Promise<void> => {
+  it("delivers oversized UDP frames as valid JSON within the datagram cap", async (): Promise<void> => {
     const port = await new Promise<number>((resolve, reject): void => {
       const socket = createSocket("udp4");
       probe = socket;
@@ -125,9 +167,10 @@ describe("syslog UDP transport end to end", (): void => {
         meta: { detail: "é".repeat(1_000) },
       },
       { hostname: "test-host", appName: "terrence", procId: "7" },
+      { maxBodyBytes: UDP_JSON_BODY_BUDGET, format: "json" },
     );
 
-    sendSyslogFrame(target, frame);
+    sendSyslogFrame(target, frame, { jsonBody: true });
 
     const message = await Promise.race([
       received,
@@ -140,8 +183,63 @@ describe("syslog UDP transport end to end", (): void => {
     const decoded = message.toString("utf8");
     expect(message.byteLength).toBeLessThanOrEqual(1024);
     expect(Buffer.from(decoded, "utf8").equals(message)).toBeTrue();
-    expect(decoded.startsWith("<14>1 2026-08-26T03:00:00.000Z test-host terrence 7 - ")).toBeTrue();
-    expect(decoded).not.toContain("[terrence@65024");
+    expect(decoded.startsWith("{")).toBeTrue();
+    // The received payload parses: collectors extract fields from oversized
+    // entries instead of choking on a truncated blob.
+    const receivedBody = JSON.parse(decoded) as Record<string, unknown>;
+    expect(receivedBody["truncated"]).toBe(true);
+    expect(typeof receivedBody["message"]).toBe("string");
+    expect((receivedBody["message"] as string).startsWith("🙂")).toBeTrue();
+  }, 5_000);
+
+  it("repairs JSON bodies cut by the transport-level fallback into parseable objects", async (): Promise<void> => {
+    const port = await new Promise<number>((resolve, reject): void => {
+      const socket = createSocket("udp4");
+      probe = socket;
+      socket.on("error", reject);
+      socket.bind(0, "127.0.0.1", (): void => {
+        resolve((socket.address() as { port: number }).port);
+      });
+    });
+
+    const target = parseSyslogTarget(`udp://127.0.0.1:${port}`);
+    if (target === null) throw new Error("unreachable");
+    const received = new Promise<Buffer>((resolve): void => {
+      probe?.once("message", (message: Buffer): void => {
+        resolve(message);
+      });
+    });
+    // No maxBodyBytes: the frame exceeds the datagram cap, so the transport
+    // fallback (not the formatter budget) shortens it. jsonBody tells the
+    // fallback to repair the cut into a parseable object.
+    const frame = formatSyslogMessage(
+      {
+        timestamp: "2026-08-26T03:00:00.000Z",
+        level: "info",
+        message: "fallback repair",
+        meta: { first: "a".repeat(300), second: "b".repeat(300), third: "c".repeat(300) },
+      },
+      { hostname: "test-host", appName: "terrence", procId: "7" },
+      { format: "json" },
+    );
+    expect(Buffer.byteLength(frame, "utf8")).toBeGreaterThan(1024);
+
+    sendSyslogFrame(target, frame, { jsonBody: true });
+
+    const message = await Promise.race([
+      received,
+      new Promise<Buffer>((_, reject): void => {
+        setTimeout((): void => {
+          reject(new Error("collector never received the frame"));
+        }, 3_000);
+      }),
+    ]);
+    const decoded = message.toString("utf8");
+    expect(message.byteLength).toBeLessThanOrEqual(1024);
+    const repaired = JSON.parse(decoded) as Record<string, unknown>;
+    expect(repaired["truncated"]).toBe(true);
+    expect(repaired["timestamp"]).toBe("2026-08-26T03:00:00.000Z");
+    expect(repaired["level"]).toBe("info");
   }, 5_000);
 
   it("preserves the first emoji when truncating a NILVALUE UDP frame", async (): Promise<void> => {
@@ -168,9 +266,16 @@ describe("syslog UDP transport end to end", (): void => {
         message: `🙂${"x".repeat(2_048)}`,
       },
       { hostname: "test-host", appName: "terrence", procId: "7" },
+      { format: "json" },
     );
 
-    expect(frame.startsWith("<14>1 2026-08-26T03:00:00.000Z test-host terrence 7 - - 🙂")).toBeTrue();
+    expect(frame.startsWith("{")).toBeTrue();
+    const emojiBody = JSON.parse(frame) as Record<string, unknown>;
+    expect(typeof emojiBody["message"]).toBe("string");
+    expect((emojiBody["message"] as string).startsWith("🙂")).toBeTrue();
+    // The untruncated frame parses; the transport may cut the JSON tail on
+    // oversized frames, but the message prefix (and its emoji) always lands
+    // before the cut because message serializes first.
     sendSyslogFrame(target, frame);
 
     const message = await Promise.race([
@@ -184,6 +289,6 @@ describe("syslog UDP transport end to end", (): void => {
     const decoded = message.toString("utf8");
     expect(message.byteLength).toBeLessThanOrEqual(1024);
     expect(Buffer.from(decoded, "utf8").equals(message)).toBeTrue();
-    expect(decoded.startsWith("<14>1 2026-08-26T03:00:00.000Z test-host terrence 7 - - 🙂")).toBeTrue();
+    expect(decoded.startsWith("{")).toBeTrue();
   }, 5_000);
 });

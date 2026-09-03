@@ -69,7 +69,7 @@ import { probeLandlockAbi, RunSandbox, removeSandboxWorkDir, runNetDenyEnabled, 
 import { createRunCgroup, destroyRunCgroup, killRunCgroup } from "./lib/run-cgroup";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "./lib/secrets";
 import { encryptStatePayload } from "./lib/validation";
-import { log } from "./lib/log";
+import { log, safeJsonStringify } from "./lib/log";
 export type { ExecutionPhase } from "./worker/phases";
 export { executorBackendFromEnv, type ExecutorBackend, EXECUTOR_BACKENDS } from "./worker/executor-policy";
 import {
@@ -144,6 +144,42 @@ function assertRunSandboxAvailable(): void {
   }
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object" || !("code" in error)) return undefined;
+  const code = Reflect.get(error, "code");
+  return typeof code === "string" ? code : undefined;
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return errorCode(error) === "ENOENT";
+}
+
+function isExpectedProcessTerminationError(error: unknown): boolean {
+  if (["ENOENT", "ESRCH"].includes(errorCode(error) ?? "")) return true;
+  return /(?:already exited|no such process|not running)/i.test(errorMessage(error));
+}
+
+function logBestEffortFailure(
+  message: string,
+  context: Readonly<Record<string, unknown>>,
+  error: unknown,
+): void {
+  log.warn(message, { ...context, error: errorMessage(error) });
+}
+
+function logProcessTerminationFailure(
+  error: unknown,
+  context: Readonly<Record<string, unknown>>,
+): void {
+  if (!isExpectedProcessTerminationError(error)) {
+    logBestEffortFailure("Failed to terminate run process", context, error);
+  }
+}
+
 /** Executor policy check (36-39): returns an error message when local execution is forbidden. */
 export function executorPolicyAllowsLocal(
   workspace: Readonly<{ trustedExecution?: boolean | null; executionMode?: string | null }>,
@@ -169,12 +205,25 @@ export function runWorkDir(runId: string): string {
   return runSandbox !== null ? runSandbox.workDirFor(runId) : join(tmpdir(), "terrence", "runs", runId);
 }
 
+const LOCAL_BACKEND_OVERRIDE = 'terraform {\n  backend "local" {}\n}\n';
+
+async function writeLocalBackendOverride(executionDir: string): Promise<void> {
+  await writeFile(join(executionDir, "terrence_backend_override.tf"), LOCAL_BACKEND_OVERRIDE, { mode: 0o600 });
+}
+
 type SavedPlanMetadata = Readonly<{
   sha256: string;
   stateId: string | null;
   stateSerial: number;
   configurationVersionId: string | null;
 }>;
+
+class SavedPlanIntegrityError extends Error {
+  constructor() {
+    super("Saved plan integrity check failed.");
+    this.name = "SavedPlanIntegrityError";
+  }
+}
 
 function savedPlanDirectory(runId: string): string {
   return join(storageDir, "saved-plans", runId);
@@ -191,7 +240,9 @@ export async function cleanupRunWorkDir(runId: string): Promise<void> {
 
 export function scheduleRunWorkDirCleanup(runId: string, delayMs = 6_000): void {
   const timer = setTimeout((): void => {
-    void cleanupRunWorkDir(runId).catch((): void => undefined);
+    void cleanupRunWorkDir(runId).catch((error: unknown): void => {
+      logBestEffortFailure("Scheduled run workdir cleanup failed", { runId }, error);
+    });
   }, delayMs);
   timer.unref?.();
 }
@@ -235,20 +286,44 @@ async function persistSavedPlan(
 }
 
 async function readSavedPlanMetadata(runId: string): Promise<SavedPlanMetadata | undefined> {
+  const path = savedPlanMetadataFile(runId);
+  let raw: string;
   try {
-    const parsed: unknown = JSON.parse(await readFile(savedPlanMetadataFile(runId), "utf8"));
-    if (parsed === null || typeof parsed !== "object") return undefined;
-    const value = parsed as Record<string, unknown>;
-    if (typeof value.sha256 !== "string" || typeof value.stateSerial !== "number") return undefined;
-    return {
-      sha256: value.sha256,
-      stateId: typeof value.stateId === "string" ? value.stateId : null,
-      stateSerial: value.stateSerial,
-      configurationVersionId: typeof value.configurationVersionId === "string" ? value.configurationVersionId : null,
-    };
-  } catch {
-    return undefined;
+    raw = await readFile(path, "utf8");
+  } catch (error: unknown) {
+    if (isMissingFileError(error)) return undefined;
+    throw new Error(`Could not read saved plan metadata for run ${runId}: ${errorMessage(error)}`);
   }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch (error: unknown) {
+    throw new Error(`Saved plan metadata for run ${runId} is invalid JSON: ${errorMessage(error)}`);
+  }
+  if (parsed === null || typeof parsed !== "object") {
+    throw new Error(`Saved plan metadata for run ${runId} has an invalid shape.`);
+  }
+  const value = parsed as Record<string, unknown>;
+  if (typeof value.sha256 !== "string" || typeof value.stateSerial !== "number") {
+    throw new Error(`Saved plan metadata for run ${runId} has an invalid shape.`);
+  }
+  const stateId = value.stateId;
+  const configurationVersionId = value.configurationVersionId;
+  if (
+    !Object.hasOwn(value, "stateId")
+    || !Object.hasOwn(value, "configurationVersionId")
+    || (stateId !== null && typeof stateId !== "string")
+    || (configurationVersionId !== null && typeof configurationVersionId !== "string")
+  ) {
+    throw new Error(`Saved plan metadata for run ${runId} has an invalid shape.`);
+  }
+  return {
+    sha256: value.sha256,
+    stateId: stateId as string | null,
+    stateSerial: value.stateSerial,
+    configurationVersionId: configurationVersionId as string | null,
+  };
 }
 
 async function restoreSavedPlan(runId: string, executionDir: string): Promise<SavedPlanMetadata | undefined> {
@@ -260,7 +335,7 @@ async function restoreSavedPlan(runId: string, executionDir: string): Promise<Sa
     ? Buffer.from(await decryptSecret(storedText), "base64")
     : stored;
   const checksum = createHash("sha256").update(bytes).digest("hex");
-  if (checksum !== metadata.sha256) throw new Error("Saved plan integrity check failed.");
+  if (checksum !== metadata.sha256) throw new SavedPlanIntegrityError();
   await mkdir(executionDir, { recursive: true, mode: 0o700 });
   await writeFile(join(executionDir, "tfplan"), bytes, { mode: 0o600 });
   return metadata;
@@ -320,6 +395,20 @@ type TrackedRunProcess = Readonly<{
   stdout?: Readonly<ReadableStream<Uint8Array>>;
   stderr?: Readonly<ReadableStream<Uint8Array>>;
 }>;
+
+function killTrackedProcess(
+  child: TrackedRunProcess,
+  signal: "SIGINT" | "SIGKILL",
+  runId: string,
+  phase: string,
+): void {
+  try {
+    child.kill(signal);
+  } catch (error: unknown) {
+    logProcessTerminationFailure(error, { runId, phase, pid: child.pid, signal });
+  }
+}
+
 const activeRunProcesses = new Map<string, Set<TrackedRunProcess>>();
 /** Per-run cgroup paths (kanban 8/9). Empty when cgroups are unavailable. */
 const activeRunCgroups = new Map<string, string>();
@@ -417,8 +506,8 @@ function terminateProcessGroup(pid: number | null, signal: "SIGINT" | "SIGKILL")
   if (pid === null || pid <= 0) return;
   try {
     process.kill(-pid, signal);
-  } catch {
-    // Group may already be gone (ESRCH) or the platform may not support it.
+  } catch (error: unknown) {
+    logProcessTerminationFailure(error, { pid, signal, scope: "process-group" });
   }
 }
 
@@ -440,7 +529,7 @@ export function cancelRunExecution(runId: string, force = false): void {
     // (e.g. `sleep &`) — some of which ignore SIGINT. Only SIGKILL cannot be
     // ignored, so it is what guarantees no orphan survives cancellation.
     terminateProcessGroup(pgid, signal);
-    try { child.kill(signal); } catch {}
+    killTrackedProcess(child, signal, runId, "cancel");
     if (!force) {
       // Grace period for a clean shutdown (tofu writes partial state, releases
       // locks), then force-kill anything still left in the group. This
@@ -464,7 +553,7 @@ export function terminateActiveRunExecutions(): void {
   for (const runId of runIds) {
     for (const child of activeRunProcesses.get(runId) ?? []) {
       terminateProcessGroup(child.pid, "SIGKILL");
-      try { child.kill("SIGKILL"); } catch {}
+      killTrackedProcess(child, "SIGKILL", runId, "shutdown");
     }
     if (activeRunCgroups.has(runId)) killRunCgroup(runId);
   }
@@ -481,7 +570,12 @@ async function runWasCanceled(runId: string): Promise<boolean> {
   return row?.status === "canceled" || row?.status === "force_canceled";
 }
 
-async function writeLog(runId: string, phase: "plan" | "apply", outputText: string): Promise<void> {
+type RunLogPhase = "plan" | "apply";
+type RunDiagnosticLevel = "info" | "warn" | "error";
+
+type RunDiagnosticFields = Readonly<Record<string, unknown>>;
+
+async function writeLog(runId: string, phase: RunLogPhase, outputText: string): Promise<void> {
   try {
     await db.insert(logs).values({
       id: crypto.randomUUID(),
@@ -500,11 +594,34 @@ async function writeLog(runId: string, phase: "plan" | "apply", outputText: stri
       log.error("Failed to persist run log output", {
         runId,
         phase,
-        error: error instanceof Error ? error.message : String(error),
+        error,
       });
     }
   }
 }
+
+/** Persist machine-readable context beside human-readable run output. */
+async function writeRunDiagnostic(
+  runId: string,
+  phase: RunLogPhase,
+  level: RunDiagnosticLevel,
+  event: string,
+  message: string,
+  fields: RunDiagnosticFields = {},
+): Promise<void> {
+  const record = {
+    ...fields,
+    schemaVersion: 1,
+    timestamp: new Date().toISOString(),
+    level,
+    event,
+    runId,
+    phase,
+    message,
+  };
+  await writeLog(runId, phase, `[terrence diagnostic] ${safeJsonStringify(record)}`);
+}
+
 
 type RunStatusExtra = Readonly<Partial<Pick<
   typeof runs.$inferInsert,
@@ -734,9 +851,17 @@ async function readPlanJson(
         new Response(process.stdout).text(),
         new Response(process.stderr).text(),
       ]);
-      const [exitCode, [stdout]] = await waitForTrackedProcess(runId, "plan", process, output, timeoutMs);
+      const [exitCode, [stdout, stderr]] = await waitForTrackedProcess(runId, "plan", process, output, timeoutMs);
       if (exitCode === 0) return parseJsonObject(stdout);
-    } catch {}
+      log.warn("Terraform plan JSON command failed", {
+        runId,
+        binary,
+        exitCode,
+        stderr: stderr.trim().slice(0, 2_000),
+      });
+    } catch (error: unknown) {
+      logBestEffortFailure("Failed to read Terraform plan JSON", { runId, binary }, error);
+    }
   }
   return undefined;
 }
@@ -795,7 +920,7 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
     : await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId), columns: { orgId: true } });
   if (workspace === undefined || !(await costEstimationEnabledForOrganization(workspace.orgId))) {
     await writeLog(runId, "plan", "[terrence] Cost estimation is disabled. Skipping.");
-    const estimate = emptyCostEstimate("skipped", {
+    const estimate = emptyCostEstimate("skipped_due_to_targeting", {
       ...timestamps,
       "finished-at": new Date().toISOString(),
     });
@@ -836,6 +961,7 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
         stdout: "pipe",
         stderr: "pipe",
       },
+      runSandbox,
     );
     const costOutput = Promise.all([
       new Response(costProcess.stdout).text(),
@@ -870,10 +996,19 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
     }
     await writeLog(runId, "plan", `[terrence] Cost estimation errored: ${message}`);
   } finally {
-    try {
-      await rm(inputPath, { force: true });
-      await rm(secretsDir, { recursive: true, force: true });
-    } catch {}
+    const cleanupTargets: readonly { label: string; operation: Promise<void> }[] = [
+      { label: "plan input", operation: rm(inputPath, { force: true }) },
+      { label: "credentials directory", operation: rm(secretsDir, { recursive: true, force: true }) },
+    ];
+    const cleanupResults = await Promise.allSettled(cleanupTargets.map((target) => target.operation));
+    for (const [index, result] of cleanupResults.entries()) {
+      if (result.status === "rejected") {
+        const target = cleanupTargets[index];
+        if (target !== undefined) {
+          logBestEffortFailure("Could not clean up cost-estimate temporary files", { runId, artifact: target.label }, result.reason);
+        }
+      }
+    }
   }
 }
 
@@ -906,17 +1041,18 @@ async function waitForTrackedProcess<T>(
   let cancelEscalationTimer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   let cancellationRequested = false;
+  let cancellationPollFailureLogged = false;
   const requestCancellation = (force: boolean): void => {
     if (cancellationRequested && !force) return;
     cancellationRequested = true;
     const signal = force ? "SIGKILL" : "SIGINT";
     terminateProcessGroup(child.pid, signal);
-    try { child.kill(signal); } catch {}
+    killTrackedProcess(child, signal, runId, phase);
     if (force) killRunCgroup(runId);
     if (!force && cancelEscalationTimer === undefined) {
       cancelEscalationTimer = setTimeout((): void => {
         terminateProcessGroup(child.pid, "SIGKILL");
-        try { child.kill("SIGKILL"); } catch {}
+        killTrackedProcess(child, "SIGKILL", runId, `${phase}-cancellation`);
         killRunCgroup(runId);
       }, 5_000);
     }
@@ -925,7 +1061,11 @@ async function waitForTrackedProcess<T>(
     void db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { status: true } }).then((run): void => {
       if (run?.status === "force_canceled") requestCancellation(true);
       else if (run?.status === "canceled") requestCancellation(false);
-    }).catch((): void => undefined);
+    }).catch((error: unknown): void => {
+      if (cancellationPollFailureLogged) return;
+      cancellationPollFailureLogged = true;
+      logBestEffortFailure("Cancellation status polling failed", { runId, phase }, error);
+    });
   }, 250);
   cancellationPoller.unref?.();
   const completed = Promise.all([child.exited, output]);
@@ -940,7 +1080,7 @@ async function waitForTrackedProcess<T>(
   } catch (error: unknown) {
     if (!timedOut) throw error;
     terminateProcessGroup(child.pid, "SIGKILL");
-    try { child.kill("SIGKILL"); } catch {}
+    killTrackedProcess(child, "SIGKILL", runId, `${phase}-timeout`);
     if (activeRunCgroups.has(runId)) killRunCgroup(runId);
     await Promise.allSettled([child.exited, output]);
     throw error;
@@ -1119,27 +1259,51 @@ export async function executionVariables(
   return [...effective.values()];
 }
 
+type ArchiveExtractionContext = Readonly<{
+  runId?: string;
+  phase?: string;
+}>;
+
 async function extractTarArchive(
   archivePath: string,
   destDir: string,
   workingDirectory?: string | null,
+  context?: ArchiveExtractionContext,
 ): Promise<boolean> {
+  const diagnosticContext = {
+    ...context,
+    archivePath,
+    destinationDirectory: destDir,
+    workingDirectory: workingDirectory ?? null,
+  };
   try {
     await assertArchiveExpandedSize(archivePath);
     const verboseProc = spawn(["tar", "-tvzf", archivePath]);
     const verboseText = await new Response(verboseProc.stdout).text();
     const verboseExitCode = await verboseProc.exited;
-    if (verboseExitCode !== 0) return false;
+    if (verboseExitCode !== 0) {
+      log.error("Configuration archive member inspection failed", {
+        ...diagnosticContext,
+        exitCode: verboseExitCode,
+      });
+      return false;
+    }
 
     const verboseLines = verboseText.split("\n").map((s: string): string => s.trim()).filter((s: string): boolean => s !== "");
     assertArchiveMemberCount(verboseLines);
     for (const line of verboseLines) {
       if (tarMemberIsForbiddenSpecial(line.charAt(0))) {
-        log.error("Security error: archive contains forbidden link/special member", { member: line });
+        log.error("Security error: archive contains forbidden link/special member", {
+          ...diagnosticContext,
+          member: line,
+        });
         return false;
       }
       if (line.includes(" -> ") || line.includes(" link to ")) {
-        log.error("Security error: archive contains link member", { member: line });
+        log.error("Security error: archive contains link member", {
+          ...diagnosticContext,
+          member: line,
+        });
         return false;
       }
     }
@@ -1147,26 +1311,61 @@ async function extractTarArchive(
     const listProc = spawn(["tar", "-tzf", archivePath]);
     const membersText = await new Response(listProc.stdout).text();
     const exitCode = await listProc.exited;
-    if (exitCode !== 0) return false;
+    if (exitCode !== 0) {
+      log.error("Configuration archive path inspection failed", {
+        ...diagnosticContext,
+        exitCode,
+      });
+      return false;
+    }
 
     const members = membersText.split("\n").map((s: string): string => s.trim()).filter((s: string): boolean => s !== "");
     assertArchiveMemberCount(members);
     for (const m of members) {
       if (tarMemberPathUnsafe(m)) {
-        log.error("Security error: archive contains dangerous path", { path: m });
+        log.error("Security error: archive contains dangerous path", {
+          ...diagnosticContext,
+          member: m,
+          path: m,
+        });
         return false;
       }
     }
     await assertArchiveLogicalSize(archivePath);
 
-    const extractProc = spawn(["tar", "-x", "-o", "-z", "-f", archivePath, "-C", destDir]);
-    const ok = (await extractProc.exited) === 0;
-    if (ok) {
-      await unnestArchiveDirectory(destDir, workingDirectory);
+    // Uploaded archives can contain client-side execution artifacts (a stale
+    // `tfplan` bookmark from `terraform plan -out=tfplan`, local state, or a
+    // provider cache). Those must never shadow the server-managed files that
+    // planning and apply reconstruct (saved plan, seeded state, backend
+    // override, initialized providers).
+    const executionArtifactExcludes = [
+      "tfplan",
+      "*/tfplan",
+      "terraform.tfstate",
+      "*/terraform.tfstate",
+      "terraform.tfstate.backup",
+      "*/terraform.tfstate.backup",
+      ".terraform",
+      "*/.terraform",
+      ".terraform/*",
+      "*/.terraform/*",
+    ].flatMap((pattern): string[] => ["--exclude", pattern]);
+    const extractProc = spawn(["tar", "-x", "-o", "-z", "-f", archivePath, "-C", destDir, ...executionArtifactExcludes]);
+    const extractExitCode = await extractProc.exited;
+    if (extractExitCode !== 0) {
+      log.error("Configuration archive extraction process failed", {
+        ...diagnosticContext,
+        exitCode: extractExitCode,
+      });
+      return false;
     }
-    return ok;
-  } catch (err: unknown) {
-    log.error("Tar extraction error", { error: err });
+    await unnestArchiveDirectory(destDir, workingDirectory);
+    return true;
+  } catch (error: unknown) {
+    log.error("Configuration archive extraction failed", {
+      ...diagnosticContext,
+      error,
+    });
     return false;
   }
 }
@@ -1186,17 +1385,24 @@ async function unnestArchiveDirectory(
     if (hasTfInRoot) return;
 
     const dirEntries = entries.filter((e): boolean => e.isDirectory());
-    if (entries.length === 1 && dirEntries.length === 1 && dirEntries[0] !== undefined) {
+    const rootEntriesAreSafe = entries.every((e): boolean => e.isDirectory() || e.isFile());
+    if (dirEntries.length === 1 && rootEntriesAreSafe && dirEntries[0] !== undefined) {
       const subDir = join(destDir, dirEntries[0].name);
       const subFiles = await readdir(subDir);
+      const rootNames = new Set(entries.map((entry): string => entry.name));
+      const conflictingFile = subFiles.find((file): boolean => rootNames.has(file));
+      if (conflictingFile !== undefined) {
+        throw new Error(`Cannot unnest archive directory: root entry '${conflictingFile}' already exists.`);
+      }
       for (const file of subFiles) {
         await rename(join(subDir, file), join(destDir, file));
       }
       await rm(subDir, { recursive: true, force: true });
       log.info(`Un-nested archive directory '${dirEntries[0].name}' into working directory.`);
     }
-  } catch (err: unknown) {
-    log.warn("Could not unnest archive directory", { error: err });
+  } catch (error: unknown) {
+    log.warn("Could not unnest archive directory", { destDir, error });
+    throw error;
   }
 }
 
@@ -1357,7 +1563,13 @@ async function executeRunTasks(
             if (["running", "passed", "failed"].includes(String(attributes.status))) status = String(attributes.status);
             if (typeof attributes.message === "string") message = attributes.message;
             if (typeof attributes.url === "string") resultUrl = attributes.url;
-          } catch {}
+          } catch (error: unknown) {
+            logBestEffortFailure(
+              "Run task returned an invalid JSON response; using its HTTP status",
+              { runId, resultId, taskId: task.id },
+              error,
+            );
+          }
         }
       } catch (error: unknown) {
         status = "failed";
@@ -1548,7 +1760,7 @@ async function executeRunImpl(runId: string): Promise<void> {
   // admin enabling requireHardIsolation between claim and execution.
   if (workspace.executionMode !== "agent") {
     const pForExec = workspace.projectId
-      ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) }).catch((): undefined => undefined)
+      ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) })
       : undefined;
     const policyError = executorPolicyAllowsLocal(
       workspace,
@@ -1611,8 +1823,25 @@ async function executeRunImpl(runId: string): Promise<void> {
 
       if (cv !== undefined && typeof cv.archivePath === "string" && cv.archivePath !== "" && (await exists(cv.archivePath))) {
         await writeLog(runId, "plan", `[terrence] Extracting configuration archive ${cv.archivePath}`);
-        const ok = await extractTarArchive(cv.archivePath, workDir, workspace.workingDirectory);
+        const ok = await extractTarArchive(
+          cv.archivePath,
+          workDir,
+          workspace.workingDirectory,
+          { runId, phase: "plan" },
+        );
         if (!ok) {
+          await writeRunDiagnostic(
+            runId,
+            "plan",
+            "error",
+            "run.plan.archive_restore_failed",
+            "The configuration archive could not be restored for planning.",
+            {
+              failureReason: "configuration_archive_restore_failed",
+              archivePath: cv.archivePath,
+              executionDirectory: workDir,
+            },
+          );
           throw new Error("Configuration archive extraction failed or contained invalid path components.");
         }
       }
@@ -1658,11 +1887,7 @@ async function executeRunImpl(runId: string): Promise<void> {
       throw new Error(`Working directory '${workspace.workingDirectory ?? ""}' does not exist in the configuration.`);
     }
     await writeLog(runId, "plan", `[terrence] Executing from ${executionDir}`);
-    await writeFile(
-      join(executionDir, "terrence_backend_override.tf"),
-      'terraform {\n  backend "local" {}\n}\n',
-      { mode: 0o600 },
-    );
+    await writeLocalBackendOverride(executionDir);
 
     const latestState = await db.query.stateVersions.findFirst({
       where: and(
@@ -1955,7 +2180,15 @@ async function executeRunImpl(runId: string): Promise<void> {
     }
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    log.error(`Run ${runId} planning failed`, { error: errMsg });
+    log.error(`Run ${runId} planning failed`, { error });
+    await writeRunDiagnostic(
+      runId,
+      "plan",
+      "error",
+      "run.plan.failed",
+      "Planning failed.",
+      { failureReason: "plan_failed", error },
+    );
     await writeLog(runId, "plan", `[terrence ERROR] ${errMsg}`);
     try {
       if (!isTerminalRunStatus(run.status)) await updateRunStatus(runId, "errored");
@@ -1970,7 +2203,10 @@ async function executeRunImpl(runId: string): Promise<void> {
       // Saved plans live under storage/saved-plans; never retain the execution
       // directory, which contains tfvars, state, provider caches, and tokens.
       await cleanupRunWorkDir(runId);
-    } catch {}
+    } catch (error: unknown) {
+      logBestEffortFailure("Run workdir cleanup failed after planning", { runId }, error);
+      scheduleRunWorkDirCleanup(runId);
+    }
   }
 }
 
@@ -2032,14 +2268,15 @@ async function releaseRunWorkspaceLock(workspaceId: string, runId: string): Prom
 async function cleanupApplyArtifacts(runId: string): Promise<void> {
   try {
     await cleanupSavedPlan(runId);
-  } catch {
-    // Cleanup is best effort after a task gate or apply failure.
+  } catch (error: unknown) {
+    logBestEffortFailure("Saved-plan cleanup failed after apply gate failure", { runId }, error);
   }
   try {
     if (runSandbox !== null) await removeSandboxWorkDir(runId);
     else await rm(runWorkDir(runId), { recursive: true, force: true });
-  } catch {
-    // Cleanup is best effort after a task gate or apply failure.
+  } catch (error: unknown) {
+    logBestEffortFailure("Run workdir cleanup failed after apply gate failure", { runId }, error);
+    scheduleRunWorkDirCleanup(runId);
   }
 }
 
@@ -2068,7 +2305,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
   // Re-check executor policy at apply entry too (admin may have tightened policy between plan and apply).
   if (workspace.executionMode !== "agent") {
     const pForApply = workspace.projectId
-      ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) }).catch((): undefined => undefined)
+      ? await db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) })
       : undefined;
     const policyErr = executorPolicyAllowsLocal(
       workspace,
@@ -2078,6 +2315,18 @@ async function executeApplyImpl(runId: string): Promise<void> {
     if (policyErr !== null) {
       if (run.status !== "canceled" && run.status !== "force_canceled") {
         await updateRunStatus(runId, "errored");
+        await writeRunDiagnostic(
+          runId,
+          "apply",
+          "error",
+          "run.apply.policy_blocked",
+          "Apply was blocked by executor policy before execution started.",
+          {
+            failureReason: "executor_policy_blocked",
+            policyError: policyErr,
+            executionMode: workspace.executionMode,
+          },
+        );
         await writeLog(runId, "apply", `[terrence ERROR] ${policyErr}`);
         publish("run.status", { "run-id": runId, "workspace-id": workspace.id, "org-id": workspace.orgId, status: "errored", at: new Date().toISOString() });
         queueRunNotification(runId, "run:errored", "errored");
@@ -2134,59 +2383,270 @@ async function executeApplyImpl(runId: string): Promise<void> {
     const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
     await writeLog(runId, "apply", `[terrence] Starting apply phase for run ${runId}`);
 
-    const savedPlan = await restoreSavedPlan(runId, executionDir);
-    const savedPlanRequired = run.savePlan === true || savedPlan !== undefined;
-    if (savedPlanRequired) {
-      if (savedPlan === undefined) {
-        throw new Error("Saved plan metadata or file is missing; the plan cannot be verified before apply.");
-      }
-      if (savedPlan.configurationVersionId !== run.configurationVersionId) {
-        throw new Error("Saved plan configuration version no longer matches the run.");
-      }
-      const currentState = await db.query.stateVersions.findFirst({
-        where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
-        orderBy: [desc(stateVersions.serial)],
-        columns: { id: true, serial: true },
-      });
-      if (savedPlan.stateSerial !== (currentState?.serial ?? 0) || savedPlan.stateId !== (currentState?.id ?? null)) {
-        throw new Error("Saved plan is stale because the workspace state changed after planning.");
+    let applyStatePayload: string | null = null;
+    let savedPlan: SavedPlanMetadata | undefined;
+    // Peek at the metadata only: the plan file itself is restored after the
+    // configuration archive is extracted, because uploaded archives can
+    // contain a stale client-side `tfplan` bookmark that must not shadow the
+    // verified saved plan.
+    let savedPlanRequired = run.savePlan === true;
+    if (!savedPlanRequired) {
+      try {
+        savedPlanRequired = (await readSavedPlanMetadata(runId)) !== undefined;
+      } catch {
+        // Corrupt metadata: take the saved-plan path so restore surfaces the diagnostic below.
+        savedPlanRequired = true;
       }
     }
-
-    if (savedPlanRequired && !(await exists(join(executionDir, "tfplan")) && await exists(executionDir))) {
-      throw new Error("Saved plan file 'tfplan' is missing; cannot apply run.");
-    }
+    // The saved-plan file is restored after the archive block below, so an
+    // uploaded stale `tfplan` bookmark can never shadow the verified plan.
+    // Validation of the restored plan lives alongside the restore.
 
     const requestedTool = workspace.iacBinary ?? org?.defaultIacBinary ?? "terraform";
     const requestedVersion = run.terraformVersion ?? workspace.terraformVersion ?? org?.defaultTerraformVersion ?? "latest";
 
     let dirFiles = (await exists(executionDir)) ? await readdir(executionDir) : [];
     let hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
+    let configurationArchivePath: string | null = null;
+    let archiveRestored = false;
     if (savedPlanRequired && !hasTfFiles && run.configurationVersionId !== null) {
+      // The plan-phase workdir is cleaned after planning, so the directory may
+      // not exist yet (it used to be created implicitly by the early restore).
+      // Extract into workDir (like the plan phase): archive members carry
+      // working-directory-relative paths, so extracting into executionDir
+      // would nest them one level too deep.
+      await mkdir(workDir, { recursive: true, mode: 0o700 });
       const configuration = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, run.configurationVersionId) });
-      if (configuration?.archivePath !== null && configuration?.archivePath !== undefined && await exists(configuration.archivePath)) {
-        if (!(await extractTarArchive(configuration.archivePath, executionDir, workspace.workingDirectory))) {
+      configurationArchivePath = typeof configuration?.archivePath === "string" && configuration.archivePath !== ""
+        ? configuration.archivePath
+        : null;
+      if (configurationArchivePath !== null && await exists(configurationArchivePath)) {
+        archiveRestored = await extractTarArchive(
+          configurationArchivePath,
+          workDir,
+          workspace.workingDirectory,
+          { runId, phase: "apply" },
+        );
+        if (!archiveRestored) {
+          await writeRunDiagnostic(
+            runId,
+            "apply",
+            "error",
+            "run.apply.archive_restore_failed",
+            "The configuration archive could not be restored for apply.",
+            {
+              failureReason: "configuration_archive_restore_failed",
+              archivePath: configurationArchivePath,
+              executionDirectory: executionDir,
+            },
+          );
           throw new Error("Saved plan configuration archive could not be restored.");
         }
         dirFiles = await readdir(executionDir);
         hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
       }
     }
-    const isSimulatedAllowed = envEnabled(process.env.SIMULATED_RUNS) || Reflect.get(process.env, "NODE_ENV") === "test";
-    const resolved = isSimulatedAllowed ? null : await ensureBinary(requestedTool, requestedVersion);
+    if (savedPlanRequired) {
+      // Restore after extraction: the uploaded archive can contain a stale
+      // client-side `tfplan` bookmark, and the verified bytes must be the
+      // last write so `terraform apply tfplan` reads the real saved plan.
+      try {
+        savedPlan = await restoreSavedPlan(runId, executionDir);
+      } catch (error: unknown) {
+        const integrityFailure = error instanceof SavedPlanIntegrityError;
+        await writeRunDiagnostic(
+          runId,
+          "apply",
+          "error",
+          integrityFailure ? "run.apply.saved_plan_integrity_failed" : "run.apply.saved_plan_restore_failed",
+          integrityFailure
+            ? "Saved plan integrity verification failed before apply."
+            : "Saved plan could not be restored before apply.",
+          {
+            failureReason: integrityFailure ? "saved_plan_integrity_check_failed" : "saved_plan_restore_failed",
+            error,
+          },
+        );
+        throw error;
+      }
+      if (savedPlan === undefined) {
+        await writeRunDiagnostic(
+          runId,
+          "apply",
+          "error",
+          "run.apply.saved_plan_missing",
+          "Apply cannot verify the saved plan because its metadata or file is unavailable.",
+          { failureReason: "saved_plan_metadata_or_file_missing" },
+        );
+        throw new Error("Saved plan metadata or file is missing; the plan cannot be verified before apply.");
+      }
+      if (savedPlan.configurationVersionId !== run.configurationVersionId) {
+        await writeRunDiagnostic(
+          runId,
+          "apply",
+          "error",
+          "run.apply.saved_plan_mismatch",
+          "Saved plan belongs to a different configuration version.",
+          {
+            failureReason: "saved_plan_configuration_mismatch",
+            savedPlanConfigurationVersionId: savedPlan.configurationVersionId,
+            runConfigurationVersionId: run.configurationVersionId,
+          },
+        );
+        throw new Error("Saved plan configuration version no longer matches the run.");
+      }
+      const currentState = await db.query.stateVersions.findFirst({
+        where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
+        orderBy: [desc(stateVersions.serial)],
+        columns: { id: true, serial: true, statePayload: true },
+      });
+      applyStatePayload = currentState?.statePayload ?? null;
+      if (savedPlan.stateSerial !== (currentState?.serial ?? 0) || savedPlan.stateId !== (currentState?.id ?? null)) {
+        await writeRunDiagnostic(
+          runId,
+          "apply",
+          "error",
+          "run.apply.saved_plan_stale",
+          "Saved plan is stale because workspace state changed after planning.",
+          {
+            failureReason: "saved_plan_state_mismatch",
+            savedPlanStateId: savedPlan.stateId,
+            savedPlanStateSerial: savedPlan.stateSerial,
+            currentStateId: currentState?.id ?? null,
+            currentStateSerial: currentState?.serial ?? 0,
+          },
+        );
+        throw new Error("Saved plan is stale because the workspace state changed after planning.");
+      }
+    }
 
-    if (resolved !== null && (await exists(executionDir)) && hasTfFiles) {
+    if (savedPlanRequired && !(await exists(join(executionDir, "tfplan")) && await exists(executionDir))) {
+      await writeRunDiagnostic(
+        runId,
+        "apply",
+        "error",
+        "run.apply.plan_file_missing",
+        "The verified saved plan file is not present in the apply execution directory.",
+        {
+          failureReason: "saved_plan_file_missing_after_restore",
+          executionDirectory: executionDir,
+          executionDirectoryExists: await exists(executionDir),
+        },
+      );
+      throw new Error("Saved plan file 'tfplan' is missing; cannot apply run.");
+    }
+    if (savedPlanRequired && applyStatePayload !== null && applyStatePayload !== "") {
+      await writeFile(join(executionDir, "terraform.tfstate"), decodeStatePayload(applyStatePayload), { mode: 0o600 });
+      await writeLog(runId, "apply", `[terrence] Seeded workspace state for saved plan apply.`);
+    }
+    if (savedPlanRequired) await writeLocalBackendOverride(executionDir);
+    // Refresh the listing: the restore/seed/override writes above happened
+    // after the archive-time snapshot, and preflight must describe the
+    // directory `terraform apply` is about to see.
+    dirFiles = (await exists(executionDir)) ? await readdir(executionDir) : [];
+    hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
+    const isSimulatedAllowed = envEnabled(process.env.SIMULATED_RUNS) || Reflect.get(process.env, "NODE_ENV") === "test";
+    let resolved: Awaited<ReturnType<typeof ensureBinary>> | null = null;
+    if (!isSimulatedAllowed) {
+      try {
+        resolved = await ensureBinary(requestedTool, requestedVersion);
+      } catch (error: unknown) {
+        await writeRunDiagnostic(
+          runId,
+          "apply",
+          "error",
+          "run.apply.binary_resolution_failed",
+          "The execution engine threw while resolving its CLI binary.",
+          {
+            failureReason: "cli_binary_resolution_threw",
+            requestedTool,
+            requestedVersion,
+            error,
+          },
+        );
+        throw error;
+      }
+    }
+
+    const executionDirectoryExists = await exists(executionDir);
+    const configurationFiles = dirFiles.filter((file: string): boolean => file.endsWith(".tf") || file.endsWith(".tf.json"));
+    await writeRunDiagnostic(
+      runId,
+      "apply",
+      "info",
+      "run.apply.preflight",
+      "Apply preflight evaluated.",
+      {
+        requestedTool,
+        requestedVersion,
+        resolvedTool: resolved?.tool ?? null,
+        resolvedVersion: resolved?.version ?? null,
+        binaryPath: resolved?.binaryPath ?? null,
+        binaryResolved: resolved !== null,
+        simulated: isSimulatedAllowed,
+        savedPlanRequired,
+        savedPlanRestored: savedPlan !== undefined,
+        savedPlanFilePresent: await exists(join(executionDir, "tfplan")),
+        archivePath: configurationArchivePath,
+        archiveRestored,
+        executionDirectory: executionDir,
+        executionDirectoryExists,
+        rootEntryCount: dirFiles.length,
+        rootEntryNames: dirFiles.slice(0, 64),
+        configurationFileCount: configurationFiles.length,
+        configurationFiles,
+      },
+    );
+
+    if (resolved !== null && executionDirectoryExists && hasTfFiles) {
       if (await runWasCanceled(runId)) return;
       const binary = resolved.binaryPath;
       if (runSandbox !== null) await runSandbox.ensureTool(resolved.tool, resolved.version, binary);
       const vars = await executionVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
       const envVars = { ...buildSanitizedEnv(vars), ...(await runTerraformEnv(run.id, workspace, "apply", vars)) };
       if (run.debuggingMode) envVars.TF_LOG = "TRACE";
+      const applyTimeoutMs = await executionTimeoutMs("apply");
+
+      if (savedPlanRequired && resolved !== null) {
+        if (await runWasCanceled(runId)) return;
+        await writeLog(runId, "apply", `\n--- Executing ${resolved.tool} init ---`);
+        if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
+        const initProc = spawnRunProcess(
+          runId,
+          [binary, "init", "-reconfigure", "-no-color", "-input=false"],
+          {
+            cwd: executionDir,
+            env: envVars,
+            stdout: "pipe",
+            stderr: "pipe",
+          },
+          runSandbox,
+        );
+        const initOutput = Promise.all([
+          streamLog(runId, "apply", initProc.stdout),
+          streamLog(runId, "apply", initProc.stderr),
+        ]);
+        const [initExit] = await waitForTrackedProcess(runId, "apply", initProc, initOutput, applyTimeoutMs);
+        if (await runWasCanceled(runId)) return;
+        if (initExit !== 0) throw new Error(`${resolved.tool} init failed with exit code ${initExit}`);
+      }
 
       await writeLog(runId, "apply", `\n--- Executing ${resolved.tool} apply ---`);
       if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
       const hasPlanFile = await exists(join(executionDir, "tfplan"));
       if (!hasPlanFile) {
+        await writeRunDiagnostic(
+          runId,
+          "apply",
+          "error",
+          "run.apply.plan_file_missing",
+          "Terraform configuration was restored, but the plan file is missing.",
+          {
+            failureReason: "tfplan_missing_before_process_start",
+            executionDirectory: executionDir,
+            rootEntryNames: dirFiles.slice(0, 64),
+          },
+        );
         throw new Error("Saved plan file 'tfplan' is missing; cannot apply run.");
       }
       if (await runWasCanceled(runId)) return;
@@ -2213,8 +2673,9 @@ async function executeApplyImpl(runId: string): Promise<void> {
           jsonStateOutputs = parsed.outputs !== null && parsed.outputs !== undefined
             ? JSON.stringify(parsed.outputs)
             : null;
-        } catch {
+        } catch (error: unknown) {
           jsonState = null;
+          logBestEffortFailure("Apply state file is not valid JSON; storing raw state without JSON resources", { runId }, error);
         }
 
         // Pull VCS commit metadata from the run's configuration version so the state
@@ -2250,7 +2711,6 @@ async function executeApplyImpl(runId: string): Promise<void> {
       };
 
       applyStarted = true;
-      const applyTimeoutMs = await executionTimeoutMs("apply");
       const applyProc = spawnRunProcess(
         runId,
         applyArgs,
@@ -2292,7 +2752,11 @@ async function executeApplyImpl(runId: string): Promise<void> {
           await saveStateAfterApply();
         } catch (saveError: unknown) {
           await writeLog(runId, "apply", `[terrence] Could not record partial state after failed apply: ${saveError instanceof Error ? saveError.message : String(saveError)}`);
-          await captureInterruptedApplyState(runId).catch(() => false);
+          try {
+            await captureInterruptedApplyState(runId);
+          } catch (captureError: unknown) {
+            log.error("Could not capture state after partial apply persistence failure", { runId, error: captureError });
+          }
         }
         throw new Error(`${resolved.tool} apply failed with exit code ${applyExit}`);
       }
@@ -2300,14 +2764,46 @@ async function executeApplyImpl(runId: string): Promise<void> {
       try {
         await saveStateAfterApply();
       } catch (saveError: unknown) {
-        await captureInterruptedApplyState(runId).catch(() => false);
+        try {
+          await captureInterruptedApplyState(runId);
+        } catch (captureError: unknown) {
+          log.error("Could not capture state after apply state persistence failure", { runId, error: captureError });
+        }
         throw saveError;
       }
 
     } else if (isSimulatedAllowed) {
       await writeLog(runId, "apply", `[terrence] Execution engine: Simulated apply completed successfully.`);
     } else {
-      throw new Error(`Unable to resolve CLI binary '${requestedTool}' for apply phase.`);
+      const failedChecks = [
+        ...(resolved === null ? ["cli_binary_unresolved"] : []),
+        ...(!executionDirectoryExists ? ["execution_directory_missing"] : []),
+        ...(!hasTfFiles ? ["configuration_files_missing"] : []),
+      ];
+      await writeRunDiagnostic(
+        runId,
+        "apply",
+        "error",
+        "run.apply.preflight_failed",
+        "Apply preflight failed before the Terraform process started.",
+        {
+          failureReason: "apply_preflight_failed",
+          failedChecks,
+          requestedTool,
+          requestedVersion,
+          executionDirectory: executionDir,
+          executionDirectoryExists,
+          rootEntryNames: dirFiles.slice(0, 64),
+          configurationFiles,
+        },
+      );
+      if (failedChecks.length === 1 && failedChecks[0] === "cli_binary_unresolved") {
+        throw new Error(`Unable to resolve CLI binary '${requestedTool}' for apply phase.`);
+      }
+      if (failedChecks.length === 1 && failedChecks[0] === "configuration_files_missing") {
+        throw new Error(`No Terraform configuration (.tf or .tf.json) files were found in workspace directory '${executionDir}'.`);
+      }
+      throw new Error(`Apply preflight failed: ${failedChecks.join(", ") || "unknown_failure"}.`);
     }
 
     // Parse resource counts from apply log output
@@ -2347,6 +2843,14 @@ async function executeApplyImpl(runId: string): Promise<void> {
     }
     const errMsg = error instanceof Error ? error.message : String(error);
     log.error("Run apply failed", { runId, error });
+    await writeRunDiagnostic(
+      runId,
+      "apply",
+      "error",
+      "run.apply.failed",
+      "Apply failed.",
+      { failureReason: "apply_failed", error },
+    );
     await writeLog(runId, "apply", `[terrence ERROR] ${errMsg}`);
     await updateRunStatus(runId, "errored");
     await cleanupSavedPlan(runId);
@@ -2358,7 +2862,10 @@ async function executeApplyImpl(runId: string): Promise<void> {
         } else {
           await rm(workDir, { recursive: true, force: true });
         }
-      } catch {}
+      } catch (error: unknown) {
+        logBestEffortFailure("Run workdir cleanup failed after successful apply", { runId }, error);
+        scheduleRunWorkDirCleanup(runId);
+      }
     } else {
       if (applyStarted && !applyCanceled) {
         await writeLog(runId, "apply", `[terrence] Apply failed; partial state was journaled before cleaning the execution directory.`);
@@ -2366,7 +2873,10 @@ async function executeApplyImpl(runId: string): Promise<void> {
       try {
         if (runSandbox !== null) await removeSandboxWorkDir(runId);
         else await rm(workDir, { recursive: true, force: true });
-      } catch {}
+      } catch (error: unknown) {
+        logBestEffortFailure("Run workdir cleanup failed after failed apply", { runId }, error);
+        scheduleRunWorkDirCleanup(runId);
+      }
     }
   }
 } finally {
@@ -2482,9 +2992,7 @@ export async function runPolicyChecks(
         // Unpredictable per-invocation directory: a guessable tmp path under
         // /tmp invites symlink attacks and cross-run tampering.
         const workDir = join(tmpdir(), "terrence", "opa", `${runId}-${crypto.randomUUID()}`);
-        try {
-          await mkdir(workDir, { recursive: true, mode: 0o700 });
-        } catch {}
+        await mkdir(workDir, { recursive: true, mode: 0o700 });
         const policyPath = join(workDir, "policy.rego");
         const dataPath = join(workDir, "input.json");
         await writeFile(policyPath, policySource, { mode: 0o600 });
@@ -2526,7 +3034,9 @@ export async function runPolicyChecks(
         }
         try {
           await rm(workDir, { recursive: true, force: true });
-        } catch {}
+        } catch (error: unknown) {
+          logBestEffortFailure("OPA policy workdir cleanup failed", { runId, policyId: policy.id }, error);
+        }
       } else if (isSentinel && typeof policySource === "string" && policySource !== "") {
         const workDir = join(tmpdir(), "terrence", "sentinel", `${runId}-${crypto.randomUUID()}`, policy.id);
         await mkdir(workDir, { recursive: true, mode: 0o700 });
@@ -2601,7 +3111,9 @@ export async function runPolicyChecks(
         }
         try {
           await rm(workDir, { recursive: true, force: true });
-        } catch {}
+        } catch (error: unknown) {
+          logBestEffortFailure("Sentinel policy workdir cleanup failed", { runId, policyId: policy.id }, error);
+        }
       } else if (!isOpa && !isSentinel) {
         checkStatus = "unreachable";
         checkResult = { error: `Policy kind '${policySet?.kind ?? "unknown"}' is not supported` };
@@ -3060,7 +3572,12 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
       ) throw new Error("Applied configuration archive is unavailable.");
 
       await mkdir(workDir, { recursive: true, mode: 0o700 });
-      if (!(await extractTarArchive(configuration.archivePath, workDir))) {
+      if (!(await extractTarArchive(
+        configuration.archivePath,
+        workDir,
+        undefined,
+        { phase: "assessment" },
+      ))) {
         throw new Error("Configuration archive extraction failed or contained invalid path components.");
       }
       const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
@@ -3244,7 +3761,9 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
       } else {
         await rm(workDir, { recursive: true, force: true });
       }
-    } catch {}
+    } catch (error: unknown) {
+      logBestEffortFailure("Assessment workdir cleanup failed", { assessmentResultId }, error);
+    }
   }
 }
 
@@ -3702,7 +4221,11 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
       if (localRunReservations.has(run.id)) releaseLocalRunReservation(run.id);
       log.error("Scheduled apply failed", { runId: run.id, error });
       // Keep the run confirmed so a transient failure retries next poll.
-      await db.update(runs).set({ status: "confirmed" }).where(and(eq(runs.id, run.id), eq(runs.status, "apply_queued"))).catch((): void => {});
+      try {
+        await db.update(runs).set({ status: "confirmed" }).where(and(eq(runs.id, run.id), eq(runs.status, "apply_queued")));
+      } catch (restoreError: unknown) {
+        logBestEffortFailure("Failed to restore scheduled run after apply dispatch failure", { runId: run.id }, restoreError);
+      }
     }
   }
   return applied;
@@ -3914,7 +4437,13 @@ async function runTokenStateFor(
   workspace: Readonly<{ id: string; orgId: string }>,
 ): Promise<RunTokenState> {
   const cached = runTokenCache.get(runId);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined) {
+    if (await exists(cached.tfrcPath)) return cached;
+    const tfrcPath = await writeRunCliConfig(runWorkDir(runId), registryHostname(), cached.token);
+    const refreshed = { ...cached, tfrcPath };
+    runTokenCache.set(runId, refreshed);
+    return refreshed;
+  }
   const token = await mintRunToken(runId, workspace.id, workspace.orgId);
   const tfrcPath = await writeRunCliConfig(runWorkDir(runId), registryHostname(), token);
   const value: RunTokenState = { token, tfrcPath, oidc: {} };
@@ -4060,8 +4589,17 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
   const parsedRetention = rawRetention === undefined || rawRetention === "" ? 7 * 24 * 60 * 60 * 1000 : Number(rawRetention);
   const retentionMs = Number.isSafeInteger(parsedRetention) && parsedRetention >= 0 ? parsedRetention : 7 * 24 * 60 * 60 * 1000;
   const cutoff = Date.now() - retentionMs;
+  type CleanupEntry = Readonly<{ name: string; isDirectory(): boolean }>;
+  const readCleanupEntries = async (root: string, message: string): Promise<readonly CleanupEntry[] | null> => {
+    try {
+      return await readdir(root, { withFileTypes: true, encoding: "utf8" }) as unknown as CleanupEntry[];
+    } catch (error: unknown) {
+      if (!isMissingFileError(error)) logBestEffortFailure(message, { root }, error);
+      return null;
+    }
+  };
   const pruneRoot = async (root: string, requireRecoveredMarker = false): Promise<void> => {
-    const entries = await readdir(root, { withFileTypes: true, encoding: "utf8" }).catch(() => null);
+    const entries = await readCleanupEntries(root, "Could not scan cleanup directory");
     if (entries === null) return;
     await Promise.all(entries
       .filter((entry): boolean => entry.isDirectory())
@@ -4070,14 +4608,16 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
         try {
           if (requireRecoveredMarker && !(await exists(join(path, ".recovered")))) return;
           if ((await stat(path)).mtimeMs < cutoff) await rm(path, { recursive: true, force: true });
-        } catch {
-          // Best effort: a concurrent reconciliation or cleanup may own it.
+        } catch (error: unknown) {
+          if (!isMissingFileError(error)) {
+            logBestEffortFailure("Could not prune interrupted-apply recovery", { path }, error);
+          }
         }
       }));
   };
   const pruneSavedPlans = async (): Promise<void> => {
     const root = join(storageDir, "saved-plans");
-    const entries = await readdir(root, { withFileTypes: true, encoding: "utf8" }).catch(() => null);
+    const entries = await readCleanupEntries(root, "Could not scan saved-plan cleanup directory");
     if (entries === null) return;
     await Promise.all(entries
       .filter((entry): boolean => entry.isDirectory())
@@ -4088,8 +4628,8 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
           const run = await db.query.runs.findFirst({ where: eq(runs.id, entry.name), columns: { status: true } });
           if (run !== undefined && !FINAL_RUN_STATUSES.includes(run.status)) return;
           await rm(path, { recursive: true, force: true });
-        } catch {
-          // Best effort: a concurrent reconciliation or cleanup may own it.
+        } catch (error: unknown) {
+          if (!isMissingFileError(error)) logBestEffortFailure("Could not prune saved plan", { path }, error);
         }
       }));
   };
@@ -4143,7 +4683,14 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
       await writeLog(run.id, "plan", "[terrence] Run requeued: the Terrence process restarted before this run's plan began.");
     } else {
       const applySide = run.status === "apply_queued" || run.status === "applying";
-      const capturedPartialState = run.status === "applying" ? await captureInterruptedApplyState(run.id).catch((): boolean => false) : false;
+      let capturedPartialState = false;
+      if (run.status === "applying") {
+        try {
+          capturedPartialState = await captureInterruptedApplyState(run.id);
+        } catch (error: unknown) {
+          logBestEffortFailure("Could not capture state after interrupted apply", { runId: run.id }, error);
+        }
+      }
       const message = applySide
         ? run.status === "applying"
           ? `Terrence restarted during apply; infrastructure state may be partially changed. This run was NOT re-executed automatically.${capturedPartialState ? " A durable recovery copy was captured." : " No local state file was available to capture."}`
@@ -4159,15 +4706,22 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
       try {
         if (runSandbox !== null) await removeSandboxWorkDir(run.id);
         else await rm(runWorkDir(run.id), { recursive: true, force: true });
-      } catch {}
+      } catch (error: unknown) {
+        logBestEffortFailure("Startup reconciliation workdir cleanup failed", { runId: run.id }, error);
+        scheduleRunWorkDirCleanup(run.id);
+      }
       errored += 1;
     }
     } catch (error: unknown) {
       // One bad transition or CAS race must not abort the whole startup
       // reconciliation; log and continue to the next interrupted run.
       const detail = error instanceof Error ? error.message : String(error);
-      try { await writeLog(run.id, "plan", `[terrence ERROR] Startup reconciliation failed for run ${run.id}: ${detail}`); } catch {}
-      try { console.error(`reconcileInterruptedLocalRuns: run ${run.id} failed:`, detail); } catch {}
+      try {
+        await writeLog(run.id, "plan", `[terrence ERROR] Startup reconciliation failed for run ${run.id}: ${detail}`);
+      } catch (logError: unknown) {
+        logBestEffortFailure("Could not persist startup reconciliation failure", { runId: run.id }, logError);
+      }
+      log.error(`Startup reconciliation failed for run ${run.id}`, { runId: run.id, error: detail });
     }
   }
 
@@ -4196,8 +4750,8 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
       } else {
         await rm(join(tmpdir(), "terrence", "assessments", assessment.id), { recursive: true, force: true });
       }
-    } catch {
-      // best-effort
+    } catch (error: unknown) {
+      logBestEffortFailure("Startup assessment workdir cleanup failed", { assessmentResultId: assessment.id }, error);
     }
   }
 

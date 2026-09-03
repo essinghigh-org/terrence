@@ -634,7 +634,12 @@ function matchesFileTriggers(workspace: DeepReadonly<typeof workspaces.$inferSel
   return paths.includes("") || [...files].some((file: string): boolean => paths.some((path: string): boolean => file === path || file.startsWith(`${path}/`)));
 }
 
-export async function getGitHubAppAccessToken(installationId: number): Promise<string | null> {
+export type GitHubAppAccessTokenDetails = Readonly<{
+  permissions: Readonly<Record<string, string>> | null;
+  token: string;
+}>;
+
+export async function getGitHubAppAccessTokenDetails(installationId: number): Promise<GitHubAppAccessTokenDetails | null> {
   const appId = process.env.GITHUB_APP_ID;
   const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
   if (appId === undefined || privateKey === undefined || appId === "" || privateKey === "") {
@@ -653,18 +658,34 @@ export async function getGitHubAppAccessToken(installationId: number): Promise<s
     if (apiUrl === undefined) return null;
     const response = await fetchVcsUrl(`${apiUrl}/app/installations/${String(installationId)}/access_tokens`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.v3+json" },
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "User-Agent": "Terrence",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
     });
     if (!response.ok) {
       console.error("[terrence] Failed to fetch access token:", await response.text());
       return null;
     }
-    const data = await response.json() as { token?: unknown };
-    return requiredString(data.token) ?? null;
+    const data = await response.json() as { permissions?: unknown; token?: unknown };
+    const tokenValue = requiredString(data.token);
+    if (tokenValue === undefined) return null;
+    const rawPermissions = asRecord(data.permissions);
+    const permissions = rawPermissions === undefined
+      ? null
+      : Object.fromEntries(Object.entries(rawPermissions).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+    return { permissions, token: tokenValue };
   } catch (error) {
     console.error("[terrence] Exception creating GitHub access token:", error);
     return null;
   }
+}
+
+export async function getGitHubAppAccessToken(installationId: number): Promise<string | null> {
+  const details = await getGitHubAppAccessTokenDetails(installationId);
+  return details?.token ?? null;
 }
 
 /**

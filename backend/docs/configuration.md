@@ -111,6 +111,7 @@ Set variables through the container environment or an `.env` file.
 | `TERRENCE_SYSLOG_TARGET` / `TERRENCE_SYSLOG_TARGETS` | none | Remote syslog destination(s). Site Admin logging settings override these when persisted. |
 | `TERRENCE_SYSLOG_LEVEL` | `LOG_LEVEL` | Remote syslog verbosity. |
 | `TERRENCE_SYSLOG_HOSTNAME` / `TERRENCE_SYSLOG_APP` | derived / `terrence` | Remote syslog identity overrides. |
+| `TERRENCE_SYSLOG_FORMAT` | `rfc5424` | Syslog message shape: `rfc5424` structured data or bare `json` object per message (one per UDP datagram, newline-delimited over TCP). |
 | `TERRENCE_QUERY_LOG` | off | Log every database query. |
 | `TERRENCE_QUERY_COUNT` | off | Count database queries for diagnostics. |
 | `MIGRATION_CHECKPOINT_RETRIES` | default | Retry count for migration checkpoints. |

@@ -231,14 +231,25 @@ export const projectRoutes = new Elysia({ name: "projects" })
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await ensureDefaultProject(org.id);
     const { number, size } = pageRequest(request);
+    // Audit finding 11: the CLI lists with filter[names] and scans only the
+    // returned page for an exact match. Accept repeated params and
+    // comma-separated values (both go-tfe encodings) so lookups hit past
+    // page one instead of falling through to a duplicate create.
+    const nameFilter = new URL(request.url).searchParams.getAll("filter[names]")
+      .flatMap((value): string[] => value.split(","))
+      .map((value): string => value.trim())
+      .filter((value): boolean => value !== "");
+    const scope = nameFilter.length > 0
+      ? and(eq(projects.orgId, org.id), inArray(projects.name, nameFilter))
+      : eq(projects.orgId, org.id);
     const [projList, countRows] = await Promise.all([
       db.query.projects.findMany({
-        where: eq(projects.orgId, org.id),
+        where: scope,
         orderBy: [asc(projects.name)],
         limit: size,
         offset: (number - 1) * size,
       }),
-      db.select({ total: count() }).from(projects).where(eq(projects.orgId, org.id)),
+      db.select({ total: count() }).from(projects).where(scope),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
     const counts = await countsByProject(projList.map((p): string => p.id));

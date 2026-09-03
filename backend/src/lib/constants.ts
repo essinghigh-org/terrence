@@ -16,7 +16,10 @@ export const PROVIDER_MODES = ["tofu", "terraform"] as const;
 export const TOKEN_DESCRIPTION_MAX_LENGTH = 255;
 export type ProviderMode = (typeof PROVIDER_MODES)[number];
 
-/** One deliberate compatibility target for every reference-format discovery header. */
+/** One deliberate compatibility target for every reference-format discovery header.
+ * Kept dotted on purpose: the hashicorp/tfe provider treats Terrence as TFE
+ * (no TFP-AppName) and gates versioned features on a dotted X-TFE-Version —
+ * release-style values fail those gates (provider E2E proves it). */
 export const COMPATIBILITY_VERSION =
   process.env.TERRENCE_COMPATIBILITY_VERSION?.trim() ||
   process.env.TERRENCE_TFE_COMPATIBILITY_VERSION?.trim() ||
@@ -28,7 +31,7 @@ export const COMPATIBILITY_VERSION =
 // The compatibility version above often holds a release-style value via env,
 // which would make TFP-API-Version unparseable and break version negotiation.
 // Keep the API version in its own constant, overridable independently.
-export const TFP_API_VERSION = process.env.TERRENCE_TFP_API_VERSION?.trim() || "2.5.0";
+export const TFP_API_VERSION = process.env.TERRENCE_TFP_API_VERSION?.trim() || "2.6";
 
 export const NOTIFICATION_DESTINATIONS = ["generic", "slack", "microsoft-teams", "email"] as const;
 export type NotificationDestination = (typeof NOTIFICATION_DESTINATIONS)[number];

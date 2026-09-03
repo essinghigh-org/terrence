@@ -34,16 +34,28 @@ type ParamItem = DeepReadonly<typeof policySetParameters.$inferSelect>;
 type PolicySetVersionItem = DeepReadonly<typeof policySetVersions.$inferSelect>;
 type PolicySetVcsRepo = NonNullable<typeof policySets.$inferSelect.vcsRepo>;
 
+/** Audit finding 6: the CLI hydrates policy checks from run linkage and
+ * (a) prints scope (empty renders "Unknown policy check"), (b) dereferences
+ * actions/permissions on soft_failed (absent would nil-panic), and (c) fails
+ * hard on unknown statuses — so "failed" serializes as "hard_failed". */
+function policyCheckStatus(check: PcItem): string {
+  return check.status === "failed" ? "hard_failed" : check.status;
+}
+
 function policyCheckResource(
   check: PcItem,
   policy: PolItem | undefined,
+  options?: Readonly<{ isOverridable?: boolean; canOverride?: boolean }>,
 ): Record<string, unknown> {
   return {
     id: check.id,
     type: "policy-checks",
     attributes: {
-      status: check.status,
+      status: policyCheckStatus(check),
       result: check.result,
+      scope: "organization",
+      actions: { "is-overridable": options?.isOverridable ?? false },
+      permissions: { "can-override": options?.canOverride ?? false },
       "policy-name": policy?.name ?? null,
       "enforcement-level": policy?.enforcementLevel ?? null,
       "created-at": new Date(check.createdAt).toISOString(),
@@ -1268,9 +1280,24 @@ export const policyRoutes = new Elysia({ name: "policies" })
       ? []
       : await db.query.policies.findMany({ where: inArray(policies.id, policyIds) });
     const policiesById = new Map(policyList.map((policy): [string, PolItem] => [policy.id, policy]));
+    const setIds = [...new Set(pcList.flatMap((check): string[] => {
+      const setId = check.policySetId ?? policiesById.get(check.policyId ?? "")?.policySetId ?? null;
+      return setId === null ? [] : [setId];
+    }))];
+    const setList = setIds.length === 0
+      ? []
+      : await db.query.policySets.findMany({ where: inArray(policySets.id, setIds), columns: { id: true, overridable: true } });
+    const overridableBySet = new Map(setList.map((row): [string, boolean] => [row.id, row.overridable === true]));
+    const canOverride = await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "policy-override");
     return {
-      data: pcList.map((check: PcItem): Record<string, unknown> =>
-        policyCheckResource(check, check.policyId === null ? undefined : policiesById.get(check.policyId))),
+      data: pcList.map((check: PcItem): Record<string, unknown> => {
+        const policy = check.policyId === null ? undefined : policiesById.get(check.policyId);
+        const setId = check.policySetId ?? policy?.policySetId ?? null;
+        return policyCheckResource(check, policy, {
+          isOverridable: setId === null ? false : overridableBySet.get(setId) ?? false,
+          canOverride,
+        });
+      }),
     };
   })
   .get("/api/v2/policy-checks/:check_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -1284,7 +1311,36 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const policy = pc.policyId === null
       ? undefined
       : await db.query.policies.findFirst({ where: eq(policies.id, pc.policyId) });
-    return { data: policyCheckResource(pc, policy) };
+    const setId = pc.policySetId ?? policy?.policySetId ?? null;
+    const pset = setId === null
+      ? undefined
+      : await db.query.policySets.findFirst({ where: eq(policySets.id, setId), columns: { overridable: true } });
+    const canOverride = await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "policy-override");
+    return { data: policyCheckResource(pc, policy, { isOverridable: pset?.overridable === true, canOverride }) };
+  })
+  .get("/api/v2/policy-checks/:check_id/output", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+    // Audit finding 4: go-tfe PolicyChecks.Logs polls Read until finished,
+    // then GETs this path and reads the RAW body as the log stream (not
+    // JSON:API), so this returns text/plain rendered from the stored
+    // evaluation outcome. Same read gate as the check itself.
+    const checkId = params.check_id ?? "";
+    const pc = await db.query.policyChecks.findFirst({ where: eq(policyChecks.id, checkId) });
+    if (pc === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, pc.runId) });
+    if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, run.workspaceId) });
+    if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const lines = [`Policy check ${pc.id} status: ${pc.status}`];
+    if (pc.result !== null && pc.result !== undefined) {
+      try {
+        lines.push(JSON.stringify(pc.result, null, 2) ?? "");
+      } catch {
+        lines.push("[unserializable result]");
+      }
+    }
+    return new Response(`${lines.join("\n")}\n`, {
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
   })
   .post("/api/v2/policy-checks/:check_id/actions/override", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const checkId = params.check_id ?? "";

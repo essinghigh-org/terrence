@@ -89,4 +89,47 @@ describe("runtime logging configuration", () => {
       collector.socket.close();
     }
   });
+
+  it("switches the syslog message shape between rfc5424 and json at runtime", async () => {
+    const collector = await openCollector();
+    const logSpy = spyOn(console, "log").mockImplementation((): void => {
+      /* suppress test output */
+    });
+    try {
+      process.env.TERRENCE_SYSLOG_TARGET = `udp://127.0.0.1:${String(collector.port)}`;
+      applyLoggingSettings({
+        enabled: true,
+        "log-level": "debug",
+        "syslog-level": "debug",
+        "syslog-targets": [`udp://127.0.0.1:${String(collector.port)}`],
+        "syslog-format": "rfc5424",
+      });
+      log.info("rfc shape", { http: { status: 200 } });
+      await Bun.sleep(25);
+      expect(collector.received).toHaveLength(1);
+      expect(collector.received[0]).toContain("[terrence@65024");
+      expect(collector.received[0]).toContain('http.status="200"');
+
+      applyLoggingSettings({ "syslog-format": "json" });
+      log.info("json shape", { http: { status: 201 } });
+      await Bun.sleep(25);
+      expect(collector.received).toHaveLength(2);
+      expect(collector.received[1]).not.toContain("[terrence@65024");
+      const second = collector.received[1] ?? "";
+      expect(second.startsWith("{")).toBeTrue();
+      const body = JSON.parse(second) as Record<string, unknown>;
+      expect(body["message"]).toBe("json shape");
+      expect(body["http"]).toEqual({ status: 201 });
+
+      applyLoggingSettings({ "syslog-format": "bogus" });
+      log.info("fallback shape", { http: { status: 500 } });
+      await Bun.sleep(25);
+      expect(collector.received).toHaveLength(3);
+      expect(collector.received[2]).toContain("[terrence@65024");
+      expect(collector.received[2]).toContain('http.status="500"');
+    } finally {
+      logSpy.mockRestore();
+      collector.socket.close();
+    }
+  });
 });
