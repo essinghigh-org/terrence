@@ -66,16 +66,27 @@ function hotp(key: Buffer, counter: number): number {
   return binary % 1_000_000;
 }
 
-export function verifyTotp(secret: string, code: string, window = 1): boolean {
-  if (!/^\d{6}$/.test(code)) return false;
+/** Return the moving-factor counter represented by a code, or null if invalid. */
+export function matchingTotpCounter(
+  secret: string,
+  code: string,
+  window = 1,
+  atMs = Date.now(),
+): number | null {
+  if (!/^\d{6}$/.test(code)) return null;
   const key = base32Decode(secret);
-  if (key.length === 0) return false;
-  const counter = Math.floor(Date.now() / 30_000);
+  if (key.length === 0) return null;
+  const counter = Math.floor(atMs / 30_000);
   const expected = Number.parseInt(code, 10);
   for (let offset = -window; offset <= window; offset++) {
-    if (hotp(key, counter + offset) === expected) return true;
+    const candidate = counter + offset;
+    if (candidate >= 0 && hotp(key, candidate) === expected) return candidate;
   }
-  return false;
+  return null;
+}
+
+export function verifyTotp(secret: string, code: string, window = 1): boolean {
+  return matchingTotpCounter(secret, code, window) !== null;
 }
 
 /** Generate a fresh TOTP code for a secret (used in tests). */

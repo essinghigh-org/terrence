@@ -465,6 +465,15 @@ if (!isPostgres) {
     client.run("ALTER TABLE agent_jobs ADD COLUMN fencing_token INTEGER NOT NULL DEFAULT 0");
   }
 
+  // TOTP replay protection is additive and intentionally idempotent here so
+  // older installations converge without relying on a generated migration.
+  const user2FAColumns = new Set(
+    (client.query("PRAGMA table_info(user_2fa)").all() as { name: string }[]).map((row): string => row.name),
+  );
+  if (!user2FAColumns.has("last_accepted_counter")) {
+    client.run("ALTER TABLE user_2fa ADD COLUMN last_accepted_counter INTEGER");
+  }
+
   // Hot-path indexes are declared in the canonical schema and migrations, but
   // keep this backfill idempotent for installations whose journal skipped a
   // migration or whose older boot created only the agent index.
@@ -806,6 +815,8 @@ export async function applyPgMigrations(): Promise<void> {
     await pg.unsafe("ALTER TABLE configuration_versions ADD COLUMN IF NOT EXISTS upload_claim_expires_at bigint");
     // TOTP seed at-rest encryption (todo 110-112, see sqlite boot path).
     await pg.unsafe("ALTER TABLE user_2fa ADD COLUMN IF NOT EXISTS secret_encrypted text");
+    // TOTP replay protection is additive and idempotent for older installs.
+    await pg.unsafe("ALTER TABLE user_2fa ADD COLUMN IF NOT EXISTS last_accepted_counter bigint");
     // Refresh-session two-tab concurrency grace (todo 125-127, see sqlite boot path).
     await pg.unsafe("ALTER TABLE refresh_sessions ADD COLUMN IF NOT EXISTS successor_hash text");
     await pg.unsafe("ALTER TABLE refresh_sessions ADD COLUMN IF NOT EXISTS rotated_at_ms bigint");

@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { users, apiTokens, refreshSessions, organizationMemberships, organizations, samlSettings, teams, user2FA } from "../db/schema";
-import { and, count, eq, gt, inArray, isNull, ne, or } from "drizzle-orm";
+import { and, count, eq, gt, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { userResource } from "../lib/response";
 import { isUniqueConstraintError } from "../lib/validation";
@@ -10,7 +10,7 @@ import { auditLog } from "../lib/utils";
 import { log } from "../lib/log";
 import { authPlugin } from "../auth";
 import { lockFirstUserElection } from "../db/first-user";
-import { generateTotpSecret, otpauthUrl, verifyTotp } from "../lib/totp";
+import { generateTotpSecret, matchingTotpCounter, otpauthUrl } from "../lib/totp";
 import { encryptSecret, decryptSecret, isEncryptedSecret } from "../lib/secrets";
 import { generateAuthenticationToken, hashAuthenticationToken, tokenHashCandidates } from "../lib/token-service";
 
@@ -409,6 +409,65 @@ async function resolveMfaSeed(mfa: Readonly<{ secret: string; secretEncrypted: s
   try { return await decryptSecret(raw); } catch { return null; }
 }
 
+type MfaUpdate = Readonly<{
+  secret?: string;
+  secretEncrypted?: string;
+  enabled?: boolean;
+}>;
+
+/** Atomically accept a strictly newer TOTP counter for this MFA record. */
+async function acceptTotpCode(
+  userId: string,
+  mfa: Readonly<typeof user2FA.$inferSelect>,
+  code: string,
+  updates: MfaUpdate = {},
+): Promise<boolean> {
+  const seedPlain = await resolveMfaSeed(mfa);
+  if (seedPlain === null) return false;
+  const counter = matchingTotpCounter(seedPlain, code);
+  if (counter === null) return false;
+  const sameSecret = and(
+    eq(user2FA.secret, mfa.secret),
+    mfa.secretEncrypted === null
+      ? isNull(user2FA.secretEncrypted)
+      : eq(user2FA.secretEncrypted, mfa.secretEncrypted),
+  );
+  const accepted = await db.update(user2FA)
+    .set({ ...updates, lastAcceptedCounter: counter })
+    .where(and(
+      eq(user2FA.userId, userId),
+      sameSecret,
+      or(isNull(user2FA.lastAcceptedCounter), lt(user2FA.lastAcceptedCounter, counter)),
+    ))
+    .returning({ userId: user2FA.userId });
+  return accepted.length === 1;
+}
+
+function currentPasswordFromAttrs(attrs: Attrs): string {
+  return typeof attrs["current_password"] === "string"
+    ? attrs["current_password"]
+    : typeof attrs["current-password"] === "string"
+      ? attrs["current-password"]
+      : "";
+}
+
+async function requireCurrentPassword(
+  user: Readonly<typeof users.$inferSelect>,
+  body: unknown,
+  set: SetObj,
+): Promise<Record<string, unknown> | null> {
+  const currentPassword = currentPasswordFromAttrs(extractAttrs(body) ?? {});
+  if (currentPassword === "") {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Current password is required" }] };
+  }
+  if (!(await passwordMatches(currentPassword, user.passwordHash))) {
+    (set as { status: number }).status = 401;
+    return { errors: [{ status: "401", title: "Unauthorized", detail: "Current password is incorrect" }] };
+  }
+  return null;
+}
+
 export const accountRoutes = new Elysia({ name: "accounts" })
   // Public routes (no auth required)
   .post("/admin/initial-admin-user", async ({ body, request, set }: ReqCtx): Promise<unknown> => {
@@ -661,8 +720,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
     }
-    const loginSeedPlain = await resolveMfaSeed(mfa);
-    if (loginSeedPlain === null || !verifyTotp(loginSeedPlain, code)) {
+    if (!(await acceptTotpCode(challenge.userId, mfa, code))) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
     }
@@ -1172,11 +1230,13 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       },
     };
   })
-  .post("/api/v2/account/mfa/enroll", async ({ user, set }: AuthReqCtx): Promise<unknown> => {
+  .post("/api/v2/account/mfa/enroll", async ({ user, body, set }: AuthReqCtx): Promise<unknown> => {
     if (user === null || user === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    const passwordError = await requireCurrentPassword(user, body, set);
+    if (passwordError !== null) return passwordError;
     const existing = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
     if (existing !== undefined && existing.enabled === true) {
       (set as { status: number }).status = 409;
@@ -1192,7 +1252,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const secretEncrypted = await encryptSecret(secret);
     await db.insert(user2FA).values({ userId: user.id, secret: "", secretEncrypted, enabled: false }).onConflictDoUpdate({
       target: user2FA.userId,
-      set: { secret: "", secretEncrypted, enabled: false },
+      set: { secret: "", secretEncrypted, enabled: false, lastAcceptedCounter: null },
     });
     await auditLog("enroll", "mfa", user.id, user.id, null, { userId: user.id });
     return {
@@ -1218,20 +1278,13 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
     }
-    const seedPlain = await resolveMfaSeed(mfa);
-    if (seedPlain === null || !verifyTotp(seedPlain, code)) {
+    const seedUpdate = mfa.secretEncrypted === null && mfa.secret !== ""
+      ? { secret: "", secretEncrypted: await encryptSecret(mfa.secret) }
+      : {};
+    if (!(await acceptTotpCode(user.id, mfa, code, { ...seedUpdate, enabled: true }))) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
     }
-    // Transparent migration: a plaintext seed is re-encrypted after its first
-    // successful use (todo 111/112 — the enc:v1 prefix check prevents
-    // double-encrypting an already-encrypted value).
-    if (mfa.secretEncrypted === null && mfa.secret !== "") {
-      await db.update(user2FA)
-        .set({ secret: "", secretEncrypted: await encryptSecret(mfa.secret) })
-        .where(eq(user2FA.userId, user.id));
-    }
-    await db.update(user2FA).set({ enabled: true }).where(eq(user2FA.userId, user.id));
     await auditLog("verify", "mfa", user.id, user.id, null, { userId: user.id });
     const token = refreshCookieCandidates(request)[0];
     if (token !== undefined && token !== "") {
@@ -1249,12 +1302,6 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const attrs = extractAttrs(body) ?? {};
-    const code = typeof attrs["code"] === "string" ? attrs["code"] : "";
-    if (code === "") {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Code is required" }] };
-    }
     const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
     if (mfa === undefined) {
       (set as { status: number }).status = 404;
@@ -1264,8 +1311,15 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found", detail: "MFA is not enabled" }] };
     }
-    const disableSeedPlain = await resolveMfaSeed(mfa);
-    if (disableSeedPlain === null || !verifyTotp(disableSeedPlain, code)) {
+    const attrs = extractAttrs(body) ?? {};
+    const code = typeof attrs["code"] === "string" ? attrs["code"] : "";
+    if (code === "") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Code is required" }] };
+    }
+    const passwordError = await requireCurrentPassword(user, body, set);
+    if (passwordError !== null) return passwordError;
+    if (!(await acceptTotpCode(user.id, mfa, code))) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid authentication code" }] };
     }

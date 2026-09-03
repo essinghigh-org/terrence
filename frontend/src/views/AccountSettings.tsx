@@ -98,6 +98,7 @@ export function AccountSettings(): React.JSX.Element {
   const [mfaEnabled, setMfaEnabled] = useState(false);
   const [mfaEnrollment, setMfaEnrollment] = useState<{ secret: string; "otpauth-url"?: string } | null>(null);
   const [mfaCode, setMfaCode] = useState("");
+  const [mfaCurrentPassword, setMfaCurrentPassword] = useState("");
   const [mfaLoading, setMfaLoading] = useState(false);
   const [mfaLoaded, setMfaLoaded] = useState(false);
 
@@ -208,19 +209,25 @@ export function AccountSettings(): React.JSX.Element {
   function handleCancelEnrollment(): void {
     setMfaEnrollment(null);
     setMfaCode("");
+    setMfaCurrentPassword("");
   }
 
   async function handleBeginMfaEnrollment(): Promise<void> {
+    if (mfaCurrentPassword.trim() === "") return;
     setMfaLoading(true);
     setError("");
     setSuccessMsg("");
     try {
       // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi("/account/mfa/enroll", { method: "POST" }) as {
+      const response = await fetchApi("/account/mfa/enroll", {
+        method: "POST",
+        body: JSON.stringify({ data: { attributes: { current_password: mfaCurrentPassword } } }),
+      }) as {
         data: { attributes: { secret: string; "otpauth-url"?: string } };
       };
       setMfaEnrollment(response.data.attributes);
       setMfaCode("");
+      setMfaCurrentPassword("");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not start MFA enrollment");
     } finally {
@@ -250,17 +257,18 @@ export function AccountSettings(): React.JSX.Element {
   }
 
   async function handleDisableMfa(): Promise<void> {
-    if (mfaCode.trim() === "") return;
+    if (mfaCode.trim() === "" || mfaCurrentPassword.trim() === "") return;
     setMfaLoading(true);
     setError("");
     setSuccessMsg("");
     try {
       await fetchApi("/account/mfa", {
         method: "DELETE",
-        body: JSON.stringify({ data: { attributes: { code: mfaCode.trim() } } }),
+        body: JSON.stringify({ data: { attributes: { code: mfaCode.trim(), current_password: mfaCurrentPassword } } }),
       });
       setMfaEnabled(false);
       setMfaCode("");
+      setMfaCurrentPassword("");
       setSuccessMsg("Multi-factor authentication disabled");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not disable MFA");
@@ -794,6 +802,10 @@ export function AccountSettings(): React.JSX.Element {
                   <label htmlFor="mfa-disable-code" className="text-sm font-medium">Authenticator code to disable MFA</label>
                   <Input id="mfa-disable-code" name="mfa-disable-code" inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={(event): void => { setMfaCode(event.target.value); }} onInput={(event): void => { setMfaCode(event.currentTarget.value); }} placeholder="6-digit code" />
                 </div>
+                <div className="space-y-1.5">
+                  <label htmlFor="mfa-disable-password" className="text-sm font-medium">Current password to disable MFA</label>
+                  <Input id="mfa-disable-password" name="mfa-disable-password" type="password" autoComplete="current-password" value={mfaCurrentPassword} onChange={(event): void => { setMfaCurrentPassword(event.target.value); }} onInput={(event): void => { setMfaCurrentPassword(event.currentTarget.value); }} />
+                </div>
               </>
             ) : mfaEnrollment !== null ? (
               <div className="space-y-4 rounded-md border bg-muted/30 p-4">
@@ -816,19 +828,25 @@ export function AccountSettings(): React.JSX.Element {
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">MFA is not enabled on this account.</p>
+              <>
+                <p className="text-sm text-muted-foreground">MFA is not enabled on this account.</p>
+                <div className="space-y-1.5">
+                  <label htmlFor="mfa-enrollment-password" className="text-sm font-medium">Current password to set up MFA</label>
+                  <Input id="mfa-enrollment-password" name="mfa-enrollment-password" type="password" autoComplete="current-password" value={mfaCurrentPassword} onChange={(event): void => { setMfaCurrentPassword(event.target.value); }} onInput={(event): void => { setMfaCurrentPassword(event.currentTarget.value); }} />
+                </div>
+              </>
             )}
           </CardContent>
           <CardFooter className="gap-2">
             {mfaEnabled ? (
-              <Button type="button" variant="destructive" disabled={mfaLoading || mfaCode.trim() === ""} onClick={(): void => { void handleDisableMfa(); }}>Disable MFA</Button>
+              <Button type="button" variant="destructive" disabled={mfaLoading || mfaCode.trim() === "" || mfaCurrentPassword.trim() === ""} onClick={(): void => { void handleDisableMfa(); }}>Disable MFA</Button>
             ) : mfaEnrollment !== null ? (
               <>
                 <Button type="button" disabled={mfaLoading || mfaCode.trim() === ""} onClick={(): void => { void handleConfirmMfaEnrollment(); }}>{mfaLoading ? "Verifying…" : "Verify and enable MFA"}</Button>
                 <Button type="button" variant="outline" disabled={mfaLoading} onClick={(): void => { handleCancelEnrollment(); }}>Cancel</Button>
               </>
             ) : (
-              <Button type="button" disabled={mfaLoading} onClick={(): void => { void handleBeginMfaEnrollment(); }}>{mfaLoading ? "Preparing…" : "Set up MFA"}</Button>
+              <Button type="button" disabled={mfaLoading || mfaCurrentPassword.trim() === ""} onClick={(): void => { void handleBeginMfaEnrollment(); }}>{mfaLoading ? "Preparing…" : "Set up MFA"}</Button>
             )}
           </CardFooter>
         </Card>

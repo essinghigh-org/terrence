@@ -73,6 +73,7 @@ describe("totp", () => {
 describe("mfa api", () => {
   let apiToken = "";
   let mfaSecret = "";
+  let acceptedEnrollmentCode = "";
   const username = `mfauser_${Date.now()}`;
 
   beforeAll(async () => {
@@ -95,8 +96,18 @@ describe("mfa api", () => {
     expect(res.json.data?.attributes?.["enabled"]).toBe(false);
   });
 
-  test("POST /account/mfa/enroll returns a secret and otpauth URL", async () => {
+  test("POST /account/mfa/enroll requires the current password", async () => {
     const res = await api("POST", "/api/v2/account/mfa/enroll", undefined, apiToken);
+    expect(res.status).toBe(422);
+  });
+
+  test("POST /account/mfa/enroll returns a secret and otpauth URL", async () => {
+    const res = await api(
+      "POST",
+      "/api/v2/account/mfa/enroll",
+      { data: { attributes: { "current-password": "securepassword" } } },
+      apiToken,
+    );
     expect(res.status).toBe(200);
     const attrs = res.json.data?.attributes ?? {};
     mfaSecret = attrs["secret"] as string;
@@ -111,10 +122,16 @@ describe("mfa api", () => {
   });
 
   test("POST /account/mfa/verify enables MFA with a valid code", async () => {
-    const code = generateTotpCode(mfaSecret);
+    const code = generateTotpCode(mfaSecret, Date.now() - 30_000);
+    acceptedEnrollmentCode = code;
     const res = await api("POST", "/api/v2/account/mfa/verify", { data: { attributes: { code } } }, apiToken);
     expect(res.status).toBe(200);
     expect(res.json.data?.attributes?.["enabled"]).toBe(true);
+  });
+
+  test("POST /account/mfa/verify rejects reuse of an accepted TOTP code", async () => {
+    const res = await api("POST", "/api/v2/account/mfa/verify", { data: { attributes: { code: acceptedEnrollmentCode } } }, apiToken);
+    expect(res.status).toBe(401);
   });
 
   test("POST /account/mfa/verify rejects an invalid code", async () => {
@@ -160,9 +177,20 @@ describe("mfa api", () => {
     expect(res.status).toBe(401);
   });
 
-  test("DELETE /account/mfa disables with a valid code", async () => {
+  test("DELETE /account/mfa requires the current password", async () => {
     const code = generateTotpCode(mfaSecret);
     const res = await api("DELETE", "/api/v2/account/mfa", { data: { attributes: { code } } }, apiToken);
+    expect(res.status).toBe(422);
+  });
+
+  test("DELETE /account/mfa disables with a valid code", async () => {
+    const code = generateTotpCode(mfaSecret, Date.now() + 30_000);
+    const res = await api(
+      "DELETE",
+      "/api/v2/account/mfa",
+      { data: { attributes: { code, "current-password": "securepassword" } } },
+      apiToken,
+    );
     expect(res.status).toBe(200);
     expect(res.json.data?.attributes?.["enabled"]).toBe(false);
   });
