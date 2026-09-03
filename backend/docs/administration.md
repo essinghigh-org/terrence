@@ -93,8 +93,8 @@ Site Admin value is unset:
   `TERRENCE_SYSLOG_APP` control remote level and identity.
 - `TERRENCE_SYSLOG_FORMAT` selects the message shape: `rfc5424` (default,
   meta as dotted structured-data params) or `json` (one bare JSON object
-  per message with no syslog envelope, auto-extracted by json
-  sourcetypes such as Splunk: one object per UDP datagram,
+  per message with no syslog envelope, auto-extracted by JSON-aware collectors
+  such as Splunk with the `_json` sourcetype: one object per UDP datagram,
   newline-delimited objects over TCP).
 
 A persisted non-null Site Admin value overrides its environment fallback. An
