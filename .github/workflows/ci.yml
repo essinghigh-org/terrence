@@ -160,6 +160,8 @@ jobs:
           bun-version: 1.4.0
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Build frontend (security-regression assertions need dist, issue #290)
+        run: cd frontend && bun run build
       - name: Backend coverage report
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -200,11 +202,18 @@ jobs:
           docker run -d --name terrence-ci-verify terrence:ci > /dev/null
           cleanup_verify() { docker rm -f terrence-ci-verify > /dev/null 2>&1 || true; }
           trap cleanup_verify EXIT
-          for _ in $(seq 1 30); do
+          for attempt in $(seq 1 30); do
             health=$(docker inspect terrence-ci-verify --format '{{.State.Health.Status}}' 2>/dev/null || true)
             if [ "$health" = "healthy" ]; then break; fi
-            sleep 5
+            if [ "$attempt" -lt 30 ]; then sleep 5; fi
           done
+          # Re-inspect after the polling loop: only a confirmed healthy
+          # container may be passed to the runtime-user verification script.
+          health=$(docker inspect terrence-ci-verify --format '{{.State.Health.Status}}' 2>/dev/null || true)
+          if [ "$health" != "healthy" ]; then
+            echo "FAIL: verification container is not healthy (status=${health:-unknown})" >&2
+            exit 1
+          fi
           bash backend/scripts/verify-container-user.sh terrence-ci-verify
           trap - EXIT
           cleanup_verify

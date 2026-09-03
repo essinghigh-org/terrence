@@ -345,18 +345,18 @@ describe("Run list sorting (kanban 14.8)", () => {
   // sleep (issue #382): a fixed nap fails under loaded runners when the window
   // needs longer, and wastes time when it does not.
   const handleWithRateLimitRetry = async (buildRequest: () => Request): Promise<Response> => {
-    let last: Response | null = null;
     for (let attempt = 0; attempt < 12; attempt++) {
       const res = await app.handle(buildRequest());
       if (res.status !== 429) return res;
-      last = res;
       const retryAfter = Number(res.headers.get("Retry-After"));
       const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
         ? Math.min(Math.ceil(retryAfter * 1000), 5000)
         : 250 * (attempt + 1);
       await Bun.sleep(waitMs);
     }
-    return last ?? app.handle(buildRequest());
+    // Make one final request after the last retry wait. Returning the last
+    // 429 would hide whether the rate-limit window has actually cleared.
+    return app.handle(buildRequest());
   };
 
   const listRunIds = async (sort: string | null): Promise<string[]> => {
