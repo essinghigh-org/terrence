@@ -1,19 +1,21 @@
-// RFC 5424 syslog message formatting for Terrence's structured log entries.
+// Bare-JSON log shipping for Terrence's structured log entries.
 //
-// Maps the app's { error, warn, info, debug } levels onto the syslog
-// severity codes and emits IETF-style messages with a JSON body:
+// Format "json" emits one JSON object per datagram with NO syslog envelope:
+// collectors that auto-extract JSON (Splunk json/_json sourcetypes) parse
+// every field, including nested objects such as `http`, with zero
+// collector-side configuration. (A JSON body wrapped in an RFC 5424
+// envelope defeats content-based JSON detection, so the envelope is
+// omitted outright — the JSON body already carries timestamp, hostname,
+// and app identity.)
 //
-//   <PRI>VERSION TIMESTAMP HOSTNAME APP PROCID MSGID - {"timestamp":...}
+// Format "rfc5424" (default) emits IETF-style messages with dotted
+// structured-data params for syslog-native tooling:
 //
-// Structured data is always NIL; the message is a JSON object so collectors
-// with a json sourcetype (Splunk index=terrence) auto-extract every field,
-// including nested objects such as `http`, without regex parsing or
-// collector-side props. The RFC 5424 envelope (PRI/severity, timestamp,
-// hostname, app) is preserved for syslog-native tooling.
+//   <PRI>VERSION TIMESTAMP HOSTNAME APP PROCID MSGID [terrence@65024 k="v"]
 //
 // Datagram transports (UDP, 1024-byte RFC 5426 cap) pass maxBodyBytes so the
 // body is shortened to valid JSON that fits; stream transports (TCP) send
-// the full body.
+// the full body newline-delimited.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
@@ -181,10 +183,20 @@ function jsonStringBytes(value: string): number {
   return Buffer.byteLength(JSON.stringify(value) as string, "utf8");
 }
 
+/** Return the smallest useful JSON value that fits an unusually small cap.
+ * A valid object is impossible below two bytes, so the final scalar/empty
+ * fallback is only used for pathological caller-supplied limits. */
+function fallbackJsonBody(maxBytes: number): string {
+  for (const candidate of ['{"truncated":true}', "{}", "0"]) {
+    if (Buffer.byteLength(candidate, "utf8") <= maxBytes) return candidate;
+  }
+  return "";
+}
+
 /** Shorten body to fit maxBytes while staying valid JSON: the largest
  * non-envelope meta fields are dropped first, then the remaining budget is
- * filled with the longest message prefix that fits. Envelope keys always
- * survive. */
+ * filled with the longest message prefix (plus marker) that fits. Envelope keys always
+ * survive when the requested budget permits them. */
 function fitJsonBody(body: Record<string, unknown>, maxBytes: number): string {
   const full = stringifySyslogBody(body);
   if (Buffer.byteLength(full, "utf8") <= maxBytes) return full;
@@ -207,7 +219,9 @@ function fitJsonBody(body: Record<string, unknown>, maxBytes: number): string {
     dropped.add(key);
   }
   const base = baseFor(dropped);
-  const budget = maxBytes - sizeOf(base);
+  const baseBytes = sizeOf(base);
+  if (baseBytes > maxBytes) return fallbackJsonBody(maxBytes);
+  const budget = maxBytes - baseBytes;
   // 2. Binary-search the longest message prefix (plus marker) that fits.
   const message = typeof shortened["message"] === "string" ? (shortened["message"] as string) : "";
   let lo = 0;
@@ -220,9 +234,19 @@ function fitJsonBody(body: Record<string, unknown>, maxBytes: number): string {
   }
   const final: Record<string, unknown> = {
     ...base,
-    message: lo < message.length && message !== "" ? `${message.slice(0, lo)}${TRUNCATION_MARKER}` : message,
+    message: messageForBudget(message, lo, budget),
   };
-  return stringifySyslogBody(final);
+  const fitted = stringifySyslogBody(final);
+  return Buffer.byteLength(fitted, "utf8") <= maxBytes ? fitted : fallbackJsonBody(maxBytes);
+}
+
+/** Message value for a fitted body: the full text when it fits, else the
+ * longest prefix plus marker — or "" when even the marker exceeds the
+ * remaining budget (the truncated flag still signals the shortening). */
+function messageForBudget(message: string, prefixLength: number, budget: number): string {
+  if (prefixLength >= message.length || message === "") return message;
+  if (budget >= jsonStringBytes(TRUNCATION_MARKER)) return `${message.slice(0, prefixLength)}${TRUNCATION_MARKER}`;
+  return "";
 }
 
 export type SyslogEntryInput = Readonly<{
@@ -245,9 +269,10 @@ export type SyslogFormatOptions = Readonly<{
   format?: SyslogFormat;
 }>;
 
-/** Build one RFC 5424 line (no framing, no trailing newline). Format
- * "json" carries the entry as a JSON message body (SD=NIL) for json
- * sourcetypes; "rfc5424" (the default) carries meta as dotted SD-PARAMs. */
+/** Build one wire message (no framing, no trailing newline). Format "json"
+ * returns the bare JSON object with no syslog envelope so collectors with
+ * content-based JSON detection auto-extract every field; "rfc5424" (the
+ * default) returns the full RFC 5424 line with meta as dotted SD-PARAMs. */
 export function formatSyslogMessage(
   entry: SyslogEntryInput,
   identity: SyslogIdentity,
@@ -266,7 +291,7 @@ export function formatSyslogMessage(
       if (!["timestamp", "level", "message", "hostname", "app"].includes(key)) extra[key] = value;
     }
     const body: Record<string, unknown> = {
-      timestamp: entry.timestamp,
+      timestamp: rfc3339Timestamp(entry.timestamp),
       level: entry.level,
       message: entry.message,
       hostname: identity.hostname || NIL,
@@ -274,8 +299,9 @@ export function formatSyslogMessage(
       ...extra,
     };
     const maxBytes = options?.maxBodyBytes;
-    const json = maxBytes === undefined ? stringifySyslogBody(body) : fitJsonBody(body, maxBytes);
-    return `${header} ${NIL} ${json}`;
+    // Bare JSON on the wire: no RFC 5424 envelope, so JSON-detecting
+    // collectors parse the datagram with no extra configuration.
+    return maxBytes === undefined ? stringifySyslogBody(body) : fitJsonBody(body, maxBytes);
   }
   const meta = entry.meta;
   if (meta === undefined || Object.keys(meta).length === 0) {

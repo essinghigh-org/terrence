@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createSocket, type Socket } from "node:dgram";
+import { createServer } from "node:net";
 
 import { closeSyslogTransports, parseSyslogTarget, sendSyslogFrame } from "../../src/lib/syslog-transport";
 import { formatSyslogMessage, UDP_JSON_BODY_BUDGET } from "../../src/lib/syslog-format";
@@ -42,12 +43,12 @@ describe("syslog UDP transport end to end", (): void => {
       { hostname: "test-host", appName: "terrence", procId: "7" },
       { format: "json" },
     );
-    expect(frame.startsWith("<12>1 2026-08-26T03:00:00.000Z test-host terrence 7 - ")).toBeTrue();
-    const delivered = JSON.parse(frame.slice(frame.indexOf("{"))) as Record<string, unknown>;
+    expect(frame.startsWith("{")).toBeTrue();
+    const delivered = JSON.parse(frame) as Record<string, unknown>;
     expect(delivered["requestId"]).toBe("r-9");
 
     if (target === null) throw new Error("unreachable");
-    sendSyslogFrame(target, frame);
+    sendSyslogFrame(target, frame, { jsonBody: true });
 
     const got = await Promise.race([
       received,
@@ -56,6 +57,45 @@ describe("syslog UDP transport end to end", (): void => {
       }),
     ]);
     expect(got).toBe(frame);
+  }, 5_000);
+
+  it("frames bare JSON newline-delimited over TCP", async (): Promise<void> => {
+    const chunks: Buffer[] = [];
+    const server = createServer((socket): void => {
+      socket.on("data", (chunk: Buffer): void => { chunks.push(chunk); });
+    });
+    const port = await new Promise<number>((resolve): void => {
+      server.listen(0, "127.0.0.1", (): void => {
+        resolve((server.address() as { port: number }).port);
+      });
+    });
+    try {
+      const target = parseSyslogTarget(`tcp://127.0.0.1:${String(port)}`);
+      expect(target).not.toBeNull();
+      const frame = formatSyslogMessage(
+        {
+          timestamp: "2026-08-26T03:00:00.000Z",
+          level: "info",
+          message: "tcp json",
+          meta: { requestId: "r-tcp" },
+        },
+        { hostname: "test-host", appName: "terrence", procId: "7" },
+        { format: "json" },
+      );
+      expect(frame.startsWith("{")).toBeTrue();
+      if (target === null) throw new Error("unreachable");
+      sendSyslogFrame(target, frame, { jsonBody: true });
+      const expectedBytes = Buffer.byteLength(frame, "utf8") + 1;
+      const deadline = Date.now() + 3_000;
+      while (Buffer.concat(chunks).byteLength < expectedBytes && Date.now() < deadline) {
+        await Bun.sleep(10);
+      }
+      const wire = Buffer.concat(chunks).toString("utf8");
+      expect(wire).toBe(`${frame}\n`);
+      expect((): unknown => JSON.parse(wire)).not.toThrow();
+    } finally {
+      server.close();
+    }
   }, 5_000);
 
   it("delivers an IPv6 target through a UDP6 socket", async (): Promise<void> => {
@@ -130,7 +170,7 @@ describe("syslog UDP transport end to end", (): void => {
       { maxBodyBytes: UDP_JSON_BODY_BUDGET, format: "json" },
     );
 
-    sendSyslogFrame(target, frame);
+    sendSyslogFrame(target, frame, { jsonBody: true });
 
     const message = await Promise.race([
       received,
@@ -143,10 +183,10 @@ describe("syslog UDP transport end to end", (): void => {
     const decoded = message.toString("utf8");
     expect(message.byteLength).toBeLessThanOrEqual(1024);
     expect(Buffer.from(decoded, "utf8").equals(message)).toBeTrue();
-    expect(decoded.startsWith("<14>1 2026-08-26T03:00:00.000Z test-host terrence 7 - ")).toBeTrue();
+    expect(decoded.startsWith("{")).toBeTrue();
     // The received payload parses: collectors extract fields from oversized
     // entries instead of choking on a truncated blob.
-    const receivedBody = JSON.parse(decoded.slice(decoded.indexOf("{"))) as Record<string, unknown>;
+    const receivedBody = JSON.parse(decoded) as Record<string, unknown>;
     expect(receivedBody["truncated"]).toBe(true);
     expect(typeof receivedBody["message"]).toBe("string");
     expect((receivedBody["message"] as string).startsWith("🙂")).toBeTrue();
@@ -196,7 +236,7 @@ describe("syslog UDP transport end to end", (): void => {
     ]);
     const decoded = message.toString("utf8");
     expect(message.byteLength).toBeLessThanOrEqual(1024);
-    const repaired = JSON.parse(decoded.slice(decoded.indexOf("{"))) as Record<string, unknown>;
+    const repaired = JSON.parse(decoded) as Record<string, unknown>;
     expect(repaired["truncated"]).toBe(true);
     expect(repaired["timestamp"]).toBe("2026-08-26T03:00:00.000Z");
     expect(repaired["level"]).toBe("info");
@@ -229,8 +269,8 @@ describe("syslog UDP transport end to end", (): void => {
       { format: "json" },
     );
 
-    expect(frame.startsWith("<14>1 2026-08-26T03:00:00.000Z test-host terrence 7 - - {")).toBeTrue();
-    const emojiBody = JSON.parse(frame.slice(frame.indexOf("{"))) as Record<string, unknown>;
+    expect(frame.startsWith("{")).toBeTrue();
+    const emojiBody = JSON.parse(frame) as Record<string, unknown>;
     expect(typeof emojiBody["message"]).toBe("string");
     expect((emojiBody["message"] as string).startsWith("🙂")).toBeTrue();
     // The untruncated frame parses; the transport may cut the JSON tail on
@@ -249,6 +289,6 @@ describe("syslog UDP transport end to end", (): void => {
     const decoded = message.toString("utf8");
     expect(message.byteLength).toBeLessThanOrEqual(1024);
     expect(Buffer.from(decoded, "utf8").equals(message)).toBeTrue();
-    expect(decoded.startsWith("<14>1 2026-08-26T03:00:00.000Z test-host terrence 7 - - {")).toBeTrue();
+    expect(decoded.startsWith("{")).toBeTrue();
   }, 5_000);
 });
