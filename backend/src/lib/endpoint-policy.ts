@@ -66,7 +66,10 @@ export const SENSITIVE_API_PATHS = [
   "/api/v2/tokens",
   "/api/v2/users",
   "/api/v2/users/login",
+  "/api/v2/account/mfa/verify",
+  "/api/v2/account/mfa",
   "/oauth/authorization",
+  "/oauth/authorization/complete",
   "/oauth/token",
   ...SSO_AUTH_PATHS,
 ] as const;
@@ -108,7 +111,7 @@ function isInvitationPath(pathname: string): boolean {
 export const ENDPOINT_POLICIES: readonly EndpointPolicy[] = [
   {
     id: "sensitive",
-    description: "Credential-bearing or secret-issuing endpoints (login, token issuance, invitation).",
+    description: "Credential-bearing or secret-issuing endpoints (OAuth authorization, login, tokens, MFA, invitations).",
     rateLimit: "sensitive",
     bodyLimit: "api",
     auth: "public",
@@ -118,6 +121,10 @@ export const ENDPOINT_POLICIES: readonly EndpointPolicy[] = [
       const path = pathnameOf(request);
       if (request.method === "PATCH" && path === "/api/v2/account/password") return path;
       if (isInvitationPath(path)) return "/api/v2/organization-invitations/*";
+      if (request.method === "GET" && (path === "/oauth/authorization" || path === "/oauth/authorization/complete")) {
+        return path;
+      }
+      if (request.method === "DELETE" && path === "/api/v2/account/mfa") return path;
       if (request.method !== "POST") return undefined;
       if (SENSITIVE_SET.has(path)) return path;
       if (/^\/api\/v2\/notification-configurations\/[^/]+\/actions\/verify$/.test(path)) {
