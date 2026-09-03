@@ -505,8 +505,8 @@ export const projectRoutes = new Elysia({ name: "projects" })
     }
     const sourceWorkspaces = await db.query.workspaces.findMany({ where: inArray(workspaces.id, workspaceIds) });
     if (sourceWorkspaces.length !== workspaceIds.length || sourceWorkspaces.some((workspace): boolean => workspace.orgId !== destination.orgId)) {
-      (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: "Workspace(s) not found or not authorized to move" }] };
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Workspaces must belong to the project organization" }] };
     }
     const destinationExecutionMode = destination.defaultExecutionMode ?? "remote";
     await db.transaction(async (tx): Promise<void> => {

@@ -192,24 +192,10 @@ export function AdminDatabaseMigration(): React.JSX.Element {
 
   const act = useCallback(async (path: string, method: string, body?: JsonValue): Promise<JsonValue> => {
     setError(null);
-    const response = await fetchApi(`/admin/db-migration/${path}`, {
+    return fetchApi<JsonValue>(`/admin/db-migration/${path}`, {
       method,
       ...(body === undefined ? undefined : { body: JSON.stringify(body) }),
     });
-    if (!(response instanceof Response)) {
-      // SAFETY: fetchApi resolves the parsed JSON body; the raw-Response branch
-      // is a legacy path that never occurs for the admin db-migration endpoints.
-      return response as JsonValue;
-    }
-    if (!response.ok) {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const parsed = (await response.json().catch((): null => null)) as { errors?: { detail?: string }[] } | null;
-      throw new Error(parsed?.errors?.[0]?.detail ?? `Request failed (${response.status})`);
-    }
-    // SAFETY: this legacy response branch is decoded as the same JSON value
-    // returned by fetchApi above.
-    const parsed = await response.json() as JsonValue;
-    return parsed;
   }, []);
 
   const runAction = useCallback(async (path: string, method: string, body?: JsonValue, thenLoad = true): Promise<void> => {

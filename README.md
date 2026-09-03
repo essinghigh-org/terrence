@@ -69,7 +69,7 @@ ADMIN_PASSWORD="pick-a-long-password" docker compose up -d
 
 Requirements:
 
-- Bun >= 1.4
+- Bun 1.4.0
 - Terraform >= 1.9 or OpenTofu >= 1.7
 
 ```bash
@@ -80,7 +80,7 @@ bun install
 
 ## Documentation
 
-Full documentation is available inside a running Terrence instance under the Documentation section.
+Full documentation is available in [`backend/docs/`](backend/docs/) or inside a running Terrence instance under the Documentation section.
 
 ## Compatibility
 

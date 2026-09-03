@@ -619,6 +619,8 @@ export function RunDetail({
   const [policyChecks, setPolicyChecks] = useState<PolicyCheck[]>([]);
   const [assessmentChecks, setAssessmentChecks] = useState<AssessmentCheck[]>([]);
   const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
+  const [planExpanded, setPlanExpanded] = useState<boolean | null>(null);
+  const [applyExpanded, setApplyExpanded] = useState<boolean | null>(null);
   const [comments, setComments] = useState<RunComment[]>([]);
   const [commentBody, setCommentBody] = useState("");
   const [confirmationAction, setConfirmationAction] = useState<ConfirmationAction | null>(null);
@@ -698,10 +700,6 @@ export function RunDetail({
     }
     toast.add({ title: "Could not copy run ID", type: "error" });
   }
-
-  useEffect((): void => {
-    setRunEvents([]);
-  }, [runId]);
 
   useEffect((): (() => void) => {
     if (fullscreenLog === null) return () => {};
@@ -889,6 +887,9 @@ export function RunDetail({
       setCostEstimate(null);
       setPolicyChecks([]);
       setAssessmentChecks([]);
+      setRunEvents([]);
+      setPlanExpanded(null);
+      setApplyExpanded(null);
       setComments([]);
       setAuxiliaryError(false);
       setCreatorUsername("");
@@ -1181,10 +1182,14 @@ export function RunDetail({
         try {
           if (controller.signal.aborted) return;
           const { enqueueExplanation } = await import("../lib/api");
-          await enqueueExplanation(runId, kind).catch((): null => null);
+          await enqueueExplanation(runId, kind);
           const ready = await pollExplanationUntilReady(kind, controller.signal);
           if (ready) return;
-        } catch {}
+        } catch (enqueueErr) {
+          console.error("Failed to enqueue explanation:", enqueueErr);
+          setExplainError(enqueueErr instanceof Error ? enqueueErr.message : "Failed to enqueue explanation.");
+          return;
+        }
       }
       setExplainError(msg);
     } finally {
@@ -1770,7 +1775,8 @@ export function RunDetail({
           <details
             aria-labelledby="plan-heading"
             className="group overflow-hidden rounded-md border border-border bg-background shadow-sm"
-            open={!applied && ["running", "finished", "errored", "unreachable"].includes(planStatus)}
+            open={planExpanded ?? (!applied && ["running", "finished", "errored", "unreachable"].includes(planStatus))}
+            onToggle={(event): void => { setPlanExpanded(event.currentTarget.open); }}
           >
             <summary className="cursor-pointer list-none border-b border-border px-5 py-4 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -2007,7 +2013,8 @@ export function RunDetail({
             className={`group overflow-hidden rounded-md border bg-background shadow-sm ${
               ["errored", "unreachable"].includes(applyStatus) ? "border-destructive/50" : "border-border"
             }`}
-            open={applied || ["running", "errored", "unreachable"].includes(applyStatus) ? true : false}
+            open={applyExpanded ?? (applied || ["running", "errored", "unreachable"].includes(applyStatus))}
+            onToggle={(event): void => { setApplyExpanded(event.currentTarget.open); }}
           >
             <summary className="cursor-pointer list-none border-b border-border px-5 py-4 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

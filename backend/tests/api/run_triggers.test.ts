@@ -75,6 +75,9 @@ describe("Workspace Run Triggers & Cost Estimates API contract", () => {
     const listAfterRes = await request(`/api/v2/workspaces/${targetWsId}/run-triggers`);
     const listAfterBody = await listAfterRes.json();
     expect(listAfterBody.data.length).toBe(0);
+
+    const invalidFilterRes = await request(`/api/v2/workspaces/${targetWsId}/run-triggers?filter[run-trigger][type]=invalid`);
+    expect(invalidFilterRes.status).toBe(422);
   });
 
   it("returns cost estimates for a run", async () => {

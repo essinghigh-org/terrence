@@ -431,4 +431,9 @@ describe("instance metrics", () => {
     expect(body).toContain(`terrence_org_workspaces_total{org="${orgA}"} 2`);
     expect(body).toContain(`terrence_agents_total{pool_id="${poolA}",pool="pool-a",org="${orgA}",status="idle"} 1`);
   });
+
+  test("rejects unrecognized format query parameter with 422", async () => {
+    const res = await fetch(`${baseUrl}metrics?format=invalid`, { headers: auth(monitoringToken) });
+    expect(res.status).toBe(422);
+  });
 });

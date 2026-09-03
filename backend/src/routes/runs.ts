@@ -930,9 +930,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
     const location = signedApiURL(request, `/api/v2/state-versions/${state.id}/download`, "GET");
-    (set as { status: number }).status = 307;
-    (set.headers as Record<string, string>) .Location = location;
-    return {};
+    return new Response(null, { status: 307, headers: { Location: location } });
   })
   .get("/api/v2/runs/:run_id/run-events", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params.run_id ?? "";

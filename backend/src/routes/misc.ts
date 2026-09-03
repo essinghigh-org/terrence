@@ -715,7 +715,12 @@ export const miscRoutes = new Elysia({ name: "misc" })
     const workspaceId = params.workspace_id ?? "";
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (ws === undefined || (await findAuthorizedWorkspace(ws.id, user?.id, tokenOrgId, tokenTeamId)) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const filterType = request !== undefined ? new URL(request.url).searchParams.get("filter[run-trigger][type]") ?? "" : "";
+    const rawFilterType = request !== undefined ? new URL(request.url).searchParams.get("filter[run-trigger][type]") : null;
+    if (rawFilterType !== null && rawFilterType !== "" && rawFilterType !== "inbound" && rawFilterType !== "outbound") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "filter[run-trigger][type] must be 'inbound' or 'outbound'" }] };
+    }
+    const filterType = rawFilterType ?? "inbound";
     const triggers = filterType === "outbound"
       ? await db.query.runTriggers.findMany({ where: eq(runTriggers.sourceWorkspaceId, workspaceId) })
       : await db.query.runTriggers.findMany({ where: eq(runTriggers.workspaceId, workspaceId) });

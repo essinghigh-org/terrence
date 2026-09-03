@@ -110,7 +110,7 @@ jobs:
         run: bun run deps:dedupe:check
       - name: Check dependency release-age policy
         run: |
-          node <<'NODE'
+          bun - <<'NODE'
           const fs = require("fs");
           const renovate = JSON.parse(fs.readFileSync("renovate.json", "utf8"));
           const lines = fs.readFileSync("bunfig.toml", "utf8").split(/\r?\n/);
@@ -207,7 +207,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          provider_version="$(node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync("backend/src/data/provider_surface.json", "utf8")); const m=/v([0-9]+[.][0-9]+[.][0-9]+)/.exec(s.provider); if (!m) process.exit(1); process.stdout.write(m[1]);')"
+          provider_version="$(bun -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync("backend/src/data/provider_surface.json", "utf8")); const m=/v([0-9]+[.][0-9]+[.][0-9]+)/.exec(s.provider); if (!m) process.exit(1); process.stdout.write(m[1]);')"
           TFE_PROVIDER_VERSION="$provider_version" TERRAFORM_BIN=terraform bun backend/scripts/refresh-provider-surface.ts
           git diff --exit-code -- backend/src/data/provider_surface.json backend/tests/e2e/provider_surface.json
       - name: Build frontend for API contract fixtures

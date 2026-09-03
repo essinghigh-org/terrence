@@ -230,7 +230,12 @@ const comparisonOperators = new Set(["is", "not-is", "is_not", "greater-than", "
 const negativeFilterOperators = new Set(["does not contain", "not-is", "is_not"]);
 
 function columnFor(field: string, columns: Readonly<Record<string, string>>): string | undefined {
-  return columns[field] ?? columns[field.replaceAll("-", "_")] ?? columns[field.replaceAll("_", "-")];
+  if (Object.hasOwn(columns, field)) return columns[field];
+  const underscore = field.replaceAll("-", "_");
+  if (Object.hasOwn(columns, underscore)) return columns[underscore];
+  const hyphen = field.replaceAll("_", "-");
+  if (Object.hasOwn(columns, hyphen)) return columns[hyphen];
+  return undefined;
 }
 
 function queryColumns(type: ViewType): Readonly<Record<string, string>> {

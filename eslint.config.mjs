@@ -11,7 +11,6 @@ export default tseslint.config(
       '**/*.sql.ts',
       '**/.git/**',
       'frontend/tools/oxlint/**',
-      'eslint.config.mjs',
     ],
   },
 
@@ -22,7 +21,7 @@ export default tseslint.config(
   // Keep the baseline guard itself linted without opting it into the
   // repository's TypeScript project service.
   {
-    files: ['scripts/lint-budget.ts'],
+    files: ['scripts/lint-budget.ts', 'eslint.config.mjs'],
     ...tseslint.configs.disableTypeChecked,
     languageOptions: {
       ...tseslint.configs.disableTypeChecked.languageOptions,

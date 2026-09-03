@@ -2,6 +2,9 @@
   "name": "terrence",
   "version": "1.1.14",
   "packageManager": "bun@1.4.0",
+  "engines": {
+    "bun": "1.4.0"
+  },
   "description": "Self-hosted platform for OpenTofu and Terraform remote workflows",
   "license": "MIT",
   "devDependencies": {
@@ -15,6 +18,7 @@
     "esbuild": "0.28.2"
   },
   "scripts": {
+    "prepare": "test -d .git && ln -sf ../../scripts/pre-commit .git/hooks/pre-commit || true",
     "dev:backend": "bun run --cwd backend dev",
     "dev:frontend": "bun run --cwd frontend dev",
     "dev": "bun run --parallel dev:backend dev:frontend",

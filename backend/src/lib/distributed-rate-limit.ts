@@ -8,8 +8,8 @@ import { isPostgres } from "../db/driver";
  * window. On SQLite (single instance) callers never use this — they keep
  * the process-local Map (fixedWindowContext in app.ts).
  *
- * The table is created idempotently at boot (like `locks`), so no generated
- * migration is needed and sparse-journal boot never collides.
+ * The table is created via generated migrations (drizzle/0029_numerous_lady_mastermind.sql
+ * and drizzle/pg/0026_volatile_menace.sql).
  *
  * Window math: `floor(now / duration) * duration` is the window start; all
  * replicas that compute the same window share the bucket. Expiry is handled
