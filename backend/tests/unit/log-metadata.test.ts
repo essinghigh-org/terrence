@@ -94,4 +94,41 @@ describe("structured logger metadata nesting (12.5)", () => {
       logSpy.mockRestore();
     }
   });
+
+  it("redacts secret-shaped keys and credentials embedded in strings", async () => {
+    const mod = await import("../../src/lib/log");
+    const errorSpy = spyOn(console, "error").mockImplementation(() => undefined);
+    const token = "ghp_test-secret-value";
+    const userinfoUrl = "https://provider-user:provider-password@provider.test/path";
+    const toJsonValue = {
+      secret: "to-json-secret",
+      toJSON: (): { leaked: string } => ({ leaked: "to-json-secret" }),
+    };
+    try {
+      mod.log.error(`provider failed with Bearer ${token}; password="password with spaces"`, {
+        accessToken: token,
+        authorization: `Bearer ${token}`,
+        nested: { password: "password-value" },
+        url: `https://provider.test/callback?access_token=${encodeURIComponent(token)}&state=ok`,
+        userinfoUrl,
+        toJsonValue,
+      });
+      const line = errorSpy.mock.calls[0]?.[0] as string;
+      const parsed = JSON.parse(line);
+      expect(line).not.toContain(token);
+      expect(parsed.message).toBe("provider failed with Bearer [REDACTED]; password=[REDACTED]");
+      expect(parsed.meta.accessToken).toBe("[REDACTED]");
+      expect(parsed.meta.authorization).toBe("[REDACTED]");
+      expect(parsed.meta.nested.password).toBe("[REDACTED]");
+      expect(parsed.meta.url).toContain("access_token=[REDACTED]");
+      expect(parsed.meta.url).toContain("state=ok");
+      expect(parsed.meta.userinfoUrl).toBe("https://provider-user:[REDACTED]@provider.test/path");
+      expect(parsed.meta.toJsonValue).toEqual({ secret: "[REDACTED]" });
+      expect(parsed.meta.toJsonValue.toJSON).toBeUndefined();
+      expect(line).not.toContain("to-json-secret");
+      expect(line).not.toContain("provider-password");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
 });

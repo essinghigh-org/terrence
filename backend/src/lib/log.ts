@@ -148,9 +148,76 @@ const MAX_ERROR_DETAIL_KEYS = 16;
 const MAX_ERROR_COLLECTION_ITEMS = 16;
 const MAX_ERROR_CAUSE_DEPTH = 3;
 const ERROR_TRUNCATION_SUFFIX = "…[truncated]";
+const REDACTED_LOG_VALUE = "[REDACTED]";
+const SENSITIVE_LOG_KEY_PATTERN = /(?:authorization|cookie|credential|password|passphrase|secret|token|privatekey|signingkey|apikey)/i;
+const PRIVATE_KEY_PATTERN = /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/gi;
+const BEARER_OR_BASIC_PATTERN = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi;
+const URL_SECRET_PARAMETER_PATTERN = /([?&](?:access[_-]?token|api[_-]?key|id[_-]?token|refresh[_-]?token|secret|password|signature|token)=)[^&#\s]*/gi;
+const URL_USERINFO_PASSWORD_PATTERN = /(\b[a-z][a-z\d+.-]*:\/\/[^\/\s:@]*):[^\/\s@]+@/gi;
+const KEY_VALUE_SECRET_PATTERN = /((?:^|[,{\s;])['"]?(?:access[_-]?token|api[_-]?key|authorization|cookie|id[_-]?token|password|passphrase|private[_-]?key|refresh[_-]?token|secret|token)['"]?\s*[:=]\s*)(?:(['"])(?:\\.|(?!\2)[\s\S])*\2|[^,'"}\s]+)/gi;
+const KNOWN_TOKEN_PATTERN = /\b(?:gh[pousr]_|github_pat_|glpat-|xox[baprs]-)[A-Za-z0-9_\-]+/gi;
 
 type ErrorWithOptionalCause = Error & { cause?: unknown; errors?: unknown };
 type SafeErrorScalar = string | number | boolean | null;
+
+function isSensitiveLogKey(key: string | undefined): boolean {
+  if (key === undefined) return false;
+  return SENSITIVE_LOG_KEY_PATTERN.test(key.replace(/[^a-z0-9]/gi, ""));
+}
+
+/** Scrub common bearer/credential shapes even when a caller logs one string. */
+function redactSensitiveString(value: string): string {
+  return value
+    .replace(PRIVATE_KEY_PATTERN, "[REDACTED PRIVATE KEY]")
+    .replace(BEARER_OR_BASIC_PATTERN, "$1 [REDACTED]")
+    .replace(URL_SECRET_PARAMETER_PATTERN, "$1[REDACTED]")
+    .replace(URL_USERINFO_PASSWORD_PATTERN, "$1:[REDACTED]@")
+    .replace(KEY_VALUE_SECRET_PATTERN, "$1[REDACTED]")
+    .replace(KNOWN_TOKEN_PATTERN, "[REDACTED TOKEN]");
+}
+
+/** Deeply redact metadata before it reaches either local or remote sinks. */
+function redactLogValue(value: unknown, key?: string, ancestors = new WeakSet<object>()): unknown {
+  if (isSensitiveLogKey(key)) return REDACTED_LOG_VALUE;
+  if (typeof value === "string") return redactSensitiveString(value);
+  if (typeof value === "bigint") return value.toString();
+  if (value === null || typeof value !== "object") return value;
+  if (value instanceof Error) {
+    try {
+      return serializeLogError(value);
+    } catch {
+      return { name: "Error", message: "[Error omitted]" };
+    }
+  }
+  if (value instanceof Date) {
+    try {
+      return value.toISOString();
+    } catch {
+      return "[Invalid date]";
+    }
+  }
+  if (ancestors.has(value)) return "[Circular]";
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map((entry: unknown): unknown => redactLogValue(entry, undefined, ancestors));
+    }
+    const output: Record<string, unknown> = {};
+    for (const [childKey, childValue] of Object.entries(value)) {
+      if (childKey === "toJSON") continue;
+      try {
+        output[childKey] = redactLogValue(childValue, childKey, ancestors);
+      } catch {
+        output[childKey] = "[Unserializable]";
+      }
+    }
+    return output;
+  } catch {
+    return "[Unserializable]";
+  } finally {
+    ancestors.delete(value);
+  }
+}
 
 function truncateLogString(value: string, limit: number): string {
   if (value.length <= limit) return value;
@@ -159,7 +226,7 @@ function truncateLogString(value: string, limit: number): string {
 
 function safeErrorScalar(value: unknown, limit: number): SafeErrorScalar | undefined {
   if (value === null || typeof value === "boolean") return value;
-  if (typeof value === "string") return truncateLogString(value, limit);
+  if (typeof value === "string") return truncateLogString(redactSensitiveString(value), limit);
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "bigint") return truncateLogString(value.toString(), limit);
   return undefined;
@@ -185,10 +252,10 @@ function serializeLogErrorInternal(error: Error, depth: number, active: Set<Erro
   try {
     const value = error as ErrorWithOptionalCause;
     const serialized: Record<string, unknown> = {
-      name: truncateLogString(value.name, MAX_ERROR_STRING_LENGTH),
-      message: truncateLogString(value.message, MAX_ERROR_STRING_LENGTH),
+      name: truncateLogString(redactSensitiveString(value.name), MAX_ERROR_STRING_LENGTH),
+      message: truncateLogString(redactSensitiveString(value.message), MAX_ERROR_STRING_LENGTH),
     };
-    if (value.stack !== undefined) serialized["stack"] = truncateLogString(value.stack, MAX_ERROR_STRING_LENGTH);
+    if (value.stack !== undefined) serialized["stack"] = truncateLogString(redactSensitiveString(value.stack), MAX_ERROR_STRING_LENGTH);
     if (value.cause !== undefined) serialized["cause"] = serializeNestedError(value.cause, depth + 1, active);
     if (Array.isArray(value.errors)) {
       const errors = value.errors
@@ -234,27 +301,24 @@ export function serializeLogError(error: unknown): Readonly<Record<string, unkno
     }
     return {
       name: "NonErrorThrown",
-      message: truncateLogString(message, MAX_ERROR_STRING_LENGTH),
+      message: truncateLogString(redactSensitiveString(message), MAX_ERROR_STRING_LENGTH),
     };
   }
   return serializeLogErrorInternal(error, 0, new Set<Error>());
 }
 
 export function safeJsonStringify(value: unknown): string {
-  const seen = new WeakSet<object>();
-  return JSON.stringify(value, (_key: string, entry: unknown) => {
-    if (typeof entry === "bigint") return entry.toString();
-    if (entry !== null && typeof entry === "object") {
-      if (seen.has(entry)) return "[Circular]";
-      seen.add(entry);
-      if (entry instanceof Error) return serializeLogError(entry);
-    }
-    return entry;
-  });
+  try {
+    return JSON.stringify(redactLogValue(value)) ?? "null";
+  } catch {
+    return "[Unserializable]";
+  }
 }
 
 function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<string, unknown>>): void {
   const configuration = loggingConfiguration;
+  const safeMessage = redactSensitiveString(message);
+  const safeMeta = meta === undefined ? undefined : redactLogValue(meta) as Readonly<Record<string, unknown>>;
   if (
     configuration.enabled
     && configuration.syslogTargets.length > 0
@@ -267,9 +331,9 @@ function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<
     for (const target of configuration.syslogTargets) {
       try {
         const frame = formatSyslogMessage(
-          meta !== undefined
-            ? { timestamp: new Date().toISOString(), level, message, meta }
-            : { timestamp: new Date().toISOString(), level, message },
+          safeMeta !== undefined
+            ? { timestamp: new Date().toISOString(), level, message: safeMessage, meta: safeMeta }
+            : { timestamp: new Date().toISOString(), level, message: safeMessage },
           {
             hostname: resolveHostname(process.env, configuration.syslogHostname),
             appName: configuration.syslogApp,
@@ -292,9 +356,9 @@ function structuredLog(level: LogLevel, message: string, meta?: Readonly<Record<
     const entry: Record<string, unknown> = {
       timestamp: new Date().toISOString(),
       level,
-      message,
+      message: safeMessage,
     };
-    if (meta !== undefined && Object.keys(meta).length > 0) entry["meta"] = meta;
+    if (safeMeta !== undefined && Object.keys(safeMeta).length > 0) entry["meta"] = safeMeta;
     const output = safeJsonStringify(entry);
     if (level === "error") console.error(output);
     else if (level === "warn") console.warn(output);

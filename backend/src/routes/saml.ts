@@ -507,10 +507,27 @@ async function currentSamlSettings(): Promise<SamlRow> {
   return settings;
 }
 
+function acceptsJson(request: RequestInfo | undefined): boolean {
+  return (request?.headers.get("accept") ?? "")
+    .split(",")
+    .some((value: string): boolean => {
+      const parameters = value.split(";");
+      const mediaType = parameters.shift()?.trim().toLowerCase();
+      if (mediaType !== "application/json" && mediaType !== "application/vnd.api+json") return false;
+      const qualityParameter = parameters.find((parameter: string): boolean => /^q\s*=/iu.test(parameter.trim()));
+      if (qualityParameter === undefined) return true;
+      const quality = Number(qualityParameter.slice(qualityParameter.indexOf("=") + 1).trim().replace(/^"|"$/gu, ""));
+      return Number.isFinite(quality) && quality > 0 && quality <= 1;
+    });
+}
+
 function wantsToken(request: RequestInfo | undefined, relayState: string | null): boolean {
-  if (relayState === "api" || relayState === "api-token" || relayState === "terraform-cli") return true;
-  const accept = request?.headers.get("accept") ?? "";
-  return accept.includes("application/json") && relayState !== null && relayState.startsWith("cli");
+  const tokenRelayState = relayState === "api" || relayState === "api-token" || relayState === "terraform-cli"
+    || (relayState !== null && relayState.startsWith("cli"));
+  // A top-level browser navigation normally asks for HTML. Requiring an
+  // explicit JSON client signal prevents a caller-controlled RelayState from
+  // switching an ordinary browser SSO login into a token-rendering flow.
+  return tokenRelayState && acceptsJson(request);
 }
 
 function sessionTokenValue(session: unknown): string | null {
@@ -688,7 +705,10 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
       return ssoHtmlResponse(ssoHtmlPage("SAML SSO", "RelayState is too large."), 400);
     }
     const relayState = rawRelayState;
-    await storeSsoChallenge(SAML_AUTHN_CHALLENGE_KIND, requestId, { relayState }, Date.now() + PENDING_AUTHNREQUEST_TTL_MS);
+    await storeSsoChallenge(SAML_AUTHN_CHALLENGE_KIND, requestId, {
+      relayState,
+      tokenResponse: wantsToken(request, relayState),
+    }, Date.now() + PENDING_AUTHNREQUEST_TTL_MS);
     const authnRequest = encodeRedirect(authnRequestXml(entityId, assertionConsumerService, settings.ssoEndpointUrl, requestId));
     target.searchParams.set("SAMLRequest", authnRequest);
     if (relayState !== null) target.searchParams.set("RelayState", relayState);
@@ -878,6 +898,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     if (issuedRelayState === undefined || issuedRelayState !== relayState) {
       return reject("SAML response does not match an issuance from this instance.", 400);
     }
+    const issuedTokenResponse = authnChallenge?.["tokenResponse"] === true;
     if (!(await claimSsoChallenge(
       SAML_ASSERTION_CHALLENGE_KIND,
       assertionIdElement,
@@ -973,7 +994,7 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     const tokenTtlMs = typeof settings.ssoApiTokenSessionTimeout === "number" && settings.ssoApiTokenSessionTimeout > 0
       ? settings.ssoApiTokenSessionTimeout * 1000
       : DEFAULT_SSO_API_TOKEN_TTL_MS;
-    const wantsTokenResponse = wantsToken(request, issuedRelayState);
+    const wantsTokenResponse = issuedTokenResponse;
     const session = await issueSsoLogin(user, { set, request, server }, {
       tokenTtlMs,
       wantsToken: wantsTokenResponse,
@@ -990,24 +1011,20 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     };
 
     const sessionToken = sessionTokenValue(session);
-    const wantsJson = request?.headers.get("accept")?.includes("application/json") === true;
     if (wantsTokenResponse) {
       if (sessionToken === null) {
         await auditLog("sso-failure", "saml", user.id, user.id, null, { reason: "SSO token response was malformed" });
         return respond(ssoHtmlPage("SAML SSO", "The sign-in token could not be issued.", { error: true }), 500);
       }
-      if (wantsJson) {
-        const response = Response.json(session, {
-          headers: {
-            "Cache-Control": "no-store",
-            "Content-Type": "application/vnd.api+json",
-          },
-        });
-        appendSetCookies(response, set.headers["Set-Cookie"]);
-        clearSamlStateCookie(request, response, server);
-        return response;
-      }
-      return respond(ssoHtmlPage("SAML SSO", "You are signed in.", { token: sessionToken }));
+      const response = Response.json(session, {
+        headers: {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/vnd.api+json",
+        },
+      });
+      appendSetCookies(response, set.headers["Set-Cookie"]);
+      clearSamlStateCookie(request, response, server);
+      return response;
     }
     return respond(ssoHtmlPage("SAML SSO", "You are signed in.", { redirectUrl: "/app" }));
   })

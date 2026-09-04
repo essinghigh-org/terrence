@@ -31,6 +31,7 @@ import {
 } from "./vcs-source";
 import { githubAppApiBase } from "./github-api";
 import { newRunId } from "./run-id";
+import { log } from "./log";
 
 type WebhookPayload = Readonly<Record<string, unknown>>;
 type VcsRepo = DeepReadonly<NonNullable<typeof workspaces.$inferSelect.vcsRepo>>;
@@ -669,7 +670,7 @@ export async function getGitHubAppAccessTokenDetails(installationId: number): Pr
   const appId = process.env["GITHUB_APP_ID"];
   const privateKey = process.env["GITHUB_APP_PRIVATE_KEY"];
   if (appId === undefined || privateKey === undefined || appId === "" || privateKey === "") {
-    console.error("[terrence] GITHUB_APP_ID or GITHUB_APP_PRIVATE_KEY not configured.");
+    log.error("GitHub App credentials are not configured");
     return null;
   }
 
@@ -692,7 +693,8 @@ export async function getGitHubAppAccessTokenDetails(installationId: number): Pr
       },
     });
     if (!response.ok) {
-      console.error("[terrence] Failed to fetch access token:", await response.text());
+      await cancelResponseBody(response);
+      log.error("Failed to fetch GitHub App access token", { status: response.status });
       return null;
     }
     const data = await response.json() as { permissions?: unknown; token?: unknown };
@@ -704,7 +706,7 @@ export async function getGitHubAppAccessTokenDetails(installationId: number): Pr
       : Object.fromEntries(Object.entries(rawPermissions).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
     return { permissions, token: tokenValue };
   } catch (error) {
-    console.error("[terrence] Exception creating GitHub access token:", error);
+    log.error("Exception creating GitHub access token", { error });
     return null;
   }
 }
@@ -880,7 +882,10 @@ async function fetchGithubPrFilesPage(credentials: ProviderCredentials, repoFull
     const response = await fetchVcsUrl(url, {
       headers: { Authorization: `Bearer ${credentials.token}`, Accept: "application/vnd.github+json" },
     });
-    if (!response.ok) return undefined;
+    if (!response.ok) {
+      await cancelResponseBody(response);
+      return undefined;
+    }
     const pageFiles = extractGithubPrFilenames(await response.json() as unknown);
     if (pageFiles === undefined) return undefined;
     for (const file of pageFiles) files.add(file);
@@ -949,7 +954,10 @@ async function fetchGitlabMrFilesPage(credentials: ProviderCredentials, repoFull
       headers: { Authorization: `Bearer ${credentials.token}`, Accept: "application/json" },
     },
   );
-  if (!response.ok) return undefined;
+  if (!response.ok) {
+    await cancelResponseBody(response);
+    return undefined;
+  }
   const body = await response.json() as unknown;
   const files = new Set<string>();
   if (!extractGitlabMrFiles(body, files)) return undefined;
@@ -1033,7 +1041,10 @@ async function bitbucketCloudDiffstatFiles(
   const MAX_PAGES = 10;
   for (let page = 1; cloudUrl !== null && page <= MAX_PAGES; page += 1) {
     const response = await fetchVcsUrl(cloudUrl, { headers: auth });
-    if (!response.ok) return { files: undefined, receivedPage };
+    if (!response.ok) {
+      await cancelResponseBody(response);
+      return { files: undefined, receivedPage };
+    }
     receivedPage = true;
     const body = await response.json() as unknown;
     if (!extractBitbucketDiffstatPaths(body, files)) return { files: undefined, receivedPage };
@@ -1086,7 +1097,10 @@ async function bitbucketDataCenterPullRequestFiles(
   let dcUrl: string | null = `${apiUrl}/rest/api/1.0/projects/${encodedOwner}/repos/${encodedRepo}/pull-requests/${pullRequest}/changes?limit=100`;
   for (let page = 1; dcUrl !== null && page <= 10; page += 1) {
     const dcResponse = await fetchVcsUrl(dcUrl, { headers: auth });
-    if (!dcResponse.ok) return undefined;
+    if (!dcResponse.ok) {
+      await cancelResponseBody(dcResponse);
+      return undefined;
+    }
     const dcBody = await dcResponse.json() as unknown;
     const dcValues = asRecord(dcBody)?.["values"];
     if (!Array.isArray(dcValues)) return undefined;
@@ -1166,9 +1180,10 @@ async function reportUntriggeredSpeculativeStatus(
         }),
         },
     );
-    if (!response.ok) console.error(`[terrence] Failed to report passing GitHub status for workspace ${workspace.id}: ${String(response.status)}`);
+    await cancelResponseBody(response);
+    if (!response.ok) log.error("Failed to report passing GitHub status", { workspaceId: workspace.id, status: response.status });
   } catch (error) {
-    console.error(`[terrence] Failed to report passing GitHub status for workspace ${workspace.id}:`, error);
+    log.error("Failed to report passing GitHub status", { workspaceId: workspace.id, error });
   }
 }
 
@@ -1383,11 +1398,12 @@ export async function reportRunVcsStatus(runId: string, runStatus: string): Prom
       ? await aggregatedGithubStatus(context, initialState, runStatus)
       : { state: initialState, context: context.baseContext, description: `Terraform run ${runStatus}` };
     const response = await postVcsStatus(context, status, runStatus);
+    await cancelResponseBody(response);
     if (!response.ok) {
-      console.error(`[terrence] Failed to report ${context.provider} commit status for run ${runId}: ${String(response.status)}`);
+      log.error("Failed to report VCS commit status", { provider: context.provider, runId, status: response.status });
     }
   } catch (error) {
-    console.error(`[terrence] Failed to report VCS commit status for run ${runId}:`, error);
+    log.error("Failed to report VCS commit status", { runId, error });
   }
 }
 
@@ -1464,7 +1480,10 @@ async function githubAppDefaultBranch(
     headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json" },
     timeoutMs: 10_000,
   });
-  if (!response.ok) return undefined;
+  if (!response.ok) {
+    await cancelResponseBody(response);
+    return undefined;
+  }
   const body = await response.json() as Record<string, unknown>;
   return typeof body["default_branch"] === "string" ? body["default_branch"] : undefined;
 }
@@ -1498,7 +1517,10 @@ async function oauthDefaultBranch(
     headers: { Authorization: "Bearer " + secret, Accept: accept },
     timeoutMs: 10_000,
   });
-  if (!response.ok) return undefined;
+  if (!response.ok) {
+    await cancelResponseBody(response);
+    return undefined;
+  }
   return defaultBranchFromBody(provider, await response.json() as Record<string, unknown>);
 }
 
@@ -1552,10 +1574,10 @@ async function githubAppLatestCommit(
     const body = await response.json() as Record<string, unknown>[];
     const sha = body[0]?.["sha"];
     if (typeof sha === "string") return sha;
-    console.error(`[terrence] latestCommitSha: unexpected response body for ${identifier}`);
+    log.error("latestCommitSha: unexpected response body", { identifier });
   } else {
-    const errText = await response.text().catch((): string => "");
-    console.error(`[terrence] latestCommitSha: GitHub API returned ${response.status} for ${url}: ${errText.slice(0, 500)}`);
+    await cancelResponseBody(response);
+    log.error("latestCommitSha: GitHub API request failed", { identifier, status: response.status });
   }
   return undefined;
 }
@@ -1590,7 +1612,10 @@ async function oauthLatestCommit(
     headers: { Authorization: "Bearer " + secret, Accept: accept },
     timeoutMs: 10_000,
   });
-  if (!response.ok) return undefined;
+  if (!response.ok) {
+    await cancelResponseBody(response);
+    return undefined;
+  }
   const body = await response.json() as Record<string, unknown> | Record<string, unknown>[];
   return latestShaFromBody(provider, body);
 }
@@ -1990,7 +2015,7 @@ export async function syncRegistryModulesForTag(
       await synchronizeRegistryModule(mod);
     } catch (error: unknown) {
       // The module row records the failure; keep syncing the rest.
-      console.error(`[terrence] Registry module sync failed for ${mod.id}:`, error instanceof Error ? error.message : error);
+      log.error("Registry module sync failed", { moduleId: mod.id, error });
     }
   }
 }
@@ -2048,7 +2073,7 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
   // workspace run path below.
   if (details.tag !== undefined) {
     void syncRegistryModulesForTag(details.repoFullName, details.tag, details.sourceIdentity).catch((error: unknown): void => {
-      console.error("[terrence] Registry module tag sync failed:", error);
+      log.error("Registry module tag sync failed", { error });
     });
   }
 
@@ -2069,7 +2094,7 @@ export async function handleGithubWebhook(eventName: string, payload: WebhookPay
   }
 
   if (missingCredentialConfigurationVersionIds.length > 0) {
-    console.error(`[terrence] Could not obtain GitHub credentials for ${details.repoFullName}`);
+    log.error("Could not obtain GitHub credentials", { repoFullName: details.repoFullName });
     await markConfigurationVersionsErrored(
       missingCredentialConfigurationVersionIds,
       "GitHub credentials are unavailable",
@@ -2170,10 +2195,12 @@ async function fetchProviderPolicyArchive(
     timeoutMs: ARCHIVE_DOWNLOAD_TIMEOUT_MS,
   });
   if (!response.ok || response.body === null) {
+    await cancelResponseBody(response);
     throw new Error(`Failed to download ${credentials.provider} policy archive`);
   }
   const declaredLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > MAX_TARBALL_BYTES) {
+    await cancelResponseBody(response);
     throw new Error(`${credentials.provider} policy archive exceeds the maximum download size`);
   }
 
@@ -2253,7 +2280,10 @@ async function downloadAndSaveTarball(
       maxResponseBytes: MAX_TARBALL_BYTES,
       timeoutMs: ARCHIVE_DOWNLOAD_TIMEOUT_MS,
     });
-    if (!response.ok || response.body === null) throw new Error(`Failed to download ${provider} tarball`);
+    if (!response.ok || response.body === null) {
+      await cancelResponseBody(response);
+      throw new Error(`Failed to download ${provider} tarball`);
+    }
 
     const file = await open(temporaryPath, "wx");
     let downloadedBytes = 0;

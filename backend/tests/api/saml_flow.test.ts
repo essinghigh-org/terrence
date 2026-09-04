@@ -63,15 +63,22 @@ describe("SAML SSO flow", () => {
     return pair?.slice(prefix.length) ?? "";
   };
 
-  const validAcs = async (options: SamlResponseOptions = {}, relayState?: string, extraHeaders: Record<string, string> = {}): Promise<Response> => {
-    const auth = await app.handle(new Request(`https://terrence.test/users/saml/auth${relayState === undefined ? "" : `?RelayState=${encodeURIComponent(relayState)}`}`));
+  const validAcs = async (
+    options: SamlResponseOptions = {},
+    relayState?: string,
+    authHeaders: Record<string, string> = {},
+    acsHeaders: Record<string, string> = authHeaders,
+  ): Promise<Response> => {
+    const auth = await app.handle(new Request(`https://terrence.test/users/saml/auth${relayState === undefined ? "" : `?RelayState=${encodeURIComponent(relayState)}`}`, {
+      headers: authHeaders,
+    }));
     const location = new URL(auth.headers.get("Location") ?? "");
     const state = cookieValue(auth, "terrence_saml_state");
     if (state === "") throw new Error("SAML auth response has no state cookie");
     const requestId = /\bID="([^"]+)"/.exec(inflateAndDecode(location.searchParams.get("SAMLRequest") ?? ""))?.[1];
     if (requestId === undefined) throw new Error("SAML AuthnRequest has no ID");
     const response = buildSignedSamlResponse({ ...options, inResponseTo: requestId });
-    return app.handle(samlAcsRequest(response, relayState, { ...extraHeaders, Cookie: `terrence_saml_state=${state}` }));
+    return app.handle(samlAcsRequest(response, relayState, { ...acsHeaders, Cookie: `terrence_saml_state=${state}` }));
   };
 
   beforeAll(async () => {
@@ -330,10 +337,16 @@ describe("SAML SSO flow", () => {
   });
 
   test("issues a short-lived API token for the CLI flow via RelayState", async () => {
-    const response = await validAcs({ username: `cli-${suffix}`, email: `cli-${suffix}@example.com` }, "api");
+    const response = await validAcs(
+      { username: `cli-${suffix}`, email: `cli-${suffix}@example.com` },
+      "api",
+      { Accept: "application/json" },
+      { Accept: "text/html" },
+    );
     expect(response.status).toBe(200);
-    const html = await response.text();
-    expect(html).toContain("sso-token");
+    expect(response.headers.get("Content-Type")).toContain("application/vnd.api+json");
+    const json = await response.json() as { data: { attributes: { token: string } } };
+    expect(json.data.attributes.token).toMatch(/^user-/);
     const completedAt = Date.now();
 
     const user = await db.query.users.findFirst({ where: eq(users.username, `cli-${suffix}`) });
@@ -347,11 +360,43 @@ describe("SAML SSO flow", () => {
     expect(tokenRow!.expiresAt! - completedAt).toBeLessThanOrEqual(3_650_000);
   });
 
-  test("returns JSON token when the ACS is called with an API Accept header", async () => {
+  test("does not render an API token when a browser supplies RelayState=api", async () => {
+    const username = `browser-api-${suffix}`;
+    const response = await validAcs({ username, email: `${username}@example.com` }, "api");
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).not.toContain("sso-token");
+    expect(html).toContain("/app");
+
+    const user = await db.query.users.findFirst({ where: eq(users.username, username) });
+    expect(user).not.toBeUndefined();
+    const tokenRows = await db.query.apiTokens.findMany({
+      where: and(eq(apiTokens.userId, user!.id), eq(apiTokens.description, "SSO login token")),
+    });
+    expect(tokenRows).toHaveLength(0);
+  });
+
+  test("does not render an API token when JSON is explicitly unacceptable", async () => {
+    const username = `browser-api-q-zero-${suffix}`;
+    const response = await validAcs(
+      { username, email: `${username}@example.com` },
+      "api",
+      { Accept: "application/json;q=0" },
+      { Accept: "application/json" },
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toContain("text/html");
+    const html = await response.text();
+    expect(html).not.toContain("sso-token");
+    expect(html).toContain("/app");
+  });
+
+  test("returns JSON token when the AuthnRequest requests an API response", async () => {
     const response = await validAcs(
       { username: `json-${suffix}`, email: `json-${suffix}@example.com` },
       "cli",
       { Accept: "application/json" },
+      { Accept: "text/html" },
     );
     expect(response.status).toBe(200);
     expect(response.headers.getSetCookie().some((value): boolean => value.startsWith("terrence_saml_state=;"))).toBeTrue();
