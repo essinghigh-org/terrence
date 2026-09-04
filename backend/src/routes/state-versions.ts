@@ -88,6 +88,28 @@ async function requestBodyText(
   }
 }
 
+function stateLineageError(
+  previousState: Readonly<{ statePayload: string | null }> | undefined,
+  incomingState: Readonly<Record<string, unknown>>,
+): string | null {
+  if (previousState === undefined) return null;
+  if (typeof previousState.statePayload !== "string" || previousState.statePayload === "") {
+    return "State lineage cannot be validated because the workspace history has no state payload";
+  }
+  let previous: Record<string, unknown> | null;
+  try {
+    previous = parseTerraformStatePayload(decodeStatePayload(previousState.statePayload));
+  } catch {
+    previous = null;
+  }
+  if (previous === null) {
+    return "State lineage cannot be validated because the workspace history contains an invalid state payload";
+  }
+  return incomingState["lineage"] === previous["lineage"]
+    ? null
+    : "State lineage does not match the workspace history";
+}
+
 function recoveryStatePath(runId: string): string {
   return join(storageDir, "recovery", runId, "terraform.tfstate");
 }
@@ -401,7 +423,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     });
     return decodeStatePayload(sv.jsonState);
   })
-  .delete("/api/v2/state-versions/:state_version_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/state-versions/:state_version_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -409,7 +431,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (ws === undefined || !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "admin"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.update(stateVersions).set({ status: "discarded", softDeletedAt: null }).where(eq(stateVersions.id, stateVersionId));
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   })
   .get("/api/v2/state-versions/:state_version_id/download", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
@@ -456,6 +478,21 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const rawState = rawStateResult.text;
     if (rawState === "" || parseStatePayload(rawState) === null) {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State content must be valid JSON" }] };
+    }
+    const parsedTerraformState = parseTerraformStatePayload(rawState);
+    if (parsedTerraformState === null) {
+      (set as { status: number }).status = 400;
+      return { errors: [{ status: "400", title: "Bad Request", detail: "State content must be a valid Terraform/OpenTofu state file" }] };
+    }
+    const latestState = await db.query.stateVersions.findFirst({
+      where: and(eq(stateVersions.workspaceId, sv.workspaceId), eq(stateVersions.status, "finalized")),
+      orderBy: [desc(stateVersions.serial)],
+      columns: { statePayload: true },
+    });
+    const lineageError = stateLineageError(latestState, parsedTerraformState);
+    if (lineageError !== null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lineageError }] };
     }
     await db.update(stateVersions).set({ statePayload: await encryptStatePayload(rawState), status: "finalized" }).where(eq(stateVersions.id, stateVersionId));
     await insertStateOutputIndex(db, stateVersionId, sv.workspaceId,
@@ -689,12 +726,10 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       orderBy: [desc(stateVersions.serial)],
       columns: { serial: true, statePayload: true },
     });
-    if (latest?.statePayload !== null && latest?.statePayload !== undefined) {
-      const previous = parseTerraformStatePayload(decodeStatePayload(latest.statePayload));
-      if (previous?.["lineage"] !== undefined && parsed["lineage"] !== previous["lineage"]) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Recovered state lineage does not match the workspace history" }] };
-      }
+    const lineageError = stateLineageError(latest, parsed);
+    if (lineageError !== null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lineageError }] };
     }
     const stateVersionId = await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<string> => {
       const t = tx as typeof db;
@@ -798,14 +833,16 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const latestState = await db.query.stateVersions.findFirst({
       where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
       orderBy: [desc(stateVersions.serial)],
+      columns: { serial: true, statePayload: true },
     });
     if (latestState !== undefined && serial <= latestState.serial) {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] };
     }
-    if (parsedTerraformState !== null && latestState?.statePayload !== null && latestState?.statePayload !== undefined) {
-      const previous = parseTerraformStatePayload(decodeStatePayload(latestState.statePayload));
-      if (previous?.["lineage"] !== undefined && parsedTerraformState["lineage"] !== previous["lineage"]) {
-        (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State lineage does not match the workspace history" }] };
+    if (parsedTerraformState !== null) {
+      const lineageError = stateLineageError(latestState, parsedTerraformState);
+      if (lineageError !== null) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: lineageError }] };
       }
     }
     if (jsonState !== null && parseStatePayload(jsonState) === null) {
@@ -892,12 +929,10 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial must be the next workspace state serial" }] };
     }
-    if (latestImportedState?.statePayload !== null && latestImportedState?.statePayload !== undefined) {
-      const previous = parseTerraformStatePayload(decodeStatePayload(latestImportedState.statePayload));
-      if (previous?.["lineage"] !== undefined && parsed["lineage"] !== previous["lineage"]) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "State lineage does not match the workspace history" }] };
-      }
+    const lineageError = stateLineageError(latestImportedState, parsed);
+    if (lineageError !== null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lineageError }] };
     }
     const contentMd5 = request.headers.get("content-md5");
     if (contentMd5 !== null && contentMd5 !== createHash("md5").update(rawState).digest("base64")) {

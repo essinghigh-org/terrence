@@ -256,13 +256,13 @@ const updateRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId: to
   return { data: await runTaskResource(updated) };
 };
 
-const deleteRunTask = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+const deleteRunTask = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
   const taskId = params["task_id"] ?? "";
   const task = await db.query.runTasks.findFirst({ where: eq(runTasks.id, taskId) });
   if (task === undefined || !(await checkOrganizationPermission(task.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-run-tasks"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
   await db.delete(runTasks).where(eq(runTasks.id, taskId));
   (set as { status: number }).status = 204;
-  return {};
+  return new Response(null, { status: 204 });
 };
 
 const listWorkspaceRunTasks = async ({ params, request, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -463,7 +463,7 @@ const attachWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, t
   return { data: { id: persisted.id, type: "workspace-tasks", attributes: { stage: persisted.stage, stages: [persisted.stage], "enforcement-level": persisted.enforcementLevel }, relationships: { "task": { data: { id: taskId, type: "tasks" } }, workspace: { data: { id: workspaceId, type: "workspaces" } } } } };
 };
 
-const detachWorkspaceRunTask = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+const detachWorkspaceRunTask = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
   const workspaceId = params["workspace_id"] ?? "";
   const taskId = params["task_id"] ?? "";
   const ws = await findManageableWorkspace(workspaceId, user?.id, tokenOrgId, tokenTeamId ?? null);
@@ -473,7 +473,7 @@ const detachWorkspaceRunTask = async ({ params, user, orgId: tokenOrgId, teamId:
     or(eq(workspaceRunTasks.id, taskId), eq(workspaceRunTasks.runTaskId, taskId)),
   ));
   (set as { status: number }).status = 204;
-  return {};
+  return new Response(null, { status: 204 });
 };
 
 const overrideTaskStage = async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {

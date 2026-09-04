@@ -4,6 +4,7 @@ import { db } from "../../src/db";
 import { stateVersions } from "../../src/db/schema";
 import { and, eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
+import { jsonHeaders } from "./compat_contract_helpers";
 
 describe("the reference format API v2 - Data Retention & Garbage Collection", () => {
   let userToken: string;
@@ -72,6 +73,23 @@ describe("the reference format API v2 - Data Retention & Garbage Collection", ()
   });
 
   test("should create multiple state versions and enforce retention policy GC", async () => {
+    const pendingId = `pending-${crypto.randomUUID()}`;
+    await db.insert(stateVersions).values({
+      id: pendingId,
+      workspaceId,
+      serial: 0,
+      status: "pending",
+      statePayload: null,
+      createdAt: Date.now(),
+    });
+    const pendingListRes = await app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
+      headers: jsonHeaders(userToken),
+    }));
+    expect(pendingListRes.status).toBe(200);
+    const pendingResource = (await pendingListRes.json()).data.find((item: { id: string }) => item.id === pendingId);
+    expect(pendingResource.attributes.md5).toBeNull();
+    expect(pendingResource.attributes.size).toBeNull();
+
     // Create 3 state versions
     for (let serial = 1; serial <= 3; serial++) {
       const rawState = JSON.stringify({ version: 4, serial, lineage: "gc-123", resources: [] });
@@ -120,6 +138,14 @@ describe("the reference format API v2 - Data Retention & Garbage Collection", ()
       ),
     });
     expect(softDeleted).toBeDefined();
+
+    const softDeletedListRes = await app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
+      headers: jsonHeaders(userToken),
+    }));
+    expect(softDeletedListRes.status).toBe(200);
+    const softDeletedResource = (await softDeletedListRes.json()).data.find((item: { id: string }) => item.id === softDeleted!.id);
+    expect(softDeletedResource.attributes.md5).toBeNull();
+    expect(softDeletedResource.attributes.size).toBeNull();
 
     const restoreRes = await app.handle(
       new Request(`http://localhost/api/v2/state-versions/${softDeleted!.id}/actions/restore_backing_data`, {

@@ -892,7 +892,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       org.name,
     );
   })
-  .delete("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/organizations/:org_name/workspaces/:workspace_name", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
     const workspaceName = params["workspace_name"] ?? "";
     const org = await cachedOrgByName(orgName);
@@ -902,7 +902,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     await deleteWorkspace(ws.id);
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   })
   .post("/api/v2/organizations/:org_name/workspaces/:workspace_name/actions/safe-delete", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const orgName = params["org_name"] ?? "";
@@ -915,7 +915,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const ok = await safeDeleteWorkspace(ws.id);
     if (!ok) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace contains managed resources" }] }; }
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   })
   .get("/api/v2/workspaces/:workspace_id", async ({ params, user, orgId: principalOrgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
@@ -1100,14 +1100,14 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       org?.name ?? null,
     );
   })
-  .delete("/api/v2/workspaces/:workspace_id", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/workspaces/:workspace_id", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(ws, user?.id, principalOrgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     await deleteWorkspace(ws.id);
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   })
   .post("/api/v2/workspaces/:workspace_id/actions/safe-delete", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
@@ -1117,7 +1117,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const ok = await safeDeleteWorkspace(ws.id);
     if (!ok) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace contains managed resources" }] }; }
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   })
   // --- Tags ---
   .get("/api/v2/workspaces/:workspace_id/tag-bindings", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -1230,7 +1230,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     (set as { status: number }).status = 201;
     return { data: tags.map((tag: TagItem): Record<string, string> => ({ id: tag.key, type: "tags" })) };
   })
-  .delete("/api/v2/workspaces/:workspace_id/relationships/tags", async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/workspaces/:workspace_id/relationships/tags", async ({ params, body, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null, "admin");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -1241,7 +1241,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       if (keys.length > 0) await db.delete(workspaceTags).where(and(eq(workspaceTags.workspaceId, workspaceId), inArray(workspaceTags.key, keys)));
     }
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   })
   // --- Workspace Variables ---
   .get("/api/v2/workspaces/:workspace_id/vars", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -1374,7 +1374,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     }
     return { data: workspaceVariableResource({ ...variable, ...updated }) };
   })
-  .delete("/api/v2/workspaces/:workspace_id/vars/:var_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/workspaces/:workspace_id/vars/:var_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
     const varId = params["var_id"] ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "variables-write");
@@ -1383,7 +1383,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (variable === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(workspaceVariables).where(eq(workspaceVariables.id, varId));
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   })
   // Variable sets attached to this workspace (the reference format model: inherited variables
   // stay on their variable set — the workspace-variable list never flattens them).
@@ -1498,7 +1498,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const consumers = await db.query.remoteStateConsumers.findMany({ where: eq(remoteStateConsumers.workspaceId, workspaceId) });
     return { data: consumers.map((c: Readonly<{ consumerWorkspaceId: string }>): Record<string, string> => ({ id: c.consumerWorkspaceId, type: "workspaces" })) };
   })
-  .post("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
+  .post("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -1517,9 +1517,9 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     }));
     if (batch.length > 0) await db.insert(remoteStateConsumers).values(batch).onConflictDoNothing();
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   })
-  .patch("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
+  .patch("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -1546,9 +1546,9 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       if (batch.length > 0) await t.insert(remoteStateConsumers).values(batch).onConflictDoNothing();
     });
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   })
-  .delete("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
+  .delete("/api/v2/workspaces/:workspace_id/relationships/remote-state-consumers", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -1564,7 +1564,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       await db.delete(remoteStateConsumers).where(and(eq(remoteStateConsumers.workspaceId, workspaceId), inArray(remoteStateConsumers.consumerWorkspaceId, consumerWorkspaceIds)));
     }
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   })
   // --- Data Retention ---
   .get("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -1642,13 +1642,13 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const gcSummary = await applyDataRetentionGarbageCollection(workspaceId);
     return { data: { status: "ok", ...gcSummary } };
   })
-  .delete("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/workspaces/:workspace_id/relationships/data-retention-policy", async ({ params, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, tokenOrgId ?? null, teamId ?? null, "admin");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(dataRetentionPolicies).where(eq(dataRetentionPolicies.workspaceId, workspaceId));
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   })
   // --- SSH Key assignment ---
   .patch("/api/v2/workspaces/:workspace_id/relationships/ssh-key", async ({ params, body, user, orgId: tokenOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
