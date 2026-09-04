@@ -112,6 +112,18 @@ if (isPostgres) {
   );
 }
 
+// Generated links (uploads, downloads, private registry, email) fall back
+// to proxy headers and finally the connection address without it (issue
+// #576). Warn once so reverse-proxy deployments set it.
+if (typeof process.env["PUBLIC_URL"] !== "string" || process.env["PUBLIC_URL"] === "") {
+  console.warn(
+    "[terrence] PUBLIC_URL is not set. Generated upload/download URLs and private "
+    + "registry resolution fall back to proxy headers, then localhost. Set PUBLIC_URL "
+    + "to the outward address (for example https://terraform.example.com) when serving "
+    + "behind a reverse proxy or using the private registry.",
+  );
+}
+
 // Graceful shutdown: Docker/systemd send SIGTERM; a WAL checkpoint here
 // means the main DB file is complete the moment the process exits, so a
 // backup taken right after stop never misses -wal tail pages (kanban 4.17).

@@ -1372,7 +1372,7 @@ export function pagination(request: RequestWithUrl, currentPage: number, pageSiz
 }
 
 export function apiURL(request: RequestWithUrl, path: string): string {
-  return new URL(path, PUBLIC_URL ?? request.url).toString();
+  return new URL(path, requestBaseUrl(request)).toString();
 }
 
 /**
@@ -1422,6 +1422,34 @@ export function sensitiveIdentifierHash(value: string): string {
   return createHmac("sha256", SIGNED_URL_SECRET).update(value).digest("hex");
 }
 
+/**
+ * Outward-facing base URL for generated links (issue #576). PUBLIC_URL is
+ * authoritative when set. Otherwise derive from reverse-proxy headers when
+ * present (standard homelab proxies preserve Host or set
+ * X-Forwarded-Host/Proto), falling back to the connection address. The
+ * header path is best-effort: proxy deployments should set PUBLIC_URL.
+ */
+type HeaderCarrier = Readonly<{
+  readonly url: string;
+  readonly headers?: Readonly<{ get(name: string): string | null }>;
+}>;
+
+function proxyBaseUrl(request: HeaderCarrier): string | null {
+  const headers = request.headers;
+  if (headers === undefined) return null;
+  const host = headers.get("x-forwarded-host") ?? headers.get("host");
+  if (host === null || host === "") return null;
+  const proto = headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ?? "http";
+  if (!/^[A-Za-z0-9._~-]+(?::\d+)?$/.test(host)) return null;
+  if (proto !== "http" && proto !== "https") return null;
+  return `${proto}://${host}`;
+}
+
+export function requestBaseUrl(request: HeaderCarrier): string {
+  if (PUBLIC_URL !== null) return PUBLIC_URL.toString();
+  return proxyBaseUrl(request) ?? request.url;
+}
+
 export function signedApiURL(request: RequestWithUrl, path: string, method = "GET", ttlSeconds?: number): string {
   const configuredTtl = ttlSeconds ?? Number(process.env["SIGNED_URL_TTL_SECONDS"] ?? 300);
   const ttl = Number.isSafeInteger(configuredTtl) && configuredTtl > 0 ? configuredTtl : 300;
@@ -1429,7 +1457,7 @@ export function signedApiURL(request: RequestWithUrl, path: string, method = "GE
   const signature = createHmac("sha256", SIGNED_URL_SECRET)
     .update(`${method}\n${path}\n${String(expires)}`)
     .digest("hex");
-  const url = new URL(path, PUBLIC_URL ?? request.url);
+  const url = new URL(path, requestBaseUrl(request));
   url.searchParams.set("expires", String(expires));
   url.searchParams.set("signature", signature);
   return url.toString();
