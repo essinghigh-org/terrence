@@ -111,10 +111,6 @@ export function processOutputPreview(output: CapturedProcessOutput): string {
   return preview === "" ? marker : `${preview}\n${marker}`;
 }
 
-export function processOutputBytes(output: CapturedProcessOutput): number {
-  return output.stdout.bytes + output.stderr.bytes;
-}
-
 /** Compose private process-output files without materializing them in JavaScript. */
 export async function writeProcessOutputFile(
   target: string,
