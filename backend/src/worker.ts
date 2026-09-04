@@ -4784,6 +4784,7 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
   requeued: number;
   errored: number;
   assessmentsErrored: number;
+  rearmed: number;
 }> {
   await pruneInterruptedApplyRecovery();
   const pendingAt = new Date().toISOString();
@@ -4869,6 +4870,51 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
     }
   }
 
+  // Orphaned manual-apply dispatches (issue #572): the apply route writes
+  // confirmed with scheduledAt null and dispatches fire-and-forget. A crash
+  // in between leaves a resting state that no poller selects
+  // (applyDueScheduledRuns requires scheduledAt) yet still blocks the
+  // workspace queue. At boot no dispatcher can be alive, so re-arm these
+  // for the scheduled-apply poller by stamping scheduledAt now. The
+  // poller's atomic confirmed -> apply_queued claim keeps this safe
+  // against double dispatch, and agent-mode runs stay with
+  // recoverStaleAgentJobs.
+  let rearmed = 0;
+  const orphanedApplies = await db.query.runs.findMany({
+    where: and(
+      eq(runs.status, "confirmed"),
+      isNull(runs.scheduledAt),
+      eq(runs.planOnly, false),
+    ),
+    columns: { id: true, workspaceId: true },
+  });
+  if (orphanedApplies.length > 0) {
+    const orphanWorkspaceIds = [...new Set(orphanedApplies.map((run): string => run.workspaceId))];
+    const orphanWorkspaces = await db.query.workspaces.findMany({
+      where: inArray(workspaces.id, orphanWorkspaceIds),
+      columns: { id: true, executionMode: true },
+    });
+    const orphanAgentWorkspaceIds = new Set(
+      orphanWorkspaces.filter((ws): boolean => ws.executionMode === "agent").map((ws): string => ws.id),
+    );
+    for (const run of orphanedApplies) {
+      if (orphanAgentWorkspaceIds.has(run.workspaceId)) continue;
+      try {
+        const rearmedRows = await db.update(runs).set({ scheduledAt: Date.now() }).where(and(
+          eq(runs.id, run.id),
+          eq(runs.status, "confirmed"),
+          isNull(runs.scheduledAt),
+        )).returning({ id: runs.id });
+        if (rearmedRows.length === 0) continue;
+        rearmed += 1;
+        await writeLog(run.id, "apply", "[terrence] Run re-armed: the Terrence process restarted after apply was confirmed but before dispatch. The scheduled-apply poller will dispatch it.");
+      } catch (error: unknown) {
+        const detail = error instanceof Error ? error.message : String(error);
+        logBestEffortFailure("Startup reconciliation failed to re-arm orphaned apply", { runId: run.id }, detail);
+      }
+    }
+  }
+
   // Running assessments die with the process too; they count against the
   // assessment concurrency budget, so error them and let the next discovery
   // cycle create a fresh pending result.
@@ -4899,7 +4945,7 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
     }
   }
 
-  return { requeued, errored, assessmentsErrored };
+  return { requeued, errored, assessmentsErrored, rearmed };
 }
 
 export function startWorkerQueue(): void {

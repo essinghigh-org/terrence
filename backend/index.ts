@@ -64,10 +64,11 @@ startControlPlaneHeartbeat();
 // replayed. Agent-mode runs are left to recoverStaleAgentJobs.
 try {
   const reconciled = await reconcileInterruptedLocalRuns();
-  if (reconciled.requeued > 0 || reconciled.errored > 0 || reconciled.assessmentsErrored > 0) {
+  if (reconciled.requeued > 0 || reconciled.errored > 0 || reconciled.assessmentsErrored > 0 || reconciled.rearmed > 0) {
     console.log(
       `[terrence] Startup reconciliation: ${reconciled.requeued} run(s) requeued, `
-      + `${reconciled.errored} run(s) errored, ${reconciled.assessmentsErrored} assessment(s) errored`,
+      + `${reconciled.errored} run(s) errored, ${reconciled.assessmentsErrored} assessment(s) errored, `
+      + `${reconciled.rearmed} apply(s) re-armed for dispatch`,
     );
   }
 } catch (error: unknown) {
