@@ -29,6 +29,7 @@ import {
 import type { DeepReadonly } from "./utils";
 import { insertStateVersionWithSerialTx } from "./state-serial";
 import { encryptStatePayload } from "./validation";
+import { isAgentPoolTokenActive } from "./agent-token";
 
 export const MAX_AGENT_RESULT_BYTES = 64 * 1024;
 export const MAX_AGENT_RESULT_DEPTH = 8;
@@ -507,10 +508,11 @@ export async function authenticateAgent(
   });
   const token = tokenRows.find((candidate) => candidate.token === tokenHash) ?? tokenRows[0];
   if (token === undefined) return undefined;
+  const now = Date.now();
+  if (!isAgentPoolTokenActive(token, now)) return undefined;
   if (token.token === legacyTokenHash) {
     await db.update(agentPoolTokens).set({ token: tokenHash }).where(eq(agentPoolTokens.id, token.id));
   }
-  const now = Date.now();
   if (token.lastUsedAt === null || now - token.lastUsedAt >= AGENT_TOKEN_LAST_USED_INTERVAL_MS) {
     await db.update(agentPoolTokens).set({ lastUsedAt: now }).where(eq(agentPoolTokens.id, token.id));
   }

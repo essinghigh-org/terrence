@@ -29,6 +29,7 @@ import { publish } from "../lib/event-bus";
 import { authPlugin } from "../auth";
 import { cachedOrgByName } from "../lib/cached-lookups";
 import { withDbLock } from "../lib/db-lock";
+import { agentPoolTokenExpiresAt } from "../lib/agent-token";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -825,6 +826,8 @@ export const userRoutes = new Elysia({ name: "users" })
           description: agentToken.description,
           "created-at": new Date(agentToken.createdAt).toISOString(),
           "last-used-at": agentToken.lastUsedAt === null ? null : new Date(agentToken.lastUsedAt).toISOString(),
+          "expired-at": new Date(agentPoolTokenExpiresAt(agentToken)).toISOString(),
+          "revoked-at": agentToken.revokedAt === null ? null : new Date(agentToken.revokedAt).toISOString(),
         },
         relationships: {
           "agent-pool": { data: { id: pool.id, type: "agent-pools" } },
@@ -864,8 +867,9 @@ export const userRoutes = new Elysia({ name: "users" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    await db.delete(agentPoolTokens).where(eq(agentPoolTokens.id, tokenId));
-    if (agentToken !== undefined && pool !== undefined) await auditLog("delete", "agent-pool-token", tokenId, user?.id ?? null, pool.orgId, { agentPoolId: pool.id });
+    const revokedAt = Date.now();
+    await db.update(agentPoolTokens).set({ revokedAt }).where(and(eq(agentPoolTokens.id, tokenId), isNull(agentPoolTokens.revokedAt)));
+    if (agentToken !== undefined && pool !== undefined) await auditLog("revoke", "agent-pool-token", tokenId, user?.id ?? null, pool.orgId, { agentPoolId: pool.id });
     (set as { status: number }).status = 204;
     return {};
   })

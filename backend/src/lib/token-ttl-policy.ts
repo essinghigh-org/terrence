@@ -17,8 +17,10 @@ import { eq } from "drizzle-orm";
 //   credentials are untouched when a policy shortens).
 
 /** Token types a policy can govern. Mirrors apiTokens.tokenType semantics:
- * "" is the organization-token slot. Whitelisted at the policy API (todo 76). */
-export const TTL_POLICY_TOKEN_TYPES = ["", "organization", "user", "team", "team-legacy", "audit-trails", "audit_trails"] as const;
+ * "" is the organization-token slot. Agent is the pool credential used by
+ * the agent protocol; the two hyphen/underscore spellings are accepted as
+ * compatibility aliases and stored canonically as "agent". */
+export const TTL_POLICY_TOKEN_TYPES = ["", "organization", "user", "team", "team-legacy", "audit-trails", "audit_trails", "agent", "agent-pool", "agent_pool"] as const;
 export type TtlPolicyTokenType = (typeof TTL_POLICY_TOKEN_TYPES)[number];
 
 export function isTtlPolicyTokenType(value: string): value is TtlPolicyTokenType {
@@ -29,6 +31,7 @@ export function isTtlPolicyTokenType(value: string): value is TtlPolicyTokenType
 export function normalizeTtlPolicyTokenType(value: string): string {
   if (value === "organization") return "";
   if (value === "audit_trails") return "audit-trails";
+  if (value === "agent-pool" || value === "agent_pool") return "agent";
   return value;
 }
 
@@ -55,6 +58,7 @@ export async function resolveTokenExpiryUnderPolicy(
   tokenType: TtlPolicyTokenType,
   requestedExpiresAt: number | null,
 ): Promise<TtlPolicyResolution> {
+  const canonicalTokenType = normalizeTtlPolicyTokenType(tokenType);
   if (requestedExpiresAt !== null && !Number.isFinite(requestedExpiresAt)) {
     return { kind: "invalid", detail: "expired-at must be a valid timestamp" };
   }
@@ -65,10 +69,10 @@ export async function resolveTokenExpiryUnderPolicy(
   const policies = await db.query.orgTokenTTLPolicies.findMany({
     where: eq(orgTokenTTLPolicies.orgId, orgId),
   });
-  const policy = policies.find((p: Readonly<{ tokenType: string; maxTtlMs: number }>): boolean => p.tokenType === tokenType);
+  const policy = policies.find((p: Readonly<{ tokenType: string; maxTtlMs: number }>): boolean => normalizeTtlPolicyTokenType(p.tokenType) === canonicalTokenType);
   if (policy === undefined) return { kind: "ok", expiresAt: requestedExpiresAt };
   if (policy.maxTtlMs === 0) {
-    return { kind: "forbidden", detail: `Organization policy forbids ${tokenType === "" ? "organization" : tokenType} tokens` };
+    return { kind: "forbidden", detail: `Organization policy forbids ${canonicalTokenType === "" ? "organization" : canonicalTokenType} tokens` };
   }
 
   const maxExpiresAt = Date.now() + policy.maxTtlMs;

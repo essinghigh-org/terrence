@@ -76,7 +76,7 @@ export const tokenTtlRoutes = new Elysia({ name: "token-ttl" })
       // the mint path actually enforces.
       if (typeof o["token-type"] !== "string" || tokenType.length > 100 || !isTtlPolicyTokenType(tokenType) || typeof maxTtlMs !== "number" || !Number.isFinite(maxTtlMs) || maxTtlMs < 0) {
         (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "each policy requires a whitelisted token-type string (\"\" (empty, organization token slot) | user | team | team-legacy | audit-trails; empty = org token slot) and a non-negative max-ttl-ms number" }] };
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "each policy requires a whitelisted token-type string (\"\" (empty, organization token slot) | user | team | team-legacy | audit-trails | agent; empty = org token slot) and a non-negative max-ttl-ms number" }] };
       }
       cleaned.push({ id: `ttl-${crypto.randomUUID()}`, orgId: org.id, tokenType, maxTtlMs, createdAt: now, updatedAt: now });
     }

@@ -1546,6 +1546,8 @@ export const agentPoolTokens = sqliteTable("agent_pool_tokens", {
   description: text("description"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
   lastUsedAt: integer("last_used_at"),
+  expiresAt: integer("expires_at"),
+  revokedAt: integer("revoked_at"),
 });
 
 export const agents = sqliteTable("agents", {
