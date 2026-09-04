@@ -11,6 +11,7 @@ import {
   users,
 } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
+import { setExternalUrlTransportForTests } from "../../src/lib/url-safety";
 
 const suffix = crypto.randomUUID();
 const orgId = `org-repository-discovery-${suffix}`;
@@ -34,7 +35,6 @@ const bitbucketTokenId = `ot-repository-discovery-bitbucket-${suffix}`;
 const boundedBitbucketTokenId = `ot-repository-discovery-bitbucket-bounded-${suffix}`;
 const outsiderTokenId = `ot-repository-discovery-outsider-${suffix}`;
 
-const originalFetch = globalThis.fetch;
 const calls: { authorization: string | null; url: string }[] = [];
 
 function request(connectionId: string): Promise<Response> {
@@ -52,9 +52,9 @@ function jsonResponse(body: unknown, headers: Record<string, string> = {}): Resp
 }
 
 beforeAll(async () => {
-  globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    const url = input instanceof Request ? input.url : input.toString();
-    const headers = new Headers(input instanceof Request ? input.headers : init?.headers);
+  setExternalUrlTransportForTests(async (target, init): Promise<Response> => {
+    const url = target.url;
+    const headers = new Headers(init.headers);
     calls.push({ authorization: headers.get("authorization"), url });
     const parsed = new URL(url);
 
@@ -101,7 +101,7 @@ beforeAll(async () => {
       return jsonResponse({ values: [] });
     }
     return new Response("unexpected provider request", { status: 500 });
-  }, { preconnect: originalFetch.preconnect });
+  });
 
   await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
   await db.insert(organizations).values([
@@ -178,7 +178,7 @@ beforeEach(() => {
 });
 
 afterAll(async () => {
-  globalThis.fetch = originalFetch;
+  setExternalUrlTransportForTests(undefined);
   await db.delete(oauthTokens).where(inArray(oauthTokens.id, [
     githubTokenId,
     githubEnterpriseTokenId,
@@ -228,6 +228,19 @@ describe("VCS OAuth repository discovery", () => {
     expect(calls).toHaveLength(2);
     expect(calls.every((call) => call.authorization === "Bearer github-enterprise-token")).toBe(true);
     expect(calls.every((call) => new URL(call.url).hostname === "github.enterprise.test")).toBe(true);
+  });
+
+  test("rejects HTTP API URLs before sending bearer credentials", async () => {
+    const previousApiUrl = "https://github.enterprise.test/api/v3";
+    await db.update(oauthClients).set({ apiUrl: "http://github.enterprise.test/api/v3" }).where(eq(oauthClients.id, githubEnterpriseClientId));
+    try {
+      const response = await request(githubEnterpriseTokenId);
+      expect(response.status).toBe(200);
+      expect((await response.json()).data).toEqual([]);
+      expect(calls).toHaveLength(0);
+    } finally {
+      await db.update(oauthClients).set({ apiUrl: previousApiUrl }).where(eq(oauthClients.id, githubEnterpriseClientId));
+    }
   });
 
   test("uses GitLab's paginated projects API and normalizes paths", async () => {

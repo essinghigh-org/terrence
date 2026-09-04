@@ -6,7 +6,7 @@ import { db, isPostgres } from "../db";
 import { apiTokens, githubAppInstallations, oauthClients, oauthTokens, organizations, type users } from "../db/schema";
 import { apiURL, checkOrganizationPermission, checkOrganizationVcsReadPermission } from "../lib/utils";
 import { decryptSecret } from "../lib/secrets";
-import { getGitHubAppAccessToken, getGitHubAppAccessTokenDetails } from "../lib/webhooks";
+import { fetchVcsUrl, getGitHubAppAccessToken, getGitHubAppAccessTokenDetails } from "../lib/webhooks";
 import { findVcsIntegrationUsage, isVcsIntegrationReferenceConflict, vcsIntegrationUsageDetail, type VcsIntegrationUsage } from "../lib/vcs-integration-usage";
 import { AvatarService } from "../lib/avatars";
 import { githubAppApiBase } from "../lib/github-api";
@@ -191,7 +191,7 @@ function validRepositoryApiUrl(value: string): URL | null {
   try {
     const url = new URL(value);
     if (
-      (url.protocol !== "https:" && url.protocol !== "http:")
+      url.protocol !== "https:"
       || url.username !== ""
       || url.password !== ""
       || url.search !== ""
@@ -378,10 +378,11 @@ function repositoryPage(body: unknown, provider: RepositoryProvider): Repository
 }
 
 async function fetchRepositoryPage(url: URL, token: string): Promise<{ body: unknown; headers: Headers } | null> {
+  if (url.protocol !== "https:") return null;
   try {
-    const response = await fetch(url, {
+    const response = await fetchVcsUrl(url.toString(), {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+      timeoutMs: GITHUB_TIMEOUT_MS,
     });
     if (!response.ok) return null;
     return { body: await response.json() as unknown, headers: response.headers };
@@ -524,13 +525,13 @@ async function fetchInstallation(
 
   try {
     const endpoint = `${config.apiUrl.replace(/\/$/, "")}/app/installations/${String(installationId)}`;
-    const response = await fetch(endpoint, {
+    const response = await fetchVcsUrl(endpoint, {
       headers: {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${appToken}`,
         "X-GitHub-Api-Version": "2022-11-28",
       },
-      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+      timeoutMs: GITHUB_TIMEOUT_MS,
     });
     if (!response.ok) return null;
     const payload = await response.json() as Record<string, unknown>;
@@ -909,8 +910,9 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       let repo: { full_name: string } | undefined;
       let sawRepository = false;
       for (let requestCount = 0; requestCount < MAX_REPOSITORY_PAGES; requestCount += 1) {
-        const statusRes = await fetch(repositoryUrl, {
-          headers: repoHeaders, signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+        const statusRes = await fetchVcsUrl(repositoryUrl.toString(), {
+          headers: repoHeaders,
+          timeoutMs: GITHUB_TIMEOUT_MS,
         });
         if (!statusRes.ok) {
           checks.push({ id: "installation-access", label: "Installation repo access", ok: false, status: statusRes.status, detail: `Installation could not list repositories (HTTP ${statusRes.status}). Re-install the app and grant repository access.` });
@@ -954,11 +956,11 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       // Some GitHub-compatible APIs omit permissions from the access-token
       // response. Keep the synthetic write probe for those deployments.
       const testSha = "a".repeat(40);
-      const writeRes = await fetch(`${githubApiBase}/repos/${encodeURIComponent(repo.full_name)}/statuses/${testSha}`, {
+      const writeRes = await fetchVcsUrl(`${githubApiBase}/repos/${encodeURIComponent(repo.full_name)}/statuses/${testSha}`, {
         method: "POST",
         headers: repoHeaders,
         body: JSON.stringify({ state: "pending", context: "terrence/diagnostics", description: "Terrence permission check" }),
-        signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+        timeoutMs: GITHUB_TIMEOUT_MS,
       });
       // GitHub-compatible APIs commonly return 422 for a synthetic
       // (non-existent) SHA when the token has the commit-statuses permission.
