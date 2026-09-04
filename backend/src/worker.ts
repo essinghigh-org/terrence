@@ -107,14 +107,17 @@ import { jitteredPollDelay } from "./lib/poll-jitter";
 // a filesystem allow-list (workdir + binary dir + system libraries) to itself
 // before exec. Provider plugins and local-exec provisioners inherit the
 // restrictions, so they cannot see STORAGE_DIR (DB, encryption key, state
-// archives) or other workspaces. Enable it with TERRENCE_RUN_SANDBOX=true.
+// archives) or other workspaces. The sandbox is required by default
+// (TERRENCE_RUN_SANDBOX unset means sandboxed); disable it explicitly with
+// TERRENCE_RUN_SANDBOX=false.
 const RUN_SANDBOX_REQUIRED = runSandboxRequired();
 const runSandbox = RUN_SANDBOX_REQUIRED && RunSandbox.isUsable() ? new RunSandbox() : null;
 const POLICY_EVALUATION_TIMEOUT_MS = 30_000;
 if (RUN_SANDBOX_REQUIRED && runSandbox === null) {
   log.error(
-    "Run sandbox is enabled (TERRENCE_RUN_SANDBOX=true) but Landlock is unavailable. "
+    "Run sandbox is required (the default) but Landlock is unavailable. "
     + "Runs will FAIL until Landlock is enabled on the host kernel or the sandbox is disabled. "
+    + "Set TERRENCE_RUN_SANDBOX=false, or use `docker compose -f docker-compose.yml -f docker-compose.unsandboxed.yml up -d`. "
     + "See https://docs.kernel.org/userspace-api/landlock.html",
   );
 }
