@@ -328,7 +328,7 @@ async function encryptNotificationToken(token: string | null | undefined): Promi
   return token === null || token === undefined ? token : encryptSecret(token);
 }
 
-async function verifyBeforeSave(values: typeof notificationConfigurations.$inferInsert): Promise<boolean> {
+async function verifyDestinationBeforeUpdate(values: typeof notificationConfigurations.$inferInsert): Promise<boolean> {
   if (values.enabled !== true || values.destinationType === "email") return true;
   const delivery = await postNotification(await decryptedNotification(values as NcItem), {
     payload_version: 1,
@@ -379,10 +379,6 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "All notification users must be active organization members" }] };
     }
-    if (!(await verifyBeforeSave(values))) {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Notification verification did not return a successful response" }] };
-    }
     if (!(await insertConfiguration(values))) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A workspace can have at most 20 notification configurations" }] };
@@ -427,10 +423,6 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "All notification users must be active organization members" }] };
     }
-    if (!(await verifyBeforeSave(values))) {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Notification verification did not return a successful response" }] };
-    }
     if (!(await insertConfiguration(values))) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A workspace can have at most 20 notification configurations" }] };
@@ -474,10 +466,6 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     if (!(await validNotificationUsers(team.orgId, values.emailUserIds ?? []))) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "All notification users must be active organization members" }] };
-    }
-    if (!(await verifyBeforeSave(values))) {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "Notification verification did not return a successful response" }] };
     }
     await db.insert(notificationConfigurations).values({
       ...values,
@@ -645,7 +633,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
         updates.emailAllMembers = false;
         updates.emailUserIds = [];
       }
-      if (candidate.enabled === true && (updates.enabled === true || destinationChanged) && !(await verifyBeforeSave(candidate))) {
+      if (candidate.enabled === true && (updates.enabled === true || destinationChanged) && !(await verifyDestinationBeforeUpdate(candidate))) {
         (set as { status: number }).status = 400;
         return { errors: [{ status: "400", title: "Bad Request", detail: "Notification verification did not return a successful response" }] };
       }
