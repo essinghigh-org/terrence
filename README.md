@@ -57,6 +57,8 @@ releases.
 
 Open `http://localhost:3000` and sign in as `admin` using the password you configured.
 
+That is plain HTTP for local use. For `terraform login` and anything beyond localhost, terminate TLS first: [Reverse proxy (HTTPS)](backend/docs/reverse-proxy.md).
+
 ### Docker Compose
 
 ```bash
