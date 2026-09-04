@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 const storageDir = resolve(process.env.STORAGE_DIR ?? join(dirname(fileURLToPath(import.meta.url)), 'storage'));
 
 export default defineConfig({
-  schema: './src/db/schema.ts',
+  schema: './src/db/schema-sqlite.ts',
   out: './drizzle',
   dialect: 'sqlite',
   dbCredentials: {
