@@ -21,6 +21,7 @@ import type { DeepReadonly } from "./utils";
 export type ExplorerCatalogItem = Readonly<{ name: string; source: string; version: string }>;
 type Job = DeepReadonly<typeof durableJobs.$inferSelect>;
 const MEMBERSHIP_BATCH_SIZE = 100;
+const EXPLORER_INVENTORY_BATCH_SIZE = 200;
 
 async function insertMemberships(tx: DeepReadonly<Parameters<Parameters<typeof db.transaction>[0]>[0]>, memberships: readonly DeepReadonly<typeof explorerCatalogMemberships.$inferInsert>[]): Promise<void> {
   for (let index = 0; index < memberships.length; index += MEMBERSHIP_BATCH_SIZE) {
@@ -101,15 +102,23 @@ function membershipRows(row: ExplorerInventoryCatalogRow): typeof explorerCatalo
   }));
 }
 
+type ExplorerWorkspace = Pick<typeof workspaces.$inferSelect, "id" | "orgId" | "name" | "projectId" | "terraformVersion" | "executionMode" | "vcsRepo" | "createdAt" | "updatedAt">;
+type ExplorerOrganization = Pick<typeof organizations.$inferSelect, "id">;
+type ExplorerProject = Pick<typeof projects.$inferSelect, "id" | "name">;
+type ExplorerState = Pick<typeof stateVersions.$inferSelect, "id" | "workspaceId" | "serial" | "terraformVersion" | "jsonState">;
+type ExplorerRun = Pick<typeof runs.$inferSelect, "id" | "workspaceId" | "status" | "appliedAt" | "createdAt">;
+type ExplorerAssessment = Pick<typeof assessmentResults.$inferSelect, "id" | "workspaceId" | "drifted" | "resourcesDrifted" | "resourcesUndrifted" | "allChecksSucceeded" | "checksPassed" | "checksFailed" | "checksErrored" | "checksUnknown" | "createdAt">;
+type ExplorerNoCode = Pick<typeof noCodeWorkspaceConfigurations.$inferSelect, "workspaceId" | "noCodeModuleId">;
+
 type ExplorerWorkspaceData = DeepReadonly<{
-  workspace: typeof workspaces.$inferSelect;
-  organization: typeof organizations.$inferSelect | undefined;
-  project: typeof projects.$inferSelect | undefined;
-  state: typeof stateVersions.$inferSelect | undefined;
-  run: typeof runs.$inferSelect | undefined;
-  assessment: typeof assessmentResults.$inferSelect | undefined;
+  workspace: ExplorerWorkspace;
+  organization: ExplorerOrganization | undefined;
+  project: ExplorerProject | undefined;
+  state: ExplorerState | undefined;
+  run: ExplorerRun | undefined;
+  assessment: ExplorerAssessment | undefined;
   tags: { key: string }[];
-  noCode: typeof noCodeWorkspaceConfigurations.$inferSelect | undefined;
+  noCode: ExplorerNoCode | undefined;
 }>;
 
 async function loadExplorerWorkspaceData(workspaceId: string): Promise<ExplorerWorkspaceData | undefined> {
@@ -125,6 +134,99 @@ async function loadExplorerWorkspaceData(workspaceId: string): Promise<ExplorerW
     db.query.noCodeWorkspaceConfigurations.findFirst({ where: eq(noCodeWorkspaceConfigurations.workspaceId, workspace.id) }),
   ]);
   return { workspace, organization, project, state, run, assessment, tags, noCode };
+}
+
+function latestRowsByWorkspace<Row extends Readonly<{ workspaceId: string }>>(rows: readonly Row[]): Map<string, Row> {
+  const byWorkspace = new Map<string, Row>();
+  for (const row of rows) {
+    if (!byWorkspace.has(row.workspaceId)) byWorkspace.set(row.workspaceId, row);
+  }
+  return byWorkspace;
+}
+
+async function loadExplorerWorkspaceDataBatch(workspaceIds: readonly string[]): Promise<ExplorerWorkspaceData[]> {
+  const ids = [...workspaceIds];
+  if (ids.length === 0) return [];
+  const workspaceRows = await db.query.workspaces.findMany({
+    where: inArray(workspaces.id, ids),
+    columns: {
+      id: true,
+      orgId: true,
+      name: true,
+      projectId: true,
+      terraformVersion: true,
+      executionMode: true,
+      vcsRepo: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+  if (workspaceRows.length === 0) return [];
+  const organizationIds = [...new Set(workspaceRows.map((workspace): string => workspace.orgId))];
+  const projectIds = workspaceRows.flatMap((workspace): string[] => workspace.projectId === null ? [] : [workspace.projectId]);
+  const [organizationRows, projectRows, stateRows, runRows, assessmentRows, tagRows, noCodeRows] = await Promise.all([
+    db.query.organizations.findMany({ where: inArray(organizations.id, organizationIds), columns: { id: true } }),
+    projectIds.length === 0 ? Promise.resolve([]) : db.query.projects.findMany({ where: inArray(projects.id, [...new Set(projectIds)]), columns: { id: true, name: true } }),
+    db.query.stateVersions.findMany({
+      where: and(inArray(stateVersions.workspaceId, ids), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
+      columns: { id: true, workspaceId: true, serial: true, terraformVersion: true, jsonState: true },
+      orderBy: [desc(stateVersions.serial), desc(stateVersions.id)],
+    }),
+    db.query.runs.findMany({
+      where: inArray(runs.workspaceId, ids),
+      columns: { id: true, workspaceId: true, status: true, appliedAt: true, createdAt: true },
+      orderBy: [desc(runs.createdAt), desc(runs.id)],
+    }),
+    db.query.assessmentResults.findMany({
+      where: inArray(assessmentResults.workspaceId, ids),
+      columns: {
+        id: true,
+        workspaceId: true,
+        drifted: true,
+        resourcesDrifted: true,
+        resourcesUndrifted: true,
+        allChecksSucceeded: true,
+        checksPassed: true,
+        checksFailed: true,
+        checksErrored: true,
+        checksUnknown: true,
+        createdAt: true,
+      },
+      orderBy: [desc(assessmentResults.createdAt), desc(assessmentResults.id)],
+    }),
+    db.query.workspaceTags.findMany({
+      where: inArray(workspaceTags.workspaceId, ids),
+      columns: { workspaceId: true, key: true },
+      orderBy: [asc(workspaceTags.workspaceId), asc(workspaceTags.key)],
+    }),
+    db.query.noCodeWorkspaceConfigurations.findMany({
+      where: inArray(noCodeWorkspaceConfigurations.workspaceId, ids),
+      columns: { workspaceId: true, noCodeModuleId: true },
+      orderBy: [asc(noCodeWorkspaceConfigurations.workspaceId)],
+    }),
+  ]);
+  const organizationsById = new Map(organizationRows.map((organization): [string, ExplorerOrganization] => [organization.id, organization]));
+  const projectsById = new Map(projectRows.map((project): [string, ExplorerProject] => [project.id, project]));
+  const statesByWorkspace = latestRowsByWorkspace(stateRows);
+  const runsByWorkspace = latestRowsByWorkspace(runRows);
+  const assessmentsByWorkspace = latestRowsByWorkspace(assessmentRows);
+  const noCodeByWorkspace = latestRowsByWorkspace(noCodeRows);
+  const tagsByWorkspace = new Map<string, { key: string }[]>();
+  for (const tag of tagRows) {
+    const tags = tagsByWorkspace.get(tag.workspaceId) ?? [];
+    tags.push({ key: tag.key });
+    tagsByWorkspace.set(tag.workspaceId, tags);
+  }
+  return workspaceRows.map((workspace): ExplorerWorkspaceData => ({
+    workspace,
+    organization: organizationsById.get(workspace.orgId),
+    project: workspace.projectId === null ? undefined : projectsById.get(workspace.projectId),
+    state: statesByWorkspace.get(workspace.id),
+    run: runsByWorkspace.get(workspace.id),
+    assessment: assessmentsByWorkspace.get(workspace.id),
+    tags: tagsByWorkspace.get(workspace.id) ?? [],
+    noCode: noCodeByWorkspace.get(workspace.id),
+  }));
 }
 
 function explorerWorkspaceFields(data: DeepReadonly<ExplorerWorkspaceData>, now: number): Readonly<Record<string, unknown>> {
@@ -223,6 +325,35 @@ async function persistExplorerInventory(
   });
 }
 
+async function persistExplorerInventoryBatch(
+  rows: readonly DeepReadonly<typeof explorerWorkspaceInventory.$inferInsert>[],
+): Promise<void> {
+  if (rows.length === 0) return;
+  const workspaceIds = rows.map((row): string => row.workspaceId);
+  await db.transaction(async (tx): Promise<void> => {
+    await tx.delete(explorerCatalogMemberships).where(inArray(explorerCatalogMemberships.workspaceId, workspaceIds));
+    await tx.delete(explorerWorkspaceInventory).where(inArray(explorerWorkspaceInventory.workspaceId, workspaceIds));
+    await tx.insert(explorerWorkspaceInventory).values([...rows]);
+    await insertMemberships(tx, rows.flatMap(membershipRows));
+  });
+}
+
+async function refreshExplorerWorkspaces(workspaceIds: readonly string[], rebuild = true): Promise<void> {
+  const data = await loadExplorerWorkspaceDataBatch(workspaceIds);
+  if (data.length === 0) return;
+  const now = Date.now();
+  const rows = data.map((workspace): typeof explorerWorkspaceInventory.$inferInsert => {
+    const items = stateItems(workspace.state?.jsonState ?? null);
+    return explorerInventoryRow(workspace, items, now);
+  });
+  await persistExplorerInventoryBatch(rows);
+  if (rebuild) {
+    for (const orgId of new Set(data.flatMap((workspace): string[] => workspace.organization === undefined ? [] : [workspace.organization.id]))) {
+      scheduleExplorerCatalog(orgId);
+    }
+  }
+}
+
 export async function refreshExplorerWorkspace(workspaceId: string, rebuild = true): Promise<void> {
   const data = await loadExplorerWorkspaceData(workspaceId);
   if (data === undefined) return;
@@ -273,9 +404,9 @@ async function backfillExplorerInventory(orgId: string, context: DurableJobConte
     const inventory = await db.query.explorerWorkspaceInventory.findMany({ where: inArray(explorerWorkspaceInventory.workspaceId, ids), columns: { workspaceId: true } });
     const existing = new Set(inventory.map((row) => row.workspaceId));
     const missing = page.filter((workspace) => !existing.has(workspace.id));
-    for (let index = 0; index < missing.length; index += 25) {
+    for (let index = 0; index < missing.length; index += EXPLORER_INVENTORY_BATCH_SIZE) {
       if (await context.canceled()) return;
-      await Promise.all(missing.slice(index, index + 25).map(async (workspace) => refreshExplorerWorkspace(workspace.id, false)));
+      await refreshExplorerWorkspaces(missing.slice(index, index + EXPLORER_INVENTORY_BATCH_SIZE).map((workspace): string => workspace.id), false);
     }
     cursor = page[page.length - 1]?.id ?? cursor;
     await context.heartbeat();
@@ -343,9 +474,8 @@ export async function ensureExplorerInventory(orgId: string): Promise<void> {
     const inventory = await db.query.explorerWorkspaceInventory.findMany({ where: eq(explorerWorkspaceInventory.orgId, orgId), columns: { workspaceId: true } });
     const existing = new Set(inventory.map((row) => row.workspaceId));
     const missing = workspacesInOrg.filter((workspace) => !existing.has(workspace.id));
-    const batchSize = 25;
-    for (let index = 0; index < missing.length; index += batchSize) {
-      await Promise.all(missing.slice(index, index + batchSize).map(async (workspace) => refreshExplorerWorkspace(workspace.id, false)));
+    for (let index = 0; index < missing.length; index += EXPLORER_INVENTORY_BATCH_SIZE) {
+      await refreshExplorerWorkspaces(missing.slice(index, index + EXPLORER_INVENTORY_BATCH_SIZE).map((workspace): string => workspace.id), false);
     }
     await rebuildExplorerCatalog(orgId);
     return;
