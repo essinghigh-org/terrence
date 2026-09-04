@@ -655,6 +655,8 @@ export const accountRoutes = new Elysia({ name: "accounts" })
           : or(eq(users.username, username), eq(users.email, loginEmail)),
       });
       if (found !== undefined && isLoginLocked(found)) {
+        // Preserve the dummy-hash timing path without changing lockout behavior.
+        await passwordMatches(password, found.passwordHash);
         (set as { status: number }).status = 401;
         return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
       }

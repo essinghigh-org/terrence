@@ -2,7 +2,7 @@ import { describe, expect, test, beforeAll } from "bun:test";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { ssoChallenges } from "../../src/db/schema";
+import { ssoChallenges, users } from "../../src/db/schema";
 import { generateTotpCode, generateTotpSecret, otpauthUrl, verifyTotp } from "../../src/lib/totp";
 
 async function api(
@@ -161,8 +161,10 @@ describe("mfa api", () => {
     const challengeToken = res.json.data?.attributes?.["mfa-challenge-token"] as string;
     expect(challengeToken).toMatch(/^mfa-/);
     const row = await db.query.ssoChallenges.findFirst({ where: eq(ssoChallenges.id, challengeToken) });
+    const account = await db.query.users.findFirst({ where: eq(users.username, username) });
     expect(row?.kind).toBe("mfa-login");
-    expect(row?.payload["userId"]).toBeDefined();
+    expect(account).toBeDefined();
+    expect(row?.payload["userId"]).toBe(account?.id);
   });
 
   test("POST /users/login/mfa completes login with a valid code", async () => {
