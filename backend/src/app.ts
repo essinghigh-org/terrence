@@ -499,9 +499,11 @@ export const app = new Elysia()
   })
   .onBeforeHandle(({ request, user, set }: PasswordGuardContext): Record<string, unknown> | undefined => {
     if (user?.mustChangePassword !== true) return;
+    // Allow-list, not prefix match (issue #570): a forced password change
+    // must gate every authenticated surface, including /mcp and /scim/,
+    // with only the account-read and password-change endpoints exempt.
     const path = new URL(request.url).pathname;
     if (path === "/api/v2/account/details" || path === "/api/v2/account/password") return;
-    if (!path.startsWith("/api/")) return;
     (set as { status: number }).status = 403;
     return {
       errors: [{

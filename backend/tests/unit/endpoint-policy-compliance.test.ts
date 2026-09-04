@@ -20,6 +20,8 @@ describe("endpoint-policy (465-469)", () => {
     { method: "DELETE", url: "http://x/api/v2/account/mfa", rate: "sensitive" },
     { method: "GET", url: "http://x/users/saml/auth", rate: "sso-get" },
     { method: "GET", url: "http://x/api/v2/workspaces", rate: "global" },
+    { method: "POST", url: "http://x/mcp", rate: "global" },
+    { method: "GET", url: "http://x/scim/v2/Users", rate: "global" },
   ];
 
   for (const { method, url, rate } of probes) {
