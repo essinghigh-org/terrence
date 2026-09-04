@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { inArray } from "drizzle-orm";
-import { app } from "../../src/app";
+import { app, fixedWindowContext } from "../../src/app";
 import { COMPATIBILITY_VERSION } from "../../src/lib/constants";
 import { db } from "../../src/db";
 import { apiTokens, users } from "../../src/db/schema";
@@ -66,6 +66,28 @@ afterAll(async () => {
 });
 
 describe("rate limiting", () => {
+  it("keeps local counts isolated when one context receives mixed durations", async () => {
+    const context = fixedWindowContext();
+    const requestTime = 1_700_000_000_000;
+    expect((await context.increment("client", 1_000, requestTime)).count).toBe(1);
+    expect((await context.increment("client", 60_000, requestTime)).count).toBe(1);
+    expect((await context.increment("client", 1_000, requestTime)).count).toBe(2);
+    await context.decrement("client");
+    // The context cannot identify the failed request's duration because the
+    // rate-limit plugin only passes the key. It must not refund the arbitrary
+    // most-recent window.
+    expect((await context.increment("client", 1_000, requestTime)).count).toBe(3);
+  });
+
+  it("refunds the unique matching window when only one duration is active", async () => {
+    const context = fixedWindowContext();
+    const requestTime = 1_700_000_000_000;
+    expect((await context.increment("client", 1_000, requestTime)).count).toBe(1);
+    expect((await context.increment("client", 1_000, requestTime)).count).toBe(2);
+    await context.decrement("client");
+    expect((await context.increment("client", 1_000, requestTime)).count).toBe(2);
+  });
+
   it("does not count static asset or SPA shell requests against the API bucket", async () => {
     // A page load fetches 30-40 hashed chunks in parallel; those requests must
     // never consume the per-IP API bucket or every cold cache trips a 429.

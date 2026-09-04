@@ -347,50 +347,82 @@ function distributedOrLocal(bucketPrefix: string): ReturnType<typeof fixedWindow
   return isPostgres ? distributedFixedWindowContext(bucketPrefix) : fixedWindowContext();
 }
 
-function fixedWindowContext(): RateLimitContext {
-  const counts = new Map<string, number>();
-  let duration = SENSITIVE_RATE_DURATION_MS;
-  let resetAt = Date.now() + duration;
+export function fixedWindowContext(): RateLimitContext {
+  type LocalWindow = {
+    readonly duration: number;
+    readonly counts: Map<string, number>;
+    start: number;
+    resetAt: number;
+  };
 
-  const resetExpiredWindow = (now: number): void => {
-    if (now < resetAt) return;
-    counts.clear();
-    resetAt = now + duration;
+  const windows = new Map<number, LocalWindow>();
+  let defaultDuration = SENSITIVE_RATE_DURATION_MS;
+
+  const validDuration = (candidate: number | undefined): number =>
+    candidate !== undefined && Number.isFinite(candidate) && candidate > 0 ? candidate : defaultDuration;
+
+  const windowFor = (duration: number, now: number): LocalWindow => {
+    const existing = windows.get(duration);
+    if (existing !== undefined) return existing;
+    const created: LocalWindow = {
+      duration,
+      counts: new Map<string, number>(),
+      start: now,
+      resetAt: now + duration,
+    };
+    windows.set(duration, created);
+    return created;
+  };
+
+  const resetExpiredWindow = (window: LocalWindow, now: number): void => {
+    if (now < window.resetAt) return;
+    window.counts.clear();
+    window.start = now;
+    window.resetAt = now + window.duration;
   };
 
   return {
     init(options): void {
-      duration = typeof options.duration === "number" && Number.isFinite(options.duration) && options.duration > 0
+      defaultDuration = typeof options.duration === "number" && Number.isFinite(options.duration) && options.duration > 0
         ? options.duration
         : SENSITIVE_RATE_DURATION_MS;
-      resetAt = Date.now() + duration;
+      windows.clear();
     },
     increment(key, requestDuration, requestTime): { count: number; nextReset: Date; start: number } {
       const now = requestTime ?? Date.now();
-      if (requestDuration !== undefined && requestDuration !== duration) {
-        duration = requestDuration;
-        resetAt = now + duration;
-        counts.clear();
-      }
-      resetExpiredWindow(now);
-      const count = (counts.get(key) ?? 0) + 1;
-      counts.set(key, count);
-      return { count, nextReset: new Date(resetAt), start: resetAt - duration };
+      const window = windowFor(validDuration(requestDuration), now);
+      resetExpiredWindow(window, now);
+      const count = (window.counts.get(key) ?? 0) + 1;
+      window.counts.set(key, count);
+      return { count, nextReset: new Date(window.resetAt), start: window.start };
     },
     decrement(key): void {
-      const count = counts.get(key);
-      if (count !== undefined && count > 0) counts.set(key, count - 1);
+      // elysia-rate-limit only supplies the key when refunding a failed
+      // request. Each production context has one configured duration; if a
+      // caller reuses a context with mixed durations and the key exists in
+      // more than one live window, do not refund an arbitrary bucket.
+      const targets = [...windows.values()].filter((window): boolean => (window.counts.get(key) ?? 0) > 0);
+      if (targets.length !== 1) return;
+      const window = targets[0];
+      if (window === undefined) return;
+      const count = window.counts.get(key);
+      if (count === undefined) return;
+      window.counts.set(key, count - 1);
     },
     reset(key): void {
       if (key !== undefined) {
-        counts.delete(key);
+        for (const window of windows.values()) window.counts.delete(key);
         return;
       }
-      counts.clear();
-      resetAt = Date.now() + duration;
+      for (const window of windows.values()) {
+        const now = Date.now();
+        window.counts.clear();
+        window.start = now;
+        window.resetAt = now + window.duration;
+      }
     },
     kill(): void {
-      counts.clear();
+      windows.clear();
     },
   };
 }

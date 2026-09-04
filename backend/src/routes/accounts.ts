@@ -20,6 +20,7 @@ import { authenticateLdapWithCircuitBreaker } from "../lib/ldap";
 import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "../lib/sso";
 import { resolveClientIp } from "../lib/client-ip";
 import { checkPasswordPolicy, loadPasswordPolicy } from "../lib/password-policy";
+import { clearLoginFailures, isLoginLocked, recordFailedLogin } from "../lib/login-lockout";
 import { secureRequest } from "../lib/secure-request";
 import { normalizeEmail, normalizeUsername } from "../lib/identity";
 
@@ -593,12 +594,13 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const [sso, ldap] = await Promise.all([ssoSettingsSnapshot(), ldapSettings()]);
     const localAuthEnabled = sso.localAuthEnabled;
 
-    // LDAP is tried first when the directory is reachable; local password
-    // auth remains the fallback unless an administrator has disabled local
+    // LDAP is tried first when the directory is reachable; local password auth
+    // remains the fallback unless an administrator has disabled local
     // authentication. An *unavailable* directory is different from a rejected
     // bind: when LDAP is the only configured path, a down directory is a
     // service problem (503), not bad credentials.
     let user: typeof users.$inferSelect | null = null;
+    let localPasswordAuthenticated = false;
     let ldapUnavailable = false;
     if (ldap.enabled) {
       let ldapUser: Awaited<ReturnType<typeof authenticateLdapWithCircuitBreaker>>["user"] = null;
@@ -653,14 +655,35 @@ export const accountRoutes = new Elysia({ name: "accounts" })
           ? eq(users.username, username)
           : or(eq(users.username, username), eq(users.email, loginEmail)),
       });
+      if (found !== undefined && isLoginLocked(found)) {
+        // Preserve the dummy-hash timing path without changing lockout behavior.
+        await passwordMatches(password, found.passwordHash);
+        (set as { status: number }).status = 401;
+        return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
+      }
       const passwordValid = await passwordMatches(password, found?.passwordHash);
       if (found === undefined || !passwordValid) {
+        if (found !== undefined && !isUserLoginBlocked(found)) {
+          const failure = await recordFailedLogin(found.id);
+          if (failure.lockedUntil !== null) {
+            log.warn("Account locked after repeated failed login attempts", {
+              userId: found.id,
+              failedAttempts: failure.failedAttempts,
+              lockedUntil: failure.lockedUntil,
+            });
+          }
+        }
         (set as { status: number }).status = 401;
         return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
       }
       user = found;
+      localPasswordAuthenticated = true;
     }
 
+    if (localPasswordAuthenticated && isLoginLocked(user)) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
+    }
     if (isUserLoginBlocked(user)) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
@@ -669,12 +692,18 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "This invitation has not been accepted yet" }] };
     }
+    // Keep the compare-and-clear even when the stale user row appears clean:
+    // a failed login can set a lock while password verification is in flight.
+    if (localPasswordAuthenticated && !(await clearLoginFailures(user.id))) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
+    }
     // If MFA is enabled for this account, issue a short-lived challenge token
     // instead of an access token. The client completes login via
     // POST /users/login/mfa with a valid TOTP code.
     const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
     if (mfa !== undefined && mfa.enabled === true) {
-      const challengeToken = issueMfaChallenge(user.id);
+      const challengeToken = await issueMfaChallenge(user.id);
       return {
         data: {
           type: "users",
@@ -709,7 +738,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "400", title: "Bad Request", detail: "Missing MFA challenge token or code" }] };
     }
 
-    const challenge = consumeMfaChallenge(challengeToken);
+    const challenge = await consumeMfaChallenge(challengeToken);
     if (challenge === null) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "MFA challenge has expired or is invalid" }] };

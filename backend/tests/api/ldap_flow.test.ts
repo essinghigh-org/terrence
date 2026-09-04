@@ -132,6 +132,30 @@ describe("LDAP authentication", () => {
     expect(created?.email).toBe(`${ldapUsername}@example.com`);
   });
 
+  test("does not apply local password lockout state to LDAP authentication", async () => {
+    const provisioned = await db.query.users.findFirst({ where: eq(users.username, ldapUsername) });
+    expect(provisioned).not.toBeUndefined();
+    if (provisioned === undefined) return;
+    const lockedUntil = Date.now() + 60_000;
+    await db.update(users).set({
+      loginFailedAttempts: 5,
+      loginFailureWindowStartedAt: Date.now() - 1_000,
+      loginLockedUntil: lockedUntil,
+    }).where(eq(users.id, provisioned.id));
+    try {
+      const response = await login(ldapUsername, VALID_USER_PASSWORD, true);
+      expect(response.status).toBe(200);
+      const unchanged = await db.query.users.findFirst({ where: eq(users.id, provisioned.id) });
+      expect(unchanged?.loginLockedUntil).toBe(lockedUntil);
+    } finally {
+      await db.update(users).set({
+        loginFailedAttempts: 0,
+        loginFailureWindowStartedAt: null,
+        loginLockedUntil: null,
+      }).where(eq(users.id, provisioned.id));
+    }
+  });
+
   test("rejects wrong directory credentials", async () => {
     const response = await login(ldapUsername, "wrong-password", true);
     expect(response.status).toBe(401);

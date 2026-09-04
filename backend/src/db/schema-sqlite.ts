@@ -12,6 +12,12 @@ export const users = sqliteTable("users", {
   isSuspended: integer("is_suspended", { mode: "boolean" }).default(false),
   isProvisional: integer("is_provisional", { mode: "boolean" }).notNull().default(false),
   mustChangePassword: integer("must_change_password", { mode: "boolean" }).notNull().default(false),
+  // Durable per-account password-guessing state. The boot repair path adds
+  // these columns to older installations without requiring a replayable
+  // migration, while atomic updates keep distributed attempts consistent.
+  loginFailedAttempts: integer("login_failed_attempts").notNull().default(0),
+  loginFailureWindowStartedAt: integer("login_failure_window_started_at"),
+  loginLockedUntil: integer("login_locked_until"),
   theme: text("theme").notNull().default("original-light"),
   // External identity for SAML / OIDC / LDAP provisioned accounts.
   // Both NULL for local accounts. (sso_provider, sso_subject) is unique and
