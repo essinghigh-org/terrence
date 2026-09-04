@@ -34,7 +34,9 @@ jobs:
           # Raises the tofu release-lookup ceiling from 60/hr (per shared
           # runner IP) to 5000/hr when both matrix jobs run e2e downloads.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: cd backend && bun test --bail=5
+        # The backend package script serializes Bun workers because the test
+        # suite shares its Elysia app and SQLite connection across files.
+        run: cd backend && bun run test
 
   backend-postgres:
     name: Backend (Postgres)
@@ -70,7 +72,9 @@ jobs:
         env:
           DATABASE_URL: postgres://terrence:terrence@localhost:5432/terrence_test
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: cd backend && bun test --bail=5
+        # The backend package script serializes Bun workers because the test
+        # suite shares its Elysia app and SQLite connection across files.
+        run: cd backend && bun run test
 
   frontend:
     name: Frontend
