@@ -857,9 +857,12 @@ export const app = new Elysia()
     // Any valid JSON media type (vnd.api+json, application/json,
     // application/scim+json, ...) is capped and parsed here so chunked
     // bodies without Content-Length cannot buffer up to the 100 MiB server
-    // limit. Arbitrary strings that merely contain "json" are not treated as
-    // JSON and fall through to Elysia's default parser.
-    if (isJsonContentType(contentType)) {
+    // limit. Archive-upload paths are exempt: state and configuration
+    // uploads legitimately carry JSON content types up to the 100 MiB
+    // server cap, and their routes enforce their own limits. Arbitrary
+    // strings that merely contain "json" are not treated as JSON and fall
+    // through to Elysia's default parser.
+    if (isJsonContentType(contentType) && !isUploadPath(pathname)) {
       const text = await readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
       try {
         return JSON.parse(text) as Record<string, unknown>;
