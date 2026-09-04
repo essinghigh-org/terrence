@@ -20,6 +20,7 @@ import { authenticateLdapWithCircuitBreaker } from "../lib/ldap";
 import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "../lib/sso";
 import { resolveClientIp } from "../lib/client-ip";
 import { checkPasswordPolicy, loadPasswordPolicy } from "../lib/password-policy";
+import { clearLoginFailures, isLoginLocked, recordFailedLogin } from "../lib/login-lockout";
 import { secureRequest } from "../lib/secure-request";
 import { normalizeEmail, normalizeUsername } from "../lib/identity";
 
@@ -653,14 +654,23 @@ export const accountRoutes = new Elysia({ name: "accounts" })
           ? eq(users.username, username)
           : or(eq(users.username, username), eq(users.email, loginEmail)),
       });
+      if (found !== undefined && isLoginLocked(found)) {
+        (set as { status: number }).status = 401;
+        return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
+      }
       const passwordValid = await passwordMatches(password, found?.passwordHash);
       if (found === undefined || !passwordValid) {
+        if (found !== undefined && !isUserLoginBlocked(found)) await recordFailedLogin(found.id);
         (set as { status: number }).status = 401;
         return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
       }
       user = found;
     }
 
+    if (isLoginLocked(user)) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
+    }
     if (isUserLoginBlocked(user)) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
@@ -669,12 +679,16 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "This invitation has not been accepted yet" }] };
     }
+    if (!(await clearLoginFailures(user.id))) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
+    }
     // If MFA is enabled for this account, issue a short-lived challenge token
     // instead of an access token. The client completes login via
     // POST /users/login/mfa with a valid TOTP code.
     const mfa = await db.query.user2FA.findFirst({ where: eq(user2FA.userId, user.id) });
     if (mfa !== undefined && mfa.enabled === true) {
-      const challengeToken = issueMfaChallenge(user.id);
+      const challengeToken = await issueMfaChallenge(user.id);
       return {
         data: {
           type: "users",
@@ -709,7 +723,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "400", title: "Bad Request", detail: "Missing MFA challenge token or code" }] };
     }
 
-    const challenge = consumeMfaChallenge(challengeToken);
+    const challenge = await consumeMfaChallenge(challengeToken);
     if (challenge === null) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "MFA challenge has expired or is invalid" }] };

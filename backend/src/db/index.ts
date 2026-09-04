@@ -475,6 +475,21 @@ if (!isPostgres) {
     client.run("ALTER TABLE user_2fa ADD COLUMN last_accepted_counter INTEGER");
   }
 
+  // Per-account login lockout is additive and intentionally idempotent. Keep
+  // older installations convergent without replaying a generated migration.
+  const userColumns = new Set(
+    (client.query("PRAGMA table_info(users)").all() as { name: string }[]).map((row): string => row.name),
+  );
+  if (!userColumns.has("login_failed_attempts")) {
+    client.run("ALTER TABLE users ADD COLUMN login_failed_attempts INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!userColumns.has("login_failure_window_started_at")) {
+    client.run("ALTER TABLE users ADD COLUMN login_failure_window_started_at INTEGER");
+  }
+  if (!userColumns.has("login_locked_until")) {
+    client.run("ALTER TABLE users ADD COLUMN login_locked_until INTEGER");
+  }
+
   // Agent-pool token lifecycle is additive. The generated migration covers
   // fresh databases, while this idempotent repair keeps older installations
   // with sparse journals convergent without invalidating existing credentials.
@@ -832,6 +847,10 @@ export async function applyPgMigrations(): Promise<void> {
     await pg.unsafe("ALTER TABLE user_2fa ADD COLUMN IF NOT EXISTS secret_encrypted text");
     // TOTP replay protection is additive and idempotent for older installs.
     await pg.unsafe("ALTER TABLE user_2fa ADD COLUMN IF NOT EXISTS last_accepted_counter bigint");
+    // Per-account login lockout is additive and idempotent for older installs.
+    await pg.unsafe("ALTER TABLE users ADD COLUMN IF NOT EXISTS login_failed_attempts bigint NOT NULL DEFAULT 0");
+    await pg.unsafe("ALTER TABLE users ADD COLUMN IF NOT EXISTS login_failure_window_started_at bigint");
+    await pg.unsafe("ALTER TABLE users ADD COLUMN IF NOT EXISTS login_locked_until bigint");
     // Agent-pool token lifecycle is additive and idempotent for older installs.
     await pg.unsafe("ALTER TABLE agent_pool_tokens ADD COLUMN IF NOT EXISTS expires_at bigint");
     await pg.unsafe("ALTER TABLE agent_pool_tokens ADD COLUMN IF NOT EXISTS revoked_at bigint");
