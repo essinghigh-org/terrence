@@ -4,6 +4,7 @@ import { organizationMemberships, organizations, samlSettings, users } from "../
 import { auditLog } from "./utils";
 import { checkPasswordPolicy, loadPasswordPolicy } from "./password-policy";
 import { lockFirstUserElection } from "../db/first-user";
+import { hashPassword } from "./password-hashing";
 
 function consumeAdminPassword(): string | null {
   const password = process.env["ADMIN_PASSWORD"];
@@ -41,7 +42,7 @@ export async function bootstrapInitialAdmin(): Promise<"created" | "disabled" | 
   const { username, email, organizationName } = resolveBootstrapIdentity(bootstrapUsername);
   const id = `user-${crypto.randomUUID()}`;
   const organizationId = `org-${crypto.randomUUID()}`;
-  const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
+  const passwordHash = await hashPassword(password);
 
   const created = await db.transaction(async (tx: unknown): Promise<{ created: boolean; organizationCreated: boolean }> => {
     const t = tx as typeof db;

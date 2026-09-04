@@ -1,4 +1,5 @@
 import { Elysia } from "elysia";
+import { timingSafeEqual } from "node:crypto";
 import { and, eq, isNull, or } from "drizzle-orm";
 import { db } from "./db";
 import { apiTokens, user2FA, users } from "./db/schema";
@@ -127,6 +128,13 @@ function tokenClientId(body: unknown, request: RequestWithHeaders): string {
 async function s256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Buffer.from(digest).toString("base64url");
+}
+
+export async function verifyPkceVerifier(verifier: string, expectedChallenge: string): Promise<boolean> {
+  if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)) return false;
+  const actual = Buffer.from(await s256(verifier));
+  const expected = Buffer.from(expectedChallenge);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
 type RequestInfo = Readonly<{ url: string; headers: Readonly<{ get: (name: string) => string | null }> }>;
@@ -325,8 +333,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     if (
       entry.expiresAt <= Date.now()
       || field(body, "redirect_uri") !== entry.redirectUri
-      || !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)
-      || await s256(verifier) !== entry.codeChallenge
+      || !await verifyPkceVerifier(verifier, entry.codeChallenge)
     ) {
       return oauthError(set, "invalid_grant");
     }

@@ -518,16 +518,7 @@ export async function syncSamlGroupMappings(userId: string, groups: readonly str
   });
 }
 
-const DUMMY_PASSWORD_HASH = "$2b$10$./PtU.lbOie2J8A136xCHebbWWXw66h5mpFJQiXmWzmuMNqYJVzgq";
-
-/** Compare local passwords safely, including nonexistent and unusable accounts. */
-export async function passwordMatches(password: string, passwordHash = DUMMY_PASSWORD_HASH): Promise<boolean> {
-  try {
-    return await Bun.password.verify(password, passwordHash).catch(() => false);
-  } catch {
-    return false;
-  }
-}
+export { passwordMatches } from "./password-hashing";
 
 /** HTML-escape a value for safe interpolation into rendered SSO pages. */
 function escapeHtml(value: string): string {

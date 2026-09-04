@@ -5,7 +5,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, users } from "../../src/db/schema";
-import { oauthPlugin } from "../../src/oauth";
+import { oauthPlugin, verifyPkceVerifier } from "../../src/oauth";
 
 const userId = crypto.randomUUID();
 const username = `oauth-user-${userId}`;
@@ -295,5 +295,48 @@ describe("Terraform login OAuth", () => {
     const retry = await exchange(verifier);
     expect(retry.status).toBe(400);
     expect(await retry.json()).toEqual({ error: "invalid_grant" });
+  });
+
+  it("uses a constant-time comparison for valid and mismatched PKCE challenges", async () => {
+    const expected = await challenge();
+    expect(await verifyPkceVerifier(verifier, expected)).toBe(true);
+    expect(await verifyPkceVerifier("wrong-verifier-that-is-long-enough-012345678901", expected)).toBe(false);
+  });
+
+  it("rejects malformed and out-of-range PKCE verifier boundaries before comparing", async () => {
+    const validVerifier = "a".repeat(43);
+    const expected = await challenge(validVerifier);
+
+    expect(await verifyPkceVerifier("a".repeat(42), expected)).toBe(false);
+    expect(await verifyPkceVerifier(`${"a".repeat(42)}!`, expected)).toBe(false);
+    expect(await verifyPkceVerifier("a".repeat(129), expected)).toBe(false);
+    expect(await verifyPkceVerifier(validVerifier, "a".repeat(42))).toBe(false);
+  });
+
+  it("does not exchange an authorization code for a provisional account", async () => {
+    const { complete } = await fullHandshake();
+    const callback = new URL(complete.headers.get("Location")!);
+    const code = callback.searchParams.get("code")!;
+    await db.update(users).set({ isProvisional: true }).where(eq(users.id, userId));
+
+    try {
+      const tokenResponse = await oauthApp.handle(new Request("http://localhost/oauth/token", {
+        method: "POST",
+        headers: {
+          "Authorization": `Basic ${btoa("terraform-cli:")}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          code,
+          code_verifier: verifier,
+          grant_type: "authorization_code",
+          redirect_uri: "http://localhost:10000/login",
+        }),
+      }));
+      expect(tokenResponse.status).toBe(400);
+      expect(await tokenResponse.json()).toEqual({ error: "invalid_grant" });
+    } finally {
+      await db.update(users).set({ isProvisional: false }).where(eq(users.id, userId));
+    }
   });
 });

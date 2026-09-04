@@ -935,11 +935,11 @@ export const samlRoutes = new Elysia({ name: "saml-sso" })
     }
     let user = result.user;
 
-    // Do not synchronize groups or elevate a suspended/tombstoned account
-    // while processing a signed assertion. Those writes must never happen
-    // before the account-availability check.
-    if (user.isSuspended === true || user.deletedAt !== null) {
-      await auditLog("sso-failure", "saml", user.id, user.id, null, { reason: "account is suspended or deleted" });
+    // Do not synchronize groups or elevate a suspended, provisional, or
+    // tombstoned account while processing a signed assertion. Those writes must
+    // never happen before the account-availability check.
+    if (isUserLoginBlocked(user)) {
+      await auditLog("sso-failure", "saml", user.id, user.id, null, { reason: "account is suspended, provisional, or deleted" });
       return reject("This account is not available.", 403);
     }
 

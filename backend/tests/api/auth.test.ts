@@ -52,6 +52,7 @@ describe("the reference format API Authentication (Local Auth MVP)", () => {
       })
     );
     expect(firstRes.status).toBe(201);
+    const firstData = await firstRes.json();
 
     const secondRes = await app.handle(
       new Request("http://localhost/api/v2/users", {
@@ -62,8 +63,32 @@ describe("the reference format API Authentication (Local Auth MVP)", () => {
         }),
       })
     );
+    expect(secondRes.status).toBe(201);
+    const secondData = await secondRes.json();
+    expect(secondData.data).toEqual(firstData.data);
 
-    expect(secondRes.status).toBe(409);
+    const partialUsername = `partial_${dupUser}`;
+    const partialRes = await app.handle(
+      new Request("http://localhost/api/v2/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({
+          data: {
+            type: "users",
+            attributes: {
+              username: partialUsername,
+              email: `${dupUser}@example.com`,
+              password: "anotherpassword",
+            },
+          },
+        }),
+      }),
+    );
+    expect(partialRes.status).toBe(201);
+    const partialData = await partialRes.json();
+    expect(partialData.data.type).toBe("users");
+    expect(partialData.data.id).not.toBe(firstData.data.id);
+    expect(partialData.data.attributes.username).toBe(partialUsername);
   });
 
   it("should fail to login with incorrect password", async () => {

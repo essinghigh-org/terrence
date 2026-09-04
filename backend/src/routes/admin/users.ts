@@ -7,6 +7,7 @@ import { eq, and, or, count, isNull } from "drizzle-orm";
 import { auditLog, caseInsensitiveLike, pageRequest, pagination, sensitiveIdentifierHash, withOrganizationMembershipLocks } from "../../lib/utils";
 import { isUniqueConstraintError } from "../../lib/validation";
 import { checkPasswordPolicy, loadPasswordPolicy } from "../../lib/password-policy";
+import { hashPassword } from "../../lib/password-hashing";
 import { hashAuthenticationToken } from "../../lib/token-service";
 import type { ParamCtx } from "./types";
 import { type UserItem, adminUserResource } from "./helpers";
@@ -67,7 +68,7 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] };
     }
-    const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
+    const passwordHash = await hashPassword(password);
     const id = `user-${crypto.randomUUID()}`;
     try {
       await db.insert(users).values({ id, username, email, passwordHash, isSiteAdmin });

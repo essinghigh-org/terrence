@@ -15,8 +15,31 @@ const SALT_FILE_NAME = ".encryption-salt";
 const KEY_LENGTH = 32;
 const SALT_LENGTH = 16;
 
+type PasswordKdfOptions = Readonly<{ ["N"]: number; r: number; p: number; maxmem: number }>;
+
+// scrypt's memory cost is intentionally explicit. Node's default N=2^14 is
+// too small for a key protecting Terraform state; these parameters use the
+// current OWASP baseline while staying within a bounded 256 MiB allocation.
+export const PASSWORD_KDF_OPTIONS: PasswordKdfOptions = {
+  N: 2 ** 17,
+  r: 8,
+  p: 1,
+  maxmem: 256 * 1024 * 1024,
+};
+
+// Existing installations used Node's implicit N=2^14 setting. Keep this only
+// for read compatibility; all newly derived keys use PASSWORD_KDF_OPTIONS.
+const LEGACY_PASSWORD_KDF_OPTIONS: PasswordKdfOptions = {
+  N: 2 ** 14,
+  r: 8,
+  p: 1,
+  maxmem: 64 * 1024 * 1024,
+};
+
 let cachedKey: Buffer | undefined;
 let cachedStorageDir: string | undefined;
+let cachedLegacyPasswordKey: Buffer | undefined;
+let cachedLegacyPasswordKeyStorageDir: string | undefined;
 // In-flight guard for the cold file-key load. Under test setups (and any burst
 // of first-time encryptSecret calls) several callers can hit a missing key file
 // concurrently; without a shared promise each one races the filesystem and the
@@ -142,13 +165,15 @@ async function loadEncryptionKey(): Promise<Buffer> {
     cachedKey = undefined;
     cachedKeyInFlight = undefined;
     cachedKeyInFlightDir = undefined;
+    cachedLegacyPasswordKey = undefined;
+    cachedLegacyPasswordKeyStorageDir = undefined;
     cachedStorageDir = currentStorageDir;
   }
   if (cachedKey !== undefined) return cachedKey;
 
   const password = process.env["ENCRYPTION_PASSWORD"];
   if (password !== undefined && password !== "") {
-    cachedKey = scryptSync(password, await loadKdfSalt(), KEY_LENGTH);
+    cachedKey = scryptSync(password, await loadKdfSalt(), KEY_LENGTH, PASSWORD_KDF_OPTIONS);
     if (saltWasRecreatedOnLoad) {
       log.warn(KDF_SALT_RECREATED_WARNING);
       saltWasRecreatedOnLoad = false; // warn once per boot
@@ -212,6 +237,20 @@ async function loadEncryptionKey(): Promise<Buffer> {
   return cachedKey;
 }
 
+async function loadLegacyPasswordKey(): Promise<Buffer> {
+  const currentStorageDir = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"));
+  if (cachedLegacyPasswordKey !== undefined && cachedLegacyPasswordKeyStorageDir === currentStorageDir) {
+    return cachedLegacyPasswordKey;
+  }
+  const password = process.env["ENCRYPTION_PASSWORD"];
+  if (password === undefined || password === "") {
+    throw new Error("Legacy password-derived key requested without ENCRYPTION_PASSWORD");
+  }
+  cachedLegacyPasswordKey = scryptSync(password, await loadKdfSalt(), KEY_LENGTH, LEGACY_PASSWORD_KDF_OPTIONS);
+  cachedLegacyPasswordKeyStorageDir = currentStorageDir;
+  return cachedLegacyPasswordKey;
+}
+
 export function isEncryptedSecret(value: string): boolean {
   const parts = value.split(":");
   if (parts.length !== 5 || `${parts[0]}:${parts[1]}` !== ENCRYPTED_PREFIX) return false;
@@ -258,7 +297,18 @@ export async function decryptSecret(value: string): Promise<string> {
     ]).toString("utf8");
   };
 
-  return decrypt(await loadEncryptionKey());
+  const primaryKey = await loadEncryptionKey();
+  try {
+    return decrypt(primaryKey);
+  } catch (primaryError) {
+    const password = process.env["ENCRYPTION_PASSWORD"];
+    if (password === undefined || password === "") throw primaryError;
+    try {
+      return decrypt(await loadLegacyPasswordKey());
+    } catch {
+      throw primaryError;
+    }
+  }
 }
 
 /**
@@ -293,7 +343,19 @@ export function decryptSecretSync(value: string, storageDir: string): string {
     ]).toString("utf8");
   };
 
-  return decrypt(loadEncryptionKeySync(storageDir));
+  const resolvedDir = resolve(storageDir);
+  const primaryKey = loadEncryptionKeySync(resolvedDir);
+  try {
+    return decrypt(primaryKey);
+  } catch (primaryError) {
+    const password = process.env["ENCRYPTION_PASSWORD"];
+    if (password === undefined || password === "") throw primaryError;
+    try {
+      return decrypt(loadPasswordDerivedKeySync(resolvedDir, password, LEGACY_PASSWORD_KDF_OPTIONS));
+    } catch {
+      throw primaryError;
+    }
+  }
 }
 
 type MaterialLengthMode = "minimum" | "exact";
@@ -317,7 +379,11 @@ function readBase64MaterialSync(path: string, expectedLength: number, lengthMode
   return material;
 }
 
-function loadPasswordDerivedKeySync(resolvedDir: string, password: string): Buffer {
+function loadPasswordDerivedKeySync(
+  resolvedDir: string,
+  password: string,
+  options: PasswordKdfOptions = PASSWORD_KDF_OPTIONS,
+): Buffer {
   const saltPath = join(resolvedDir, SALT_FILE_NAME);
   let salt: Buffer | undefined;
   try {
@@ -339,7 +405,7 @@ function loadPasswordDerivedKeySync(resolvedDir: string, password: string): Buff
     log.warn(KDF_SALT_RECREATED_WARNING);
     saltWasRecreatedOnLoad = false;
   }
-  return scryptSync(password, resolvedSalt, KEY_LENGTH);
+  return scryptSync(password, resolvedSalt, KEY_LENGTH, options);
 }
 
 function loadFileEncryptionKeySync(resolvedDir: string): Buffer {
