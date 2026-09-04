@@ -6,6 +6,7 @@ import {
   runs, stateVersions, users, workspaceTags, workspaceVariables, workspaces,
 } from "../../src/db/schema";
 import { eq, inArray } from "drizzle-orm";
+import { validTarGzip } from "./test-archives";
 
 const TEST_WORKSPACE_ID = `ws-run-test-${crypto.randomUUID()}`;
 const TEST_USERNAME = `run-owner-${crypto.randomUUID()}`;
@@ -77,6 +78,34 @@ describe("the reference format API v2 - Runs", () => {
       autoApply: false
     }).returning();
     workspaceId = ws[0]!.id;
+
+    // Runs require an uploaded configuration version (issue #574), so seed
+    // one for every test in this suite.
+    const cvRes = await app.handle(
+      new Request(`http://localhost/api/v2/workspaces/${workspaceId}/configuration-versions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "Authorization": `Bearer ${userToken}`
+        },
+        body: JSON.stringify({
+          data: { type: "configuration-versions", attributes: { auto_queue_runs: false, speculative: false } },
+        }),
+      })
+    );
+    expect(cvRes.status).toBe(201);
+    const seededCvId = (await cvRes.json() as { data: { id: string } }).data.id;
+    const uploadRes = await app.handle(
+      new Request(`http://localhost/api/v2/configuration-versions/${seededCvId}/upload`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "Authorization": `Bearer ${userToken}`
+        },
+        body: validTarGzip("runs-suite"),
+      })
+    );
+    expect(uploadRes.status).toBe(200);
   });
 
   it("should create a run", async () => {

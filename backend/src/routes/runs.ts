@@ -790,6 +790,14 @@ export async function createRun(
       configurationVersion = latest;
     }
   }
+  // A run with no configuration to plan against only fails deep in the
+  // worker log (issue #574). Reject it here with an actionable message,
+  // except for VCS-backed workspaces (handled above) and local-path
+  // workspaces whose source lives on disk.
+  if (cvId === undefined && workspace.vcsRepo?.identifier === undefined && workspace.source !== "local") {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No configuration version is available for this workspace. Upload a configuration version or connect a VCS repository first." }] };
+  }
   if (workspace.iacBinary === null) { await db.update(workspaces).set({ iacBinary: "terraform" }).where(eq(workspaces.id, workspace.id)); }
   const id = newRunId();
   const createdAt = Date.now();
