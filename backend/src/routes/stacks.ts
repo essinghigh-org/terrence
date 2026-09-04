@@ -7,7 +7,7 @@ import { checkOrganizationPermission, pageRequest, pagination, signedApiURL, val
 import { isValidTagsRegex } from "../lib/vcs-repo";
 import { cachedOrgByName } from "../lib/cached-lookups";
 import { enqueueDurableJob } from "../lib/durable-jobs";
-import { isStackStoragePath } from "../lib/stack-worker";
+import { isCurrentStackStateRecord, isStackStoragePath } from "../lib/stack-worker";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -243,15 +243,17 @@ function stackRecordResource(record: StackRecordItem): Record<string, unknown> {
     };
   }
   if (record.recordType === "stack-states") {
+    const isCurrent = isCurrentStackStateRecord(record);
+    const status = isCurrent ? "current" : record.status === "current" ? "superseded" : record.status;
     return {
       id: record.id,
       type: record.recordType,
       attributes: {
         generation: payload["generation"] ?? 1,
-        status: record.status,
+        status,
         deployment: record.name,
         components: Array.isArray(payload["components"]) ? payload["components"] : [],
-        "is-current": payload["is-current"] !== false,
+        "is-current": isCurrent,
         "resource-instance-count": payload["resource-instance-count"] ?? 0,
       },
       relationships: { stack: { data: { id: record.stackId, type: "stacks" } }, "stack-deployment-run": { data: typeof payload["runId"] === "string" ? { id: payload["runId"], type: "stack-deployment-runs" } : null } },

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile, rename, copyFile } from "node:fs/promises";
+import { cp, chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile, rename, copyFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "bun";
@@ -406,6 +406,19 @@ function stateFilePath(stackId: string, deployment: string): string {
   return join(STACK_STORAGE_DIR, "states", `${safe}-${digest}.tfstate`);
 }
 
+function stateSnapshotPath(stackId: string, deployment: string, recordId: string): string {
+  const safe = `${stackId}-${deployment}`.replace(/[^A-Za-z0-9_.-]+/g, "_");
+  const digest = createHash("sha256").update(`${stackId}\0${deployment}`).digest("hex").slice(0, 12);
+  return join(STACK_STORAGE_DIR, "states", `${safe}-${digest}`, `${recordId}.tfstate`);
+}
+
+export function isCurrentStackStateRecord(record: Readonly<{ status: string; payload?: Readonly<Record<string, unknown>> | null }>): boolean {
+  // status is the canonical marker. The payload check keeps recovery safe for
+  // rows written by older versions that could leave status=current alongside
+  // an explicit is-current=false compatibility flag.
+  return record.status === "current" && record.payload?.["is-current"] !== false;
+}
+
 function planHasChanges(value: string): boolean {
   try {
     const parsed = JSON.parse(value) as Record<string, unknown>;
@@ -424,56 +437,124 @@ function planHasChanges(value: string): boolean {
 
 export async function saveStackState(stackId: string, deployment: string, runId: string, statePayload: string | null = null, fencingToken?: number): Promise<string> {
   const path = stateFilePath(stackId, deployment);
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  if (fencingToken !== undefined && !await refreshStackStateLock(stackId, deployment, runId, fencingToken)) throw new Error("Stack state lock ownership was lost before state publication");
-  const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-  let temporaryState = false;
-  if (statePayload !== null) {
-    try {
-      JSON.parse(statePayload);
-      await writeFile(temporary, statePayload, { mode: 0o600 });
+  const recordId = `sst-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+  const snapshotPath = stateSnapshotPath(stackId, deployment, recordId);
+  let temporary: string | null = null;
+  let snapshotTemporary: string | null = null;
+  let snapshotPublished = false;
+  try {
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    if (fencingToken !== undefined && !await refreshStackStateLock(stackId, deployment, runId, fencingToken)) throw new Error("Stack state lock ownership was lost before state publication");
+    temporary = `${path}.${crypto.randomUUID()}.tmp`;
+    let temporaryState = false;
+    let nextStatePayload = statePayload;
+    if (nextStatePayload !== null) {
+      try {
+        JSON.parse(nextStatePayload);
+        await writeFile(temporary, nextStatePayload, { mode: 0o600 });
+        temporaryState = true;
+      } catch {
+        nextStatePayload = null;
+        await rm(temporary, { force: true });
+      }
+    }
+    if (!temporaryState && !(await Bun.file(path).exists())) {
+      await writeFile(temporary, JSON.stringify({ version: 4, terraform_version: "", serial: 0, lineage: crypto.randomUUID(), outputs: {}, resources: [] }), { mode: 0o600 });
       temporaryState = true;
-    } catch {
-      statePayload = null;
-      await rm(temporary, { force: true });
     }
-  }
-  if (!temporaryState && !(await Bun.file(path).exists())) {
-    await writeFile(temporary, JSON.stringify({ version: 4, terraform_version: "", serial: 0, lineage: crypto.randomUUID(), outputs: {}, resources: [] }), { mode: 0o600 });
-    temporaryState = true;
-  }
-  if (temporaryState) {
-    if (fencingToken !== undefined && !await refreshStackStateLock(stackId, deployment, runId, fencingToken)) {
-      await rm(temporary, { force: true });
-      throw new Error("Stack state lock ownership was lost before state publication");
+    if (temporaryState) {
+      if (fencingToken !== undefined && !await refreshStackStateLock(stackId, deployment, runId, fencingToken)) throw new Error("Stack state lock ownership was lost before state publication");
+      await rename(temporary, path);
     }
-    await rename(temporary, path);
+    temporary = null;
+    if (!(await Bun.file(path).exists())) throw new Error("Stack state could not be read for publication");
+    await mkdir(dirname(snapshotPath), { recursive: true, mode: 0o700 });
+    snapshotTemporary = `${snapshotPath}.${crypto.randomUUID()}.tmp`;
+    if (fencingToken !== undefined && !await refreshStackStateLock(stackId, deployment, runId, fencingToken)) throw new Error("Stack state lock ownership was lost before state publication");
+    await copyFile(path, snapshotTemporary);
+    await chmod(snapshotTemporary, 0o600);
+    if (fencingToken !== undefined && !await refreshStackStateLock(stackId, deployment, runId, fencingToken)) throw new Error("Stack state lock ownership was lost before state publication");
+    await rename(snapshotTemporary, snapshotPath);
+    snapshotTemporary = null;
+    await db.transaction(async (tx): Promise<void> => {
+      if (fencingToken !== undefined) {
+        const now = Date.now();
+        const renewed = await tx.update(stackStateLocks).set({ leaseExpiresAt: now + STACK_STATE_LOCK_LEASE_MS, updatedAt: now }).where(and(
+          eq(stackStateLocks.stackId, stackId),
+          eq(stackStateLocks.deployment, deployment),
+          eq(stackStateLocks.runId, runId),
+          gt(stackStateLocks.leaseExpiresAt, now),
+          eq(stackStateLocks.fencingToken, fencingToken),
+        )).returning({ id: stackStateLocks.id });
+        if (renewed.length === 0) throw new Error("Stack state lock ownership was lost during state publication");
+      }
+      const existing = await tx.query.stackRecords.findMany({ where: and(
+        eq(stackRecords.stackId, stackId),
+        eq(stackRecords.recordType, "stack-states"),
+        eq(stackRecords.name, deployment),
+      ) });
+      const currentRecords = existing.filter((record) => record.status === "current");
+      const now = Date.now();
+      for (const record of currentRecords) {
+        await tx.update(stackRecords).set({
+          status: "superseded",
+          payload: { ...(record.payload ?? {}), "is-current": false },
+          updatedAt: now,
+        }).where(and(eq(stackRecords.id, record.id), eq(stackRecords.status, "current")));
+      }
+      await tx.insert(stackRecords).values({
+        id: recordId,
+        stackId,
+        parentId: runId,
+        recordType: "stack-states",
+        name: deployment,
+        status: "current",
+        payload: { generation: existing.length + 1, "is-current": true, runId, descriptionPath: snapshotPath, components: [] },
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+    snapshotPublished = true;
+    return path;
+  } catch (error: unknown) {
+    if (temporary !== null) await rm(temporary, { force: true });
+    if (snapshotTemporary !== null) await rm(snapshotTemporary, { force: true });
+    if (!snapshotPublished) await rm(snapshotPath, { force: true });
+    throw error;
   }
-  const existing = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, stackId), eq(stackRecords.recordType, "stack-states")) });
-  if (fencingToken !== undefined && !await refreshStackStateLock(stackId, deployment, runId, fencingToken)) throw new Error("Stack state lock ownership was lost during state publication");
-  for (const record of existing.filter((candidate) => candidate.name === deployment)) {
-    await db.update(stackRecords).set({ payload: { ...(record.payload ?? {}), "is-current": false }, updatedAt: Date.now() }).where(eq(stackRecords.id, record.id));
-  }
-  await db.insert(stackRecords).values({
-    id: `sst-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
-    stackId,
-    parentId: runId,
-    recordType: "stack-states",
-    name: deployment,
-    status: "current",
-    payload: { generation: existing.filter((record) => record.name === deployment).length + 1, "is-current": true, runId, descriptionPath: path, components: [] },
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  });
-  return path;
 }
 
 export async function removeStackState(stackId: string, deployment: string, runId: string, fencingToken?: number): Promise<void> {
+  const path = stateFilePath(stackId, deployment);
   if (fencingToken !== undefined && !await refreshStackStateLock(stackId, deployment, runId, fencingToken)) throw new Error("Stack state lock ownership was lost before state removal");
-  await rm(stateFilePath(stackId, deployment), { force: true });
-  const records = await db.query.stackRecords.findMany({ where: and(eq(stackRecords.stackId, stackId), eq(stackRecords.recordType, "stack-states"), eq(stackRecords.name, deployment)) });
-  for (const record of records) await db.update(stackRecords).set({ status: "destroyed", payload: { ...(record.payload ?? {}), "is-current": false }, updatedAt: Date.now() }).where(eq(stackRecords.id, record.id));
-  if (fencingToken !== undefined && !await refreshStackStateLock(stackId, deployment, runId, fencingToken)) throw new Error("Stack state lock ownership was lost during state removal");
+  await db.transaction(async (tx): Promise<void> => {
+    if (fencingToken !== undefined) {
+      const now = Date.now();
+      const renewed = await tx.update(stackStateLocks).set({ leaseExpiresAt: now + STACK_STATE_LOCK_LEASE_MS, updatedAt: now }).where(and(
+        eq(stackStateLocks.stackId, stackId),
+        eq(stackStateLocks.deployment, deployment),
+        eq(stackStateLocks.runId, runId),
+        gt(stackStateLocks.leaseExpiresAt, now),
+        eq(stackStateLocks.fencingToken, fencingToken),
+      )).returning({ id: stackStateLocks.id });
+      if (renewed.length === 0) throw new Error("Stack state lock ownership was lost during state removal");
+    }
+    const records = await tx.query.stackRecords.findMany({ where: and(
+      eq(stackRecords.stackId, stackId),
+      eq(stackRecords.recordType, "stack-states"),
+      eq(stackRecords.name, deployment),
+    ) });
+    const currentRecords = records.filter((record) => record.status === "current");
+    const now = Date.now();
+    for (const record of currentRecords) {
+      await tx.update(stackRecords).set({
+        status: "destroyed",
+        payload: { ...(record.payload ?? {}), "is-current": false },
+        updatedAt: now,
+      }).where(and(eq(stackRecords.id, record.id), eq(stackRecords.status, "current")));
+    }
+  });
+  await rm(path, { force: true });
 }
 
 type TerraformCommandResult = Readonly<{ code: number; output: string; heartbeatLost: boolean }>;
@@ -793,13 +874,12 @@ async function failStackRun(stack: Stack, run: DeepReadonly<typeof stackRecords.
 
 async function recoverAgentApplyState(stack: Stack, run: DeepReadonly<typeof stackRecords.$inferSelect>, step: DeepReadonly<typeof stackRecords.$inferSelect>): Promise<void> {
   const deployment = run.name ?? "default";
-  const current = await db.query.stackRecords.findFirst({ where: and(
+  const currentStates = await db.query.stackRecords.findMany({ where: and(
     eq(stackRecords.stackId, stack.id),
     eq(stackRecords.recordType, "stack-states"),
     eq(stackRecords.name, deployment),
-    eq(stackRecords.status, "current"),
-  ) });
-  if (current !== undefined) return;
+  ), orderBy: [desc(stackRecords.createdAt)] });
+  if (currentStates.some(isCurrentStackStateRecord)) return;
   const state = (step.payload ?? {})["state"] ?? (step.payload ?? {})["json_state"];
   const statePayload = typeof state === "string" ? state : state !== null && typeof state === "object" ? JSON.stringify(state) : null;
   const fencingToken = payloadFencingToken(step) ?? payloadFencingToken(run);
