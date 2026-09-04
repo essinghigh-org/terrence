@@ -43,7 +43,7 @@ const BASELINE_TERMINAL_STATUSES = [
  * or this run has no measurable duration).
  */
 export async function runDurationBaseline(
-  run: Readonly<typeof runs.$inferSelect>,
+  run: DeepReadonly<typeof runs.$inferSelect>,
 ): Promise<Readonly<{
   "duration-seconds": number;
   "median-duration-seconds": number;
@@ -523,6 +523,32 @@ async function linkageForRuns(runList: readonly RunItem[]): Promise<ReadonlyMap<
     if (evalRecord.runId !== null) linkage.get(evalRecord.runId)?.tfPolicyEvaluationIds.push(evalRecord.id);
   }
   return linkage;
+}
+
+async function actionRunResource(
+  run: RunItem,
+  workspace: Readonly<typeof workspaces.$inferSelect>,
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+): Promise<Record<string, unknown>> {
+  const [canApply, canOverridePolicy, canAdmin, origins, baseline, linkage] = await Promise.all([
+    checkWorkspacePermission(workspace, userId, orgId, teamId, "apply"),
+    checkWorkspacePermission(workspace, userId, orgId, teamId, "policy-override"),
+    checkWorkspacePermission(workspace, userId, orgId, teamId, "admin"),
+    originsForRuns([run]),
+    runDurationBaseline(run),
+    linkageForRuns([run]),
+  ]);
+  return runResource(
+    run,
+    canApply,
+    canOverridePolicy,
+    origins.get(run.id),
+    baseline,
+    canAdmin,
+    linkage.get(run.id),
+  );
 }
 
 /** Audit finding 6: task-stage resources for include=task_stages sideloads
@@ -1008,7 +1034,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     const included = await includedRunResources([authorized.run], request, includes);
     return { data, ...(included.length > 0 ? { included } : {}) };
   })
-  .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "admin");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -1016,7 +1042,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     await Promise.all([deleteRunLogArchive(runId), deletePlanJsonArtifact(runId)]);
     await db.delete(runs).where(eq(runs.id, runId));
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   })
   .post("/api/v2/runs/:run_id/modules", async ({ params, run, set }: ParamCtx): Promise<unknown> => {
     // Module artifacts callback from the terraform CLI (cloud protocol). The
@@ -1497,7 +1523,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "policy-override"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const run = authorized.run;
     if (run.status !== "policy_soft_failed") { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be policy_soft_failed to override" }] }; }
-    const updated = await db.update(runs).set({ status: "planned" }).where(and(eq(runs.id, runId), eq(runs.status, "policy_soft_failed"))).returning({ id: runs.id });
+    const updated = await db.update(runs).set({ status: "planned" }).where(and(eq(runs.id, runId), eq(runs.status, "policy_soft_failed"))).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is no longer awaiting policy override" }] }; }
     await db.update(policyChecks).set({ status: "overridden" }).where(and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])));
     await auditLog("override-policy", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
@@ -1507,7 +1533,12 @@ export const runRoutes = new Elysia({ name: "runs" })
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
     queueRunNotification(runId, "run:needs_attention", "planned");
-    return { data: { id: runId, type: "runs", attributes: { status: "planned" } } };
+    const updatedRun = updated[0];
+    if (updatedRun === undefined) {
+      (set as { status: number }).status = 500;
+      return { errors: [{ status: "500", title: "Internal Server Error" }] };
+    }
+    return { data: await actionRunResource(updatedRun, authorized.workspace, user?.id, orgId ?? null, teamId ?? null) };
   })
   .post("/api/v2/runs/:run_id/actions/force-execute", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
@@ -1569,7 +1600,12 @@ export const runRoutes = new Elysia({ name: "runs" })
       toStatus: "pending",
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
-    return { data: { id: runId, type: "runs", attributes: { status: "pending" } } };
+    const updatedRun = updated[0];
+    if (updatedRun === undefined) {
+      (set as { status: number }).status = 500;
+      return { errors: [{ status: "500", title: "Internal Server Error" }] };
+    }
+    return { data: await actionRunResource(updatedRun, authorized.workspace, user?.id, orgId ?? null, teamId ?? null) };
   })
   // --- Comments ---
   .get("/api/v2/runs/:run_id/comments", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -1614,7 +1650,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     }
     return { data: commentResource({ id, runId, body: text, userId: user?.id ?? null, createdAt, ...actor }) };
   })
-  .delete("/api/v2/comments/:comment_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/comments/:comment_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const commentId = params["comment_id"] ?? "";
     const c = await db.query.runComments.findFirst({ where: eq(runComments.id, commentId) });
     if (c === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -1622,7 +1658,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(runComments).where(eq(runComments.id, commentId));
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   })
   .get("/api/v2/comments/:comment_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const commentId = params["comment_id"] ?? "";

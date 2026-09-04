@@ -196,6 +196,54 @@ describe("remote-workflow runs contract", () => {
     expectCollection(await response.json(), "runs");
   });
 
+  it("returns full run resources from queue and policy override actions", async () => {
+    const queued = await expectSuccessResponse(
+      await request(`/api/v2/runs/${runId}/actions/queue`, { method: "POST", headers }),
+      200,
+      "runs",
+    );
+    expect(queued.attributes["status"]).toBe("pending");
+    expect(queued.relationships?.["workspace"]).toMatchObject({
+      data: { id: workspaceId, type: "workspaces" },
+    });
+    expect(queued.relationships?.["plan"]).toMatchObject({
+      data: { id: `plan-${runId}`, type: "plans" },
+    });
+    expect(queued.relationships?.["apply"]).toMatchObject({
+      data: { id: `apply-${runId}`, type: "applies" },
+    });
+    expectSelfLink(queued, "/api/v2/runs/");
+
+    const policyRunId = `run-policy-override-${seed.suffix}`;
+    await db.insert(runs).values({
+      id: policyRunId,
+      workspaceId,
+      createdBy: seed.userId,
+      status: "policy_soft_failed",
+      createdAt: Date.now(),
+    });
+    try {
+      const overridden = await expectSuccessResponse(
+        await request(`/api/v2/runs/${policyRunId}/actions/override-policy`, { method: "POST", headers }),
+        200,
+        "runs",
+      );
+      expect(overridden.attributes["status"]).toBe("planned");
+      expect(overridden.relationships?.["workspace"]).toMatchObject({
+        data: { id: workspaceId, type: "workspaces" },
+      });
+      expect(overridden.relationships?.["plan"]).toMatchObject({
+        data: { id: `plan-${policyRunId}`, type: "plans" },
+      });
+      expect(overridden.relationships?.["apply"]).toMatchObject({
+        data: { id: `apply-${policyRunId}`, type: "applies" },
+      });
+      expectSelfLink(overridden, "/api/v2/runs/");
+    } finally {
+      await db.delete(runs).where(eq(runs.id, policyRunId));
+    }
+  });
+
   it("sideloads requested plan and apply resources on every run collection", async () => {
     const include = encodeURIComponent("plan,apply");
     const paths = [

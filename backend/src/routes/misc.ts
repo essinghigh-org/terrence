@@ -633,7 +633,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     }
     await db.delete(workspaceVariables).where(eq(workspaceVariables.id, variable.id));
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   })
   // --- Audit Trails ---
   .get("/api/v2/admin/audit-logs", async ({ user, set }: ParamCtx): Promise<unknown> => {
@@ -779,15 +779,15 @@ export const miscRoutes = new Elysia({ name: "misc" })
     ]);
     return { data: { id: trigger.id, type: "run-triggers", attributes: { "created-at": new Date(trigger.createdAt).toISOString(), "sourceable-name": sw?.name ?? "", "workspace-name": tw?.name ?? "" }, relationships: { sourceable: { data: { id: trigger.sourceWorkspaceId, type: "workspaces" } }, "sourceable-workspace": { data: { id: trigger.sourceWorkspaceId, type: "workspaces" } }, workspace: { data: { id: trigger.workspaceId, type: "workspaces" } } } } };
   })
-  .delete("/api/v2/run-triggers/:run_trigger_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/run-triggers/:run_trigger_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const triggerId = params["run_trigger_id"] ?? "";
     const trigger = triggerId !== "" ? await db.query.runTriggers.findFirst({ where: eq(runTriggers.id, triggerId) }) : undefined;
     if (trigger === undefined || (await findAuthorizedWorkspace(trigger.workspaceId, user?.id, tokenOrgId, tokenTeamId, "admin")) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.delete(runTriggers).where(eq(runTriggers.id, triggerId));
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   })
-  .post("/api/v2/workspaces/:workspace_id/relationships/run-triggers", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
+  .post("/api/v2/workspaces/:workspace_id/relationships/run-triggers", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (ws === undefined || (await findAuthorizedWorkspace(ws.id, user?.id, tokenOrgId, tokenTeamId, "admin")) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -827,9 +827,9 @@ export const miscRoutes = new Elysia({ name: "misc" })
       }))).onConflictDoNothing();
     }
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   })
-  .delete("/api/v2/workspaces/:workspace_id/relationships/run-triggers", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
+  .delete("/api/v2/workspaces/:workspace_id/relationships/run-triggers", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
     const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
     if (ws === undefined || (await findAuthorizedWorkspace(ws.id, user?.id, tokenOrgId, tokenTeamId, "admin")) === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -842,5 +842,5 @@ export const miscRoutes = new Elysia({ name: "misc" })
       }
     }
     (set as { status: number }).status = 204;
-    return {};
+    return new Response(null, { status: 204 });
   });

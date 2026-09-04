@@ -1102,11 +1102,19 @@ function getStateAvailability(state: StateParam, payload: string): { rawStateAva
   return { rawStateAvailable, jsonStateAvailable, pending };
 }
 
-function buildStateCoreAttributes(state: StateParam, parsed: Readonly<Record<string, unknown> | null>, resources: readonly StateResource[], aggregates: StateAggregates, payload: string, includeState: boolean): Record<string, unknown> {
+function buildStateCoreAttributes(
+  state: StateParam,
+  parsed: Readonly<Record<string, unknown> | null>,
+  resources: readonly StateResource[],
+  aggregates: StateAggregates,
+  payload: string,
+  rawStateAvailable: boolean,
+  includeState: boolean,
+): Record<string, unknown> {
   return {
     ...(includeState ? { state: payload } : {}),
     serial: state.serial,
-    md5: createHash("md5").update(payload).digest("hex"),
+    md5: rawStateAvailable ? createHash("md5").update(payload).digest("hex") : null,
     lineage: typeof (parsed as Record<string, unknown> | null)?.["lineage"] === "string" ? (parsed as Record<string, unknown>)["lineage"] : null,
     "terraform-version": typeof (parsed as Record<string, unknown> | null)?.["terraform_version"] === "string" ? (parsed as Record<string, unknown>)["terraform_version"] : null,
     "resources-processed": parsed !== null,
@@ -1116,7 +1124,7 @@ function buildStateCoreAttributes(state: StateParam, parsed: Readonly<Record<str
     "state-version": parsed !== null && typeof (parsed as Record<string, unknown>)["version"] === "number" && Number.isInteger((parsed as Record<string, unknown>)["version"]) ? (parsed as Record<string, unknown>)["version"] : null,
     status: state.status ?? "finalized",
     intermediate: state.intermediate,
-    size: Buffer.byteLength(payload),
+    size: rawStateAvailable ? Buffer.byteLength(payload) : null,
     "created-at": new Date(state.createdAt).toISOString(),
     "vcs-commit-sha": state.vcsCommitSha,
     "vcs-commit-url": state.vcsCommitUrl,
@@ -1141,7 +1149,7 @@ function buildStateRunAttributes(run?: Readonly<{ status: string; message: strin
 
 function buildStateVersionAttributes(state: StateParam, parsed: Readonly<Record<string, unknown> | null>, resources: readonly StateResource[], aggregates: StateAggregates, payload: string, flags: DeepReadonly<{ rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean }>, request: Readonly<{ url: string }>, includeState: boolean, run?: Readonly<{ status: string; message: string | null }> | null): Record<string, unknown> {
   return {
-    ...buildStateCoreAttributes(state, parsed, resources, aggregates, payload, includeState),
+    ...buildStateCoreAttributes(state, parsed, resources, aggregates, payload, flags.rawStateAvailable, includeState),
     ...buildStateUrlAttributes(state, flags, request),
     ...buildStateRunAttributes(run),
   };
