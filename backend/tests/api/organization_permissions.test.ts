@@ -371,7 +371,6 @@ describe("granular organization permissions", () => {
         "POST",
         resource("oauth-clients", { name: "denied", "service-provider": "github" }),
       ),
-      request(`/api/v2/oauth-clients/${oauthClientId}`, tokens.manageWorkspaces),
       request(
         `/api/v2/oauth-clients/${oauthClientId}`,
         tokens.manageWorkspaces,
@@ -381,7 +380,10 @@ describe("granular organization permissions", () => {
       request(`/api/v2/oauth-tokens/${oauthTokenId}`, tokens.manageWorkspaces),
       request(`/api/v2/oauth-tokens/${oauthTokenId}`, tokens.manageWorkspaces, "DELETE"),
     ]);
-    expect(restricted.map(({ status }): number => status)).toEqual(Array(7).fill(404));
+    expect(restricted.map(({ status }): number => status)).toEqual(Array(6).fill(404));
+    const readableClient = await request(`/api/v2/oauth-clients/${oauthClientId}`, tokens.manageWorkspaces);
+    expect(readableClient.status).toBe(200);
+    expect((await readableClient.json() as { data: { id: string } }).data.id).toBe(oauthClientId);
 
     const sameOrg = await request(
       `/api/v2/organizations/${orgName}/workspaces`,
