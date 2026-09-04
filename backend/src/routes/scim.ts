@@ -3,7 +3,7 @@ import { tokenHashCandidates } from "../lib/token-service";
 import { db } from "../db";
 import { apiTokens, identityLinks, organizationInvitations, refreshSessions, scimGroups, scimGroupMemberships, scimTokens, scimUserIdentities, scimSettings,
   teamMemberships, teamScimGroupMappings, teams, users } from "../db/schema";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { isUniqueConstraintError } from "../lib/validation";
 import { reconcileScimSiteAdmins, reconcileTeam } from "./scim-admin";
 
@@ -48,6 +48,102 @@ function scimError(set: SetObj, status: number, detail: string): Record<string, 
 
 type ScimPayload = Record<string, unknown>;
 
+const SCIM_DEFAULT_COUNT = 100;
+const SCIM_MAX_COUNT = 200;
+
+type ScimFilter = Readonly<{ attribute: string; value: string | boolean }>;
+type ScimListQuery = Readonly<{ filter?: ScimFilter; startIndex: number; count: number }>;
+
+function parseScimFilter(raw: string | null): ScimFilter | { error: string } | undefined {
+  if (raw === null) return undefined;
+  if (raw.trim() === "") return { error: "filter must not be empty" };
+  const match = /^\s*([A-Za-z][A-Za-z0-9_.-]*)\s+eq\s+(?:"((?:\\.|[^"\\])*)"|(true|false))\s*$/i.exec(raw);
+  if (match === null) return { error: "filter must use an equality expression with a quoted string or boolean" };
+  const attribute = match[1] ?? "";
+  const stringValue = match[2];
+  if (stringValue !== undefined) {
+    try {
+      const decoded: unknown = JSON.parse(`"${stringValue}"`);
+      return typeof decoded === "string" ? { attribute, value: decoded } : { error: "filter string value is invalid" };
+    } catch {
+      return { error: "filter string value is invalid" };
+    }
+  }
+  return { attribute, value: (match[3] ?? "").toLowerCase() === "true" };
+}
+
+function parseScimInteger(raw: string | null, name: string, defaultValue: number, minimum: number): number | { error: string } {
+  if (raw === null) return defaultValue;
+  if (!/^\d+$/.test(raw)) return { error: `${name} must be an integer` };
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value >= minimum ? value : { error: `${name} is out of range` };
+}
+
+function parseScimListQuery(request: RequestCtx["request"]): ScimListQuery | { error: string } {
+  const params = new URL(request.url).searchParams;
+  const startIndex = parseScimInteger(params.get("startIndex"), "startIndex", 1, 1);
+  if (typeof startIndex !== "number") return startIndex;
+  const requestedCount = parseScimInteger(params.get("count"), "count", SCIM_DEFAULT_COUNT, 0);
+  if (typeof requestedCount !== "number") return requestedCount;
+  const parsedFilter = parseScimFilter(params.get("filter"));
+  if (parsedFilter !== undefined && "error" in parsedFilter) return parsedFilter;
+  return {
+    startIndex,
+    count: Math.min(requestedCount, SCIM_MAX_COUNT),
+    ...(parsedFilter === undefined ? {} : { filter: parsedFilter }),
+  };
+}
+
+function scimCaseInsensitiveEquals(column: AnyColumn, value: string): SQL {
+  return sql`lower(${column}) = lower(${value})`;
+}
+
+function scimUserWhere(filter: ScimFilter | undefined): SQL | { error: string } | undefined {
+  if (filter === undefined) return undefined;
+  switch (filter.attribute.toLowerCase()) {
+    case "id":
+      return typeof filter.value === "string" ? eq(scimUserIdentities.id, filter.value) : { error: "id filter value must be a string" };
+    case "username":
+      return typeof filter.value === "string" ? sql`lower(coalesce(${users.username}, ${scimUserIdentities.username})) = lower(${filter.value})` : { error: "userName filter value must be a string" };
+    case "externalid":
+      return typeof filter.value === "string" ? scimCaseInsensitiveEquals(scimUserIdentities.externalId, filter.value) : { error: "externalId filter value must be a string" };
+    case "emails.value":
+      return typeof filter.value === "string" ? sql`lower(nullif(${users.email}, '')) = lower(${filter.value})` : { error: "emails.value filter value must be a string" };
+    case "active":
+      if (typeof filter.value !== "boolean") return { error: "active filter value must be a boolean" };
+      return filter.value
+        ? or(isNull(users.id), isNull(users.isSuspended), eq(users.isSuspended, false))
+        : eq(users.isSuspended, true);
+    default:
+      return { error: `Unsupported User filter attribute: ${filter.attribute}` };
+  }
+}
+
+function scimGroupWhere(filter: ScimFilter | undefined): SQL | { error: string } | undefined {
+  if (filter === undefined) return undefined;
+  switch (filter.attribute.toLowerCase()) {
+    case "id":
+      return typeof filter.value === "string" ? eq(scimGroups.id, filter.value) : { error: "id filter value must be a string" };
+    case "displayname":
+      return typeof filter.value === "string" ? scimCaseInsensitiveEquals(scimGroups.name, filter.value) : { error: "displayName filter value must be a string" };
+    case "externalid":
+      return typeof filter.value === "string" ? scimCaseInsensitiveEquals(scimGroups.externalId, filter.value) : { error: "externalId filter value must be a string" };
+    default:
+      return { error: `Unsupported Group filter attribute: ${filter.attribute}` };
+  }
+}
+
+function parseScimActive(payload: ScimPayload): boolean | undefined | null {
+  const value = payload["active"];
+  if (value === undefined) return undefined;
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  return null;
+}
+
 function scimUserResource(identity: typeof scimUserIdentities.$inferSelect, user: typeof users.$inferSelect | undefined): Record<string, unknown> {
   const created = new Date(identity.createdAt ?? identity.updatedAt).toISOString();
   const lastModified = new Date(identity.updatedAt).toISOString();
@@ -63,14 +159,13 @@ function scimUserResource(identity: typeof scimUserIdentities.$inferSelect, user
   };
 }
 
-async function scimGroupResource(group: typeof scimGroups.$inferSelect): Promise<Record<string, unknown>> {
-  const memberships = await db.query.scimGroupMemberships.findMany({ where: eq(scimGroupMemberships.groupId, group.id) });
-  const identityIds = memberships.map((membership): string => membership.scimUserId);
-  const identities = identityIds.length === 0 ? [] : await db.query.scimUserIdentities.findMany({ where: inArray(scimUserIdentities.id, identityIds) });
-  const userIds = identities.map((identity): string => identity.userId);
-  const userRows = userIds.length === 0 ? [] : await db.query.users.findMany({ where: inArray(users.id, userIds), columns: { id: true, username: true } });
-  const usernames = new Map(userRows.map((user): [string, string] => [user.id, user.username]));
-  const names = new Map(identities.map((identity): [string, string] => [identity.id, usernames.get(identity.userId) ?? identity.username]));
+type ScimGroupMembership = typeof scimGroupMemberships.$inferSelect;
+
+function buildScimGroupResource(
+  group: typeof scimGroups.$inferSelect,
+  memberships: readonly ScimGroupMembership[],
+  names: ReadonlyMap<string, string>,
+): Record<string, unknown> {
   const created = new Date(group.createdAt).toISOString();
   const lastModified = new Date(group.updatedAt).toISOString();
   return {
@@ -83,8 +178,41 @@ async function scimGroupResource(group: typeof scimGroups.$inferSelect): Promise
   };
 }
 
+async function scimGroupResource(group: typeof scimGroups.$inferSelect): Promise<Record<string, unknown>> {
+  const memberships = await db.query.scimGroupMemberships.findMany({ where: eq(scimGroupMemberships.groupId, group.id) });
+  const identityIds = memberships.map((membership): string => membership.scimUserId);
+  const identities = identityIds.length === 0 ? [] : await db.query.scimUserIdentities.findMany({ where: inArray(scimUserIdentities.id, identityIds) });
+  const userIds = identities.map((identity): string => identity.userId);
+  const userRows = userIds.length === 0 ? [] : await db.query.users.findMany({ where: inArray(users.id, userIds), columns: { id: true, username: true } });
+  const usernames = new Map(userRows.map((user): [string, string] => [user.id, user.username]));
+  const names = new Map(identities.map((identity): [string, string] => [identity.id, usernames.get(identity.userId) ?? identity.username]));
+  return buildScimGroupResource(group, memberships, names);
+}
+
+async function scimGroupResources(groups: readonly (typeof scimGroups.$inferSelect)[]): Promise<Record<string, unknown>[]> {
+  if (groups.length === 0) return [];
+  const groupIds = groups.map((group): string => group.id);
+  const memberships = await db.query.scimGroupMemberships.findMany({
+    where: inArray(scimGroupMemberships.groupId, groupIds),
+    orderBy: [asc(scimGroupMemberships.id)],
+  });
+  const identityIds = [...new Set(memberships.map((membership): string => membership.scimUserId))];
+  const identities = identityIds.length === 0 ? [] : await db.query.scimUserIdentities.findMany({ where: inArray(scimUserIdentities.id, identityIds) });
+  const userIds = [...new Set(identities.map((identity): string => identity.userId))];
+  const userRows = userIds.length === 0 ? [] : await db.query.users.findMany({ where: inArray(users.id, userIds), columns: { id: true, username: true } });
+  const usernames = new Map(userRows.map((user): [string, string] => [user.id, user.username]));
+  const names = new Map(identities.map((identity): [string, string] => [identity.id, usernames.get(identity.userId) ?? identity.username]));
+  const membershipsByGroup = new Map<string, ScimGroupMembership[]>();
+  for (const membership of memberships) {
+    const groupMemberships = membershipsByGroup.get(membership.groupId) ?? [];
+    groupMemberships.push(membership);
+    membershipsByGroup.set(membership.groupId, groupMemberships);
+  }
+  return groups.map((group): Record<string, unknown> => buildScimGroupResource(group, membershipsByGroup.get(group.id) ?? [], names));
+}
+
 function scimEmail(payload: ScimPayload): string | null {
-  const emails = Array.isArray(payload["emails"]) ? payload["emails"] : [];
+  const emails: readonly unknown[] = Array.isArray(payload["emails"]) ? payload["emails"] as readonly unknown[] : [];
   const primary = emails.find((email): boolean => email !== null && typeof email === "object" && (email as Record<string, unknown>)["primary"] === true);
   const first = primary ?? emails[0];
   const value = first !== null && typeof first === "object" ? (first as Record<string, unknown>)["value"] : undefined;
@@ -194,17 +322,29 @@ export const scimRoutes = new Elysia({ name: "scim" })
   .get("/scim/v2/Users", async ({ request, set }: RequestCtx): Promise<unknown> => {
     if (!(await validateScimToken(request, set))) return scimError(set, 401, "Unauthorized");
     set.headers["Content-Type"] = "application/scim+json";
-    const identities = await db.query.scimUserIdentities.findMany();
-    const userIds = identities.map((i) => i.userId);
-    const userList = userIds.length === 0 ? [] : await db.query.users.findMany({ where: inArray(users.id, userIds) });
-    const userMap = new Map(userList.map((u) => [u.id, u]));
-
-    const resources = identities.map((identity): Record<string, unknown> => scimUserResource(identity, userMap.get(identity.userId)));
-
+    const parsed = parseScimListQuery(request);
+    if ("error" in parsed) return scimError(set, 400, parsed.error);
+    const filterWhere = scimUserWhere(parsed.filter);
+    if (filterWhere !== undefined && "error" in filterWhere) return scimError(set, 400, filterWhere.error);
+    const where = filterWhere;
+    const userRowsQuery = db.select({ identity: scimUserIdentities, user: users })
+      .from(scimUserIdentities)
+      .leftJoin(users, eq(users.id, scimUserIdentities.userId));
+    const userCountQuery = db.select({ total: count() })
+      .from(scimUserIdentities)
+      .leftJoin(users, eq(users.id, scimUserIdentities.userId));
+    const [rows, countRows] = await Promise.all([
+      (where === undefined ? userRowsQuery : userRowsQuery.where(where))
+        .orderBy(asc(scimUserIdentities.id))
+        .limit(parsed.count)
+        .offset(parsed.startIndex - 1),
+      (where === undefined ? userCountQuery : userCountQuery.where(where)),
+    ]);
+    const resources = rows.map((row): Record<string, unknown> => scimUserResource(row.identity, row.user ?? undefined));
     return {
       schemas: ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
-      totalResults: resources.length,
-      startIndex: 1,
+      totalResults: countRows[0]?.total ?? 0,
+      startIndex: parsed.startIndex,
       itemsPerPage: resources.length,
       Resources: resources,
     };
@@ -216,6 +356,8 @@ export const scimRoutes = new Elysia({ name: "scim" })
     const userName = typeof payload["userName"] === "string" ? payload["userName"].trim() : "";
     if (userName === "") return scimError(set, 400, "userName is required");
 
+    const active = parseScimActive(payload);
+    if (active === null) return scimError(set, 400, "active must be a boolean");
     const email = scimEmail(payload);
     if (email === null) return scimError(set, 400, "emails is required");
 
@@ -225,7 +367,7 @@ export const scimRoutes = new Elysia({ name: "scim" })
     let rejectedExistingAccount = false;
     try {
       await db.transaction(async (tx): Promise<void> => {
-        const existing = await tx.query.users.findFirst({ where: eq(users.email, email) });
+        const existing = await tx.query.users.findFirst({ where: sql`lower(${users.email}) = lower(${email})` });
         if (existing?.isSiteAdmin === true) {
           rejectedExistingAccount = true;
           return;
@@ -238,14 +380,16 @@ export const scimRoutes = new Elysia({ name: "scim" })
             email,
             passwordHash,
             isSiteAdmin: false,
-            isSuspended: payload["active"] === false,
+            isSuspended: active === false,
             mustChangePassword: false,
           });
         } else {
-          await tx.update(users).set({ isSuspended: payload["active"] === false }).where(eq(users.id, existing.id));
-          if (payload["active"] === false) {
-            await tx.delete(apiTokens).where(eq(apiTokens.userId, existing.id));
-            await tx.update(refreshSessions).set({ revokedAt: Date.now() }).where(and(eq(refreshSessions.userId, existing.id), isNull(refreshSessions.revokedAt)));
+          if (active !== undefined) {
+            await tx.update(users).set({ isSuspended: !active }).where(eq(users.id, existing.id));
+            if (active === false) {
+              await tx.delete(apiTokens).where(eq(apiTokens.userId, existing.id));
+              await tx.update(refreshSessions).set({ revokedAt: Date.now() }).where(and(eq(refreshSessions.userId, existing.id), isNull(refreshSessions.revokedAt)));
+            }
           }
         }
         await tx.insert(scimUserIdentities).values({
@@ -319,6 +463,8 @@ export const scimRoutes = new Elysia({ name: "scim" })
     if (identity === undefined) return scimError(set, 404, "User not found");
     const payload = body !== null && typeof body === "object" ? body as ScimPayload : {};
     const userName = typeof payload["userName"] === "string" && payload["userName"].trim() !== "" ? payload["userName"].trim() : identity.username;
+    const active = parseScimActive(payload);
+    if (active === null) return scimError(set, 400, "active must be a boolean");
     const email = scimEmail(payload);
     if (email === null) return scimError(set, 400, "emails is required");
     const currentUser = await db.query.users.findFirst({ where: eq(users.id, identity.userId) });
@@ -330,9 +476,9 @@ export const scimRoutes = new Elysia({ name: "scim" })
           username: userName,
           email,
           ...(email !== currentUser.email ? { emailVerifiedAt: null } : {}),
-          ...(typeof payload["active"] === "boolean" ? { isSuspended: !payload["active"] } : {}),
+          ...(active !== undefined ? { isSuspended: !active } : {}),
         }).where(eq(users.id, identity.userId));
-        if (payload["active"] === false) {
+        if (active === false) {
           await tx.delete(apiTokens).where(eq(apiTokens.userId, identity.userId));
           await tx.update(refreshSessions).set({ revokedAt: Date.now() }).where(and(eq(refreshSessions.userId, identity.userId), isNull(refreshSessions.revokedAt)));
         }
@@ -385,6 +531,8 @@ export const scimRoutes = new Elysia({ name: "scim" })
     const userName = typeof updates["userName"] === "string" && updates["userName"].trim() !== "" ? updates["userName"].trim() : currentUser.username;
     const email = updates["emails"] === undefined ? currentUser.email : scimEmail({ emails: updates["emails"] });
     if (updates["emails"] !== undefined && email === null) return scimError(set, 400, "emails cannot be cleared");
+    const active = parseScimActive(updates);
+    if (active === null) return scimError(set, 400, "active must be a boolean");
     const updatedAt = Date.now();
     try {
       await db.transaction(async (tx): Promise<void> => {
@@ -392,9 +540,9 @@ export const scimRoutes = new Elysia({ name: "scim" })
           username: userName,
           email,
           ...(email !== currentUser.email ? { emailVerifiedAt: null } : {}),
-          ...(typeof updates["active"] === "boolean" ? { isSuspended: !updates["active"] } : {}),
+          ...(active !== undefined ? { isSuspended: !active } : {}),
         }).where(eq(users.id, currentUser.id));
-        if (updates["active"] === false) {
+        if (active === false) {
           await tx.delete(apiTokens).where(eq(apiTokens.userId, currentUser.id));
           await tx.update(refreshSessions).set({ revokedAt: Date.now() }).where(and(eq(refreshSessions.userId, currentUser.id), isNull(refreshSessions.revokedAt)));
         }
@@ -419,12 +567,25 @@ export const scimRoutes = new Elysia({ name: "scim" })
   .get("/scim/v2/Groups", async ({ request, set }: RequestCtx): Promise<unknown> => {
     if (!(await validateScimToken(request, set))) return scimError(set, 401, "Unauthorized");
     set.headers["Content-Type"] = "application/scim+json";
-    const groupsList = await db.query.scimGroups.findMany();
-    const resources = await Promise.all(groupsList.map(async (group): Promise<Record<string, unknown>> => scimGroupResource(group)));
+    const parsed = parseScimListQuery(request);
+    if ("error" in parsed) return scimError(set, 400, parsed.error);
+    const filterWhere = scimGroupWhere(parsed.filter);
+    if (filterWhere !== undefined && "error" in filterWhere) return scimError(set, 400, filterWhere.error);
+    const where = filterWhere;
+    const groupRowsQuery = db.select().from(scimGroups);
+    const groupCountQuery = db.select({ total: count() }).from(scimGroups);
+    const [groupsList, countRows] = await Promise.all([
+      (where === undefined ? groupRowsQuery : groupRowsQuery.where(where))
+        .orderBy(asc(scimGroups.id))
+        .limit(parsed.count)
+        .offset(parsed.startIndex - 1),
+      (where === undefined ? groupCountQuery : groupCountQuery.where(where)),
+    ]);
+    const resources = await scimGroupResources(groupsList);
     return {
       schemas: ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
-      totalResults: resources.length,
-      startIndex: 1,
+      totalResults: countRows[0]?.total ?? 0,
+      startIndex: parsed.startIndex,
       itemsPerPage: resources.length,
       Resources: resources,
     };
