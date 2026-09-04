@@ -663,6 +663,7 @@ function buildRunCoreAttributes(run: RunParam, operation: string, normalizedSour
     message: run.message,
     operation,
     "plan-only": run.planOnly,
+    "position-in-queue": 0,
     refresh: run.refresh,
     "refresh-only": run.refreshOnly,
     "replace-addrs": run.replaceAddrs,

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
-import { runs, workspaces } from "../../src/db/schema";
+import { runs, workspaces, configurationVersions } from "../../src/db/schema";
 import {
   cleanupSeed,
   expectCollection,
@@ -20,15 +20,36 @@ describe("remote-workflow runs contract", () => {
   const seed = seedOrg("run");
   const headers = jsonHeaders(seed.token);
   const workspaceId = `workspace-${seed.suffix}`;
+  const includedRunId = `run-included-${seed.suffix}`;
+  const configurationVersionId = `cv-${seed.suffix}`;
   let runId = "";
 
   beforeAll(async () => {
     await persistSeed(seed);
     await db.insert(workspaces).values({ id: workspaceId, name: `runs-${seed.suffix}`, orgId: seed.orgId });
+    await db.insert(configurationVersions).values({
+      id: configurationVersionId,
+      workspaceId,
+      status: "uploaded",
+      ingressAttributes: {
+        commitSha: "abc123",
+        branch: "main",
+        senderUsername: "contract-user",
+      },
+    });
+    await db.insert(runs).values({
+      id: includedRunId,
+      workspaceId,
+      configurationVersionId,
+      createdBy: seed.userId,
+      status: "planned",
+      createdAt: Date.now() - 1_000,
+    });
   });
 
   afterAll(async () => {
     await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
+    await db.delete(configurationVersions).where(eq(configurationVersions.id, configurationVersionId));
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
     await cleanupSeed(seed);
   });
@@ -60,6 +81,7 @@ describe("remote-workflow runs contract", () => {
     expect(resource.attributes["source"]).toBe("tfe-api");
     expect(resource.attributes["trigger-reason"]).toBe("manual");
     expect(resource.attributes["plan-only"]).toBe(false);
+    expect(resource.attributes["position-in-queue"]).toBe(0);
     expect(resource.attributes["allow-empty-apply"]).toBe(false);
     expect(resource.attributes["allow-config-generation"]).toBe(false);
     expect(resource.attributes["actions"]).toMatchObject({
@@ -97,16 +119,22 @@ describe("remote-workflow runs contract", () => {
     expect(resource.attributes["status-timestamps"]).toBeTypeOf("object");
   });
 
-  it("includes plan and workspace resources requested by the Terraform CLI", async () => {
-    const response = await request(`/api/v2/runs/${runId}?include=plan%2Cworkspace`, { headers });
+  it("includes every requested run resource on detail reads", async () => {
+    const include = encodeURIComponent("plan,apply,workspace,cost_estimate,configuration_version,configuration_version.ingress_attributes");
+    const response = await request(`/api/v2/runs/${includedRunId}?include=${include}`, { headers });
     expect(response.status).toBe(200);
     const body = await response.json() as {
       included?: { id: string; type: string; attributes?: Record<string, unknown> }[];
     };
     expect(body.included).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        id: `plan-${runId}`,
+        id: `plan-${includedRunId}`,
         type: "plans",
+        attributes: expect.objectContaining({ status: "finished" }),
+      }),
+      expect.objectContaining({
+        id: `apply-${includedRunId}`,
+        type: "applies",
         attributes: expect.objectContaining({ status: "pending" }),
       }),
       expect.objectContaining({
@@ -114,7 +142,23 @@ describe("remote-workflow runs contract", () => {
         type: "workspaces",
         attributes: expect.objectContaining({ name: `runs-${seed.suffix}`, locked: false }),
       }),
+      expect.objectContaining({
+        id: `ce-${includedRunId}`,
+        type: "cost-estimates",
+        attributes: expect.objectContaining({ status: "finished", "terrence:infracost-enabled": false }),
+      }),
+      expect.objectContaining({
+        id: configurationVersionId,
+        type: "configuration-versions",
+        attributes: expect.objectContaining({ status: "uploaded" }),
+      }),
+      expect.objectContaining({
+        id: configurationVersionId,
+        type: "ingress-attributes",
+        attributes: expect.objectContaining({ "commit-sha": "abc123", branch: "main" }),
+      }),
     ]));
+    expect(body.included?.some((resource): boolean => resource.type === "users")).toBe(false);
   });
 
   it("lists runs for a workspace with pagination metadata", async () => {
@@ -150,6 +194,29 @@ describe("remote-workflow runs contract", () => {
     });
     expect(response.status).toBe(200);
     expectCollection(await response.json(), "runs");
+  });
+
+  it("sideloads requested plan and apply resources on every run collection", async () => {
+    const include = encodeURIComponent("plan,apply");
+    const paths = [
+      `/api/v2/workspaces/${workspaceId}/runs?include=${include}&page[number]=1&page[size]=10`,
+      `/api/v2/organizations/${seed.orgName}/runs?include=${include}&page[number]=1&page[size]=10`,
+      `/api/v2/organizations/${seed.orgName}/runs/queue?include=${include}&page[number]=1&page[size]=10`,
+    ];
+    for (const path of paths) {
+      const response = await request(path, { headers });
+      expect(response.status).toBe(200);
+      const body = await response.json() as {
+        data: { id: string }[];
+        included?: { id: string; type: string }[];
+      };
+      expect(body.data.length).toBeGreaterThan(0);
+      const includedKeys = new Set((body.included ?? []).map((resource): string => `${resource.type}:${resource.id}`));
+      for (const run of body.data) {
+        expect(includedKeys.has(`plans:plan-${run.id}`)).toBe(true);
+        expect(includedKeys.has(`applies:apply-${run.id}`)).toBe(true);
+      }
+    }
   });
 
   it("shows run events", async () => {

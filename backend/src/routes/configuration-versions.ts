@@ -37,7 +37,7 @@ function hasIngressData(cv: DeepReadonly<ConfigurationVersion>): boolean {
   );
 }
 
-function configurationVersionResource(
+export function configurationVersionResource(
   cv: DeepReadonly<ConfigurationVersion>,
   request: Readonly<{ url: string }>,
   includeUploadUrl = true,
@@ -78,6 +78,27 @@ function configurationVersionResource(
     links: {
       self: `/api/v2/configuration-versions/${cv.id}`,
       download: `/api/v2/configuration-versions/${cv.id}/download`,
+    },
+  };
+}
+
+export function configurationVersionIngressResource(
+  cv: DeepReadonly<ConfigurationVersion>,
+): Record<string, unknown> {
+  const ingress = (cv.ingressAttributes ?? {}) as Record<string, unknown>;
+  return {
+    id: cv.id,
+    type: "ingress-attributes",
+    attributes: {
+      "commit-sha": ingress["commitSha"] ?? null,
+      "commit-url": ingress["commitUrl"] ?? null,
+      "commit-message": ingress["commitMessage"] ?? null,
+      branch: ingress["branch"] ?? null,
+      tag: ingress["tag"] ?? null,
+      "pull-request-number": ingress["pullRequestNumber"] ?? null,
+      "sender-username": ingress["senderUsername"] ?? null,
+      "clone-url": ingress["cloneUrl"] ?? null,
+      "compare-url": ingress["compareUrl"] ?? null,
     },
   };
 }
@@ -387,6 +408,5 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     if (!hasIngressData(cv)) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const ingress = (cv.ingressAttributes ?? {}) as Record<string, unknown>;
-    return { data: { id: cv.id, type: "ingress-attributes", attributes: { "commit-sha": ingress["commitSha"] ?? null, "commit-url": ingress["commitUrl"] ?? null, "commit-message": ingress["commitMessage"] ?? null, branch: ingress["branch"] ?? null, tag: ingress["tag"] ?? null, "pull-request-number": ingress["pullRequestNumber"] ?? null, "sender-username": ingress["senderUsername"] ?? null, "clone-url": ingress["cloneUrl"] ?? null, "compare-url": ingress["compareUrl"] ?? null } } };
+    return { data: configurationVersionIngressResource(cv) };
   });
