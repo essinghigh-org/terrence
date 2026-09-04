@@ -80,16 +80,20 @@ describe("Notification destination ownership verification API (kanban 7.7)", () 
       // Initially unverified.
       const before = await request(`/api/v2/notification-configurations/${ncId}/ownership-verified`);
       expect(before.status).toBe(200);
-      expect((await before.json()).data.ownership_verified).toBe(false);
+      const beforeBody = await before.json();
+      expect(beforeBody.data.type).toBe("notification-configurations");
+      expect(beforeBody.data.attributes["ownership-verified"]).toBe(false);
 
       // Successful challenge/echo handshake.
       const verifyRes = await request(`/api/v2/notification-configurations/${ncId}/actions/verify-ownership`, "POST");
       expect(verifyRes.status).toBe(200);
-      expect((await verifyRes.json()).data.ownership_verified).toBe(true);
+      const verifyBody = await verifyRes.json();
+      expect(verifyBody.data.type).toBe("notification-configurations");
+      expect(verifyBody.data.attributes["ownership-verified"]).toBe(true);
 
       // Reported verified afterward.
       const after = await request(`/api/v2/notification-configurations/${ncId}/ownership-verified`);
-      expect((await after.json()).data.ownership_verified).toBe(true);
+      expect((await after.json()).data.attributes["ownership-verified"]).toBe(true);
     } finally {
       await db.delete(notificationConfigurations).where(eq(notificationConfigurations.id, ncId));
     }
@@ -122,7 +126,7 @@ describe("Notification destination ownership verification API (kanban 7.7)", () 
       expect(verifyRes.status).toBe(400);
       const body = await verifyRes.json();
       expect(body.errors?.[0]?.title).toBe("Ownership Not Verified");
-      expect(body.errors?.[0]?.ownership_verified).toBe(false);
+      expect(body.errors?.[0]?.meta?.["ownership-verified"]).toBe(false);
     } finally {
       await deadServer.stop(true);
       await db.delete(notificationConfigurations).where(eq(notificationConfigurations.id, ncId));

@@ -77,18 +77,34 @@ describe("preserved Explorer bulk-action compatibility", () => {
 
     const response = await request(path, "POST", targetPayload);
     expect(response.status).toBe(201);
-    expect((await response.json()).data).toEqual({
-      id: expect.stringMatching(/^eba-/),
-      type: "explorer_bulk_actions",
-      attributes: {
-        organization_id: orgId,
-        action_type: "change_requests",
-        action_inputs: { subject, message: "Update every selected workspace." },
-        created_by: { id: ownerId, type: "users" },
-      },
+    const responseBody = await response.json();
+    expect(responseBody.data).toEqual(expect.objectContaining({
+      id: expect.stringMatching(/^ebar-/),
+      type: "change-requests",
+      attributes: expect.objectContaining({
+        subject,
+        message: "Update every selected workspace.",
+        status: "pending",
+        "created-at": expect.any(String),
+        "updated-at": expect.any(String),
+      }),
+      relationships: expect.objectContaining({
+        organization: { data: { id: orgId, type: "organizations" } },
+        workspace: { data: expect.objectContaining({ type: "workspaces" }) },
+        "created-by": { data: { id: ownerId, type: "users" } },
+        "resolved-by": { data: null },
+      }),
+    }));
+    expect(responseBody.data.attributes).not.toHaveProperty("organization_id");
+    expect(responseBody.data.attributes).not.toHaveProperty("created_by");
+    expect(responseBody.meta).toEqual({
+      "action-type": "change-requests",
+      "action-inputs": { subject, message: "Update every selected workspace." },
+      "created-count": 2,
     });
     const targetRows = await db.query.explorerBulkActionRecords.findMany({ where: eq(explorerBulkActionRecords.subject, subject) });
     expect(targetRows.map((row): string => row.workspaceId).sort()).toEqual([queryWorkspaceId, workspaceId].sort());
+    expect(targetRows.some((row): boolean => row.id === responseBody.data.id)).toBeTrue();
 
     const querySubject = `Query target ${suffix}`;
     const queryResponse = await request(path, "POST", {

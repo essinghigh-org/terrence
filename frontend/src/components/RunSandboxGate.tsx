@@ -15,9 +15,9 @@ async function fetchRunSandboxStatus(): Promise<RunSandboxStatus | null> {
     if (!response.ok) return null;
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
     const payload = (await response.json()) as {
-      data?: { "run-sandbox"?: RunSandboxStatus };
+      data?: { attributes?: { "run-sandbox"?: RunSandboxStatus } };
     };
-    return payload.data?.["run-sandbox"] ?? null;
+    return payload.data?.attributes?.["run-sandbox"] ?? null;
   } catch {
     return null;
   }

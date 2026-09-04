@@ -699,11 +699,8 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
     // template before enabling the destination.
     if (query?.["preview"] === "true") {
       return {
-        status: "preview",
-        data: {
-          ...notificationResource(configuration),
-          preview: samplePayload,
-        },
+        data: notificationResource(configuration),
+        meta: { status: "preview", preview: samplePayload },
       };
     }
 
@@ -713,10 +710,10 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
       return { errors: [{ status: "400", title: "Bad Request", detail: `Notification verification returned HTTP ${delivery.code}` }] };
     }
     return {
-      status: "verification_sent",
       // Diagnostics (request/response details) surface even on success so
       // the caller can confirm the destination received the right payload.
-      data: { ...notificationResource(configuration, [delivery]), verification: deliveryResource(delivery) },
+      data: notificationResource(configuration, [delivery]),
+      meta: { status: "verification_sent", verification: deliveryResource(delivery) },
     };
   })
   .post("/api/v2/notification-configurations/:nc_id/actions/verify-ownership", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
@@ -737,20 +734,34 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
           status: "400",
           title: "Ownership Not Verified",
           detail,
-          ownership_verified: false,
-          response_preview: outcome.echoed,
+          meta: {
+            "ownership-verified": false,
+            "response-preview": outcome.echoed,
+          },
         }],
       };
     }
     return {
       data: {
         ...notificationResource(configuration),
-        ownership_verified: true,
+        attributes: {
+          ...(notificationResource(configuration)["attributes"] as Record<string, unknown>),
+          "ownership-verified": true,
+        },
       },
     };
   })
   .get("/api/v2/notification-configurations/:nc_id/ownership-verified", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const configuration = await authorizedConfiguration(params["nc_id"] ?? "", user?.id, tokenOrgId, tokenTeamId, "read");
     if (configuration === undefined) return notFound(set);
-    return { data: { id: configuration.id, ownership_verified: isOwnershipVerified(configuration.id) } };
+    const resource = notificationResource(configuration);
+    return {
+      data: {
+        ...resource,
+        attributes: {
+          ...(resource["attributes"] as Record<string, unknown>),
+          "ownership-verified": isOwnershipVerified(configuration.id),
+        },
+      },
+    };
   });

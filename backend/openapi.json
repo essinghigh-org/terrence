@@ -28969,15 +28969,8 @@
         ],
         "summary": "PUT /api/v2/policies/{policy_id}/upload",
         "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/vnd.api+json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
+          "204": {
+            "description": "No Content"
           },
           "400": {
             "description": "Bad Request"
@@ -43266,9 +43259,6 @@
           "406": {
             "description": "Not Acceptable"
           },
-          "409": {
-            "description": "Conflict"
-          },
           "413": {
             "description": "Payload Too Large"
           },
@@ -43280,6 +43270,9 @@
           },
           "500": {
             "description": "Internal Server Error"
+          },
+          "502": {
+            "description": "Bad Gateway"
           }
         }
       }

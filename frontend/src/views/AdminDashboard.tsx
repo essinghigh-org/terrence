@@ -223,14 +223,14 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         const ping = pingResponse as { "signup-enabled"?: boolean };
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const sandbox = (metaResponse as {
-          data?: { "run-sandbox"?: { enabled?: boolean; available?: boolean; reason?: string | null; extraRwAllowed?: boolean } };
-        }).data?.["run-sandbox"];
+          data?: { attributes?: { "run-sandbox"?: { enabled?: boolean; available?: boolean; reason?: string | null; "extra-rw-allowed"?: boolean } } };
+        }).data?.attributes?.["run-sandbox"];
         setSecuritySummary({
           signupEnabled: ping["signup-enabled"] === true,
           sandboxEnabled: sandbox?.enabled === true,
           sandboxAvailable: sandbox?.available === true,
           sandboxReason: isString(sandbox?.reason) ? sandbox.reason : null,
-          sandboxExtraRwAllowed: sandbox?.extraRwAllowed === true,
+          sandboxExtraRwAllowed: sandbox?.["extra-rw-allowed"] === true,
         });
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const samlIsEnabled = (samlResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;

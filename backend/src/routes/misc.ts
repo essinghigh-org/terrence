@@ -33,7 +33,7 @@ type ParamCtx = Readonly<{
   token?: Readonly<{ id: string; orgId: string | null; teamId: string | null; tokenType?: string; scopes?: string | null }> | null;
   orgId: string | null;
   teamId: string | null;
-  request?: Readonly<{ url: string }>;
+  request: Readonly<{ url: string }>;
   set: SetObj;
 }>;
 
@@ -211,8 +211,12 @@ function webhookUnprocessable(set: SetObj, detail: string): { errors: { status: 
 }
 
 type AuditLogItem = Readonly<typeof auditLogs.$inferSelect>;
+type AuditLogPage = Readonly<{ number: number; size: number }>;
+type PagedAuditLogs = Readonly<{ logs: AuditLogItem[]; total: number }>;
 
-async function auditTrailResources(logsList: readonly AuditLogItem[]): Promise<Record<string, unknown>[]> {
+const AUDIT_LOG_RESOURCE_TYPE = "audit-logs";
+
+async function auditLogResources(logsList: readonly AuditLogItem[]): Promise<Record<string, unknown>[]> {
   const actorIds = [...new Set(logsList.map((log): string | null => log.userId).filter((id): id is string => id !== null))];
   const actors = actorIds.length === 0
     ? []
@@ -222,7 +226,7 @@ async function auditTrailResources(logsList: readonly AuditLogItem[]): Promise<R
     const actor = al.userId === null ? undefined : actorsById.get(al.userId);
     return {
       id: al.id,
-      type: "audit-trails",
+      type: AUDIT_LOG_RESOURCE_TYPE,
       attributes: {
         action: al.action,
         "resource-type": al.resourceType,
@@ -236,12 +240,28 @@ async function auditTrailResources(logsList: readonly AuditLogItem[]): Promise<R
   });
 }
 
+async function pagedAuditLogs(where: SQL | undefined, page: AuditLogPage): Promise<PagedAuditLogs> {
+  const [totalRows, logs] = await Promise.all([
+    where === undefined
+      ? db.select({ total: count() }).from(auditLogs)
+      : db.select({ total: count() }).from(auditLogs).where(where),
+    db.query.auditLogs.findMany({
+      where,
+      limit: page.size,
+      offset: (page.number - 1) * page.size,
+      orderBy: [desc(auditLogs.createdAt), desc(auditLogs.id)],
+    }),
+  ]);
+  return { logs, total: Number(totalRows[0]?.total ?? 0) };
+}
+
 const AUDIT_LOG_ACCESS_DENIED = Symbol("audit-log-access-denied");
-type AuditLogResult = AuditLogItem[] | null | typeof AUDIT_LOG_ACCESS_DENIED;
+type AuditLogResult = PagedAuditLogs | null | typeof AUDIT_LOG_ACCESS_DENIED;
 
 async function auditLogsForPrincipal(
   user: Readonly<typeof users.$inferSelect> | null | undefined,
   token: Readonly<{ id: string; orgId: string | null; teamId: string | null; tokenType?: string; scopes?: string | null }> | null | undefined,
+  page: AuditLogPage,
 ): Promise<AuditLogResult> {
   let orgIds: string[];
   if (user === null || user === undefined) {
@@ -274,8 +294,22 @@ async function auditLogsForPrincipal(
     }
   }
   const uniqueOrgIds = [...new Set(orgIds)];
-  if (uniqueOrgIds.length === 0) return user === null || user === undefined ? null : [];
-  return db.query.auditLogs.findMany({ where: inArray(auditLogs.orgId, uniqueOrgIds), limit: 100, orderBy: [desc(auditLogs.createdAt)] });
+  if (uniqueOrgIds.length === 0) return user === null || user === undefined ? null : { logs: [], total: 0 };
+  return pagedAuditLogs(inArray(auditLogs.orgId, uniqueOrgIds), page);
+}
+
+async function auditTrailAliasResponse({ user, token, request, set }: ParamCtx): Promise<unknown> {
+  const page = pageRequest(request);
+  const result = await auditLogsForPrincipal(user, token, page);
+  if (result === null || result === AUDIT_LOG_ACCESS_DENIED) {
+    const status = result === AUDIT_LOG_ACCESS_DENIED ? 403 : 401;
+    (set as { status: number }).status = status;
+    return { errors: [{ status: String(status), title: status === 401 ? "Unauthorized" : "Forbidden" }] };
+  }
+  return {
+    data: await auditLogResources(result.logs),
+    ...pagination(request, page.number, page.size, result.total),
+  };
 }
 
 const webhookAcknowledged = {
@@ -636,22 +670,27 @@ export const miscRoutes = new Elysia({ name: "misc" })
     return new Response(null, { status: 204 });
   })
   // --- Audit Trails ---
-  .get("/api/v2/admin/audit-logs", async ({ user, set }: ParamCtx): Promise<unknown> => {
-    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const logsList = await db.query.auditLogs.findMany({ limit: 100, orderBy: [desc(auditLogs.createdAt)] });
-    return { data: (await auditTrailResources(logsList)).map((resource): Record<string, unknown> => ({ ...resource, type: "audit-logs" })) };
+  .get("/api/v2/admin/audit-logs", async ({ user, request, set }: ParamCtx): Promise<unknown> => {
+    if (user === null || user === undefined) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
+    if (user.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const page = pageRequest(request);
+    const result = await pagedAuditLogs(undefined, page);
+    return { data: await auditLogResources(result.logs), ...pagination(request, page.number, page.size, result.total) };
   })
-  .get("/api/v2/organizations/:org_name/audit-logs", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations/:org_name/audit-logs", async ({ params, user, orgId: tokenOrgId, request, set }: ParamCtx): Promise<unknown> => {
+    if ((user === null || user === undefined) && tokenOrgId === null) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
     const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId, null, "audit-logs:read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const logsList = await db.query.auditLogs.findMany({ where: eq(auditLogs.orgId, org.id), limit: 100, orderBy: [desc(auditLogs.createdAt)] });
-    return { data: await auditTrailResources(logsList) };
+    const page = pageRequest(request);
+    const result = await pagedAuditLogs(eq(auditLogs.orgId, org.id), page);
+    return { data: await auditLogResources(result.logs), ...pagination(request, page.number, page.size, result.total) };
   })
   .get("/api/v2/organizations/:org_name/audit-configuration", async ({ params, user, orgId: tokenOrgId, set }: ParamCtx): Promise<unknown> => {
     // go-tfe OrganizationAuditConfigurations.Read. Fields that the cloud
     // platform gates behind paid tiers are null for a reference-style
     // deployment; audit trails are always enabled here.
+    if ((user === null || user === undefined) && tokenOrgId === null) { (set as { status: number }).status = 401; return { errors: [{ status: "401", title: "Unauthorized" }] }; }
     const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrgPermission(user?.id, org.id, "owner", tokenOrgId, null, "audit-logs:read"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
@@ -677,24 +716,8 @@ export const miscRoutes = new Elysia({ name: "misc" })
       },
     };
   })
-  .get("/api/v2/organization-audit-trailers", async ({ user, token, set }: ParamCtx): Promise<unknown> => {
-    const logs = await auditLogsForPrincipal(user, token);
-    if (logs === null || logs === AUDIT_LOG_ACCESS_DENIED) {
-      const status = logs === AUDIT_LOG_ACCESS_DENIED ? 403 : 401;
-      (set as { status: number }).status = status;
-      return { errors: [{ status: String(status), title: status === 401 ? "Unauthorized" : "Forbidden" }] };
-    }
-    return { data: await auditTrailResources(logs) };
-  })
-  .get("/api/v2/audit-trails", async ({ user, token, set }: ParamCtx): Promise<unknown> => {
-    const logs = await auditLogsForPrincipal(user, token);
-    if (logs === null || logs === AUDIT_LOG_ACCESS_DENIED) {
-      const status = logs === AUDIT_LOG_ACCESS_DENIED ? 403 : 401;
-      (set as { status: number }).status = status;
-      return { errors: [{ status: String(status), title: status === 401 ? "Unauthorized" : "Forbidden" }] };
-    }
-    return { data: await auditTrailResources(logs) };
-  })
+  .get("/api/v2/organization-audit-trailers", auditTrailAliasResponse)
+  .get("/api/v2/audit-trails", auditTrailAliasResponse)
   // --- Cost Estimation ---
   .get("/api/v2/runs/:run_id/cost-estimate", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";

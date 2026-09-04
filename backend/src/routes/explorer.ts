@@ -610,6 +610,27 @@ async function organizationFor(params: Readonly<Record<string, string>>): Promis
 
 type ExplorerBulkActionRecord = Readonly<typeof explorerBulkActionRecords.$inferSelect>;
 
+function explorerBulkActionResource(record: ExplorerBulkActionRecord, organizationId: string): Record<string, unknown> {
+  return {
+    id: record.id,
+    type: "change-requests",
+    attributes: {
+      subject: record.subject,
+      message: record.message,
+      status: record.status,
+      "created-at": safeIsoDate(record.createdAt),
+      "updated-at": safeIsoDate(record.updatedAt),
+      "resolved-at": safeIsoDate(record.resolvedAt),
+    },
+    relationships: {
+      organization: { data: { id: organizationId, type: "organizations" } },
+      workspace: { data: { id: record.workspaceId, type: "workspaces" } },
+      "created-by": { data: record.createdBy === null ? null : { id: record.createdBy, type: "users" } },
+      "resolved-by": { data: record.resolvedBy === null ? null : { id: record.resolvedBy, type: "users" } },
+    },
+  };
+}
+
 function explorerBulkActionRecordValues(
   workspaceId: string,
   subject: string,
@@ -778,15 +799,11 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
     }
     (set as { status: number }).status = 201;
     return {
-      data: {
-        id: `eba-${crypto.randomUUID()}`,
-        type: "explorer_bulk_actions",
-        attributes: {
-          organization_id: organization.id,
-          action_type: "change_requests",
-          action_inputs: { subject, message },
-          created_by: user === null || user === undefined ? null : { id: user.id, type: "users" },
-        },
+      data: explorerBulkActionResource(records[0]!, organization.id),
+      meta: {
+        "action-type": "change-requests",
+        "action-inputs": { subject, message },
+        "created-count": records.length,
       },
     };
   })

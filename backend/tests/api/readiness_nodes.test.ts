@@ -23,7 +23,7 @@ async function seedSystemToken(): Promise<string> {
 }
 
 describe("Readiness & Nodes API (the reference format Parity)", () => {
-  test("GET /api/v1/nodes returns bare string array in data", async () => {
+  test("GET /api/v1/nodes returns typed node resources in data", async () => {
     const systemToken = await seedSystemToken();
     const res = await app.handle(
       new Request("http://localhost/api/v1/nodes", {
@@ -35,8 +35,25 @@ describe("Readiness & Nodes API (the reference format Parity)", () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(Array.isArray(json.data)).toBe(true);
-    expect(typeof json.data[0]).toBe("string");
-    expect(json.data[0]).toBe("terrence-node-1");
+    expect(json.data[0]).toEqual({ id: "terrence-node-1", type: "nodes" });
+  });
+
+  test("GET /api/v1/nodes/readiness returns typed node resources", async () => {
+    const systemToken = await seedSystemToken();
+    const res = await app.handle(
+      new Request("http://localhost/api/v1/nodes/readiness", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${systemToken}` },
+      })
+    );
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(Array.isArray(json.data)).toBe(true);
+    expect(json.data[0].id).toBe("terrence-node-1");
+    expect(json.data[0].type).toBe("nodes");
+    expect(json.data[0].attributes.status).toBe("OK");
+    expect(Array.isArray(json.data[0].attributes.checks)).toBe(true);
   });
 
   test("GET /api/v1/health/readiness returns subsystem health status", async () => {
