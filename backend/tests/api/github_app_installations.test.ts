@@ -43,6 +43,8 @@ let providerMode: "valid" | "mismatch" = "valid";
 let providerName = "octo-organization";
 let accessTokenPermissions: Readonly<Record<string, string>> | undefined = { statuses: "write" };
 const providerRequests: { authorization: string | null; url: string }[] = [];
+let rawFetchCalls = 0;
+let externalFetchOverride: NonNullable<Parameters<typeof setExternalUrlTransportForTests>[0]> | undefined;
 
 function restoreEnvironment(): void {
   for (const [key, value] of Object.entries(originalEnvironment)) {
@@ -132,12 +134,19 @@ beforeAll(async () => {
     });
   };
   setExternalUrlTransportForTests(async (target, init): Promise<Response> => {
+    if (externalFetchOverride !== undefined) return externalFetchOverride(target, init);
     const requestInit: RequestInit = { method: init.method };
     if (init.headers !== undefined) requestInit.headers = init.headers;
     if (init.body !== undefined) requestInit.body = init.body;
     return mockFetch(target.url, requestInit);
   });
-  globalThis.fetch = Object.assign(mockFetch, { preconnect: originalFetch.preconnect });
+  globalThis.fetch = Object.assign(
+    async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      rawFetchCalls += 1;
+      return mockFetch(input, init);
+    },
+    { preconnect: originalFetch.preconnect },
+  );
 
   await db.insert(organizations).values({ id: orgId, name: orgName });
   await db.insert(users).values([
@@ -180,6 +189,8 @@ beforeEach(async () => {
   providerName = "octo-organization";
   accessTokenPermissions = { statuses: "write" };
   providerRequests.length = 0;
+  rawFetchCalls = 0;
+  externalFetchOverride = undefined;
   process.env["GITHUB_APP_SLUG"] = "terrence-test";
   await db.insert(organizationMemberships).values({
     id: `mem-github-app-${suffix}`,
@@ -288,6 +299,7 @@ describe("GitHub App installation setup", () => {
     const { state } = await startSetup();
     const completed = await callback(state);
     expect(completed.status).toBe(303);
+    expect(rawFetchCalls).toBe(0);
     const destination = new URL(completed.headers.get("location")!);
     expect(destination.pathname).toBe(`/app/${orgName}/settings/vcs`);
 
@@ -384,7 +396,12 @@ describe("GitHub App installation setup", () => {
       }
       return previousFetch(input, init);
     };
-    globalThis.fetch = Object.assign(diagnosticFetch, { preconnect: previousFetch.preconnect });
+    externalFetchOverride = async (target, init): Promise<Response> => {
+      const requestInit: RequestInit = { method: init.method };
+      if (init.headers !== undefined) requestInit.headers = new Headers(init.headers);
+      if (init.body !== undefined) requestInit.body = init.body;
+      return diagnosticFetch(target.url, requestInit);
+    };
     await db.insert(githubAppInstallations).values({
       id: localId,
       orgId,
@@ -407,7 +424,7 @@ describe("GitHub App installation setup", () => {
       expect(new URL(repositoryRequest?.url ?? "https://terrence.test").searchParams.get("per_page")).toBe("100");
       expect(diagnosticRequests.some((entry) => entry.url.includes("/statuses/"))).toBe(false);
     } finally {
-      globalThis.fetch = previousFetch;
+      externalFetchOverride = undefined;
       await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, localId));
     }
   });
@@ -460,7 +477,12 @@ describe("GitHub App installation setup", () => {
       }
       return previousFetch(input, init);
     };
-    globalThis.fetch = Object.assign(diagnosticFetch, { preconnect: previousFetch.preconnect });
+    externalFetchOverride = async (target, init): Promise<Response> => {
+      const requestInit: RequestInit = { method: init.method };
+      if (init.headers !== undefined) requestInit.headers = new Headers(init.headers);
+      if (init.body !== undefined) requestInit.body = init.body;
+      return diagnosticFetch(target.url, requestInit);
+    };
     await db.insert(githubAppInstallations).values({
       id: localId,
       orgId,
@@ -478,7 +500,7 @@ describe("GitHub App installation setup", () => {
       expect(check?.detail).toContain("acme/fallback-repository");
       expect(diagnosticRequests.some((entry) => entry.url.includes("/statuses/"))).toBe(true);
     } finally {
-      globalThis.fetch = previousFetch;
+      externalFetchOverride = undefined;
       accessTokenPermissions = previousPermissions;
       await db.delete(githubAppInstallations).where(eq(githubAppInstallations.id, localId));
     }

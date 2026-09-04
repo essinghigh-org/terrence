@@ -11,9 +11,9 @@ import {
   registryModuleVersions,
 } from "../db/schema";
 import { decryptSecret } from "./secrets";
-import { getGitHubAppAccessToken } from "./webhooks";
+import { fetchVcsUrl, fetchVcsUrlStream, getGitHubAppAccessToken } from "./webhooks";
 import { githubAppApiBase, normalizeGithubApiBase } from "./github-api";
-import { ingestModuleArchive, MAX_MODULE_ARCHIVE_BYTES } from "./registry-module-archive";
+import { ingestModuleArchive } from "./registry-module-archive";
 import { inspectRegistryModule, type RegistryModuleMetadata } from "./registry-module-metadata";
 import { isModuleVersion, sortModuleVersionsDescending } from "./registry-version";
 import {
@@ -22,6 +22,7 @@ import {
 } from "./registry-sync-lease";
 
 const API_TIMEOUT_MS = 15_000;
+const MAX_MODULE_DOWNLOAD_BYTES = 1 * 1024 * 1024;
 const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const MODULE_STORAGE_DIR = join(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "modules");
 
@@ -67,13 +68,13 @@ async function credentialsFor(mod: RegistryModule): Promise<Credentials> {
 }
 
 async function githubJson<T>(credentials: Credentials, path: string): Promise<T> {
-  const response = await fetch(`${credentials.apiUrl}${path}`, {
+  const response = await fetchVcsUrl(`${credentials.apiUrl}${path}`, {
     headers: {
       Authorization: `Bearer ${credentials.token}`,
       Accept: "application/vnd.github+json",
       "User-Agent": "Terrence",
     },
-    signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    timeoutMs: API_TIMEOUT_MS,
   });
   if (!response.ok) throw new Error(`The VCS request failed with HTTP ${response.status}`);
   return response.json() as Promise<T>;
@@ -169,18 +170,18 @@ async function withDownloadedArchive<T>(
 ): Promise<T> {
   const repository = mod.repositoryIdentifier ?? "";
   const encodedRepository = repository.split("/").map(encodeURIComponent).join("/");
-  const response = await fetch(`${credentials.apiUrl}/repos/${encodedRepository}/tarball/${encodeURIComponent(sha)}`, {
+  const response = await fetchVcsUrlStream(`${credentials.apiUrl}/repos/${encodedRepository}/tarball/${encodeURIComponent(sha)}`, {
     headers: {
       Authorization: `Bearer ${credentials.token}`,
       Accept: "application/vnd.github+json",
       "User-Agent": "Terrence",
     },
-    redirect: "follow",
-    signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    timeoutMs: API_TIMEOUT_MS,
+    maxResponseBytes: MAX_MODULE_DOWNLOAD_BYTES,
   });
   if (!response.ok || response.body === null) throw new Error(`The module source download failed with HTTP ${response.status}`);
   const contentLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > MAX_MODULE_ARCHIVE_BYTES) throw new Error("The module source download is too large");
+  if (Number.isFinite(contentLength) && contentLength > MAX_MODULE_DOWNLOAD_BYTES) throw new Error("The module source download is too large");
 
   const staging = await mkdtemp(join(tmpdir(), "terrence-registry-download-"));
   const path = join(staging, "source.tar.gz");
@@ -193,7 +194,7 @@ async function withDownloadedArchive<T>(
       const { done, value } = await reader.read();
       if (done) break;
       total += value.length;
-      if (total > MAX_MODULE_ARCHIVE_BYTES) throw new Error("The module source download is too large");
+      if (total > MAX_MODULE_DOWNLOAD_BYTES) throw new Error("The module source download is too large");
       await file.write(value);
     }
     await file.close();

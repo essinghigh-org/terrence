@@ -17,6 +17,7 @@ import {
   users,
 } from "../../src/db/schema";
 import { encryptSecret } from "../../src/lib/secrets";
+import { setExternalUrlTransportForTests } from "../../src/lib/url-safety";
 import { makeRegistryModuleArchive } from "../registry-module-helpers";
 
 describe("VCS-backed registry modules", () => {
@@ -31,7 +32,7 @@ describe("VCS-backed registry modules", () => {
   const readerToken = `registry-vcs-reader-token-${suffix}`;
   const oauthClientId = `registry-vcs-client-${suffix}`;
   const oauthTokenId = `registry-vcs-oauth-token-${suffix}`;
-  const originalFetch = globalThis.fetch;
+
   let directory = "";
   let archiveBytes = new Uint8Array();
   let tags = [
@@ -104,8 +105,8 @@ describe("VCS-backed registry modules", () => {
       createdAt: Date.now(),
     });
 
-    globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
-      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input : input.url);
+    setExternalUrlTransportForTests(async (target): Promise<Response> => {
+      const url = new URL(target.url);
       if (url.pathname.endsWith("/tags")) return Response.json(tags);
       if (url.pathname.includes("/branches/")) return Response.json({ commit: { sha: "sha-branch" } });
       if (url.pathname.includes("/tarball/")) {
@@ -115,11 +116,11 @@ describe("VCS-backed registry modules", () => {
         });
       }
       throw new Error(`Unexpected VCS request: ${url}`);
-    }) as typeof fetch;
+    });
   });
 
   afterAll(async () => {
-    globalThis.fetch = originalFetch;
+    setExternalUrlTransportForTests(undefined);
     const modules = await db.query.registryModules.findMany({ where: eq(registryModules.orgId, orgId) });
     const versions = await Promise.all(modules.map((module) => db.query.registryModuleVersions.findMany({
       where: eq(registryModuleVersions.moduleId, module.id),
@@ -219,6 +220,20 @@ describe("VCS-backed registry modules", () => {
       "commit-sha": "sha-branch",
       status: "ok",
     });
+  });
+
+  test("rejects source archives above the network download limit", async () => {
+    const goodArchive = archiveBytes;
+    archiveBytes = new Uint8Array((1 * 1024 * 1024) + 1);
+    let failed: Response | undefined;
+    try {
+      failed = await request(`/api/v2/organizations/${orgName}/registry-modules/vcs`, "POST", vcsPayload("oversized-download"));
+    } finally {
+      archiveBytes = goodArchive;
+    }
+    expect(failed?.status).toBe(422);
+    const oversized = await db.query.registryModules.findFirst({ where: eq(registryModules.name, "oversized-download") });
+    expect(oversized?.lastSyncError).toContain("too large");
   });
 
   test("keeps a failed ingest explicitly errored and out of protocol discovery", async () => {

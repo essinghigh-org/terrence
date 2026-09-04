@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { systemApiApp } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, organizations, users, workspaces } from "../../src/db/schema";
+import { setExternalUrlTransportForTests } from "../../src/lib/url-safety";
 
 const SYSTEM_API_RATE_LIMIT_MS = 1100;
 
@@ -147,6 +148,35 @@ describe("System administration API contract", () => {
     expect(bundle.snapshots).toHaveLength(1);
     expect(bundle.snapshots[0].metrics.workspacecount.value).toBeGreaterThanOrEqual(1);
     expect(bundle.snapshots[0].metrics.workspacecount.mode).toBe("write");
+  });
+
+  it("validates dependency URLs before using the pinned transport", async () => {
+    const originalEndpoint = process.env["TERRENCE_ARCHIVIST_URL"];
+    const requests: { method: string; url: string }[] = [];
+    setExternalUrlTransportForTests(async (target, init): Promise<Response> => {
+      requests.push({ method: init.method, url: target.url });
+      return new Response(null, { status: 204 });
+    });
+    try {
+      process.env["TERRENCE_ARCHIVIST_URL"] = "https://archivist.test/health";
+      const healthy = await request("/api/v1/diagnostics?check=archivist.connection", { accept: "application/json" });
+      expect(healthy.status).toBe(200);
+      const healthyResults = await healthy.json();
+      expect(healthyResults[0].checks[0].checks[0].status).toBe("OK");
+      expect(requests).toEqual([{ method: "GET", url: "https://archivist.test/health" }]);
+
+      process.env["TERRENCE_ARCHIVIST_URL"] = "https://user:password@archivist.test/health";
+      const beforeRejectedProbe = requests.length;
+      const rejected = await request("/api/v1/diagnostics?check=archivist.connection", { accept: "application/json" });
+      expect(rejected.status).toBe(503);
+      const rejectedResults = await rejected.json();
+      expect(rejectedResults[0].checks[0].checks[0].status).toBe("ERROR");
+      expect(requests).toHaveLength(beforeRejectedProbe);
+    } finally {
+      if (originalEndpoint === undefined) Reflect.deleteProperty(process.env, "TERRENCE_ARCHIVIST_URL");
+      else process.env["TERRENCE_ARCHIVIST_URL"] = originalEndpoint;
+      setExternalUrlTransportForTests(undefined);
+    }
   });
 
   it("generates, lists, downloads, and deletes a local support bundle", async () => {

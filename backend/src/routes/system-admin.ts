@@ -9,7 +9,7 @@ import { authPlugin } from "../auth";
 import { db } from "../db";
 import { controlPlaneNodes, workspaces } from "../db/schema";
 import { systemAuthError, systemRateLimited } from "../lib/system-api";
-import { privateHostReason } from "../lib/url-safety";
+import { fetchResolvedExternalUrl, privateHostReason, resolveExternalUrl } from "../lib/url-safety";
 import { landlockAccessFlagsForAbi, probeLandlockAbi, runSandboxRequired } from "../lib/sandbox";
 import { envEnabled } from "../lib/env";
 import { readinessNodeId } from "./health";
@@ -114,6 +114,19 @@ function worstStatus(statuses: readonly Status[]): Status {
   return "OK";
 }
 
+async function fetchDependencyEndpoint(endpoint: string): Promise<Response> {
+  // Dependency URLs are operator-configured and may intentionally target
+  // private service addresses, but still require safe HTTP(S) syntax,
+  // resolvability, and a pinned address so redirects cannot escape validation.
+  const destination = await resolveExternalUrl(endpoint, true);
+  if ("error" in destination) throw new Error(destination.error);
+  return fetchResolvedExternalUrl(destination.target, {
+    method: "GET",
+    timeoutMs: 2_000,
+    maxResponseBytes: 1024 * 1024,
+  });
+}
+
 function requestedChecks(url: QueryUrl): ReadonlyMap<string, ReadonlySet<string>> | undefined {
   const values = url.searchParams.getAll("check").flatMap((value): string[] => value.split(","));
   const selected = new Map<string, Set<string>>();
@@ -162,7 +175,7 @@ async function diagnosticGroups(
     const endpoint = process.env[`TERRENCE_${dependency.toUpperCase()}_URL`];
     checks.set(`${dependency}.connection`, endpoint === undefined || endpoint === ""
       ? Promise.resolve({ name: "connection", status: "OK" })
-      : fetch(endpoint, { signal: AbortSignal.timeout(2_000) })
+      : fetchDependencyEndpoint(endpoint)
         .then((response): DiagnosticCheck => ({ name: "connection", status: response.ok ? "OK" : "ERROR" }))
         .catch((): DiagnosticCheck => ({ name: "connection", status: "ERROR" })));
   }

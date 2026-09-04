@@ -110,6 +110,13 @@ async function cancelResponseBody(response: Response): Promise<void> {
   if (response.body !== null) await response.body.cancel().catch((): undefined => undefined);
 }
 
+function methodAfterRedirect(method: string, status: number): string {
+  const normalizedMethod = method.toUpperCase();
+  if (status === 303 && normalizedMethod !== "GET" && normalizedMethod !== "HEAD") return "GET";
+  if ((status === 301 || status === 302) && normalizedMethod === "POST") return "GET";
+  return method;
+}
+
 async function fetchVcsUrlWithRedirects(
   url: string,
   init: VcsFetchInit,
@@ -117,14 +124,26 @@ async function fetchVcsUrlWithRedirects(
 ): Promise<Response> {
   const allowPrivate = envEnabled(process.env["TERRENCE_ALLOW_PRIVATE_VCS_URLS"]);
   const requestInit = normalizedVcsFetchInit(init);
+  const baseRequestInit = {
+    maxResponseBytes: requestInit.maxResponseBytes,
+    timeoutMs: requestInit.timeoutMs,
+  };
   let currentUrl = url;
+  let method = requestInit.method;
+  let body = requestInit.body;
   const requestHeaders = new Headers(requestInit.headers);
 
   for (let redirectCount = 0; ; redirectCount += 1) {
     const destination = await resolveExternalUrl(currentUrl, allowPrivate);
     if ("error" in destination) return new Response(destination.error, { status: 422 });
+    const destinationUrl = new URL(destination.target.url);
+    if (requestHeaders.has("authorization") && destinationUrl.protocol !== "https:") {
+      return new Response("Credential-bearing VCS requests require HTTPS", { status: 422 });
+    }
     const response = await fetcher(destination.target, {
-      ...requestInit,
+      ...baseRequestInit,
+      method,
+      ...(body === undefined ? {} : { body }),
       headers: Object.fromEntries(requestHeaders.entries()),
     });
     if (!REDIRECT_STATUSES.has(response.status)) return response;
@@ -140,16 +159,23 @@ async function fetchVcsUrlWithRedirects(
     } catch {
       return new Response("Invalid redirect URL", { status: 422 });
     }
-    if (new URL(destination.target.url).origin !== redirectUrl.origin) requestHeaders.delete("authorization");
+    if (destinationUrl.origin !== redirectUrl.origin) requestHeaders.delete("authorization");
+    const nextMethod = methodAfterRedirect(method, response.status);
+    if (nextMethod !== method) {
+      method = nextMethod;
+      body = undefined;
+      requestHeaders.delete("content-length");
+      requestHeaders.delete("content-type");
+    }
     currentUrl = redirectUrl.toString();
   }
 }
 
-async function fetchVcsUrl(url: string, init: VcsFetchInit = {}): Promise<Response> {
+export async function fetchVcsUrl(url: string, init: VcsFetchInit = {}): Promise<Response> {
   return fetchVcsUrlWithRedirects(url, init, fetchResolvedExternalUrl);
 }
 
-async function fetchVcsUrlStream(url: string, init: VcsFetchInit = {}): Promise<Response> {
+export async function fetchVcsUrlStream(url: string, init: VcsFetchInit = {}): Promise<Response> {
   return fetchVcsUrlWithRedirects(url, init, fetchResolvedExternalUrlStream);
 }
 
