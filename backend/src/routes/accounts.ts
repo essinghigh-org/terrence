@@ -594,12 +594,13 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const [sso, ldap] = await Promise.all([ssoSettingsSnapshot(), ldapSettings()]);
     const localAuthEnabled = sso.localAuthEnabled;
 
-    // LDAP is tried first when the directory is reachable; local password
-    // auth remains the fallback unless an administrator has disabled local
+    // LDAP is tried first when the directory is reachable; local password auth
+    // remains the fallback unless an administrator has disabled local
     // authentication. An *unavailable* directory is different from a rejected
     // bind: when LDAP is the only configured path, a down directory is a
     // service problem (503), not bad credentials.
     let user: typeof users.$inferSelect | null = null;
+    let localPasswordAuthenticated = false;
     let ldapUnavailable = false;
     if (ldap.enabled) {
       let ldapUser: Awaited<ReturnType<typeof authenticateLdapWithCircuitBreaker>>["user"] = null;
@@ -676,9 +677,10 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
       }
       user = found;
+      localPasswordAuthenticated = true;
     }
 
-    if (isLoginLocked(user)) {
+    if (localPasswordAuthenticated && isLoginLocked(user)) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
     }
@@ -692,7 +694,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     }
     // Keep the compare-and-clear even when the stale user row appears clean:
     // a failed login can set a lock while password verification is in flight.
-    if (!(await clearLoginFailures(user.id))) {
+    if (localPasswordAuthenticated && !(await clearLoginFailures(user.id))) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
     }

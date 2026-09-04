@@ -44,6 +44,8 @@ export async function recordFailedLogin(
   `;
   const nextLockedUntil = sql<number | null>`
     CASE
+      WHEN ${users.loginLockedUntil} IS NOT NULL AND ${users.loginLockedUntil} > ${now}
+        THEN ${users.loginLockedUntil}
       WHEN ${windowExpired} THEN NULL
       WHEN ${users.loginFailedAttempts} + 1 >= ${LOGIN_FAILURE_THRESHOLD} THEN ${now + LOGIN_LOCKOUT_MS}
       ELSE ${users.loginLockedUntil}
