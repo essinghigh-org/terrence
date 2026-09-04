@@ -10,7 +10,7 @@
  *   - the terraform/tofu binary dir     (read/execute)
  *   - provider mirror / plugin dirs     (read)
  *   - system libraries + /bin, /usr/bin (read/execute)
- *   - /etc, /dev/null, /dev/urandom     (read)
+ *   - system DNS configuration and CA certificate paths (read)
  *
  * Everything else — including STORAGE_DIR (database, state archives,
  * encryption key, other workspaces' configs) — is unreachable.
