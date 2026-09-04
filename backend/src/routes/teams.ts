@@ -58,6 +58,55 @@ const organizationAccessKeys = [
 const organizationAccessStringKeys = new Set(["visibility", "sso-team-id"]);
 const organizationAccessColumnKeys = new Set(["allow-member-token-management"]);
 
+type TeamWorkspaceAccess = "read" | "plan" | "write" | "admin" | "custom";
+
+const teamWorkspaceAccessLevels = new Set(["read", "plan", "write", "admin", "custom"]);
+const teamWorkspacePermissionKeys = new Set([
+  "runs", "variables", "state-versions", "sentinel-mocks", "workspace-locking", "run-tasks", "policy-overrides",
+]);
+const teamWorkspaceBooleanPermissionKeys = new Set(["workspace-locking", "run-tasks", "policy-overrides"]);
+const teamWorkspaceStringPermissionValues: Readonly<Record<string, readonly string[]>> = {
+  runs: ["read", "plan", "apply"],
+  variables: ["none", "read", "write"],
+  "state-versions": ["none", "read-outputs", "read", "write"],
+  "sentinel-mocks": ["none", "read"],
+};
+
+type ParsedTeamWorkspaceGrant = Readonly<{
+  access: TeamWorkspaceAccess;
+  permissions: Record<string, unknown> | null;
+  grantsPolicyOverrides: boolean;
+}>;
+
+function parseTeamWorkspaceGrant(accessInput: unknown, permissionsInput: unknown): Readonly<{ value: ParsedTeamWorkspaceGrant }> | Readonly<{ error: string }> {
+  if (typeof accessInput !== "string" || !teamWorkspaceAccessLevels.has(accessInput)) return { error: "Invalid access level" };
+  if (permissionsInput === undefined || permissionsInput === null) {
+    return { value: { access: accessInput as TeamWorkspaceAccess, permissions: null, grantsPolicyOverrides: false } };
+  }
+  if (typeof permissionsInput !== "object" || Array.isArray(permissionsInput)) return { error: "permissions must be an object or null" };
+
+  const permissions = permissionsInput as Record<string, unknown>;
+  for (const [key, value] of Object.entries(permissions)) {
+    if (!teamWorkspacePermissionKeys.has(key)) return { error: `permissions.${key} is not supported` };
+    if (teamWorkspaceBooleanPermissionKeys.has(key)) {
+      if (typeof value !== "boolean") return { error: `permissions.${key} must be a boolean` };
+      continue;
+    }
+    const allowedValues = teamWorkspaceStringPermissionValues[key];
+    if (allowedValues === undefined || typeof value !== "string" || !allowedValues.includes(value)) {
+      return { error: `permissions.${key} has an invalid value` };
+    }
+  }
+
+  return {
+    value: {
+      access: accessInput as TeamWorkspaceAccess,
+      permissions,
+      grantsPolicyOverrides: accessInput === "custom" && permissions["policy-overrides"] === true,
+    },
+  };
+}
+
 function parseOrganizationAccess(input: unknown): Readonly<{ value: Record<string, boolean> }> | Readonly<{ error: string }> {
   if (input === undefined) return { value: {} };
   if (input === null || typeof input !== "object" || Array.isArray(input)) return { error: "organization-access must be an object" };
@@ -702,8 +751,10 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const teamId = typeof teamData["id"] === "string" ? teamData["id"] : "";
     const workspaceId = typeof wsData["id"] === "string" ? wsData["id"] : "";
-    const access = typeof attrs["access"] === "string" ? attrs["access"] : "write";
-    const permissions = (attrs["permissions"] as Record<string, unknown> | null) ?? null;
+    const accessInput = attrs["access"] === undefined ? "write" : attrs["access"];
+    const grant = parseTeamWorkspaceGrant(accessInput, attrs["permissions"]);
+    if ("error" in grant) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: grant.error }] }; }
+    const { access, permissions } = grant.value;
     if (teamId === "" || workspaceId === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
     const [ws, targetTeam] = await Promise.all([
       db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) }),
@@ -714,6 +765,13 @@ export const teamRoutes = new Elysia({ name: "teams" })
       || targetTeam?.orgId !== ws.orgId
       || !(await checkWorkspacePermission(ws, user?.id, tokenOrgId, tokenTeamId ?? null, "admin"))
     ) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (
+      grant.value.grantsPolicyOverrides
+      && !(await checkOrganizationPermission(ws.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policy-overrides"))
+    ) {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: "manage-policy-overrides is required to grant policy overrides" }] };
+    }
     const id = `tw-${crypto.randomUUID()}`;
     await db.insert(teamWorkspaces).values({ id, teamId, workspaceId, access, permissions });
     (set as { status: number }).status = 201;
@@ -736,9 +794,23 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
+    const accessInput = attributes["access"] === undefined ? tw.access : attributes["access"];
+    const permissionsInput = attributes["permissions"] === undefined
+      ? (accessInput === "custom" ? tw.permissions : null)
+      : attributes["permissions"];
+    const grant = parseTeamWorkspaceGrant(accessInput, permissionsInput);
+    if ("error" in grant) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: grant.error }] }; }
+    if (
+      (attributes["access"] !== undefined || attributes["permissions"] !== undefined)
+      && grant.value.grantsPolicyOverrides
+      && !(await checkOrganizationPermission(ws.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-policy-overrides"))
+    ) {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: "manage-policy-overrides is required to grant policy overrides" }] };
+    }
     const updates: Record<string, unknown> = {};
-    if (typeof attributes["access"] === "string") updates["access"] = attributes["access"];
-    if (attributes["permissions"] !== undefined) updates["permissions"] = attributes["permissions"];
+    if (attributes["access"] !== undefined) updates["access"] = grant.value.access;
+    if (attributes["permissions"] !== undefined) updates["permissions"] = grant.value.permissions;
     if (Object.keys(updates).length > 0) await db.update(teamWorkspaces).set(updates).where(eq(teamWorkspaces.id, id));
     const updated = await db.query.teamWorkspaces.findFirst({ where: eq(teamWorkspaces.id, id) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
