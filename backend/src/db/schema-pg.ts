@@ -1863,6 +1863,9 @@ export const workspaces = pgTable("workspaces", {
     lockedReason: text("locked_reason"),
     lockOwnerType: text("lock_owner_type"),
     lockOwnerId: text("lock_owner_id"),
+    // Issue #568: when the current lock was taken (ms epoch). Converges via
+    // applyPgMigrations on installs with sparse journals.
+    lockedAt: bigint("locked_at", { mode: "number" }),
     trustedExecution: boolean("trusted_execution").notNull().default(true),
     ownedByType: text("owned_by_type"),
     ownedById: text("owned_by_id"),

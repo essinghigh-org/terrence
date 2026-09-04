@@ -1433,6 +1433,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       lockedReason: lockReason.reason,
       lockOwnerType: principal.type,
       lockOwnerId: principal.id,
+      lockedAt: Date.now(),
     }).where(and(eq(workspaces.id, workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
     if (locked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is already locked" }] }; }
     await auditLog("lock", "workspaces", workspaceId, user?.id ?? null, ws.orgId, teamId !== null && teamId !== undefined ? { teamId } : undefined);
@@ -1459,7 +1460,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const ownerPredicate = ownerlessLegacyLock
       ? and(isNull(workspaces.lockOwnerType), isNull(workspaces.lockOwnerId))
       : and(eq(workspaces.lockOwnerType, principal.type), eq(workspaces.lockOwnerId, principal.id));
-    const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true), ownerPredicate)).returning({ id: workspaces.id });
+    const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true), ownerPredicate)).returning({ id: workspaces.id });
     if (unlocked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock changed while unlocking" }] }; }
     await promoteIntermediateStateVersion(workspaceId);
     const org = await cachedOrgById(ws.orgId);
@@ -1478,7 +1479,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (ws.locked !== true) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is not locked" }] }; }
     await promoteIntermediateStateVersion(workspaceId);
-    const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true))).returning({ id: workspaces.id });
+    const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true))).returning({ id: workspaces.id });
     if (unlocked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock changed while unlocking" }] }; }
     const org = await cachedOrgById(ws.orgId);
     return {
