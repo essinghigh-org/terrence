@@ -629,23 +629,30 @@ export const systemHealthRoutes = new Elysia({ name: "system-health" })
       version: appVersion(), status: String(current.status).toLowerCase(), readinessChecks: current.checks,
       registeredAt: Date.now(), lastHeartbeatAt: Date.now(),
     });
-    return [...byId.values()].map((node): Record<string, unknown> => ({
-      node: node.id,
-      status: node.id === readinessNodeId() ? current.status : (node.status === "error" ? "ERROR" : node.status === "draining" ? "DRAINING" : "OK"),
-      checks: node.id === readinessNodeId() ? current.checks : node.readinessChecks,
-    }));
+    return {
+      data: [...byId.values()].map((node): Record<string, unknown> => ({
+        id: node.id,
+        type: "nodes",
+        attributes: {
+          status: node.id === readinessNodeId() ? current.status : (node.status === "error" ? "ERROR" : node.status === "draining" ? "DRAINING" : "OK"),
+          checks: node.id === readinessNodeId() ? current.checks : node.readinessChecks,
+        },
+      })),
+      links: { self: "/api/v1/nodes/readiness" },
+    };
   })
   .get("/api/v1/metadata", (): { version: string; build: string } => ({
     version: appVersion(),
     build: process.env["BUILD_SHA"] ?? "unknown",
   }))
-  .get("/api/v1/nodes", async (): Promise<{ data: string[]; links: { self: string } }> => {
+  .get("/api/v1/nodes", async (): Promise<{ data: { id: string; type: "nodes" }[]; links: { self: string } }> => {
     const nodes = await db.query.controlPlaneNodes.findMany({
       where: gte(controlPlaneNodes.lastHeartbeatAt, Date.now() - NODE_HEARTBEAT_TIMEOUT_MS),
       orderBy: [desc(controlPlaneNodes.registeredAt)],
     }).catch(() => []);
     return {
-      data: [...new Set([readinessNodeId(), ...nodes.map((node): string => node.id)])],
+      data: [...new Set([readinessNodeId(), ...nodes.map((node): string => node.id)])]
+        .map((id): { id: string; type: "nodes" } => ({ id, type: "nodes" })),
       links: { self: "/api/v1/nodes" },
     };
   });
@@ -659,15 +666,16 @@ export const healthRoutes = new Elysia({ name: "health" })
     h["TFE-Version"] = COMPATIBILITY_VERSION;
     h["X-TFE-Version"] = COMPATIBILITY_VERSION;
     const rateLimits = {
-      general: { max: Number(process.env["RATE_LIMIT_MAX"] ?? 30), windowMs: 1_000 },
-      workspaceRunHistory: { max: Number(process.env["RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX"] ?? 30), windowMs: Number(process.env["RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS"] ?? 60_000) },
-      sensitive: { max: Number(process.env["RATE_LIMIT_SENSITIVE_MAX"] ?? 5), windowMs: 60_000 },
-      ssoGet: { max: Number(process.env["RATE_LIMIT_SSO_GET_MAX"] ?? 60), windowMs: 60_000 },
-      scimSettings: { max: Number(process.env["RATE_LIMIT_SCIM_SETTINGS_MAX"] ?? 20), windowMs: 1_000 },
-      scimMapping: { max: Number(process.env["RATE_LIMIT_SCIM_MAPPING_MAX"] ?? 10), windowMs: 60_000 },
+      general: { max: Number(process.env["RATE_LIMIT_MAX"] ?? 30), "window-ms": 1_000 },
+      "workspace-run-history": { max: Number(process.env["RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX"] ?? 30), "window-ms": Number(process.env["RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS"] ?? 60_000) },
+      sensitive: { max: Number(process.env["RATE_LIMIT_SENSITIVE_MAX"] ?? 5), "window-ms": 60_000 },
+      "sso-get": { max: Number(process.env["RATE_LIMIT_SSO_GET_MAX"] ?? 60), "window-ms": 60_000 },
+      "scim-settings": { max: Number(process.env["RATE_LIMIT_SCIM_SETTINGS_MAX"] ?? 20), "window-ms": 1_000 },
+      "scim-mapping": { max: Number(process.env["RATE_LIMIT_SCIM_MAPPING_MAX"] ?? 10), "window-ms": 60_000 },
     };
     return {
       data: {
+        id: "capabilities",
         type: "capabilities",
         attributes: {
           "tfe-version": COMPATIBILITY_VERSION,
@@ -734,13 +742,17 @@ export const healthRoutes = new Elysia({ name: "health" })
   })
   .get("/api/v2/meta", ({ user, set }: MetricsCtx): {
     data: {
-      "run-sandbox": {
-        enabled: boolean;
-        available: boolean;
-        abi: number;
-        reason: string | null;
-        extraRwAllowed: boolean;
-        docs: string;
+      id: string;
+      type: "meta";
+      attributes: {
+        "run-sandbox": {
+          enabled: boolean;
+          available: boolean;
+          abi: number;
+          reason: string | null;
+          "extra-rw-allowed": boolean;
+          docs: string;
+        };
       };
     };
   } | { errors: { status: string; title: string }[] } => {
@@ -759,13 +771,17 @@ export const healthRoutes = new Elysia({ name: "health" })
     const extraRwAllowed = envEnabled(process.env["TERRENCE_SANDBOX_EXTRA_RW_ALLOWED"]);
     return {
       data: {
-        "run-sandbox": {
-          enabled: sandboxRequired,
-          available: abi >= 1,
-          abi,
-          reason,
-          extraRwAllowed,
-          docs: "https://docs.kernel.org/userspace-api/landlock.html",
+        id: "meta",
+        type: "meta",
+        attributes: {
+          "run-sandbox": {
+            enabled: sandboxRequired,
+            available: abi >= 1,
+            abi,
+            reason,
+            "extra-rw-allowed": extraRwAllowed,
+            docs: "https://docs.kernel.org/userspace-api/landlock.html",
+          },
         },
       },
     };

@@ -388,7 +388,7 @@ test("shows the security overview from existing admin controls", async (): Promi
     }
     if (url === "/api/v2/ping") return json({ "signup-enabled": false });
     if (url === "/api/v2/meta") {
-      return json({ data: { "run-sandbox": { enabled: true, available: true, reason: null } } });
+      return json({ data: { id: "meta", type: "meta", attributes: { "run-sandbox": { enabled: true, available: true, reason: null } } } });
     }
     if (url === "/api/v2/admin/saml-settings") return json({ data: { attributes: { enabled: true } } });
     if (url === "/api/v2/admin/oidc-settings") return json({ data: { attributes: { enabled: false } } });

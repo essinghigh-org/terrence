@@ -171,8 +171,10 @@ describe("remote-workflow API global conventions", () => {
       headers: uploadHeaders,
       body: "main = rule { true }",
     });
-    expect(upload.status).toBe(200);
-    expect(upload.headers.get("content-type")).not.toContain("application/vnd.api+json");
+    // #406: Policies.Upload is a body-less mutation, not a JSON document.
+    expect(upload.status).toBe(204);
+    expect(await upload.text()).toBe("");
+    expect(upload.headers.get("content-type")).toBeNull();
   });
 
   it("shapes error documents consistently (API-006)", async () => {

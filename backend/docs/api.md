@@ -67,7 +67,9 @@ Non-API paths return branded HTML 404 pages. Upload and download endpoints use p
 
 ## Discovery
 
-`GET /api/v2/meta` reports the API version and capabilities. `GET /api/v2/ping` is a lightweight liveness probe.
+`GET /api/v2/meta` returns a JSON:API `meta` resource (`id: "meta"`) with the `run-sandbox` status under `data.attributes`. `GET /api/v2/capabilities` returns a JSON:API `capabilities` resource (`id: "capabilities"`) with version and kebab-case rate-limit attributes. `GET /api/v2/ping` is a lightweight liveness probe.
+
+The authenticated System API node endpoints use JSON:API node resources: `GET /api/v1/nodes` returns node identifiers under `data`, and `GET /api/v1/nodes/readiness` returns node status and checks under each resource's `attributes`. The dedicated `/api/v1/readiness` and `/healthz` probes retain their operational health-document formats.
 
 ## Terraform protocol endpoints
 

@@ -158,7 +158,7 @@ describe("audit coverage", () => {
       const entry = body.data.find(({ attributes }) => attributes["resource-id"] === orgId);
       expect(entry).toBeDefined();
       expect(entry).toMatchObject({
-        type: "audit-trails",
+        type: "audit-logs",
         attributes: {
           action: "create",
           "actor-username": `audit-user-${suffix}`,

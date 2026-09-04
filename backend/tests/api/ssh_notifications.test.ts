@@ -155,7 +155,8 @@ describe("SSH Keys & Notification Configurations API contract", () => {
       const verifyRes = await request(`/api/v2/notification-configurations/${ncId}/actions/verify`, "POST");
       expect(verifyRes.status).toBe(200);
       const verifyBody = await verifyRes.json();
-      expect(verifyBody.status).toBe("verification_sent");
+      expect(verifyBody.meta.status).toBe("verification_sent");
+      expect(verifyBody.data.type).toBe("notification-configurations");
       expect(verifyBody.data.attributes["delivery-responses"][0].successful).toBeTrue();
       expect(attempts).toBe(3);
       for (const delivery of deliveries) {
@@ -209,8 +210,8 @@ describe("SSH Keys & Notification Configurations API contract", () => {
       const previewRes = await request(`/api/v2/notification-configurations/${ncId}/actions/verify?preview=true`, "POST");
       expect(previewRes.status).toBe(200);
       const previewBody = await previewRes.json();
-      expect(previewBody.status).toBe("preview");
-      const preview = previewBody.data.preview as Record<string, unknown>;
+      expect(previewBody.meta.status).toBe("preview");
+      const preview = previewBody.meta.preview as Record<string, unknown>;
       expect(preview["payload_version"]).toBe(1);
       expect(preview["run_id"]).toBe("test-notification");
       expect(preview["workspace_name"]).toBe("sample-workspace");
@@ -222,7 +223,7 @@ describe("SSH Keys & Notification Configurations API contract", () => {
       const verifyRes = await request(`/api/v2/notification-configurations/${ncId}/actions/verify`, "POST");
       expect(verifyRes.status).toBe(200);
       const verifyBody = await verifyRes.json();
-      expect(verifyBody.status).toBe("verification_sent");
+      expect(verifyBody.meta.status).toBe("verification_sent");
       expect(hits).toBe(1);
     } finally {
       await webhook.stop(true);

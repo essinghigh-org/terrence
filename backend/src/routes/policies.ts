@@ -436,7 +436,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     (set as { status: number }).status = 201;
     return { data: await policyResource({ id, orgId: org.id, policySetId, policySetVersionId: null, name, description, kind, enforcementLevel, query, source, sourcePath: null, createdAt }, org.name) };
   })
-  .put("/api/v2/policies/:policy_id/upload", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string; detail?: string }[] }> => {
+  .put("/api/v2/policies/:policy_id/upload", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     // go-tfe Policies.Upload PUTs the raw policy content to
     // /policies/:id/upload; store the uploaded policy source separately from an OPA query.
     const policyId = params["policy_id"] ?? "";
@@ -470,8 +470,8 @@ export const policyRoutes = new Elysia({ name: "policies" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Policy content must be uploaded as text or binary data" }] };
     }
     await db.update(policies).set({ source: content.trim() === "" ? null : content }).where(eq(policies.id, policyId));
-    (set as { status: number }).status = 200;
-    return {};
+    (set as { status: number }).status = 204;
+    return new Response(null, { status: 204 });
   })
   .get("/api/v2/policies/:policy_id/download", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<Response | { errors: { status: string; title: string }[] }> => {
     // go-tfe Policies.Download GETs the raw policy content from

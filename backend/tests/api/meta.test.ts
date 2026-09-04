@@ -7,12 +7,16 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 
 type SandboxMeta = {
   data?: {
-    "run-sandbox"?: {
-      enabled: boolean;
-      available: boolean;
-      abi: number;
-      reason: string | null;
-      docs: string;
+    id?: string;
+    type?: string;
+    attributes?: {
+      "run-sandbox"?: {
+        enabled: boolean;
+        available: boolean;
+        abi: number;
+        reason: string | null;
+        docs: string;
+      };
     };
   };
 };
@@ -37,10 +41,29 @@ test("GET /api/v2/meta reports the run sandbox status for an authenticated calle
   }));
   expect(response.status).toBe(200);
   const payload = (await response.json()) as SandboxMeta;
-  const sandbox = payload.data?.["run-sandbox"];
+  expect(payload.data?.id).toBe("meta");
+  expect(payload.data?.type).toBe("meta");
+  const sandbox = payload.data?.attributes?.["run-sandbox"];
   expect(sandbox).toBeDefined();
   expect(typeof sandbox?.enabled).toBe("boolean");
   expect(typeof sandbox?.available).toBe("boolean");
   expect(typeof sandbox?.abi).toBe("number");
   expect(typeof sandbox?.docs).toBe("string");
+});
+
+test("GET /api/v2/capabilities returns a typed JSON:API resource", async () => {
+  const response = await app.handle(new Request("http://localhost/api/v2/capabilities", {
+    headers: { Authorization: `Bearer ${token}` },
+  }));
+  expect(response.status).toBe(200);
+  const payload = await response.json() as {
+    data?: {
+      id?: string;
+      type?: string;
+      attributes?: Record<string, unknown>;
+    };
+  };
+  expect(payload.data?.id).toBe("capabilities");
+  expect(payload.data?.type).toBe("capabilities");
+  expect(payload.data?.attributes?.["rate-limits"]).toBeTypeOf("object");
 });
