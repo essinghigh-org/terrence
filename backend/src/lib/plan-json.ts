@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { isDiskFullError, markStorageDegraded } from "./storage-health";
 
@@ -88,16 +88,31 @@ export async function writePlanJsonArtifact(runId: string, planJson: PlanJson): 
     await rename(temporary, target);
     temporary = null;
   } catch (error: unknown) {
-    if (temporary !== null) await rm(temporary, { force: true }).catch((): void => {});
+    if (temporary !== null) await rm(temporary, { force: true }).catch((): void => { /* best-effort cleanup */ });
     if (isDiskFullError(error)) markStorageDegraded("plan JSON artifact writes are failing (disk full)");
     throw error;
   }
 }
 
+export async function writePlanJsonArtifactFromFile(runId: string, sourcePath: string): Promise<void> {
+  let temporary: string | null = null;
+  try {
+    await mkdir(planJsonDirectory, { recursive: true, mode: 0o700 });
+    const target = artifactPath(runId);
+    temporary = `${target}.${crypto.randomUUID()}.tmp`;
+    await copyFile(sourcePath, temporary);
+    await chmod(temporary, 0o600);
+    await rename(temporary, target);
+    temporary = null;
+  } catch (error: unknown) {
+    if (temporary !== null) await rm(temporary, { force: true }).catch((): void => { /* best-effort cleanup */ });
+    if (isDiskFullError(error)) markStorageDegraded("plan JSON artifact writes are failing (disk full)");
+    throw error;
+  }
+}
 export async function readPlanJsonArtifact(runId: string): Promise<PlanJson | undefined> {
   return readPlanJsonFile(artifactPath(runId));
 }
-
 async function readPlanJsonFile(path: string): Promise<PlanJson | undefined> {
   try {
     const parsed = JSON.parse(await readFile(path, "utf8")) as unknown;

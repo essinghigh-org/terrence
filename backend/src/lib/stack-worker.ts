@@ -26,6 +26,13 @@ import { ensureBinary } from "../binaryManager";
 import { extractValidatedModuleArchive } from "./registry-module-archive";
 import { enqueueDurableJob, type DurableJobContext } from "./durable-jobs";
 import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./sandbox";
+import {
+  captureProcessOutput,
+  processOutputPreview,
+  writeProcessOutputFile,
+  type CapturedProcessOutput,
+  type ProcessOutputPart,
+} from "./process-output";
 
 const STACK_STORAGE_DIR = join(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "stacks");
 const MAX_STACK_ARCHIVE_BYTES = 100 * 1024 * 1024;
@@ -355,8 +362,9 @@ async function command(
   args: readonly string[],
   cwd: string,
   sandbox: DeepReadonly<RunSandbox> | null,
-  heartbeat?: () => Promise<boolean>,
-): Promise<Readonly<{ code: number; output: string; heartbeatLost: boolean }>> {
+  heartbeat: (() => Promise<boolean>) | undefined,
+  outputDirectory: string,
+): Promise<Readonly<{ code: number; output: string; capturedOutput: CapturedProcessOutput; heartbeatLost: boolean }>> {
   const env = { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "", LANG: "C" };
   const operation = args[1] === "apply" ? "apply" : "plan";
   const timeoutMs = await stackExecutionTimeoutMs(operation);
@@ -374,11 +382,8 @@ async function command(
       }
     }).catch((): void => { heartbeatLost = true; try { if ((child as unknown as { pid?: number }).pid) process.kill(-(child as unknown as { pid: number }).pid, "SIGTERM"); else child.kill(); } catch { try { child.kill(); } catch {} } });
   }, 10_000);
-  const output = Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-  const completed = Promise.all([child.exited, output]);
+  const outputPromise = captureProcessOutput(child.stdout, child.stderr, outputDirectory, `stack-${operation}`);
+  const completed = Promise.all([child.exited, outputPromise]);
   const timeout = new Promise<never>((_, reject): void => {
     timer = setTimeout((): void => {
       timedOut = true;
@@ -387,12 +392,12 @@ async function command(
     }, timeoutMs);
   });
   try {
-    const [code, [stdout, stderr]] = await Promise.race([completed, timeout]);
-    return { code, output: [stdout.trim(), stderr.trim()].filter(Boolean).join("\n"), heartbeatLost };
+    const [code, capturedOutput] = await Promise.race([completed, timeout]);
+    return { code, output: processOutputPreview(capturedOutput), capturedOutput, heartbeatLost };
   } catch (error: unknown) {
     try { if ((child as unknown as { pid?: number }).pid) process.kill(-(child as unknown as { pid: number }).pid, "SIGKILL"); else child.kill("SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }
     if (!timedOut) throw error;
-    await Promise.allSettled([child.exited, output]);
+    await Promise.allSettled([child.exited, outputPromise]);
     throw error;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
@@ -557,7 +562,12 @@ export async function removeStackState(stackId: string, deployment: string, runI
   await rm(path, { force: true });
 }
 
-type TerraformCommandResult = Readonly<{ code: number; output: string; heartbeatLost: boolean }>;
+type TerraformCommandResult = Readonly<{
+  code: number;
+  output: string;
+  capturedOutput: CapturedProcessOutput;
+  heartbeatLost: boolean;
+}>;
 
 type ComponentExecutionStart = Readonly<{
   executionDirectory: string;
@@ -603,11 +613,11 @@ async function runTerraformComponentOperation(
   heartbeat: () => Promise<boolean>,
   binaryPath: string,
 ): Promise<TerraformCommandResult> {
-  if (operation === "plan") return command(planArgs, executionDirectory, sandbox, heartbeat);
+  if (operation === "plan") return command(planArgs, executionDirectory, sandbox, heartbeat, workDirectory);
   if (planArtifactPath === null || !(await Bun.file(planArtifactPath).exists())) throw new Error("The approved Stack plan artifact is unavailable");
   const planPath = join(workDirectory, "tfplan");
   await copyFile(planArtifactPath, planPath);
-  return command([binaryPath, "apply", "-no-color", "-input=false", planPath], executionDirectory, sandbox, heartbeat);
+  return command([binaryPath, "apply", "-no-color", "-input=false", planPath], executionDirectory, sandbox, heartbeat, workDirectory);
 }
 
 type ComponentExecutionRequest = DeepReadonly<{
@@ -653,7 +663,7 @@ async function startTerraformComponentExecution(request: ComponentExecutionReque
     if (!await context.heartbeat()) return false;
     return fencingToken === null || await refreshStackStateLock(stackId, deployment, runId, fencingToken);
   };
-  const init = await command([resolved.binaryPath, "init", "-backend=false", "-no-color", "-input=false"], executionDirectory, sandbox, heartbeat);
+  const init = await command([resolved.binaryPath, "init", "-backend=false", "-no-color", "-input=false"], executionDirectory, sandbox, heartbeat, workDirectory);
   if (init.heartbeatLost || !await heartbeat()) throw new Error(`Stack ${operation} lost its execution lease during initialization`);
   const planPath = join(workDirectory, "tfplan");
   const stateExists = await Bun.file(statePath).exists();
@@ -674,8 +684,21 @@ async function persistTerraformComponentArtifacts(
   const { planPath, init, commandResult } = start;
   const descriptionPath = join(STACK_STORAGE_DIR, `${stepId}-${operation}.txt`);
   const logPath = join(STACK_STORAGE_DIR, `${stepId}-${operation}.log`);
-  await writeFile(descriptionPath, commandResult.output || init.output, { mode: 0o600 });
-  await writeFile(logPath, [`init (${init.code})`, init.output, `${operation} (${commandResult.code})`, commandResult.output].filter(Boolean).join("\n"), { mode: 0o600 });
+  const initParts: readonly ProcessOutputPart[] = [
+    { path: init.capturedOutput.stdout.path },
+    { path: init.capturedOutput.stderr.path },
+  ];
+  const commandParts: readonly ProcessOutputPart[] = [
+    { path: commandResult.capturedOutput.stdout.path },
+    { path: commandResult.capturedOutput.stderr.path },
+  ];
+  const descriptionParts = commandResult.output !== "" ? commandParts : initParts;
+  await writeProcessOutputFile(descriptionPath, descriptionParts);
+  const logParts: ProcessOutputPart[] = [`init (${init.code})`];
+  if (init.output !== "") logParts.push("\n", ...initParts);
+  logParts.push(`\n${operation} (${commandResult.code})`);
+  if (commandResult.output !== "") logParts.push("\n", ...commandParts);
+  await writeProcessOutputFile(logPath, logParts);
   if (operation === "plan" && (commandResult.code === 0 || commandResult.code === 2) && await Bun.file(planPath).exists()) await copyFile(planPath, join(STACK_STORAGE_DIR, `${stepId}-plan`));
   const now = Date.now();
   await db.insert(stackRecords).values([
@@ -692,9 +715,9 @@ async function finalizeTerraformComponentState(
   const { executionDirectory, planPath, binaryPath, init, commandResult, heartbeat } = start;
   if (init.code !== 0 || (operation === "plan" ? ![0, 2].includes(commandResult.code) : commandResult.code !== 0)) throw new Error(commandResult.output || init.output || `Terraform ${operation} failed`);
   if (operation === "plan") {
-    const json = await command([binaryPath, "show", "-json", planPath], executionDirectory, sandbox, heartbeat);
+    const json = await command([binaryPath, "show", "-json", planPath], executionDirectory, sandbox, heartbeat, request.workDirectory);
     if (json.heartbeatLost || !await heartbeat()) throw new Error("Stack plan lost its execution lease while collecting output");
-    return json.code === 0 ? json.output : "";
+    return json.code === 0 ? await readFile(json.capturedOutput.stdout.path, "utf8") : "";
   }
   const generatedState = join(executionDirectory, "terraform.tfstate");
   const generatedStatePayload = await Bun.file(generatedState).exists() ? await readFile(generatedState, "utf8") : null;
