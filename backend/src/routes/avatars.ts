@@ -6,6 +6,8 @@ import {
 } from "../lib/avatars";
 
 const KEY_PATTERN = /^[0-9a-f]{64}$/;
+const SVG_AVATAR_CONTENT_SECURITY_POLICY = "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'none'; style-src 'none'; sandbox";
+const SVG_AVATAR_CONTENT_DISPOSITION = 'attachment; filename="avatar.svg"';
 
 type AvatarHandlerCtx = Readonly<{
   params: Readonly<Record<string, string>>;
@@ -55,7 +57,15 @@ export const avatarHandler = async ({ params, request, set }: AvatarHandlerCtx):
 
     const etagValue = current.contentHash ?? key;
     const etag = `"${etagValue}"`;
+    const contentType = current.contentType ?? "image/png";
+    const isSvg = contentType.split(";", 1)[0]?.trim().toLowerCase() === "image/svg+xml";
     const headers = new Headers();
+    if (isSvg) {
+      s.headers["Content-Disposition"] = SVG_AVATAR_CONTENT_DISPOSITION;
+      s.headers["Content-Security-Policy"] = SVG_AVATAR_CONTENT_SECURITY_POLICY;
+      headers.set("Content-Disposition", SVG_AVATAR_CONTENT_DISPOSITION);
+      headers.set("Content-Security-Policy", SVG_AVATAR_CONTENT_SECURITY_POLICY);
+    }
     const incoming = request.headers;
     if (incoming.get("if-none-match") === etag) {
       // A proper 304 carries the cache metadata so the browser can keep it.
@@ -68,10 +78,10 @@ export const avatarHandler = async ({ params, request, set }: AvatarHandlerCtx):
     }
 
     s.status = 200;
-    s.headers["Content-Type"] = current.contentType ?? "image/png";
+    s.headers["Content-Type"] = contentType;
     s.headers["Cache-Control"] = AVATAR_CLIENT_CACHE;
     s.headers["ETag"] = etag;
-    headers.set("Content-Type", current.contentType ?? "image/png");
+    headers.set("Content-Type", contentType);
     headers.set("Cache-Control", AVATAR_CLIENT_CACHE);
     headers.set("ETag", etag);
     return new Response(new Uint8Array(bytes), { headers });
