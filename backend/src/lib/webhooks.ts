@@ -1892,6 +1892,9 @@ async function createWebhookRun(
   resolveCredentials: () => Promise<ProviderCredentials | undefined>,
 ): Promise<OAuthWebhookRun | undefined> {
   const isSpeculative = kind === "pull_request";
+  // Local-execution workspaces never run remotely (issue #567): VCS events
+  // must not queue remote runs for them.
+  if (workspace.executionMode === "local") return undefined;
   if (isSpeculative && workspace.speculativeEnabled === false) return undefined;
   if (!isSpeculative && workspace.autoApplyRunTrigger !== true && workspace.queueAllRuns !== true) return undefined;
   const credentials = await resolveCredentials();

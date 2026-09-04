@@ -746,6 +746,13 @@ export async function createRun(
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(workspace.lockedReason) }] };
   }
+  // Local-execution workspaces never run remotely (issue #567): the CLI
+  // plans and applies on the operator machine and the server only stores
+  // state. This matches the reference behavior for local workspaces.
+  if (workspace.executionMode === "local") {
+    (set as { status: number }).status = 422;
+    return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote runs cannot be created for workspaces with local execution mode" }] };
+  }
   if (isDestroy && workspace.allowDestroyPlan === false) {
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Destroy plans are disabled for this workspace" }] };

@@ -4216,6 +4216,30 @@ export async function pollWorkerQueue(): Promise<string[]> {
       }
     }
 
+    // Local-execution workspaces never run on the server (issue #567):
+    // remote runs are rejected at creation, so any pending row here
+    // predates the gate. Error it with an explanation instead of
+    // executing it or leaving it stuck forever.
+    if (workspace.executionMode === "local") {
+      const blocked = await db.update(runs).set({
+        status: "errored",
+        statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+      }).where(and(claimWhere, eq(runs.status, "pending"))).returning({ id: runs.id });
+      if (blocked.length > 0) {
+        await writeLog(run.id, "plan", "[terrence ERROR] Remote runs cannot execute on workspaces with local execution mode. Plan and apply locally with the CLI; this run predates local-execution enforcement.");
+        queueRunNotification(run.id, "run:errored", "errored");
+        void reportRunVcsStatus(run.id, "errored");
+        publish("run.status", {
+          "run-id": run.id,
+          "workspace-id": workspace.id,
+          "org-id": workspace.orgId,
+          status: "errored",
+          at: new Date().toISOString(),
+        });
+      }
+      continue;
+    }
+
     let localReservationHeld = workspace.executionMode !== "agent" && reserveLocalRunExecution(run.id);
     if (!localReservationHeld && workspace.executionMode !== "agent") continue;
 
@@ -4295,6 +4319,22 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
     try {
       const workspace = workspacesById.get(run.workspaceId);
       if (workspace === undefined || workspace.locked === true) continue;
+      if (workspace.executionMode === "local") {
+        // Local-execution workspaces never run on the server (issue #567):
+        // a confirmed row here predates the creation gate. Error it with
+        // an explanation instead of dispatching or leaving it confirmed
+        // forever.
+        const blocked = await db.update(runs).set({
+          status: "errored",
+          statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+        }).where(and(eq(runs.id, run.id), eq(runs.status, "confirmed"))).returning({ id: runs.id });
+        if (blocked.length > 0) {
+          await writeLog(run.id, "apply", "[terrence ERROR] Remote runs cannot execute on workspaces with local execution mode. This apply predates local-execution enforcement.");
+          queueRunNotification(run.id, "run:errored", "errored");
+          void reportRunVcsStatus(run.id, "errored");
+        }
+        continue;
+      }
       const gateBlockReason = await applyGateBlockReason(new Date());
       if (gateBlockReason !== null) {
         // Log the deferral only when the block reason changes so a closed
