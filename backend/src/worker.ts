@@ -3055,6 +3055,47 @@ async function executeApplyImpl(runId: string): Promise<void> {
 }
 
 /**
+ * Policy engine resolution failure: the binary is not installed, not on
+ * PATH, and no override points at it. Distinct from evaluation errors so
+ * callers can report "engine unavailable" instead of "policy failed".
+ */
+class PolicyEngineMissingError extends Error {
+  readonly engine: "opa" | "sentinel";
+  constructor(engine: "opa" | "sentinel", message: string) {
+    super(message);
+    this.name = "PolicyEngineMissingError";
+    this.engine = engine;
+  }
+}
+
+/**
+ * Resolve a policy engine binary without spawning (issue #596). Honors
+ * OPA_BINARY_PATH / SENTINEL_BINARY_PATH overrides, otherwise PATH.
+ * Neither engine ships in the image; operators install them (OPA is
+ * Apache-2.0, Sentinel is proprietary BYOB). Exported for tests.
+ */
+export async function probePolicyEngine(kind: "opa" | "sentinel"): Promise<{ path: string } | { missing: string }> {
+  const override = kind === "opa" ? process.env["OPA_BINARY_PATH"] : process.env["SENTINEL_BINARY_PATH"];
+  const command = override !== undefined && override.trim() !== "" ? override.trim() : kind;
+  if (command.includes("/")) {
+    if (await exists(command)) return { path: command };
+  } else {
+    const found = Bun.which(command);
+    if (found !== null) return { path: found };
+  }
+  const install = kind === "opa"
+    ? "Install OPA (https://www.openpolicyagent.org/docs/latest/#running-opa) and ensure the `opa` binary is on PATH, or set OPA_BINARY_PATH to its location."
+    : "Install Sentinel and ensure the `sentinel` binary is on PATH, or set SENTINEL_BINARY_PATH to its location.";
+  return { missing: `${kind === "opa" ? "OPA" : "Sentinel"} policy engine is not available. ${install}` };
+}
+
+async function requirePolicyEngine(kind: "opa" | "sentinel"): Promise<string> {
+  const probed = await probePolicyEngine(kind);
+  if ("missing" in probed) throw new PolicyEngineMissingError(kind, probed.missing);
+  return probed.path;
+}
+
+/**
  * Evaluate policies attached to a workspace after a plan completes.
  * Returns an object indicating whether the run should proceed to apply.
  * Exported for tests; the worker is the only production caller.
@@ -3173,7 +3214,7 @@ export async function runPolicyChecks(
         const opaQuerySafe = /^[a-zA-Z0-9_.]+$/.test(opaQuery) ? opaQuery : "data";
         const opaProc = spawnRunProcess(
           runId,
-          ["opa", "eval", "--data", policyPath, "--input", dataPath, opaQuerySafe],
+          [await requirePolicyEngine("opa"), "eval", "--data", policyPath, "--input", dataPath, opaQuerySafe],
           {
             cwd: workDir,
             env: { PATH: process.env["PATH"] ?? "" },
@@ -3220,7 +3261,7 @@ export async function runPolicyChecks(
           global: { tfplan: { value: generatedPlanJson ?? {} } },
         }), { mode: 0o600 });
         const args = [
-          process.env["SENTINEL_BINARY_PATH"] ?? "sentinel",
+          await requirePolicyEngine("sentinel"),
           "apply",
           "-json",
           "-timeout=30s",
@@ -3328,6 +3369,24 @@ export async function runPolicyChecks(
         await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" ${checkStatus}: ${JSON.stringify(checkResult)}`);
       }
     } catch (err: unknown) {
+      // A missing engine is unreachable, not errored (issue #596): the
+      // policy never evaluated. Blocking semantics match errored
+      // (mandatory and soft-mandatory stop the run; advisory warns).
+      if (err instanceof PolicyEngineMissingError) {
+        checkBatch.push({
+          id: checkId,
+          runId,
+          policyId: policy.id,
+          policySetId: policy.policySetId,
+          status: "unreachable",
+          result: { error: err.message },
+          createdAt: Date.now(),
+        });
+        if (policy.enforcementLevel === "hard-mandatory") hardFailed = true;
+        if (policy.enforcementLevel === "soft-mandatory") softFailed = true;
+        await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" unreachable: ${err.message}`);
+        continue;
+      }
       const errMsg = err instanceof Error ? err.message : String(err);
       checkBatch.push({
         id: checkId,
