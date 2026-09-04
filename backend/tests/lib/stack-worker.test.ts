@@ -8,7 +8,8 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../../src/db";
 import { agents, agentPoolTokens, agentPools, durableJobs, organizations, stackAgentJobs, stackRecords, stackStateLocks, stacks } from "../../src/db/schema";
 import { claimStackAgentJob, completeStackAgentJob, heartbeatStackAgentJob } from "../../src/lib/stack-agent-jobs";
-import { removeStackState, runStackDeploymentJob, saveStackState } from "../../src/lib/stack-worker";
+import { deferredChangesFromCapturedOutput, removeStackState, runStackDeploymentJob, saveStackState } from "../../src/lib/stack-worker";
+import { captureProcessOutput, PROCESS_OUTPUT_PREVIEW_CHARS } from "../../src/lib/process-output";
 import type { DurableJob } from "../../src/lib/durable-jobs";
 
 const context = { heartbeat: async (): Promise<boolean> => true, canceled: async (): Promise<boolean> => false };
@@ -45,6 +46,33 @@ describe("Stack deployment worker", () => {
     process.env["SIMULATED_RUNS"] = "true";
     await db.insert(organizations).values({ id: orgId, name: orgId });
     await db.insert(stacks).values({ id: stackId, orgId, projectId: null, executionMode: "remote", name: "stack-worker", createdAt: Date.now(), updatedAt: Date.now() });
+  });
+
+  test("detects deferred markers beyond the output preview boundary", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "terrence-stack-deferred-test-"));
+    try {
+      const child = Bun.spawn([
+        process.execPath,
+        "-e",
+        `process.stdout.write("x".repeat(${PROCESS_OUTPUT_PREVIEW_CHARS + 128})); process.stdout.write("\\ndeferred\\n")`,
+      ], { stdout: "pipe", stderr: "pipe" });
+      const captured = await captureProcessOutput(child.stdout, child.stderr, directory, "deferred-marker");
+      expect(await child.exited).toBe(0);
+      expect(captured.stdout.truncated).toBe(true);
+      expect(await deferredChangesFromCapturedOutput("plan", captured)).toBe(true);
+      expect(await deferredChangesFromCapturedOutput("apply", captured)).toBe(false);
+
+      const nonMarkerChild = Bun.spawn([
+        process.execPath,
+        "-e",
+        "process.stdout.write(\"deferredly\")",
+      ], { stdout: "pipe", stderr: "pipe" });
+      const nonMarker = await captureProcessOutput(nonMarkerChild.stdout, nonMarkerChild.stderr, directory, "deferred-negative");
+      expect(await nonMarkerChild.exited).toBe(0);
+      expect(await deferredChangesFromCapturedOutput("plan", nonMarker)).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   afterAll(async () => {

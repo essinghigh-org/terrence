@@ -26,6 +26,14 @@ import { ensureBinary } from "../binaryManager";
 import { extractValidatedModuleArchive } from "./registry-module-archive";
 import { enqueueDurableJob, type DurableJobContext } from "./durable-jobs";
 import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./sandbox";
+import {
+  captureProcessOutput,
+  processOutputContainsWord,
+  processOutputPreview,
+  writeProcessOutputFile,
+  type CapturedProcessOutput,
+  type ProcessOutputPart,
+} from "./process-output";
 
 const STACK_STORAGE_DIR = join(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "stacks");
 const MAX_STACK_ARCHIVE_BYTES = 100 * 1024 * 1024;
@@ -355,8 +363,9 @@ async function command(
   args: readonly string[],
   cwd: string,
   sandbox: DeepReadonly<RunSandbox> | null,
-  heartbeat?: () => Promise<boolean>,
-): Promise<Readonly<{ code: number; output: string; heartbeatLost: boolean }>> {
+  heartbeat: (() => Promise<boolean>) | undefined,
+  outputDirectory: string,
+): Promise<Readonly<{ code: number; output: string; capturedOutput: CapturedProcessOutput; heartbeatLost: boolean }>> {
   const env = { PATH: process.env["PATH"] ?? "", HOME: process.env["HOME"] ?? "", LANG: "C" };
   const operation = args[1] === "apply" ? "apply" : "plan";
   const timeoutMs = await stackExecutionTimeoutMs(operation);
@@ -374,11 +383,8 @@ async function command(
       }
     }).catch((): void => { heartbeatLost = true; try { if ((child as unknown as { pid?: number }).pid) process.kill(-(child as unknown as { pid: number }).pid, "SIGTERM"); else child.kill(); } catch { try { child.kill(); } catch {} } });
   }, 10_000);
-  const output = Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-  const completed = Promise.all([child.exited, output]);
+  const outputPromise = captureProcessOutput(child.stdout, child.stderr, outputDirectory, `stack-${operation}`);
+  const completed = Promise.all([child.exited, outputPromise]);
   const timeout = new Promise<never>((_, reject): void => {
     timer = setTimeout((): void => {
       timedOut = true;
@@ -387,12 +393,15 @@ async function command(
     }, timeoutMs);
   });
   try {
-    const [code, [stdout, stderr]] = await Promise.race([completed, timeout]);
-    return { code, output: [stdout.trim(), stderr.trim()].filter(Boolean).join("\n"), heartbeatLost };
+    const [code, capturedOutput] = await Promise.race([completed, timeout]);
+    return { code, output: processOutputPreview(capturedOutput), capturedOutput, heartbeatLost };
   } catch (error: unknown) {
     try { if ((child as unknown as { pid?: number }).pid) process.kill(-(child as unknown as { pid: number }).pid, "SIGKILL"); else child.kill("SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }
-    if (!timedOut) throw error;
-    await Promise.allSettled([child.exited, output]);
+    if (!timedOut) {
+      await Promise.allSettled([child.exited, outputPromise]);
+      throw error;
+    }
+    await Promise.allSettled([child.exited, outputPromise]);
     throw error;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
@@ -417,22 +426,6 @@ export function isCurrentStackStateRecord(record: Readonly<{ status: string; pay
   // rows written by older versions that could leave status=current alongside
   // an explicit is-current=false compatibility flag.
   return record.status === "current" && record.payload?.["is-current"] !== false;
-}
-
-function planHasChanges(value: string): boolean {
-  try {
-    const parsed = JSON.parse(value) as Record<string, unknown>;
-    const changes = parsed["resource_changes"];
-    return Array.isArray(changes) && changes.some((item): boolean => {
-      if (item === null || typeof item !== "object") return false;
-      const actions = (item as Record<string, unknown>)["change"];
-      if (actions === null || typeof actions !== "object") return false;
-      const raw = (actions as Record<string, unknown>)["actions"];
-      return Array.isArray(raw) && raw.some((action): boolean => action !== "no-op");
-    });
-  } catch {
-    return false;
-  }
 }
 
 export async function saveStackState(stackId: string, deployment: string, runId: string, statePayload: string | null = null, fencingToken?: number): Promise<string> {
@@ -557,12 +550,16 @@ export async function removeStackState(stackId: string, deployment: string, runI
   await rm(path, { force: true });
 }
 
-type TerraformCommandResult = Readonly<{ code: number; output: string; heartbeatLost: boolean }>;
+type TerraformCommandResult = Readonly<{
+  code: number;
+  output: string;
+  capturedOutput: CapturedProcessOutput;
+  heartbeatLost: boolean;
+}>;
 
 type ComponentExecutionStart = Readonly<{
   executionDirectory: string;
   planPath: string;
-  binaryPath: string;
   init: TerraformCommandResult;
   commandResult: TerraformCommandResult;
   heartbeat: () => Promise<boolean>;
@@ -603,11 +600,11 @@ async function runTerraformComponentOperation(
   heartbeat: () => Promise<boolean>,
   binaryPath: string,
 ): Promise<TerraformCommandResult> {
-  if (operation === "plan") return command(planArgs, executionDirectory, sandbox, heartbeat);
+  if (operation === "plan") return command(planArgs, executionDirectory, sandbox, heartbeat, workDirectory);
   if (planArtifactPath === null || !(await Bun.file(planArtifactPath).exists())) throw new Error("The approved Stack plan artifact is unavailable");
   const planPath = join(workDirectory, "tfplan");
   await copyFile(planArtifactPath, planPath);
-  return command([binaryPath, "apply", "-no-color", "-input=false", planPath], executionDirectory, sandbox, heartbeat);
+  return command([binaryPath, "apply", "-no-color", "-input=false", planPath], executionDirectory, sandbox, heartbeat, workDirectory);
 }
 
 type ComponentExecutionRequest = DeepReadonly<{
@@ -653,7 +650,7 @@ async function startTerraformComponentExecution(request: ComponentExecutionReque
     if (!await context.heartbeat()) return false;
     return fencingToken === null || await refreshStackStateLock(stackId, deployment, runId, fencingToken);
   };
-  const init = await command([resolved.binaryPath, "init", "-backend=false", "-no-color", "-input=false"], executionDirectory, sandbox, heartbeat);
+  const init = await command([resolved.binaryPath, "init", "-backend=false", "-no-color", "-input=false"], executionDirectory, sandbox, heartbeat, workDirectory);
   if (init.heartbeatLost || !await heartbeat()) throw new Error(`Stack ${operation} lost its execution lease during initialization`);
   const planPath = join(workDirectory, "tfplan");
   const stateExists = await Bun.file(statePath).exists();
@@ -662,7 +659,18 @@ async function startTerraformComponentExecution(request: ComponentExecutionReque
   const commandResult = await runTerraformComponentOperation(operation, planArgs, planArtifactPath, executionDirectory, workDirectory, sandbox, heartbeat, resolved.binaryPath);
   if (await context.canceled()) return { hasChanges: false, deferredChanges: false, output: "", statePath: null };
   if (commandResult.heartbeatLost || !await heartbeat()) throw new Error(`Stack ${operation} lost its execution lease`);
-  return { executionDirectory, planPath, binaryPath: resolved.binaryPath, init, commandResult, heartbeat };
+  return { executionDirectory, planPath, init, commandResult, heartbeat };
+}
+
+function hasCapturedProcessOutput(output: CapturedProcessOutput): boolean {
+  return output.stdout.bytes > 0 || output.stderr.bytes > 0;
+}
+
+export async function deferredChangesFromCapturedOutput(
+  operation: "plan" | "apply",
+  output: CapturedProcessOutput,
+): Promise<boolean> {
+  return operation === "plan" && await processOutputContainsWord(output, "deferred");
 }
 
 async function persistTerraformComponentArtifacts(
@@ -674,8 +682,21 @@ async function persistTerraformComponentArtifacts(
   const { planPath, init, commandResult } = start;
   const descriptionPath = join(STACK_STORAGE_DIR, `${stepId}-${operation}.txt`);
   const logPath = join(STACK_STORAGE_DIR, `${stepId}-${operation}.log`);
-  await writeFile(descriptionPath, commandResult.output || init.output, { mode: 0o600 });
-  await writeFile(logPath, [`init (${init.code})`, init.output, `${operation} (${commandResult.code})`, commandResult.output].filter(Boolean).join("\n"), { mode: 0o600 });
+  const initParts: readonly ProcessOutputPart[] = [
+    { path: init.capturedOutput.stdout.path },
+    { path: init.capturedOutput.stderr.path },
+  ];
+  const commandParts: readonly ProcessOutputPart[] = [
+    { path: commandResult.capturedOutput.stdout.path },
+    { path: commandResult.capturedOutput.stderr.path },
+  ];
+  const descriptionParts = hasCapturedProcessOutput(commandResult.capturedOutput) ? commandParts : initParts;
+  await writeProcessOutputFile(descriptionPath, descriptionParts);
+  const logParts: ProcessOutputPart[] = [`init (${init.code})`];
+  if (hasCapturedProcessOutput(init.capturedOutput)) logParts.push("\n", ...initParts);
+  logParts.push(`\n${operation} (${commandResult.code})`);
+  if (hasCapturedProcessOutput(commandResult.capturedOutput)) logParts.push("\n", ...commandParts);
+  await writeProcessOutputFile(logPath, logParts);
   if (operation === "plan" && (commandResult.code === 0 || commandResult.code === 2) && await Bun.file(planPath).exists()) await copyFile(planPath, join(STACK_STORAGE_DIR, `${stepId}-plan`));
   const now = Date.now();
   await db.insert(stackRecords).values([
@@ -687,20 +708,16 @@ async function persistTerraformComponentArtifacts(
 async function finalizeTerraformComponentState(
   start: ComponentExecutionStart,
   request: ComponentExecutionRequest,
-): Promise<string> {
-  const { operation, destroy, stackId, deployment, runId, fencingToken, sandbox } = request;
-  const { executionDirectory, planPath, binaryPath, init, commandResult, heartbeat } = start;
+): Promise<void> {
+  const { operation, destroy, stackId, deployment, runId, fencingToken } = request;
+  const { executionDirectory, init, commandResult } = start;
   if (init.code !== 0 || (operation === "plan" ? ![0, 2].includes(commandResult.code) : commandResult.code !== 0)) throw new Error(commandResult.output || init.output || `Terraform ${operation} failed`);
-  if (operation === "plan") {
-    const json = await command([binaryPath, "show", "-json", planPath], executionDirectory, sandbox, heartbeat);
-    if (json.heartbeatLost || !await heartbeat()) throw new Error("Stack plan lost its execution lease while collecting output");
-    return json.code === 0 ? json.output : "";
-  }
+  if (operation === "plan") return;
   const generatedState = join(executionDirectory, "terraform.tfstate");
   const generatedStatePayload = await Bun.file(generatedState).exists() ? await readFile(generatedState, "utf8") : null;
   if (destroy) await removeStackState(stackId, deployment, runId, fencingToken ?? undefined);
   else await saveStackState(stackId, deployment, runId, generatedStatePayload, fencingToken ?? undefined);
-  return "";
+  return;
 }
 
 async function finalizeTerraformComponentExecution(
@@ -709,8 +726,9 @@ async function finalizeTerraformComponentExecution(
 ): Promise<StackExecutionResult> {
   const { stepId, stackId, operation } = request;
   await persistTerraformComponentArtifacts(start, stepId, stackId, operation);
-  const show = await finalizeTerraformComponentState(start, request);
-  return { hasChanges: operation === "plan" && (start.commandResult.code === 2 || planHasChanges(show)), deferredChanges: operation === "plan" && /\bdeferred\b/i.test(start.commandResult.output), output: start.commandResult.output || start.init.output, statePath: operation === "apply" ? request.statePath : null };
+  await finalizeTerraformComponentState(start, request);
+  const deferredChanges = await deferredChangesFromCapturedOutput(operation, start.commandResult.capturedOutput);
+  return { hasChanges: operation === "plan" && start.commandResult.code === 2, deferredChanges, output: start.commandResult.output || start.init.output, statePath: operation === "apply" ? request.statePath : null };
 }
 
 async function executeRealTerraformComponent(request: ComponentExecutionRequest): Promise<StackExecutionResult> {

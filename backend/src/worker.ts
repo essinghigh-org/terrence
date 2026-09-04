@@ -40,6 +40,11 @@ import { mkdir, mkdtemp, rm, writeFile, readFile, exists, readdir, rename, stat 
 import { ensureBinary } from "./binaryManager";
 import { resolveInfracostBinary } from "./lib/infracost-bin";
 import { recordFailure, workerPollerFinished, workerPollFinished, workerPollStarted } from "./lib/process-metrics";
+import {
+  captureProcessOutput,
+  processOutputPreview,
+  type CapturedProcessOutput,
+} from "./lib/process-output";
 import { isStorageDegraded, isDiskFullError, markStorageDegraded } from "./lib/storage-health";
 import { workspaceExecutionDirectory } from "./workspace";
 import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
@@ -56,6 +61,7 @@ import {
   planJsonResourceCounts,
   readPlanJsonArtifact,
   writePlanJsonArtifact,
+  writePlanJsonArtifactFromFile,
   type PlanResourceCounts,
 } from "./lib/plan-json";
 import { refetchConfigurationVersion, reportRunVcsStatus } from "./lib/webhooks";
@@ -836,12 +842,28 @@ function parseJsonObject(raw: string): JsonObject {
   return value;
 }
 
+const MAX_CAPTURED_JSON_BYTES = 16 * 1024 * 1024;
+
+async function readCapturedFile(output: CapturedProcessOutput): Promise<string> {
+  return readFile(output.stdout.path, "utf8");
+}
+
+async function readCapturedJson(output: CapturedProcessOutput, label: string): Promise<string> {
+  if (output.stdout.bytes > MAX_CAPTURED_JSON_BYTES) {
+    throw new Error(`${label} exceeds the ${MAX_CAPTURED_JSON_BYTES} byte limit`);
+  }
+  return readCapturedFile(output);
+}
+
+type PlanJsonCapture = Readonly<{ planJson: JsonObject; rawPath: string }>;
+
 async function readPlanJson(
   runId: string,
   executionDir: string,
   planBinaryPath: string | undefined,
   timeoutMs: number,
-): Promise<JsonObject | undefined> {
+  outputDirectory: string,
+): Promise<PlanJsonCapture | undefined> {
   const tfplanPath = join(executionDir, "tfplan");
   if (!(await exists(tfplanPath))) return undefined;
   const binaries = [...new Set(
@@ -849,8 +871,11 @@ async function readPlanJson(
       .filter((binary: string | undefined): binary is string => typeof binary === "string" && binary !== ""),
   )];
   for (const binary of binaries) {
+    let captured: CapturedProcessOutput | undefined;
+    let keepStdout = false;
+    let outputPromise: Promise<CapturedProcessOutput> | undefined;
     try {
-      const process = spawnRunProcess(
+      const child = spawnRunProcess(
         runId,
         [binary, "show", "-json", tfplanPath],
         {
@@ -861,20 +886,32 @@ async function readPlanJson(
         },
         runSandbox,
       );
-      const output = Promise.all([
-        new Response(process.stdout).text(),
-        new Response(process.stderr).text(),
-      ]);
-      const [exitCode, [stdout, stderr]] = await waitForTrackedProcess(runId, "plan", process, output, timeoutMs);
-      if (exitCode === 0) return parseJsonObject(stdout);
+      outputPromise = captureProcessOutput(child.stdout, child.stderr, outputDirectory, "terraform-show-json");
+      const [exitCode, output] = await waitForTrackedProcess(runId, "plan", child, outputPromise, timeoutMs);
+      captured = output;
+      if (exitCode === 0) {
+        // Terraform show -json is a file-backed user artifact and may
+        // legitimately exceed the auxiliary JSON response limit. Keep the
+        // parse isolated to its private spool file rather than rejecting a
+        // valid large plan at an arbitrary 16 MiB boundary.
+        const planJson = parseJsonObject(await readCapturedFile(output));
+        keepStdout = true;
+        return { planJson, rawPath: output.stdout.path };
+      }
       log.warn("Terraform plan JSON command failed", {
         runId,
         binary,
         exitCode,
-        stderr: stderr.trim().slice(0, 2_000),
+        stderr: output.stderr.preview.trim().slice(0, 2_000),
       });
     } catch (error: unknown) {
       logBestEffortFailure("Failed to read Terraform plan JSON", { runId, binary }, error);
+    } finally {
+      captured ??= await outputPromise?.catch((): undefined => undefined);
+      if (captured !== undefined) {
+        await rm(captured.stderr.path, { force: true });
+        if (!keepStdout) await rm(captured.stdout.path, { force: true });
+      }
     }
   }
   return undefined;
@@ -977,17 +1014,20 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
       },
       runSandbox,
     );
-    const costOutput = Promise.all([
-      new Response(costProcess.stdout).text(),
-      new Response(costProcess.stderr).text(),
-    ]);
-    const [exitCode, [stdout, stderr]] = await waitForTrackedProcess(runId, "cost-estimate", costProcess, costOutput, await executionTimeoutMs("plan"));
+    const costOutput = captureProcessOutput(costProcess.stdout, costProcess.stderr, secretsDir, "infracost");
+    const [exitCode, capturedOutput] = await waitForTrackedProcess(
+      runId,
+      "cost-estimate",
+      costProcess,
+      costOutput,
+      await executionTimeoutMs("plan"),
+    );
     if (exitCode !== 0) {
-      const detail = stderr.trim().slice(0, 2_000);
+      const detail = capturedOutput.stderr.preview.trim().slice(0, 2_000);
       throw new Error(`Infracost exited with code ${exitCode}${detail === "" ? "" : `: ${detail}`}`);
     }
 
-    const estimate = parseInfracostOutput(JSON.parse(stdout) as unknown, {
+    const estimate = parseInfracostOutput(JSON.parse(await readCapturedJson(capturedOutput, "Infracost output")) as unknown, {
       ...timestamps,
       "finished-at": new Date().toISOString(),
     });
@@ -1092,7 +1132,13 @@ async function waitForTrackedProcess<T>(
   try {
     return await Promise.race([completed, timeout]);
   } catch (error: unknown) {
-    if (!timedOut) throw error;
+    if (!timedOut) {
+      terminateProcessGroup(child.pid, "SIGKILL");
+      killTrackedProcess(child, "SIGKILL", runId, `${phase}-output-failure`);
+      if (activeRunCgroups.has(runId)) killRunCgroup(runId);
+      await Promise.allSettled([child.exited, output]);
+      throw error;
+    }
     terminateProcessGroup(child.pid, "SIGKILL");
     killTrackedProcess(child, "SIGKILL", runId, `${phase}-timeout`);
     if (activeRunCgroups.has(runId)) killRunCgroup(runId);
@@ -2040,11 +2086,20 @@ async function executeRunImpl(runId: string): Promise<void> {
       throw new Error(`No Terraform configuration (.tf or .tf.json) files were found in workspace directory '${executionDir}'.`);
     }
 
+    const planCapture = isSimulatedAllowed
+      ? undefined
+      : await readPlanJson(runId, executionDir, resolved?.binaryPath, planTimeoutMs, workDir);
     const planJson = isSimulatedAllowed
       ? parseJsonObject(process.env["SIMULATED_PLAN_JSON"] ?? "{}")
-      : await readPlanJson(runId, executionDir, resolved?.binaryPath, planTimeoutMs);
+      : planCapture?.planJson;
     if (planJson !== undefined) {
-      await writePlanJsonArtifact(runId, planJson);
+      if (planCapture === undefined) await writePlanJsonArtifact(runId, planJson);
+      else {
+        // readPlanJson only returns after the child and both output streams are
+        // complete; the raw file is in the private run workdir. Copy those
+        // exact bytes instead of reserializing the large parsed plan in memory.
+        await writePlanJsonArtifactFromFile(runId, planCapture.rawPath);
+      }
       // The structured plan is persisted: tell SSE clients to fetch it once
       // instead of polling /json-output while the run is still planning.
       publish("plan.output.ready", {
@@ -2952,11 +3007,11 @@ export async function runPolicyChecks(
 
   const planTimeoutMs = await executionTimeoutMs("plan");
   const policyTimeoutMs = Math.min(planTimeoutMs, POLICY_EVALUATION_TIMEOUT_MS);
-  const generatedPlanJson = preloadedPlanJson ?? (
-    executionDir === undefined || executionDir === ""
-      ? undefined
-      : await readPlanJson(runId, executionDir, planBinaryPath, planTimeoutMs)
-  );
+  const generatedPlanCapture = preloadedPlanJson !== undefined || executionDir === undefined || executionDir === ""
+    ? undefined
+    : await readPlanJson(runId, executionDir, planBinaryPath, planTimeoutMs, executionDir);
+  const generatedPlanJson = preloadedPlanJson ?? generatedPlanCapture?.planJson;
+  if (generatedPlanCapture !== undefined) await rm(generatedPlanCapture.rawPath, { force: true });
   const planJsonPayload = generatedPlanJson === undefined ? null : JSON.stringify(generatedPlanJson);
 
   let hardFailed = false;
@@ -3031,13 +3086,10 @@ export async function runPolicyChecks(
           },
           policySandbox,
         );
-        const opaOutput = Promise.all([
-          new Response(opaProc.stdout).text(),
-          new Response(opaProc.stderr).text(),
-        ]);
-        const [opaExit, [opaStdout]] = await waitForTrackedProcess(runId, "policy", opaProc, opaOutput, policyTimeoutMs);
+        const opaOutput = captureProcessOutput(opaProc.stdout, opaProc.stderr, workDir, "opa");
+        const [opaExit, capturedOutput] = await waitForTrackedProcess(runId, "policy", opaProc, opaOutput, policyTimeoutMs);
         if (opaExit === 0) {
-          checkResult = JSON.parse(opaStdout !== "" ? opaStdout : "{}") as Record<string, unknown>;
+          checkResult = parseJsonObject(await readCapturedJson(capturedOutput, "OPA output"));
           const resultList = checkResult["result"] as Record<string, unknown>[] | undefined;
           const exprList = resultList?.[0]?.["expressions"] as Record<string, unknown>[] | undefined;
           const valObj = exprList?.[0]?.["value"] as Record<string, unknown> | undefined;
@@ -3098,11 +3150,12 @@ export async function runPolicyChecks(
           },
           policySandbox,
         );
-        const sentinelOutput = Promise.all([
-          new Response(sentinelProc.stdout).text(),
-          new Response(sentinelProc.stderr).text(),
-        ]);
-        const [sentinelExit, [sentinelStdout, sentinelStderr]] = await waitForTrackedProcess(runId, "policy", sentinelProc, sentinelOutput, policyTimeoutMs);
+        const sentinelOutput = captureProcessOutput(sentinelProc.stdout, sentinelProc.stderr, workDir, "sentinel");
+        const [sentinelExit, capturedOutput] = await waitForTrackedProcess(runId, "policy", sentinelProc, sentinelOutput, policyTimeoutMs);
+        const sentinelStdout = await readCapturedJson(capturedOutput, "Sentinel output");
+        const sentinelStderr = capturedOutput.stderr.truncated
+          ? `${capturedOutput.stderr.preview}\n[terrence] Sentinel stderr truncated.`
+          : capturedOutput.stderr.preview;
         let sentinel: Record<string, unknown>;
         try {
           const parsed = JSON.parse(sentinelStdout) as unknown;
@@ -3199,7 +3252,7 @@ export async function runPolicyChecks(
   return { proceed, hardFailed, softFailed };
 }
 
-type CapturedProcess = Readonly<{ exitCode: number; output: string; stdout: string }>;
+type CapturedProcess = Readonly<{ exitCode: number; output: string; capturedOutput: CapturedProcessOutput }>;
 
 async function captureProcess(
   runId: string,
@@ -3207,14 +3260,12 @@ async function captureProcess(
   cwd: string,
   env: Readonly<Record<string, string>>,
   timeoutMs: number,
+  outputDirectory: string,
 ): Promise<CapturedProcess> {
   const child = spawnRunProcess(runId, args, { cwd, env, stdout: "pipe", stderr: "pipe" }, runSandbox);
-  const output = Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-  const [exitCode, [stdout, stderr]] = await waitForTrackedProcess(runId, "assessment", child, output, timeoutMs);
-  return { exitCode, output: `${stdout}${stderr}`, stdout };
+  const outputPromise = captureProcessOutput(child.stdout, child.stderr, outputDirectory, "assessment");
+  const [exitCode, capturedOutput] = await waitForTrackedProcess(runId, "assessment", child, outputPromise, timeoutMs);
+  return { exitCode, output: processOutputPreview(capturedOutput), capturedOutput };
 }
 
 function assessmentIntervalMs(): number {
@@ -3672,6 +3723,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
         executionDir,
         environment,
         assessmentTimeoutMs,
+        workDir,
       );
       appendOutput(init.output);
       if (init.exitCode !== 0) throw new Error(`${resolved.tool} init failed with exit code ${String(init.exitCode)}`);
@@ -3697,15 +3749,16 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
         executionDir,
         environment,
         assessmentTimeoutMs,
+        workDir,
       );
       appendOutput(plan.output);
       if (plan.exitCode !== 0 && plan.exitCode !== 2) {
         throw new Error(`${resolved.tool} assessment plan failed with exit code ${String(plan.exitCode)}`);
       }
 
-      const generatedPlan = await readPlanJson(assessmentResultId, executionDir, resolved.binaryPath, assessmentTimeoutMs);
+      const generatedPlan = await readPlanJson(assessmentResultId, executionDir, resolved.binaryPath, assessmentTimeoutMs, workDir);
       if (generatedPlan === undefined) throw new Error("Unable to read assessment plan JSON.");
-      planJson = generatedPlan;
+      planJson = generatedPlan.planJson;
 
       const schema = await captureProcess(
         `assessment-${assessmentResultId}`,
@@ -3713,8 +3766,9 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
         executionDir,
         environment,
         assessmentTimeoutMs,
+        workDir,
       );
-      if (schema.exitCode === 0) providerSchema = parseJsonObject(schema.stdout);
+      if (schema.exitCode === 0) providerSchema = parseJsonObject(await readCapturedJson(schema.capturedOutput, "Provider schema output"));
       else appendOutput(`[terrence] Provider schema unavailable: ${schema.output}`);
     }
 
