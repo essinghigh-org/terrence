@@ -4072,7 +4072,18 @@ export async function pollWorkerQueue(): Promise<string[]> {
     if (claimedWorkspaceIds.has(run.workspaceId)) continue;
 
     const workspace = workspacesById.get(run.workspaceId);
-    if (workspace === undefined || workspace.locked === true) continue;
+    if (workspace === undefined) continue;
+    // A lock acquired after run creation parks the run silently (issue
+    // #575). Log the block throttled instead of parking with no signal.
+    if (workspace.locked === true) {
+      if (notePlanLockLogged(run.id)) {
+        const reason = typeof workspace.lockedReason === "string" && workspace.lockedReason !== ""
+          ? ` Reason: ${workspace.lockedReason}`
+          : "";
+        await writeLog(run.id, "plan", `[terrence] Run is waiting: the workspace is locked.${reason} Unlock the workspace or cancel this run.`);
+      }
+      continue;
+    }
 
     // Atomic conditional claim: only claim if no planning/applying run exists for this workspace,
     // and the run is still pending.
@@ -4253,6 +4264,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
       if (claimed.length > 0) {
         claimedRunIds.push(run.id);
         claimedWorkspaceIds.add(run.workspaceId);
+        planLockLoggedAt.delete(run.id);
         // Advance through plan_queued then dispatch to planning
         executeRun(run.id).catch((err: unknown): void => { log.error("Worker error on run", { runId: run.id, error: err }); });
         localReservationHeld = false;
@@ -4309,7 +4321,7 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
   const scheduledWorkspaceRows = dueRuns.length === 0
     ? []
     : await db.query.workspaces.findMany({
-        columns: { id: true, orgId: true, locked: true, executionMode: true, agentPoolId: true, projectId: true },
+        columns: { id: true, orgId: true, locked: true, lockedReason: true, executionMode: true, agentPoolId: true, projectId: true },
         where: inArray(workspaces.id, [...new Set(dueRuns.map((run): string => run.workspaceId))]),
       });
   const workspacesById = new Map(scheduledWorkspaceRows.map((workspace): readonly [string, typeof workspace] => [workspace.id, workspace]));
@@ -4318,7 +4330,21 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
     if (run.planOnly === true) continue;
     try {
       const workspace = workspacesById.get(run.workspaceId);
-      if (workspace === undefined || workspace.locked === true) continue;
+      if (workspace === undefined) continue;
+      // A lock acquired after the apply was confirmed parks the run
+      // silently (issue #575). Log the block throttled like the other
+      // deferral reasons instead of parking with no signal.
+      if (workspace.locked === true) {
+        const reason = typeof workspace.lockedReason === "string" && workspace.lockedReason !== ""
+          ? workspace.lockedReason
+          : "locked";
+        const key = `scheduled:${run.id}`;
+        if (scheduledBlockReasons.get(key) !== `workspace-locked:${reason}`) {
+          scheduledBlockReasons.set(key, `workspace-locked:${reason}`);
+          await writeLog(run.id, "apply", `[terrence] Apply is waiting: the workspace is locked (${reason}). Unlock the workspace or cancel this run.`);
+        }
+        continue;
+      }
       if (workspace.executionMode === "local") {
         // Local-execution workspaces never run on the server (issue #567):
         // a confirmed row here predates the creation gate. Error it with
@@ -4539,6 +4565,29 @@ async function trackLocalExecution<T>(promise: Promise<T>): Promise<T> {
 function localRunConcurrencyLimit(): number {
   const configured = Number(process.env["TERRENCE_RUN_CONCURRENCY"] ?? 5);
   return Number.isSafeInteger(configured) && configured > 0 ? configured : 5;
+}
+
+/** Last lock-blocked log per pending run (issue #575): re-log at most every
+ * 5 minutes so the queue poll does not spam. Bounded; stale entries are
+ * harmless because run ids are unique (a stale timestamp only triggers a
+ * fresh, accurate log if the id ever reappears as pending). */
+const planLockLoggedAt = new Map<string, number>();
+const PLAN_LOCK_LOG_INTERVAL_MS = 5 * 60 * 1000;
+
+function notePlanLockLogged(runId: string): boolean {
+  const now = Date.now();
+  const last = planLockLoggedAt.get(runId);
+  if (last !== undefined && now - last < PLAN_LOCK_LOG_INTERVAL_MS) return false;
+  planLockLoggedAt.set(runId, now);
+  if (planLockLoggedAt.size > 2000) {
+    const oldest = planLockLoggedAt.keys().next();
+    if (!oldest.done) planLockLoggedAt.delete(oldest.value);
+  }
+  return true;
+}
+
+export function clearPlanLockLoggedForTests(): void {
+  planLockLoggedAt.clear();
 }
 
 function localRunCapacityUsed(): number {
