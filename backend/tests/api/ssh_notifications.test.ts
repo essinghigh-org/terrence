@@ -123,10 +123,8 @@ describe("SSH Keys & Notification Configurations API contract", () => {
     let ncId = "";
 
     try {
-      // 1. Create notification configuration. Created disabled so the
-      // create-time verification-before-save probe (NOT-002) does not fire;
-      // the explicit verify action below exercises the retry behaviour in
-      // isolation (3 attempts: 503, 503, then 200).
+      // 1. Create a disabled configuration; the explicit verify action below
+      // exercises retry behaviour in isolation (3 attempts: 503, 503, then 200).
       const createNcRes = await request(`/api/v2/workspaces/${workspaceId}/notification-configurations`, "POST", {
         data: {
           type: "notification-configurations",
@@ -196,9 +194,8 @@ describe("SSH Keys & Notification Configurations API contract", () => {
             "destination-type": "generic",
             url: webhook.url.toString(),
             triggers: ["run:errored"],
-            // Disabled so the create-time verification probe (NOT-002) does not
-            // hit the destination — the point of this test is that preview and
-            // verify do, and only when the caller explicitly asks.
+            // Keep this disabled so the test covers the explicit preview and
+            // verify actions, which contact the destination only when requested.
             enabled: false,
           },
         },
@@ -232,6 +229,43 @@ describe("SSH Keys & Notification Configurations API contract", () => {
       for (const id of createdIds) {
         await db.delete(notificationConfigurations).where(eq(notificationConfigurations.id, id));
       }
+    }
+  });
+
+  it("creates enabled webhook configs even when the destination is unreachable", async () => {
+    const unreachableServer = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        return new Response("unexpected request", { status: 500 });
+      },
+    });
+    const unreachableUrl = unreachableServer.url.toString();
+    await unreachableServer.stop(true);
+
+    let ncId = "";
+    try {
+      const response = await request(`/api/v2/workspaces/${workspaceId}/notification-configurations`, "POST", {
+        data: {
+          type: "notification-configurations",
+          attributes: {
+            name: "Unreachable Alert",
+            "destination-type": "generic",
+            url: unreachableUrl,
+            triggers: ["run:errored"],
+            enabled: true,
+          },
+        },
+      });
+      expect(response.status).toBe(201);
+      const body = await response.json();
+      ncId = body.data.id as string;
+
+      const stored = await db.query.notificationConfigurations.findFirst({ where: eq(notificationConfigurations.id, ncId) });
+      expect(stored?.enabled).toBe(true);
+      expect(stored?.url).toBe(unreachableUrl);
+    } finally {
+      if (ncId !== "") await db.delete(notificationConfigurations).where(eq(notificationConfigurations.id, ncId));
     }
   });
 
@@ -272,10 +306,9 @@ describe("SSH Keys & Notification Configurations API contract", () => {
         createdIds.push(responseBody.data.id);
       }
 
-      // Creating enabled fires the reference format's verification-before-save probe once per
-      // config, which posts a minimal probe body to the webhook. Those probes
-      // are not the run deliveries under test, so drop them before delivering.
-      payloads.length = 0;
+      // Creating a configuration does not contact the destination. Delivery
+      // happens only when the run notification is emitted below.
+      expect(payloads).toHaveLength(0);
 
       const projectList = await request(`/api/v2/projects/${projectId}/notification-configurations?page%5Bsize%5D=1`);
       expect(projectList.status).toBe(200);
