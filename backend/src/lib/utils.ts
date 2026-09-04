@@ -1340,7 +1340,9 @@ export function cursorPagination(request: RequestWithUrl, cursor: string | null,
 }
 
 export function pagination(request: RequestWithUrl, currentPage: number, pageSize: number, totalCount: number): { links: Record<string, string | null>; meta: Record<string, unknown> } {
-  const totalPages = Math.ceil(totalCount / pageSize);
+  // Empty collections still expose page 1 through first/last links. Keep the
+  // metadata consistent with those links instead of reporting zero pages.
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const pageLink = (page: number): string => {
     const url = new URL(request.url);
     url.searchParams.set("page[number]", String(page));
@@ -1350,7 +1352,7 @@ export function pagination(request: RequestWithUrl, currentPage: number, pageSiz
 
   return {
     links: {
-      self: pageLink(currentPage),
+      self: request.url,
       first: pageLink(1),
       prev: currentPage > 1 ? pageLink(currentPage - 1) : null,
       next: currentPage < totalPages ? pageLink(currentPage + 1) : null,

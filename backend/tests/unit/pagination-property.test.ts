@@ -109,29 +109,33 @@ describe("pagination (link/meta builder)", () => {
   test("empty collection still yields a valid link graph", () => {
     const p = pagination(requestWithQuery(""), 1, 20, 0);
     const meta = p.meta["pagination"] as Record<string, unknown>;
-    // total-pages is the raw ceil(0/20) = 0; links still point at page 1
+    // Empty collections expose a single, empty page so metadata and links
+    // agree on the page-1 range.
     expect(meta).toEqual({
       "current-page": 1,
       "page-size": 20,
       "prev-page": null,
       "next-page": null,
-      "total-pages": 0,
+      "total-pages": 1,
       "total-count": 0,
     });
     expect(p.links["prev"]).toBeNull();
     expect(p.links["next"]).toBeNull();
-    expect(p.links["first"]).toBe(p.links["self"]);
-    expect(p.links["last"]).toBe(p.links["self"]);
+    expect(p.links["self"]).toBe(requestWithQuery("").url);
+    expect(p.links["first"]).toContain("page%5Bnumber%5D=1");
+    expect(p.links["last"]).toContain("page%5Bnumber%5D=1");
   });
 
   test("exact page boundary: no next link on the last full page", () => {
     // 40 items at size 20 -> exactly 2 pages
-    const p = pagination(requestWithQuery(""), 2, 20, 40);
+    const request = requestWithQuery("page[number]=2&page[size]=20");
+    const p = pagination(request, 2, 20, 40);
     const meta = p.meta["pagination"] as Record<string, unknown>;
     expect(meta["total-pages"]).toBe(2);
     expect(p.links["next"]).toBeNull();
     expect(p.links["prev"]).not.toBeNull();
-    expect(p.links["last"]).toBe(p.links["self"]);
+    expect(p.links["last"]).toContain("page%5Bnumber%5D=2");
+    expect(p.links["self"]).toBe(request.url);
   });
 
   test("last partial page is reachable and reported", () => {
@@ -150,9 +154,16 @@ describe("pagination (link/meta builder)", () => {
     expect(meta["current-page"]).toBe(99);
     expect(meta["total-pages"]).toBe(1);
     expect(p.links["next"]).toBeNull();
-    // self points at the over-page; first/last point at the real range
+    // self echoes the request; first/last point at the real range
+    expect(p.links["self"]).toBe(requestWithQuery("").url);
     expect(p.links["first"]).not.toBeNull();
     expect(p.links["last"]).toBe(p.links["first"]);
+  });
+
+  test("self preserves the exact request URI", () => {
+    const request = requestWithQuery("filter[status]=pending&page[size]=10&page[number]=2");
+    const p = pagination(request, 2, 10, 25);
+    expect(p.links["self"]).toBe(request.url);
   });
 
   test("fuzz: link presence/targets match ceil(total/size) for arbitrary inputs", () => {
@@ -166,8 +177,9 @@ describe("pagination (link/meta builder)", () => {
     for (let i = 0; i < 5000; i++) {
       const totalCount = Math.floor(rand() * 5000);
       const pageSize = 1 + Math.floor(rand() * 100);
-      // implementation formula: raw ceil, no clamp (0 for an empty set)
-      const totalPages = Math.ceil(totalCount / pageSize);
+      // Empty collections still have a page-1 link, so the implementation
+      // reports one page even when the collection has no items.
+      const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
       const currentPage = 1 + Math.floor(rand() * (totalPages + 5)); // includes over-page
       const req = requestWithQuery(`page[number]=${currentPage}&page[size]=${pageSize}`);
       const p = pagination(req, currentPage, pageSize, totalCount);
@@ -183,8 +195,8 @@ describe("pagination (link/meta builder)", () => {
       expect(p.links["prev"]).toBe(currentPage > 1 ? pageLink(req, currentPage - 1, pageSize) : null);
       expect(p.links["next"]).toBe(currentPage < totalPages ? pageLink(req, currentPage + 1, pageSize) : null);
       expect(p.links["first"]).toBe(pageLink(req, 1, pageSize));
-      expect(p.links["last"]).toBe(pageLink(req, Math.max(1, totalPages), pageSize));
-      expect(self).toBe(pageLink(req, currentPage, pageSize));
+      expect(p.links["last"]).toBe(pageLink(req, totalPages, pageSize));
+      expect(self).toBe(req.url);
       // every generated link round-trips to a valid page param
       for (const link of [p.links["self"], p.links["first"], p.links["prev"], p.links["next"], p.links["last"]]) {
         if (link === null || link === undefined) continue;

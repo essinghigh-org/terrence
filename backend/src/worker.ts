@@ -2830,6 +2830,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
           jsonState: await encryptStatePayload(jsonState),
           jsonStateOutputs: await encryptStatePayload(jsonStateOutputs),
           runId,
+          createdBy: run.createdBy,
           vcsCommitSha,
           vcsCommitUrl,
           terraformVersion: resolved.version,

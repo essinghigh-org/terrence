@@ -10,7 +10,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, open, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, organizations, runs, runTokens, stateVersions, users, workspaces } from "../../src/db/schema";
@@ -101,7 +101,7 @@ beforeAll(async () => {
     id: stateVersionId,
     workspaceId: wsA,
     serial: 1,
-    statePayload: JSON.stringify({ version: 4, terraform_version: "1.0.0", resources: [] }),
+    statePayload: JSON.stringify({ version: 4, serial: 1, terraform_version: "1.0.0", lineage: `run-token-lineage-${suffix}`, resources: [] }),
     status: "finalized",
     createdAt: Date.now(),
   });
@@ -202,12 +202,52 @@ describe("run token authorization", () => {
         type: "state-versions",
         attributes: {
           serial: 2,
-          state: JSON.stringify({ version: 4, serial: 2, terraform_version: "1.0.0", resources: [] }),
-          md5: createHash("md5").update(JSON.stringify({ version: 4, serial: 2, terraform_version: "1.0.0", resources: [] })).digest("base64"),
+          state: JSON.stringify({ version: 4, serial: 2, terraform_version: "1.0.0", lineage: `run-token-lineage-${suffix}`, resources: [] }),
+          md5: createHash("md5").update(JSON.stringify({ version: 4, serial: 2, terraform_version: "1.0.0", lineage: `run-token-lineage-${suffix}`, resources: [] })).digest("base64"),
         },
       },
     }));
     expect(res.status).toBe(201);
+    await db.delete(runTokens).where(eq(runTokens.tokenHash, hashRunToken(token)));
+  });
+
+  test("persists run linkage for raw state uploads", async () => {
+    const token = await mintRunToken(runA, wsA, orgA);
+    const latest = await db.query.stateVersions.findFirst({
+      where: eq(stateVersions.workspaceId, wsA),
+      orderBy: [desc(stateVersions.serial)],
+      columns: { serial: true },
+    });
+    const serial = (latest?.serial ?? 0) + 1;
+    const state = JSON.stringify({ version: 4, serial, terraform_version: "1.0.0", lineage: `run-token-lineage-${suffix}`, resources: [] });
+    const res = await app.handle(new Request(`http://terrence.test/api/v2/workspaces/${wsA}/state-versions/upload`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/vnd.api+json",
+      },
+      body: state,
+    }));
+    expect(res.status).toBe(201);
+    const body = await res.json() as { data: { id: string } };
+    const stored = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, body.data.id) });
+    expect(stored?.runId).toBe(runA);
+    await db.delete(stateVersions).where(eq(stateVersions.id, body.data.id));
+    await db.delete(runTokens).where(eq(runTokens.tokenHash, hashRunToken(token)));
+  });
+
+  test("cannot attribute a state version to a different run in the same workspace", async () => {
+    const token = await mintRunToken(runA, wsA, orgA);
+    const res = await app.handle(request(`/api/v2/workspaces/${wsA}/state-versions`, "POST", token, {
+      data: {
+        type: "state-versions",
+        attributes: { serial: 2 },
+        relationships: { run: { data: { id: `run-other-${suffix}`, type: "runs" } } },
+      },
+    }));
+    expect(res.status).toBe(422);
+    const body = await res.json() as { errors: { detail?: string }[] };
+    expect(body.errors[0]?.detail).toBe("run must match the run-scoped credential");
     await db.delete(runTokens).where(eq(runTokens.tokenHash, hashRunToken(token)));
   });
 

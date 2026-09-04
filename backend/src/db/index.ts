@@ -456,6 +456,16 @@ if (!isPostgres) {
     client.run("PRAGMA foreign_keys = ON;");
   }
 
+  // State-version authorship is additive. The generated migration covers fresh
+  // databases, while this idempotent repair keeps sparse-journal installs
+  // convergent without losing existing state versions.
+  const stateVersionColumns = new Set(
+    (client.query("PRAGMA table_info(state_versions)").all() as { name: string }[]).map((row): string => row.name),
+  );
+  if (!stateVersionColumns.has("created_by")) {
+    client.run("ALTER TABLE state_versions ADD COLUMN created_by TEXT REFERENCES users(id) ON DELETE SET NULL");
+  }
+
   // Agent claim fencing is an additive compatibility column. Keep it in the
   // boot repair path rather than a generated migration because the historical
   // snapshot still contains the intentionally preserved query_runs table.
@@ -830,6 +840,10 @@ export async function applyPgMigrations(): Promise<void> {
       BEFORE INSERT OR UPDATE OF sso_provider, sso_subject ON users
       FOR EACH ROW EXECUTE FUNCTION users_sso_identity_pair_guard()
     `);
+    // State-version authorship is additive. The generated migration covers
+    // fresh databases; this repair also converges installs with sparse
+    // migration journals.
+    await pg.unsafe("ALTER TABLE state_versions ADD COLUMN IF NOT EXISTS created_by text REFERENCES users(id) ON DELETE SET NULL");
     // Agent claim fencing is additive and intentionally kept idempotent here;
     // the generated journal also carries the additive fencing-column change.
     await pg.unsafe("ALTER TABLE agent_jobs ADD COLUMN IF NOT EXISTS fencing_token bigint NOT NULL DEFAULT 0");

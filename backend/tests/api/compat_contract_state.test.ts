@@ -77,6 +77,9 @@ describe("remote-workflow state versions contract", () => {
     expect(resource.relationships?.["workspace"]).toMatchObject({
       data: { id: workspaceId, type: "workspaces" },
     });
+    expect(resource.relationships?.["created-by"]).toMatchObject({
+      data: { id: seed.userId, type: "users" },
+    });
     expectSelfLink(resource, "/api/v2/state-versions/");
   });
 

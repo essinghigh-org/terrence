@@ -280,6 +280,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         vcsCommitSha: source.vcsCommitSha,
         vcsCommitUrl: source.vcsCommitUrl,
         runId: null,
+        createdBy: user?.id ?? null,
         terraformVersion: source.terraformVersion,
         intermediate: false,
         status: "finalized",
@@ -578,6 +579,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         workspaceId: sv.workspaceId,
         serial: (latest?.serial ?? 0) + 1,
         runId: null,
+        createdBy: user?.id ?? null,
         statePayload: sv.statePayload === null ? null : await encryptStatePayload(decodeStatePayload(sv.statePayload)),
         jsonState: sv.jsonState === null ? null : await encryptStatePayload(decodeStatePayload(sv.jsonState)),
         jsonStateOutputs: sv.jsonStateOutputs === null ? null : await encryptStatePayload(decodeStatePayload(sv.jsonStateOutputs)),
@@ -746,6 +748,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         statePayload: await encryptStatePayload(rawState),
         jsonState: await encryptStatePayload(rawState),
         jsonStateOutputs: await encryptStatePayload(parsed["outputs"] === undefined ? null : JSON.stringify(parsed["outputs"])),
+        createdBy: run.createdBy,
         status: "finalized",
         terraformVersion: typeof parsed["terraform_version"] === "string" ? parsed["terraform_version"] : null,
         intermediate: false,
@@ -791,16 +794,23 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const jsonStateOutputs = inlineJsonStateOutputs !== undefined && inlineJsonStateOutputs !== ""
       ? decodeStatePayload(inlineJsonStateOutputs)
       : null;
-    const runId = typeof runData["id"] === "string" ? runData["id"] : null;
+    const requestedRunId = typeof runData["id"] === "string" ? runData["id"] : null;
+    if (run !== null && requestedRunId !== null && requestedRunId !== run.runId) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "run must match the run-scoped credential" }] };
+    }
+    const runId = run?.runId ?? requestedRunId;
+    let relatedRunCreatedBy: string | null = null;
     const intermediate = attributes["intermediate"] === true;
     if (serial === undefined) {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "param is missing or the value is empty: serial" }] };
     }
     if (runId !== null) {
-      const relatedRun = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { workspaceId: true } });
+      const relatedRun = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { workspaceId: true, createdBy: true } });
       if (relatedRun?.workspaceId !== workspaceId) {
         (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "run must belong to this workspace" }] };
       }
+      relatedRunCreatedBy = relatedRun.createdBy;
     }
     if (run === null && (!ownsWorkspaceLock(ws, lockPrincipal(user?.id, orgId, teamId)))) {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before writing state" }] };
@@ -870,6 +880,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
           statePayload: await encryptStatePayload(statePayload),
           jsonState: await encryptStatePayload(jsonState ?? statePayload),
           jsonStateOutputs: await encryptStatePayload(jsonStateOutputs),
+          createdBy: relatedRunCreatedBy ?? user?.id ?? null,
           intermediate,
           status: statePayload === null ? "pending" : "finalized",
           createdAt: Date.now(),
@@ -934,6 +945,9 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lineageError }] };
     }
+    const runCreatedBy = run === null
+      ? null
+      : (await db.query.runs.findFirst({ where: eq(runs.id, run.runId), columns: { createdBy: true } }))?.createdBy ?? null;
     const contentMd5 = request.headers.get("content-md5");
     if (contentMd5 !== null && contentMd5 !== createHash("md5").update(rawState).digest("base64")) {
       (set as { status: number }).status = 422;
@@ -954,6 +968,8 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         statePayload: await encryptStatePayload(rawState),
         jsonState: await encryptStatePayload(rawState),
         jsonStateOutputs: await encryptStatePayload(parsed["outputs"] === undefined ? null : JSON.stringify(parsed["outputs"])),
+        runId: run?.runId ?? null,
+        createdBy: runCreatedBy ?? user?.id ?? null,
         status: "finalized",
         terraformVersion: typeof parsed["terraform_version"] === "string" ? parsed["terraform_version"] : null,
         intermediate: false,

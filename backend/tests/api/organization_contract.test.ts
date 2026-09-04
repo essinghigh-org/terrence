@@ -149,7 +149,7 @@ describe("organization API contract", () => {
       "total-count": 3,
     });
     expect(pageBody.links).toMatchObject({
-      self: expect.stringContaining("page%5Bnumber%5D=1"),
+      self: expect.stringContaining("page[number]=1"),
       first: expect.any(String),
       prev: null,
       next: expect.stringContaining("page%5Bnumber%5D=2"),

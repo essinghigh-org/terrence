@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, policyEvaluations, taskStages, runComments, auditLogs, users } from "../db/schema";
+import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, policyEvaluations, taskStages, runComments, auditLogs, users, notificationConfigurations, notificationConfigurationWorkspaceExclusions } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt, sql } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource, taskStageResource, type RunRelationshipLinkage } from "../lib/response";
 import { tfPolicyEvaluationResource, tfStageTypesForEvaluations } from "./policy-evaluations";
@@ -26,6 +26,7 @@ import { cachedOrgByName } from "../lib/cached-lookups";
 import { scheduleExplorerInventory } from "../lib/explorer-inventory";
 import { runExecutionDurationMilliseconds } from "../lib/run-duration";
 import { newRunId } from "../lib/run-id";
+import { RUN_NOTIFICATION_TRIGGERS } from "../lib/constants";
 
 type SetObj = { status?: number | string; headers: Record<string, string | number> };
 
@@ -507,16 +508,80 @@ async function includedRunResources(
 /** Audit finding 6: batch-load relationship linkage IDs for a run page (one
  * query per relation, no N+1) so the CLI hydrates policy checks, cost
  * estimates, and task stages from run reads. */
-async function linkageForRuns(runList: readonly RunItem[]): Promise<ReadonlyMap<string, RunRelationshipLinkage>> {
+async function notificationConfigurationIdsForRuns(runList: readonly RunItem[]): Promise<ReadonlyMap<string, readonly string[]>> {
+  const workspaceIds = [...new Set(runList.map((run): string => run.workspaceId))];
+  if (workspaceIds.length === 0) return new Map();
+
+  const workspaceRows = await db.query.workspaces.findMany({
+    where: inArray(workspaces.id, workspaceIds),
+    columns: { id: true, projectId: true },
+  });
+  const projectIds = [...new Set(workspaceRows.flatMap((workspace): string[] =>
+    workspace.projectId === null ? [] : [workspace.projectId],
+  ))];
+  const configurationWhere = projectIds.length === 0
+    ? inArray(notificationConfigurations.workspaceId, workspaceIds)
+    : or(
+        inArray(notificationConfigurations.workspaceId, workspaceIds),
+        inArray(notificationConfigurations.projectId, projectIds),
+      );
+  const configurations = await db.query.notificationConfigurations.findMany({
+    where: configurationWhere,
+    orderBy: [asc(notificationConfigurations.createdAt), asc(notificationConfigurations.id)],
+    columns: { id: true, workspaceId: true, projectId: true, enabled: true, triggers: true },
+  });
+  const projectConfigurationIds = configurations
+    .filter((configuration): boolean => configuration.projectId !== null)
+    .map((configuration): string => configuration.id);
+  const exclusions = projectConfigurationIds.length === 0
+    ? []
+    : await db.query.notificationConfigurationWorkspaceExclusions.findMany({
+        where: and(
+          inArray(notificationConfigurationWorkspaceExclusions.notificationConfigurationId, projectConfigurationIds),
+          inArray(notificationConfigurationWorkspaceExclusions.workspaceId, workspaceIds),
+        ),
+        columns: { notificationConfigurationId: true, workspaceId: true },
+      });
+  const excluded = new Set(exclusions.map((row): string => `${row.notificationConfigurationId}:${row.workspaceId}`));
+  const workspaceById = new Map(workspaceRows.map((workspace): [string, typeof workspace] => [workspace.id, workspace]));
+  const configurationIdsByRun = new Map<string, readonly string[]>();
+  for (const run of runList) {
+    const workspace = workspaceById.get(run.workspaceId);
+    if (workspace === undefined) {
+      configurationIdsByRun.set(run.id, []);
+      continue;
+    }
+    const ids = configurations
+      .filter((configuration): boolean => {
+        if (configuration.enabled !== true
+          || !configuration.triggers.some((trigger): boolean => (RUN_NOTIFICATION_TRIGGERS as readonly string[]).includes(trigger))) return false;
+        if (configuration.workspaceId === workspace.id) return true;
+        return configuration.projectId !== null
+          && configuration.projectId === workspace.projectId
+          && !excluded.has(`${configuration.id}:${workspace.id}`);
+      })
+      .map((configuration): string => configuration.id);
+    configurationIdsByRun.set(run.id, ids);
+  }
+  return configurationIdsByRun;
+}
+
+export async function linkageForRuns(runList: readonly RunItem[]): Promise<ReadonlyMap<string, RunRelationshipLinkage>> {
   const ids = runList.map((r: RunItem): string => r.id);
   if (ids.length === 0) return new Map();
-  const [checks, stages, evals] = await Promise.all([
+  const [checks, stages, evals, notificationConfigurationIdsByRun] = await Promise.all([
     db.query.policyChecks.findMany({ where: inArray(policyChecks.runId, [...ids]), columns: { id: true, runId: true } }),
     db.query.taskStages.findMany({ where: inArray(taskStages.runId, [...ids]), columns: { id: true, runId: true } }),
     db.query.policyEvaluations.findMany({ where: inArray(policyEvaluations.runId, [...ids]), columns: { id: true, runId: true } }),
+    notificationConfigurationIdsForRuns(runList),
   ]);
-  const linkage = new Map<string, { policyCheckIds: string[]; taskStageIds: string[]; tfPolicyEvaluationIds: string[] }>();
-  for (const id of ids) linkage.set(id, { policyCheckIds: [], taskStageIds: [], tfPolicyEvaluationIds: [] });
+  const linkage = new Map<string, { policyCheckIds: string[]; taskStageIds: string[]; tfPolicyEvaluationIds: string[]; notificationConfigurationIds: readonly string[] }>();
+  for (const id of ids) linkage.set(id, {
+    policyCheckIds: [],
+    taskStageIds: [],
+    tfPolicyEvaluationIds: [],
+    notificationConfigurationIds: notificationConfigurationIdsByRun.get(id) ?? [],
+  });
   for (const check of checks) linkage.get(check.runId)?.policyCheckIds.push(check.id);
   for (const stage of stages) linkage.get(stage.runId)?.taskStageIds.push(stage.id);
   for (const evalRecord of evals) {
@@ -758,7 +823,9 @@ export async function createRun(
     at: nowIso,
   });
   scheduleExplorerInventory(workspaceId);
-  return { data: runResource({ id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: user?.id ?? null, appliedAt: null, scheduledAt: null, softDeletedAt: null, createdAt }, canApply, false, origin) };
+  const createdRun = { id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: user?.id ?? null, appliedAt: null, scheduledAt: null, softDeletedAt: null, createdAt };
+  const createdLinkage = await linkageForRuns([createdRun]);
+  return { data: runResource(createdRun, canApply, false, origin, undefined, undefined, createdLinkage.get(id)) };
 }
 
 /**

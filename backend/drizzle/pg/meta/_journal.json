@@ -330,6 +330,13 @@
       "when": 1788482697125,
       "tag": "0046_military_dragon_man",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1788550756716,
+      "tag": "0047_small_fixer",
+      "breakpoints": true
     }
   ]
 }

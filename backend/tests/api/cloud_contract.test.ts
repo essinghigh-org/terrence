@@ -416,13 +416,15 @@ describe("Terraform cloud protocol contract", () => {
           "page-size": 20,
           "prev-page": null,
           "next-page": null,
-          "total-pages": 0,
+          "total-pages": 1,
           "total-count": 0,
         },
       },
     });
     expect(runEvents.links).toMatchObject({ prev: null, next: null });
-    for (const linkName of ["self", "first", "last"]) {
+    expect(runEvents.links.self).toContain(`/api/v2/runs/${runId}/run-events`);
+    expect(runEvents.links.self).not.toContain("?");
+    for (const linkName of ["first", "last"]) {
       expect(runEvents.links[linkName]).toBeTypeOf("string");
       expect(runEvents.links[linkName]).toContain(`/api/v2/runs/${runId}/run-events?`);
     }

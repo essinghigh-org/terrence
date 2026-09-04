@@ -99,7 +99,7 @@ describe("JSON:API pagination", () => {
       "total-count": 2,
     });
     expect(workspacePage.links).toMatchObject({
-      self: expect.stringContaining("page%5Bnumber%5D=2"),
+      self: expect.stringContaining("page[number]=2"),
       first: expect.stringContaining("page%5Bnumber%5D=1"),
       prev: expect.stringContaining("page%5Bnumber%5D=1"),
       next: null,
@@ -122,7 +122,7 @@ describe("JSON:API pagination", () => {
       "total-count": 2,
     });
     expect(runPage.links).toMatchObject({
-      self: expect.stringContaining("page%5Bnumber%5D=2"),
+      self: expect.stringContaining("page[number]=2"),
       prev: expect.stringContaining("page%5Bnumber%5D=1"),
       next: null,
       last: expect.stringContaining("page%5Bnumber%5D=2"),
