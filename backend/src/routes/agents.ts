@@ -18,7 +18,7 @@ import {
   stacks,
   type users,
 } from "../db/schema";
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import { checkOrganizationPermission, type DeepReadonly, auditLog, strictAuditEnabled, FINAL_RUN_STATUSES } from "../lib/utils";
 import { organizationName } from "../lib/response";
 import { hashAuthenticationToken, tokenHashCandidates } from "../lib/token-service";
@@ -40,8 +40,10 @@ import { isStackStoragePath } from "../lib/stack-worker";
 import { refetchConfigurationVersion } from "../lib/webhooks";
 import type { PlanJson } from "../lib/plan-json";
 import { cachedOrgByName } from "../lib/cached-lookups";
-import { decodeStatePayload } from "../lib/validation";
+import { decodeStatePayload, tokenExpiry } from "../lib/validation";
 import { assertSafeTarArchive } from "../lib/archive";
+import { resolveTokenExpiryUnderPolicy } from "../lib/token-ttl-policy";
+import { AGENT_POOL_TOKEN_DEFAULT_TTL_MS, agentPoolTokenExpiresAt, isAgentPoolTokenActive } from "../lib/agent-token";
 
 const MAX_AGENT_PLAN_JSON_BYTES = 16 * 1024 * 1024;
 
@@ -164,6 +166,7 @@ type TokenItem = Readonly<{
   readonly description: string | null;
   readonly createdAt: number;
   readonly lastUsedAt: number | null;
+  readonly expiresAt: number | null;
 }>;
 
 
@@ -387,11 +390,13 @@ async function canRegisterAgent(
   });
   const token = tokenRows.find((candidate) => candidate.token === tokenHash) ?? tokenRows[0];
   if (token === undefined) return false;
+  const now = Date.now();
+  if (!isAgentPoolTokenActive(token, now)) return false;
   if (token.token === legacyTokenHash) {
     await db.update(agentPoolTokens).set({ token: tokenHash }).where(eq(agentPoolTokens.id, token.id));
   }
-  if (token.lastUsedAt === null || Date.now() - token.lastUsedAt >= 60_000) {
-    await db.update(agentPoolTokens).set({ lastUsedAt: Date.now() }).where(eq(agentPoolTokens.id, token.id));
+  if (token.lastUsedAt === null || now - token.lastUsedAt >= 60_000) {
+    await db.update(agentPoolTokens).set({ lastUsedAt: now }).where(eq(agentPoolTokens.id, token.id));
   }
   return true;
 }
@@ -1102,8 +1107,8 @@ export const agentRoutes = new Elysia({ name: "agents" })
     const poolId = params["pool_id"] ?? "";
     const pool = await db.query.agentPools.findFirst({ where: eq(agentPools.id, poolId) });
     if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "manage-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const tokenList = await db.query.agentPoolTokens.findMany({ where: eq(agentPoolTokens.agentPoolId, poolId) });
-    return { data: tokenList.map((t: TokenItem): Record<string, unknown> => ({ id: t.id, type: "authentication-tokens", attributes: { description: t.description, "created-at": new Date(t.createdAt).toISOString(), "last-used-at": t.lastUsedAt !== null ? new Date(t.lastUsedAt).toISOString() : null } })) };
+    const tokenList = await db.query.agentPoolTokens.findMany({ where: and(eq(agentPoolTokens.agentPoolId, poolId), isNull(agentPoolTokens.revokedAt)) });
+    return { data: tokenList.map((t: TokenItem): Record<string, unknown> => ({ id: t.id, type: "authentication-tokens", attributes: { description: t.description, "created-at": new Date(t.createdAt).toISOString(), "last-used-at": t.lastUsedAt !== null ? new Date(t.lastUsedAt).toISOString() : null, "expired-at": new Date(agentPoolTokenExpiresAt(t)).toISOString() } })) };
   })
   .post("/api/v2/agent-pools/:pool_id/authentication-tokens", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const poolId = params["pool_id"] ?? "";
@@ -1111,9 +1116,22 @@ export const agentRoutes = new Elysia({ name: "agents" })
     if (pool === undefined || !(await checkOrganizationPermission(pool.orgId, user?.id, tokenOrgId ?? null, tokenTeamId ?? null, "manage-agent-pools"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const attrs = getAttrs(body);
     const description = typeof attrs["description"] === "string" ? attrs["description"] : `Agent token for ${pool.name}`;
+    const expiredAtValue = attrs["expired-at"] ?? attrs["expires-at"] ?? attrs["expiredAt"] ?? attrs["expiresAt"];
+    const parsedExpiry = tokenExpiry(expiredAtValue);
+    const requestedExpiry = parsedExpiry ?? Date.now() + AGENT_POOL_TOKEN_DEFAULT_TTL_MS;
+    const policyResolution = await resolveTokenExpiryUnderPolicy(pool.orgId, "agent", requestedExpiry);
+    if (policyResolution.kind === "invalid") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: policyResolution.detail }] };
+    }
+    if (policyResolution.kind === "forbidden") {
+      (set as { status: number }).status = 403;
+      return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
+    }
+    const expiresAt = policyResolution.expiresAt ?? Date.now() + AGENT_POOL_TOKEN_DEFAULT_TTL_MS;
     const rawToken = `agent-${crypto.randomUUID().replace(/-/g, "")}`;
     const tokenId = `atok-${crypto.randomUUID()}`;
-    await db.insert(agentPoolTokens).values({ id: tokenId, agentPoolId: poolId, token: hashAuthenticationToken(rawToken), description, createdAt: Date.now() });
+    await db.insert(agentPoolTokens).values({ id: tokenId, agentPoolId: poolId, token: hashAuthenticationToken(rawToken), description, createdAt: Date.now(), expiresAt, revokedAt: null });
     if (strictAuditEnabled()) {
       await auditLog("create", "agent-pool-token", tokenId, user?.id ?? null, pool.orgId, {
         agentPoolId: poolId,
@@ -1121,5 +1139,5 @@ export const agentRoutes = new Elysia({ name: "agents" })
       });
     }
     (set as { status: number }).status = 201;
-    return { data: { id: tokenId, type: "authentication-tokens", attributes: { token: rawToken, description, "created-at": new Date().toISOString() } } };
+    return { data: { id: tokenId, type: "authentication-tokens", attributes: { token: rawToken, description, "created-at": new Date().toISOString(), "expired-at": expiresAt !== null ? new Date(expiresAt).toISOString() : null } } };
   });

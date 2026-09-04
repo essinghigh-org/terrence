@@ -38,6 +38,7 @@ import { log } from "../lib/log";
 import { validSignedApiURL } from "../lib/utils";
 import { assertSafeTarArchive } from "../lib/archive";
 import { resolveExternalUrl } from "../lib/url-safety";
+import { isAgentPoolTokenActive } from "../lib/agent-token";
 
 const MAX_AGENT_BODY_BYTES = 16 * 1024 * 1024;
 // The public listener's native request cap is 100 MiB. Keep the endpoint's
@@ -143,10 +144,13 @@ async function poolForToken(token: string): Promise<{ poolId: string; tokenId: s
   const [tokenHash, legacyTokenHash] = tokenHashCandidates(token);
   const rows = await db.query.agentPoolTokens.findMany({ where: inArray(agentPoolTokens.token, [tokenHash, legacyTokenHash]), limit: 2 });
   const row = rows.find((candidate) => candidate.token === tokenHash) ?? rows[0];
-  if (row !== undefined && row.token === legacyTokenHash) {
+  if (row === undefined) return undefined;
+  const now = Date.now();
+  if (!isAgentPoolTokenActive(row, now)) return undefined;
+  if (row.token === legacyTokenHash) {
     await db.update(agentPoolTokens).set({ token: tokenHash }).where(eq(agentPoolTokens.id, row.id));
   }
-  return row === undefined ? undefined : { poolId: row.agentPoolId, tokenId: row.id };
+  return { poolId: row.agentPoolId, tokenId: row.id };
 }
 
 async function agentFromRequest(ctx: AgentCtx): Promise<Agent | undefined> {

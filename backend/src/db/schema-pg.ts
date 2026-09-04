@@ -175,6 +175,8 @@ export const agentPoolTokens = pgTable("agent_pool_tokens", {
     description: text("description"),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.agentPoolTokens.createdAt.defaultFn!()),
     lastUsedAt: bigint("last_used_at", { mode: "number" }),
+    expiresAt: bigint("expires_at", { mode: "number" }),
+    revokedAt: bigint("revoked_at", { mode: "number" }),
 });
 
 export const agentPools = pgTable("agent_pools", {

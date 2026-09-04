@@ -330,12 +330,15 @@ describe("the reference format API v2 - Agent Pools & Agents", () => {
     );
     expect(deleteResponse.status).toBe(204);
 
-    const missingResponse = await app.handle(
+    const revokedResponse = await app.handle(
       new Request(`http://localhost/api/v2/authentication-tokens/${token.id}`, {
         headers: { Authorization: `Bearer ${userToken}` },
       }),
     );
-    expect(missingResponse.status).toBe(404);
+    expect(revokedResponse.status).toBe(200);
+    const revoked = (await revokedResponse.json()).data;
+    expect(revoked.attributes["revoked-at"]).not.toBeNull();
+    expect(typeof revoked.attributes["revoked-at"]).toBe("string");
   });
 
   test("should reject deleting an agent with a claimed job", async () => {

@@ -14,6 +14,7 @@ import * as schema from './schema';
 import { envEnabled } from '../lib/env';
 import { databaseUrl, isPostgres, storageDir } from './driver';
 import { poolMetrics, poolQueryEnd, poolQueryStart, poolTransactionEnd, poolTransactionStart, recordSlowQuery } from '../lib/db-pool-metrics';
+import { AGENT_POOL_TOKEN_DEFAULT_TTL_MS } from '../lib/agent-token';
 
 // Deliberately synchronous: a top-level await here made this module a TLA
 // module, and Bun's worker threads can resolve importers while the TLA is
@@ -474,6 +475,20 @@ if (!isPostgres) {
     client.run("ALTER TABLE user_2fa ADD COLUMN last_accepted_counter INTEGER");
   }
 
+  // Agent-pool token lifecycle is additive. The generated migration covers
+  // fresh databases, while this idempotent repair keeps older installations
+  // with sparse journals convergent without invalidating existing credentials.
+  const agentPoolTokenColumns = new Set(
+    (client.query("PRAGMA table_info(agent_pool_tokens)").all() as { name: string }[]).map((row): string => row.name),
+  );
+  if (!agentPoolTokenColumns.has("expires_at")) {
+    client.run("ALTER TABLE agent_pool_tokens ADD COLUMN expires_at INTEGER");
+  }
+  if (!agentPoolTokenColumns.has("revoked_at")) {
+    client.run("ALTER TABLE agent_pool_tokens ADD COLUMN revoked_at INTEGER");
+  }
+  client.run(`UPDATE agent_pool_tokens SET expires_at = created_at + ${AGENT_POOL_TOKEN_DEFAULT_TTL_MS} WHERE expires_at IS NULL`);
+
   // Hot-path indexes are declared in the canonical schema and migrations, but
   // keep this backfill idempotent for installations whose journal skipped a
   // migration or whose older boot created only the agent index.
@@ -817,6 +832,10 @@ export async function applyPgMigrations(): Promise<void> {
     await pg.unsafe("ALTER TABLE user_2fa ADD COLUMN IF NOT EXISTS secret_encrypted text");
     // TOTP replay protection is additive and idempotent for older installs.
     await pg.unsafe("ALTER TABLE user_2fa ADD COLUMN IF NOT EXISTS last_accepted_counter bigint");
+    // Agent-pool token lifecycle is additive and idempotent for older installs.
+    await pg.unsafe("ALTER TABLE agent_pool_tokens ADD COLUMN IF NOT EXISTS expires_at bigint");
+    await pg.unsafe("ALTER TABLE agent_pool_tokens ADD COLUMN IF NOT EXISTS revoked_at bigint");
+    await pg.unsafe(`UPDATE agent_pool_tokens SET expires_at = created_at + ${AGENT_POOL_TOKEN_DEFAULT_TTL_MS} WHERE expires_at IS NULL`);
     // Refresh-session two-tab concurrency grace (todo 125-127, see sqlite boot path).
     await pg.unsafe("ALTER TABLE refresh_sessions ADD COLUMN IF NOT EXISTS successor_hash text");
     await pg.unsafe("ALTER TABLE refresh_sessions ADD COLUMN IF NOT EXISTS rotated_at_ms bigint");
