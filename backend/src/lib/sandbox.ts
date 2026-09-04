@@ -19,8 +19,8 @@ import type { Subprocess } from "bun";
  *   - the terraform/tofu binary dir     (read/execute)
  *   - system libraries and /bin,/usr/bin (read/execute, for the shell used by
  *     local-exec provisioners)
- *   - /etc (read-only: resolv.conf, CA certs), the resolv.conf realpath dir
- *     (systemd-resolved stub), /dev (read/write for /dev/null etc.)
+ *   - the system DNS configuration and CA certificate paths (read-only),
+ *     /dev (read/write for /dev/null etc.)
  *
  * Everything else — including STORAGE_DIR (the database, .encryption-key,
  * configuration archives and other workspaces' state) — is unreachable.
@@ -168,6 +168,30 @@ function systemRuleArgs(): string[] {
   ].filter(existsSync).map((path): string => `--rx=${path}`);
 }
 
+/** Minimal system configuration allow-list needed by network clients. */
+function systemEtcRuleArgs(): string[] {
+  const candidates = [
+    "/etc/resolv.conf",
+    "/etc/ssl/certs",
+    "/etc/ssl/cert.pem",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    "/etc/ca-certificates",
+  ];
+  const paths = new Set<string>();
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    try {
+      paths.add(realpathSync(candidate));
+    } catch {
+      paths.add(candidate);
+    }
+  }
+  const resolvDir = resolvConfDir();
+  if (resolvDir !== null) paths.add(resolvDir);
+  return [...paths].map((path): string => `--ro=${path}`);
+}
+
 /** Minimal /dev allow-list (todo 10). The previous --rw-files=/dev granted
  *  read/write beneath the entire /dev tree. Prefer explicitly required
  *  devices so a compromised provisioner cannot reach /dev/shm, device nodes,
@@ -254,8 +278,6 @@ export class RunSandbox {
 
       const workDir = this.workDirForRunCwd(opts.cwd);
       const binaryDir = dirname(binaryPath);
-      const resolvDir = resolvConfDir();
-
       const env: Record<string, string> = {
         ...opts.env,
         PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
@@ -269,10 +291,9 @@ export class RunSandbox {
         `--rwx=${workDir}`,
         `--rx=${binaryDir}`,
         ...systemRuleArgs(),
-        "--ro=/etc",
+        ...systemEtcRuleArgs(),
         ...devRuleArgs(),
         ...netRuleArgs(),
-        ...(resolvDir !== null ? [`--ro=${resolvDir}`] : []),
         ...extraRwArgs(),
         `--cwd=${opts.cwd}`,
         "--",

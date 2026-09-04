@@ -1196,10 +1196,13 @@ test("evaluates Sentinel policies and persists structured results", async () => 
     const binDir = join(process.env.TEST_DIR, "bin");
     await mkdir(binDir);
     const argsPath = join(process.env.TEST_DIR, "sentinel-args");
+    const configPath = join(process.env.TEST_DIR, "sentinel-config");
     const sentinelPath = join(binDir, "sentinel");
     await writeFile(sentinelPath, [
       "#!/bin/sh",
-      "echo \\"$@\\" > " + JSON.stringify(argsPath),
+      "echo $@ > " + JSON.stringify(argsPath),
+      "config_path=$(printf '%s' $4 | cut -d= -f2-)",
+      "cat $config_path > " + JSON.stringify(configPath),
       "printf '%s' '{\\"result\\":false,\\"duration\\":7,\\"trace\\":{\\"main\\":false}}'",
       "exit 1",
     ].join("\\n"));
@@ -1249,6 +1252,7 @@ test("evaluates Sentinel policies and persists structured results", async () => 
       checkStatus: check?.status,
       result: check?.result,
       args: await readFile(argsPath, "utf8"),
+      config: await readFile(configPath, "utf8"),
     }));
   `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
 
@@ -1262,8 +1266,92 @@ test("evaluates Sentinel policies and persists structured results", async () => 
     "duration-ms": 7,
     sentinel: { result: false, trace: { main: false } },
   });
-  expect(result.args).toContain("-global tfplan=");
+  expect(result.args).toContain("-config=");
+  expect(result.args).not.toContain("-global tfplan=");
+  expect(result.args).not.toContain("terraform_data.example");
+  expect(JSON.parse(result.config)).toEqual({
+    global: {
+      tfplan: {
+        value: {
+          format_version: "1.2",
+          resource_changes: [{ address: "terraform_data.example" }],
+        },
+      },
+    },
+  });
   expect(result.args).toContain('-param environment="production"');
+}, 30_000);
+
+test("evaluates OPA policies through the required sandbox", async () => {
+  const result = await runWorkerScript(`
+    const { chmod, mkdir, readFile, writeFile } = await import("fs/promises");
+    const { join } = await import("path");
+
+    const binDir = join(process.env.TEST_DIR, "bin");
+    const runnerPath = join(binDir, "landlock-runner");
+    const runnerArgsPath = join(process.env.TEST_DIR, "runner-args");
+    const opaPath = join(binDir, "opa");
+    await mkdir(binDir, { recursive: true });
+    await writeFile(runnerPath, [
+      "#!/bin/sh",
+      'if [ "$1" = "--probe" ]; then echo 1; exit 0; fi',
+      'printf "%s " "$@" > ' + JSON.stringify(runnerArgsPath),
+      'while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done',
+      'if [ "$#" -gt 0 ]; then shift; fi',
+      'exec "$@"',
+    ].join("\\n"), { mode: 0o755 });
+    const opaOutput = JSON.stringify({ result: [{ expressions: [{ value: { violations: [] } }] }] });
+    await writeFile(opaPath, "#!/bin/sh\\nprintf '%s' " + JSON.stringify(opaOutput) + "\\n", { mode: 0o755 });
+    await chmod(runnerPath, 0o755);
+    await chmod(opaPath, 0o755);
+    process.env.TERRENCE_LANDLOCK_RUNNER = runnerPath;
+    process.env.PATH = binDir + ":" + process.env.PATH;
+
+    const { db } = await import("./src/db/index.ts");
+    const {
+      organizations,
+      policies,
+      policyChecks,
+      policySetWorkspaces,
+      policySets,
+      runs,
+      workspaces,
+    } = await import("./src/db/schema.ts");
+    const { runPolicyChecks } = await import("./src/worker.ts");
+
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(workspaces).values({ id: "workspace", name: "workspace", orgId: "org" });
+    await db.insert(policySets).values({
+      id: "opa-set",
+      orgId: "org",
+      name: "opa",
+      kind: "opa",
+      global: true,
+    });
+    await db.insert(policySetWorkspaces).values({ id: "link", policySetId: "opa-set", workspaceId: "workspace" });
+    await db.insert(policies).values({
+      id: "opa-policy",
+      policySetId: "opa-set",
+      name: "allow",
+      enforcementLevel: "hard-mandatory",
+      query: "data.terrence",
+      source: "package terrence",
+    });
+    await db.insert(runs).values({ id: "run", workspaceId: "workspace", status: "pending", createdAt: Date.now() });
+
+    const verdict = await runPolicyChecks("run", "workspace", "org", undefined, undefined, { format_version: "1.2" });
+    const check = await db.query.policyChecks.findFirst({ where: (row, { eq }) => eq(row.runId, "run") });
+    console.log(JSON.stringify({
+      verdict,
+      checkStatus: check?.status,
+      runnerArgs: await readFile(runnerArgsPath, "utf8"),
+    }));
+  `, { NODE_ENV: "test", SIMULATED_RUNS: "false", TERRENCE_RUN_SANDBOX: "true" });
+
+  expect(result.verdict).toEqual({ proceed: true, hardFailed: false, softFailed: false });
+  expect(result.checkStatus).toBe("passed");
+  expect(result.runnerArgs).toContain("--");
+  expect(result.runnerArgs).toContain("/opa ");
 }, 30_000);
 
 test("rejects configuration archives containing traversal paths or links", async () => {

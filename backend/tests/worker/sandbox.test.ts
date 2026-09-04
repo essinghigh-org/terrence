@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { writeFile, mkdir, rm, symlink, mkdtemp } from "fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { RunSandbox, probeLandlockAbi } from "../../src/lib/sandbox";
@@ -88,6 +88,50 @@ describe("landlock run sandbox", () => {
       expect(stdout.trim()).toBe("BLOCKED");
     } finally {
       await rm(testBase, { recursive: true, force: true });
+    }
+  });
+
+  it("does not grant blanket /etc access while permitting DNS and CA paths", async (): Promise<void> => {
+    if (!usable) { console.warn("Skipping: Landlock unavailable"); return; }
+    const caProbePath = [
+      "/etc/ssl/certs",
+      "/etc/ssl/cert.pem",
+      "/etc/pki/tls/certs/ca-bundle.crt",
+      "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+      "/etc/ca-certificates",
+    ].find((path): boolean => existsSync(path));
+    if (caProbePath === undefined) {
+      console.warn("Skipping: no configured CA path exists");
+      return;
+    }
+    const caProbeCommand = statSync(caProbePath).isDirectory() ? "ls" : "cat";
+    const sandbox = new RunSandbox();
+    const workDir = await mkdtemp(join(tmpdir(), "terrence-sb-"));
+    await mkdir(join(workDir, "tmp"), { recursive: true });
+    try {
+      const script = join(workDir, "probe.sh");
+      await writeFile(
+        script,
+        [
+          "#!/bin/sh",
+          "OUT=ETC_BLOCKED",
+          "if cat /etc/passwd > /dev/null 2>&1; then OUT=ETC_WIDE_READABLE; fi",
+          "if cat /etc/resolv.conf > /dev/null 2>&1; then OUT=\"${OUT}_DNS_READABLE\"; else OUT=\"${OUT}_DNS_BLOCKED\"; fi",
+          `if ${caProbeCommand} "${caProbePath}" > /dev/null 2>&1; then OUT=\"\${OUT}_CA_READABLE\"; else OUT=\"\${OUT}_CA_BLOCKED\"; fi`,
+          "echo $OUT",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
+      const [exitCode, stdout] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      expect(exitCode).toBe(0);
+      expect(stdout.trim()).toBe("ETC_BLOCKED_DNS_READABLE_CA_READABLE");
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
     }
   });
 

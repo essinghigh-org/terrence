@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { probeLandlockAbi } from "../../src/lib/sandbox";
@@ -8,6 +8,7 @@ const TEST_RUN_SANDBOX = probeLandlockAbi() >= 1 ? "true" : "false";
 
 async function runWorkerScript(script: string, env: Readonly<Record<string, string>> = {}): Promise<Record<string, unknown>> {
   const testDir = await mkdtemp(join(tmpdir(), "terrence-cost-estimate-"));
+  await mkdir(join(testDir, "record"), { recursive: true });
   try {
     const child = Bun.spawn([Bun.which("bun") ?? "bun", "-e", script], {
       cwd: join(import.meta.dir, "../.."),

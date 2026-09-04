@@ -102,6 +102,7 @@ import { insertStateVersionWithSerialRetry } from "./lib/state-serial";
 // archives) or other workspaces. Enable it with TERRENCE_RUN_SANDBOX=true.
 const RUN_SANDBOX_REQUIRED = runSandboxRequired();
 const runSandbox = RUN_SANDBOX_REQUIRED && RunSandbox.isUsable() ? new RunSandbox() : null;
+const POLICY_EVALUATION_TIMEOUT_MS = 30_000;
 if (RUN_SANDBOX_REQUIRED && runSandbox === null) {
   log.error(
     "Run sandbox is enabled (TERRENCE_RUN_SANDBOX=true) but Landlock is unavailable. "
@@ -142,6 +143,19 @@ function assertRunSandboxAvailable(): void {
       + "to run without isolation. See https://docs.kernel.org/userspace-api/landlock.html",
     );
   }
+}
+
+/**
+ * Policy engines execute administrator-supplied policy source and must use
+ * the same isolation boundary as IaC runs. Tests and the explicit insecure
+ * opt-out may run without Landlock; production's default is fail-closed.
+ */
+function policyEvaluationSandbox(): RunSandbox | null {
+  if (envEnabled(process.env["SIMULATED_RUNS"]) || !runSandboxRequired()) return null;
+  if (!RunSandbox.isUsable() || !RunSandbox.hasRunner()) {
+    throw new Error("Landlock sandbox is required but unavailable for policy evaluation");
+  }
+  return new RunSandbox();
 }
 
 function errorMessage(error: unknown): string {
@@ -2937,6 +2951,7 @@ export async function runPolicyChecks(
   }
 
   const planTimeoutMs = await executionTimeoutMs("plan");
+  const policyTimeoutMs = Math.min(planTimeoutMs, POLICY_EVALUATION_TIMEOUT_MS);
   const generatedPlanJson = preloadedPlanJson ?? (
     executionDir === undefined || executionDir === ""
       ? undefined
@@ -2988,11 +3003,14 @@ export async function runPolicyChecks(
         : policy.query;
 
       if (isOpa && typeof policySource === "string" && policySource !== "" && planJsonPayload !== null && planJsonPayload !== "") {
+        const policySandbox = policyEvaluationSandbox();
         // Try to evaluate with OPA
         // Unpredictable per-invocation directory: a guessable tmp path under
         // /tmp invites symlink attacks and cross-run tampering.
         const workDir = join(tmpdir(), "terrence", "opa", `${runId}-${crypto.randomUUID()}`);
-        await mkdir(workDir, { recursive: true, mode: 0o700 });
+        try {
+          await mkdir(workDir, { recursive: true, mode: 0o700 });
+          await mkdir(join(workDir, "tmp"), { recursive: true, mode: 0o700 });
         const policyPath = join(workDir, "policy.rego");
         const dataPath = join(workDir, "input.json");
         await writeFile(policyPath, policySource, { mode: 0o600 });
@@ -3011,12 +3029,13 @@ export async function runPolicyChecks(
             stdout: "pipe",
             stderr: "pipe",
           },
+          policySandbox,
         );
         const opaOutput = Promise.all([
           new Response(opaProc.stdout).text(),
           new Response(opaProc.stderr).text(),
         ]);
-        const [opaExit, [opaStdout]] = await waitForTrackedProcess(runId, "policy", opaProc, opaOutput, planTimeoutMs);
+        const [opaExit, [opaStdout]] = await waitForTrackedProcess(runId, "policy", opaProc, opaOutput, policyTimeoutMs);
         if (opaExit === 0) {
           checkResult = JSON.parse(opaStdout !== "" ? opaStdout : "{}") as Record<string, unknown>;
           const resultList = checkResult["result"] as Record<string, unknown>[] | undefined;
@@ -3032,23 +3051,32 @@ export async function runPolicyChecks(
           checkStatus = "errored";
           checkResult = { error: "OPA evaluation failed" };
         }
-        try {
-          await rm(workDir, { recursive: true, force: true });
-        } catch (error: unknown) {
-          logBestEffortFailure("OPA policy workdir cleanup failed", { runId, policyId: policy.id }, error);
+        } finally {
+          try {
+            await rm(workDir, { recursive: true, force: true });
+          } catch (error: unknown) {
+            logBestEffortFailure("OPA policy workdir cleanup failed", { runId, policyId: policy.id }, error);
+          }
         }
       } else if (isSentinel && typeof policySource === "string" && policySource !== "") {
         const workDir = join(tmpdir(), "terrence", "sentinel", `${runId}-${crypto.randomUUID()}`, policy.id);
-        await mkdir(workDir, { recursive: true, mode: 0o700 });
+        try {
+          await mkdir(workDir, { recursive: true, mode: 0o700 });
+          await mkdir(join(workDir, "tmp"), { recursive: true, mode: 0o700 });
         const policyPath = join(workDir, "policy.sentinel");
+        const configPath = join(workDir, "sentinel.json");
         await writeFile(policyPath, policySource, { mode: 0o600 });
+        // Keep the potentially large plan out of argv (/proc and ARG_MAX). A
+        // JSON config preserves the plan as data without HCL interpolation.
+        await writeFile(configPath, JSON.stringify({
+          global: { tfplan: { value: generatedPlanJson ?? {} } },
+        }), { mode: 0o600 });
         const args = [
           process.env["SENTINEL_BINARY_PATH"] ?? "sentinel",
           "apply",
           "-json",
           "-timeout=30s",
-          "-global",
-          `tfplan=${planJsonPayload ?? "{}"}`,
+          `-config=${configPath}`,
         ];
         for (const parameter of (policy.policySetId !== null ? parametersBySet.get(policy.policySetId) ?? [] : [])) {
           args.push(
@@ -3058,14 +3086,7 @@ export async function runPolicyChecks(
         }
         args.push(policyPath);
 
-        // Use the Landlock sandbox if available for policy evaluation.
-// In simulated mode (tests) or when disabled, run unsandboxed.
-        const isSimulatedAllowed = envEnabled(process.env["SIMULATED_RUNS"]);
-        const sandboxRequired = !isSimulatedAllowed && runSandboxRequired();
-        if (sandboxRequired && (!RunSandbox.isUsable() || !RunSandbox.hasRunner())) {
-          throw new Error("Landlock sandbox is required but unavailable for policy evaluation");
-        }
-        const runSandbox = sandboxRequired ? new RunSandbox() : null;
+        const policySandbox = policyEvaluationSandbox();
         const sentinelProc = spawnRunProcess(
           runId,
           args,
@@ -3075,13 +3096,13 @@ export async function runPolicyChecks(
             stdout: "pipe",
             stderr: "pipe",
           },
-          runSandbox,
+          policySandbox,
         );
         const sentinelOutput = Promise.all([
           new Response(sentinelProc.stdout).text(),
           new Response(sentinelProc.stderr).text(),
         ]);
-        const [sentinelExit, [sentinelStdout, sentinelStderr]] = await waitForTrackedProcess(runId, "policy", sentinelProc, sentinelOutput, planTimeoutMs);
+        const [sentinelExit, [sentinelStdout, sentinelStderr]] = await waitForTrackedProcess(runId, "policy", sentinelProc, sentinelOutput, policyTimeoutMs);
         let sentinel: Record<string, unknown>;
         try {
           const parsed = JSON.parse(sentinelStdout) as unknown;
@@ -3109,10 +3130,12 @@ export async function runPolicyChecks(
           checkStatus = "errored";
           checkResult = { error: `Sentinel evaluation exited with code ${String(sentinelExit)}`, sentinel };
         }
-        try {
-          await rm(workDir, { recursive: true, force: true });
-        } catch (error: unknown) {
-          logBestEffortFailure("Sentinel policy workdir cleanup failed", { runId, policyId: policy.id }, error);
+        } finally {
+          try {
+            await rm(workDir, { recursive: true, force: true });
+          } catch (error: unknown) {
+            logBestEffortFailure("Sentinel policy workdir cleanup failed", { runId, policyId: policy.id }, error);
+          }
         }
       } else if (!isOpa && !isSentinel) {
         checkStatus = "unreachable";
