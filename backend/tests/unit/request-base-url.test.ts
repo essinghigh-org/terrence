@@ -9,9 +9,9 @@ const publicUrlSet = typeof process.env["PUBLIC_URL"] === "string" && process.en
 describe("request base URL resolution (#576)", () => {
   const req = (url: string, headers?: Record<string, string>) => ({
     url,
-    headers: headers === undefined
-      ? undefined
-      : { get: (name: string): string | null => headers[name.toLowerCase()] ?? null },
+    ...(headers === undefined
+      ? {}
+      : { headers: { get: (name: string): string | null => headers[name.toLowerCase()] ?? null } }),
   });
 
   it("uses X-Forwarded-Host and Proto behind a proxy", () => {
