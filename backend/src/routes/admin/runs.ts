@@ -6,6 +6,7 @@ import { databaseMetrics } from "../../db";
 import { runs } from "../../db/schema";
 import { eq, and, desc, notInArray } from "drizzle-orm";
 import { runResource } from "../../lib/response";
+import { linkageForRuns } from "../runs";
 import { FINAL_RUN_STATUSES } from "../../lib/utils";
 import providerSurface from "../../data/provider_surface.json";
 import { getLatestTfeProviderVersion } from "../../lib/provider-version";
@@ -55,7 +56,8 @@ export const runsRoutes = new Elysia({ name: "admin-runs" })
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: runResource(run, true) };
+    const linkage = await linkageForRuns([run]);
+    return { data: runResource(run, true, false, undefined, undefined, true, linkage.get(run.id)) };
   })
   .post("/api/v2/admin/runs/:run_id/actions/cancel", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
@@ -67,7 +69,8 @@ export const runsRoutes = new Elysia({ name: "admin-runs" })
     const { cancelRunExecution, cleanupSavedPlan } = await import("../../worker");
     cancelRunExecution(runId);
     await Promise.allSettled([cleanupSavedPlan(runId), cancelAgentJobsForRun(runId)]);
-    return { data: runResource(updated[0], true) };
+    const linkage = await linkageForRuns([updated[0]]);
+    return { data: runResource(updated[0], true, false, undefined, undefined, true, linkage.get(updated[0].id)) };
   })
   .post("/api/v2/admin/runs/:run_id/actions/force-cancel", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
@@ -79,5 +82,6 @@ export const runsRoutes = new Elysia({ name: "admin-runs" })
     const { cancelRunExecution, cleanupSavedPlan } = await import("../../worker");
     cancelRunExecution(runId, true);
     await Promise.allSettled([cleanupSavedPlan(runId), cancelAgentJobsForRun(runId)]);
-    return { data: runResource(updated[0], true) };
+    const linkage = await linkageForRuns([updated[0]]);
+    return { data: runResource(updated[0], true, false, undefined, undefined, true, linkage.get(updated[0].id)) };
   });

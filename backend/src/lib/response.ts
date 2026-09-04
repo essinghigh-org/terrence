@@ -773,6 +773,8 @@ export type RunRelationshipLinkage = Readonly<{
   readonly policyCheckIds?: readonly string[];
   readonly taskStageIds?: readonly string[];
   readonly tfPolicyEvaluationIds?: readonly string[];
+  /** Notification configuration IDs that apply run alerts to this run. */
+  readonly notificationConfigurationIds?: readonly string[];
 }>;
 
 function relationshipData(ids: readonly string[], type: string): Record<string, unknown>[] {
@@ -836,7 +838,11 @@ function buildRunRelationships(run: RunParam, linkage?: RunRelationshipLinkage):
       links: { related: `/api/v2/runs/${run.id}/input-state-version` },
     },
     "workspace-run-alerts": {
-      data: [],
+      // Terraform names this relationship after the alert surface, while the
+      // persisted resources that define those alerts are notification
+      // configurations. Return their real linkage IDs instead of a hardcoded
+      // empty array.
+      data: relationshipData(linkage?.notificationConfigurationIds ?? [], "notification-configurations"),
     },
   };
 }
@@ -1160,6 +1166,7 @@ function buildStateVersionRelationships(state: StateParam): Record<string, unkno
   return {
     workspace: { data: { id: state.workspaceId, type: "workspaces" } },
     run: state.runId !== null ? { data: { id: state.runId, type: "runs" } } : { data: null },
+    "created-by": state.createdBy !== null ? { data: { id: state.createdBy, type: "users" } } : { data: null },
     outputs: {
       data: outputResources.map((output): OutputResourceRef => ({ id: output["id"] as string, type: output["type"] as string })),
     },

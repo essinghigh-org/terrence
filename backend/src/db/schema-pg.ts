@@ -141,7 +141,7 @@ export const agentJobs = pgTable("agent_jobs", {
 }, (table) => [
     uniqueIndex("agent_jobs_run_phase_idx").on(table.runId, table.phase),
     index("agent_jobs_pool_status_created_idx").on(table.agentPoolId, table.status, table.createdAt),
-  index("agent_jobs_status_claimed_idx").on(table.status, table.claimedAt),
+    index("agent_jobs_status_claimed_idx").on(table.status, table.claimedAt),
   ]);
 
 export const agentPoolAllowedProjects = pgTable("agent_pool_allowed_projects", {
@@ -1479,11 +1479,7 @@ export const stackRecords = pgTable("stack_records", {
 }, (table) => [
     index("stack_records_stack_type_idx").on(table.stackId, table.recordType),
     index("stack_records_parent_type_idx").on(table.parentId, table.recordType),
-    foreignKey({
-      columns: [table.parentId],
-      foreignColumns: [table.id],
-      name: "stack_records_parent_id_fk",
-    }).onDelete("set null"),
+    foreignKey({ columns: [table.parentId], foreignColumns: [table.id], name: "stack_records_parent_id_fk" }).onDelete("set null"),
   ]);
 
 export const stackStateLocks = pgTable("stack_state_locks", {
@@ -1547,7 +1543,7 @@ export const stateOutputIndex = pgTable("state_output_index", {
 
 export const stateVersions = pgTable("state_versions", {
     id: text("id").notNull().primaryKey(),
-    workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull(),
     serial: bigint("serial", { mode: "number" }).notNull(),
     statePayload: text("state_payload"),
     status: text("status").default("finalized"),
@@ -1556,6 +1552,7 @@ export const stateVersions = pgTable("state_versions", {
     vcsCommitSha: text("vcs_commit_sha"),
     vcsCommitUrl: text("vcs_commit_url"),
     runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
+    createdBy: text("created_by"),
     terraformVersion: text("terraform_version"),
     intermediate: boolean("intermediate").notNull().default(false),
     softDeletedAt: bigint("soft_deleted_at", { mode: "number" }),
@@ -1563,6 +1560,8 @@ export const stateVersions = pgTable("state_versions", {
 }, (table) => [
     uniqueIndex("state_versions_ws_serial_idx").on(table.workspaceId, table.serial),
     index("state_versions_run_idx").on(table.runId),
+    foreignKey({ columns: [table.workspaceId], foreignColumns: [workspaces.id], name: "state_versions_workspace_fk" }).onDelete("cascade"),
+    foreignKey({ columns: [table.createdBy], foreignColumns: [users.id], name: "state_versions_created_by_users_id_fk" }).onDelete("set null"),
   ]);
 
 export const supportBundleRequests = pgTable("support_bundle_requests", {

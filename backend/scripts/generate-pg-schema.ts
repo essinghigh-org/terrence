@@ -172,17 +172,18 @@ function renderExtras(table: Table, props: Map<string, string>): string[] {
       const localRefs = ref.columns.map((column): string => `table.${props.get(column.name)}`).join(", ");
       const foreignProps = propByDbName(ref.foreignTable);
       const foreignTable = varFor(ref.foreignTable);
+      const foreignReference = ref.foreignTable === table ? "table" : foreignTable;
       const foreignRefs = ref.foreignColumns
-        .map((column): string => `${foreignTable}.${foreignProps.get(column.name)}`)
+        .map((column): string => `${foreignReference}.${foreignProps.get(column.name)}`)
         .join(", ");
       const onDelete = (item as { _onDelete?: string })._onDelete;
       const onUpdate = (item as { _onUpdate?: string })._onUpdate;
       const actions = [
-        onDelete === undefined ? "" : `, onDelete: ${JSON.stringify(onDelete)}`,
-        onUpdate === undefined ? "" : `, onUpdate: ${JSON.stringify(onUpdate)}`,
+        onDelete === undefined ? "" : `.onDelete(${JSON.stringify(onDelete)})`,
+        onUpdate === undefined ? "" : `.onUpdate(${JSON.stringify(onUpdate)})`,
       ].join("");
       entries.push(
-        `foreignKey({ columns: [${localRefs}], foreignColumns: [${foreignRefs}], name: ${JSON.stringify(ref.name)}${actions} })`,
+        `foreignKey({ columns: [${localRefs}], foreignColumns: [${foreignRefs}], name: ${JSON.stringify(ref.name)} })${actions}`,
       );
       continue;
     }

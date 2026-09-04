@@ -700,7 +700,7 @@ export const refreshSessions = sqliteTable("refresh_sessions", {
 
 export const stateVersions = sqliteTable("state_versions", {
   id: text("id").primaryKey(),
-  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  workspaceId: text("workspace_id").notNull(),
   serial: integer("serial").notNull(),
   statePayload: text("state_payload"),
   status: text("status").default("finalized"),
@@ -709,6 +709,7 @@ export const stateVersions = sqliteTable("state_versions", {
   vcsCommitSha: text("vcs_commit_sha"),
   vcsCommitUrl: text("vcs_commit_url"),
   runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
+  createdBy: text("created_by"),
   terraformVersion: text("terraform_version"),
   intermediate: integer("intermediate", { mode: "boolean" }).notNull().default(false),
   softDeletedAt: integer("soft_deleted_at"),
@@ -716,6 +717,16 @@ export const stateVersions = sqliteTable("state_versions", {
 }, (table) => [
   uniqueIndex("state_versions_ws_serial_idx").on(table.workspaceId, table.serial),
   index("state_versions_run_idx").on(table.runId),
+  foreignKey({
+    columns: [table.workspaceId],
+    foreignColumns: [workspaces.id],
+    name: "state_versions_workspace_fk",
+  }).onDelete("cascade"),
+  foreignKey({
+    columns: [table.createdBy],
+    foreignColumns: [users.id],
+    name: "state_versions_created_by_users_id_fk",
+  }).onDelete("set null"),
 ]);
 
 export const stateOutputIndex = sqliteTable("state_output_index", {

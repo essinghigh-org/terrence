@@ -1057,6 +1057,7 @@ async function persistApplyStateVersion(
     jsonState: await encryptStatePayload(completion.jsonState ?? completion.statePayload),
     jsonStateOutputs: await encryptStatePayload(completion.jsonStateOutputs),
     runId: run.id,
+    createdBy: run.createdBy,
     status: "finalized",
     createdAt: now,
   });

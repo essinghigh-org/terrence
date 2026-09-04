@@ -9,6 +9,7 @@ import {
   organizationMemberships,
   organizations,
   runs,
+  notificationConfigurations,
   users,
   workspaces,
 } from "../../src/db/schema";
@@ -66,15 +67,28 @@ async function createRun(message = "test run"): Promise<string> {
 // --- Run resource relationships ---
 
 describe("the reference format API v2 - Run resource relationships", () => {
-  it("run resource includes workspace-run-alerts stub relationship", async () => {
+  it("run resource includes configured workspace-run-alerts relationship data", async () => {
     const runId = await createRun("workspace-run-alerts test");
+    const notificationConfigurationId = `nc-sm-${suffix}`;
+    await db.insert(notificationConfigurations).values({
+      id: notificationConfigurationId,
+      workspaceId,
+      name: "Run alert regression",
+      destinationType: "generic",
+      url: "https://example.com/terrence-notifications",
+      triggers: ["run:completed"],
+      enabled: true,
+    });
     const res = await req(`/api/v2/runs/${runId}`);
     expect(res.status).toBe(200);
     const body = await res.json();
     const run = body.data;
 
     expect(run.relationships).toHaveProperty("workspace-run-alerts");
-    expect(Array.isArray(run.relationships["workspace-run-alerts"].data)).toBe(true);
+    expect(run.relationships["workspace-run-alerts"].data).toEqual([
+      { id: notificationConfigurationId, type: "notification-configurations" },
+    ]);
+    await db.delete(notificationConfigurations).where(eq(notificationConfigurations.id, notificationConfigurationId));
   });
 
   it("plan resource includes state-versions relationship with link", async () => {
