@@ -5,6 +5,7 @@ import { apiTokens, identityLinks, organizationInvitations, refreshSessions, sci
   teamMemberships, teamScimGroupMappings, teams, users } from "../db/schema";
 import { and, asc, count, eq, inArray, isNull, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { isUniqueConstraintError } from "../lib/validation";
+import { hashPassword } from "../lib/password-hashing";
 import { reconcileScimSiteAdmins, reconcileTeam } from "./scim-admin";
 
 type SetObj = Readonly<{ status?: number | string; headers: Record<string, string | number> }>;
@@ -362,7 +363,7 @@ export const scimRoutes = new Elysia({ name: "scim" })
     if (email === null) return scimError(set, 400, "emails is required");
 
     const userId = `user-${crypto.randomUUID()}`;
-    const passwordHash = await Bun.password.hash(crypto.randomUUID());
+    const passwordHash = await hashPassword(crypto.randomUUID());
     const scimIdentityId = `scimuser-${crypto.randomUUID()}`;
     let rejectedExistingAccount = false;
     try {

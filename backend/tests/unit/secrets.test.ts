@@ -1,6 +1,7 @@
+import { createCipheriv, scryptSync } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { describe, expect, it, beforeEach, afterEach } from "bun:test";
-import { rmSync, mkdirSync, existsSync, readFileSync } from "node:fs";
+import { rmSync, mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -168,8 +169,52 @@ describe("concurrent cold-start key creation (policy_vcs_sync regression)", () =
     } finally {
       if (previousDir === undefined) delete process.env["STORAGE_DIR"];
       else process.env["STORAGE_DIR"] = previousDir;
-      if (previousPass !== undefined) process.env["ENCRYPTION_PASSWORD"] = previousPass;
+      if (previousPass === undefined) delete process.env["ENCRYPTION_PASSWORD"];
+      else process.env["ENCRYPTION_PASSWORD"] = previousPass;
       rmSync(coldDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("password-derived KDF parameters", () => {
+  it("uses memory-hard parameters stronger than the legacy Node defaults", async () => {
+    const mod = await import("../../src/lib/secrets");
+    expect(mod.PASSWORD_KDF_OPTIONS).toMatchObject({ N: 2 ** 17, r: 8, p: 1 });
+    expect(mod.PASSWORD_KDF_OPTIONS.maxmem).toBeGreaterThan(128 * 1024 * 1024);
+  });
+
+  it("decrypts ciphertext made with the legacy KDF parameters", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "terrence-legacy-kdf-"));
+    const previousDir = process.env["STORAGE_DIR"];
+    const previousPass = process.env["ENCRYPTION_PASSWORD"];
+    const password = "legacy-kdf-password";
+    const plaintext = "state encrypted before the KDF upgrade";
+    const salt = Buffer.alloc(16, 7);
+    const iv = Buffer.alloc(12, 9);
+    process.env["STORAGE_DIR"] = dir;
+    process.env["ENCRYPTION_PASSWORD"] = password;
+
+    try {
+      writeFileSync(join(dir, ".encryption-salt"), salt.toString("base64"), { mode: 0o600 });
+      const legacyKey = scryptSync(password, salt, 32, { N: 2 ** 14, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+      const cipher = createCipheriv("aes-256-gcm", legacyKey, iv);
+      const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+      const envelope = [
+        "enc:v1",
+        iv.toString("base64"),
+        cipher.getAuthTag().toString("base64"),
+        ciphertext.toString("base64"),
+      ].join(":");
+      const mod = await import("../../src/lib/secrets");
+
+      expect(await mod.decryptSecret(envelope)).toBe(plaintext);
+      expect(mod.decryptSecretSync(envelope, dir)).toBe(plaintext);
+    } finally {
+      if (previousDir === undefined) delete process.env["STORAGE_DIR"];
+      else process.env["STORAGE_DIR"] = previousDir;
+      if (previousPass === undefined) delete process.env["ENCRYPTION_PASSWORD"];
+      else process.env["ENCRYPTION_PASSWORD"] = previousPass;
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

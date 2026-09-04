@@ -1,8 +1,9 @@
 import { db } from "./src/db";
 import { users, organizations, workspaces } from "./src/db/schema";
+import { hashPassword } from "./src/lib/password-hashing";
 
 async function seed(): Promise<void> {
-    const passwordHash = await Bun.password.hash("testpass", { algorithm: "bcrypt", cost: 10 });
+    const passwordHash = await hashPassword("testpass");
     const userId = crypto.randomUUID();
     await db.insert(users).values({
         id: userId,

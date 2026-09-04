@@ -18,6 +18,7 @@ import { issueMfaChallenge, consumeMfaChallenge } from "../lib/mfa-challenge";
 import { withDbLock } from "../lib/db-lock";
 import { authenticateLdapWithCircuitBreaker } from "../lib/ldap";
 import { ldapSettings, passwordMatches, provisionSsoUser, ssoSettingsSnapshot, SsoConflictError } from "../lib/sso";
+import { hashPassword, verifyAndUpgradePassword } from "../lib/password-hashing";
 import { resolveClientIp } from "../lib/client-ip";
 import { checkPasswordPolicy, loadPasswordPolicy } from "../lib/password-policy";
 import { clearLoginFailures, isLoginLocked, recordFailedLogin } from "../lib/login-lockout";
@@ -62,6 +63,16 @@ function extractAttrs(body: unknown): Attrs | undefined {
   if (body === null || typeof body !== "object") return undefined;
   const payload = body as DataPayload;
   return payload.data?.attributes;
+}
+
+function localSignupAcknowledgement(id: string, username: string, email: string | null): Record<string, unknown> {
+  return {
+    data: {
+      id,
+      type: "users",
+      attributes: { username, email, "is-site-admin": false },
+    },
+  };
 }
 
 type HeaderValue = string | number | readonly string[];
@@ -116,6 +127,7 @@ async function refreshSessionForToken(rawToken: string): Promise<typeof refreshS
 
 export function isUserLoginBlocked(user: Readonly<typeof users.$inferSelect>): boolean {
   return user.isSuspended === true
+    || user.isProvisional === true
     || (user as unknown as { deletedAt?: number | null }).deletedAt != null;
 }
 
@@ -519,7 +531,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     const configuredOrganizationName = (process.env["ADMIN_ORGANIZATION"] ?? "default").trim();
     const organizationName = configuredOrganizationName === "" ? "default" : configuredOrganizationName;
     const token = generateAuthenticationToken("user");
-    const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
+    const passwordHash = await hashPassword(password);
     const createdOrganizationId = await db.transaction(async (tx: unknown): Promise<string | null> => {
       const t = tx as typeof db;
       // Serialize the first-user election across concurrent requests (PG
@@ -661,7 +673,9 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         (set as { status: number }).status = 401;
         return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
       }
-      const passwordValid = await passwordMatches(password, found?.passwordHash);
+      const passwordValid = found === undefined
+        ? await passwordMatches(password)
+        : await verifyAndUpgradePassword(found.id, password, found.passwordHash);
       if (found === undefined || !passwordValid) {
         if (found !== undefined && !isUserLoginBlocked(found)) {
           const failure = await recordFailedLogin(found.id);
@@ -684,13 +698,13 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
     }
-    if (isUserLoginBlocked(user)) {
-      (set as { status: number }).status = 401;
-      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
-    }
     if (user.isProvisional === true) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "This invitation has not been accepted yet" }] };
+    }
+    if (isUserLoginBlocked(user)) {
+      (set as { status: number }).status = 401;
+      return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
     }
     // Keep the compare-and-clear even when the stale user row appears clean:
     // a failed login can set a lock while password verification is in flight.
@@ -1015,17 +1029,26 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A valid email address is required" }] };
     }
 
-    const existing = await db.query.users.findFirst({
-      where: eq(users.username, username),
-    });
-    if (existing !== undefined) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] };
-    }
-
-    const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
+    // Hash before the lookup so duplicate and new registrations do not expose
+    // username existence through a cheap-vs-expensive timing difference.
+    const passwordHash = await hashPassword(password);
     const id = crypto.randomUUID();
     const normalizedEmail = emailStr;
+    const existing = await db.query.users.findFirst({
+      where: or(eq(users.username, username), eq(users.email, normalizedEmail)),
+    });
+    if (existing !== undefined) {
+      // An exact replay is idempotent, so return the persisted identity. For a
+      // partial username/email collision, keep the 201 response shape but do
+      // not disclose which stored identity caused the collision.
+      if (existing.username === username && existing.email === normalizedEmail) {
+        (set as { status: number }).status = 201;
+        return localSignupAcknowledgement(existing.id, existing.username, existing.email);
+      }
+      (set as { status: number }).status = 201;
+      return localSignupAcknowledgement(id, username, normalizedEmail);
+    }
+
 
     // Local signup NEVER elects a site admin. The first user on a fresh
     // instance must come from the ADMIN_PASSWORD (or installer IACT)
@@ -1036,17 +1059,20 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       await db.insert(users).values({ id, username, email: normalizedEmail, passwordHash, isSiteAdmin: false });
       await auditLog("create", "users", id, null, null, { username });
       (set as { status: number }).status = 201;
-      return {
-        data: {
-          id,
-          type: "users",
-          attributes: { username, email: normalizedEmail, "is-site-admin": false },
-        },
-      };
+      return localSignupAcknowledgement(id, username, normalizedEmail);
     } catch (e: unknown) {
       if (isUniqueConstraintError(e)) {
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] };
+        // A concurrent request may win the unique-key race after the lookup;
+        // answer with the same idempotent acknowledgement rather than exposing
+        // a distinct conflict response.
+        const raced = await db.query.users.findFirst({
+          where: or(eq(users.username, username), eq(users.email, normalizedEmail)),
+        });
+        (set as { status: number }).status = 201;
+        if (raced !== undefined && raced.username === username && raced.email === normalizedEmail) {
+          return localSignupAcknowledgement(raced.id, raced.username, raced.email);
+        }
+        return localSignupAcknowledgement(id, username, normalizedEmail);
       }
       throw e;
     }
@@ -1228,7 +1254,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Current password is incorrect" }] };
     }
 
-    const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
+    const passwordHash = await hashPassword(password);
     await db.transaction(async (tx: unknown): Promise<void> => {
       const t = tx as typeof db;
       await t.update(users)
