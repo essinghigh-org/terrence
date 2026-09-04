@@ -1460,6 +1460,10 @@ export const policySetParameters = sqliteTable("policy_set_parameters", {
   policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
   key: text("key").notNull(),
   value: text("value").notNull(),
+  // Sensitive values are encrypted at rest (issue #577), mirroring
+  // workspace variables: when sensitive is true, `value` holds "" and
+  // `valueEncrypted` holds the AES-256-GCM enc:v1 payload.
+  valueEncrypted: text("value_encrypted"),
   sensitive: integer("sensitive", { mode: "boolean" }).default(false),
   hcl: integer("hcl", { mode: "boolean" }).default(false),
 });

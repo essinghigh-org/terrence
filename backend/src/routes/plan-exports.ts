@@ -3,7 +3,7 @@ import { db } from "../db";
 import { planExports, type users } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { authPlugin } from "../auth";
-import { findAuthorizedRun } from "../lib/utils";
+import { findAuthorizedRun, checkWorkspacePermission } from "../lib/utils";
 import { readPlanJsonArtifact } from "../lib/plan-json";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
@@ -117,6 +117,14 @@ export const planExportRoutes = new Elysia({ name: "plan-exports" })
     const runId = pe.planId.replace(/^plan-/, "");
     const authorized = await findAuthorizedRun(runId, user.id, orgId, teamId);
     if (authorized === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    // The export embeds the raw plan, so it requires the state-read class
+    // or admin like the raw plan endpoints (issue #577).
+    const canReadRaw = await checkWorkspacePermission(authorized.workspace, user.id, orgId, teamId, "state-read")
+      || await checkWorkspacePermission(authorized.workspace, user.id, orgId, teamId, "admin");
+    if (!canReadRaw) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }

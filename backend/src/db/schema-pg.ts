@@ -936,6 +936,7 @@ export const policySetParameters = pgTable("policy_set_parameters", {
     policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
     key: text("key").notNull(),
     value: text("value").notNull(),
+    valueEncrypted: text("value_encrypted"),
     sensitive: boolean("sensitive").default(false),
     hcl: boolean("hcl").default(false),
 });

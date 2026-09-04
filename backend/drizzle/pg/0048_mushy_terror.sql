@@ -1,0 +1,1 @@
+ALTER TABLE "policy_set_parameters" ADD COLUMN "value_encrypted" text;

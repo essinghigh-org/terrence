@@ -912,6 +912,31 @@ async function authorizedPlanWorkspace(
 }
 
 /**
+ * Raw (unsanitized) plan JSON carries secrets in cleartext, so it requires
+ * the state-read class or admin (issue #577). The run-token path is
+ * unchanged: run tokens are already workspace-scoped secrets. Callers 404
+ * on failure, matching the surrounding convention. Redacted endpoints stay
+ * at read.
+ */
+async function authorizedRawPlanWorkspace(
+  runId: string,
+  run: Readonly<typeof runs.$inferSelect>,
+  runContext: ParamCtx["run"],
+  userId: string | undefined,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null,
+): Promise<typeof workspaces.$inferSelect | undefined> {
+  if (runContext !== undefined && runContext !== null) {
+    if (runContext.runId !== runId || runContext.workspaceId !== run.workspaceId) return undefined;
+    return db.query.workspaces.findFirst({
+      where: and(eq(workspaces.id, run.workspaceId), eq(workspaces.orgId, runContext.organizationId)),
+    });
+  }
+  return (await findAuthorizedWorkspace(run.workspaceId, userId, tokenOrgId, tokenTeamId, "state-read"))
+    ?? (await findAuthorizedWorkspace(run.workspaceId, userId, tokenOrgId, tokenTeamId, "admin"));
+}
+
+/**
  * Shared sanitized plan-artifact responder for the redacted/sanitized plan
  * endpoints. Serves the artifact as soon as it exists: the worker persists
  * plan JSON before the run leaves its planning statuses, and Terraform
@@ -1757,7 +1782,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     const runId = planId.replace(/^plan-/, "");
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
     if (run === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const ws = await authorizedPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null);
+    const ws = await authorizedRawPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null);
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const planJson = await readPlanJsonArtifact(runId);
     if (planJson === undefined) {
@@ -1775,7 +1800,7 @@ export const runRoutes = new Elysia({ name: "runs" })
   .get("/api/v2/runs/:run_id/plan/json-output", async ({ params, user, orgId, teamId, run: runContext, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
-    if (run === undefined || await authorizedPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null) === undefined) {
+    if (run === undefined || await authorizedRawPlanWorkspace(runId, run, runContext, user?.id, orgId ?? null, teamId ?? null) === undefined) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }

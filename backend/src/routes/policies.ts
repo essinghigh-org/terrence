@@ -9,6 +9,7 @@ import { authPlugin } from "../auth";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { cachedOrgByName } from "../lib/cached-lookups";
+import { variableValueForRead, variableValueForWrite } from "../lib/variable-crypto";
 import { vcsRepoResource } from "../lib/vcs-repo";
 
 const POLICY_ARCHIVE_DIR = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "policy-set-versions");
@@ -1374,9 +1375,14 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const value = typeof attrs["value"] === "string" ? attrs["value"] : "";
     const sensitive = typeof attrs["sensitive"] === "boolean" ? attrs["sensitive"] : false;
     const hcl = typeof attrs["hcl"] === "boolean" ? attrs["hcl"] : false;
-    await db.insert(policySetParameters).values({ id, policySetId, key, value, sensitive, hcl });
+    // Sensitive values are encrypted at rest like workspace variables
+    // (issue #577): plaintext never lands in the value column.
+    const stored = await variableValueForWrite(sensitive, value);
+    await db.insert(policySetParameters).values({ id, policySetId, key, value: stored.value, valueEncrypted: stored.valueEncrypted, sensitive, hcl });
     (set as { status: number }).status = 201;
-    return { data: policySetParameterResource({ id, policySetId, key, value, sensitive, hcl }, policySetId) };
+    const created = await db.query.policySetParameters.findFirst({ where: eq(policySetParameters.id, id) });
+    if (created === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    return { data: policySetParameterResource(created, policySetId) };
   })
   .get("/api/v2/policy-sets/:policy_set_id/parameters/:param_id", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const policySetId = params["policy_set_id"] ?? "";
@@ -1399,9 +1405,22 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const updates: Partial<typeof policySetParameters.$inferInsert> = {};
     if (typeof attrs["key"] === "string") updates.key = attrs["key"];
-    if (typeof attrs["value"] === "string") updates.value = attrs["value"];
-    if (typeof attrs["sensitive"] === "boolean") updates.sensitive = attrs["sensitive"];
     if (typeof attrs["hcl"] === "boolean") updates.hcl = attrs["hcl"];
+    // Value handling mirrors workspace variables (issue #577): a supplied
+    // value is authoritative, otherwise the stored value is kept
+    // (decrypting an encrypted one), so rotations persist and metadata-only
+    // updates leave the secret untouched.
+    const sensitive = typeof attrs["sensitive"] === "boolean" ? attrs["sensitive"] : (param.sensitive ?? false);
+    const suppliedValue = typeof attrs["value"] === "string" ? attrs["value"] : null;
+    if (suppliedValue !== null || typeof attrs["sensitive"] === "boolean") {
+      // Decrypt whenever the stored row is sensitive so unsetting the flag
+      // reveals the value instead of wiping it.
+      const effectiveValue = suppliedValue ?? (sensitive || param.sensitive === true ? await variableValueForRead(param) : param.value);
+      const stored = await variableValueForWrite(sensitive, effectiveValue);
+      updates.value = stored.value;
+      updates.valueEncrypted = stored.valueEncrypted;
+      updates.sensitive = sensitive;
+    }
     if (Object.keys(updates).length > 0) await db.update(policySetParameters).set(updates).where(eq(policySetParameters.id, paramId));
     const updated = await db.query.policySetParameters.findFirst({ where: eq(policySetParameters.id, paramId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }

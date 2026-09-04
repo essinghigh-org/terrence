@@ -74,6 +74,7 @@ import { publish } from "./lib/event-bus";
 import { probeLandlockAbi, RunSandbox, removeSandboxWorkDir, runNetDenyEnabled, runSandboxRequired } from "./lib/sandbox";
 import { createRunCgroup, destroyRunCgroup, killRunCgroup } from "./lib/run-cgroup";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "./lib/secrets";
+import { variableValueForRead } from "./lib/variable-crypto";
 import { encryptStatePayload } from "./lib/validation";
 import { log, safeJsonStringify } from "./lib/log";
 export type { ExecutionPhase } from "./worker/phases";
@@ -1251,7 +1252,7 @@ async function streamLog(
   await flush();
 }
 
-function buildSanitizedEnv(
+export function buildSanitizedEnv(
   workspaceVars: readonly { readonly key: string; readonly value: string; readonly category: string; readonly sensitive?: boolean }[],
   extraEnv?: Readonly<Record<string, string>>,
 ): Record<string, string> {
@@ -1293,6 +1294,29 @@ type ExecutionVariable = {
   priority: boolean;
   sensitive: boolean;
 };
+
+/**
+ * Normalize per-run variables for execution (issue #577). Items carry key
+ * and value with optional category ("env" or "terraform", defaulting to
+ * terraform) and sensitive flag. Malformed entries are skipped: validation
+ * at creation rejects them, so anything reaching here predates it.
+ */
+export function normalizeRunVariables(variables: unknown): { key: string; value: string; category: string; sensitive: boolean }[] {
+  if (!Array.isArray(variables)) return [];
+  const normalized: { key: string; value: string; category: string; sensitive: boolean }[] = [];
+  for (const item of variables) {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) continue;
+    const record = item as Readonly<Record<string, unknown>>;
+    if (typeof record["key"] !== "string" || typeof record["value"] !== "string") continue;
+    normalized.push({
+      key: record["key"],
+      value: record["value"],
+      category: record["category"] === "env" ? "env" : "terraform",
+      sensitive: record["sensitive"] === true,
+    });
+  }
+  return normalized;
+}
 
 export async function executionVariables(
   workspaceId: string,
@@ -2031,13 +2055,8 @@ async function executeRunImpl(runId: string): Promise<void> {
       workspace.projectId,
     );
 
-    const extraTfVars: Record<string, string> = {};
-    for (const variable of run.variables ?? []) {
-      if (typeof (variable as unknown as { sensitive?: unknown }).sensitive === "boolean" && (variable as unknown as { sensitive: boolean }).sensitive) {
-        extraTfVars[`TF_VAR_${variable.key}`] = variable.value;
-      }
-    }
-    const envVars = { ...buildSanitizedEnv(vars), ...extraTfVars, ...(await runTerraformEnv(run.id, workspace, "plan", vars)) };
+    const runVars = normalizeRunVariables(run.variables);
+    const envVars = { ...buildSanitizedEnv(vars), ...buildSanitizedEnv(runVars), ...(await runTerraformEnv(run.id, workspace, "plan", vars)) };
     if (run.debuggingMode) envVars["TF_LOG"] = "TRACE";
     const tfVarsLines = vars
       .filter((variable: { readonly category: string }): boolean => variable.category === "terraform")
@@ -2046,6 +2065,17 @@ async function executeRunImpl(runId: string): Promise<void> {
     if (tfVarsLines.length > 0) {
       await writeFile(join(executionDir, "terrence.workspace.tfvars"), tfVarsLines.join("\n"), { mode: 0o600 });
       await writeLog(runId, "plan", `[terrence] Injected ${tfVarsLines.length} workspace Terraform variables.`);
+    }
+    // Non-sensitive terraform run variables ride a separate var-file passed
+    // after the workspace one so they win (issue #577). JSON quoting keeps
+    // values with spaces intact, and undeclared keys are ignored instead of
+    // aborting the plan the way raw -var flags do.
+    const runTfVarsLines = runVars
+      .filter((variable): boolean => variable.category === "terraform" && !variable.sensitive)
+      .map((variable): string => `${variable.key} = ${JSON.stringify(variable.value)}`);
+    if (runTfVarsLines.length > 0) {
+      await writeFile(join(executionDir, "terrence.run.tfvars"), runTfVarsLines.join("\n"), { mode: 0o600 });
+      await writeLog(runId, "plan", `[terrence] Injected ${runTfVarsLines.length} run Terraform variables.`);
     }
 
     const requestedTool = workspace.iacBinary ?? org?.defaultIacBinary ?? "terraform";
@@ -2105,10 +2135,7 @@ async function executeRunImpl(runId: string): Promise<void> {
       for (const target of run.targetAddrs ?? []) planArgs.push(`-target=${target}`);
       for (const replacement of run.replaceAddrs ?? []) planArgs.push(`-replace=${replacement}`);
       if (tfVarsLines.length > 0) planArgs.push("-var-file=terrence.workspace.tfvars");
-      for (const variable of run.variables ?? []) {
-        if (typeof (variable as unknown as { sensitive?: unknown }).sensitive === "boolean" && (variable as unknown as { sensitive: boolean }).sensitive) continue;
-        planArgs.push(`-var=${variable.key}=${variable.value}`);
-      }
+      if (runTfVarsLines.length > 0) planArgs.push("-var-file=terrence.run.tfvars");
       for (const variable of vars) {
         if (variable.category === "terraform" && variable.priority) {
           if (variable.sensitive) continue;
@@ -2734,7 +2761,10 @@ async function executeApplyImpl(runId: string): Promise<void> {
       const binary = resolved.binaryPath;
       if (runSandbox !== null) await runSandbox.ensureTool(resolved.tool, resolved.version, binary);
       const vars = await executionVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
-      const envVars = { ...buildSanitizedEnv(vars), ...(await runTerraformEnv(run.id, workspace, "apply", vars)) };
+      // Run-scoped variables ride the apply environment exactly like the
+      // plan environment (issue #577): provider credentials injected at
+      // plan time must still be present at apply time.
+      const envVars = { ...buildSanitizedEnv(vars), ...buildSanitizedEnv(normalizeRunVariables(run.variables)), ...(await runTerraformEnv(run.id, workspace, "apply", vars)) };
       if (run.debuggingMode) envVars["TF_LOG"] = "TRACE";
       const applyTimeoutMs = await executionTimeoutMs("apply");
 
@@ -3194,9 +3224,12 @@ export async function runPolicyChecks(
           `-config=${configPath}`,
         ];
         for (const parameter of (policy.policySetId !== null ? parametersBySet.get(policy.policySetId) ?? [] : [])) {
+          // Sensitive parameters are stored encrypted (issue #577):
+          // resolve the plaintext for the engine invocation.
+          const paramValue = await variableValueForRead(parameter);
           args.push(
             "-param",
-            `${parameter.key}=${parameter.hcl === true ? parameter.value : JSON.stringify(parameter.value)}`,
+            `${parameter.key}=${parameter.hcl === true ? paramValue : JSON.stringify(paramValue)}`,
           );
         }
         args.push(policyPath);
@@ -3756,7 +3789,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
         phase: "plan",
         ttlSeconds: timeoutSeconds(settings?.planTimeout, 7_200),
       }, variables, executionDir);
-      const environment = { ...buildSanitizedEnv(variables), ...identity.environment };
+      const environment = { ...buildSanitizedEnv(variables), ...buildSanitizedEnv(normalizeRunVariables(appliedRun.variables)), ...identity.environment };
       const terraformVariables = variables
         .filter((variable: Readonly<{ category: string }>): boolean => variable.category === "terraform")
         .map((variable: Readonly<{ key: string; hcl: boolean; value: string }>): string =>
@@ -3765,6 +3798,18 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
         await writeFile(
           join(executionDir, "terrence.workspace.tfvars"),
           terraformVariables.join("\n"),
+          { mode: 0o600 },
+        );
+      }
+      // Run-scoped terraform variables ride their own var-file like the plan
+      // path (issue #577) instead of raw -var flags.
+      const appliedRunTfVarsLines = normalizeRunVariables(appliedRun.variables)
+        .filter((variable): boolean => variable.category === "terraform" && !variable.sensitive)
+        .map((variable): string => `${variable.key} = ${JSON.stringify(variable.value)}`);
+      if (appliedRunTfVarsLines.length > 0) {
+        await writeFile(
+          join(executionDir, "terrence.run.tfvars"),
+          appliedRunTfVarsLines.join("\n"),
           { mode: 0o600 },
         );
       }
@@ -3800,7 +3845,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
         "-out=tfplan",
       ];
       if (terraformVariables.length > 0) planArgs.push("-var-file=terrence.workspace.tfvars");
-      for (const variable of appliedRun.variables ?? []) planArgs.push(`-var=${variable.key}=${variable.value}`);
+      if (appliedRunTfVarsLines.length > 0) planArgs.push("-var-file=terrence.run.tfvars");
       for (const variable of variables) {
         if (variable.category === "terraform" && variable.priority) {
           planArgs.push(`-var=${variable.key}=${variable.hcl ? variable.value : JSON.stringify(variable.value)}`);

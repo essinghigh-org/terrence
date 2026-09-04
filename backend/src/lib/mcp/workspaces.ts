@@ -21,6 +21,7 @@ import { validateVersion } from "../utils";
 import { isExecutionMode } from "../constants";
 import { ensureDefaultProject } from "../../routes/projects";
 import { validVariableAttributes } from "../validation";
+import { variableValueForRead, variableValueForWrite } from "../variable-crypto";
 import { toolBadRequest, toolError, type McpSession, type McpTool } from "./types";
 import { cachedOrgByName } from "../cached-lookups";
 
@@ -91,27 +92,36 @@ function workspaceTagBindings(args: Readonly<Record<string, unknown>>): readonly
 type WorkspaceVariableUpdate = Readonly<{
   key: string;
   value: string;
+  valueEncrypted: string | null;
   category: string;
   sensitive: boolean;
   hcl: boolean;
   description: string | null;
 }>;
 
-function workspaceVariableUpdate(
+async function workspaceVariableUpdate(
   variable: typeof workspaceVariables.$inferSelect,
   args: Readonly<Record<string, unknown>>,
-): WorkspaceVariableUpdate | Readonly<{ error: string }> {
+): Promise<WorkspaceVariableUpdate | Readonly<{ error: string }>> {
   const key = typeof args["key"] === "string" ? args["key"] : variable.key;
-  const value = typeof args["value"] === "string" ? args["value"] : variable.value;
   const category = typeof args["category"] === "string" ? args["category"] : variable.category;
   let sensitive = typeof args["sensitive"] === "boolean" ? args["sensitive"] : (variable.sensitive ?? false);
   if ((variable.sensitive ?? false) && !sensitive && args["value"] === undefined) sensitive = true;
   const hcl = typeof args["hcl"] === "boolean" ? args["hcl"] : (variable.hcl ?? false);
   const description = typeof args["description"] === "string" ? args["description"] : variable.description;
-  if (!validVariableAttributes({ key, value, category, sensitive, hcl, description }, true)) {
+  // A supplied value is authoritative; otherwise keep the stored value
+  // (decrypting an encrypted one), mirroring the API update path so MCP
+  // rotations of sensitive variables actually persist (issue #577).
+  const suppliedValue = typeof args["value"] === "string" ? args["value"] : null;
+  const effectiveValue = suppliedValue ?? (sensitive ? await variableValueForRead(variable) : variable.value);
+  if (!validVariableAttributes({ key, value: effectiveValue, category, sensitive, hcl, description }, true)) {
     return { error: "Invalid variable attributes" };
   }
-  return { key, value, category, sensitive, hcl, description };
+  const unchangedSensitive = suppliedValue === null && sensitive && variable.sensitive === true && variable.valueEncrypted !== null;
+  const stored = unchangedSensitive
+    ? { value: variable.value, valueEncrypted: variable.valueEncrypted }
+    : await variableValueForWrite(sensitive, effectiveValue);
+  return { key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description };
 }
 
 async function persistWorkspaceVariableUpdate(
@@ -301,7 +311,10 @@ export const workspaceTools: readonly McpTool[] = [
       });
       if (existing !== undefined) return toolBadRequest(`Variable "${key}" already exists in this workspace`);
       const id = `wsvar-${crypto.randomUUID()}`;
-      await db.insert(workspaceVariables).values({ id, workspaceId: wsId, key, value, category, sensitive, hcl, description });
+      // Sensitive values are encrypted at rest like the API path (issue
+      // #577): plaintext never lands in the value column.
+      const stored = await variableValueForWrite(sensitive, value);
+      await db.insert(workspaceVariables).values({ id, workspaceId: wsId, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description });
       return { id, workspaceId: wsId, key, value: sensitive === true ? null : value, category, sensitive, hcl, description };
     },
   },
@@ -332,7 +345,7 @@ export const workspaceTools: readonly McpTool[] = [
         where: and(eq(workspaceVariables.id, varId), eq(workspaceVariables.workspaceId, wsId)),
       });
       if (variable === undefined) return toolBadRequest(`Variable "${varId}" not found in workspace`);
-      const updated = workspaceVariableUpdate(variable, args);
+      const updated = await workspaceVariableUpdate(variable, args);
       if ("error" in updated) return toolBadRequest(updated.error);
       const updateError = await persistWorkspaceVariableUpdate(varId, updated);
       if (updateError !== undefined) return toolBadRequest(updateError);
