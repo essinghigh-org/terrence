@@ -46,6 +46,10 @@ function isPrivateV4(n: number): boolean {
   if ((n >>> 16) === 0xc0a8) return true; // 192.168/16
   if ((n >>> 16) === 0xa9fe) return true; // 169.254/16 link-local (incl. cloud metadata)
   if ((n >>> 22) === 0x191) return true; // 100.64/10 CGNAT
+  if ((n >>> 8) === 0xc00002) return true; // 192.0.2.0/24 TEST-NET-1
+  if ((n >>> 17) === 0x6309) return true; // 198.18.0.0/15 benchmarking
+  if ((n >>> 8) === 0xc63364) return true; // 198.51.100.0/24 TEST-NET-2
+  if ((n >>> 8) === 0xcb0071) return true; // 203.0.113.0/24 TEST-NET-3
   if ((n >>> 28) === 0xe) return true; // 224/4 multicast
   if ((n >>> 24) >= 240) return true; // 240/4 reserved + broadcast
   if ((n >>> 24) === 192 && ((n >>> 16) & 0xff) === 0 && ((n >>> 8) & 0xff) === 0) return true; // 192.0.0.0/24 reserved

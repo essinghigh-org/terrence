@@ -9,6 +9,7 @@ const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
   "base64",
 );
+const SVG = Buffer.from("<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script><rect width=\"1\" height=\"1\"/></svg>");
 
 let storage: string;
 let origin: string;
@@ -26,6 +27,7 @@ beforeAll(async (): Promise<void> => {
     fetch(request: Request): Response {
       const path = new URL(request.url).pathname;
       if (path === "/avatar.png") return new Response(PNG, { headers: { "content-type": "image/png" } });
+      if (path === "/avatar.svg") return new Response(SVG, { headers: { "content-type": "image/svg+xml" } });
       if (path === "/text.txt") return new Response("not an image", { headers: { "content-type": "text/plain" } });
       if (path === "/fake.png") return new Response("not real image bytes", { headers: { "content-type": "image/png" } });
       return new Response("not found", { status: 404 });
@@ -61,6 +63,26 @@ describe("avatar proxy route", (): void => {
     const unknown = "f".repeat(64);
     const missing = await app.handle(new Request(`http://t/api/v2/avatars/${unknown}`));
     expect(missing.status).toBe(404);
+  });
+
+  it("serves SVG avatars as inert attachment downloads", async (): Promise<void> => {
+    const previousGithubAppHttpUrlForTest = process.env["GITHUB_APP_HTTP_URL"];
+    process.env["GITHUB_APP_HTTP_URL"] = origin.slice(0, -1);
+    try {
+      const key = await AvatarService.record("github-app", `${origin}avatar.svg`);
+      const res = await app.handle(new Request(`https://t/api/v2/avatars/${key}`));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("image/svg+xml");
+      expect(res.headers.get("content-disposition")).toBe('attachment; filename="avatar.svg"');
+      const csp = res.headers.get("content-security-policy") ?? "";
+      expect(csp).toContain("default-src 'none'");
+      expect(csp).toContain("script-src 'none'");
+      expect(csp).toContain("sandbox");
+      expect(Buffer.from(await res.arrayBuffer())).toEqual(SVG);
+    } finally {
+      if (previousGithubAppHttpUrlForTest === undefined) delete process.env["GITHUB_APP_HTTP_URL"];
+      else process.env["GITHUB_APP_HTTP_URL"] = previousGithubAppHttpUrlForTest;
+    }
   });
 
   it("honours 304 revalidation when the browser sends If-None-Match", async (): Promise<void> => {

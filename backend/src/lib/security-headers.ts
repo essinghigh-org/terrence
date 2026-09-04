@@ -85,7 +85,7 @@ export function staticCacheControl(pathname: string): string | undefined {
 }
 
 export function applySecurityHeaders(target: Record<string, string | number>): void {
-  target["Content-Security-Policy"] = buildContentSecurityPolicy();
+  target["Content-Security-Policy"] ??= buildContentSecurityPolicy();
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
     if (target[name] === undefined) target[name] = value;
   }
