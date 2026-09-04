@@ -8,6 +8,7 @@ import {
   apiTokens,
   organizationMemberships,
   organizations,
+  projects,
   users,
 } from "../../src/db/schema";
 
@@ -31,6 +32,15 @@ describe("project defaults and workspace inheritance", () => {
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
     await db.insert(organizations).values({ id: orgId, name: orgName });
+    await db.insert(projects).values({
+      id: `default-${suffix}`,
+      orgId,
+      name: "Default Project",
+      description: "Default Project for Organization",
+      defaultExecutionMode: "remote",
+      settingOverwrites: { "execution-mode": false },
+      isDefault: true,
+    });
     await db.insert(organizationMemberships).values({
       id: `membership-${suffix}`,
       userId,

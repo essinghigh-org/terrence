@@ -10,18 +10,19 @@ import {
 /**
  * RBAC-008: Default project create/move/delete behavior.
  *
- * the reference format auto-provisions a "Default Project" for every organization and assigns
- * workspaces without an explicit project to it. Terrence mirrors this via
- * `ensureDefaultProject` (src/routes/projects.ts:203) called on org creation
- * (projects.ts:231,258) and on workspace creation when no project is supplied
- * (workspaces.ts:670). These tests pin that contract against a real CREATE
- * request so a refactor cannot silently drop the fallback.
+ * The reference format auto-provisions a "Default Project" for every organization and assigns
+ * workspaces without an explicit project to it. Terrence creates the project transactionally
+ * with the organization and retains `ensureDefaultProject` for legacy organizations and
+ * workspace creation. These tests pin that contract against real API requests so a refactor
+ * cannot silently drop the fallback.
  */
 describe("Default Project assignment (RBAC-008)", () => {
   const suffix = crypto.randomUUID();
   const userId = `usr-${suffix}`;
-  const orgId = `org-${suffix}`;
+  let orgId: string;
   const orgName = `default-project-${suffix}`;
+  const readOnlyOrgId = `org-read-only-${suffix}`;
+  const readOnlyOrgName = `default-project-read-only-${suffix}`;
   const token = `token-${suffix}`;
 
   const request = (path: string, method = "GET", body?: unknown) =>
@@ -38,11 +39,17 @@ describe("Default Project assignment (RBAC-008)", () => {
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
-    await db.insert(organizations).values({ id: orgId, name: orgName });
-    await db.insert(organizationMemberships).values({
-      id: `mem-${suffix}`, userId, orgId, role: "owner", status: "active",
-    });
     await db.insert(apiTokens).values({ id: `tok-${suffix}`, token: hashAuthenticationToken(token), userId });
+    const created = await request("/api/v2/organizations", "POST", {
+      data: { type: "organizations", attributes: { name: orgName } },
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json() as { data: { attributes: { "external-id": string } } };
+    orgId = createdBody.data.attributes["external-id"];
+    await db.insert(organizations).values({ id: readOnlyOrgId, name: readOnlyOrgName });
+    await db.insert(organizationMemberships).values({
+      id: `mem-read-only-${suffix}`, userId, orgId: readOnlyOrgId, role: "owner", status: "active",
+    });
     explicitProjectId = `prj-${crypto.randomUUID()}`;
     await db.insert(projects).values({
       id: explicitProjectId, orgId, name: "explicit-project", isDefault: false,
@@ -52,18 +59,36 @@ describe("Default Project assignment (RBAC-008)", () => {
 
   afterAll(async () => {
     await db.delete(projects).where(eq(projects.orgId, orgId));
+    await db.delete(projects).where(eq(projects.orgId, readOnlyOrgId));
     await db.delete(workspaces).where(eq(workspaces.orgId, orgId));
+    await db.delete(workspaces).where(eq(workspaces.orgId, readOnlyOrgId));
     await db.delete(apiTokens).where(eq(apiTokens.token, token));
-    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `mem-${suffix}`));
+    await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId));
+    await db.delete(organizationMemberships).where(eq(organizationMemberships.id, `mem-read-only-${suffix}`));
     await db.delete(organizations).where(eq(organizations.id, orgId));
+    await db.delete(organizations).where(eq(organizations.id, readOnlyOrgId));
     await db.delete(users).where(eq(users.id, userId));
   });
 
-  it("auto-creates a Default Project when the org is first queried", async () => {
+  it("lists the pre-provisioned Default Project without writing during GET", async () => {
+    const before = await db.query.projects.findMany({ where: eq(projects.orgId, orgId) });
+    expect(before.some((project) => project.isDefault)).toBe(true);
     const listed = await request(`/api/v2/organizations/${orgName}/projects`);
     expect(listed.status).toBe(200);
-    const projects = (await listed.json()).data as readonly { attributes: { name: string } }[];
-    expect(projects.find((p) => p.attributes.name === "Default Project")).toBeDefined();
+    const listedProjects = (await listed.json()).data as readonly { attributes: { name: string } }[];
+    expect(listedProjects.find((project) => project.attributes.name === "Default Project")).toBeDefined();
+    const after = await db.query.projects.findMany({ where: eq(projects.orgId, orgId) });
+    expect(after.map((project) => project.id).sort()).toEqual(before.map((project) => project.id).sort());
+  });
+
+  it("does not create a Default Project for an existing organization while listing", async () => {
+    const before = await db.query.projects.findMany({ where: eq(projects.orgId, readOnlyOrgId) });
+    expect(before).toHaveLength(0);
+    const listed = await request(`/api/v2/organizations/${readOnlyOrgName}/projects`);
+    expect(listed.status).toBe(200);
+    expect((await listed.json()).data).toHaveLength(0);
+    const after = await db.query.projects.findMany({ where: eq(projects.orgId, readOnlyOrgId) });
+    expect(after).toHaveLength(0);
   });
 
   it("assigns a workspace without a project relationship to the Default Project", async () => {

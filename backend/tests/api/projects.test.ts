@@ -7,6 +7,7 @@ import {
   apiTokens,
   organizationMemberships,
   organizations,
+  projects,
   users,
 } from "../../src/db/schema";
 
@@ -30,6 +31,15 @@ describe("projects API contract", () => {
   beforeAll(async () => {
     await db.insert(users).values([{ id: userId, username: userId, passwordHash: "unused" }]);
     await db.insert(organizations).values([{ id: orgId, name: orgName }]);
+    await db.insert(projects).values([{
+      id: `default-${suffix}`,
+      orgId,
+      name: "Default Project",
+      description: "Default Project for Organization",
+      defaultExecutionMode: "remote",
+      settingOverwrites: { "execution-mode": false },
+      isDefault: true,
+    }]);
     await db.insert(organizationMemberships).values([
       { id: crypto.randomUUID(), userId, orgId, role: "owner" },
     ]);
@@ -44,7 +54,7 @@ describe("projects API contract", () => {
   });
 
   it("lists, creates, patches, and deletes projects", async () => {
-    // 1. Initial list auto-creates Default Project
+    // 1. Initial list returns the pre-provisioned Default Project
     const listRes1 = await request(`/api/v2/organizations/${orgName}/projects`);
     expect(listRes1.status).toBe(200);
     const listBody1 = await listRes1.json();

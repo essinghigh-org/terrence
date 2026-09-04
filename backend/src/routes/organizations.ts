@@ -1,6 +1,6 @@
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { organizations, organizationMemberships, organizationDataRetentionPolicies, reservedTagKeys, samlSettings, teams, workspaces, workspaceTags, registryPartnerships, agentPools, type users } from "../db/schema";
+import { organizations, organizationMemberships, organizationDataRetentionPolicies, reservedTagKeys, samlSettings, teams, workspaces, workspaceTags, registryPartnerships, agentPools, projects, type users } from "../db/schema";
 import { eq, and, asc, count, inArray } from "drizzle-orm";
 import { organizationResource, organizationName } from "../lib/response";
 import { applyDataRetentionGarbageCollection, auditLog, caseInsensitiveLike, checkOrganizationPermissionsMany, checkOrgPermission, deleteOrganization, pageRequest, pagination } from "../lib/utils";
@@ -12,6 +12,7 @@ import { cachedOrgByName, invalidateOrgLookup } from "../lib/cached-lookups";
 import { publish } from "../lib/event-bus";
 import { costEstimationEnabledForOrganization, getSiteCapabilities } from "../lib/settings";
 import { moduleTestTokenTtl as parseModuleTestTokenTtl, moduleTestTokenTtlBounds } from "../lib/workload-identity";
+import { defaultProjectValues } from "./projects";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -232,6 +233,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
         await t.insert(organizationMemberships).values({
           id: crypto.randomUUID(), userId: user.id, orgId: id, role: "owner",
         });
+        await t.insert(projects).values(defaultProjectValues(id));
       });
       await auditLog("create", "organizations", id, user.id, id, { name });
       (set as { status: number }).status = 201;

@@ -284,3 +284,27 @@ test("preserves quoted referenced identifiers in generated foreign-key DDL", () 
     'ALTER TABLE "child" ADD CONSTRAINT "fk_child_1" FOREIGN KEY ("quote_id") REFERENCES "parent" ("parent""id") NOT VALID;',
   );
 });
+
+test("preserves REFERENCES parent shorthand in generated foreign-key DDL", () => {
+  const table = parseCreateTableSql(
+    'CREATE TABLE "child" ("parent_id" INTEGER REFERENCES "parent")',
+  );
+  if (table === null) throw new Error("expected child table to parse");
+  expect(table.columns[0]?.references?.table).toBe("parent");
+  expect(table.columns[0]?.references?.columns).toEqual(["parent_id"]);
+  expect(table.columns[0]?.references?.refColumns).toEqual([]);
+  expect(generateForeignKeySql(table)).toContain(
+    'ALTER TABLE "child" ADD CONSTRAINT "fk_child_0" FOREIGN KEY ("parent_id") REFERENCES "parent" NOT VALID;',
+  );
+});
+
+test("preserves table-level REFERENCES parent shorthand in generated foreign-key DDL", () => {
+  const table = parseCreateTableSql(
+    'CREATE TABLE "child" ("parent_id" INTEGER, FOREIGN KEY ("parent_id") REFERENCES "parent")',
+  );
+  if (table === null) throw new Error("expected child table to parse");
+  expect(table.tableForeignKeys[0]?.refColumns).toEqual([]);
+  expect(generateForeignKeySql(table)).toContain(
+    'ALTER TABLE "child" ADD CONSTRAINT "fk_child_0" FOREIGN KEY ("parent_id") REFERENCES "parent" NOT VALID;',
+  );
+});
