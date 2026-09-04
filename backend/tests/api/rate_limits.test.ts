@@ -79,6 +79,15 @@ describe("rate limiting", () => {
     expect((await context.increment("client", 1_000, requestTime)).count).toBe(3);
   });
 
+  it("refunds the unique matching window when only one duration is active", async () => {
+    const context = fixedWindowContext();
+    const requestTime = 1_700_000_000_000;
+    expect((await context.increment("client", 1_000, requestTime)).count).toBe(1);
+    expect((await context.increment("client", 1_000, requestTime)).count).toBe(2);
+    await context.decrement("client");
+    expect((await context.increment("client", 1_000, requestTime)).count).toBe(2);
+  });
+
   it("does not count static asset or SPA shell requests against the API bucket", async () => {
     // A page load fetches 30-40 hashed chunks in parallel; those requests must
     // never consume the per-IP API bucket or every cold cache trips a 429.

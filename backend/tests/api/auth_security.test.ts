@@ -76,7 +76,7 @@ describe("account login lockout", () => {
 
     const locked = await db.query.users.findFirst({ where: eq(users.id, userId) });
     expect(locked?.loginFailedAttempts).toBe(5);
-    expect(locked?.loginFailureWindowStartedAt).toBeDefined();
+    expect(locked?.loginFailureWindowStartedAt).toBeGreaterThan(0);
     expect(locked?.loginLockedUntil).toBeGreaterThan(Date.now());
 
     const blockedValidLogin = await app.handle(loginRequest(password, "203.0.113.99"));

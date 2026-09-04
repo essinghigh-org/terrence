@@ -662,7 +662,16 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       }
       const passwordValid = await passwordMatches(password, found?.passwordHash);
       if (found === undefined || !passwordValid) {
-        if (found !== undefined && !isUserLoginBlocked(found)) await recordFailedLogin(found.id);
+        if (found !== undefined && !isUserLoginBlocked(found)) {
+          const failure = await recordFailedLogin(found.id);
+          if (failure.lockedUntil !== null) {
+            log.warn("Account locked after repeated failed login attempts", {
+              userId: found.id,
+              failedAttempts: failure.failedAttempts,
+              lockedUntil: failure.lockedUntil,
+            });
+          }
+        }
         (set as { status: number }).status = 401;
         return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
       }
@@ -681,6 +690,8 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "This invitation has not been accepted yet" }] };
     }
+    // Keep the compare-and-clear even when the stale user row appears clean:
+    // a failed login can set a lock while password verification is in flight.
     if (!(await clearLoginFailures(user.id))) {
       (set as { status: number }).status = 401;
       return { errors: [{ status: "401", title: "Unauthorized", detail: "Invalid username or password" }] };
