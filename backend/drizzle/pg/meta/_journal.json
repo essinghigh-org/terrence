@@ -323,6 +323,13 @@
       "when": 1788348386417,
       "tag": "0045_brave_dark_phoenix",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1788482697125,
+      "tag": "0046_military_dragon_man",
+      "breakpoints": true
     }
   ]
 }

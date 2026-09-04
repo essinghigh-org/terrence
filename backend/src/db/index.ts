@@ -475,9 +475,9 @@ if (!isPostgres) {
     client.run("ALTER TABLE user_2fa ADD COLUMN last_accepted_counter INTEGER");
   }
 
-  // Agent-pool token lifecycle is additive and intentionally idempotent here
-  // so existing installations retain their credentials while gaining expiry
-  // and revocation state without relying on a generated migration.
+  // Agent-pool token lifecycle is additive. The generated migration covers
+  // fresh databases, while this idempotent repair keeps older installations
+  // with sparse journals convergent without invalidating existing credentials.
   const agentPoolTokenColumns = new Set(
     (client.query("PRAGMA table_info(agent_pool_tokens)").all() as { name: string }[]).map((row): string => row.name),
   );
