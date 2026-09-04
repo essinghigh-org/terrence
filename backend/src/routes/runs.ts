@@ -5,10 +5,14 @@ import { agentPools, runs, workspaces, configurationVersions, logs, stateVersion
 import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt, sql } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource, taskStageResource, type RunRelationshipLinkage } from "../lib/response";
 import { tfPolicyEvaluationResource, tfStageTypesForEvaluations } from "./policy-evaluations";
+import { configurationVersionResource, configurationVersionIngressResource } from "./configuration-versions";
+import { costEstimateResource } from "./misc";
 import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, cursorPagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, organizationRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, readRunLogs, readRunLogsPage } from "../lib/run-logs";
 import { deletePlanJsonArtifact, readPlanJsonArtifact, readPlanJsonSideArtifact, sanitizePlanJson } from "../lib/plan-json";
+import { readCostEstimateArtifact } from "../lib/cost-estimate";
+import { costEstimationEnabledForOrganization } from "../lib/settings";
 import { applyGateBlockReason } from "../lib/operations";
 import { authPlugin } from "../auth";
 import { queueRunNotification } from "../lib/notifications";
@@ -139,9 +143,25 @@ function originForConfiguration(
   return origin;
 }
 
+const SUPPORTED_RUN_INCLUDES = new Set([
+  "plan",
+  "apply",
+  "created_by",
+  "cost_estimate",
+  "configuration_version",
+  "configuration_version.ingress_attributes",
+  "workspace",
+  "task_stages",
+  "tf_policy_evaluations",
+]);
+
 function requestedRunIncludes(request: ParamCtx["request"]): ReadonlySet<string> {
   const values = new URL(request.url).searchParams.getAll("include");
-  return new Set(values.flatMap((value: string): string[] => value.split(",").map((item: string): string => item.trim()).filter(Boolean)));
+  if (values.length === 0) return new Set(["created_by"]);
+  return new Set(values
+    .flatMap((value: string): string[] => value.split(","))
+    .map((item: string): string => item.trim())
+    .filter((item: string): boolean => SUPPORTED_RUN_INCLUDES.has(item)));
 }
 
 function includedWorkspaceResource(workspace: Readonly<typeof workspaces.$inferSelect>): Record<string, unknown> {
@@ -361,6 +381,127 @@ async function includedUsersForRuns(runList: readonly (RunItem)[]): Promise<Reco
     columns: { id: true, username: true, email: true, isSiteAdmin: true },
   });
   return userList.map((u): Record<string, unknown> => userResource(u as Parameters<typeof userResource>[0]));
+}
+
+async function workspacesForRuns(runList: readonly RunItem[]): Promise<(typeof workspaces.$inferSelect)[]> {
+  const ids = [...new Set(runList.map((run: RunItem): string => run.workspaceId))];
+  if (ids.length === 0) return [];
+  return db.query.workspaces.findMany({ where: inArray(workspaces.id, ids) });
+}
+
+function configurationVersionHasIngressData(configuration: ConfigurationVersionItem): boolean {
+  const ingress = (configuration.ingressAttributes ?? {}) as Record<string, unknown>;
+  return Object.values(ingress).some(
+    (value): boolean =>
+      (typeof value === "string" && value !== "")
+      || typeof value === "number"
+      || typeof value === "boolean",
+  );
+}
+
+async function includedConfigurationVersionsForRuns(
+  runList: readonly RunItem[],
+  request: ParamCtx["request"],
+  includes: ReadonlySet<string>,
+): Promise<Record<string, unknown>[]> {
+  const ids = [...new Set(runList
+    .map((run: RunItem): string | null => run.configurationVersionId)
+    .filter((id): id is string => id !== null))];
+  if (ids.length === 0) return [];
+  const configurations = await db.query.configurationVersions.findMany({
+    where: inArray(configurationVersions.id, ids),
+  });
+  const byId = new Map(configurations.map((configuration): [string, ConfigurationVersionItem] => [configuration.id, configuration]));
+  const resources: Record<string, unknown>[] = [];
+  for (const run of runList) {
+    if (run.configurationVersionId === null) continue;
+    const configuration = byId.get(run.configurationVersionId);
+    if (configuration === undefined) continue;
+    resources.push(configurationVersionResource(configuration, request));
+    if (includes.has("configuration_version.ingress_attributes") && configurationVersionHasIngressData(configuration)) {
+      resources.push(configurationVersionIngressResource(configuration));
+    }
+  }
+  return resources;
+}
+
+async function includedCostEstimatesForRuns(
+  runList: readonly RunItem[],
+  workspaceList: readonly (typeof workspaces.$inferSelect)[],
+): Promise<Record<string, unknown>[]> {
+  const workspacesById = new Map(workspaceList.map((workspace): [string, typeof workspace] => [workspace.id, workspace]));
+  const organizationIds = [...new Set(workspaceList.map((workspace): string => workspace.orgId))];
+  const enabledEntries = await Promise.all(organizationIds.map(async (organizationId): Promise<readonly [string, boolean]> => [
+    organizationId,
+    await costEstimationEnabledForOrganization(organizationId),
+  ]));
+  const enabledByOrganization = new Map(enabledEntries);
+  const resources = await Promise.all(runList.map(async (run): Promise<Record<string, unknown> | undefined> => {
+    const workspace = workspacesById.get(run.workspaceId);
+    if (workspace === undefined) return undefined;
+    return costEstimateResource(
+      run,
+      await readCostEstimateArtifact(run.id),
+      enabledByOrganization.get(workspace.orgId) ?? false,
+    );
+  }));
+  return resources.filter((resource): resource is Record<string, unknown> => resource !== undefined);
+}
+
+function deduplicateIncludedResources(resources: readonly Record<string, unknown>[]): Record<string, unknown>[] {
+  const seen = new Set<string>();
+  return resources.filter((resource): boolean => {
+    const type = resource["type"];
+    const id = resource["id"];
+    if (typeof type !== "string" || typeof id !== "string") return true;
+    const key = `${type}:${id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function includedRunResources(
+  runList: readonly RunItem[],
+  request: ParamCtx["request"],
+  includes: ReadonlySet<string>,
+): Promise<Record<string, unknown>[]> {
+  const needsWorkspaceRows = includes.has("workspace") || includes.has("cost_estimate");
+  const includeConfiguration = includes.has("configuration_version") || includes.has("configuration_version.ingress_attributes");
+  const [usersIncluded, workspaceList, configurationsIncluded, stagesIncluded, evaluationsIncluded] = await Promise.all([
+    includes.has("created_by") ? includedUsersForRuns(runList) : Promise.resolve([] as Record<string, unknown>[]),
+    needsWorkspaceRows ? workspacesForRuns(runList) : Promise.resolve([] as (typeof workspaces.$inferSelect)[]),
+    includeConfiguration
+      ? includedConfigurationVersionsForRuns(runList, request, includes)
+      : Promise.resolve([] as Record<string, unknown>[]),
+    includes.has("task_stages")
+      ? includedTaskStagesForRuns(runList)
+      : Promise.resolve([] as Record<string, unknown>[]),
+    includes.has("tf_policy_evaluations")
+      ? includedTFPolicyEvaluationsForRuns(runList)
+      : Promise.resolve([] as Record<string, unknown>[]),
+  ]);
+  const plans = includes.has("plan") ? runList.map((run): Record<string, unknown> => planResource(run, request)) : [];
+  const applies = includes.has("apply") ? runList.map((run): Record<string, unknown> => applyResource(run, request)) : [];
+  const workspacesIncluded = includes.has("workspace")
+    ? runList.flatMap((run): Record<string, unknown>[] => {
+      const workspace = workspaceList.find((candidate): boolean => candidate.id === run.workspaceId);
+      return workspace === undefined ? [] : [includedWorkspaceResource(workspace)];
+    })
+    : [];
+  const costEstimates = includes.has("cost_estimate")
+    ? await includedCostEstimatesForRuns(runList, workspaceList)
+    : [];
+  return deduplicateIncludedResources([
+    ...usersIncluded,
+    ...plans,
+    ...applies,
+    ...configurationsIncluded,
+    ...workspacesIncluded,
+    ...stagesIncluded,
+    ...evaluationsIncluded,
+    ...costEstimates,
+  ]);
 }
 
 /** Audit finding 6: batch-load relationship linkage IDs for a run page (one
@@ -698,7 +839,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     const totalCount = countRows[0]?.total ?? 0;
     const [origins, linkage] = await Promise.all([originsForRuns(workspaceRuns), linkageForRuns(workspaceRuns)]);
     const data = workspaceRuns.map((r: RunItem): Record<string, unknown> => runResource(r, canApply, false, origins.get(r.id), undefined, undefined, linkage.get(r.id)));
-    const included = await includedUsersForRuns(workspaceRuns);
+    const included = await includedRunResources(workspaceRuns, request, requestedRunIncludes(request));
     return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/organizations/:org_name/runs", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -720,7 +861,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     const applySet = new Set(applyIds ?? []);
     const [origins, linkage] = await Promise.all([originsForRuns(orgRuns), linkageForRuns(orgRuns)]);
     const data = orgRuns.map((r: RunItem): Record<string, unknown> => runResource(r, applyIds === null || applySet.has(r.workspaceId), false, origins.get(r.id), undefined, undefined, linkage.get(r.id)));
-    const included = await includedUsersForRuns(orgRuns);
+    const included = await includedRunResources(orgRuns, request, requestedRunIncludes(request));
     return { data, ...(included.length > 0 ? { included } : {}), ...pagination(request, number, size, totalCount) };
   })
   .get("/api/v2/organizations/:org_name/runs/queue", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
@@ -795,7 +936,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       const attrs = typeof resource["attributes"] === "object" && resource["attributes"] !== null ? (resource["attributes"] as Record<string, unknown>) : {};
       return { ...resource, attributes: { ...attrs, "position-in-queue": isPending ? position : 0 } };
     });
-    const included = await includedUsersForRuns(queue);
+    const included = await includedRunResources(queue, request, requestedRunIncludes(request));
     const last = queue.at(-1);
     const pageMeta = cursorMode
       ? cursorPagination(request, hasMore && last !== undefined ? encodeRunCursor(last) : null, size, hasMore)
@@ -863,12 +1004,8 @@ export const runRoutes = new Elysia({ name: "runs" })
       : lockedReason !== undefined && lockedReason !== null && lockedReason !== ""
         ? lockedReason
         : "Locked manually";
-    const included = await includedUsersForRuns([authorized.run]);
     const includes = requestedRunIncludes(request);
-    if (includes.has("plan")) included.push(planResource(authorized.run, request));
-    if (includes.has("workspace")) included.push(includedWorkspaceResource(authorized.workspace));
-    if (includes.has("task_stages")) included.push(...await includedTaskStagesForRuns([authorized.run]));
-    if (includes.has("tf_policy_evaluations")) included.push(...await includedTFPolicyEvaluationsForRuns([authorized.run]));
+    const included = await includedRunResources([authorized.run], request, includes);
     return { data, ...(included.length > 0 ? { included } : {}) };
   })
   .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Record<string, never> | { errors: { status: string; title: string }[] }> => {
