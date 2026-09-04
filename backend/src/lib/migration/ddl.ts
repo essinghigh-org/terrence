@@ -21,6 +21,7 @@ export type DrizzleColumnMode = "boolean" | "json";
 export type ForeignKeyDef = Readonly<{
   columns: readonly string[];
   table: string;
+  /** Empty means SQLite's shorthand: reference the parent table's primary key. */
   refColumns: readonly string[];
   onUpdate: string | null;
   onDelete: string | null;
@@ -314,13 +315,20 @@ function parseReferenceClause(sql: string, start: number): { fk: ForeignKeyDef; 
   if (table === null) return null;
   pos = table.end;
   while (pos < sql.length && /\s/.test(sql[pos] ?? "")) pos += 1;
-  if ((sql[pos] ?? "") !== "(") return null;
-  const close = scanBalanced(sql, pos);
-  if (close < 0) return null;
-  const cols = parseReferenceColumns(sql, pos, close);
-  if (cols === null) return null;
-  const actions = parseReferenceActions(sql, close + 1);
-  return { fk: { columns: cols, table: table.name, refColumns: cols, onUpdate: actions.onUpdate, onDelete: actions.onDelete }, end: actions.end };
+  // SQLite permits `REFERENCES parent` as shorthand for referencing the
+  // parent's primary key. Keep an empty refColumns list so PostgreSQL can
+  // emit the equivalent `REFERENCES parent` clause instead of dropping the FK.
+  let refColumns: string[] = [];
+  if ((sql[pos] ?? "") === "(") {
+    const close = scanBalanced(sql, pos);
+    if (close < 0) return null;
+    const parsedColumns = parseReferenceColumns(sql, pos, close);
+    if (parsedColumns === null) return null;
+    refColumns = parsedColumns;
+    pos = close + 1;
+  }
+  const actions = parseReferenceActions(sql, pos);
+  return { fk: { columns: [], table: table.name, refColumns, onUpdate: actions.onUpdate, onDelete: actions.onDelete }, end: actions.end };
 }
 
 function scanDefaultExprEnd(sql: string, start: number): number {
@@ -737,9 +745,12 @@ export function generateForeignKeySql(table: TableDef): string[] {
     const onUpdate = fk.onUpdate === null ? "" : ` ON UPDATE ${fk.onUpdate}`;
     const onDelete = fk.onDelete === null ? "" : ` ON DELETE ${fk.onDelete}`;
     const constraintName = quoteIdentifier(name);
+    const referencedColumns = fk.refColumns.length === 0
+      ? ""
+      : ` (${fk.refColumns.map(quoteIdentifier).join(", ")})`;
     statements.push(
       `ALTER TABLE ${quoteIdentifier(table.name)} DROP CONSTRAINT IF EXISTS ${constraintName};`,
-      `ALTER TABLE ${quoteIdentifier(table.name)} ADD CONSTRAINT ${constraintName} FOREIGN KEY (${fk.columns.map(quoteIdentifier).join(", ")}) REFERENCES ${quoteIdentifier(fk.table)} (${fk.refColumns.map(quoteIdentifier).join(", ")})${onUpdate}${onDelete} NOT VALID;`,
+      `ALTER TABLE ${quoteIdentifier(table.name)} ADD CONSTRAINT ${constraintName} FOREIGN KEY (${fk.columns.map(quoteIdentifier).join(", ")}) REFERENCES ${quoteIdentifier(fk.table)}${referencedColumns}${onUpdate}${onDelete} NOT VALID;`,
     );
   });
   return statements;

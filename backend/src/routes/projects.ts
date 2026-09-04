@@ -201,12 +201,8 @@ function newProjectId(): string {
   return `prj-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
 }
 
-export async function ensureDefaultProject(orgId: string): Promise<typeof projects.$inferSelect> {
-  let project = await db.query.projects.findFirst({
-    where: and(eq(projects.orgId, orgId), eq(projects.isDefault, true)),
-  });
-  if (project !== undefined) return project;
-  await db.insert(projects).values({
+export function defaultProjectValues(orgId: string): typeof projects.$inferInsert {
+  return {
     id: newProjectId(),
     orgId,
     name: "Default Project",
@@ -215,7 +211,15 @@ export async function ensureDefaultProject(orgId: string): Promise<typeof projec
     settingOverwrites: { "execution-mode": false },
     isDefault: true,
     createdAt: Date.now(),
-  }).onConflictDoNothing();
+  };
+}
+
+export async function ensureDefaultProject(orgId: string): Promise<typeof projects.$inferSelect> {
+  let project = await db.query.projects.findFirst({
+    where: and(eq(projects.orgId, orgId), eq(projects.isDefault, true)),
+  });
+  if (project !== undefined) return project;
+  await db.insert(projects).values(defaultProjectValues(orgId)).onConflictDoNothing();
   project = await db.query.projects.findFirst({
     where: and(eq(projects.orgId, orgId), eq(projects.isDefault, true)),
   });
@@ -229,7 +233,6 @@ export const projectRoutes = new Elysia({ name: "projects" })
     const orgName = params["org_name"] ?? "";
     const org = await cachedOrgByName(orgName);
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, tokenOrgId, tokenTeamId ?? null, "read-projects"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    await ensureDefaultProject(org.id);
     const { number, size } = pageRequest(request);
     // Audit finding 11: the CLI lists with filter[names] and scans only the
     // returned page for an exact match. Accept repeated params and
