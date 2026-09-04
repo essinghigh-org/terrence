@@ -111,6 +111,68 @@ export function processOutputPreview(output: CapturedProcessOutput): string {
   return preview === "" ? marker : `${preview}\n${marker}`;
 }
 
+function isWordCharacter(character: string): boolean {
+  const code = character.charCodeAt(0);
+  return (code >= 48 && code <= 57)
+    || (code >= 65 && code <= 90)
+    || (code >= 97 && code <= 122)
+    || code === 95;
+}
+
+async function fileContainsWholeWord(path: string, word: string): Promise<boolean> {
+  const reader = Bun.file(path).stream().getReader();
+  const decoder = new TextDecoder();
+  let matched = 0;
+  let awaitingTrailingBoundary = false;
+  let previous = "";
+
+  const scan = (text: string): boolean => {
+    for (const character of text) {
+      if (awaitingTrailingBoundary) {
+        if (!isWordCharacter(character)) return true;
+        awaitingTrailingBoundary = false;
+        matched = 0;
+        previous = character;
+        continue;
+      }
+      const lower = character.toLowerCase();
+      if (matched > 0) {
+        if (lower === word[matched]) {
+          matched += 1;
+          if (matched === word.length) awaitingTrailingBoundary = true;
+        } else {
+          matched = 0;
+        }
+      } else if (lower === word[0] && !isWordCharacter(previous)) {
+        matched = 1;
+        if (word.length === 1) awaitingTrailingBoundary = true;
+      }
+      previous = character;
+    }
+    return false;
+  };
+
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      if (scan(decoder.decode(next.value, { stream: true }))) return true;
+    }
+    if (scan(decoder.decode())) return true;
+    return awaitingTrailingBoundary;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/** Search complete spooled streams without materializing them in memory. */
+export async function processOutputContainsWord(output: CapturedProcessOutput, word: string): Promise<boolean> {
+  const normalized = word.toLowerCase();
+  if (normalized === "") return false;
+  return await fileContainsWholeWord(output.stdout.path, normalized)
+    || await fileContainsWholeWord(output.stderr.path, normalized);
+}
+
 /** Compose private process-output files without materializing them in JavaScript. */
 export async function writeProcessOutputFile(
   target: string,

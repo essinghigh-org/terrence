@@ -1,4 +1,4 @@
-import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { isDiskFullError, markStorageDegraded } from "./storage-health";
 
@@ -78,6 +78,27 @@ export function sanitizePlanJson(planJson: PlanJson): PlanJson {
   return visit(planJson) as PlanJson;
 }
 
+async function streamFileToPrivatePath(sourcePath: string, destinationPath: string): Promise<void> {
+  await writeFile(destinationPath, "", { flag: "wx", mode: 0o600 });
+  const reader = Bun.file(sourcePath).stream().getReader();
+  const writer = Bun.file(destinationPath).writer();
+  let ended = false;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      await writer.write(next.value);
+    }
+    await writer.end();
+    ended = true;
+  } finally {
+    reader.releaseLock();
+    if (!ended) {
+      try { await writer.end(); } catch { /* best-effort cleanup */ }
+    }
+  }
+}
+
 export async function writePlanJsonArtifact(runId: string, planJson: PlanJson): Promise<void> {
   let temporary: string | null = null;
   try {
@@ -100,8 +121,7 @@ export async function writePlanJsonArtifactFromFile(runId: string, sourcePath: s
     await mkdir(planJsonDirectory, { recursive: true, mode: 0o700 });
     const target = artifactPath(runId);
     temporary = `${target}.${crypto.randomUUID()}.tmp`;
-    await copyFile(sourcePath, temporary);
-    await chmod(temporary, 0o600);
+    await streamFileToPrivatePath(sourcePath, temporary);
     await rename(temporary, target);
     temporary = null;
   } catch (error: unknown) {

@@ -28,6 +28,7 @@ import { enqueueDurableJob, type DurableJobContext } from "./durable-jobs";
 import { RunSandbox, removeSandboxWorkDir, runSandboxRequired } from "./sandbox";
 import {
   captureProcessOutput,
+  processOutputContainsWord,
   processOutputPreview,
   writeProcessOutputFile,
   type CapturedProcessOutput,
@@ -396,7 +397,10 @@ async function command(
     return { code, output: processOutputPreview(capturedOutput), capturedOutput, heartbeatLost };
   } catch (error: unknown) {
     try { if ((child as unknown as { pid?: number }).pid) process.kill(-(child as unknown as { pid: number }).pid, "SIGKILL"); else child.kill("SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }
-    if (!timedOut) throw error;
+    if (!timedOut) {
+      await Promise.allSettled([child.exited, outputPromise]);
+      throw error;
+    }
     await Promise.allSettled([child.exited, outputPromise]);
     throw error;
   } finally {
@@ -422,22 +426,6 @@ export function isCurrentStackStateRecord(record: Readonly<{ status: string; pay
   // rows written by older versions that could leave status=current alongside
   // an explicit is-current=false compatibility flag.
   return record.status === "current" && record.payload?.["is-current"] !== false;
-}
-
-function planHasChanges(value: string): boolean {
-  try {
-    const parsed = JSON.parse(value) as Record<string, unknown>;
-    const changes = parsed["resource_changes"];
-    return Array.isArray(changes) && changes.some((item): boolean => {
-      if (item === null || typeof item !== "object") return false;
-      const actions = (item as Record<string, unknown>)["change"];
-      if (actions === null || typeof actions !== "object") return false;
-      const raw = (actions as Record<string, unknown>)["actions"];
-      return Array.isArray(raw) && raw.some((action): boolean => action !== "no-op");
-    });
-  } catch {
-    return false;
-  }
 }
 
 export async function saveStackState(stackId: string, deployment: string, runId: string, statePayload: string | null = null, fencingToken?: number): Promise<string> {
@@ -572,7 +560,6 @@ type TerraformCommandResult = Readonly<{
 type ComponentExecutionStart = Readonly<{
   executionDirectory: string;
   planPath: string;
-  binaryPath: string;
   init: TerraformCommandResult;
   commandResult: TerraformCommandResult;
   heartbeat: () => Promise<boolean>;
@@ -672,7 +659,18 @@ async function startTerraformComponentExecution(request: ComponentExecutionReque
   const commandResult = await runTerraformComponentOperation(operation, planArgs, planArtifactPath, executionDirectory, workDirectory, sandbox, heartbeat, resolved.binaryPath);
   if (await context.canceled()) return { hasChanges: false, deferredChanges: false, output: "", statePath: null };
   if (commandResult.heartbeatLost || !await heartbeat()) throw new Error(`Stack ${operation} lost its execution lease`);
-  return { executionDirectory, planPath, binaryPath: resolved.binaryPath, init, commandResult, heartbeat };
+  return { executionDirectory, planPath, init, commandResult, heartbeat };
+}
+
+function hasCapturedProcessOutput(output: CapturedProcessOutput): boolean {
+  return output.stdout.bytes > 0 || output.stderr.bytes > 0;
+}
+
+export async function deferredChangesFromCapturedOutput(
+  operation: "plan" | "apply",
+  output: CapturedProcessOutput,
+): Promise<boolean> {
+  return operation === "plan" && await processOutputContainsWord(output, "deferred");
 }
 
 async function persistTerraformComponentArtifacts(
@@ -692,12 +690,12 @@ async function persistTerraformComponentArtifacts(
     { path: commandResult.capturedOutput.stdout.path },
     { path: commandResult.capturedOutput.stderr.path },
   ];
-  const descriptionParts = commandResult.output !== "" ? commandParts : initParts;
+  const descriptionParts = hasCapturedProcessOutput(commandResult.capturedOutput) ? commandParts : initParts;
   await writeProcessOutputFile(descriptionPath, descriptionParts);
   const logParts: ProcessOutputPart[] = [`init (${init.code})`];
-  if (init.output !== "") logParts.push("\n", ...initParts);
+  if (hasCapturedProcessOutput(init.capturedOutput)) logParts.push("\n", ...initParts);
   logParts.push(`\n${operation} (${commandResult.code})`);
-  if (commandResult.output !== "") logParts.push("\n", ...commandParts);
+  if (hasCapturedProcessOutput(commandResult.capturedOutput)) logParts.push("\n", ...commandParts);
   await writeProcessOutputFile(logPath, logParts);
   if (operation === "plan" && (commandResult.code === 0 || commandResult.code === 2) && await Bun.file(planPath).exists()) await copyFile(planPath, join(STACK_STORAGE_DIR, `${stepId}-plan`));
   const now = Date.now();
@@ -710,20 +708,16 @@ async function persistTerraformComponentArtifacts(
 async function finalizeTerraformComponentState(
   start: ComponentExecutionStart,
   request: ComponentExecutionRequest,
-): Promise<string> {
-  const { operation, destroy, stackId, deployment, runId, fencingToken, sandbox } = request;
-  const { executionDirectory, planPath, binaryPath, init, commandResult, heartbeat } = start;
+): Promise<void> {
+  const { operation, destroy, stackId, deployment, runId, fencingToken } = request;
+  const { executionDirectory, init, commandResult } = start;
   if (init.code !== 0 || (operation === "plan" ? ![0, 2].includes(commandResult.code) : commandResult.code !== 0)) throw new Error(commandResult.output || init.output || `Terraform ${operation} failed`);
-  if (operation === "plan") {
-    const json = await command([binaryPath, "show", "-json", planPath], executionDirectory, sandbox, heartbeat, request.workDirectory);
-    if (json.heartbeatLost || !await heartbeat()) throw new Error("Stack plan lost its execution lease while collecting output");
-    return json.code === 0 ? await readFile(json.capturedOutput.stdout.path, "utf8") : "";
-  }
+  if (operation === "plan") return;
   const generatedState = join(executionDirectory, "terraform.tfstate");
   const generatedStatePayload = await Bun.file(generatedState).exists() ? await readFile(generatedState, "utf8") : null;
   if (destroy) await removeStackState(stackId, deployment, runId, fencingToken ?? undefined);
   else await saveStackState(stackId, deployment, runId, generatedStatePayload, fencingToken ?? undefined);
-  return "";
+  return;
 }
 
 async function finalizeTerraformComponentExecution(
@@ -732,8 +726,9 @@ async function finalizeTerraformComponentExecution(
 ): Promise<StackExecutionResult> {
   const { stepId, stackId, operation } = request;
   await persistTerraformComponentArtifacts(start, stepId, stackId, operation);
-  const show = await finalizeTerraformComponentState(start, request);
-  return { hasChanges: operation === "plan" && (start.commandResult.code === 2 || planHasChanges(show)), deferredChanges: operation === "plan" && /\bdeferred\b/i.test(start.commandResult.output), output: start.commandResult.output || start.init.output, statePath: operation === "apply" ? request.statePath : null };
+  await finalizeTerraformComponentState(start, request);
+  const deferredChanges = await deferredChangesFromCapturedOutput(operation, start.commandResult.capturedOutput);
+  return { hasChanges: operation === "plan" && start.commandResult.code === 2, deferredChanges, output: start.commandResult.output || start.init.output, statePath: operation === "apply" ? request.statePath : null };
 }
 
 async function executeRealTerraformComponent(request: ComponentExecutionRequest): Promise<StackExecutionResult> {
