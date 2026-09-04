@@ -4,6 +4,7 @@ import { db } from "../db";
 import { workerQueueDraining } from "../worker";
 import { durableJobs } from "../db/schema";
 import { log } from "./log";
+import { jitteredPollDelay } from "./poll-jitter";
 
 export type DurableJobKind = "module-test" | "stack-configuration" | "stack-deployment" | "explorer-inventory" | "explorer-catalog" | "plan-explanation" | "vcs-webhook";
 export type DurableJob = Readonly<typeof durableJobs.$inferSelect>;
@@ -260,9 +261,13 @@ export function startDurableJobWorker(
   workerRunning = true;
   const workerId = `durable-${process.pid}-${crypto.randomUUID()}`;
   const kinds = Object.keys(handlers) as DurableJobKind[];
+  const schedulePoll = (): void => {
+    const timer = setTimeout((): void => { void poll(); }, jitteredPollDelay(POLL_MS));
+    timer.unref?.();
+  };
   const poll = async (): Promise<void> => {
     if (workerQueueDraining()) {
-      setTimeout((): void => { void poll(); }, POLL_MS);
+      schedulePoll();
       return;
     }
     try {
@@ -278,7 +283,7 @@ export function startDurableJobWorker(
     } catch (error: unknown) {
       log.error("Durable job poll failed", { error: String(error) });
     } finally {
-      setTimeout((): void => { void poll(); }, POLL_MS);
+      schedulePoll();
     }
   };
   void poll();

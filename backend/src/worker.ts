@@ -98,6 +98,7 @@ import { revokeWorkloadIdentityTokens, workspaceIdentityEnvironment } from "./li
 import { costEstimationEnabledForOrganization, getSettings } from "./lib/settings";
 import { storageDir } from "./db/driver";
 import { insertStateVersionWithSerialRetry } from "./lib/state-serial";
+import { jitteredPollDelay } from "./lib/poll-jitter";
 
 
 // --- Run sandbox (Landlock isolation for tofu/terraform) ---
@@ -432,6 +433,70 @@ function killTrackedProcess(
 const activeRunProcesses = new Map<string, Set<TrackedRunProcess>>();
 /** Per-run cgroup paths (kanban 8/9). Empty when cgroups are unavailable. */
 const activeRunCgroups = new Map<string, string>();
+type CancellationEscalationTimer = ReturnType<typeof setTimeout>;
+const cancellationEscalationTimers = new Map<string, Map<number | null, CancellationEscalationTimer>>();
+
+function clearCancellationEscalationTimers(runId: string): void {
+  const timers = cancellationEscalationTimers.get(runId);
+  if (timers === undefined) return;
+  for (const timer of timers.values()) clearTimeout(timer);
+  cancellationEscalationTimers.delete(runId);
+}
+
+/**
+ * Keep the process-group grace period alive independently of the tracked leader
+ * and release the timer when it fires. A per-run/process-group key prevents
+ * repeated cancellation requests from accumulating identical timers.
+ */
+function scheduleCancellationEscalation(runId: string, pgid: number | null): void {
+  const timers = cancellationEscalationTimers.get(runId) ?? new Map<number | null, CancellationEscalationTimer>();
+  if (timers.has(pgid)) return;
+  const timer = setTimeout((): void => {
+    const current = cancellationEscalationTimers.get(runId);
+    current?.delete(pgid);
+    if (current?.size === 0) cancellationEscalationTimers.delete(runId);
+    terminateProcessGroup(pgid, "SIGKILL");
+    // Cgroup backstop: after grace, hard-kill any straggler the group
+    // signals missed (daemonizers, setpgid escapes).
+    if (activeRunCgroups.get(runId) !== undefined) killRunCgroup(runId);
+  }, 5_000);
+  timer.unref?.();
+  timers.set(pgid, timer);
+  cancellationEscalationTimers.set(runId, timers);
+}
+
+/** Test-only visibility for cancellation timer lifecycle assertions. */
+export function cancellationEscalationTimerCountForTests(runId: string): number {
+  return cancellationEscalationTimers.get(runId)?.size ?? 0;
+}
+
+/** Test-only timer identity for proving repeated cancellation reuses a timer. */
+export function cancellationEscalationTimerForTests(runId: string): CancellationEscalationTimer | undefined {
+  return cancellationEscalationTimers.get(runId)?.values().next().value;
+}
+
+/** Test-only visibility for whether an escalation timer retains the event loop. */
+export function cancellationEscalationTimerReferencedForTests(runId: string): boolean | undefined {
+  const timer = cancellationEscalationTimers.get(runId)?.values().next().value;
+  if (timer === undefined) return undefined;
+  const hasRef = (timer as unknown as { hasRef?: () => boolean }).hasRef;
+  return typeof hasRef === "function" ? hasRef.call(timer) : undefined;
+}
+
+/** Test-only cleanup for the timer and process tracking hooks. */
+export function clearCancellationEscalationTimersForTests(): void {
+  for (const runId of cancellationEscalationTimers.keys()) clearCancellationEscalationTimers(runId);
+}
+
+/** Register a synthetic process for cancellation lifecycle tests. */
+export function trackRunProcessForTests(runId: string, process: TrackedRunProcess): void {
+  trackRunProcess(runId, process);
+}
+
+/** Clear synthetic process registrations after cancellation lifecycle tests. */
+export function clearTrackedRunProcessesForTests(): void {
+  activeRunProcesses.clear();
+}
 
 /** Create the run's cgroup (limits applied) when the host allows it. */
 export function prepareRunCgroup(runId: string): string | null {
@@ -540,6 +605,7 @@ export function cancelRunExecution(runId: string, force = false): void {
   // as the primary path; the cgroup kill is the backstop, and only escalates
   // immediately on force.
   if (force) {
+    clearCancellationEscalationTimers(runId);
     killRunCgroup(runId);
   }
   for (const child of activeRunProcesses.get(runId) ?? []) {
@@ -558,19 +624,15 @@ export function cancelRunExecution(runId: string, force = false): void {
       // because orphaned descendants keep the group alive until they too are
       // reaped. Escalating to the group — not just the tracked child — is what
       // terminates those orphans.
-      setTimeout((): void => {
-        terminateProcessGroup(pgid, "SIGKILL");
-        // Cgroup backstop: after grace, hard-kill any straggler the group
-        // signals missed (daemonizers, setpgid escapes).
-        if (activeRunCgroups.get(runId) !== undefined) killRunCgroup(runId);
-      }, 5_000);
+      scheduleCancellationEscalation(runId, pgid);
     }
   }
 }
 
 export function terminateActiveRunExecutions(): void {
-  const runIds = new Set([...activeRunProcesses.keys(), ...activeRunCgroups.keys()]);
+  const runIds = new Set([...activeRunProcesses.keys(), ...activeRunCgroups.keys(), ...cancellationEscalationTimers.keys()]);
   for (const runId of runIds) {
+    clearCancellationEscalationTimers(runId);
     for (const child of activeRunProcesses.get(runId) ?? []) {
       terminateProcessGroup(child.pid, "SIGKILL");
       killTrackedProcess(child, "SIGKILL", runId, "shutdown");
@@ -4219,14 +4281,18 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
       : "";
     if (runId !== "" && !dueIds.has(runId)) scheduledBlockReasons.delete(key);
   }
+  const scheduledWorkspaceRows = dueRuns.length === 0
+    ? []
+    : await db.query.workspaces.findMany({
+        columns: { id: true, orgId: true, locked: true, executionMode: true, agentPoolId: true, projectId: true },
+        where: inArray(workspaces.id, [...new Set(dueRuns.map((run): string => run.workspaceId))]),
+      });
+  const workspacesById = new Map(scheduledWorkspaceRows.map((workspace): readonly [string, typeof workspace] => [workspace.id, workspace]));
   const applied: string[] = [];
   for (const run of dueRuns) {
     if (run.planOnly === true) continue;
     try {
-      const workspace = await db.query.workspaces.findFirst({
-        columns: { id: true, orgId: true, locked: true, executionMode: true, agentPoolId: true, projectId: true },
-        where: eq(workspaces.id, run.workspaceId),
-      });
+      const workspace = workspacesById.get(run.workspaceId);
       if (workspace === undefined || workspace.locked === true) continue;
       const gateBlockReason = await applyGateBlockReason(new Date());
       if (gateBlockReason !== null) {
@@ -4854,7 +4920,8 @@ export function startWorkerQueue(): void {
 
   const arm = (cycle: () => Promise<void>, interval: number): void => {
     if (workerQueueDraining()) return;
-    setTimeout((): void => { void cycle(); }, interval);
+    const timer = setTimeout((): void => { void cycle(); }, jitteredPollDelay(interval));
+    timer.unref?.();
   };
 
   const fastCycle = async (): Promise<void> => {

@@ -16,6 +16,7 @@ import type { ModuleTestConfiguration, ModuleTestResult } from "./module-tests";
 import { revokeWorkloadIdentityTokens, type CredentialProvider } from "./workload-identity";
 import { enqueueDurableJob, type DurableJobContext } from "./durable-jobs";
 import { log } from "./log";
+import { jitteredPollDelay } from "./poll-jitter";
 
 type Job = Readonly<typeof durableJobs.$inferSelect>;
 type ModuleTestRun = Readonly<typeof moduleTestRuns.$inferSelect>;
@@ -177,7 +178,7 @@ async function waitForSupervisor(
       return resultAfterSupervisorExit(resultPath);
     }
     if (!await context.heartbeat()) return undefined;
-    await new Promise<void>((resolve): void => { setTimeout(resolve, 500); });
+    await new Promise<void>((resolve): void => { setTimeout(resolve, jitteredPollDelay(500)); });
   }
 }
 
