@@ -63,7 +63,7 @@ test("terminal stages retain completed work and identify the stage that stopped"
 });
 
 test.each(["planning", "applying"])("%s opens the active phase and logs even when its endpoint still reports pending", async status => {
-  let currentStatus = status;
+  let currentStatus: string = status;
   const json = (data: JsonValue): Response => Response.json(data);
   // SAFETY: the mock implements the fetch call signature; these tests never use Bun preconnect.
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
