@@ -28,8 +28,7 @@ import { DiagnosticsBanner } from "../components/DiagnosticsBanner";
 import { extractDiagnostics, type TerraformDiagnostic } from "../lib/diagnostics";
 import { cn, copyTextToClipboard, formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { safeHttpUrl } from "@/lib/safe-url";
-
-const MAX_LOG_DISPLAY_CHARS = 200_000;
+import { truncateLogForDisplay } from "../lib/log-display";
 import { ApplyOutput } from "../components/ApplyOutput";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
@@ -66,7 +65,7 @@ type RunActions = {
   "is-force-cancelable"?: boolean;
 };
 
-type ConfirmationAction = "apply" | "discard";
+type ConfirmationAction = "apply" | "discard" | "cancel" | "force-cancel" | "override-policy";
 
 type RunPermissions = {
   "can-apply"?: boolean;
@@ -121,6 +120,9 @@ type RunResource = {
     };
     workspace?: {
       data: { id: string; type: string };
+    };
+    "configuration-version"?: {
+      data: { id: string; type: string } | null;
     };
   };
 };
@@ -646,6 +648,27 @@ export function RunDetail({
   const [commentBody, setCommentBody] = useState("");
   const [confirmationAction, setConfirmationAction] = useState<ConfirmationAction | null>(null);
   const [actionComment, setActionComment] = useState("");
+  const [speculativeRun, setSpeculativeRun] = useState(false);
+  const cvId = run?.relationships?.["configuration-version"]?.data?.id ?? null;
+  const planOnlyRun = run?.attributes["plan-only"] === true;
+
+  // Speculative plans never apply (issue #603): the run row only carries
+  // plan-only, so resolve the speculative flag from its configuration
+  // version. Best effort; a failed lookup simply shows no badge.
+  useEffect((): (() => void) => {
+    setSpeculativeRun(false);
+    if (!planOnlyRun || cvId === null) return () => {};
+    const controller = new AbortController();
+    fetchApi(`/api/v2/configuration-versions/${cvId}`, { signal: controller.signal })
+      .then((data: unknown): void => {
+        if (controller.signal.aborted) return;
+// SAFETY: the configuration-version endpoint returns the JSON:API envelope; speculative is read as unknown below.
+        const attrs = (data as { data?: { attributes?: { speculative?: unknown } } })?.data?.attributes;
+        setSpeculativeRun(attrs?.speculative === true);
+      })
+      .catch((): void => {});
+    return (): void => { controller.abort(); };
+  }, [runId, planOnlyRun, cvId]);
   const [explainerOpen, setExplainerOpen] = useState(false);
   const [explainerKind, setExplainerKind] = useState<ExplainKind>("plan");
   const [explaining, setExplaining] = useState(false);
@@ -1114,9 +1137,18 @@ export function RunDetail({
   async function confirmRunAction(): Promise<void> {
     if (confirmationAction === null) return;
     const action = confirmationAction;
+    const successTitle = action === "apply"
+      ? "Run queued for apply"
+      : action === "discard"
+        ? "Run discarded"
+        : action === "cancel"
+          ? "Run canceled"
+          : action === "force-cancel"
+            ? "Run force canceled"
+            : "Policy check overridden";
     const succeeded = await performRunAction(
       action,
-      action === "apply" ? "Run queued for apply" : "Run discarded",
+      successTitle,
       actionComment,
     );
     if (succeeded) {
@@ -1350,6 +1382,27 @@ export function RunDetail({
     && permissions?.["can-override-policy-check"] === true;
   const canComment = fresh && permissions?.["can-comment"] === true;
 
+  // Explain missing run actions (issue #597), mirroring the Why-is-Apply
+  // pattern below. Terminal runs need no explanation.
+  const actionDisabledReasons: { action: string; reason: string }[] = [];
+  if (!TERMINAL_STATUSES.has(status)) {
+    if (!canCancel) {
+      if (!fresh) actionDisabledReasons.push({ action: "Cancel", reason: "This run is no longer current." });
+      else if (permissions?.["can-cancel"] !== true) actionDisabledReasons.push({ action: "Cancel", reason: "You do not have permission to cancel runs in this workspace." });
+      else if (actions?.["is-cancelable"] !== true) actionDisabledReasons.push({ action: "Cancel", reason: `Runs in ${status} state cannot be canceled.` });
+    }
+    if (!canDiscard) {
+      if (!fresh) actionDisabledReasons.push({ action: "Discard", reason: "This run is no longer current." });
+      else if (permissions?.["can-discard"] !== true) actionDisabledReasons.push({ action: "Discard", reason: "You do not have permission to discard runs in this workspace." });
+      else if (actions?.["is-discardable"] !== true) actionDisabledReasons.push({ action: "Discard", reason: "Only pending, planned, saved, soft-failed, and unreachable runs can be discarded." });
+    }
+    if (!canForceCancel) {
+      if (!fresh) actionDisabledReasons.push({ action: "Force cancel", reason: "This run is no longer current." });
+      else if (permissions?.["can-force-cancel"] !== true) actionDisabledReasons.push({ action: "Force cancel", reason: "Force cancel requires workspace admin permission." });
+      else if (actions?.["is-force-cancelable"] !== true) actionDisabledReasons.push({ action: "Force cancel", reason: "Cancel the run first; force cancel is for stuck canceled runs." });
+    }
+  }
+
   // Statuses where a run is actively heading toward apply; re-running another
   // run from this page while one is in flight would queue a duplicate.
   const runInFlight = [
@@ -1366,6 +1419,16 @@ export function RunDetail({
     && !runInFlight
     && attributes["is-destroy"] !== true
     && attributes["workspace-locked"] !== true;
+
+  // Rerun hides entirely when it cannot work (issue #630); otherwise name
+  // the blocker on a disabled button instead of leaving no path visible.
+  const rerunBlockedReason = canRerun || workspaceId === ""
+    ? null
+    : runInFlight
+      ? "A run is already in flight for this workspace."
+      : attributes["is-destroy"] === true
+        ? "Rerun is unavailable for destroy runs."
+        : "The workspace is locked.";
 
   const performRerun = async (): Promise<void> => {
     if (workspaceId === "" || rerunPending) return;
@@ -1588,6 +1651,7 @@ export function RunDetail({
             </Badge>
             <span aria-live="polite" className="sr-only">Run status: {formatRunStatus(status)}</span>
             {attributes["plan-only"] === true && <Badge variant="outline" className="rounded">Plan only</Badge>}
+            {speculativeRun && <Badge variant="outline" className="rounded" title="This speculative plan never applies">Speculative</Badge>}
             {attributes["is-destroy"] === true && <Badge variant="destructive" className="rounded">Destroy</Badge>}
             {attributes["refresh-only"] === true && <Badge variant="outline" className="rounded text-primary border-primary/30 bg-primary/10">Refresh only</Badge>}
             {attributes["allow-empty-apply"] === true && <Badge variant="outline" className="rounded text-primary border-primary/30 bg-primary/10">Allow empty apply</Badge>}
@@ -1600,6 +1664,9 @@ export function RunDetail({
           <p className="mt-2 text-sm text-muted-foreground">
             {formatRunSource(attributes.source, attributes["trigger-reason"])} · Created {formatDate(attributes["created-at"])}
           </p>
+          {speculativeRun && (
+            <p className="mt-1 text-xs text-muted-foreground">Speculative plan: Apply is disabled and this run never applies.</p>
+          )}
           <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
             <span>Run ID:</span>
             <code className="select-all font-mono">{runId}</code>
@@ -1657,17 +1724,21 @@ export function RunDetail({
             <Play className="size-3.5" aria-hidden="true" />
             New run
           </Link>
-          {canRerun && (
+          {(canRerun || rerunBlockedReason !== null) && (
             <Button
               variant="outline"
               size="sm"
               className="gap-1.5"
-              disabled={rerunPending || pendingAction !== ""}
+              disabled={!canRerun || rerunPending || pendingAction !== ""}
+              title={rerunBlockedReason ?? undefined}
               onClick={(): void => { void performRerun(); }}
             >
               <RotateCcw className="size-3.5" aria-hidden="true" />
               {rerunPending ? "Queuing…" : "Re-run"}
             </Button>
+          )}
+          {rerunBlockedReason !== null && (
+            <span className="text-xs text-muted-foreground">{rerunBlockedReason}</span>
           )}
           {rerunError !== "" && (
             <p role="alert" className="w-full text-xs text-destructive">{rerunError}</p>
@@ -1678,7 +1749,7 @@ export function RunDetail({
                   <Button
                     variant="outline"
                     disabled={pendingAction !== ""}
-                    onClick={(): void => { void performRunAction("cancel", "Run canceled"); }}
+                    onClick={(): void => { beginRunConfirmation("cancel"); }}
                   >
                     Cancel run
                   </Button>
@@ -1687,7 +1758,7 @@ export function RunDetail({
                   <Button
                     variant="destructive"
                     disabled={pendingAction !== ""}
-                    onClick={(): void => { void performRunAction("force-cancel", "Run force canceled"); }}
+                    onClick={(): void => { beginRunConfirmation("force-cancel"); }}
                   >
                     Force cancel
                   </Button>
@@ -1696,11 +1767,21 @@ export function RunDetail({
                   <Button
                     className="bg-primary text-primary-foreground hover:bg-primary/90"
                     disabled={pendingAction !== ""}
-                    onClick={(): void => { void performRunAction("override-policy", "Policy check overridden"); }}
+                    onClick={(): void => { beginRunConfirmation("override-policy"); }}
                   >
                     Override policy
                   </Button>
                 )}
+              </div>
+            )}
+            {actionDisabledReasons.length > 0 && (
+              <div className="mt-2 w-full">
+                <p className="text-xs font-medium text-foreground/85">Why are actions unavailable?</p>
+                <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-muted-foreground">
+                  {actionDisabledReasons.map(({ action, reason }: { action: string; reason: string }): React.JSX.Element => (
+                    <li key={action}><span className="font-medium">{action}:</span> {reason}</li>
+                  ))}
+                </ul>
               </div>
             )}
           </div>
@@ -1903,7 +1984,7 @@ export function RunDetail({
                 <span>Raw plan log</span>
               </summary>
               <pre className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
-                {planLogs !== "" ? (planLogs.length > MAX_LOG_DISPLAY_CHARS ? planLogs.slice(0, MAX_LOG_DISPLAY_CHARS) + "\n… (truncated, download full log)" : planLogs) : planRawLogMessage}
+                {planLogs !== "" ? truncateLogForDisplay(planLogs) : planRawLogMessage}
               </pre>
               </details>
               <Button
@@ -2160,14 +2241,13 @@ export function RunDetail({
                 </section>
               )
             )}
-            {applyWarnings.length === 0 && applyErrors.length === 0 && (
-              <div className="relative">
+            <div className="relative">
                 <details className="group">
                 <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 pr-16 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
                   <span>Raw apply log</span>
                 </summary>
                 <pre className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
-                  {applyLogs !== "" ? (applyLogs.length > MAX_LOG_DISPLAY_CHARS ? applyLogs.slice(0, MAX_LOG_DISPLAY_CHARS) + "\n… (truncated, download full log)" : applyLogs) : applyRawLogMessage}
+                  {applyLogs !== "" ? truncateLogForDisplay(applyLogs) : applyRawLogMessage}
                 </pre>
                 </details>
                 <Button
@@ -2181,11 +2261,10 @@ export function RunDetail({
                   <Maximize2 className="size-4" aria-hidden="true" />
                 </Button>
               </div>
-            )}
           </details>
           )}
 
-          {(canApply || canDiscard) && (
+          {(canApply || canDiscard || canCancel || canForceCancel || canOverridePolicy) && (
             <section
               aria-labelledby="run-confirmation-heading"
               className="mx-auto w-full max-w-2xl rounded-md border border-warning/30 bg-warning/10 px-5 py-4 shadow-sm"
@@ -2240,12 +2319,28 @@ export function RunDetail({
               ) : (
                 <>
                   <h3 id="run-confirmation-heading" className="font-semibold text-warning">
-                    {confirmationAction === "apply" ? "Confirm apply" : "Confirm discard"}
+                    {confirmationAction === "apply"
+                      ? "Confirm apply"
+                      : confirmationAction === "discard"
+                        ? "Confirm discard"
+                        : confirmationAction === "cancel"
+                          ? "Confirm cancel"
+                          : confirmationAction === "force-cancel"
+                            ? "Confirm force cancel"
+                            : "Confirm policy override"}
                   </h3>
                   <p className="mt-2 text-sm text-warning">
                     {confirmationAction === "apply"
                       ? "This will execute the planned changes against this workspace."
-                      : "This will discard the plan without changing the workspace."}
+                      : confirmationAction === "discard"
+                        ? "This will discard the plan without changing the workspace."
+                        : confirmationAction === "cancel"
+                          ? status === "applying"
+                            ? "Canceling now stops the apply mid-flight. Terraform may have already written partial state: run a refresh-only plan afterwards and check for tainted resources before re-applying."
+                            : "This will stop the run. Completed steps are kept; nothing further will execute."
+                          : confirmationAction === "force-cancel"
+                            ? "Force cancel releases the workspace lock without waiting for the process to exit. Use it only when a canceled run is stuck; a still-running process may leave partial state behind."
+                            : "This records a policy override with your comment and unblocks apply. Overrides are audited: explain why the failure is acceptable."}
                   </p>
                   {canComment && (
                     <div className="mt-4">
@@ -2277,11 +2372,19 @@ export function RunDetail({
                     </Button>
                     <Button
                       type="button"
-                      variant={confirmationAction === "discard" ? "destructive" : "default"}
+                      variant={confirmationAction === "apply" ? "default" : "destructive"}
                       disabled={pendingAction !== ""}
                       onClick={(): void => { void confirmRunAction(); }}
                     >
-                      {confirmationAction === "apply" ? "Confirm & apply" : "Confirm discard"}
+                      {confirmationAction === "apply"
+                        ? "Confirm & apply"
+                        : confirmationAction === "discard"
+                          ? "Confirm discard"
+                          : confirmationAction === "cancel"
+                            ? "Confirm cancel"
+                            : confirmationAction === "force-cancel"
+                              ? "Confirm force cancel"
+                              : "Confirm override"}
                     </Button>
                   </div>
                 </>
@@ -2520,8 +2623,8 @@ export function RunDetail({
           </div>
           <pre className={`flex-1 overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
             {fullscreenLog === "plan"
-              ? planLogs !== "" ? (planLogs.length > MAX_LOG_DISPLAY_CHARS ? planLogs.slice(0, MAX_LOG_DISPLAY_CHARS) + "\n… (truncated, download full log)" : planLogs) : planRawLogMessage
-              : applyLogs !== "" ? (applyLogs.length > MAX_LOG_DISPLAY_CHARS ? applyLogs.slice(0, MAX_LOG_DISPLAY_CHARS) + "\n… (truncated, download full log)" : applyLogs) : applyRawLogMessage}
+              ? planLogs !== "" ? truncateLogForDisplay(planLogs) : planRawLogMessage
+              : applyLogs !== "" ? truncateLogForDisplay(applyLogs) : applyRawLogMessage}
           </pre>
         </div>
       )}

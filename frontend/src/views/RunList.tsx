@@ -12,6 +12,7 @@ import { DegradedBanner } from "../components/DegradedBanner";
 import { EmptyState } from "../components/EmptyState";
 import { formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { Button } from "../components/ui/button";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
   Dialog,
   DialogContent,
@@ -128,6 +129,7 @@ export function RunList({
   const [runMessage, setRunMessage] = useState("");
   const [runType, setRunType] = useState<RunType>("standard");
   const [runDestroy, setRunDestroy] = useState(false);
+  const [destroyConfirmOpen, setDestroyConfirmOpen] = useState(false);
   const [runTargets, setRunTargets] = useState("");
   const [runReplace, setRunReplace] = useState("");
   const [creating, setCreating] = useState(false);
@@ -316,7 +318,7 @@ export function RunList({
               "plan-only": runType === "plan",
               "refresh-only": runType === "refresh",
               "allow-empty-apply": runType === "empty",
-              "auto-apply": runType === "plan" ? false : undefined,
+              "auto-apply": runDestroy || runType === "plan" ? false : undefined,
               "is-destroy": runDestroy,
               "target-addrs": parseAddressList(runTargets),
               "replace-addrs": parseAddressList(runReplace),
@@ -372,6 +374,7 @@ export function RunList({
 
   const handleDialogOpenChange = (open: boolean): void => {
     setDialogOpen(open);
+    if (!open) setDestroyConfirmOpen(false);
     if (!open && searchParams.has("new-run")) {
       const next = new URLSearchParams(searchParams);
       next.delete("new-run");
@@ -580,6 +583,10 @@ export function RunList({
           <form
             onSubmit={(event): void => {
               event.preventDefault();
+              if (runDestroy && !destroyConfirmOpen) {
+                setDestroyConfirmOpen(true);
+                return;
+              }
               void handleStartRun();
             }}
           >
@@ -680,6 +687,18 @@ export function RunList({
           </form>
         </DialogContent>
       </Dialog>}
+      <ConfirmDialog
+        open={destroyConfirmOpen}
+        onOpenChange={(open): void => { setDestroyConfirmOpen(open); }}
+        title="Destroy infrastructure?"
+        description="This run will plan the destruction of all managed resources in this workspace. It never applies automatically: a destroy run from this dialog always needs a separate apply confirmation. Destroyed infrastructure usually cannot be recovered."
+        confirmText="Start destroy run"
+        confirmVariant="destructive"
+        onConfirm={(): void => {
+          setDestroyConfirmOpen(false);
+          void handleStartRun();
+        }}
+      />
     </div>
   );
 }

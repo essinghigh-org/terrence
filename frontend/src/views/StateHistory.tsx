@@ -1,12 +1,13 @@
 import { EmptyState } from "../components/EmptyState";
 import { useEffect, useRef, useState } from "react";
-import { isString } from "../lib/type-guards";
+import { isNumber, isRecord, isString } from "../lib/type-guards";
 import { Link } from "react-router-dom";
 import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/utils";
 import { formatRunStatusForUi } from "@/lib/run-labels";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { Upload } from "lucide-react";
 import { toast } from "@/components/ui/toast";
@@ -69,6 +70,12 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
   const [selectedState, setSelectedState] = useState<string | null>(null);
   const [loadingStateId, setLoadingStateId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [pendingUpload, setPendingUpload] = useState<{
+    fileName: string;
+    rawText: string;
+    serial: number | null;
+    lineage: string | null;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect((): (() => void) => {
@@ -150,13 +157,37 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
     if (file === undefined) return;
+    let rawState: string;
+    try {
+      rawState = await file.text();
+    } catch (error: unknown) {
+      const message = error instanceof Error && error.message !== "" ? error.message : "The file could not be read.";
+      toast.add({ title: "Could not read state file", description: message, type: "error" });
+      return;
+    }
+    let serial: number | null = null;
+    let lineage: string | null = null;
+    try {
+      const parsed: unknown = JSON.parse(rawState);
+      if (isRecord(parsed)) {
+        if (isNumber(parsed["serial"])) serial = parsed["serial"];
+        if (isString(parsed["lineage"]) && parsed["lineage"] !== "") lineage = parsed["lineage"];
+      }
+    } catch {
+      // Unparseable files still confirm, with unknown serial/lineage shown.
+    }
+    setPendingUpload({ fileName: file.name, rawText: rawState, serial, lineage });
+  };
+
+  const performUpload = async (): Promise<void> => {
+    if (pendingUpload === null) return;
+    setPendingUpload(null);
     setUploading(true);
     try {
-      const rawState = await file.text();
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
       const response = await fetchApi(`/workspaces/${workspaceId}/state-versions/upload`, {
         method: "POST",
-        body: rawState,
+        body: pendingUpload.rawText,
       }) as { data?: StateItem };
       const uploadedState = response.data;
       if (uploadedState !== undefined) {
@@ -324,6 +355,42 @@ s.attributes["serial"] as number}</p>
           </pre>
         </DialogContent>
       </Dialog>
+      <ConfirmDialog
+        open={pendingUpload !== null}
+        onOpenChange={(open): void => { if (!open) setPendingUpload(null); }}
+        title="Upload state version?"
+        description={((): React.ReactNode => {
+          if (pendingUpload === null) return null;
+          const latest = loadState.kind === "ready" && loadState.states.length > 0 ? loadState.states[0] : undefined;
+          const currentSerial = latest !== undefined && isNumber(latest.attributes["serial"]) ? latest.attributes["serial"] : null;
+          const currentLineage = isString(latest?.attributes["lineage"]) && latest.attributes["lineage"] !== ""
+            ? latest.attributes["lineage"]
+            : null;
+          const stale = pendingUpload.serial !== null && currentSerial !== null && pendingUpload.serial <= currentSerial;
+          const mismatch = pendingUpload.lineage !== null && currentLineage !== null && pendingUpload.lineage !== currentLineage;
+          return (
+            <span className="block space-y-1">
+              <span className="block">File <strong>{pendingUpload.fileName}</strong> becomes the latest state version.</span>
+              <span className="block">
+                Uploaded serial: {pendingUpload.serial ?? "unknown"} · Lineage: {pendingUpload.lineage ?? "unknown"}
+              </span>
+              <span className="block">
+                Current serial: {currentSerial ?? "none"} · Lineage: {currentLineage ?? "unknown"}
+              </span>
+              {(stale || mismatch) && (
+                <span className="block font-medium text-destructive">
+                  {stale ? "The uploaded serial is not newer than the current one. " : ""}
+                  {mismatch ? "The lineage does not match the current state — this looks like a different state entirely. " : ""}
+                  Upload only if you intend to replace history.
+                </span>
+              )}
+            </span>
+          );
+        })()}
+        confirmText="Upload state"
+        confirmVariant="destructive"
+        onConfirm={(): void => { void performUpload(); }}
+      />
     </div>
   );
 }

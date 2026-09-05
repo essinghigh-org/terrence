@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { StateHistory } from "../src/views/StateHistory";
 import { isString } from "../src/lib/type-guards";
@@ -119,9 +119,37 @@ test("uploads a Terraform state file and adds the new state version", async () =
   fireEvent.change(view.getByLabelText("Upload Terraform/OpenTofu state"), { target: { files: [file] } });
 
   await waitFor((): void => {
+    expect(view.getByRole("heading", { name: "Upload state version?" })).toBeTruthy();
+  });
+  fireEvent.click(within(view.getByRole("dialog")).getByRole("button", { name: "Upload state" }));
+
+  await waitFor((): void => {
     expect(view.getByText("sv-uploaded")).toBeTruthy();
   });
   expect(view.getByRole("button", { name: "Upload state" })).toBeTruthy();
+});
+
+test("unreadable state files error without opening the confirm dialog", async () => {
+  const seen: string[] = [];
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = requestUrl(input);
+    seen.push(`${init?.method ?? "GET"} ${url}`);
+    if (url === "/api/v2/workspaces/ws-1/state-versions") return json({ data: [], meta: { pagination: { "next-page": null } } });
+    throw new Error(`Unexpected request: ${url}`);
+  })) as unknown as typeof fetch;
+
+  const view = render(<MemoryRouter><StateHistory workspaceId="ws-1" /></MemoryRouter>);
+  await waitFor((): void => {
+    expect(view.getByText("No state versions recorded yet.")).toBeTruthy();
+  });
+
+  const file = new File(["unreadable"], "terraform.tfstate", { type: "application/json" });
+  Object.defineProperty(file, "text", { value: (): Promise<string> => Promise.reject(new Error("disk gone")), configurable: true });
+  fireEvent.change(view.getByLabelText("Upload Terraform/OpenTofu state"), { target: { files: [file] } });
+
+  await new Promise((resolve): void => { setTimeout(resolve, 100); });
+  expect(view.queryByRole("dialog")).toBeNull();
+  expect(seen.some((entry: string): boolean => entry.includes("state-versions/upload"))).toBe(false);
 });
 
 test("falls back to the raw state payload when the fetched state JSON cannot be parsed", async () => {

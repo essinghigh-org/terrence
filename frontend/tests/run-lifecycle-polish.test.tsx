@@ -426,6 +426,10 @@ test("clones an existing run's settings into the new-run dialog", async () => {
 
   fireEvent.click(view.getByRole("button", { name: "Start run" }));
   await waitFor((): void => {
+    expect(view.getByRole("heading", { name: "Destroy infrastructure?" })).toBeTruthy();
+  });
+  fireEvent.click(view.getByRole("button", { name: "Start destroy run" }));
+  await waitFor((): void => {
     expect(view.getByText("Cloned run detail")).toBeTruthy();
   });
   expect(createBody).toMatchObject({
