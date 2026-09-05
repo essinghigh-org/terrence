@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { exists, mkdir, readFile, rm } from "node:fs/promises";
 import { db } from "../db";
 import { stateOutputIndex, stateVersions, workspaces, runs, organizationMemberships, teams, type users } from "../db/schema";
-import { eq, and, desc, count, inArray } from "drizzle-orm";
+import { eq, and, desc, count, inArray, or, isNull } from "drizzle-orm";
 import { stateVersionResource, stateOutputResources } from "../lib/response";
 import { encryptStatePayload, parseTerraformStatePayload } from "../lib/validation";
 import {
@@ -25,7 +25,7 @@ import {
 import { isUniqueConstraintError } from "../lib/validation";
 import { authPlugin } from "../auth";
 import { scheduleExplorerInventory } from "../lib/explorer-inventory";
-import { insertStateOutputIndex } from "../lib/state-output-index";
+import { insertStateOutputIndex, replaceStateOutputIndex } from "../lib/state-output-index";
 import { persistUploadBody } from "../lib/upload-body";
 import { storageDir } from "../db/driver";
 
@@ -44,6 +44,23 @@ type ParamCtx = Readonly<{
 
 const MAX_IMPORTED_STATE_BYTES = 100 * 1024 * 1024;
 export const MAX_LEGACY_STATE_OUTPUT_CANDIDATES = 100;
+
+// Issue #578: serialize deferred uploads per state version. The conditional
+// finalize inside each endpoint is the cross-process correctness backstop
+// (exactly one concurrent PUT can win); the mutex gives the loser a fast 409
+// without both sides transferring bodies. Entries are request-scoped and
+// always released, so unlike a DB claim they can never stick after a crash.
+const stateUploadLocks = new Set<string>();
+
+function tryAcquireStateUpload(stateVersionId: string): boolean {
+  if (stateUploadLocks.has(stateVersionId)) return false;
+  stateUploadLocks.add(stateVersionId);
+  return true;
+}
+
+function releaseStateUpload(stateVersionId: string): void {
+  stateUploadLocks.delete(stateVersionId);
+}
 
 async function withStateSerialRetry<T>(operation: () => Promise<T>): Promise<T> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -478,36 +495,61 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (sv.status !== "pending" || (typeof sv.statePayload === "string" && sv.statePayload !== "")) {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State content was already uploaded" }] };
     }
-    const rawStateResult = await requestBodyText(body, request);
-    if (!rawStateResult.ok) {
-      (set as { status: number }).status = rawStateResult.reason === "too-large" ? 413 : 400;
-      return { errors: [{ status: String(rawStateResult.reason === "too-large" ? 413 : 400), title: rawStateResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] };
+    // Issue #578: claim before the network-bound body transfer so two
+    // simultaneous PUTs do not both stream bodies; the conditional finalize
+    // below is the atomic backstop.
+    if (!tryAcquireStateUpload(stateVersionId)) {
+      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" }] };
     }
-    const rawState = rawStateResult.text;
-    if (rawState === "" || parseStatePayload(rawState) === null) {
-      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State content must be valid JSON" }] };
+    try {
+      const rawStateResult = await requestBodyText(body, request);
+      if (!rawStateResult.ok) {
+        (set as { status: number }).status = rawStateResult.reason === "too-large" ? 413 : 400;
+        return { errors: [{ status: String(rawStateResult.reason === "too-large" ? 413 : 400), title: rawStateResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] };
+      }
+      const rawState = rawStateResult.text;
+      if (rawState === "" || parseStatePayload(rawState) === null) {
+        (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State content must be valid JSON" }] };
+      }
+      const parsedTerraformState = parseTerraformStatePayload(rawState);
+      if (parsedTerraformState === null) {
+        (set as { status: number }).status = 400;
+        return { errors: [{ status: "400", title: "Bad Request", detail: "State content must be a valid Terraform/OpenTofu state file" }] };
+      }
+      const latestState = await db.query.stateVersions.findFirst({
+        where: and(eq(stateVersions.workspaceId, sv.workspaceId), eq(stateVersions.status, "finalized")),
+        orderBy: [desc(stateVersions.serial)],
+        columns: { statePayload: true },
+      });
+      const lineageError = stateLineageError(latestState, parsedTerraformState);
+      if (lineageError !== null) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lineageError }] };
+      }
+      const encrypted = await encryptStatePayload(rawState);
+      const decodedJsonState = sv.jsonState === null ? null : decodeStatePayload(sv.jsonState);
+      // Atomic conditional finalize: exactly one concurrent PUT can move the
+      // version out of pending. The output index is rebuilt in the same
+      // transaction so it can never mix output names across writers.
+      const finalized = await db.transaction(async (tx): Promise<boolean> => {
+        const won = await tx.update(stateVersions).set({ statePayload: encrypted, status: "finalized" }).where(and(
+          eq(stateVersions.id, stateVersionId),
+          eq(stateVersions.status, "pending"),
+          or(isNull(stateVersions.statePayload), eq(stateVersions.statePayload, "")),
+        )).returning({ id: stateVersions.id });
+        if (won.length === 0) return false;
+        await replaceStateOutputIndex(tx, stateVersionId, sv.workspaceId, decodedJsonState, rawState);
+        return true;
+      });
+      if (!finalized) {
+        (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State content was already uploaded" }] };
+      }
+      scheduleExplorerInventory(sv.workspaceId);
+      (set as { status: number }).status = 200;
+      return {};
+    } finally {
+      releaseStateUpload(stateVersionId);
     }
-    const parsedTerraformState = parseTerraformStatePayload(rawState);
-    if (parsedTerraformState === null) {
-      (set as { status: number }).status = 400;
-      return { errors: [{ status: "400", title: "Bad Request", detail: "State content must be a valid Terraform/OpenTofu state file" }] };
-    }
-    const latestState = await db.query.stateVersions.findFirst({
-      where: and(eq(stateVersions.workspaceId, sv.workspaceId), eq(stateVersions.status, "finalized")),
-      orderBy: [desc(stateVersions.serial)],
-      columns: { statePayload: true },
-    });
-    const lineageError = stateLineageError(latestState, parsedTerraformState);
-    if (lineageError !== null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lineageError }] };
-    }
-    await db.update(stateVersions).set({ statePayload: await encryptStatePayload(rawState), status: "finalized" }).where(eq(stateVersions.id, stateVersionId));
-    await insertStateOutputIndex(db, stateVersionId, sv.workspaceId,
-      sv.jsonState === null ? null : decodeStatePayload(sv.jsonState), rawState);
-    scheduleExplorerInventory(sv.workspaceId);
-    (set as { status: number }).status = 200;
-    return {};
   })
   .put("/api/v2/state-versions/:state_version_id/json-upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
@@ -521,21 +563,44 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (typeof sv.jsonState === "string" && sv.jsonState !== "") {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "JSON state content was already uploaded" }] };
     }
-    const jsonStateResult = await requestBodyText(body, request);
-    if (!jsonStateResult.ok) {
-      (set as { status: number }).status = jsonStateResult.reason === "too-large" ? 413 : 400;
-      return { errors: [{ status: String(jsonStateResult.reason === "too-large" ? 413 : 400), title: jsonStateResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] };
+    if (!tryAcquireStateUpload(stateVersionId)) {
+      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" }] };
     }
-    const jsonState = jsonStateResult.text;
-    if (jsonState === "" || parseStatePayload(jsonState) === null) {
-      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }] };
+    try {
+      const jsonStateResult = await requestBodyText(body, request);
+      if (!jsonStateResult.ok) {
+        (set as { status: number }).status = jsonStateResult.reason === "too-large" ? 413 : 400;
+        return { errors: [{ status: String(jsonStateResult.reason === "too-large" ? 413 : 400), title: jsonStateResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] };
+      }
+      const jsonState = jsonStateResult.text;
+      if (jsonState === "" || parseStatePayload(jsonState) === null) {
+        (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }] };
+      }
+      const encrypted = await encryptStatePayload(jsonState);
+      // Issue #578: atomic conditional write plus index rebuild in one
+      // transaction, so concurrent PUTs cannot both win or mix index rows.
+      const uploaded = await db.transaction(async (tx): Promise<boolean> => {
+        const won = await tx.update(stateVersions).set({ jsonState: encrypted }).where(and(
+          eq(stateVersions.id, stateVersionId),
+          or(isNull(stateVersions.jsonState), eq(stateVersions.jsonState, "")),
+        )).returning({ id: stateVersions.id, status: stateVersions.status, statePayload: stateVersions.statePayload });
+        const row = won[0];
+        if (row === undefined) return false;
+        if (row.status === "finalized") {
+          await replaceStateOutputIndex(tx, stateVersionId, sv.workspaceId,
+            jsonState, row.statePayload === null ? null : decodeStatePayload(row.statePayload));
+        }
+        return true;
+      });
+      if (!uploaded) {
+        (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "JSON state content was already uploaded" }] };
+      }
+      scheduleExplorerInventory(sv.workspaceId);
+      (set as { status: number }).status = 200;
+      return {};
+    } finally {
+      releaseStateUpload(stateVersionId);
     }
-    await db.update(stateVersions).set({ jsonState: await encryptStatePayload(jsonState) }).where(eq(stateVersions.id, stateVersionId));
-    if (sv.status === "finalized") await insertStateOutputIndex(db, stateVersionId, sv.workspaceId,
-      jsonState, sv.statePayload === null ? null : decodeStatePayload(sv.statePayload));
-    scheduleExplorerInventory(sv.workspaceId);
-    (set as { status: number }).status = 200;
-    return {};
   })
   .put("/api/v2/state-versions/:state_version_id/json-outputs-upload", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
@@ -546,21 +611,43 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (ws === undefined || (!validSignedApiURL(request, path, "PUT") && !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-write")))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    const jsonStateOutputsResult = await requestBodyText(body, request);
-    if (!jsonStateOutputsResult.ok) {
-      (set as { status: number }).status = jsonStateOutputsResult.reason === "too-large" ? 413 : 400;
-      return { errors: [{ status: String(jsonStateOutputsResult.reason === "too-large" ? 413 : 400), title: jsonStateOutputsResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] };
+    // Issue #578: outputs are single-shot on a pending version. Rewriting a
+    // finalized version would silently mutate immutable history (and the old
+    // code appended those rows to the output index). The blob remains
+    // readable as an MCP fallback once set.
+    if (typeof sv.jsonStateOutputs === "string" && sv.jsonStateOutputs !== "") {
+      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "JSON state outputs were already uploaded" }] };
     }
-    const jsonStateOutputs = jsonStateOutputsResult.text;
-    if (jsonStateOutputs === "" || parseStatePayload(jsonStateOutputs) === null) {
-      (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state outputs must be valid JSON" }] };
+    if (sv.status === "finalized") {
+      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State version is finalized; outputs can no longer be uploaded" }] };
     }
-    await db.update(stateVersions).set({ jsonStateOutputs: await encryptStatePayload(jsonStateOutputs) }).where(eq(stateVersions.id, stateVersionId));
-    if (sv.status === "finalized") await insertStateOutputIndex(db, stateVersionId, sv.workspaceId,
-      jsonStateOutputs, sv.statePayload === null ? null : decodeStatePayload(sv.statePayload));
-    scheduleExplorerInventory(sv.workspaceId);
-    (set as { status: number }).status = 200;
-    return {};
+    if (!tryAcquireStateUpload(stateVersionId)) {
+      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" }] };
+    }
+    try {
+      const jsonStateOutputsResult = await requestBodyText(body, request);
+      if (!jsonStateOutputsResult.ok) {
+        (set as { status: number }).status = jsonStateOutputsResult.reason === "too-large" ? 413 : 400;
+        return { errors: [{ status: String(jsonStateOutputsResult.reason === "too-large" ? 413 : 400), title: jsonStateOutputsResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] };
+      }
+      const jsonStateOutputs = jsonStateOutputsResult.text;
+      if (jsonStateOutputs === "" || parseStatePayload(jsonStateOutputs) === null) {
+        (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state outputs must be valid JSON" }] };
+      }
+      const encrypted = await encryptStatePayload(jsonStateOutputs);
+      const uploaded = await db.update(stateVersions).set({ jsonStateOutputs: encrypted }).where(and(
+        eq(stateVersions.id, stateVersionId),
+        or(isNull(stateVersions.jsonStateOutputs), eq(stateVersions.jsonStateOutputs, "")),
+      )).returning({ id: stateVersions.id });
+      if (uploaded.length === 0) {
+        (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "JSON state outputs were already uploaded" }] };
+      }
+      scheduleExplorerInventory(sv.workspaceId);
+      (set as { status: number }).status = 200;
+      return {};
+    } finally {
+      releaseStateUpload(stateVersionId);
+    }
   })
   .post("/api/v2/state-versions/:state_version_id/actions/rollback", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
