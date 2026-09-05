@@ -41,6 +41,24 @@ describe("Notification rich destination adapters (kanban 7.11)", () => {
     expect(JSON.parse(render.body)).toEqual(runPayload);
   });
 
+  it("discord destinations render a webhook embeds payload (issue #633)", () => {
+    const render = renderPayloadForDestination(config("discord"), runPayload);
+    expect(render.contentType).toBe("application/json");
+    const discord = JSON.parse(render.body) as { content: string; embeds: Record<string, unknown>[] };
+    expect(discord.content).toBe("Run Completed");
+    expect(discord.embeds).toHaveLength(1);
+    expect(discord.embeds[0]).toMatchObject({ title: "Run Completed" });
+    const fields = discord.embeds[0]?.["fields"] as { name: string }[];
+    expect(fields.map((field) => field.name)).toContain("Workspace");
+    expect(typeof discord.embeds[0]?.["color"]).toBe("number");
+  });
+
+  it("discord failures render a red accent", () => {
+    const failed = { ...runPayload, notifications: [{ message: "Run Errored", trigger: "run:errored", run_status: "errored" }] };
+    const render = renderPayloadForDestination(config("discord"), failed);
+    const discord = JSON.parse(render.body) as { embeds: Record<string, unknown>[] };
+    expect(discord.embeds[0]?.["color"]).toBe(0xc0392b);
+  });
   it("slack destinations render an incoming-webhook blocks payload", () => {
     const render = renderPayloadForDestination(config("slack"), runPayload);
     expect(render.contentType).toBe("application/json");

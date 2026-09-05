@@ -12,7 +12,7 @@ import {
   type users,
   workspaces,
 } from "../db/schema";
-import { isOwnershipVerified, postNotification, verifyDestinationOwnership, type NotificationDelivery } from "../lib/notifications";
+import { isOwnershipVerified, lastDeliveryForResource, postNotification, verifyDestinationOwnership, type NotificationDelivery } from "../lib/notifications";
 import { checkOrganizationPermission, checkOrgPermission, findAuthorizedWorkspace, notFound, pageRequest, pagination } from "../lib/utils";
 import { isNotificationDestination, isNotificationTrigger } from "../lib/constants";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "../lib/secrets";
@@ -126,7 +126,7 @@ function createValidationErrors(name: string, url: string, destinationType: stri
   const errors: FieldError[] = [];
   if (isEncryptedTokenInput(token)) errors.push({ status: "422", title: "Unprocessable Entity", detail: "token must be plaintext", source: { pointer: "/data/attributes/token" } });
   if (name === "") errors.push({ status: "422", title: "Unprocessable Entity", detail: "Name is required", source: { pointer: "/data/attributes/name" } });
-  if (!isNotificationDestination(destinationType)) errors.push({ status: "422", title: "Unprocessable Entity", detail: "destination-type must be one of generic, slack, microsoft-teams, or email", source: { pointer: "/data/attributes/destination-type" } });
+  if (!isNotificationDestination(destinationType)) errors.push({ status: "422", title: "Unprocessable Entity", detail: "destination-type must be one of generic, slack, discord, microsoft-teams, or email", source: { pointer: "/data/attributes/destination-type" } });
   if (destinationType === "email") {
     if (!isValidEmailAddresses(emailAddresses)) {
       errors.push({ status: "422", title: "Unprocessable Entity", detail: "email-addresses must contain at least one valid email address", source: { pointer: "/data/attributes/email-addresses" } });
@@ -169,6 +169,7 @@ function notificationResource(
       enabled: configuration.enabled === true,
       token: null,
       "delivery-responses": deliveryResponses.map(deliveryResource),
+      "last-delivery": lastDeliveryForResource(configuration.id),
       "email-all-members": configuration.emailAllMembers === true,
       "email-user-ids": configuration.emailUserIds ?? [],
     },

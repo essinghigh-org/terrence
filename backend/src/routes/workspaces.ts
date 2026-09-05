@@ -15,7 +15,7 @@ import { decodeStatePayload, isUniqueConstraintError, validVariableAttributes } 
 import { variableValueForWrite, variableValueForRead } from "../lib/variable-crypto";
 import { validateVersion, caseInsensitiveLike, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, parseStatePayload, auditLog, strictAuditEnabled, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspace, lockPrincipal, ownsWorkspaceLock, ifMatchSatisfied, type DeepReadonly } from "../lib/utils";
 
-import { normalizeWorkingDirectory } from "../workspace";
+import { archiveContainsWorkingDir, invalidTriggerPatternIndexes, invalidTriggerPrefixIndexes, listArchiveMembers, MAX_ARCHIVE_METADATA_BYTES, normalizeWorkingDirectory, readBoundedProcessOutput, summarizeTopLevelEntries } from "../workspace";
 import { authPlugin } from "../auth";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
 import { ensureDefaultProject, isAutoDestroyDuration, parseSettingOverwrites } from "./projects";
@@ -101,7 +101,6 @@ function dependencyGraphFromState(statePayload: string | null): readonly Depende
 }
 
 const MAX_README_BYTES = 256 * 1024;
-const MAX_ARCHIVE_METADATA_BYTES = 4 * 1024 * 1024;
 const README_ARCHIVE_TIMEOUT_MS = 5_000;
 
 // Bound tar output so malformed archives cannot make the API buffer unbounded data.
@@ -110,51 +109,7 @@ async function readProcessOutput(process: Readonly<{
   stdout: Readonly<ReadableStream<Uint8Array>>;
   kill: (exitCode?: number | NodeJS.Signals) => void;
 }>, maxBytes: number): Promise<string | null> {
-  const read = async (): Promise<string | null> => {
-    const reader = process.stdout.getReader();
-    const decoder = new TextDecoder();
-    let bytes = 0;
-    let output = "";
-    try {
-      while (true) {
-        const result = await reader.read();
-        if (result.done) break;
-        bytes += result.value.byteLength;
-        if (bytes > maxBytes) {
-          process.kill("SIGKILL");
-          return null;
-        }
-        output += decoder.decode(result.value, { stream: true });
-      }
-      output += decoder.decode();
-      return await process.exited === 0 ? output : null;
-    } finally {
-      reader.releaseLock();
-    }
-  };
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const readPromise = read();
-  const timeoutPromise = new Promise<null>((resolve): void => {
-    timer = setTimeout((): void => {
-      process.kill("SIGKILL");
-      resolve(null);
-    }, README_ARCHIVE_TIMEOUT_MS);
-  });
-  try {
-    const result = await Promise.race([readPromise, timeoutPromise]);
-    if (result === null) {
-      process.kill("SIGKILL");
-      await Promise.allSettled([readPromise, process.exited]);
-    }
-    return result;
-  } catch {
-    process.kill("SIGKILL");
-    await Promise.allSettled([readPromise, process.exited]);
-    return null;
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
+  return readBoundedProcessOutput(process, maxBytes, README_ARCHIVE_TIMEOUT_MS);
 }
 
 async function readmeFromArchive(archivePath: string): Promise<string | null> {
@@ -1286,11 +1241,78 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       }
     }
     return {
-      data: page.map((entry): Record<string, unknown> =>
-        entry.source === "workspace"
-          ? workspaceVariableResource(entry.variable)
-          : variableSetVariableResource(entry.variable)),
+      data: page.map((entry): Record<string, unknown> => {
+        if (entry.source === "workspace") return workspaceVariableResource(entry.variable);
+        // Issue #627: name the winning set on inherited rows so clients can
+        // show which set won a duplicated key (additive attributes).
+        const base = variableSetVariableResource(entry.variable);
+        const baseAttributes = base["attributes"];
+        return {
+          ...base,
+          attributes: {
+            ...(typeof baseAttributes === "object" && baseAttributes !== null ? baseAttributes : {}),
+            "variable-set-id": entry.setId,
+            "variable-set-name": entry.setName,
+          },
+        };
+      }),
       ...pagination(request, number, size, totalCount),
+    };
+  })
+  // Dry-run trigger-pattern preview (issue #628): match the saved patterns
+  // against the latest uploaded configuration file list so authors see what
+  // would (and would not) trigger a run before pushing. Same normalization
+  // as the webhook matcher, so the preview agrees with live behavior.
+  .get("/api/v2/workspaces/:workspace_id/trigger-preview", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const latestCv = await db.query.configurationVersions.findFirst({
+      where: and(
+        eq(configurationVersions.workspaceId, workspaceId),
+        eq(configurationVersions.status, "uploaded"),
+      ),
+      orderBy: [desc(configurationVersions.createdAt)],
+      columns: { id: true, archivePath: true },
+    });
+    const cvArchivePath = latestCv?.archivePath;
+    if (latestCv === undefined || typeof cvArchivePath !== "string" || cvArchivePath === "" || !(await Bun.file(cvArchivePath).exists())) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Trigger preview needs an uploaded configuration version with a readable archive" }] };
+    }
+    const members = await listArchiveMembers(cvArchivePath);
+    if (members === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Trigger preview could not list the latest configuration archive" }] };
+    }
+    const files = [...members].map((member): string => member.replace(/^\.\//, "")).filter((file): boolean => file !== "" && !file.endsWith("/"));
+    const patterns = Array.isArray(ws.triggerPatterns) ? ws.triggerPatterns.filter((pattern): pattern is string => typeof pattern === "string" && pattern !== "") : [];
+    const previews = patterns.map((pattern): Record<string, unknown> => {
+      let matched: string[] = [];
+      try {
+        const glob = new Bun.Glob(pattern.replace(/^\/+/, ""));
+        matched = files.filter((file): boolean => {
+          try {
+            return glob.match(file);
+          } catch {
+            return false;
+          }
+        });
+      } catch {
+        matched = [];
+      }
+      return { pattern, matches: matched.length, "matched-files": matched.slice(0, 10), truncated: matched.length > 10 };
+    });
+    return {
+      data: {
+        id: workspaceId,
+        type: "trigger-preview",
+        attributes: {
+          "configuration-version-id": latestCv.id,
+          "files-checked": files.length,
+          patterns: previews,
+        },
+      },
     };
   })
   .post("/api/v2/workspaces/:workspace_id/vars", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -1761,6 +1783,33 @@ async function updateWorkspaceResponse(
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: msg }] };
     }
   }
+  // Issue #628: fail at save when an explicitly set directory matches
+  // nothing in the latest configuration instead of failing mid-plan.
+  // Skipped when no readable configuration exists yet; drift after save
+  // still surfaces the worker error naming the directory.
+  if (workingDirectory !== undefined && normalizedWorkingDirectory !== null) {
+    const latestCv = await db.query.configurationVersions.findFirst({
+      where: and(
+        eq(configurationVersions.workspaceId, workspace.id),
+        eq(configurationVersions.status, "uploaded"),
+      ),
+      orderBy: [desc(configurationVersions.createdAt)],
+      columns: { archivePath: true },
+    });
+    const cvArchivePath = latestCv?.archivePath;
+    if (typeof cvArchivePath === "string" && cvArchivePath !== "" && await Bun.file(cvArchivePath).exists()) {
+      const members = await listArchiveMembers(cvArchivePath);
+      if (members === null) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "working-directory could not be validated: the latest configuration archive cannot be listed" }] };
+      }
+      if (!archiveContainsWorkingDir(members, normalizedWorkingDirectory)) {
+        const tops = summarizeTopLevelEntries(members);
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "working-directory " + JSON.stringify(normalizedWorkingDirectory) + " matches no directory in the latest configuration version" + (tops.length === 0 ? "." : " (top-level entries: " + tops.join(", ") + ")") }] };
+      }
+    }
+  }
 
   if (name !== undefined && name !== workspace.name) {
     const duplicate = await findWorkspaceByName(workspace.orgId, name);
@@ -1862,6 +1911,17 @@ async function updateWorkspaceResponse(
   if (lockedTagKey !== undefined) {
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Tag key "${lockedTagKey}" cannot override its inherited project tag` }] };
+  }
+  // Issue #628: fail at save on trigger entries that can never match
+  // (non-strings, blanks) instead of silently matching nothing at webhook
+  // time. Well-typed patterns stay accepted: preview them below.
+  if (Array.isArray(attributes["trigger-prefixes"])) {
+    const badPrefixes = invalidTriggerPrefixIndexes(attributes["trigger-prefixes"] as unknown[]);
+    if (badPrefixes.length > 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "trigger-prefixes entries must be non-blank strings (indexes: " + badPrefixes.join(", ") + ")" }] }; }
+  }
+  if (Array.isArray(attributes["trigger-patterns"])) {
+    const badPatterns = invalidTriggerPatternIndexes(attributes["trigger-patterns"] as unknown[]);
+    if (badPatterns.length > 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "trigger-patterns entries must be non-blank strings (indexes: " + badPatterns.join(", ") + ")" }] }; }
   }
   const updated: Partial<typeof workspaces.$inferInsert> = {
     name: name ?? workspace.name,

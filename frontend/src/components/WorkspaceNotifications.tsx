@@ -43,7 +43,7 @@ import {
 } from "@/components/ui/table";
 import { fetchApi } from "@/lib/api";
 
-type DestinationType = "generic" | "slack" | "microsoft-teams" | "email";
+type DestinationType = "generic" | "slack" | "discord" | "microsoft-teams" | "email";
 
 type NotificationConfiguration = {
   id: string;
@@ -51,7 +51,12 @@ type NotificationConfiguration = {
     name: string;
     "destination-type": DestinationType;
     url: string;
-    "email-addresses"?: string[];
+    "email-addresses"?: string[];    "last-delivery"?: {
+      "sent-at": string;
+      successful: boolean;
+      code: string;
+      error: string | null;
+    } | null;
     triggers: string[];
     enabled: boolean;
     token?: string | null;
@@ -272,6 +277,19 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
     }
   };
 
+  const refreshConfiguration = async (id: string): Promise<void> => {
+    try {
+      const refreshed = await fetchApi<{ data?: NotificationConfiguration }>(`/notification-configurations/${id}`);
+      const data = refreshed.data;
+      if (data === undefined) return;
+      setConfigurations((current: NotificationConfiguration[]): NotificationConfiguration[] =>
+        current.map((item: NotificationConfiguration): NotificationConfiguration => (item.id === id ? data : item)),
+      );
+    } catch {
+      // Advisory refresh only; the list keeps its previous state.
+    }
+  };
+
   const verifyConfiguration = async (configuration: NotificationConfiguration): Promise<void> => {
     setPageError("");
     setNotice("");
@@ -280,6 +298,9 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
       setNotice(`Verification requested for ${configuration.attributes.name}.`);
     } catch (error: unknown) {
       setPageError(messageFrom(error, "Failed to verify notification configuration"));
+    } finally {
+      // The attempt recorded a last-delivery outcome server-side.
+      await refreshConfiguration(configuration.id);
     }
   };
 
@@ -341,7 +362,12 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
                 {!loading && configurations.map((configuration: NotificationConfiguration): React.JSX.Element => (
                   <TableRow key={configuration.id}>
                     <TableCell className="font-medium">{configuration.attributes.name}</TableCell>
-                    <TableCell>{configuration.attributes["destination-type"]}</TableCell>
+                    <TableCell>{configuration.attributes["destination-type"]}{((): React.JSX.Element | null => {
+                      const last = configuration.attributes["last-delivery"];
+                      if (last === undefined || last === null || last.successful) return null;
+                      const detail = "Last delivery failed (" + last.code + ")" + (last.error === null || last.error === "" ? "" : ": " + last.error);
+                      return (<p className="mt-1 text-xs text-destructive" title={"Sent at " + last["sent-at"]}>{detail}</p>);
+                    })()}</TableCell>
                     <TableCell>{configuration.attributes.triggers.length}</TableCell>
                     <TableCell>
                       <Badge variant={configuration.attributes.enabled ? "secondary" : "outline"}>
@@ -427,6 +453,7 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
                 >
                   <SelectItem value="generic">Generic webhook</SelectItem>
                   <SelectItem value="slack">Slack</SelectItem>
+                  <SelectItem value="discord">Discord</SelectItem>
                   <SelectItem value="microsoft-teams">Microsoft Teams</SelectItem>
                   <SelectItem value="email">Email</SelectItem>
                 </Select>

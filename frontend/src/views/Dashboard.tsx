@@ -45,7 +45,7 @@ export function Dashboard(): React.JSX.Element {
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
-  const [iacBinary, setIacBinary] = useState("tofu");
+  const [iacBinary, setIacBinary] = useState("terraform");
   const [saving, setSaving] = useState(false);
 
   const loadOrganizations = useCallback(async (signal?: Readonly<AbortSignal>): Promise<void> => {
@@ -234,7 +234,7 @@ export function Dashboard(): React.JSX.Element {
                   </Link>
                 </TableCell>
                 <TableCell className="capitalize text-muted-foreground">
-                  {organization.attributes["default-iac-binary"] ?? "tofu"}
+                  {organization.attributes["default-iac-binary"] ?? "terraform"}
                 </TableCell>
                 <TableCell className="text-right">
                   <Link

@@ -94,7 +94,7 @@ export function OrganizationSettings(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [name, setName] = useState("");
-  const [defaultIacBinary, setDefaultIacBinary] = useState("tofu");
+  const [defaultIacBinary, setDefaultIacBinary] = useState("terraform");
   const [defaultTerraformVersion, setDefaultTerraformVersion] = useState("latest");
   const [moduleTestTokenTtl, setModuleTestTokenTtl] = useState(600);
   const [notificationEmail, setNotificationEmail] = useState("");
@@ -173,7 +173,7 @@ export function OrganizationSettings(): React.JSX.Element {
 // SAFETY: the fixture field is a string per the API contract.
       setName(res.data.attributes["name"] as string);
 // SAFETY: the fixture field matches the API contract type.
-      setDefaultIacBinary((res.data.attributes["default-iac-binary"] as string | undefined) ?? "tofu");
+      setDefaultIacBinary((res.data.attributes["default-iac-binary"] as string | undefined) ?? "terraform");
 // SAFETY: the fixture field matches the API contract type.
       setDefaultTerraformVersion((res.data.attributes["default-terraform-version"] as string | undefined) ?? "latest");
       const ttl = res.data.attributes["module-test-token-ttl"];

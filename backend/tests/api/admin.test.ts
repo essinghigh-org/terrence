@@ -50,7 +50,7 @@ describe("Admin Operations API contract", () => {
     ]);
     await db.insert(organizations).values([
       { id: orgId, name: orgName },
-      { id: isolatedOrgId, name: isolatedOrgName },
+      { id: isolatedOrgId, name: isolatedOrgName, defaultIacBinary: "tofu" },
     ]);
     await db.insert(organizationMemberships).values([
       { id: crypto.randomUUID(), userId, orgId, role: "owner" },
@@ -115,6 +115,12 @@ describe("Admin Operations API contract", () => {
     expect(getOrgsRes.status).toBe(200);
     const getOrgsBody = await getOrgsRes.json();
     expect(getOrgsBody.data.some((o: any) => o.id === orgName)).toBeTrue();
+    // Admin orgs surface the default engine under "default-iac-binary"
+    // (CodeRabbit review): terraform default and explicit tofu.
+    const orgRow = getOrgsBody.data.find((o: any) => o.id === orgName);
+    expect(orgRow?.attributes?.["default-iac-binary"]).toBe("terraform");
+    const isolatedRow = getOrgsBody.data.find((o: any) => o.id === isolatedOrgName);
+    expect(isolatedRow?.attributes?.["default-iac-binary"]).toBe("tofu");
 
     // 4. Admin Workspaces list
     const getWsRes = await request("/api/v2/admin/workspaces");

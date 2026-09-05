@@ -402,3 +402,31 @@ describe.skipIf(!isPostgresEnv)("Postgres -> SQLite database export", (): void =
     expect(name).toBe("terrence-export-20260814-030405.db");
   });
 });
+
+// Issue #620: verification hash bounds. PG-independent: invalid bounds
+// fail before any source connection; a valid request starts the job.
+describe("db-export verification bounds", (): void => {
+  test("rejects out-of-range verification bounds", async (): Promise<void> => {
+    for (const attributes of [
+      { "postgres-url": "postgres://127.0.0.1:1/nope", "sample-limit": 0 },
+      { "postgres-url": "postgres://127.0.0.1:1/nope", "sample-limit": "many" },
+      { "postgres-url": "postgres://127.0.0.1:1/nope", "full-digest-limit": -3 },
+      { "postgres-url": "postgres://127.0.0.1:1/nope", "full-digest-limit": 2000000 },
+    ]) {
+      const response = await app.handle(adminRequest("/api/v2/admin/db-export", "POST", { data: { attributes } }));
+      expect(response.status).toBe(422);
+    }
+  });
+
+  test("accepts valid verification bounds and starts the job", async (): Promise<void> => {
+    const started = await app.handle(adminRequest("/api/v2/admin/db-export", "POST", {
+      data: { attributes: { "postgres-url": "postgres://127.0.0.1:1/nope", "sample-limit": 10, "full-digest-limit": 50 } },
+    }));
+    expect(started.status).toBe(202);
+    const id = ((await started.json()) as { data: { id: string } }).data.id;
+    // The unreachable source fails the job; the point is that validation
+    // passed and execution began.
+    const terminal = await waitForJob(id, 30_000);
+    expect(terminal.status).toBe("failed");
+  });
+});

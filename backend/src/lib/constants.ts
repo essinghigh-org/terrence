@@ -32,8 +32,13 @@ export const COMPATIBILITY_VERSION =
 // which would make TFP-API-Version unparseable and break version negotiation.
 // Keep the API version in its own constant, overridable independently.
 export const TFP_API_VERSION = process.env["TERRENCE_TFP_API_VERSION"]?.trim() || "2.6";
+/** One-line compatibility promise repeated in unsupported-endpoint errors
+ * (issue #643) so provider users hitting an unknown path learn the scope
+ * instead of guessing. Mirrors the README and compatibility doc wording. */
+export const COMPATIBILITY_PROMISE =
+  "Terrence supports the hashicorp/tfe provider surface, Terraform/OpenTofu remote workflows, and the product API; general TFE or HCP parity is not a goal.";
 
-export const NOTIFICATION_DESTINATIONS = ["generic", "slack", "microsoft-teams", "email"] as const;
+export const NOTIFICATION_DESTINATIONS = ["generic", "slack", "discord", "microsoft-teams", "email"] as const;
 export type NotificationDestination = (typeof NOTIFICATION_DESTINATIONS)[number];
 
 export const RUN_NOTIFICATION_TRIGGERS = [

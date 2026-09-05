@@ -552,7 +552,7 @@ export function WorkspaceSettings({
             </FieldGroup>
 
             <Field data-disabled={!canUpdate}>
-              <FieldLabel htmlFor="workspace-working-directory">Terraform working directory</FieldLabel>
+              <FieldLabel htmlFor="workspace-working-directory">{iacBinary === "tofu" ? "OpenTofu" : "Terraform"} working directory</FieldLabel>
               <Input
                 id="workspace-working-directory"
                 name="working-directory"

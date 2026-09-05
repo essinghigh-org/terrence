@@ -1,14 +1,45 @@
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { fetchApi } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { type DataItem, } from "./types";
+// Live run-concurrency surface (issue #632), best-effort: the queue table
+// renders without it when system-info is unreachable.
+type QueueStats = { limit: number; executing: number; queued: number | null };
+
 export function RunsAdmin(props: Readonly<{ runs: DataItem[]; handleCancelRun: (runId: string, force?: boolean) => Promise<void>; }>): React.JSX.Element {
   const { runs, handleCancelRun } = props;
+  const [queue, setQueue] = useState<QueueStats | null>(null);
+  useEffect((): (() => void) => {
+    let cancelled = false;
+    fetchApi("/api/v2/admin/system-info")
+      .then((response: unknown): void => {
+        if (cancelled) return;
+        const worker = (response as { data?: { worker?: Record<string, unknown> } }).data?.worker;
+        if (worker === undefined) return;
+        const limit = worker["run-concurrency-limit"];
+        const executing = worker["local-runs-executing"];
+        const queued = worker["runs-queued"];
+        if (typeof limit !== "number" || typeof executing !== "number") return;
+        // Null queued means the backend read failed: show the rest and mark
+        // the queue count unknown rather than rendering a false 0.
+        if (queued !== null && typeof queued !== "number") return;
+        setQueue({ limit, executing, queued });
+      })
+      .catch((): void => {
+        // Advisory summary only; the table below stands on its own.
+      });
+    return (): void => { cancelled = true; };
+  }, []);
   return (
     <Card>
       <CardHeader variant="section">
         <CardTitle className="text-lg">System run queue</CardTitle>
         <CardDescription>Monitor and control active execution runs</CardDescription>
+        {queue !== null && (
+          <p className="mt-2 text-sm text-muted-foreground">Concurrency limit {queue.limit} · {queue.executing} executing · {queue.queued === null ? "queued unknown" : `${String(queue.queued)} queued`} (limit from TERRENCE_RUN_CONCURRENCY)</p>
+        )}
       </CardHeader>
       <CardContent>
         <div className="rounded-md border overflow-x-auto">

@@ -106,7 +106,8 @@ test("creates a VCS workspace from choices listed for a manage-workspaces-only s
         name: "production",
         "auto-apply": false,
         "execution-mode": "remote",
-        "iac-binary": "tofu",
+        // Issue #629: no org default here, so the canonical terraform default applies.
+        "iac-binary": "terraform",
         "terraform-version": "latest",
         source: "tfe-api",
         "vcs-repo": {

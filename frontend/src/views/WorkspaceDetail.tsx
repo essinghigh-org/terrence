@@ -585,7 +585,7 @@ export function WorkspaceDetail({
     ].filter((part): part is string => part !== null).join(" · ")
     : null;
   const executionMode = workspace.attributes["execution-mode"] ?? "remote";
-  const iacBinary = workspace.attributes["iac-binary"] ?? "tofu";
+  const iacBinary = workspace.attributes["iac-binary"] ?? "terraform";
   const iacBinaryLabel = iacBinary === "tofu" ? "OpenTofu" : iacBinary;
   const engineVersion = workspace.attributes["terraform-version"] ?? "latest";
   const settingsSection = SETTINGS_SECTIONS[activeSection];

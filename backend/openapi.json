@@ -1349,6 +1349,16 @@
         ],
         "summary": "POST /api/v2/users",
         "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
           "201": {
             "description": "Created",
             "content": {
@@ -1373,9 +1383,6 @@
           },
           "406": {
             "description": "Not Acceptable"
-          },
-          "409": {
-            "description": "Conflict"
           },
           "413": {
             "description": "Payload Too Large"
@@ -6372,6 +6379,67 @@
         }
       }
     },
+    "/api/v2/workspaces/{workspace_id}/trigger-preview": {
+      "get": {
+        "operationId": "get-api-v2-workspaces-workspace-id-trigger-preview",
+        "tags": [
+          "workspaces"
+        ],
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "GET /api/v2/workspaces/{workspace_id}/trigger-preview",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not Modified"
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "406": {
+            "description": "Not Acceptable"
+          },
+          "413": {
+            "description": "Payload Too Large"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
     "/api/v2/workspaces/{workspace_id}/vars/{var_id}": {
       "get": {
         "operationId": "get-api-v2-workspaces-workspace-id-vars-var-id",
@@ -10549,6 +10617,9 @@
           },
           "406": {
             "description": "Not Acceptable"
+          },
+          "409": {
+            "description": "Conflict"
           },
           "413": {
             "description": "Payload Too Large"
@@ -30788,6 +30859,16 @@
         ],
         "summary": "POST /api/v2/policy-sets/{policy_set_id}/parameters",
         "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
           "201": {
             "description": "Created",
             "content": {

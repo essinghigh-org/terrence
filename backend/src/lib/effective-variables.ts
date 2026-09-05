@@ -11,7 +11,7 @@ import {
 
 export type EffectiveVariable =
   | { readonly source: "workspace"; readonly variable: typeof workspaceVariables.$inferSelect }
-  | { readonly source: "varset"; readonly variable: typeof variableSetVariables.$inferSelect };
+  | { readonly source: "varset"; readonly variable: typeof variableSetVariables.$inferSelect; readonly setId: string; readonly setName: string };
 
 /** Effective variable list for a workspace: workspace rows plus inherited
  * variable-set rows, deduplicated by category:key with the same precedence
@@ -69,10 +69,12 @@ export async function effectiveWorkspaceVariables(
     (setOrder.get(left.variableSetId) ?? Number.MAX_SAFE_INTEGER) - (setOrder.get(right.variableSetId) ?? Number.MAX_SAFE_INTEGER)
     || left.id.localeCompare(right.id));
   const effective = new Map<string, EffectiveVariable>();
+  const setNames = new Map(activeSets.map((set): readonly [string, string] => [set.id, set.name]));
+  const setNameOf = (variableSetId: string): string => setNames.get(variableSetId) ?? variableSetId;
   const dedupeKey = (category: string | null, key: string): string => `${category ?? ""}:${key}`;
   for (const variable of orderedSetVars) {
     if (!prioritySetIds.has(variable.variableSetId)) {
-      effective.set(dedupeKey(variable.category, variable.key), { source: "varset", variable });
+      effective.set(dedupeKey(variable.category, variable.key), { source: "varset", variable, setId: variable.variableSetId, setName: setNameOf(variable.variableSetId) });
     }
   }
   for (const variable of workspaceVars) {
@@ -80,7 +82,7 @@ export async function effectiveWorkspaceVariables(
   }
   for (const variable of orderedSetVars) {
     if (prioritySetIds.has(variable.variableSetId)) {
-      effective.set(dedupeKey(variable.category, variable.key), { source: "varset", variable });
+      effective.set(dedupeKey(variable.category, variable.key), { source: "varset", variable, setId: variable.variableSetId, setName: setNameOf(variable.variableSetId) });
     }
   }
   return [...effective.values()].sort((left, right): number =>

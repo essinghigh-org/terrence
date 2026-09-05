@@ -33,7 +33,7 @@ export function OrgsAdmin(props: Readonly<{ orgs: DataItem[]; }>): React.JSX.Ele
                     <TableCell className="px-4 py-3 font-medium text-foreground">{o.attributes.name}</TableCell>
                     <TableCell className="px-4 py-3">
                       <span className="rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary border border-primary/20">
-                        {o.attributes["iac-binary"] ?? "tofu"}
+                        {o.attributes["default-iac-binary"] ?? "terraform"}
                       </span>
                     </TableCell>
                     <TableCell className="px-4 py-3 text-muted-foreground">{o.attributes["default-terraform-version"] ?? "latest"}</TableCell>

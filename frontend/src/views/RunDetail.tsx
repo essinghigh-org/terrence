@@ -1986,7 +1986,7 @@ export function RunDetail({
             <dd className="mt-1 text-foreground">{attributes["auto-apply"] === true ? "Enabled" : "Disabled"}</dd>
           </div>
           <div>
-            <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Terraform version</dt>
+            <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Engine version</dt>
             <dd className="mt-1 text-foreground">{attributes["terraform-version"] ?? "Workspace default"}</dd>
           </div>
         </dl>

@@ -118,6 +118,11 @@ describe("admin system-info (kanban 12.10)", () => {
     expect(typeof (data["database"] as Record<string, unknown>)["sizeBytes"]).toBe("number");
     expect(typeof (data["database"] as Record<string, unknown>)["journalMode"]).toBe("string");
     expect(typeof (data["worker"] as { enabled: boolean }).enabled).toBe("boolean");
+    const worker = data["worker"] as { "run-concurrency-limit": number; "local-runs-executing": number; "runs-queued": number };
+    expect(typeof worker["run-concurrency-limit"]).toBe("number");
+    expect(worker["run-concurrency-limit"]).toBeGreaterThan(0);
+    expect(typeof worker["local-runs-executing"]).toBe("number");
+    expect(typeof worker["runs-queued"]).toBe("number");
     expect((data["worker"] as { enabled: boolean }).enabled).toBe(process.env["TERRENCE_DISABLE_WORKER"] !== "1");
     expect((data["worker"] as { "drain-mode": boolean })["drain-mode"]).toBe(process.env["TERRENCE_DISABLE_WORKER"] === "1");
     expect(typeof (data["sandbox"] as { abi: number }).abi).toBe("number");

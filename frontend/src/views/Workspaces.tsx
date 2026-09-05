@@ -203,7 +203,7 @@ export function Workspaces(): React.JSX.Element {
   // filtered-page counts as org-wide numbers (issue #611).
   const [totalsRuns, setTotalsRuns] = useState<ReadonlyMap<string, RunSummary>>(new Map());
   const [canManageWorkspaces, setCanManageWorkspaces] = useState(false);
-  const [defaultIacBinary, setDefaultIacBinary] = useState("tofu");
+  const [defaultIacBinary, setDefaultIacBinary] = useState("terraform");
   const [defaultTerraformVersion, setDefaultTerraformVersion] = useState("latest");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
