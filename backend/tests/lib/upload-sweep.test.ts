@@ -1,7 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
 import {
@@ -11,7 +12,7 @@ import {
   registryModuleVersions,
   workspaces,
 } from "../../src/db/schema";
-import { sweepUploadTemps } from "../../src/lib/upload-sweep";
+import { checkSqliteExport, sweepUploadTemps } from "../../src/lib/upload-sweep";
 
 // Issue #619: the boot sweep removes crash-stranded upload temps and
 // orphaned archives while keeping referenced files and valid exports.
@@ -23,14 +24,6 @@ describe("sweepUploadTemps", (): void => {
   const moduleId = "sweep-mod-" + suffix;
   const versionId = "sweep-ver-" + suffix;
   let root = "";
-
-  function header(pages: number): Buffer {
-    const bytes = Buffer.alloc(100);
-    bytes.write("SQLite format 3" + String.fromCharCode(0), 0);
-    bytes.writeUInt16BE(4096, 16);
-    bytes.writeUInt32BE(pages, 28);
-    return bytes;
-  }
 
   afterAll(async (): Promise<void> => {
     await db.delete(registryModuleVersions).where(eq(registryModuleVersions.id, versionId));
@@ -73,8 +66,14 @@ describe("sweepUploadTemps", (): void => {
     await writeFile(moduleUpload, "partial ingest");
     await writeFile(orphanCvArchive, "stranded archive");
     await writeFile(orphanModuleArchive, "stranded archive");
-    await writeFile(partialExport, Buffer.concat([header(4), Buffer.alloc(100)]));
     await writeFile(garbageExport, "not a database file");
+
+    // Genuine exports: a complete database is kept, a truncated one is not.
+    const genuine = new Database(join(exportsDir, "valid.db"), { create: true });
+    genuine.exec("CREATE TABLE t(x); INSERT INTO t VALUES (1);");
+    genuine.close();
+    const genuineBytes = await readFile(join(exportsDir, "valid.db"));
+    await writeFile(partialExport, genuineBytes.subarray(0, 100));
 
     // Files the sweep must keep.
     const stateKeep = join(stateUploadsDir, "README.txt");
@@ -84,7 +83,6 @@ describe("sweepUploadTemps", (): void => {
     await writeFile(cvKeep, "not a temp");
     await writeFile(keptCvArchive, "referenced archive");
     await writeFile(keptModuleArchive, "referenced archive");
-    await writeFile(validExport, Buffer.concat([header(2), Buffer.alloc(8192 - 100)]));
 
     const result = await sweepUploadTemps(root);
 
@@ -100,6 +98,32 @@ describe("sweepUploadTemps", (): void => {
     }
     for (const kept of [stateKeep, cvKeep, keptCvArchive, keptModuleArchive, validExport]) {
       expect(await Bun.file(kept).exists()).toBe(true);
+    }
+  });
+});
+
+describe("checkSqliteExport", (): void => {
+  test("separates valid, invalid, and uninspectable files", async (): Promise<void> => {
+    const dir = await mkdtemp(join(tmpdir(), "terrence-export-check-"));
+    try {
+      const valid = join(dir, "valid.db");
+      const genuine = new Database(valid, { create: true });
+      genuine.exec("CREATE TABLE t(x);");
+      genuine.close();
+      expect(await checkSqliteExport(valid)).toBe("valid");
+
+      const truncated = join(dir, "truncated.db");
+      const full = await readFile(valid);
+      await writeFile(truncated, full.subarray(0, 100));
+      expect(await checkSqliteExport(truncated)).toBe("invalid");
+
+      const garbage = join(dir, "garbage.db");
+      await writeFile(garbage, "plain text, not sqlite");
+      expect(await checkSqliteExport(garbage)).toBe("invalid");
+
+      expect(await checkSqliteExport(join(dir, "missing.db"))).toBe("unknown");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

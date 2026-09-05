@@ -1,4 +1,4 @@
-import { open, readdir, rm } from "node:fs/promises";
+import { open, readdir, rm, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { isNotNull } from "drizzle-orm";
 import { db } from "../db";
@@ -7,9 +7,14 @@ import { log } from "./log";
 
 // Startup sweep for crash-stranded upload temps and orphaned archives
 // (issue #619). Request-completion paths already clean up after themselves;
-// only a crash between the write and the cleanup strands these files, so at
-// boot (before traffic is served) anything matching is garbage by
-// construction: no upload can be in flight yet.
+// only a crash between the write and the cleanup strands these files.
+//
+// Storage is single-owner by design (a multi-replica deployment is
+// explicitly unsupported: the event bus, worker queue, and sandbox are
+// in-process). Even so, the sweep only removes files whose mtime predates
+// its own start, so a file being actively published while this instance
+// boots is never touched: publication always writes newer bytes than the
+// sweep start.
 
 export type UploadSweepResult = Readonly<{
   stateUploads: number;
@@ -19,12 +24,26 @@ export type UploadSweepResult = Readonly<{
   orphanedModuleArchives: number;
 }>;
 
+export type ExportValidity = "valid" | "invalid" | "unknown";
+
 async function listFiles(dir: string): Promise<string[]> {
   try {
     const entries = await readdir(dir, { withFileTypes: true });
     return entries.filter((entry): boolean => entry.isFile()).map((entry): string => entry.name);
   } catch {
     return [];
+  }
+}
+
+/** True when the file exists and was last modified at or before the sweep
+ * started. Anything newer may still be written to; leave it for the next
+ * boot. Unstatable files are skipped, never removed. */
+async function predatesSweepStart(dir: string, name: string, startedAt: number): Promise<boolean> {
+  try {
+    const { mtimeMs } = await stat(join(dir, name));
+    return mtimeMs <= startedAt;
+  } catch {
+    return false;
   }
 }
 
@@ -53,27 +72,55 @@ function referencedBasenames(rows: readonly Readonly<{ archivePath: string | nul
 }
 
 /** Structural SQLite validity without reading the whole file: the header
- * magic must match and the file size must equal page size times page count.
- * A crash-torn write almost always truncates the file, which fails the size
- * check; a fully-written export always passes it. */
-async function isCompleteSqliteFile(path: string): Promise<boolean> {
-  const SQLITE_MAGIC = "SQLite format 3" + String.fromCharCode(0);
+ * magic, format versions, payload fractions, and text encoding must match
+ * the spec, and the file size must equal page size times page count. A
+ * crash-torn write almost always truncates the file, which fails the size
+ * check; a fully-written export always passes it. A full integrity check
+ * would reread multi-gigabyte exports at every boot, so it is deliberately
+ * not part of this gate.
+ *
+ * Inspection failures (vanished file, I/O error) report "unknown": the
+ * caller keeps the file and logs, so a transient error can never delete a
+ * valid export. */
+const SQLITE_MAGIC = "SQLite format 3" + String.fromCharCode(0);
+
+/** Fixed header fields per the SQLite file format spec: magic, format
+ * versions, payload fractions, and text encoding. */
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+function headerFieldsValid(header: Buffer): boolean {
+  return header.length >= 100
+    && header.subarray(0, 16).toString("latin1") === SQLITE_MAGIC
+    && header[18] === 1
+    && header[19] === 1
+    && header[21] === 64
+    && header[22] === 32
+    && header[23] === 32
+    && header.readUInt32BE(56) >= 1
+    && header.readUInt32BE(56) <= 3;
+}
+
+/** Size rule for checkSqliteExport: the file must hold exactly page size
+ * times page count bytes, which a crash-torn write breaks. */
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+function judgeSqliteHeader(header: Buffer, fileSize: number): "valid" | "invalid" {
+  if (!headerFieldsValid(header)) return "invalid";
+  let pageSize = header.readUInt16BE(16);
+  if (pageSize === 1) pageSize = 65536;
+  if (pageSize < 512 || pageSize > 65536 || (pageSize & (pageSize - 1)) !== 0) return "invalid";
+  const pageCount = header.readUInt32BE(28);
+  if (pageCount === 0) return "invalid";
+  return fileSize === pageSize * pageCount ? "valid" : "invalid";
+}
+export async function checkSqliteExport(path: string): Promise<ExportValidity> {
   let handle: Awaited<ReturnType<typeof open>> | null = null;
   try {
     handle = await open(path, "r");
     const header = Buffer.alloc(100);
     const { bytesRead } = await handle.read(header, 0, 100, 0);
-    if (bytesRead < 100) return false;
-    if (header.subarray(0, 16).toString("latin1") !== SQLITE_MAGIC) return false;
-    let pageSize = header.readUInt16BE(16);
-    if (pageSize === 1) pageSize = 65536;
-    if (pageSize < 512 || pageSize > 65536 || (pageSize & (pageSize - 1)) !== 0) return false;
-    const pageCount = header.readUInt32BE(28);
-    if (pageCount === 0) return false;
     const { size } = await handle.stat();
-    return size === pageSize * pageCount;
+    return bytesRead < 100 ? "invalid" : judgeSqliteHeader(header, size);
   } catch {
-    return false;
+    return "unknown";
   } finally {
     await handle?.close().catch((): undefined => undefined);
   }
@@ -81,10 +128,11 @@ async function isCompleteSqliteFile(path: string): Promise<boolean> {
 
 /** State-upload request bodies: every state-*.json is a request-scoped temp
  * that the handler deletes in a finally block. */
-async function sweepStateUploads(dir: string): Promise<number> {
+async function sweepStateUploads(dir: string, startedAt: number): Promise<number> {
   let removed = 0;
   for (const name of await listFiles(dir)) {
     if (!name.startsWith("state-") || !name.endsWith(".json")) continue;
+    if (!(await predatesSweepStart(dir, name, startedAt))) continue;
     if (await removeLeftover(join(dir, name), "state-uploads", name)) removed += 1;
   }
   return removed;
@@ -92,10 +140,11 @@ async function sweepStateUploads(dir: string): Promise<number> {
 
 /** Configuration-version and module upload temps: *.tmp while the body
  * streams, *.upload while a module archive ingests. */
-async function sweepCvTemps(cvDir: string): Promise<number> {
+async function sweepCvTemps(cvDir: string, startedAt: number): Promise<number> {
   let removed = 0;
   for (const name of await listFiles(cvDir)) {
     if (!name.endsWith(".tmp") && !name.endsWith(".upload")) continue;
+    if (!(await predatesSweepStart(cvDir, name, startedAt))) continue;
     if (await removeLeftover(join(cvDir, name), "cv", name)) removed += 1;
   }
   return removed;
@@ -103,7 +152,7 @@ async function sweepCvTemps(cvDir: string): Promise<number> {
 
 /** Finalized-but-unclaimed CV archives: a crash between the rename and the
  * row update strands a config-*.tar.gz no row references. */
-async function sweepUnclaimedArchives(cvDir: string): Promise<number> {
+async function sweepUnclaimedArchives(cvDir: string, startedAt: number): Promise<number> {
   try {
     const rows = await db.query.configurationVersions.findMany({
       where: isNotNull(configurationVersions.archivePath),
@@ -114,6 +163,7 @@ async function sweepUnclaimedArchives(cvDir: string): Promise<number> {
     for (const name of await listFiles(cvDir)) {
       if (!name.startsWith("config-") || !name.endsWith(".tar.gz")) continue;
       if (claimed.has(name)) continue;
+      if (!(await predatesSweepStart(cvDir, name, startedAt))) continue;
       if (await removeLeftover(join(cvDir, name), "cv", name)) removed += 1;
     }
     return removed;
@@ -126,13 +176,21 @@ async function sweepUnclaimedArchives(cvDir: string): Promise<number> {
 }
 
 /** Exports: a crash mid-export strands a partial .db with no job record
- * (jobs are in-memory). Drop files that fail structural validation. */
-async function sweepInvalidExports(exportsDir: string): Promise<number> {
+ * (jobs are in-memory). Drop files proven invalid; keep anything the
+ * inspection could not decide on. */
+async function sweepInvalidExports(exportsDir: string, startedAt: number): Promise<number> {
   let removed = 0;
   for (const name of await listFiles(exportsDir)) {
     if (!name.toLowerCase().endsWith(".db")) continue;
+    if (!(await predatesSweepStart(exportsDir, name, startedAt))) continue;
     const full = join(exportsDir, name);
-    if (await isCompleteSqliteFile(full)) continue;
+    const validity = await checkSqliteExport(full);
+    if (validity === "valid" || validity === "unknown") {
+      if (validity === "unknown") {
+        log.warn("Upload sweep could not inspect export file; keeping it", { file: name });
+      }
+      continue;
+    }
     if (await removeLeftover(full, "exports", name)) removed += 1;
   }
   return removed;
@@ -140,7 +198,7 @@ async function sweepInvalidExports(exportsDir: string): Promise<number> {
 
 /** Module archives orphaned by cascade deletes that removed rows but not
  * files (org deletion before issue #619 collected them). */
-async function sweepOrphanedModuleArchives(modulesDir: string): Promise<number> {
+async function sweepOrphanedModuleArchives(modulesDir: string, startedAt: number): Promise<number> {
   try {
     const rows = await db.query.registryModuleVersions.findMany({
       where: isNotNull(registryModuleVersions.archivePath),
@@ -151,6 +209,7 @@ async function sweepOrphanedModuleArchives(modulesDir: string): Promise<number> 
     for (const name of await listFiles(modulesDir)) {
       if (!name.endsWith(".tar.gz")) continue;
       if (referenced.has(name)) continue;
+      if (!(await predatesSweepStart(modulesDir, name, startedAt))) continue;
       if (await removeLeftover(join(modulesDir, name), "modules", name)) removed += 1;
     }
     return removed;
@@ -168,13 +227,14 @@ async function sweepOrphanedModuleArchives(modulesDir: string): Promise<number> 
  * cannot take the instance down (the next boot retries).
  */
 export async function sweepUploadTemps(storageDir: string): Promise<UploadSweepResult> {
+  const startedAt = Date.now();
   const cvDir = join(storageDir, "cv");
   const result: UploadSweepResult = {
-    stateUploads: await sweepStateUploads(join(storageDir, "state-uploads")),
-    cvTemps: await sweepCvTemps(cvDir),
-    unclaimedArchives: await sweepUnclaimedArchives(cvDir),
-    invalidExports: await sweepInvalidExports(join(storageDir, "exports")),
-    orphanedModuleArchives: await sweepOrphanedModuleArchives(join(storageDir, "modules")),
+    stateUploads: await sweepStateUploads(join(storageDir, "state-uploads"), startedAt),
+    cvTemps: await sweepCvTemps(cvDir, startedAt),
+    unclaimedArchives: await sweepUnclaimedArchives(cvDir, startedAt),
+    invalidExports: await sweepInvalidExports(join(storageDir, "exports"), startedAt),
+    orphanedModuleArchives: await sweepOrphanedModuleArchives(join(storageDir, "modules"), startedAt),
   };
   const total = result.stateUploads + result.cvTemps + result.unclaimedArchives + result.invalidExports + result.orphanedModuleArchives;
   if (total > 0) {
