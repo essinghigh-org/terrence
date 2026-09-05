@@ -1,3 +1,4 @@
+import { Select } from "./ui/select";
 import { useEffect, useMemo, useState } from "react";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
@@ -608,9 +609,9 @@ export function TokenScopeDialog({
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2">
           <div className="flex items-center gap-2">
             {!isRoot && <span aria-hidden="true" className="text-sm font-semibold text-primary">(</span>}
-            <select
+            <Select
               aria-label="Combine with"
-              className="h-7 rounded-md border border-input bg-background px-2 font-mono text-xs font-semibold text-foreground shadow-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+              className="h-7 font-mono font-semibold w-auto text-xs"
               value={node.combinator}
               onChange={(e): void => {
                 setCombinator(path, e.target.value as "AND" | "OR");
@@ -618,7 +619,7 @@ export function TokenScopeDialog({
             >
               <option value="AND">AND (match all)</option>
               <option value="OR">OR (match any)</option>
-            </select>
+            </Select>
             <span className="text-xs text-muted-foreground">
               {isRoot ? "of the conditions match" : "conditions match"}
             </span>
@@ -726,10 +727,10 @@ export function TokenScopeDialog({
                   <Building2 className="size-3.5 text-muted-foreground" />
                   Organization
                 </label>
-                <select
+                <Select
                   id="token-org"
                   name="token-organization"
-                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+
                   value={orgId}
                   onChange={(e): void => {
                     setOrgId(e.target.value);
@@ -740,7 +741,7 @@ export function TokenScopeDialog({
                   {orgs.map((org): React.JSX.Element => (
                     <option key={org.id} value={org.id}>{org.name}</option>
                   ))}
-                </select>
+                </Select>
               </div>
 
               {/* Projects & Workspaces Grid */}

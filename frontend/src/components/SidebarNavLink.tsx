@@ -24,7 +24,7 @@ export function SidebarContextLabel({
   return (
     <div
       className={cn(
-        "truncate px-3 pb-2 pt-4 text-xs font-semibold",
+        "shrink-0 truncate px-3 pb-2 pt-4 text-xs font-semibold",
         tone === "primary" ? "text-foreground" : "text-muted-foreground",
         collapsed && "lg:sr-only",
       )}
@@ -80,10 +80,10 @@ export function SidebarNavLink({
       // there, so hover/focus needs to reveal where the icon goes.
       title={collapsed ? label : undefined}
       className={cn(
-        "group flex min-h-9 items-center gap-3 rounded-md border-l-2 px-3 py-2 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+        "group flex min-h-10 items-center gap-3 rounded-lg border border-transparent px-3 py-2 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
         active
-          ? "border-primary bg-primary/10 text-primary"
-          : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
+          ? "border-primary/15 bg-primary/10 text-primary"
+          : "text-muted-foreground hover:bg-muted hover:text-foreground",
       )}
     >
       {createElement(icon, {

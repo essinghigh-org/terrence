@@ -631,7 +631,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.target.value); }}
                         disabled={!canUpdateOrganization}
                         required
-                        className="h-9"
+                        className="h-10"
                       />
                     </div>
                     <div className="space-y-1.5">
@@ -639,17 +639,17 @@ export function OrganizationSettings(): React.JSX.Element {
                         Default IaC Binary
                         <HelpTooltip content="The IaC engine (OpenTofu or Terraform) used by default when creating new workspaces in this organization." />
                       </label>
-                      <select
+                      <Select
                         id="org-iac"
                         name="default-iac-binary"
-                        className="flex h-9 w-full rounded-md border border-border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary focus-visible:border-primary"
+
                         value={defaultIacBinary}
                         onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setDefaultIacBinary(event.target.value); }}
                         disabled={!canUpdateOrganization}
                       >
                         <option value="tofu">OpenTofu</option>
                         <option value="terraform">Terraform</option>
-                      </select>
+                      </Select>
                       <p className="text-sm text-muted-foreground mt-1">The engine used by default for new workspaces.</p>
                     </div>
                     <div className="space-y-1.5">
@@ -665,7 +665,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDefaultTerraformVersion(event.target.value); }}
                         disabled={!canUpdateOrganization}
                         placeholder="latest"
-                        className="h-9"
+                        className="h-10"
                       />
                     </div>
                     <div className="space-y-1.5">
@@ -680,7 +680,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNotificationEmail(event.target.value); }}
                         disabled={!canUpdateOrganization}
                         placeholder="admin@example.com"
-                        className="h-9"
+                        className="h-10"
                       />
                       <p className="text-sm text-muted-foreground mt-1">Email address used for organization notifications.</p>
                     </div>
@@ -696,7 +696,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         value={moduleTestTokenTtl}
                         onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setModuleTestTokenTtl(Number(event.target.value)); }}
                         disabled={!canUpdateOrganization}
-                        className="h-9"
+                        className="h-10"
                       />
                       <p className="text-sm text-muted-foreground mt-1">OIDC token lifetime for private module tests, in seconds (300–1800).</p>
                     </div>
@@ -1005,7 +1005,7 @@ team.attributes["name"] as string}</option>
                       value={newTeamName}
                       onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setNewTeamName(event.target.value); }}
                       disabled={!canCreateTeam}
-                      className="h-9"
+                      className="h-10"
                     />
                     <Button
                       type="submit"
@@ -1148,13 +1148,13 @@ team.attributes["name"] as string}</option>
                               <div className="flex items-center justify-between mb-3">
                                 <p className="text-sm font-semibold text-foreground">Members ({(teamMemberCounts[team.id] ?? 0)})</p>
                                 <div className="flex gap-2">
-                                  <select
+                                  <Select
                                     id={`team-${team.id}-member`}
                                     name={`team-${team.id}-member`}
 // SAFETY: the fixture field is a string per the API contract.
                                     aria-label={// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
 `Add a member to ${team.attributes["name"] as string}`}
-                                    className="h-8 rounded-md border bg-background px-2 text-xs"
+                                    className="h-8"
                                     value={addMemberTeam[team.id] ?? ""}
                                     onChange={(e): void => { setAddMemberTeam((prev) => ({ ...prev, [team.id]: e.target.value })); }}
                                   >
@@ -1162,7 +1162,7 @@ team.attributes["name"] as string}</option>
                                     {memberships.map((m): React.JSX.Element => (
                                       <option key={m.id} value={m.attributes.username ?? m.id}>{m.attributes.username ?? m.attributes.email ?? m.id}</option>
                                     ))}
-                                  </select>
+                                  </Select>
                                   <Button
                                     type="button"
                                     size="sm"

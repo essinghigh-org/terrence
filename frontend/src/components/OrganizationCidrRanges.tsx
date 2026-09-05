@@ -1,3 +1,4 @@
+import { Select } from "./ui/select";
 import { useEffect, useState } from "react";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
@@ -63,7 +64,7 @@ export function OrganizationCidrRanges({ orgName }: Readonly<{ orgName: string }
       <form onSubmit={createList} className="flex gap-2"><Input id="cidr-list-name" name="cidr-list-name" autoComplete="off" aria-label="New CIDR list name" value={listName} onInput={(event) => { setListName(event.currentTarget.value); }} placeholder="New range list name…" /><Button type="submit" disabled={saving || listName.trim() === ""}>Create list</Button></form>
       {loading ? <p className="text-sm text-muted-foreground">Loading CIDR lists…</p> : lists.length === 0 ? <p className="text-sm text-muted-foreground">No CIDR range lists yet.</p> : <>
         <label className="block text-sm font-medium" htmlFor="cidr-list">Range list</label>
-        <select id="cidr-list" name="cidr-list" className="h-9 w-full rounded-md border bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" value={selectedListId} onChange={(event) => { setSelectedListId(event.currentTarget.value); }}>{lists.map((list) => <option key={list.id} value={list.id}>{list.attributes.name}</option>)}</select>
+        <Select id="cidr-list" name="cidr-list"  value={selectedListId} onChange={(event) => { setSelectedListId(event.currentTarget.value); }}>{lists.map((list) => <option key={list.id} value={list.id}>{list.attributes.name}</option>)}</Select>
         <form onSubmit={addRange} className="flex gap-2"><Input id="cidr-range" name="cidr-range" autoComplete="off" spellCheck={false} aria-label="CIDR range" value={rangeValue} onInput={(event) => { setRangeValue(event.currentTarget.value); }} placeholder="10.0.0.0/8" /><Button type="submit" disabled={saving || rangeValue.trim() === ""}>Add range</Button></form>
         <ul className="divide-y rounded-md border">{ranges.map((range) => <li className="flex items-center justify-between px-3 py-2 text-sm" key={range.id}><code>{range.attributes.value}</code><Button type="button" variant="ghost" size="sm" onClick={() => void removeRange(range.id)}>Remove</Button></li>)}{ranges.length === 0 && <li className="px-3 py-3 text-sm text-muted-foreground">No ranges in this list.</li>}</ul>
       </>}

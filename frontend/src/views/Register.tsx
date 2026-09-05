@@ -1,3 +1,4 @@
+import { AuthLayout } from "../components/brand/AuthLayout";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -74,39 +75,35 @@ export function Register(): React.JSX.Element {
 
   if (checkingSignup) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-muted/40 p-4">
-        <Spinner className="size-6" />
-      </main>
+      <AuthLayout mode="signup">
+        <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Spinner className="size-5" />Checking account registration…</div>
+      </AuthLayout>
     );
   }
 
   if (signupDisabled) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-muted/40 p-4">
-        <Card className="w-full max-w-sm shadow-sm">
+      <AuthLayout mode="signup">
+        <Card className="login-card w-full max-w-sm">
           <CardHeader>
             <CardTitle>Signup disabled</CardTitle>
             <CardDescription>Local account creation is disabled on this instance.</CardDescription>
           </CardHeader>
           <CardFooter>
-            <Link to="/login" className="w-full">
-              <Button className="w-full" variant="outline">Sign in</Button>
-            </Link>
+            <Link to="/login" className={buttonVariants({ variant: "outline", className: "w-full" })}>Sign in</Link>
           </CardFooter>
         </Card>
-      </main>
+      </AuthLayout>
     );
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-muted/40 p-4">
-      <Card className="w-full max-w-sm shadow-sm">
+    <AuthLayout mode="signup">
+      <Card className="login-card w-full max-w-sm">
         <CardHeader>
-          <div aria-hidden="true" className="mb-2 flex size-10 items-center justify-center rounded-md bg-foreground text-lg font-bold text-background">
-            T
-          </div>
-          <CardTitle>Create your account</CardTitle>
-          <CardDescription>Start a self-hosted Terrence instance with a local user.</CardDescription>
+          <p className="mb-3 text-xs font-medium tracking-widest text-muted-foreground uppercase">Welcome aboard</p>
+          <h1 className="font-heading text-3xl font-bold tracking-tight">Create your account</h1>
+          <CardDescription>Join this Terrence instance to manage your infrastructure with your team.</CardDescription>
         </CardHeader>
         <form onSubmit={handleRegister}>
           <CardContent>
@@ -147,10 +144,12 @@ export function Register(): React.JSX.Element {
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setPassword(event.target.value); }}
                   autoComplete="new-password"
                   minLength={10}
+                  aria-describedby="register-password-hint"
                   aria-invalid={Boolean(error)}
                   required
                 />
               </Field>
+              <p id="register-password-hint" className="text-xs text-muted-foreground">Use at least 10 characters for your password.</p>
               <FieldError>{error}</FieldError>
             </FieldGroup>
           </CardContent>
@@ -165,6 +164,6 @@ export function Register(): React.JSX.Element {
           </CardFooter>
         </form>
       </Card>
-    </main>
+    </AuthLayout>
   );
 }

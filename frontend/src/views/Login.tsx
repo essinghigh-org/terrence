@@ -1,4 +1,4 @@
-import { Terrence, TerrenceLogo } from "@/components/brand/Terrence";
+import { AuthLayout } from "@/components/brand/AuthLayout";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -156,25 +156,7 @@ export function Login(): React.JSX.Element {
   };
 
   return (
-    <main className="login-page">
-      <section className="login-story" aria-label="Welcome to Terrence">
-        <Link to="/" className="login-brand" aria-label="Terrence home"><TerrenceLogo wordmark /></Link>
-        <div className="login-story-content">
-          <p className="login-eyebrow">A little order for your infrastructure</p>
-          <h2>Big plans.<br />Steady hands.</h2>
-          <p className="login-story-description">Your workspaces, plans, and people.<br />Together in one place.</p>
-          <div className="login-illustration">
-            <div className="login-orbit" aria-hidden="true" />
-            <span className="login-node login-node--plan" aria-hidden="true">plan</span>
-            <span className="login-node login-node--apply" aria-hidden="true">apply</span>
-            <Terrence animated className="login-mascot" />
-            <span className="login-illustration-caption">Meet Terrence. Your infrastructure companion.</span>
-          </div>
-        </div>
-        <p className="login-story-footer">Made for OpenTofu &amp; Terraform.</p>
-      </section>
-      <section className="login-form-panel" aria-label="Sign in">
-      <TerrenceLogo wordmark className="login-mobile-brand" />
+    <AuthLayout>
       <Card className="login-card w-full max-w-sm">
 
         <CardHeader>
@@ -253,8 +235,6 @@ export function Login(): React.JSX.Element {
           </CardFooter>
         </form>
       </Card>
-      <p className="login-form-note">Infrastructure automation, with a human touch.</p>
-      </section>
-    </main>
+    </AuthLayout>
   );
 }

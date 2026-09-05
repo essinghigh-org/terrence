@@ -74,7 +74,7 @@ function DialogContent({
       <DialogOverlay />
       <DialogPrimitive.Popup
         className={cn(
-          "fixed z-50 grid w-full max-w-lg gap-4 border bg-background p-6 shadow-lg duration-200 sm:rounded-lg",
+          "fixed z-50 grid max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg gap-5 overflow-y-auto rounded-xl border bg-card p-6 text-card-foreground shadow-lg duration-200",
           placement,
           align === "top" ? dialogMotionTop : dialogMotionCenter,
           className,
@@ -152,7 +152,7 @@ function DialogFooter({
   return (
     <div
       className={cn(
-        "flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2",
+        "flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end",
         className
       )}
       {...props}
@@ -164,7 +164,7 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props): Reac
   return (
     <DialogPrimitive.Title
       className={cn(
-        "text-lg font-semibold leading-none tracking-tight",
+        "font-heading text-xl font-semibold leading-tight tracking-tight",
         className
       )}
       {...props}
@@ -175,7 +175,7 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props): Reac
 function DialogDescription({ className, ...props }: DialogPrimitive.Description.Props): React.JSX.Element {
   return (
     <DialogPrimitive.Description
-      className={cn("text-sm text-muted-foreground", className)}
+      className={cn("text-sm leading-relaxed text-muted-foreground", className)}
       {...props}
     />
   );

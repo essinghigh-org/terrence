@@ -1,3 +1,5 @@
+import { EmptyState } from "../components/EmptyState";
+import { Select } from "../components/ui/select";
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
@@ -414,10 +416,7 @@ export function StackSettings(): React.JSX.Element {
               ) : stacks.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
-                    <div className="flex flex-col items-center justify-center gap-2">
-                      <Layers className="h-8 w-8 text-muted-foreground/60" />
-                      <p className="text-sm">{canManage ? "No stacks yet. Create one to get started." : "No stacks."}</p>
-                    </div>
+                    <EmptyState compact title={error === "" ? "No stacks yet" : "Stacks unavailable"} description={error === "" ? "Group related components and deployments in a stack." : error} docsHref="/app/docs/stacks" />
                   </TableCell>
                 </TableRow>
               ) : stacks.map((stack): React.JSX.Element => {
@@ -507,19 +506,19 @@ export function StackSettings(): React.JSX.Element {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="stack-project">Project</Label>
-              <select
+              <Select
                 id="stack-project"
                 name="project"
                 value={form.projectId}
                 onChange={set("projectId")}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+
                 disabled={editingStack !== null}
               >
                 <option value="">Select a project</option>
                 {projects.map((project): React.JSX.Element => (
                   <option key={project.id} value={project.id}>{project.attributes.name}</option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="stack-vcs">VCS repository identifier</Label>
@@ -527,32 +526,32 @@ export function StackSettings(): React.JSX.Element {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="stack-execution-mode">Execution mode</Label>
-              <select id="stack-execution-mode" name="execution-mode" value={form.executionMode} onChange={set("executionMode")} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+              <Select id="stack-execution-mode" name="execution-mode" value={form.executionMode} onChange={set("executionMode")} >
                 <option value="remote">Remote</option>
                 <option value="agent">Agent</option>
-              </select>
+              </Select>
               {form.executionMode === "agent" && <p className="text-xs text-muted-foreground">Agent mode requires an agent-pool relationship.</p>}
             </div>
             {form.executionMode === "agent" && agentPoolsAvailable && (
               <div className="space-y-1.5">
                 <Label htmlFor="stack-agent-pool">Agent pool</Label>
-                <select id="stack-agent-pool" name="agent-pool" value={form.agentPoolId} onChange={set("agentPoolId")} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+                <Select id="stack-agent-pool" name="agent-pool" value={form.agentPoolId} onChange={set("agentPoolId")} >
                   <option value="">Select an agent pool</option>
                   {agentPools.map((pool): React.JSX.Element => <option key={pool.id} value={pool.id}>{pool.attributes.name ?? pool.id}</option>)}
-                </select>
+                </Select>
               </div>
             )}
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="stack-provider">VCS service provider</Label>
-                <select id="stack-provider" name="service-provider" value={form.vcsServiceProvider} onChange={set("vcsServiceProvider")} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+                <Select id="stack-provider" name="service-provider" value={form.vcsServiceProvider} onChange={set("vcsServiceProvider")} >
                   <option value="github">GitHub</option>
                   <option value="github_enterprise">GitHub Enterprise</option>
                   <option value="gitlab_hosted">GitLab</option>
                   <option value="gitlab_community_edition">GitLab Community Edition</option>
                   <option value="gitlab_enterprise_edition">GitLab Enterprise Edition</option>
                   <option value="ado_server">Azure DevOps Server</option>
-                </select>
+                </Select>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="stack-branch">Branch</Label>

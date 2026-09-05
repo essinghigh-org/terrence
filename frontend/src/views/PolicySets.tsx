@@ -1,3 +1,4 @@
+import { EmptyState } from "../components/EmptyState";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
@@ -14,7 +15,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { Checkbox } from "../components/ui/checkbox";
 import { Select, SelectItem } from "../components/ui/select";
-import { ShieldCheck, Plus, Trash2, FolderKanban } from "lucide-react";
+import { ShieldCheck, Plus, Trash2 } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
 
 type PolicySet = {
@@ -209,10 +210,11 @@ export function PolicySets(): React.JSX.Element {
               ) : policySets.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
-                    <div className="flex flex-col items-center gap-2">
-                      <FolderKanban className="size-8 text-muted-foreground/60" />
-                      No policy sets found. Create a policy set to attach Sentinel policies to your workspaces.
-                    </div>
+                    <EmptyState compact
+                      title={error === "" ? "No policy sets yet" : "Policy sets unavailable"}
+                      description={error === "" ? "Group Sentinel or OPA policies into a set, then choose which workspaces they protect." : "Use Try again above to reload policy sets."}
+                      docsHref="/app/docs/policies"
+                    />
                   </TableCell>
                 </TableRow>
               ) : (

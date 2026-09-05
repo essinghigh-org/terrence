@@ -9,7 +9,11 @@ describe("server-level error pages", () => {
     const res = await request("GET", "/meow");
     expect(res.status).toBe(404);
     expect(res.headers.get("content-type")).toContain("text/html");
-    expect(await res.text()).toContain("Page not found");
+    const html = await res.text();
+    expect(html).toContain("Page not found");
+    expect(html).toContain('data-pose="lost"');
+    expect(html).toContain('href="/app/docs"');
+    expect(html).not.toContain('<script');
   });
 
   it("returns a branded 404 page for unknown methods on unknown paths", async () => {

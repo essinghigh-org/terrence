@@ -1,6 +1,8 @@
+import { EmptyState } from "../components/EmptyState";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { PageHeader, PageShell } from "../components/PageHeader";
+import { buttonVariants } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
@@ -72,7 +74,7 @@ export function RegistryProviderDetail(): React.JSX.Element {
   }, [name, namespace, orgName]);
 
   if (loading) return <PageShell variant="form"><div className="flex min-h-64 items-center justify-center gap-2 text-sm text-muted-foreground" role="status"><Spinner />Loading provider…</div></PageShell>;
-  if (error !== null) return <PageShell variant="form"><Empty><EmptyHeader><EmptyTitle>Provider unavailable</EmptyTitle><EmptyDescription>{error}</EmptyDescription></EmptyHeader></Empty></PageShell>;
+  if (error !== null) return <PageShell variant="form"><div role="alert"><EmptyState illustration="failed" title="Provider unavailable" description={error} /><div className="text-center"><Link className={buttonVariants({ variant: "outline" })} to={`/app/${encodeURIComponent(orgName)}/registry?tab=providers`}>Back to registry</Link></div></div></PageShell>;
   return (
     <PageShell variant="form">
       <PageHeader

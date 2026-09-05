@@ -59,3 +59,17 @@ describe("accessibility-static: public routes across themes", () => {
     }, 15000);
   }
 });
+
+
+test("standalone 404 stays accessible and fits a mobile viewport", async (): Promise<void> => {
+  const mobile = await createBrowser({ width: 390, height: 844 });
+  try {
+    await mobile.goto(`${server.baseUrl}/404.html`);
+    expect(await mobile.evaluate<string>("document.querySelector('h1')?.textContent")).toBe("Page not found");
+    expect(await mobile.evaluate<boolean>("document.documentElement.scrollWidth <= innerWidth")).toBe(true);
+    expect(await mobile.evaluate<number>("document.querySelectorAll('script').length")).toBe(0);
+    await expectNoA11yViolations(mobile);
+  } finally {
+    mobile.close();
+  }
+}, 15000);

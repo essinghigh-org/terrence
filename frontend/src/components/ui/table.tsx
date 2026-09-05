@@ -16,7 +16,7 @@ function Table({ className, density = "comfortable", ...props }: Readonly<React.
         <table
           data-slot="table"
           data-density={density}
-          className={cn("w-full caption-bottom text-sm", className)}
+          className={cn("w-full caption-bottom text-sm tabular-nums", className)}
           {...props}
         />
       </div>
@@ -28,7 +28,7 @@ function TableHeader({ className, ...props }: Readonly<React.ComponentProps<"the
   return (
     <thead
       data-slot="table-header"
-      className={cn("[&_tr]:border-b", className)}
+      className={cn("bg-muted/40 [&_tr]:border-b", className)}
       {...props}
     />
   )

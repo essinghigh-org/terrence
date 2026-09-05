@@ -56,11 +56,7 @@ export function StatusBadge({
           className,
         )}
       >
-        <span className="relative flex size-2 shrink-0">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
-          <span className="relative inline-flex size-2 rounded-full bg-primary" />
-        </span>
-        <Loader2 className="size-3 animate-spin shrink-0" />
+        <Loader2 aria-hidden="true" className="size-3.5 animate-spin shrink-0" />
         <span>{label}</span>
       </Badge>
     );
@@ -76,7 +72,7 @@ export function StatusBadge({
           className,
         )}
       >
-        <CheckCircle2 className="size-3.5 shrink-0 text-success" />
+        <CheckCircle2 aria-hidden="true" className="size-3.5 shrink-0 text-success" />
         <span>{label}</span>
       </Badge>
     );
@@ -92,7 +88,7 @@ export function StatusBadge({
           className,
         )}
       >
-        <PauseCircle className="size-3.5 shrink-0 text-warning" />
+        <PauseCircle aria-hidden="true" className="size-3.5 shrink-0 text-warning" />
         <span>{label}</span>
       </Badge>
     );
@@ -106,9 +102,9 @@ export function StatusBadge({
         className={cn("inline-flex items-center gap-1.5 font-medium", className)}
       >
         {status === "policy_hard_failed" ? (
-          <ShieldAlert className="size-3.5 shrink-0" />
+          <ShieldAlert aria-hidden="true" className="size-3.5 shrink-0" />
         ) : (
-          <XCircle className="size-3.5 shrink-0" />
+          <XCircle aria-hidden="true" className="size-3.5 shrink-0" />
         )}
         <span>{label}</span>
       </Badge>
@@ -119,7 +115,7 @@ export function StatusBadge({
   if (status === "discarded") {
     return (
       <Badge variant="outline" className={cn("inline-flex items-center gap-1.5 text-muted-foreground", className)}>
-        <AlertCircle className="size-3.5 shrink-0" />
+        <AlertCircle aria-hidden="true" className="size-3.5 shrink-0" />
         <span>{label}</span>
       </Badge>
     );
@@ -128,7 +124,7 @@ export function StatusBadge({
   // Default fallback badge
   return (
     <Badge variant="secondary" className={cn("inline-flex items-center gap-1.5", className)}>
-      <Clock className="size-3.5 shrink-0 text-muted-foreground" />
+      <Clock aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
       <span>{label}</span>
     </Badge>
   );

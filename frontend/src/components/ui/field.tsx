@@ -165,7 +165,7 @@ function FieldError({
     )
   }, [children, nonNullErrors])
 
-  if (content == null) {
+  if (content == null || content === "") {
     return null
   }
 

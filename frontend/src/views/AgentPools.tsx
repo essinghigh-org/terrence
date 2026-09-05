@@ -1,3 +1,4 @@
+import { EmptyState } from "../components/EmptyState";
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
@@ -290,8 +291,11 @@ export function AgentPools(): React.JSX.Element {
               ) : pools.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
-                    <Server className="mx-auto mb-2 size-8 text-muted-foreground/60" />
-                    No Agent Pools found. Create an agent pool to manage self-hosted execution workers.
+                    <EmptyState compact illustration={error === "" ? "empty" : undefined}
+                      title={error === "" ? "No agent pools yet" : "Agent pools unavailable"}
+                      description={error === "" ? "Create an agent pool to run infrastructure jobs on your own workers." : "Reload the page to try again."}
+                      docsHref="/app/docs/execution"
+                    />
                   </TableCell>
                 </TableRow>
               ) : (

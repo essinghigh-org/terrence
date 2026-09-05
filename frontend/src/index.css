@@ -249,3 +249,8 @@
 
 /* Preserve secondary text contrast across the supported themes. */
 .login-form-panel .text-muted-foreground, .login-form-note { color: hsl(var(--foreground)); }
+
+@layer base {
+  h1, h2, h3 { font-family: var(--font-heading); }
+  input[type="checkbox"], input[type="radio"] { accent-color: hsl(var(--primary)); }
+}

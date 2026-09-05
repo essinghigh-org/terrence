@@ -1,3 +1,4 @@
+import { Select } from "../../components/ui/select";
 import { AlertCircle, } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
@@ -214,7 +215,7 @@ export function AuthAdmin(props: Readonly<{
       {/* LOCAL AUTHENTICATION */}
       <Card>
         <CardHeader variant="section">
-          <CardTitle className="text-lg">Local Authentication</CardTitle>
+          <CardTitle className="text-lg">Local authentication</CardTitle>
           <CardDescription>Username and password sign-in for this instance</CardDescription>
         </CardHeader>
         <CardContent>
@@ -248,7 +249,7 @@ export function AuthAdmin(props: Readonly<{
                 <label htmlFor="trusted-client-ip-headers" className="block text-sm font-medium text-foreground">
                   Trusted client-IP headers
                 </label>
-                <input
+                <Input
                   id="trusted-client-ip-headers"
                   name="trusted-client-ip-headers"
                   type="text"
@@ -257,7 +258,7 @@ export function AuthAdmin(props: Readonly<{
                   value={trustedClientIpHeaders}
                   onChange={(e): void => { setTrustedClientIpHeaders(e.target.value); }}
                   placeholder="CF-Connecting-IP, X-Forwarded-For"
-                  className="h-9 w-full max-w-md rounded-md border border-input bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+                  className="max-w-md"
                 />
                 <p className="text-xs text-muted-foreground">
                   Comma-separated proxy headers, ordered by priority, used to determine the real client IP
@@ -337,8 +338,8 @@ export function AuthAdmin(props: Readonly<{
                   Link verified email addresses to existing accounts
                 </label>
               </div>
-              <div className="space-y-1">
-                <label htmlFor="saml-sso-url" className="text-xs font-medium text-foreground/85">SSO Endpoint URL</label>
+              <div className="space-y-2">
+                <label htmlFor="saml-sso-url" className="text-sm font-medium text-foreground">SSO Endpoint URL</label>
                 <Input
                   id="saml-sso-url"
                   name="saml-sso-url"
@@ -349,8 +350,8 @@ export function AuthAdmin(props: Readonly<{
                   aria-label="SSO Endpoint URL"
                 />
               </div>
-              <div className="space-y-1">
-                <label htmlFor="saml-idp-entity-id" className="text-xs font-medium text-foreground/85">IdP Entity ID</label>
+              <div className="space-y-2">
+                <label htmlFor="saml-idp-entity-id" className="text-sm font-medium text-foreground">IdP Entity ID</label>
                 <Input
                   id="saml-idp-entity-id"
                   name="saml-idp-entity-id"
@@ -361,8 +362,8 @@ export function AuthAdmin(props: Readonly<{
                   aria-label="IdP Entity ID"
                 />
               </div>
-              <div className="space-y-1">
-                <label htmlFor="saml-slo-url" className="text-xs font-medium text-foreground/85">SLO Endpoint URL</label>
+              <div className="space-y-2">
+                <label htmlFor="saml-slo-url" className="text-sm font-medium text-foreground">SLO Endpoint URL</label>
                 <Input
                   id="saml-slo-url"
                   name="saml-slo-url"
@@ -373,8 +374,8 @@ export function AuthAdmin(props: Readonly<{
                   aria-label="SLO Endpoint URL"
                 />
               </div>
-              <div className="space-y-1">
-                <label htmlFor="saml-idp-cert" className="text-xs font-medium text-foreground/85">IdP Certificate (PEM)</label>
+              <div className="space-y-2">
+                <label htmlFor="saml-idp-cert" className="text-sm font-medium text-foreground">IdP Certificate (PEM)</label>
                 <Textarea
                   id="saml-idp-cert"
                   name="saml-idp-certificate"
@@ -391,8 +392,8 @@ export function AuthAdmin(props: Readonly<{
               <div className="border-t pt-4">
                 <p className="text-xs font-semibold text-foreground/85 mb-3">Attribute mappings</p>
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-1">
-                    <label htmlFor="saml-attr-username" className="text-xs font-medium text-foreground/85">Username attribute</label>
+                  <div className="space-y-2">
+                    <label htmlFor="saml-attr-username" className="text-sm font-medium text-foreground">Username attribute</label>
                     <Input
                       id="saml-attr-username"
                       name="saml-username-attribute"
@@ -402,8 +403,8 @@ export function AuthAdmin(props: Readonly<{
                       onChange={(e): void => { setSamlAttrUsername(e.target.value); }}
                     />
                   </div>
-                  <div className="space-y-1">
-                    <label htmlFor="saml-attr-groups" className="text-xs font-medium text-foreground/85">Groups attribute</label>
+                  <div className="space-y-2">
+                    <label htmlFor="saml-attr-groups" className="text-sm font-medium text-foreground">Groups attribute</label>
                     <Input
                       id="saml-attr-groups"
                       name="saml-groups-attribute"
@@ -413,8 +414,8 @@ export function AuthAdmin(props: Readonly<{
                       onChange={(e): void => { setSamlAttrGroups(e.target.value); }}
                     />
                   </div>
-                  <div className="space-y-1">
-                    <label htmlFor="saml-attr-email" className="text-xs font-medium text-foreground/85">Email attribute</label>
+                  <div className="space-y-2">
+                    <label htmlFor="saml-attr-email" className="text-sm font-medium text-foreground">Email attribute</label>
                     <Input
                       id="saml-attr-email"
                       name="saml-email-attribute"
@@ -425,8 +426,8 @@ export function AuthAdmin(props: Readonly<{
                       aria-label="SAML email attribute"
                     />
                   </div>
-                  <div className="space-y-1">
-                    <label htmlFor="saml-attr-site-admin" className="text-xs font-medium text-foreground/85">Site admin attribute</label>
+                  <div className="space-y-2">
+                    <label htmlFor="saml-attr-site-admin" className="text-sm font-medium text-foreground">Site admin attribute</label>
                     <Input
                       id="saml-attr-site-admin"
                       name="saml-site-admin-attribute"
@@ -436,8 +437,8 @@ export function AuthAdmin(props: Readonly<{
                       onChange={(e): void => { setSamlAttrSiteAdmin(e.target.value); }}
                     />
                   </div>
-                  <div className="space-y-1">
-                    <label htmlFor="saml-site-admin-role" className="text-xs font-medium text-foreground/85">Site admin role value</label>
+                  <div className="space-y-2">
+                    <label htmlFor="saml-site-admin-role" className="text-sm font-medium text-foreground">Site admin role value</label>
                     <Input
                       id="saml-site-admin-role"
                       name="saml-site-admin-role"
@@ -449,8 +450,8 @@ export function AuthAdmin(props: Readonly<{
                   </div>
                 </div>
               </div>
-              <div className="space-y-1">
-                <label htmlFor="saml-timeout" className="text-xs font-medium text-foreground/85">SSO API token session timeout (seconds)</label>
+              <div className="space-y-2">
+                <label htmlFor="saml-timeout" className="text-sm font-medium text-foreground">SSO API token session timeout (seconds)</label>
                 <Input
                   id="saml-timeout"
                   name="saml-session-timeout"
@@ -525,8 +526,8 @@ export function AuthAdmin(props: Readonly<{
                 Link verified email addresses to existing accounts
               </label>
               <div className="grid gap-5 sm:grid-cols-2">
-                <div className="space-y-1">
-                  <label htmlFor="oidc-issuer" className="text-xs font-medium text-foreground/85">Issuer URL</label>
+                <div className="space-y-2">
+                  <label htmlFor="oidc-issuer" className="text-sm font-medium text-foreground">Issuer URL</label>
                   <Input
                     id="oidc-issuer"
                     name="oidc-issuer"
@@ -537,8 +538,8 @@ export function AuthAdmin(props: Readonly<{
                     aria-label="Issuer URL"
                   />
                 </div>
-                <div className="space-y-1">
-                  <label htmlFor="oidc-client-id" className="text-xs font-medium text-foreground/85">Client ID</label>
+                <div className="space-y-2">
+                  <label htmlFor="oidc-client-id" className="text-sm font-medium text-foreground">Client ID</label>
                   <Input
                     id="oidc-client-id"
                     name="oidc-client-id"
@@ -549,8 +550,8 @@ export function AuthAdmin(props: Readonly<{
                     aria-label="Client ID"
                   />
                 </div>
-                <div className="space-y-1">
-                  <label htmlFor="oidc-client-secret" className="text-xs font-medium text-foreground/85">Client Secret</label>
+                <div className="space-y-2">
+                  <label htmlFor="oidc-client-secret" className="text-sm font-medium text-foreground">Client Secret</label>
                   <Input
                     id="oidc-client-secret"
                     name="oidc-client-secret"
@@ -561,8 +562,8 @@ export function AuthAdmin(props: Readonly<{
                     onChange={(e): void => { setOidcClientSecret(e.target.value); }}
                   />
                 </div>
-                <div className="space-y-1">
-                  <label htmlFor="oidc-scopes" className="text-xs font-medium text-foreground/85">Scopes</label>
+                <div className="space-y-2">
+                  <label htmlFor="oidc-scopes" className="text-sm font-medium text-foreground">Scopes</label>
                   <Input
                     id="oidc-scopes"
                     name="oidc-scopes"
@@ -572,8 +573,8 @@ export function AuthAdmin(props: Readonly<{
                     onChange={(e): void => { setOidcScopes(e.target.value); }}
                   />
                 </div>
-                <div className="space-y-1">
-                  <label htmlFor="oidc-pkce-method" className="text-xs font-medium text-foreground/85">PKCE Method</label>
+                <div className="space-y-2">
+                  <label htmlFor="oidc-pkce-method" className="text-sm font-medium text-foreground">PKCE Method</label>
                   <Input
                     id="oidc-pkce-method"
                     name="oidc-pkce-method"
@@ -584,14 +585,14 @@ export function AuthAdmin(props: Readonly<{
                     onChange={(e): void => { setOidcPkceMethod(e.target.value); }}
                   />
                 </div>
-                <div className="space-y-1">
-                  <label htmlFor="oidc-signing-alg" className="text-xs font-medium text-foreground/85">ID token signing algorithm</label>
-                  <select
+                <div className="space-y-2">
+                  <label htmlFor="oidc-signing-alg" className="text-sm font-medium text-foreground">ID token signing algorithm</label>
+                  <Select
                     id="oidc-signing-alg"
                     name="oidc-signing-algorithm"
                     value={oidcSigningAlg}
                     onChange={(e): void => { setOidcSigningAlg(e.target.value); }}
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+
                     aria-label="OIDC signing algorithm"
                   >
                     <option value="">Provider-advertised asymmetric algorithm</option>
@@ -599,7 +600,7 @@ export function AuthAdmin(props: Readonly<{
                       "RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "PS256", "PS384", "PS512",
                       "HS256", "HS384", "HS512",
                     ].map((algorithm): React.JSX.Element => <option key={algorithm} value={algorithm}>{algorithm}</option>)}
-                  </select>
+                  </Select>
                 </div>
               </div>
               <Button type="submit" disabled={oidcSaving}>
@@ -651,8 +652,8 @@ export function AuthAdmin(props: Readonly<{
                 Link directory email addresses to existing accounts
               </label>
               <div className="grid gap-5 sm:grid-cols-2">
-                <div className="space-y-1">
-                  <label htmlFor="ldap-host" className="text-xs font-medium text-foreground/85">Host</label>
+                <div className="space-y-2">
+                  <label htmlFor="ldap-host" className="text-sm font-medium text-foreground">Host</label>
                   <Input
                     id="ldap-host"
                     name="ldap-host"
@@ -664,8 +665,8 @@ export function AuthAdmin(props: Readonly<{
                     aria-label="LDAP host"
                   />
                 </div>
-                <div className="space-y-1">
-                  <label htmlFor="ldap-port" className="text-xs font-medium text-foreground/85">Port</label>
+                <div className="space-y-2">
+                  <label htmlFor="ldap-port" className="text-sm font-medium text-foreground">Port</label>
                   <Input
                     id="ldap-port"
                     name="ldap-port"
@@ -676,20 +677,20 @@ export function AuthAdmin(props: Readonly<{
                     aria-label="LDAP port"
                   />
                 </div>
-                <div className="space-y-1">
-                  <label htmlFor="ldap-encryption" className="text-xs font-medium text-foreground/85">Encryption</label>
-                  <select
+                <div className="space-y-2">
+                  <label htmlFor="ldap-encryption" className="text-sm font-medium text-foreground">Encryption</label>
+                  <Select
                     id="ldap-encryption"
                     name="ldap-encryption"
                     value={ldapEncryption}
                     onChange={(e): void => { setLdapEncryption(e.target.value); }}
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+
                     aria-label="LDAP encryption"
                   >
                     <option value="plain">Plain (LDAP)</option>
                     <option value="starttls">StartTLS</option>
                     <option value="ldaps">LDAPS</option>
-                  </select>
+                  </Select>
                   {ldapEncryption === "plain" && (
                     <p className="text-xs text-warning">
                       Warning: plain LDAP transmits the bind password and user passwords without
@@ -697,8 +698,8 @@ export function AuthAdmin(props: Readonly<{
                     </p>
                   )}
                 </div>
-                <div className="space-y-1">
-                  <label htmlFor="ldap-base-dn" className="text-xs font-medium text-foreground/85">Base DN</label>
+                <div className="space-y-2">
+                  <label htmlFor="ldap-base-dn" className="text-sm font-medium text-foreground">Base DN</label>
                   <Input
                     id="ldap-base-dn"
                     name="ldap-base-dn"
@@ -710,8 +711,8 @@ export function AuthAdmin(props: Readonly<{
                     aria-label="LDAP base DN"
                   />
                 </div>
-                <div className="space-y-1">
-                  <label htmlFor="ldap-bind-dn" className="text-xs font-medium text-foreground/85">Bind DN (service account, optional)</label>
+                <div className="space-y-2">
+                  <label htmlFor="ldap-bind-dn" className="text-sm font-medium text-foreground">Bind DN (service account, optional)</label>
                   <Input
                     id="ldap-bind-dn"
                     name="ldap-bind-dn"
@@ -723,8 +724,8 @@ export function AuthAdmin(props: Readonly<{
                     aria-label="LDAP bind DN"
                   />
                 </div>
-                <div className="space-y-1">
-                  <label htmlFor="ldap-bind-password" className="text-xs font-medium text-foreground/85">Bind password</label>
+                <div className="space-y-2">
+                  <label htmlFor="ldap-bind-password" className="text-sm font-medium text-foreground">Bind password</label>
                   <Input
                     id="ldap-bind-password"
                     name="ldap-bind-password"
@@ -740,8 +741,8 @@ export function AuthAdmin(props: Readonly<{
               <div className="border-t pt-4">
                 <p className="text-xs font-semibold text-foreground/85 mb-3">User mapping</p>
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-1">
-                    <label htmlFor="ldap-user-filter" className="text-xs font-medium text-foreground/85">User filter (containing &#123;&#123;username&#125;&#125;)</label>
+                  <div className="space-y-2">
+                    <label htmlFor="ldap-user-filter" className="text-sm font-medium text-foreground">User filter (containing &#123;&#123;username&#125;&#125;)</label>
                     <Input
                       id="ldap-user-filter"
                       name="ldap-user-filter"
@@ -752,8 +753,8 @@ export function AuthAdmin(props: Readonly<{
                       aria-label="LDAP user filter"
                     />
                   </div>
-                  <div className="space-y-1">
-                    <label htmlFor="ldap-attr-username" className="text-xs font-medium text-foreground/85">Username attribute</label>
+                  <div className="space-y-2">
+                    <label htmlFor="ldap-attr-username" className="text-sm font-medium text-foreground">Username attribute</label>
                     <Input
                       id="ldap-attr-username"
                       name="ldap-username-attribute"
@@ -764,8 +765,8 @@ export function AuthAdmin(props: Readonly<{
                       aria-label="LDAP username attribute"
                     />
                   </div>
-                  <div className="space-y-1">
-                    <label htmlFor="ldap-attr-email" className="text-xs font-medium text-foreground/85">Email attribute</label>
+                  <div className="space-y-2">
+                    <label htmlFor="ldap-attr-email" className="text-sm font-medium text-foreground">Email attribute</label>
                     <Input
                       id="ldap-attr-email"
                       name="ldap-email-attribute"
@@ -776,8 +777,8 @@ export function AuthAdmin(props: Readonly<{
                       aria-label="LDAP email attribute"
                     />
                   </div>
-                  <div className="space-y-1">
-                    <label htmlFor="ldap-attr-display-name" className="text-xs font-medium text-foreground/85">Display name attribute</label>
+                  <div className="space-y-2">
+                    <label htmlFor="ldap-attr-display-name" className="text-sm font-medium text-foreground">Display name attribute</label>
                     <Input
                       id="ldap-attr-display-name"
                       name="ldap-display-name-attribute"

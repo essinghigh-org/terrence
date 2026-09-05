@@ -1368,7 +1368,7 @@ export function Layout({
           id="app-sidebar"
           aria-label="Application navigation"
           className={cn(
-            "hidden shrink-0 flex-col border-r bg-muted/40 transition-[width] duration-200 lg:flex",
+            "hidden shrink-0 flex-col border-r bg-card transition-[width] duration-200 lg:flex",
             sidebarCollapsed ? "lg:w-16" : "lg:w-[280px]",
           )}
         >
@@ -1376,7 +1376,7 @@ export function Layout({
               mid-animation; a fixed overlay decouples the button from the
               animating box so it stays put and clickable throughout. */}
           <div className="pointer-events-none fixed bottom-0 z-10 hidden lg:block" style={{ width: sidebarCollapsed ? "4rem" : "17.5rem" }}>
-            <div className="border-t p-3 pointer-events-auto">
+            <div className="border-t bg-card p-3 pointer-events-auto">
               <Button
                 variant="ghost"
                 size={sidebarCollapsed ? "icon" : "default"}
