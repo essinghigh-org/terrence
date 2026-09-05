@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { app, systemApiApp } from "../../src/app";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 describe("openapi contract", () => {
@@ -24,6 +24,21 @@ describe("openapi contract", () => {
 
   it("covers every registered route", () => {
     type Route = Readonly<{ method: string; path: string }>;
+    // Static assets served from frontend/dist register one GET route per
+    // file (plus a directory route for folders with an index.html). These
+    // are build artifacts, not API surface: resolve candidates against
+    // dist and skip matches, so checked-in public/ additions never require
+    // spec edits. Documented API routes (/healthz, /metrics, /oauth/*,
+    // /scim/*, ...) resolve against nothing in dist and stay covered.
+    const distDir = join(import.meta.dir, "../../../frontend/dist");
+    const isDistAsset = (routePath: string): boolean => {
+      const absolute = join(distDir, routePath.replace(/^\/+/, ""));
+      if (absolute !== distDir && !absolute.startsWith(`${distDir}/`)) return false;
+      const entry = statSync(absolute, { throwIfNoEntry: false });
+      if (entry?.isFile() === true) return true;
+      if (entry?.isDirectory() !== true) return false;
+      return statSync(join(absolute, "index.html"), { throwIfNoEntry: false })?.isFile() === true;
+    };
     const routes = [
       ...(app as unknown as { routes: Route[] }).routes,
       ...(systemApiApp as unknown as { routes: Route[] }).routes,
@@ -47,6 +62,7 @@ describe("openapi contract", () => {
       }
       const m = r.method.toLowerCase();
       if (!["get", "post", "put", "patch", "delete"].includes(m)) return false;
+      if (m === "get" && isDistAsset(r.path)) return false;
       return true;
     });
     const toOasPath = (p: string): string => p.replaceAll(/:([A-Za-z0-9_]+)/g, "{$1}");
