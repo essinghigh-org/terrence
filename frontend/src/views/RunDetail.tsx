@@ -1481,7 +1481,7 @@ export function RunDetail({
                   <ChevronRight className="size-4 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
                   <PhaseIcon status={planStatus} />
                   <h3 id="plan-heading" className="font-semibold text-foreground">
-                    Plan
+                    Plan{" "}
                     <span className="ml-2 font-normal text-muted-foreground">{formatPhaseState(planStatus)}</span>
                   </h3>
                 </div>
@@ -1737,7 +1737,7 @@ export function RunDetail({
                   <ChevronRight className="size-4 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
                   <PhaseIcon status={applyStatus} />
                   <h3 id="apply-heading" className="font-semibold text-foreground">
-                    Apply
+                    Apply{" "}
                     {/* The heading describes the phase; whether the run wants
                         something from you is the decision panel's job to say,
                         once. It used to be claimed here as well, and the two

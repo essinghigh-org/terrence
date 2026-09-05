@@ -665,9 +665,9 @@ test("opens failed applies and presents their diagnostics", async () => {
     </MemoryRouter>,
   );
 
-  // Accessible name has no space: the status span is separated by margin,
-  // not whitespace ("Apply" + "Failed").
-  const applyHeading = await view.findByRole("heading", { name: "ApplyFailed" });
+  // The phase name and status are separated by whitespace so assistive
+  // technology hears "Apply Failed", not "ApplyFailed".
+  const applyHeading = await view.findByRole("heading", { name: "Apply Failed" });
   // SAFETY: the heading lives inside a details element; closest() resolves it.
   const applySection = applyHeading.closest("details") as HTMLDetailsElement;
   // Apply errors surface through the same DiagnosticsBanner that warnings
