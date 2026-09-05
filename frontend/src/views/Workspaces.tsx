@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { Bookmark, Columns3, Pencil, Plus, Rows3, Star, Tags, Trash2, X } from "lucide-react";
 
 import { useSyncedSearchParam } from "@/hooks/useSyncedSearchParam";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CreateWorkspaceModal } from "@/components/CreateWorkspaceModal";
 import { EmptyState } from "@/components/EmptyState";
 import { Badge } from "@/components/ui/badge";
@@ -149,8 +150,10 @@ async function fetchWorkspacePages(
 // The "running" set mirrors the executor's active statuses (worker.ts
 // blockerStatuses minus the completed-plan states, which belong to on-hold):
 // pre-plan/post-plan task execution, policy phases, queued apply, etc.
+// The attention set includes errored runs so the tile count and its
+// click-through filter agree (issue #612).
 const runStatusFilters = {
-  attention: ["policy_soft_failed", "policy_hard_failed", "policy_override"],
+  attention: ["policy_soft_failed", "policy_hard_failed", "policy_override", "errored"],
   errored: ["errored"],
   running: [
     "queuing", "pending", "fetching", "fetching_completed", "plan_queued",
@@ -167,6 +170,22 @@ function statusesForFilter(filter: string): readonly string[] | undefined {
   return runStatusFilters[filter as keyof typeof runStatusFilters];
 }
 
+// Resolve each workspace through its own current-run relationship so an
+// included run without a workspace relationship can never crash the mapping.
+function runsByWorkspace(
+  source: Readonly<{ workspaces: Workspace[]; runs: RunSummary[] }>,
+): ReadonlyMap<string, RunSummary> {
+  const runsById = new Map(source.runs.map((run): [string, RunSummary] => [run.id, run]));
+  const byWorkspace = new Map<string, RunSummary>();
+  for (const workspace of source.workspaces) {
+    const currentRun = workspace.relationships?.["current-run"]?.data;
+    if (currentRun === null || currentRun === undefined) continue;
+    const run = runsById.get(currentRun.id);
+    if (run !== undefined) byWorkspace.set(workspace.id, run);
+  }
+  return byWorkspace;
+}
+
 export function Workspaces(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
@@ -179,6 +198,10 @@ export function Workspaces(): React.JSX.Element {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectDataError, setProjectDataError] = useState(false);
   const [latestRuns, setLatestRuns] = useState<ReadonlyMap<string, RunSummary>>(new Map());
+  // Org-wide run map backing the Active/Attention KPI tiles. Under a status
+  // filter this comes from the unfiltered fetch, so the tiles never show
+  // filtered-page counts as org-wide numbers (issue #611).
+  const [totalsRuns, setTotalsRuns] = useState<ReadonlyMap<string, RunSummary>>(new Map());
   const [canManageWorkspaces, setCanManageWorkspaces] = useState(false);
   const [defaultIacBinary, setDefaultIacBinary] = useState("tofu");
   const [defaultTerraformVersion, setDefaultTerraformVersion] = useState("latest");
@@ -204,6 +227,8 @@ export function Workspaces(): React.JSX.Element {
   const [tagValue, setTagValue] = useState("");
   const [editingTagKey, setEditingTagKey] = useState<string | null>(null);
   const [savingTag, setSavingTag] = useState(false);
+  // Pending tag removal, confirmed through a dialog (issue #588).
+  const [pendingTagDelete, setPendingTagDelete] = useState<TagBinding | null>(null);
 
   const loadData = useCallback(async (signal?: Readonly<AbortSignal>): Promise<void> => {
     setLoading(true);
@@ -253,6 +278,7 @@ export function Workspaces(): React.JSX.Element {
         const totalsSource = totalsResult ?? workspaceResult;
         setTotalWorkspaceCount(totalsSource.workspaces.length);
         setLockedWorkspaceCount(totalsSource.workspaces.filter((workspace): boolean => workspace.attributes.locked === true).length);
+        setTotalsRuns(runsByWorkspace(totalsSource));
         setTotalsUnavailable(false);
       } else {
         // Unfiltered counting failed under an active filter: keep the last
@@ -270,18 +296,9 @@ export function Workspaces(): React.JSX.Element {
         setCanManageWorkspaces(false);
       }
       // The server aggregates the latest run per workspace (include=current_run,
-      // review 10.1); the org-wide runs fetch is gone. Resolve each workspace
-      // through its own current-run relationship so an included run without
-      // a workspace relationship can never crash the mapping.
-      const runsById = new Map(workspaceResult.runs.map((run): [string, RunSummary] => [run.id, run]));
-      const byWorkspace = new Map<string, RunSummary>();
-      for (const workspace of workspaceResult.workspaces) {
-        const currentRun = workspace.relationships?.["current-run"]?.data;
-        if (currentRun === null || currentRun === undefined) continue;
-        const run = runsById.get(currentRun.id);
-        if (run !== undefined) byWorkspace.set(workspace.id, run);
-      }
-      setLatestRuns(byWorkspace);
+      // review 10.1); the org-wide runs fetch is gone. The table map below
+      // always reflects the (possibly filtered) page; KPI tiles use totalsRuns.
+      setLatestRuns(runsByWorkspace(workspaceResult));
     } catch (error: unknown) {
       if (signal?.aborted === true) return;
       setLoadError(error instanceof Error ? error.message : "Could not load workspaces");
@@ -373,26 +390,23 @@ export function Workspaces(): React.JSX.Element {
 
   const activeRunsCount = useMemo((): number => {
     let count = 0;
-    for (const run of latestRuns.values()) {
+    for (const run of totalsRuns.values()) {
       if (runStatusFilters.running.includes(run.attributes.status)) {
         count++;
       }
     }
     return count;
-  }, [latestRuns]);
+  }, [totalsRuns]);
 
   const attentionNeededCount = useMemo((): number => {
     let count = 0;
-    for (const run of latestRuns.values()) {
-      if (
-        runStatusFilters.attention.includes(run.attributes.status) ||
-        run.attributes.status === "errored"
-      ) {
+    for (const run of totalsRuns.values()) {
+      if (runStatusFilters.attention.includes(run.attributes.status)) {
         count++;
       }
     }
     return count;
-  }, [latestRuns]);
+  }, [totalsRuns]);
 
 
 
@@ -464,6 +478,8 @@ export function Workspaces(): React.JSX.Element {
         description: error instanceof Error ? error.message : "Unknown error",
         type: "error",
       });
+    } finally {
+      setPendingTagDelete(null);
     }
   };
 
@@ -516,7 +532,7 @@ export function Workspaces(): React.JSX.Element {
           )}
         >
           <div className="text-xs font-medium text-muted-foreground">Active Runs</div>
-          <div className="mt-1 tabular-nums text-2xl font-bold text-primary">{activeRunsCount}</div>
+          <div className="mt-1 tabular-nums text-2xl font-bold text-primary">{totalsUnavailable ? "—" : activeRunsCount}</div>
         </button>
         <button
           type="button"
@@ -527,8 +543,8 @@ export function Workspaces(): React.JSX.Element {
           )}
         >
           <div className="text-xs font-medium text-muted-foreground">Attention Needed</div>
-          <div className={cn("mt-1 tabular-nums text-2xl font-bold", attentionNeededCount > 0 ? "text-destructive" : "")}>
-            {attentionNeededCount}
+          <div className={cn("mt-1 tabular-nums text-2xl font-bold", !totalsUnavailable && attentionNeededCount > 0 ? "text-destructive" : "")}>
+            {totalsUnavailable ? "—" : attentionNeededCount}
           </div>
         </button>
         <button
@@ -946,7 +962,7 @@ export function Workspaces(): React.JSX.Element {
                         variant="ghost"
                         size="icon-sm"
                         aria-label={`Delete tag ${tag.attributes.key}`}
-                        onClick={(): void => { void deleteTag(tag); }}
+                        onClick={(): void => { setPendingTagDelete(tag); }}
                       >
                         <Trash2 />
                       </Button>
@@ -1003,6 +1019,20 @@ export function Workspaces(): React.JSX.Element {
           </form>
         </DialogContent>
       </Dialog>
+      <ConfirmDialog
+        open={pendingTagDelete !== null}
+        onOpenChange={(open): void => { if (!open) setPendingTagDelete(null); }}
+        title="Remove tag?"
+        description={pendingTagDelete === null ? undefined : (
+          <>
+            Tag <strong className="font-mono">{pendingTagDelete.attributes.key}</strong> will be removed
+            from this workspace. Runs that filter on this tag will stop matching it.
+          </>
+        )}
+        confirmText="Remove tag"
+        confirmVariant="destructive"
+        onConfirm={(): void => { if (pendingTagDelete !== null) void deleteTag(pendingTagDelete); }}
+      />
     </PageShell>
   );
 }

@@ -27,6 +27,7 @@ import { toast } from "../components/ui/toast";
 import { fetchApi } from "../lib/api";
 import { useTerrenceEvent } from "../lib/event-provider";
 import { isNumber, isString } from "../lib/type-guards";
+import { safeHttpUrl } from "../lib/safe-url";
 import type { JsonObject } from "@/lib/json";
 import { formatRunSource, formatRunStatusForUi, isVcsRunSource } from "../lib/run-labels";
 
@@ -521,9 +522,9 @@ export function RunList({
                         {externalSource && run.attributes["commit-sha"] !== null && run.attributes["commit-sha"] !== undefined && run.attributes["commit-sha"] !== "" && (
                           <>
                             <span aria-hidden="true">·</span>
-                            {run.attributes["commit-url"] !== null && run.attributes["commit-url"] !== undefined && run.attributes["commit-url"] !== "" ? (
+                            {isString(run.attributes["commit-url"]) && safeHttpUrl(run.attributes["commit-url"]) !== null ? (
                               <a
-                                href={run.attributes["commit-url"]}
+                                href={safeHttpUrl(run.attributes["commit-url"]) ?? undefined}
                                 target="_blank"
                                 rel="noreferrer"
                                 title={run.attributes["commit-sha"]}

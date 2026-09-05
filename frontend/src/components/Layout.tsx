@@ -176,6 +176,17 @@ export function Layout({
     if (main instanceof HTMLElement) main.scrollTop = 0;
   }, [location.pathname]);
 
+  // Forced password changes gate navigation (issue #626): while the flag is
+  // set, any route outside the account page bounces to the password section
+  // instead of rendering backend-rejected breakage. The account page itself
+  // is always allowed through.
+  useEffect((): void => {
+    if (!accountLoaded || mustChangePassword !== true) return;
+    if (location.pathname !== "/app/account") {
+      void navigate("/app/account#password", { replace: true });
+    }
+  }, [accountLoaded, mustChangePassword, location.pathname, navigate]);
+
   useEffect((): void => {
     if (!commandPaletteOpen && !shortcutsModalOpen && !mobileNavigationOpen) {
       return;

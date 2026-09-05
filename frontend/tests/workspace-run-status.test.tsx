@@ -176,8 +176,9 @@ test("KPI totals stay org-wide when a status filter is active", async () => {
   // The table still shows only the server-filtered workspace.
   expect(view.queryByText("idle-ws")).toBeNull();
   expect(view.getByText("filtered-only")).toBeTruthy();
-  // post_plan_running counts as an active run.
-  expect(view.getByText("Active Runs").parentElement!.textContent).toContain("1");
+  // post_plan_running is only on the filtered page: the org-wide tile stays 0 (issue #611).
+  expect(view.getByText("Active Runs").parentElement!.textContent).not.toContain("1");
+  expect(view.getByText("Active Runs").parentElement!.textContent).toContain("0");
 });
 
 test("KPI totals degrade visibly when the org-wide count cannot be loaded", async () => {
@@ -228,4 +229,43 @@ test("KPI totals degrade visibly when the org-wide count cannot be loaded", asyn
   });
   expect(view.getByText("Total Workspaces").parentElement!.textContent).toContain("—");
   expect(view.getByText("Locked Workspaces").parentElement!.textContent).toContain("—");
+  expect(view.getByText("Active Runs").parentElement!.textContent).toContain("—");
+  expect(view.getByText("Attention Needed").parentElement!.textContent).toContain("—");
+});
+
+test("Attention tile counts errored runs and its filter includes them (issue #612)", async () => {
+  const seen: string[] = [];
+// SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = urlOf(input);
+    seen.push(url);
+    if (url.includes("/workspaces?")) {
+      return json({
+        data: [{
+          id: "ws-1",
+          attributes: { name: "broken", locked: false },
+          relationships: { project: { data: null }, ...currentRunRelationship("run-err") },
+        }],
+        included: [includedRun("run-err", "errored", "ws-1")],
+      });
+    }
+    if (url.includes("/projects?")) return json({ data: [] });
+    if (url === "/api/v2/organizations/acme") {
+      return json({ data: { attributes: { permissions: { "can-manage-workspaces": false } } } });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  })) as unknown as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app/acme"]}>
+      <Routes><Route path="/app/:orgName" element={<Workspaces />} /></Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByText("broken")).toBeTruthy(); });
+  expect(view.getByText("Attention Needed").parentElement!.textContent).toContain("1");
+  fireEvent.click(view.getByText("Attention Needed"));
+  await waitFor((): void => {
+    expect(seen.some((entry: string): boolean => entry.includes("current-run") && entry.includes("errored"))).toBe(true);
+  });
 });

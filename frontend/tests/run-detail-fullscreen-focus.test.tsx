@@ -164,6 +164,9 @@ test("fullscreen log dialog returns focus to its trigger button on close", async
 
   // Focus moved into the dialog, away from the trigger.
   expect(document.activeElement).toBe(closeButton);
+  // The background page is inert while the overlay is open (issue #625).
+  const dialog = view.getByRole("dialog", { name: "Raw plan log" });
+  expect(dialog.previousElementSibling?.hasAttribute("inert")).toBe(true);
 
   fireEvent.click(closeButton);
 

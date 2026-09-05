@@ -698,7 +698,7 @@ export function OrganizationSettings(): React.JSX.Element {
                         disabled={!canUpdateOrganization}
                         className="h-10"
                       />
-                      <p className="text-sm text-muted-foreground mt-1">OIDC token lifetime for private module tests, in seconds (300–1800).</p>
+                      <p className="text-sm text-muted-foreground mt-1">OIDC token lifetime for private module tests, in seconds (300–1800). Applies to tokens created after save; existing tokens are unaffected.</p>
                     </div>
                     <div className="space-y-2 border-t pt-4">
                       <p className="text-sm font-semibold text-foreground">VCS status checks</p>

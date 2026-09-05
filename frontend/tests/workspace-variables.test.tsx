@@ -113,7 +113,7 @@ test("renders workspace variables and attached variable sets as separate section
   expect(view.getAllByRole("button", { name: "Delete" })).toHaveLength(1);
   // The set's sensitive variable is marked and its value is hidden.
   expect(view.getAllByText("Sensitive").length).toBeGreaterThanOrEqual(1);
-  expect(view.getByText("Sensitive — write only")).toBeTruthy();
+  expect(view.getByText("Write only")).toBeTruthy();
   // Set metadata: attached workspace count.
   expect(view.getByText(/2 workspaces/)).toBeTruthy();
 });

@@ -14,6 +14,7 @@ import {
   isRefreshableSession,
 } from "./lib/api";
 import { Layout } from "./components/Layout";
+import { markLegacyUrlRedirect } from "./components/LegacyUrlNotice";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { RunSandboxGate } from "./components/RunSandboxGate";
 import { EventProvider } from "./lib/event-provider";
@@ -114,6 +115,10 @@ function LegacyWorkspaceRedirect({ destination }: Readonly<{ destination: "runs"
     : destination === "runs"
       ? `${base}/runs`
       : `${base}/variables`;
+
+  // One-time subtle notice on the landing page (issue #641): flag the legacy
+  // arrival in session storage; the canonical page reads and clears it.
+  markLegacyUrlRedirect(location.pathname);
 
   return <Navigate replace to={`${path}${location.search}${location.hash}`} />;
 }

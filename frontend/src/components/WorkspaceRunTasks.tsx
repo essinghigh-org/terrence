@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Card,
   CardContent,
@@ -84,6 +85,8 @@ export function WorkspaceRunTasks({
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  // Pending run-task removal, confirmed through a dialog (issue #588).
+  const [pendingRemove, setPendingRemove] = useState<{ taskId: string; taskName: string } | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -182,10 +185,12 @@ export function WorkspaceRunTasks({
       setError(messageFrom(caught, "Failed to remove run task"));
     } finally {
       setSaving(null);
+      setPendingRemove(null);
     }
   };
 
   return (
+    <>
     <Card>
       <CardHeader>
         <CardTitle>Attached run tasks</CardTitle>
@@ -326,7 +331,7 @@ export function WorkspaceRunTasks({
                           variant="destructive"
                           aria-label={`Remove ${taskName}`}
                           disabled={saving !== null}
-                          onClick={(): void => { void remove(taskId); }}
+                          onClick={(): void => { setPendingRemove({ taskId, taskName }); }}
                         >
                           {saving === taskId && <Spinner data-icon="inline-start" />}
                           {saving === taskId ? "Removing" : "Remove"}
@@ -348,5 +353,20 @@ export function WorkspaceRunTasks({
         </div>
       </CardContent>
     </Card>
+      <ConfirmDialog
+        open={pendingRemove !== null}
+        onOpenChange={(open): void => { if (!open) setPendingRemove(null); }}
+        title="Remove run task?"
+        description={pendingRemove === null ? undefined : (
+          <>
+            Run task <strong>{pendingRemove.taskName}</strong> will stop running against this
+            workspace. Later runs skip its checks entirely.
+          </>
+        )}
+        confirmText="Remove run task"
+        confirmVariant="destructive"
+        onConfirm={(): void => { if (pendingRemove !== null) void remove(pendingRemove.taskId); }}
+      />
+    </>
   );
 }

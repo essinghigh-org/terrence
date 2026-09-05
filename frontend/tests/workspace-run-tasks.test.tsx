@@ -125,6 +125,11 @@ test("respects permissions and fully manages workspace run task bindings", async
   });
 
   fireEvent.click(view.getByRole("button", { name: "Remove Security scanner" }));
+  // Removal requires confirmation (issue #588).
+  await waitFor((): void => {
+    expect(view.getByRole("heading", { name: "Remove run task?" })).toBeTruthy();
+  });
+  fireEvent.click(view.getByRole("button", { name: "Remove run task" }));
   await waitFor((): void => { expect(view.getByText("Run task removed.")).toBeTruthy(); });
   expect(fetchMock.mock.calls.some(([input, init]): boolean =>
     urlOf(input) === "/api/v2/workspaces/ws-1/run-tasks/task-scanner"

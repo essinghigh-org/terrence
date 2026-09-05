@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { Suspense } from "react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 
@@ -106,4 +106,32 @@ test("static-segment ranking protects canonical route from legacy alias collisio
       "/app/acme/projects/runs",
     );
   });
+});
+
+test("a legacy redirect shows a one-time dismissible notice (issue #641)", async () => {
+  sessionStorage.clear();
+  const view = renderRoutes("/app/acme/production/runs/run-123");
+  await waitFor((): void => {
+    expect(view.getByLabelText("Current location").textContent).toBe(
+      "/app/acme/workspaces/production/runs/run-123",
+    );
+  });
+  // The notice names the legacy path that was replaced.
+  const notice = await view.findByText(/You followed a Terraform CLI link/);
+  expect(notice.textContent).toContain("/app/acme/production/runs/run-123");
+  // Dismissing removes it, and the consumed flag does not come back.
+  fireEvent.click(view.getByRole("button", { name: "Dismiss redirect notice" }));
+  expect(view.queryByText(/You followed a Terraform CLI link/)).toBeNull();
+  expect(sessionStorage.getItem("terrence:legacy-url-redirect")).toBeNull();
+});
+
+test("canonical navigation shows no redirect notice (issue #641)", async () => {
+  sessionStorage.clear();
+  const view = renderRoutes("/app/acme/workspaces/production/runs/run-123");
+  await waitFor((): void => {
+    expect(view.getByLabelText("Current location").textContent).toBe(
+      "/app/acme/workspaces/production/runs/run-123",
+    );
+  });
+  expect(view.queryByText(/You followed a Terraform CLI link/)).toBeNull();
 });

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { fetchApi } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { Input } from "../components/ui/input";
 import { toast } from "../components/ui/toast";
 
@@ -18,6 +19,10 @@ export function OrganizationCidrRanges({ orgName }: Readonly<{ orgName: string }
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Pending range removal, confirmed through a dialog (issue #588). Removing
+  // the range you connect from can lock you out of this instance, so the
+  // dialog asks for the value back.
+  const [pendingRemove, setPendingRemove] = useState<CidrRange | null>(null);
   const path = `/organizations/${encodeURIComponent(orgName)}/cidr-range-lists`;
 
   const load = async (): Promise<void> => {
@@ -56,9 +61,11 @@ export function OrganizationCidrRanges({ orgName }: Readonly<{ orgName: string }
   const removeRange = async (id: string): Promise<void> => {
     try { await fetchApi(`/cidr-ranges/${id}`, { method: "DELETE" }); setRanges((current) => current.filter((range) => range.id !== id)); }
     catch (caught: unknown) { setError(caught instanceof Error ? caught.message : "Could not remove CIDR range"); }
+    finally { setPendingRemove(null); }
   };
 
-  return <Card>
+  return <>
+  <Card>
     <CardHeader variant="section"><CardTitle>IP allowlists</CardTitle><CardDescription>Manage organization network ranges used by policy and ingress controls.</CardDescription></CardHeader>
     <CardContent className="space-y-5">
       <form onSubmit={createList} className="flex gap-2"><Input id="cidr-list-name" name="cidr-list-name" autoComplete="off" aria-label="New CIDR list name" value={listName} onInput={(event) => { setListName(event.currentTarget.value); }} placeholder="New range list name…" /><Button type="submit" disabled={saving || listName.trim() === ""}>Create list</Button></form>
@@ -66,9 +73,21 @@ export function OrganizationCidrRanges({ orgName }: Readonly<{ orgName: string }
         <label className="block text-sm font-medium" htmlFor="cidr-list">Range list</label>
         <Select id="cidr-list" name="cidr-list"  value={selectedListId} onChange={(event) => { setSelectedListId(event.currentTarget.value); }}>{lists.map((list) => <option key={list.id} value={list.id}>{list.attributes.name}</option>)}</Select>
         <form onSubmit={addRange} className="flex gap-2"><Input id="cidr-range" name="cidr-range" autoComplete="off" spellCheck={false} aria-label="CIDR range" value={rangeValue} onInput={(event) => { setRangeValue(event.currentTarget.value); }} placeholder="10.0.0.0/8" /><Button type="submit" disabled={saving || rangeValue.trim() === ""}>Add range</Button></form>
-        <ul className="divide-y rounded-md border">{ranges.map((range) => <li className="flex items-center justify-between px-3 py-2 text-sm" key={range.id}><code>{range.attributes.value}</code><Button type="button" variant="ghost" size="sm" onClick={() => void removeRange(range.id)}>Remove</Button></li>)}{ranges.length === 0 && <li className="px-3 py-3 text-sm text-muted-foreground">No ranges in this list.</li>}</ul>
+        <ul className="divide-y rounded-md border">{ranges.map((range) => <li className="flex items-center justify-between px-3 py-2 text-sm" key={range.id}><code>{range.attributes.value}</code><Button type="button" variant="ghost" size="sm" onClick={() => setPendingRemove(range)}>Remove</Button></li>)}{ranges.length === 0 && <li className="px-3 py-3 text-sm text-muted-foreground">No ranges in this list.</li>}</ul>
       </>}
       {error !== "" && <p role="alert" className="text-sm text-destructive">{error}</p>}
     </CardContent>
-  </Card>;
+  </Card>
+  <ConfirmDialog
+    open={pendingRemove !== null}
+    onOpenChange={(open) => { if (!open) setPendingRemove(null); }}
+    title="Remove CIDR range?"
+    description={pendingRemove === null ? undefined : <>Range <code>{pendingRemove.attributes.value}</code> will stop being allowlisted. If you connect from inside this range, removing it can lock you out of this instance.</>}
+    confirmText="Remove range"
+    confirmVariant="destructive"
+    requireText={pendingRemove?.attributes.value}
+    requireTextLabel={pendingRemove === null ? undefined : `Type ${pendingRemove.attributes.value} to remove this range`}
+    onConfirm={() => { if (pendingRemove !== null) void removeRange(pendingRemove.id); }}
+  />
+  </>;
 }

@@ -2,6 +2,7 @@ import { Terrence } from "./brand/Terrence";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { JsonValue } from "../lib/json";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Card,
   CardContent,
@@ -168,6 +169,8 @@ export function WorkspaceRunTriggers({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Pending trigger removal, confirmed through a dialog (issue #588).
+  const [pendingDetach, setPendingDetach] = useState<{ sourceId: string; sourceName: string } | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
     // SAFETY: both endpoints return the JSON:API envelope per contract.
@@ -250,10 +253,13 @@ export function WorkspaceRunTriggers({
       );
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : "Failed to remove run trigger");
+    } finally {
+      setPendingDetach(null);
     }
   };
 
   return (
+    <>
     <Card>
       <CardHeader>
         <CardTitle>Source workspaces</CardTitle>
@@ -320,7 +326,7 @@ export function WorkspaceRunTriggers({
                       <Button
                         size="sm"
                         variant="destructive"
-                        onClick={(): void => { void detach(sourceId); }}
+                        onClick={(): void => { setPendingDetach({ sourceId, sourceName: namesById.get(sourceId) ?? sourceId }); }}
                       >
                         Remove
                       </Button>
@@ -340,6 +346,21 @@ export function WorkspaceRunTriggers({
         </div>
       </CardContent>
     </Card>
+      <ConfirmDialog
+        open={pendingDetach !== null}
+        onOpenChange={(open): void => { if (!open) setPendingDetach(null); }}
+        title="Remove run trigger?"
+        description={pendingDetach === null ? undefined : (
+          <>
+            Successful applies in <strong>{pendingDetach.sourceName}</strong> will stop queueing runs
+            in this workspace.
+          </>
+        )}
+        confirmText="Remove trigger"
+        confirmVariant="destructive"
+        onConfirm={(): void => { if (pendingDetach !== null) void detach(pendingDetach.sourceId); }}
+      />
+    </>
   );
 }
 

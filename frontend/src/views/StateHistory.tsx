@@ -6,6 +6,7 @@ import { fetchAllApiPages, fetchApi } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/utils";
 import { formatRunStatusForUi } from "@/lib/run-labels";
+import { safeHttpUrl } from "@/lib/safe-url";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Spinner } from "@/components/ui/spinner";
@@ -307,9 +308,9 @@ s.attributes["serial"] as number}</p>
                 </TableCell>
                 <TableCell className="font-mono text-xs">
                   {isString(s.attributes["vcs-commit-sha"]) ? (
-                    isString(s.attributes["vcs-commit-url"]) ? (
+                    isString(s.attributes["vcs-commit-url"]) && safeHttpUrl(s.attributes["vcs-commit-url"]) !== null ? (
                       <a
-                        href={s.attributes["vcs-commit-url"]}
+                        href={safeHttpUrl(s.attributes["vcs-commit-url"]) ?? undefined}
                         target="_blank"
                         rel="noreferrer"
                         className="text-primary hover:underline"

@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
 import { ApiError, fetchApi, setAuthToken } from "@/lib/api";
+import { resolveReturnTarget } from "@/lib/return-to";
 import { isString } from "../lib/type-guards";
 
 
@@ -34,15 +35,10 @@ export function Login(): React.JSX.Element {
   const oauthState = searchParams.get("oauth_state");
 
   // Destination to restore after sign-in (set by ProtectedRoute when it
-  // bounces an unauthenticated deep link to /login). Only same-origin /app
-  // paths are honored so the flag can never act as an open redirect.
+  // bounces an unauthenticated deep link to /login). Validated by the shared
+  // return-to helper so the flag can never act as an open redirect.
   const returnTo = searchParams.get("returnTo");
-  const returnTarget = (): string => {
-    if (returnTo === null || !returnTo.startsWith("/app/") && returnTo !== "/app") return "/app";
-    if (returnTo.startsWith("//")) return "/app";
-    if (/[\r\n]/.test(returnTo) || returnTo.includes("/../")) return "/app";
-    return returnTo;
-  };
+  const returnTarget = (): string => resolveReturnTarget(returnTo);
 
   const finishOauthHandshake = (): void => {
     if (oauthState === null || oauthState === "") return;
@@ -228,7 +224,10 @@ export function Login(): React.JSX.Element {
               </Button>
             )}
             {mfaChallengeToken === null && localAuthEnabled && signupEnabled && (
-              <Link to="/register" className={buttonVariants({ variant: "link" })}>
+              <Link
+                to={returnTo === null ? "/register" : `/register?returnTo=${encodeURIComponent(returnTo)}`}
+                className={buttonVariants({ variant: "link" })}
+              >
                 Create account
               </Link>
             )}
