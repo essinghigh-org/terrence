@@ -60,6 +60,23 @@ describe("remote-workflow variables contract", () => {
     expectSelfLink(resource, "/api/v2/workspaces/");
   });
 
+  it("rejects a duplicate variable key with 422 instead of 500 (issue #594)", async () => {
+    const response = await request(`/api/v2/workspaces/${workspaceId}/vars`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        data: {
+          type: "vars",
+          attributes: { key: "region", value: "eu-west-1", category: "terraform" },
+        },
+      }),
+    });
+    expect(response.status).toBe(422);
+    const body = (await response.json()) as { errors: { status?: string; detail?: string }[] };
+    expect(body.errors[0]?.status).toBe("422");
+    expect(body.errors[0]?.detail).toBe("Variable key already exists in this workspace");
+  });
+
   it("creates an environment variable and hides sensitive values on read", async () => {
     const resource = await expectSuccessResponse(
       await request(`/api/v2/workspaces/${workspaceId}/vars`, {

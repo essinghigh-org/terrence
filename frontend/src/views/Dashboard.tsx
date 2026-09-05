@@ -275,7 +275,7 @@ export function Dashboard(): React.JSX.Element {
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
                 />
                 {reservedName && (
-                  <p role="alert" className="text-sm text-destructive">This organization name is reserved.</p>
+                  <p role="alert" className="text-sm text-destructive">This name is reserved: account and admin collide with app routes.</p>
                 )}
               </Field>
               <Field>

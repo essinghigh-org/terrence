@@ -112,3 +112,32 @@ test("does not resume an organization that no longer exists", async () => {
   });
   expect(view.queryByText("Organization opened")).toBeNull();
 });
+
+test("reserved organization names explain the route collision (issue #639)", async () => {
+  const fetchMock = mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations?page[size]=100") {
+      return json({ data: [] });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app"]}>
+      <Routes>
+        <Route path="/app" element={<Dashboard />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  fireEvent.click(view.getByRole("button", { name: "New organization" }));
+  fireEvent.input(view.getByLabelText("Name"), { target: { value: "admin" } });
+
+  await waitFor((): void => {
+    expect(view.getByRole("alert").textContent).toContain("collide with app routes");
+  });
+  expect(view.getByRole("button", { name: "Create organization" }).hasAttribute("disabled")).toBe(true);
+  expect(fetchMock.mock.calls.some(([input, init]): boolean =>
+    urlOf(input) === "/api/v2/organizations" && init?.method === "POST")).toBe(false);
+});
