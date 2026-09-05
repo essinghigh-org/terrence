@@ -1,7 +1,7 @@
 import { chmod, mkdir, open, readdir, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 
-import { decodeStatePayload, encryptStatePayload, parseTerraformStatePayload } from "./validation";
+import { decodeStatePayload, decryptStatePayload, encryptStatePayload, parseTerraformStatePayload } from "./validation";
 import { log } from "./log";
 
 // ---------------------------------------------------------------------------
@@ -116,9 +116,12 @@ export async function captureInterruptedApplyState(
     await writeFileDurable(recoveryDir, RECOVERY_STATE_FILENAME, encrypted, 0o600);
     // Verify the published copy before it becomes anyone's only record: a
     // truncated or bit-rotted write must fail here, while the source still
-    // exists, and never surface later as a 404 on read.
+    // exists, and never surface later as a 404 on read. Decrypt-only on
+    // purpose: interrupted applies can leave partial, non-JSON bytes, and
+    // the cancel path contract is to preserve whatever the engine wrote
+    // (read-time parsing still gates the download/recover endpoints).
     const stored = await readFile(recoveryStatePathFor(storageDir, runId), "utf8");
-    if (decodeStatePayload(stored) !== payload) {
+    if (decryptStatePayload(stored) !== payload) {
       throw new Error("recovery copy failed read-back verification");
     }
     await writeFileDurable(recoveryDir, RECOVERY_MARKER_FILENAME, new Date().toISOString(), 0o600);

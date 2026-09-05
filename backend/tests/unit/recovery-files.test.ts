@@ -10,7 +10,7 @@ import {
   sweepIncompleteRecoveryCopies,
   writeFileDurable,
 } from "../../src/lib/recovery-files";
-import { decodeStatePayload } from "../../src/lib/validation";
+import { decodeStatePayload, decryptStatePayload } from "../../src/lib/validation";
 
 // Atomic interrupted-apply recovery coverage (issue #579): durable writes
 // never leave a partial published file, captures are read-back verified,
@@ -77,6 +77,18 @@ describe("captureInterruptedApplyState (#579)", () => {
     expect(decodeStatePayload(stored)).toBe(STATE_JSON);
     expect(await readFile(recoveryMarkerPathFor(storageDir, "run-1"), "utf8")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect((await stat(recoveryStatePathFor(storageDir, "run-1"))).mode & 0o777).toBe(0o600);
+  });
+
+  it("captures partial non-JSON bytes without parsing them (cancel path contract)", async () => {
+    await isolateStorage();
+    const workRoot = join(storageDir, "work");
+    await mkdir(workRoot, { recursive: true });
+    await writeFile(join(workRoot, "terraform.tfstate"), "partial-state");
+    expect(await captureInterruptedApplyState(storageDir, "run-partial", workRoot)).toBe(true);
+    const stored = await readFile(recoveryStatePathFor(storageDir, "run-partial"), "utf8");
+    expect(stored.startsWith("enc:v1:")).toBe(true);
+    expect(decryptStatePayload(stored)).toBe("partial-state");
+    expect(await readFile(recoveryMarkerPathFor(storageDir, "run-partial"), "utf8")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it("returns false and writes nothing when no state file exists", async () => {

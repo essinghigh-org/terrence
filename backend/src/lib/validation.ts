@@ -10,7 +10,7 @@ export async function encryptStatePayload(payload: string | null): Promise<strin
   return payload === null ? null : encryptSecret(payload);
 }
 
-function decryptStatePayload(payload: string): string {
+export function decryptStatePayload(payload: string): string {
   return isEncryptedSecret(payload) ? decryptSecretSync(payload, stateStorageDir()) : payload;
 }
 
