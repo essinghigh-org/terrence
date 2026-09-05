@@ -18,6 +18,7 @@ import openapiJson from "../openapi.json" with { type: "json" };
 import { requestFinished, requestStarted } from "./lib/process-metrics";
 import { API_BODY_LIMIT_BYTES, BodyTooLargeError, readTextWithLimit } from "./lib/body-limit";
 import { acceptsJsonApi, isJsonApiContentType, isJsonApiResponseContentType, isJsonContentType, JSON_API_MEDIA_TYPE } from "./lib/media-types";
+import { COMPATIBILITY_PROMISE } from "./lib/constants";
 // 464: per-endpoint security/rate/body/audit classifications live in endpoint-policy.ts; app.ts reuses that single registry.
 import {
   isUploadPath,
@@ -267,7 +268,9 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
     }
     mutableSet.headers["Content-Type"] = "application/vnd.api+json";
     mutableSet.status = 404;
-    return { errors: [{ status: "404", title: "Not Found" }] };
+    // Issue #643: unknown API paths are usually provider clients probing
+    // for TFE surface Terrence never promised; say the scope outright.
+    return { errors: [{ status: "404", title: "Not Found", detail: COMPATIBILITY_PROMISE }] };
   }
   mutableSet.headers["Content-Type"] = "application/vnd.api+json";
   if (isBodyTooLarge) {
@@ -922,7 +925,7 @@ export const app = new Elysia()
   .get("/register", serveFrontend)
   .get("/app", serveFrontend)
   .get("/app/*", serveFrontend)
-  .get("*", async ({ request, set }: { request: Request; set: Record<string, unknown> }): Promise<Response | { errors: { status: string; title: string }[] } | undefined> => {
+  .get("*", async ({ request, set }: { request: Request; set: Record<string, unknown> }): Promise<Response | { errors: { status: string; title: string; detail?: string }[] } | undefined> => {
     const url = new URL(request.url);
     const pathname = url.pathname;
     // Avatar proxy: handled here (the wildcard route is what Elysia matches
@@ -938,7 +941,7 @@ export const app = new Elysia()
     const isApiPath = pathname === "/api" || pathname.startsWith("/api/");
     if (isApiPath) {
       (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
+      return { errors: [{ status: "404", title: "Not Found", detail: COMPATIBILITY_PROMISE }] };
     }
     if (pathname === "/login" || pathname === "/app" || pathname.startsWith("/app/")) {
       return new Response(Bun.file(FRONTEND_INDEX));

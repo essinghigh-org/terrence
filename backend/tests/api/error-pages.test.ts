@@ -34,8 +34,10 @@ describe("server-level error pages", () => {
     const res = await request("GET", "/api/v2/does-not-exist");
     expect(res.status).toBe(404);
     expect(res.headers.get("content-type")).toContain("application/vnd.api+json");
-    const body = (await res.json()) as { errors: { title: string }[] };
+    const body = (await res.json()) as { errors: { title: string; detail?: string }[] };
     expect(body.errors[0]?.title).toBe("Not Found");
+    // Issue #643: unknown API paths repeat the narrow compatibility promise.
+    expect(body.errors[0]?.detail).toContain("general TFE or HCP parity is not a goal");
   });
 
   it("still serves the SPA shell for app routes", async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach } from "bun:test";
 import { app, handleAppError } from "../../src/app";
+import { COMPATIBILITY_PROMISE } from "../../src/lib/constants";
 import { db } from "../../src/db";
 import {
   users, workspaces, configurationVersions, apiTokens, organizations, organizationMemberships,
@@ -316,7 +317,7 @@ describe("Security Regression — Internal Errors", () => {
   it("formats API and non-API not-found responses separately", () => {
     const apiSet = { headers: {} as Record<string, string | number>, status: 200 };
     expect(handleAppError({ code: "NOT_FOUND", error: new Error(), request: { url: "http://localhost/api/missing" }, set: apiSet }))
-      .toEqual({ errors: [{ status: "404", title: "Not Found" }] });
+      .toEqual({ errors: [{ status: "404", title: "Not Found", detail: COMPATIBILITY_PROMISE }] });
     expect(apiSet.headers["Content-Type"]).toBe("application/vnd.api+json");
 
     const pageSet = { headers: {} as Record<string, string | number>, status: 200 };
