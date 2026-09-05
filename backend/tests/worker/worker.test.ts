@@ -1527,3 +1527,73 @@ test("scans past ineligible pending runs to reach newer eligible ones (kanban 1.
   expect(result.claimed).toContain("eligible-run");
   expect(result.eligibleStatus).toBe("applied");
 }, 30_000);
+
+test("cancel during a run-task wait stops promptly with a canceled result (issue #584)", async () => {
+  const result = await runWorkerScript(`
+    process.env.TERRENCE_ALLOW_PRIVATE_URLS = "true";
+    const { db } = await import("./src/db/index.ts");
+    const { and, eq } = await import("drizzle-orm");
+    const { logs, organizations, runs, runTaskResults, runTasks, workspaceRunTasks, workspaces } = await import("./src/db/schema.ts");
+    const { executeRun } = await import("./src/worker.ts");
+
+    // A task endpoint that accepts the run but never settles: without a
+    // cancel check the worker would sit in the wait for RUN_TASK_TIMEOUT_MS.
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        await request.text();
+        return Response.json({ data: { attributes: { status: "running", message: "working" } } });
+      },
+    });
+    const endpoint = server.url.toString().replace(/\\/$/, "");
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(workspaces).values({ id: "workspace", name: "workspace", orgId: "org", autoApply: false });
+    await db.insert(runTasks).values([{ id: "task", orgId: "org", name: "task", url: endpoint + "/hook" }]);
+    await db.insert(workspaceRunTasks).values([
+      { id: "binding", workspaceId: "workspace", runTaskId: "task", stage: "pre_plan", enforcementLevel: "advisory" },
+    ]);
+    await db.insert(runs).values({ id: "run", workspaceId: "workspace", status: "pending", autoApply: false, createdAt: Date.now() });
+
+    const started = Date.now();
+    const runPromise = executeRun("run");
+    // Wait until the worker has posted to the task and is sitting in the
+    // settlement wait (the result row flips to running just before it).
+    let waited = 0;
+    while (waited < 5000) {
+      const rows = await db.query.runTaskResults.findMany({ where: eq(runTaskResults.runId, "run") });
+      if (rows.some((row) => row.status === "running")) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      waited += 25;
+    }
+    // Mimic the API cancel action, then let the worker observe it.
+    await db.update(runs).set({ status: "canceled" }).where(eq(runs.id, "run"));
+    await runPromise.catch(() => undefined);
+    const elapsed = Date.now() - started;
+    server.stop(true);
+
+    const final = await db.query.runs.findFirst({ where: eq(runs.id, "run") });
+    const results = await db.query.runTaskResults.findMany({ where: eq(runTaskResults.runId, "run") });
+    const planLogs = await db.query.logs.findMany({
+      where: and(eq(logs.runId, "run"), eq(logs.phase, "plan")),
+      columns: { outputText: true },
+    });
+    const text = planLogs.map((row) => row.outputText).join(" ");
+    console.log(JSON.stringify({
+      elapsed,
+      status: final?.status,
+      resultStatuses: results.map((row) => row.status),
+      taskCanceledLine: text.includes('run task "task" canceled.'),
+      stateMachineLeak: text.includes("Illegal run status transition"),
+      errorLeak: text.includes("[terrence ERROR]"),
+    }));
+    process.exit(0);
+  `, { NODE_ENV: "test", SIMULATED_RUNS: "true", RUN_TASK_TIMEOUT_MS: "20000", TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS: "true" });
+
+  // The 20s task timeout must not be waited out: cancellation ends the wait.
+  expect(result.elapsed).toBeLessThan(15000);
+  expect(result.status).toBe("canceled");
+  expect(result.resultStatuses).toEqual(["canceled"]);
+  expect(result.taskCanceledLine).toBe(true);
+  expect(result.stateMachineLeak).toBe(false);
+  expect(result.errorLeak).toBe(false);
+}, 60_000);

@@ -1646,7 +1646,19 @@ async function executeRunTasks(
     );
   }
 
-  for (const { enforcementLevel, isGlobal, task, resultId } of entryList) {
+  for (const [index, entry] of entryList.entries()) {
+    const { enforcementLevel, isGlobal, task, resultId } = entry;
+    // Issue #584: a cancel during a run-task wait must stop the wait instead
+    // of holding the workspace lock/concurrency slot until the 1h timeout.
+    // Mark this and all not-yet-run results canceled and bail; the caller
+    // treats a false return as blocking, and the phase catch turns it into a
+    // clean "Run canceled." log line for an already-canceled run.
+    if (await runWasCanceled(runId)) {
+      await db.update(runTaskResults).set({ status: "canceled", message: "Run task canceled with its run." }).where(
+        inArray(runTaskResults.id, entryList.slice(index).map((remaining): string => remaining.resultId)),
+      );
+      return false;
+    }
     const port = process.env["PORT"] ?? "3000";
     const callbackBase = process.env["PUBLIC_URL"] ?? `http://localhost:${port}`;
     const callbackPath = `/api/v2/task-results/${resultId}/callback`;
@@ -1744,8 +1756,12 @@ async function executeRunTasks(
       await db.update(runTaskResults).set({ status, message, url: resultUrl }).where(eq(runTaskResults.id, resultId));
     }
     if (status === "running") {
-      const latest = await waitForTaskSettlement(resultId, timeoutMs);
-      if (latest !== undefined && ["passed", "failed"].includes(latest.status)) {
+      const latest = await waitForTaskSettlement(resultId, timeoutMs, runId);
+      if (latest === "canceled") {
+        status = "canceled";
+        message = "Run task canceled with its run.";
+        await db.update(runTaskResults).set({ status, message }).where(eq(runTaskResults.id, resultId));
+      } else if (latest !== undefined && ["passed", "failed"].includes(latest.status)) {
         status = latest.status;
         message = latest.message;
         resultUrl = latest.url;
@@ -1757,6 +1773,7 @@ async function executeRunTasks(
     }
     const taskLogPhase = stage === "pre_apply" || stage === "post_apply" ? "apply" : "plan";
     await writeLog(runId, taskLogPhase, `[terrence] ${stage} run task "${task.name}" ${status}.`);
+    if (status === "canceled") return false;
     if (status === "failed" && (enforcementLevel === "mandatory" || enforcementLevel === "must_pass")) {
       proceed = false;
     }
@@ -1778,7 +1795,8 @@ const RUN_TASK_POLL_INTERVAL_MS = 100;
 async function waitForTaskSettlement(
   resultId: string,
   timeoutMs: number,
-): Promise<Readonly<{ status: string; message: string | null; url: string | null }> | undefined> {
+  runId: string,
+): Promise<Readonly<{ status: string; message: string | null; url: string | null }> | undefined | "canceled"> {
   const deadline = Date.now() + timeoutMs;
   // Exponential backoff: start at the poll base and double up to a cap so a
   // long-running task stops hammering the DB with a query every 100ms.
@@ -1787,6 +1805,9 @@ async function waitForTaskSettlement(
   while (Date.now() < deadline) {
     const latest = await db.query.runTaskResults.findFirst({ where: eq(runTaskResults.id, resultId) });
     if (latest !== undefined && ["passed", "failed"].includes(latest.status)) return latest;
+    // Issue #584: stop holding the workspace lock/concurrency slot while the
+    // run is already canceled; the caller records the canceled result.
+    if (await runWasCanceled(runId)) return "canceled";
     const remaining = deadline - Date.now();
     if (remaining <= 0) break;
     await Bun.sleep(Math.min(waitMs, remaining));
@@ -2537,6 +2558,10 @@ async function executeApplyImpl(runId: string): Promise<void> {
     if (await runWasCanceled(runId)) return;
     try {
       if (!(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "pre_apply"))) {
+        // Issue #584: a cancel during the task wait must not be recorded as a
+        // task failure (and must not attempt canceled -> errored, which the
+        // state machine rejects). The run is already canceled; just stop.
+        if (await runWasCanceled(runId)) return;
         await updateRunStatus(runId, "errored");
         await writeLog(runId, "apply", "[terrence] Run blocked by mandatory pre-apply task failure.");
         await cleanupApplyArtifacts(runId);
@@ -3003,7 +3028,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
     applySuccess = true;
     await writeLog(runId, "apply", `[terrence] Run status updated to 'applied'.`);
     try {
-      if (!(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "post_apply"))) {
+      if (!(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "post_apply")) && !(await runWasCanceled(runId))) {
         await writeLog(runId, "apply", "[terrence] Post-apply run task failure recorded; the apply remains completed.");
       }
     } catch (error: unknown) {

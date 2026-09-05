@@ -69,6 +69,24 @@ async function canSeeTransfer(
     || (destinationOrgId !== null && visibleOrgIds.has(destinationOrgId));
 }
 
+/** Whether the principal may run lifecycle actions (cancel/resume) on this
+ * transfer: site admins can, otherwise the same bar as creation — admin over
+ * the source workspace AND owner of the destination organization. Bare
+ * visibility (either-side membership, invited or otherwise) is not enough to
+ * stop or restart a migration (issue #614). The permission helpers require
+ * active membership, and legacy records missing either side fail closed. */
+async function canLifecycleTransfer(
+  user: NonNullable<ParamCtx["user"]>,
+  transfer: WorkspaceTransferItem,
+): Promise<boolean> {
+  if (user.isSiteAdmin === true) return true;
+  if (transfer.destinationOrgId === null || transfer.sourceWorkspaceId === null) return false;
+  if (!(await checkOrgPermission(user.id, transfer.destinationOrgId, "owner"))) return false;
+  const sourceWorkspace = await findAuthorizedWorkspace(transfer.sourceWorkspaceId, user.id, null, null);
+  if (sourceWorkspace === undefined) return false;
+  return checkWorkspacePermission(sourceWorkspace, user.id, null, null, "admin");
+}
+
 async function transferResource(t: WorkspaceTransferItem): Promise<Record<string, unknown>> {
   return {
     id: t.id,
@@ -263,6 +281,11 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
+    // Lifecycle needs the creation bar, not bare visibility (issue #614).
+    if (!(await canLifecycleTransfer(user, transfer))) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     await db.update(workspaceTransfers).set({ status: "canceled", updatedAt: Date.now() }).where(eq(workspaceTransfers.id, id));
     const updated = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
     if (updated === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
@@ -277,6 +300,11 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
     const transfer = await db.query.workspaceTransfers.findFirst({ where: eq(workspaceTransfers.id, id) });
     const visibleOrgIds = await visibleTransferOrgIds(user);
     if (transfer === undefined || !(await canSeeTransfer(visibleOrgIds, transfer))) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    // Lifecycle needs the creation bar, not bare visibility (issue #614).
+    if (!(await canLifecycleTransfer(user, transfer))) {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
