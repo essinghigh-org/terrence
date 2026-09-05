@@ -546,6 +546,7 @@ function spawnRunProcess(
     env?: Record<string, string>;
     stdout?: "pipe" | "ignore" | "inherit";
     stderr?: "pipe" | "ignore" | "inherit";
+    extraRo?: readonly string[];
   },
   sandbox?: RunSandbox | null,
 ): TrackedRunProcess {
@@ -555,6 +556,7 @@ function spawnRunProcess(
       cwd: options.cwd,
       env: options.env ?? {},
       cgroup,
+      extraRo: options.extraRo ?? [],
     });
     return trackRunProcess(runId, proc);
   }
@@ -1097,20 +1099,33 @@ async function executeCostEstimate(runId: string, executionDir: string): Promise
     // Resolve the Infracost binary: an explicit INFRACOST_BINARY override wins,
     // otherwise a version-pinned binary managed under <storage>/binaries/
     // (selected by INFRACOST_VERSION) is installed on demand and digest-verified.
-    // A null here means no binary could be resolved/installed; the estimate is
-    // recorded as errored (non-fatal to the surrounding plan/apply run).
+    // A null here means no binary could be resolved/installed. That is
+    // permanent for this image, not a transient failure (issue #605): record
+    // a distinct unavailable status with a one-line explanation for the run
+    // page instead of an errored estimate.
     const managed = await resolveInfracostBinary();
     if (managed === null) {
-      throw new Error("Infracost binary is unavailable (no INFRACOST_BINARY override and managed install failed)");
+      await writeCostEstimateArtifact(runId, emptyCostEstimate("unavailable", {
+        ...timestamps,
+        "finished-at": new Date().toISOString(),
+      }, "Cost estimation is not installed in this image (no Infracost binary override and managed install failed)."));
+      await writeLog(runId, "plan", "[terrence] Cost estimation unavailable: Infracost binary is not installed in this image. Skipping.");
+      return;
     }
+    const costEnv = await infracostEnvironment(gcpCredentialsPath);
     const costProcess = spawnRunProcess(
       runId,
       [managed.binaryPath, "breakdown", "--path", inputPath, "--format", "json", "--no-color"],
       {
         cwd: executionDir,
-        env: await infracostEnvironment(gcpCredentialsPath),
+        env: costEnv,
         stdout: "pipe",
         stderr: "pipe",
+        // Issue #605: GCP credentials live outside the workdir (which holds
+        // untrusted configuration) but the Landlock sandbox denies reads
+        // outside its allow-list. Expose just the creds file read-only so
+        // GOOGLE_APPLICATION_CREDENTIALS resolves inside the sandbox.
+        extraRo: (await exists(gcpCredentialsPath)) ? [gcpCredentialsPath] : [],
       },
       runSandbox,
     );

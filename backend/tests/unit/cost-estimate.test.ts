@@ -30,6 +30,17 @@ describe("emptyCostEstimate", () => {
     expect(result["delta-monthly-cost"]).toBe("0.0");
   });
 
+  it("supports unavailable status for a missing binary (issue #605)", () => {
+    const result = emptyCostEstimate("unavailable", {
+      "queued-at": null,
+      "pending-at": null,
+      "finished-at": null,
+    }, "Cost estimation is not installed in this image.");
+    expect(result.status).toBe("unavailable");
+    expect(result["error-message"]).toBe("Cost estimation is not installed in this image.");
+    expect(result["delta-monthly-cost"]).toBe("0.0");
+  });
+
   it("carries timestamps through", () => {
     const timestamps = {
       "queued-at": "queued",

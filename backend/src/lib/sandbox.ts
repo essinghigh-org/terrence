@@ -206,6 +206,20 @@ function devRuleArgs(): string[] {
   return args;
 }
 
+/** Per-spawn read-only path rules for files that must stay outside the
+ * writable workdir (e.g. cloud credential files the sandbox still needs to
+ * read). Best-effort realpath like the system rules so symlink layouts
+ * resolve to the enforced object. */
+function extraRoArgs(paths: readonly string[]): string[] {
+  return paths.map((path): string => {
+    try {
+      return `--ro=${realpathSync(path)}`;
+    } catch {
+      return `--ro=${resolve(path)}`;
+    }
+  });
+}
+
 /**
  * Landlock run sandbox. Instance methods mirror the chroot-era API so the
  * worker's call sites stay stable.
@@ -257,7 +271,7 @@ export class RunSandbox {
      * Uses the same rules as terraform/tofu but with a custom binary. */
     public spawnGeneric(
       args: readonly string[],
-      opts: Readonly<{ cwd: string; env: Readonly<Record<string, string>>; cgroup?: string | null }>,
+      opts: Readonly<{ cwd: string; env: Readonly<Record<string, string>>; cgroup?: string | null; extraRo?: readonly string[] }>,
     ): Subprocess<"ignore", "pipe", "pipe"> {
       let binaryPath = args[0] ?? "";
       if (this.runner === null) {
@@ -295,6 +309,7 @@ export class RunSandbox {
         ...devRuleArgs(),
         ...netRuleArgs(),
         ...extraRwArgs(),
+        ...extraRoArgs(opts.extraRo ?? []),
         `--cwd=${opts.cwd}`,
         "--",
         ...resolvedArgs,
