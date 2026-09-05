@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { desc, eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { apiTokens, organizations, runs, runTokens, stateVersions, users, workspaces } from "../../src/db/schema";
+import { apiTokens, configurationVersions, organizations, runs, runTokens, stateVersions, users, workspaces } from "../../src/db/schema";
 import { hashRunToken, mintRunToken, revokeRunTokens, writeRunCliConfig } from "../../src/lib/run-token";
 import { makeRegistryModuleArchive } from "../registry-module-helpers";
 
@@ -84,6 +84,14 @@ beforeAll(async () => {
     { id: `ws-a-${suffix}`, name: `ws-a-${suffix}`, orgId: orgA },
     { id: `ws-b-${suffix}`, name: `ws-b-${suffix}`, orgId: orgB },
   ]);
+  // Issue #574 rejects CV-less run creation; the run-token flow needs a
+  // creatable run on ws-a.
+  await db.insert(configurationVersions).values({
+    id: `cv-a-${suffix}`,
+    workspaceId: `ws-a-${suffix}`,
+    status: "uploaded",
+    archivePath: `test-only/cv-a-${suffix}.tar.gz`,
+  });
   wsA = `ws-a-${suffix}`;
   wsB = `ws-b-${suffix}`;
 
@@ -111,6 +119,7 @@ afterAll(async () => {
   await db.delete(runTokens).where(eq(runTokens.runId, runA));
   await db.delete(stateVersions).where(eq(stateVersions.id, stateVersionId));
   await db.delete(runs).where(eq(runs.id, runA));
+  await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, wsA));
   await db.delete(workspaces).where(eq(workspaces.id, wsA));
   await db.delete(workspaces).where(eq(workspaces.id, wsB));
   await db.delete(organizations).where(eq(organizations.id, orgA));

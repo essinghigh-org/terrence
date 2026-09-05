@@ -6,6 +6,7 @@ import { db } from "../../src/db";
 import {
   apiTokens,
   auditLogs,
+  configurationVersions,
   organizations,
   runs,
   stateVersions,
@@ -79,6 +80,14 @@ beforeAll(async () => {
   });
   expect(workspaceResponse.status).toBe(201);
   workspaceId = ((await workspaceResponse.json()) as { data: { id: string } }).data.id;
+  // Issue #574 rejects CV-less run creation; the run-audit test below needs
+  // a creatable run on this workspace.
+  await db.insert(configurationVersions).values({
+    id: `cv-audit-${suffix}`,
+    workspaceId,
+    status: "uploaded",
+    archivePath: `test-only/cv-audit-${suffix}.tar.gz`,
+  });
   projectId = (await db.query.workspaces.findFirst({
     where: eq(workspaces.id, workspaceId),
     columns: { projectId: true },
@@ -108,6 +117,7 @@ afterAll(async () => {
     if (applyRun === undefined || !["confirmed", "apply_queued", "applying"].includes(applyRun.status)) break;
     await Bun.sleep(10);
   }
+  if (orgId !== "") await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, workspaceId));
   if (orgId !== "") await db.delete(organizations).where(eq(organizations.id, orgId));
   await db.delete(apiTokens).where(eq(apiTokens.token, token));
   await db.delete(users).where(eq(users.id, userId));

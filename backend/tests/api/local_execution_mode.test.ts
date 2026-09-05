@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
-  apiTokens, logs, organizationMemberships, organizations, runs, users, workspaces,
+  apiTokens, configurationVersions, logs, organizationMemberships, organizations, runs, users, workspaces,
 } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { and, eq } from "drizzle-orm";
@@ -49,9 +49,19 @@ describe("local execution mode never runs remotely (#567)", () => {
       { id: localWsId, name: `local-ws-${suffix}`, orgId, executionMode: "local" },
       { id: remoteWsId, name: `remote-ws-${suffix}`, orgId, executionMode: "remote" },
     ]);
+    // Issue #574 rejects CV-less run creation, which is orthogonal to what
+    // this file probes: seed one uploaded configuration so the remote
+    // workspace accepts runs for the execution-mode assertions below.
+    await db.insert(configurationVersions).values({
+      id: `cv-remote-${suffix}`,
+      workspaceId: remoteWsId,
+      status: "uploaded",
+      archivePath: `test-only/cv-remote-${suffix}.tar.gz`,
+    });
   });
 
   afterAll(async () => {
+    await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, remoteWsId)).catch((): void => {});
     await db.delete(logs).where(eq(logs.runId, `run-local-pending-${suffix}`)).catch((): void => {});
     await db.delete(logs).where(eq(logs.runId, `run-local-confirmed-${suffix}`)).catch((): void => {});
     await db.delete(runs).where(eq(runs.workspaceId, localWsId)).catch((): void => {});

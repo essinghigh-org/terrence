@@ -6,6 +6,7 @@ import { db } from "../../src/db";
 import {
   apiTokens,
   assessmentResults,
+  configurationVersions,
   organizations,
   runTasks,
   runs,
@@ -99,6 +100,12 @@ describe("team token workspace authorization", () => {
     await db.insert(workspaces).values([
       { id: workspaceId, name: workspaceName, orgId, autoApply: true },
       { id: unassignedWorkspaceId, name: `unassigned-${suffix}`, orgId },
+    ]);
+    // Issue #574 rejects CV-less run creation; seed uploaded configurations
+    // so the run-creation assertions below exercise permissions, not setup.
+    await db.insert(configurationVersions).values([
+      { id: `cv-team-${suffix}`, workspaceId, status: "uploaded", archivePath: `test-only/cv-team-${suffix}.tar.gz` },
+      { id: `cv-team-unassigned-${suffix}`, workspaceId: unassignedWorkspaceId, status: "uploaded", archivePath: `test-only/cv-team-unassigned-${suffix}.tar.gz` },
     ]);
     await db.insert(teams).values([
       { id: teamIds.read, orgId, name: `read-${suffix}` },
@@ -218,6 +225,8 @@ describe("team token workspace authorization", () => {
 
   afterAll(async () => {
     await Promise.all(Object.values(applyRunIds).map(waitForTerminalRun));
+    await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, workspaceId));
+    await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, unassignedWorkspaceId));
     await db.delete(organizations).where(eq(organizations.id, orgId));
   });
 

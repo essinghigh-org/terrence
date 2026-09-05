@@ -78,6 +78,7 @@ Set variables through the container environment or an `.env` file.
 | `TERRAFORM_CONFIG_INSPECT_PATH` | bundled | Path to the config inspector binary. |
 | `TERRAFORM_TEST_BINARY_PATH` | none | Path for the module test binary. |
 | `SENTINEL_BINARY_PATH` | none | Path to the policy engine binary. |
+| `OPA_BINARY_PATH` | none | Path to the OPA policy engine binary. |
 | `GPG_BINARY_PATH` | system | Path to the GPG binary for provider signing keys. |
 | `TERRENCE_STACK_IAC_BINARY` | `terraform` | IaC binary for stack runs. |
 | `TERRENCE_STACK_IAC_VERSION` | `latest` | IaC binary version for stack runs. |
