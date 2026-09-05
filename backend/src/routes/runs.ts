@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { Elysia } from "elysia";
 import { db } from "../db";
-import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, policyEvaluations, taskStages, runComments, auditLogs, users, notificationConfigurations, notificationConfigurationWorkspaceExclusions } from "../db/schema";
+import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, policyEvaluations, taskStages, runComments, auditLogs, users, organizations, notificationConfigurations, notificationConfigurationWorkspaceExclusions } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt, sql } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource, taskStageResource, type RunRelationshipLinkage } from "../lib/response";
 import { tfPolicyEvaluationResource, tfStageTypesForEvaluations } from "./policy-evaluations";
@@ -802,7 +802,16 @@ export async function createRun(
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No configuration version is available for this workspace. Upload a configuration version or connect a VCS repository first." }] };
   }
-  if (workspace.iacBinary === null) { await db.update(workspaces).set({ iacBinary: "terraform" }).where(eq(workspaces.id, workspace.id)); }
+  // Issue #599: backfill an unset binary from the org default (matching
+  // workspace creation), not a hardcoded terraform — otherwise a first run
+  // permanently flips a tofu-default org's workspace to terraform.
+  if (workspace.iacBinary === null) {
+    const org = await db.query.organizations.findFirst({
+      where: eq(organizations.id, workspace.orgId),
+      columns: { defaultIacBinary: true },
+    });
+    await db.update(workspaces).set({ iacBinary: org?.defaultIacBinary ?? "terraform" }).where(eq(workspaces.id, workspace.id));
+  }
   const id = newRunId();
   const createdAt = Date.now();
   const logToken = crypto.randomUUID();

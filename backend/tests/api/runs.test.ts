@@ -622,6 +622,38 @@ describe("run execution correctness (issues #583, #601)", () => {
     const active = await db.query.runs.findFirst({ where: eq(runs.id, activeId) });
     expect(active?.status).toBe("force_canceled");
   });
+
+  it("backfills a null workspace binary from the org default, not terraform (issue #599)", async () => {
+    const backfillSuffix = crypto.randomUUID();
+    const backfillOrgId = `org-backfill-${backfillSuffix}`;
+    const backfillWsId = `ws-backfill-${backfillSuffix}`;
+    const backfillCvId = `cv-backfill-${backfillSuffix}`;
+    await db.insert(organizations).values({ id: backfillOrgId, name: `backfill-${backfillSuffix}`, defaultIacBinary: "tofu" });
+    await db.insert(organizationMemberships).values({
+      id: `mem-backfill-${backfillSuffix}`, userId, orgId: backfillOrgId, role: "owner", status: "active",
+    });
+    await db.insert(workspaces).values({ id: backfillWsId, name: `backfill-${backfillSuffix}`, orgId: backfillOrgId, autoApply: false });
+    await db.insert(configurationVersions).values({
+      id: backfillCvId, workspaceId: backfillWsId, status: "uploaded", archivePath: `test-only/backfill-${backfillSuffix}.tar.gz`,
+    });
+    const response = await app.handle(new Request("http://localhost/api/v2/runs", authed(userToken, {
+      method: "POST",
+      body: JSON.stringify({
+        data: {
+          attributes: {},
+          relationships: { workspace: { data: { id: backfillWsId, type: "workspaces" } } },
+        },
+      }),
+    })));
+    expect(response.status).toBe(201);
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, backfillWsId) });
+    expect(ws?.iacBinary).toBe("tofu");
+    await db.delete(runs).where(eq(runs.workspaceId, backfillWsId));
+    await db.delete(configurationVersions).where(eq(configurationVersions.id, backfillCvId));
+    await db.delete(workspaces).where(eq(workspaces.id, backfillWsId));
+    await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, backfillOrgId));
+    await db.delete(organizations).where(eq(organizations.id, backfillOrgId));
+  });
 });
 
 afterAll(async () => {
