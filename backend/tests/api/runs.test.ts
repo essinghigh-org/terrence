@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
   apiTokens, configurationVersions, organizationMemberships, organizations,
-  runs, stateVersions, users, workspaceTags, workspaceVariables, workspaces,
+  runs, stateVersions, teams, teamWorkspaces, users, workspaceTags, workspaceVariables, workspaces,
 } from "../../src/db/schema";
 import { eq, inArray } from "drizzle-orm";
 import { validTarGzip } from "./test-archives";
@@ -471,6 +472,155 @@ describe("Run list sorting (kanban 14.8)", () => {
     // ordered purely by the id-descending tiebreaker.
     const tieExpected = [appliedId, ...twinIds].sort((a, b): number => b.localeCompare(a));
     expect(ids).toEqual([...tieExpected, erroredId, pendingId]);
+  });
+});
+
+describe("run execution correctness (issues #583, #601)", () => {
+  const suffix = crypto.randomUUID();
+  const execWsId = `ws-run-exec-${suffix}`;
+  const execCvId = `cv-run-exec-${suffix}`;
+  const planTeamId = `team-run-exec-plan-${suffix}`;
+  const planToken = `plan-token-${suffix}`;
+
+  const authed = (token: string, init?: RequestInit): RequestInit => ({
+    ...init,
+    headers: {
+      "Content-Type": "application/vnd.api+json",
+      "Authorization": `Bearer ${token}`,
+    },
+  });
+
+  const createRun = async (token: string, attributes: Record<string, unknown> = {}): Promise<Response> =>
+    app.handle(new Request("http://localhost/api/v2/runs", authed(token, {
+      method: "POST",
+      body: JSON.stringify({
+        data: {
+          attributes,
+          relationships: { workspace: { data: { id: execWsId, type: "workspaces" } } },
+        },
+      }),
+    })));
+
+  beforeAll(async () => {
+    await db.insert(workspaces).values({ id: execWsId, name: `run-exec-${suffix}`, orgId, autoApply: true });
+    await db.insert(configurationVersions).values({ id: execCvId, workspaceId: execWsId, status: "uploaded", archivePath: `test-only/cv-exec-${suffix}.tar.gz` });
+    await db.insert(teams).values({ id: planTeamId, orgId, name: `plan-${suffix}` });
+    await db.insert(teamWorkspaces).values({ id: `tw-exec-plan-${suffix}`, teamId: planTeamId, workspaceId: execWsId, access: "plan" });
+    await db.insert(apiTokens).values({
+      id: `token-exec-plan-${suffix}`,
+      token: createHash("sha256").update(planToken).digest("hex"),
+      teamId: planTeamId,
+    });
+  });
+
+  afterAll(async () => {
+    await db.delete(runs).where(eq(runs.workspaceId, execWsId));
+    await db.delete(apiTokens).where(eq(apiTokens.id, `token-exec-plan-${suffix}`));
+    await db.delete(teamWorkspaces).where(eq(teamWorkspaces.id, `tw-exec-plan-${suffix}`));
+    await db.delete(teams).where(eq(teams.id, planTeamId));
+    await db.delete(configurationVersions).where(eq(configurationVersions.id, execCvId));
+    await db.delete(workspaces).where(eq(workspaces.id, execWsId));
+  });
+
+  it("warns when the workspace default auto-apply is suppressed by permissions (issue #601)", async () => {
+    const response = await createRun(planToken);
+    expect(response.status).toBe(201);
+    const body = await response.json() as { data: { attributes: Record<string, unknown> } };
+    // The planner cannot apply, so the run waits even though the workspace
+    // defaults to auto-apply — and now says so.
+    expect(body.data.attributes["auto-apply"]).toBe(false);
+    expect(typeof body.data.attributes["auto-apply-warning"]).toBe("string");
+    expect(body.data.attributes["auto-apply-warning"] as string).toContain("apply permission");
+  });
+
+  it("still rejects an explicit auto-apply request without apply permission", async () => {
+    const response = await createRun(planToken, { "auto-apply": true });
+    expect(response.status).toBe(403);
+  });
+
+  it("carries no warning when the caller can apply", async () => {
+    const response = await createRun(userToken);
+    expect(response.status).toBe(201);
+    const body = await response.json() as { data: { attributes: Record<string, unknown> } };
+    expect(body.data.attributes["auto-apply"]).toBe(true);
+    expect("auto-apply-warning" in body.data.attributes).toBe(false);
+  });
+
+  it("force-executes past a fetching blocker (issue #583)", async () => {
+    const blockerId = `run-exec-blocker-${suffix}`;
+    const pendingId = `run-exec-pending-${suffix}`;
+    await db.insert(runs).values([
+      { id: blockerId, workspaceId: execWsId, configurationVersionId: execCvId, status: "fetching", autoApply: false, createdAt: Date.now() },
+      { id: pendingId, workspaceId: execWsId, configurationVersionId: execCvId, status: "pending", autoApply: false, createdAt: Date.now() },
+    ]);
+    const response = await app.handle(new Request(
+      `http://localhost/api/v2/runs/${pendingId}/actions/force-execute`,
+      authed(userToken, { method: "POST" }),
+    ));
+    expect(response.status).toBe(202);
+    const blocker = await db.query.runs.findFirst({ where: eq(runs.id, blockerId) });
+    expect(blocker?.status).toBe("force_canceled");
+  });
+
+  it("names the discardable blocker instead of claiming nothing blocks (issue #583)", async () => {
+    const restingId = `run-exec-resting-${suffix}`;
+    const pendingId = `run-exec-pending2-${suffix}`;
+    await db.insert(runs).values([
+      { id: restingId, workspaceId: execWsId, configurationVersionId: execCvId, status: "planned", autoApply: false, createdAt: Date.now() },
+      { id: pendingId, workspaceId: execWsId, configurationVersionId: execCvId, status: "pending", autoApply: false, createdAt: Date.now() },
+    ]);
+    const response = await app.handle(new Request(
+      `http://localhost/api/v2/runs/${pendingId}/actions/force-execute`,
+      authed(userToken, { method: "POST" }),
+    ));
+    expect(response.status).toBe(409);
+    const body = await response.json() as { errors: { detail: string }[] };
+    expect(body.errors[0]?.detail).toContain("discard");
+    expect(body.errors[0]?.detail).toContain(restingId);
+  });
+
+  it("prefers the discard hint over force-canceling when active and resting blockers mix (issue #583)", async () => {
+    // Hermetic: earlier tests in this block leave runs behind.
+    await db.delete(runs).where(eq(runs.workspaceId, execWsId));
+    const activeId = `run-exec-mixed-active-${suffix}`;
+    const restingId = `run-exec-mixed-resting-${suffix}`;
+    const pendingId = `run-exec-mixed-pending-${suffix}`;
+    await db.insert(runs).values([
+      { id: activeId, workspaceId: execWsId, configurationVersionId: execCvId, status: "fetching", autoApply: false, createdAt: Date.now() },
+      { id: restingId, workspaceId: execWsId, configurationVersionId: execCvId, status: "planned", autoApply: false, createdAt: Date.now() },
+      { id: pendingId, workspaceId: execWsId, configurationVersionId: execCvId, status: "pending", autoApply: false, createdAt: Date.now() },
+    ]);
+    const response = await app.handle(new Request(
+      `http://localhost/api/v2/runs/${pendingId}/actions/force-execute`,
+      authed(userToken, { method: "POST" }),
+    ));
+    // Clearing only the fetching run would 202 while the planned run still
+    // holds the queue, so the endpoint must refuse and name the discard.
+    expect(response.status).toBe(409);
+    const body = await response.json() as { errors: { detail: string }[] };
+    expect(body.errors[0]?.detail).toContain(restingId);
+    const active = await db.query.runs.findFirst({ where: eq(runs.id, activeId) });
+    expect(active?.status).toBe("fetching");
+  });
+
+  it("ignores a speculative resting blocker that holds no queue (issue #583)", async () => {
+    // Hermetic: earlier tests in this block leave runs behind.
+    await db.delete(runs).where(eq(runs.workspaceId, execWsId));
+    const speculativeId = `run-exec-spec-${suffix}`;
+    const activeId = `run-exec-spec-active-${suffix}`;
+    const pendingId = `run-exec-spec-pending-${suffix}`;
+    await db.insert(runs).values([
+      { id: speculativeId, workspaceId: execWsId, configurationVersionId: execCvId, status: "planned", planOnly: true, autoApply: false, createdAt: Date.now() },
+      { id: activeId, workspaceId: execWsId, configurationVersionId: execCvId, status: "fetching", autoApply: false, createdAt: Date.now() },
+      { id: pendingId, workspaceId: execWsId, configurationVersionId: execCvId, status: "pending", autoApply: false, createdAt: Date.now() },
+    ]);
+    const response = await app.handle(new Request(
+      `http://localhost/api/v2/runs/${pendingId}/actions/force-execute`,
+      authed(userToken, { method: "POST" }),
+    ));
+    expect(response.status).toBe(202);
+    const active = await db.query.runs.findFirst({ where: eq(runs.id, activeId) });
+    expect(active?.status).toBe("force_canceled");
   });
 });
 
