@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { OrganizationCidrRanges } from "../src/components/OrganizationCidrRanges";
 import { WorkspaceConfigurationVersions } from "../src/components/WorkspaceConfigurationVersions";
 import { isString } from "../src/lib/type-guards";
@@ -41,4 +41,31 @@ test("lists and creates workspace configuration versions", async () => {
   await waitFor(() => { expect(view.getByText("cv-1")).toBeTruthy(); });
   fireEvent.click(view.getByRole("button", { name: "New version" }));
   await waitFor(() => { expect(view.getByText("cv-2")).toBeTruthy(); });
+});
+
+test("removing a CIDR range requires typing the value (issue #588)", async () => {
+  let ranges = [{ id: "range-1", attributes: { value: "10.0.0.0/8" } }];
+  const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/organizations/acme/cidr-range-lists") return json({ data: [{ id: "list-1", attributes: { name: "Private" } }] });
+    if (url.startsWith("/api/v2/cidr-ranges?")) return json({ data: ranges });
+    if (url === "/api/v2/cidr-ranges/range-1" && init?.method === "DELETE") { ranges = []; return new Response(null, { status: 204 }); }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  const view = render(<OrganizationCidrRanges orgName="acme" />);
+  await waitFor(() => { expect(view.getByText("10.0.0.0/8")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "Remove" }));
+  await waitFor(() => { expect(view.getByRole("heading", { name: "Remove CIDR range?" })).toBeTruthy(); });
+  // No request fires before confirmation.
+  expect(fetchMock.mock.calls.some(([input, init]) => urlOf(input) === "/api/v2/cidr-ranges/range-1" && init?.method === "DELETE")).toBe(false);
+  // Typing the wrong value keeps the confirm disabled.
+  const dialog = view.getByRole("dialog");
+  fireEvent.input(within(dialog).getByPlaceholderText("10.0.0.0/8"), { target: { value: "0.0.0.0/0" } });
+  fireEvent.click(view.getByRole("button", { name: "Remove range" }));
+  expect(fetchMock.mock.calls.some(([input, init]) => urlOf(input) === "/api/v2/cidr-ranges/range-1" && init?.method === "DELETE")).toBe(false);
+  fireEvent.input(within(dialog).getByPlaceholderText("10.0.0.0/8"), { target: { value: "10.0.0.0/8" } });
+  fireEvent.click(view.getByRole("button", { name: "Remove range" }));
+  await waitFor(() => { expect(view.queryByText("10.0.0.0/8")).toBeNull(); });
+  expect(fetchMock.mock.calls.some(([input, init]) => urlOf(input) === "/api/v2/cidr-ranges/range-1" && init?.method === "DELETE")).toBe(true);
 });

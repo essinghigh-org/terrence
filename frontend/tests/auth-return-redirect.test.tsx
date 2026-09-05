@@ -5,7 +5,9 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { ProtectedRoute } from "../src/App";
 import { Toaster } from "../src/components/ui/toast";
 import { expireAuthSession } from "../src/lib/api";
+import { resolveReturnTarget } from "../src/lib/return-to";
 import { Login } from "../src/views/Login";
+import { Register } from "../src/views/Register";
 import { isRecord, isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
 
@@ -185,4 +187,50 @@ test("arriving at login from the verification redirect shows a confirmation toas
   );
 
   await waitFor((): void => { expect(view.getByText("Verification link processed")).toBeTruthy(); });
+});
+
+test("the shared returnTo validator accepts /app paths and rejects the rest (issue #642)", () => {
+  expect(resolveReturnTarget("/app/account")).toBe("/app/account");
+  expect(resolveReturnTarget("/app")).toBe("/app");
+  expect(resolveReturnTarget(null)).toBe("/app");
+  expect(resolveReturnTarget(undefined)).toBe("/app");
+  expect(resolveReturnTarget("")).toBe("/app");
+  expect(resolveReturnTarget("https://evil.example/app")).toBe("/app");
+  expect(resolveReturnTarget("//evil.example/app")).toBe("/app");
+  expect(resolveReturnTarget("/app/../admin")).toBe("/app");
+  expect(resolveReturnTarget("/app/account\r\nSet-Cookie: x")).toBe("/app");
+  expect(resolveReturnTarget(42)).toBe("/app");
+});
+
+test("registration restores the preserved destination through the shared validator (issue #642)", async () => {
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = getUrlString(input);
+    if (url === "/api/v2/ping") return json({ "signup-enabled": true });
+    if (url === "/api/v2/users") return json({ data: { id: "user-1" } });
+    if (url === "/api/v2/users/login") return json({ data: { attributes: { token: "user-token" } } });
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/register?returnTo=%2Fapp%2Faccount"]}>
+      <Routes>
+        <Route path="/register" element={<Register />} />
+        <Route path="/app/account" element={<div>ACCOUNT</div>} />
+        <Route path="/app" element={<div>HOME</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => { expect(view.getByLabelText("Username")).toBeTruthy(); });
+  changeInput(asElement(view.getByLabelText("Username")), "alice");
+  changeInput(asElement(view.getByLabelText("Email address")), "alice@example.com");
+  changeInput(asElement(view.getByLabelText("Password")), "correct horse 123");
+  await act(async (): Promise<void> => {
+    const form = view.getByRole("button", { name: "Create account" }).closest("form");
+    if (form !== null) fireEvent.submit(form);
+  });
+
+  await waitFor((): void => { expect(view.getByText("ACCOUNT")).toBeTruthy(); });
+  expect(view.queryByText("HOME")).toBeNull();
 });

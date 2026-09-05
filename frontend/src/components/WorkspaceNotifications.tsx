@@ -30,6 +30,7 @@ import {
   FieldSet,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Select, SelectItem } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -107,6 +108,8 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
   const [originalExcludedWorkspaceIds, setOriginalExcludedWorkspaceIds] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [editorError, setEditorError] = useState("");
+  // Pending configuration deletion, confirmed through a dialog (issue #588).
+  const [pendingDelete, setPendingDelete] = useState<NotificationConfiguration | null>(null);
 
   // Monotonic id for each editor session. A slow exclusion fetch started for
   // one configuration must not apply its result to a different configuration
@@ -291,6 +294,8 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
       setNotice("Notification configuration deleted.");
     } catch (error: unknown) {
       setPageError(messageFrom(error, "Failed to delete notification configuration"));
+    } finally {
+      setPendingDelete(null);
     }
   };
 
@@ -358,7 +363,7 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
                         <Button
                           size="sm"
                           variant="destructive"
-                          onClick={(): void => { void deleteConfiguration(configuration); }}
+                          onClick={(): void => { setPendingDelete(configuration); }}
                         >
                           Delete
                         </Button>
@@ -540,6 +545,22 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
           </form>
         </DialogContent>
       </Dialog>
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open): void => { if (!open) setPendingDelete(null); }}
+        title={isWebhookMode ? "Delete webhook?" : "Delete notification?"}
+        description={pendingDelete === null ? undefined : (
+          <>
+            <strong>{pendingDelete.attributes.name}</strong> will stop receiving{" "}
+            {pendingDelete.attributes.triggers.length} trigger
+            {pendingDelete.attributes.triggers.length === 1 ? "" : "s"}. Events after deletion
+            are not delivered anywhere.
+          </>
+        )}
+        confirmText={isWebhookMode ? "Delete webhook" : "Delete notification"}
+        confirmVariant="destructive"
+        onConfirm={(): void => { if (pendingDelete !== null) void deleteConfiguration(pendingDelete); }}
+      />
     </>
   );
 }

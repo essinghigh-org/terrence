@@ -428,3 +428,38 @@ test("keeps failed account details read-only until retry succeeds", async () => 
   await view.findByDisplayValue("alice");
   expect(detailsRequests).toBe(2);
 });
+test("a required password change bounces non-account routes to the password section (issue #626)", async () => {
+// SAFETY: the mock's handling mirrors the backend contract for this test.
+  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === "/api/v2/account/details") {
+      return json({
+        data: {
+          attributes: {
+            username: "admin",
+            "is-site-admin": false,
+            "must-change-password": true,
+          },
+        },
+      });
+    }
+    if (url === "/api/v2/organizations?page[size]=100") return json({ data: [] });
+    throw new Error(`Unexpected request: ${url}`);
+  })) as unknown as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/app"]}>
+      <Routes>
+        <Route path="/app" element={<Layout />}>
+          <Route index element={<p>Organization content</p>} />
+          <Route path="account" element={<p>Password content</p>} />
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByText("Password content")).toBeTruthy();
+  });
+  expect(view.queryByText("Organization content")).toBeNull();
+});

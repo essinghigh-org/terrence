@@ -38,6 +38,7 @@ import { WorkspaceRetention } from "../components/WorkspaceRetention";
 import { WorkspaceDestruction } from "../components/WorkspaceDestruction";
 import { Breadcrumbs, type BreadcrumbItem } from "../components/Breadcrumbs";
 import { PageShell, SettingsSection, type PageShellVariant } from "../components/PageHeader";
+import { LegacyUrlNotice } from "../components/LegacyUrlNotice";
 import { RunDetail } from "./RunDetail";
 import { RunList } from "./RunList";
 import { StateHistory } from "./StateHistory";
@@ -492,6 +493,7 @@ export function WorkspaceDetail({
   if (isRunDetail) {
     return (
       <PageShell variant="wide">
+        <LegacyUrlNotice />
         <RunDetail />
       </PageShell>
     );
@@ -605,6 +607,7 @@ export function WorkspaceDetail({
 
   return (
     <PageShell variant={settingsSection?.layout ?? "wide"}>
+      <LegacyUrlNotice />
       <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-6">
         <div className="min-w-0">
           <Breadcrumbs items={sectionCrumbs} />

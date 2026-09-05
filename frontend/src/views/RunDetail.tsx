@@ -1613,7 +1613,10 @@ export function RunDetail({
   ) : null;
 
   return (
-    <div className="w-full">
+    <>
+      {/* The background page goes inert while the fullscreen log overlay is
+          open so assistive tech cannot walk out of the modal (issue #625). */}
+      <div className="w-full" inert={fullscreenLog !== null}>
       {showBreadcrumb && (
         <Breadcrumbs
           items={[
@@ -2597,6 +2600,8 @@ export function RunDetail({
         </DialogContent>
       </Dialog>
 
+      </div>
+
       {fullscreenLog !== null && (
         <div
           ref={fullscreenContainerRef}
@@ -2628,6 +2633,6 @@ export function RunDetail({
           </pre>
         </div>
       )}
-    </div>
+    </>
   );
 }

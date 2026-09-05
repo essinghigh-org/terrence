@@ -251,6 +251,11 @@ test("filters workspaces by run status and adds, updates, and removes tags", asy
   });
   await waitFor((): void => { expect(view.getByText("prod")).toBeTruthy(); });
   fireEvent.click(view.getByRole("button", { name: "Delete tag environment" }));
+  // Tag removal requires confirmation (issue #588).
+  await waitFor((): void => {
+    expect(view.getByRole("heading", { name: "Remove tag?" })).toBeTruthy();
+  });
+  fireEvent.click(view.getByRole("button", { name: "Remove tag" }));
   await waitFor((): void => { expect(view.getByText("No direct tags.")).toBeTruthy(); });
 });
 

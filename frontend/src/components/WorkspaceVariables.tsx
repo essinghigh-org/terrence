@@ -32,6 +32,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select, SelectItem } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Table,
   TableBody,
@@ -108,6 +109,9 @@ export function WorkspaceVariables({
   const [hcl, setHcl] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editorError, setEditorError] = useState("");
+  // Pending variable deletion, confirmed through a dialog (issue #588).
+  // Sensitive values are write-only, so deleting one asks for the key.
+  const [pendingDelete, setPendingDelete] = useState<WorkspaceVariable | null>(null);
 
   // Attached variable sets: inherited variables stay on their set and are
   // rendered read-only below the workspace-owned variables.
@@ -305,6 +309,8 @@ export function WorkspaceVariables({
       );
     } catch (error: unknown) {
       setPageError(messageFrom(error, "Failed to delete variable"));
+    } finally {
+      setPendingDelete(null);
     }
   };
 
@@ -366,19 +372,21 @@ export function WorkspaceVariables({
                     <TableCell className="font-mono font-medium">
                       <div className="flex items-center gap-2">
                         {variable.attributes.key}
-                        {variable.attributes.sensitive && <Badge variant="outline" className="border-warning/40 bg-warning/10 text-warning"><LockKeyhole className="mr-1 size-3" aria-hidden="true" />Sensitive</Badge>}
+                        {variable.attributes.sensitive && (
+                          <span className="inline-flex items-center text-muted-foreground" title="Sensitive — value hidden after save">
+                            <LockKeyhole className="size-3.5" aria-hidden="true" />
+                            <span className="sr-only">Sensitive</span>
+                          </span>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell className="max-w-48 truncate font-mono text-xs">
-                      {variable.attributes.sensitive ? <span className="inline-flex items-center gap-1 text-warning" title="This value is hidden after it is saved"><LockKeyhole className="size-3" aria-hidden="true" />Sensitive — write only</span> : variable.attributes.value ?? "—"}
+                      {variable.attributes.sensitive ? <span className="text-muted-foreground">Write only</span> : variable.attributes.value ?? "—"}
                     </TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline">
-                          {variable.attributes.category === "env" ? "Environment" : "Terraform"}
-                        </Badge>
-                        {variable.attributes.hcl && <Badge variant="secondary">HCL</Badge>}
-                      </div>
+                      <span className="text-sm text-muted-foreground">
+                        {variable.attributes.category === "env" ? "Environment" : "Terraform"}{variable.attributes.hcl ? " · HCL" : ""}
+                      </span>
                     </TableCell>
                     <TableCell className="max-w-48 truncate text-muted-foreground">
                       {variable.attributes.description ?? "—"}
@@ -391,7 +399,7 @@ export function WorkspaceVariables({
                         <Button
                           size="sm"
                           variant="destructive"
-                          onClick={(): void => { void deleteVariable(variable); }}
+                          onClick={(): void => { setPendingDelete(variable); }}
                         >
                           Delete
                         </Button>
@@ -503,19 +511,21 @@ export function WorkspaceVariables({
                           <TableCell className="font-mono font-medium">
                             <div className="flex items-center gap-2">
                               {variable.attributes.key}
-                              {variable.attributes.sensitive && <Badge variant="outline" className="border-warning/40 bg-warning/10 text-warning"><LockKeyhole className="mr-1 size-3" aria-hidden="true" />Sensitive</Badge>}
+                              {variable.attributes.sensitive && (
+                                <span className="inline-flex items-center text-muted-foreground" title="Sensitive — value hidden after save">
+                                  <LockKeyhole className="size-3.5" aria-hidden="true" />
+                                  <span className="sr-only">Sensitive</span>
+                                </span>
+                              )}
                             </div>
                           </TableCell>
                           <TableCell className="max-w-48 truncate font-mono text-xs">
-                            {variable.attributes.sensitive ? <span className="inline-flex items-center gap-1 text-warning" title="This value is hidden after it is saved"><LockKeyhole className="size-3" aria-hidden="true" />Sensitive — write only</span> : variable.attributes.value ?? "—"}
+                            {variable.attributes.sensitive ? <span className="text-muted-foreground">Write only</span> : variable.attributes.value ?? "—"}
                           </TableCell>
                           <TableCell>
-                            <div className="flex items-center gap-2">
-                              <Badge variant="outline">
-                                {variable.attributes.category === "env" ? "Environment" : "Terraform"}
-                              </Badge>
-                              {variable.attributes.hcl && <Badge variant="secondary">HCL</Badge>}
-                            </div>
+                            <span className="text-sm text-muted-foreground">
+                              {variable.attributes.category === "env" ? "Environment" : "Terraform"}{variable.attributes.hcl ? " · HCL" : ""}
+                            </span>
                           </TableCell>
                           <TableCell className="max-w-48 truncate text-muted-foreground">
                             {variable.attributes.description ?? "—"}
@@ -705,6 +715,25 @@ export function WorkspaceVariables({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open): void => { if (!open) setPendingDelete(null); }}
+        title="Delete variable?"
+        description={pendingDelete === null ? undefined : (
+          <>
+            Variable <strong className="font-mono">{pendingDelete.attributes.key}</strong> will stop
+            reaching runs in this workspace.
+            {pendingDelete.attributes.sensitive
+              ? " Its value is write-only and cannot be recovered — re-enter it if anything still needs it."
+              : ""}
+          </>
+        )}
+        confirmText="Delete variable"
+        confirmVariant="destructive"
+        requireText={pendingDelete !== null && pendingDelete.attributes.sensitive ? pendingDelete.attributes.key : undefined}
+        requireTextLabel={pendingDelete !== null && pendingDelete.attributes.sensitive ? `Type ${pendingDelete.attributes.key} to delete this sensitive variable` : undefined}
+        onConfirm={(): void => { if (pendingDelete !== null) void deleteVariable(pendingDelete); }}
+      />
     </>
   );
 }

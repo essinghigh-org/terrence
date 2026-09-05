@@ -363,8 +363,14 @@ test("creates, edits, and deletes a workspace variable", async () => {
 // SAFETY: closest() resolves to the row element that contains the queried text.
     view.getByText("region").closest("tr") as HTMLElement,
   );
-  expect(within(editedRow).getByText("Sensitive — write only")).toBeTruthy();
+  expect(within(editedRow).getByText("Write only")).toBeTruthy();
   fireEvent.click(within(editedRow).getByRole("button", { name: "Delete" }));
+  // Sensitive deletes require typing the key (issue #588).
+  await waitFor((): void => {
+    expect(view.getByRole("heading", { name: "Delete variable?" })).toBeTruthy();
+  });
+  changeInput(asElement(view.getByPlaceholderText("region")), "region");
+  fireEvent.click(view.getByRole("button", { name: "Delete variable" }));
   await waitFor((): void => {
     expect(view.getByText("No workspace variables have been added.")).toBeTruthy();
   });
@@ -658,6 +664,11 @@ test("manages workspace run triggers and custom team access", async () => {
     view.getByRole("cell", { name: "networking" }).closest("tr") as HTMLElement,
   );
   fireEvent.click(within(triggerRow).getByRole("button", { name: "Remove" }));
+  // Trigger removal requires confirmation (issue #588).
+  await waitFor((): void => {
+    expect(view.getByRole("heading", { name: "Remove run trigger?" })).toBeTruthy();
+  });
+  fireEvent.click(view.getByRole("button", { name: "Remove trigger" }));
   await waitFor((): void => { expect(view.getByText("No upstream workspaces are configured.")).toBeTruthy(); });
 
   view.rerender(tree("team-access"));
@@ -690,6 +701,11 @@ test("manages workspace run triggers and custom team access", async () => {
   );
   expect(within(adminRow).getByText("admin")).toBeTruthy();
   fireEvent.click(within(adminRow).getByRole("button", { name: "Remove" }));
+  // Access removal requires confirmation (issue #588).
+  await waitFor((): void => {
+    expect(view.getByRole("heading", { name: "Remove team access?" })).toBeTruthy();
+  });
+  fireEvent.click(view.getByRole("button", { name: "Remove access" }));
   await waitFor((): void => { expect(view.getByText("No teams have explicit access to this workspace.")).toBeTruthy(); });
 
   const customCreate = fetchMock.mock.calls.find(([input, init]): boolean =>
@@ -794,6 +810,11 @@ test("creates, verifies, edits, and deletes a workspace notification", async () 
   );
   expect(within(notificationRow).getByText("Disabled")).toBeTruthy();
   fireEvent.click(within(notificationRow).getByRole("button", { name: "Delete" }));
+  // Notification deletion requires confirmation (issue #588).
+  await waitFor((): void => {
+    expect(view.getByRole("heading", { name: "Delete notification?" })).toBeTruthy();
+  });
+  fireEvent.click(view.getByRole("button", { name: "Delete notification" }));
   await waitFor((): void => {
     expect(view.getByText("No notification configurations have been added.")).toBeTruthy();
   });

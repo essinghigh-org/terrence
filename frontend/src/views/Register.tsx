@@ -1,12 +1,13 @@
 import { AuthLayout } from "../components/brand/AuthLayout";
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { fetchApi, setAuthToken } from "@/lib/api";
+import { resolveReturnTarget } from "@/lib/return-to";
 
 
 export function Register(): React.JSX.Element {
@@ -18,6 +19,11 @@ export function Register(): React.JSX.Element {
   const [checkingSignup, setCheckingSignup] = useState(true);
   const [signupDisabled, setSignupDisabled] = useState(false);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // A deep link that bounced through login may carry ?returnTo= here; restore
+  // it through the same validator Login uses (issue #642).
+  const returnTo = searchParams.get("returnTo");
+  const loginTarget = returnTo === null ? "/login" : `/login?returnTo=${encodeURIComponent(returnTo)}`;
 
   useEffect((): void => {
     fetchApi<{ "signup-enabled"?: boolean }>("/ping")
@@ -25,12 +31,12 @@ export function Register(): React.JSX.Element {
         const resp = data;
         if (resp["signup-enabled"] === false) {
           setSignupDisabled(true);
-          void navigate("/login");
+          void navigate(loginTarget);
         }
       })
       .catch((): void => { /* assume signup is enabled */ })
       .finally((): void => { setCheckingSignup(false); });
-  }, [navigate]);
+  }, [navigate, loginTarget]);
 
   const handleRegister = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
@@ -64,7 +70,7 @@ export function Register(): React.JSX.Element {
           body: JSON.stringify({ data: { attributes: { username, password, "browser-session": true } } }),
         }) as { data: { attributes: { token: string; "expired-at"?: string | null } } };
         setAuthToken(login.data.attributes.token, login.data.attributes["expired-at"], true);
-        await navigate("/app");
+        await navigate(resolveReturnTarget(returnTo));
       } catch (_loginError: unknown) {
         setError("Account created, but failed to log in automatically. Please sign in.");
       }
@@ -114,7 +120,7 @@ export function Register(): React.JSX.Element {
                   id="register-username"
                   name="username"
                   value={username}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setUsername(event.target.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setUsername(event.currentTarget.value); }}
                   autoComplete="username"
                   aria-invalid={Boolean(error)}
                   required
@@ -128,7 +134,7 @@ export function Register(): React.JSX.Element {
                   name="email"
                   type="email"
                   value={email}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setEmail(event.target.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setEmail(event.currentTarget.value); }}
                   autoComplete="email"
                   aria-invalid={Boolean(error)}
                   required
@@ -141,7 +147,7 @@ export function Register(): React.JSX.Element {
                   name="password"
                   type="password"
                   value={password}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setPassword(event.target.value); }}
+                  onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setPassword(event.currentTarget.value); }}
                   autoComplete="new-password"
                   minLength={10}
                   aria-describedby="register-password-hint"

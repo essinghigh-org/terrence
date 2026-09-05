@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Card,
   CardAction,
@@ -101,6 +102,8 @@ export function WorkspaceTeamAccess({
   const [permissions, setPermissions] = useState<CustomPermissions>(defaultPermissions);
   const [saving, setSaving] = useState(false);
   const [editorError, setEditorError] = useState("");
+  // Pending access removal, confirmed through a dialog (issue #588).
+  const [pendingRemove, setPendingRemove] = useState<TeamWorkspace | null>(null);
 
   useEffect((): (() => void) => {
     let active = true;
@@ -223,6 +226,8 @@ export function WorkspaceTeamAccess({
       );
     } catch (error: unknown) {
       setPageError(messageFrom(error, "Failed to remove team access"));
+    } finally {
+      setPendingRemove(null);
     }
   };
 
@@ -277,7 +282,7 @@ export function WorkspaceTeamAccess({
                         <Button
                           size="sm"
                           variant="destructive"
-                          onClick={(): void => { void removeAccess(relationship); }}
+                          onClick={(): void => { setPendingRemove(relationship); }}
                         >
                           Remove
                         </Button>
@@ -458,6 +463,24 @@ export function WorkspaceTeamAccess({
           </form>
         </DialogContent>
       </Dialog>
+      <ConfirmDialog
+        open={pendingRemove !== null}
+        onOpenChange={(open): void => { if (!open) setPendingRemove(null); }}
+        title="Remove team access?"
+        description={pendingRemove === null ? undefined : (
+          <>
+            Team{" "}
+            <strong>
+              {namesById.get(pendingRemove.relationships.team.data.id) ?? pendingRemove.relationships.team.data.id}
+            </strong>{" "}
+            will lose {pendingRemove.attributes.access} access to this workspace. Members of that team
+            will no longer see or act on it.
+          </>
+        )}
+        confirmText="Remove access"
+        confirmVariant="destructive"
+        onConfirm={(): void => { if (pendingRemove !== null) void removeAccess(pendingRemove); }}
+      />
     </>
   );
 }
