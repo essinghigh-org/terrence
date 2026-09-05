@@ -3073,6 +3073,11 @@ class PolicyEngineMissingError extends Error {
  * OPA_BINARY_PATH / SENTINEL_BINARY_PATH overrides, otherwise PATH.
  * Neither engine ships in the image; operators install them (OPA is
  * Apache-2.0, Sentinel is proprietary BYOB). Exported for tests.
+ *
+ * PATH is scanned manually from process.env at call time (instead of
+ * Bun.which) so runtime PATH mutations are honored: tests prepend a
+ * fixture directory with a fake engine, and operators may extend PATH in
+ * wrapper scripts after the server starts.
  */
 export async function probePolicyEngine(kind: "opa" | "sentinel"): Promise<{ path: string } | { missing: string }> {
   const override = kind === "opa" ? process.env["OPA_BINARY_PATH"] : process.env["SENTINEL_BINARY_PATH"];
@@ -3080,8 +3085,12 @@ export async function probePolicyEngine(kind: "opa" | "sentinel"): Promise<{ pat
   if (command.includes("/")) {
     if (await exists(command)) return { path: command };
   } else {
-    const found = Bun.which(command);
-    if (found !== null) return { path: found };
+    const pathEnv = process.env["PATH"] ?? "";
+    for (const dir of pathEnv.split(":")) {
+      if (dir === "") continue;
+      const candidate = `${dir}/${command}`;
+      if (await exists(candidate)) return { path: candidate };
+    }
   }
   const install = kind === "opa"
     ? "Install OPA (https://www.openpolicyagent.org/docs/latest/#running-opa) and ensure the `opa` binary is on PATH, or set OPA_BINARY_PATH to its location."
