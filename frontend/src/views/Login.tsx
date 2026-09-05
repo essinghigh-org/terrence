@@ -1,8 +1,9 @@
+import { Terrence, TerrenceLogo } from "@/components/brand/Terrence";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader } from "@/components/ui/card";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -155,13 +156,30 @@ export function Login(): React.JSX.Element {
   };
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-muted/40 p-4">
-      <Card className="w-full max-w-sm shadow-sm">
-        <CardHeader>
-          <div className="mb-2 flex size-10 items-center justify-center rounded-md bg-foreground/10">
-            <img src="/favicon.svg" alt="" aria-hidden="true" className="size-8" />
+    <main className="login-page">
+      <section className="login-story" aria-label="Welcome to Terrence">
+        <Link to="/" className="login-brand" aria-label="Terrence home"><TerrenceLogo wordmark /></Link>
+        <div className="login-story-content">
+          <p className="login-eyebrow">A little order for your infrastructure</p>
+          <h2>Big plans.<br />Steady hands.</h2>
+          <p className="login-story-description">Your workspaces, plans, and people.<br />Together in one place.</p>
+          <div className="login-illustration">
+            <div className="login-orbit" aria-hidden="true" />
+            <span className="login-node login-node--plan" aria-hidden="true">plan</span>
+            <span className="login-node login-node--apply" aria-hidden="true">apply</span>
+            <Terrence animated className="login-mascot" />
+            <span className="login-illustration-caption">Meet Terrence. Your infrastructure companion.</span>
           </div>
-          <CardTitle>{mfaChallengeToken === null ? "Sign in to Terrence" : "Verify your sign-in"}</CardTitle>
+        </div>
+        <p className="login-story-footer">Made for OpenTofu &amp; Terraform.</p>
+      </section>
+      <section className="login-form-panel" aria-label="Sign in">
+      <TerrenceLogo wordmark className="login-mobile-brand" />
+      <Card className="login-card w-full max-w-sm">
+
+        <CardHeader>
+          <p className="mb-3 text-xs font-medium tracking-widest text-muted-foreground uppercase">{mfaChallengeToken === null ? "Welcome back" : "One more step"}</p>
+          <h1 className="font-heading text-3xl font-bold tracking-tight">{mfaChallengeToken === null ? "Sign in to Terrence" : "Verify your sign-in"}</h1>
           <CardDescription>{mfaChallengeToken === null ? "Continue to your organizations and workspaces." : "Enter the 6-digit code from your authenticator app."}</CardDescription>
         </CardHeader>
         <form onSubmit={mfaChallengeToken === null ? handleLogin : handleMfaChallenge}>
@@ -235,6 +253,8 @@ export function Login(): React.JSX.Element {
           </CardFooter>
         </form>
       </Card>
+      <p className="login-form-note">Infrastructure automation, with a human touch.</p>
+      </section>
     </main>
   );
 }

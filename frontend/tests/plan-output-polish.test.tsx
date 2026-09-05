@@ -483,3 +483,19 @@ test("renders structured terraform-style diff lines for changed list elements", 
   const text = diff.textContent ?? "";
   expect(text.indexOf("2 unchanged attributes hidden")).toBeLessThan(text.lastIndexOf("}"));
 });
+
+test("the healthy illustration requires a completed plan without changes or drift", async (): Promise<void> => {
+  const fetchMock = mock(async (): Promise<Response> => json({ resource_changes: [], resource_drift: [] }));
+  // SAFETY: this fetch mock returns the plan JSON endpoint contract.
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const view = render(<PlanOutput runId="run-quiet" status="planning" planStatus="running" />);
+  await waitFor((): void => { expect(view.getByText("This plan has no resource changes.")).toBeTruthy(); });
+  expect(view.container.querySelector('[data-pose="healthy"]')).toBeNull();
+  view.rerender(<PlanOutput runId="run-quiet" status="planned_and_finished" planStatus="finished" />);
+  await waitFor((): void => { expect(view.container.querySelector('[data-pose="healthy"]')).not.toBeNull(); });
+  cleanup();
+  fetchMock.mockImplementation(async (): Promise<Response> => json({ resource_changes: [], resource_drift: [{ address: "example.drift", type: "example", change: { actions: ["update"], before: { value: 1 }, after: { value: 2 } } }] }));
+  const drifted = render(<PlanOutput runId="run-drift" status="planned_and_finished" planStatus="finished" />);
+  await waitFor((): void => { expect(drifted.getByText("This plan has no resource changes.")).toBeTruthy(); });
+  expect(drifted.container.querySelector('[data-pose="healthy"]')).toBeNull();
+});

@@ -1,3 +1,4 @@
+import { Terrence } from "../components/brand/Terrence";
 import { useEffect, useState } from "react";
 import { fetchApi } from "../lib/api";
 import { formatDateTime } from "@/lib/utils";
@@ -171,6 +172,7 @@ export function AdminMaintenanceWindows(): React.JSX.Element {
         <CardContent>
           {windows.length === 0 ? (
             <div className="rounded-lg border border-dashed bg-muted/30 px-4 py-8 text-center">
+              <Terrence pose="maintenance" className="mx-auto mb-3 w-36" />
               <p className="text-sm font-medium text-foreground">No maintenance windows yet</p>
               <p className="mt-1 text-sm text-muted-foreground">Add a window when applies need a predictable pause.</p>
             </div>
