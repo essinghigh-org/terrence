@@ -34,7 +34,7 @@ import {
 import { eq, desc, asc, and, gt, lt, like, inArray, notInArray, or, sql, isNotNull, isNull } from "drizzle-orm";
 import { spawn } from "bun";
 import { createHash, createHmac } from "node:crypto";
-import { join } from "path";
+import { join, resolve } from "path";
 import { tmpdir } from "os";
 import { mkdir, mkdtemp, rm, writeFile, readFile, exists, readdir, rename, stat } from "fs/promises";
 import { ensureBinary } from "./binaryManager";
@@ -3078,19 +3078,36 @@ class PolicyEngineMissingError extends Error {
  * Bun.which) so runtime PATH mutations are honored: tests prepend a
  * fixture directory with a fake engine, and operators may extend PATH in
  * wrapper scripts after the server starts.
+ *
+ * Returned paths are absolute regular executable files (CodeRabbit P1-sweep
+ * review): a relative override is resolved against the server working
+ * directory because the engine is spawned with cwd set to the run workdir,
+ * and a non-executable match is skipped so it reports unavailable instead
+ * of failing at spawn.
  */
+function* executableCandidates(command: string): Generator<string> {
+  const pathEnv = process.env["PATH"] ?? "";
+  for (const dir of pathEnv.split(":")) {
+    if (dir === "") continue;
+    yield resolve(dir, command);
+  }
+}
+
+async function isExecutableFile(candidate: string): Promise<boolean> {
+  try {
+    const info = await stat(candidate);
+    return info.isFile() && (info.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
+}
+
 export async function probePolicyEngine(kind: "opa" | "sentinel"): Promise<{ path: string } | { missing: string }> {
   const override = kind === "opa" ? process.env["OPA_BINARY_PATH"] : process.env["SENTINEL_BINARY_PATH"];
   const command = override !== undefined && override.trim() !== "" ? override.trim() : kind;
-  if (command.includes("/")) {
-    if (await exists(command)) return { path: command };
-  } else {
-    const pathEnv = process.env["PATH"] ?? "";
-    for (const dir of pathEnv.split(":")) {
-      if (dir === "") continue;
-      const candidate = `${dir}/${command}`;
-      if (await exists(candidate)) return { path: candidate };
-    }
+  const candidates = command.includes("/") ? [resolve(command)] : executableCandidates(command);
+  for (const candidate of candidates) {
+    if (await isExecutableFile(candidate)) return { path: candidate };
   }
   const install = kind === "opa"
     ? "Install OPA (https://www.openpolicyagent.org/docs/latest/#running-opa) and ensure the `opa` binary is on PATH, or set OPA_BINARY_PATH to its location."
@@ -3109,6 +3126,50 @@ async function requirePolicyEngine(kind: "opa" | "sentinel"): Promise<string> {
  * Returns an object indicating whether the run should proceed to apply.
  * Exported for tests; the worker is the only production caller.
  */
+export type SentinelParamInput = Readonly<{
+  key: string;
+  hcl: boolean;
+  sensitive: boolean;
+  plaintext: string;
+}>;
+
+/**
+ * Split Sentinel parameters across delivery channels (CodeRabbit P1-sweep
+ * review, CWE-200): sensitive values ride the 0600 config file's `param`
+ * section, never process arguments (visible in /proc, logs, and audit for
+ * the process lifetime). Non-sensitive values keep the `-param` argv form.
+ * Exported for tests.
+ *
+ * Config-file values are native: plain strings pass through, while hcl
+ * values attempt a JSON parse (numbers, booleans, quoted strings, JSON
+ * objects) and fall back to the raw string for non-JSON HCL.
+ */
+export function splitSentinelParams(
+  parameters: readonly SentinelParamInput[],
+): { configParams: Record<string, { value: unknown }>; argvParams: string[] } {
+  const configParams: Record<string, { value: unknown }> = {};
+  const argvParams: string[] = [];
+  for (const parameter of parameters) {
+    if (parameter.sensitive) {
+      let value: unknown = parameter.plaintext;
+      if (parameter.hcl) {
+        try {
+          value = JSON.parse(parameter.plaintext) as unknown;
+        } catch {
+          value = parameter.plaintext;
+        }
+      }
+      configParams[parameter.key] = { value };
+    } else {
+      argvParams.push(
+        "-param",
+        `${parameter.key}=${parameter.hcl ? parameter.plaintext : JSON.stringify(parameter.plaintext)}`,
+      );
+    }
+  }
+  return { configParams, argvParams };
+}
+
 export async function runPolicyChecks(
   runId: string,
   workspaceId: string,
@@ -3266,8 +3327,23 @@ export async function runPolicyChecks(
         await writeFile(policyPath, policySource, { mode: 0o600 });
         // Keep the potentially large plan out of argv (/proc and ARG_MAX). A
         // JSON config preserves the plan as data without HCL interpolation.
+        // Sensitive parameters ride the same 0600 config file (CWE-200):
+        // decrypted values must never appear in process arguments.
+        const paramInputs: SentinelParamInput[] = [];
+        for (const parameter of (policy.policySetId !== null ? parametersBySet.get(policy.policySetId) ?? [] : [])) {
+          // Sensitive parameters are stored encrypted (issue #577):
+          // resolve the plaintext for the engine invocation.
+          paramInputs.push({
+            key: parameter.key,
+            hcl: parameter.hcl === true,
+            sensitive: parameter.sensitive === true,
+            plaintext: await variableValueForRead(parameter),
+          });
+        }
+        const { configParams, argvParams } = splitSentinelParams(paramInputs);
         await writeFile(configPath, JSON.stringify({
           global: { tfplan: { value: generatedPlanJson ?? {} } },
+          ...(Object.keys(configParams).length > 0 ? { param: configParams } : {}),
         }), { mode: 0o600 });
         const args = [
           await requirePolicyEngine("sentinel"),
@@ -3275,16 +3351,8 @@ export async function runPolicyChecks(
           "-json",
           "-timeout=30s",
           `-config=${configPath}`,
+          ...argvParams,
         ];
-        for (const parameter of (policy.policySetId !== null ? parametersBySet.get(policy.policySetId) ?? [] : [])) {
-          // Sensitive parameters are stored encrypted (issue #577):
-          // resolve the plaintext for the engine invocation.
-          const paramValue = await variableValueForRead(parameter);
-          args.push(
-            "-param",
-            `${parameter.key}=${parameter.hcl === true ? paramValue : JSON.stringify(paramValue)}`,
-          );
-        }
         args.push(policyPath);
 
         const policySandbox = policyEvaluationSandbox();

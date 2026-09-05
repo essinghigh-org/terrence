@@ -72,6 +72,13 @@ describe("workspace lock metadata and force-unlock (#568)", () => {
       data: { attributes: { reason: "deploy freeze" } },
     });
     expect(lockRes.status).toBe(200);
+    // The action response itself carries the updated metadata, not the
+    // pre-update row (CodeRabbit P1-sweep review).
+    const lockAttrs = ((await lockRes.json()) as { data: { attributes: Record<string, unknown> } }).data.attributes;
+    expect(lockAttrs["locked"]).toBe(true);
+    expect(lockAttrs["locked-reason"]).toBe("deploy freeze");
+    expect(lockAttrs["locked-by-id"]).toBe(ownerId);
+    expect(typeof lockAttrs["locked-at"]).toBe("string");
     const attrs = await attributesOf(ownerToken);
     expect(attrs["locked"]).toBe(true);
     expect(attrs["locked-reason"]).toBe("deploy freeze");
@@ -95,6 +102,9 @@ describe("workspace lock metadata and force-unlock (#568)", () => {
   it("lets an admin force-unlock and clears the lock metadata", async () => {
     const res = await request(otherToken, `/api/v2/workspaces/${wsId}/actions/force-unlock`, "POST");
     expect(res.status).toBe(200);
+    const resAttrs = ((await res.json()) as { data: { attributes: Record<string, unknown> } }).data.attributes;
+    expect(resAttrs["locked"]).toBe(false);
+    expect(resAttrs["locked-at"]).toBeNull();
     const attrs = await attributesOf(ownerToken);
     expect(attrs["locked"]).toBe(false);
     expect(attrs["locked-at"]).toBeNull();
@@ -110,6 +120,9 @@ describe("workspace lock metadata and force-unlock (#568)", () => {
     expect((await attributesOf(ownerToken))["locked-at"]).not.toBeNull();
     const unlockRes = await request(ownerToken, `/api/v2/workspaces/${wsId}/actions/unlock`, "POST");
     expect(unlockRes.status).toBe(200);
+    const unlockAttrs = ((await unlockRes.json()) as { data: { attributes: Record<string, unknown> } }).data.attributes;
+    expect(unlockAttrs["locked"]).toBe(false);
+    expect(unlockAttrs["locked-at"]).toBeNull();
     expect((await attributesOf(ownerToken))["locked-at"]).toBeNull();
   });
 });

@@ -1,9 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { db } from "../../src/db";
 import {
-  organizations, policyChecks, policies, policySets, policySetWorkspaces, runs, workspaces,
+  organizations, policyChecks, policies, policySetParameters, policySets, policySetWorkspaces, runs, workspaces,
 } from "../../src/db/schema";
-import { probePolicyEngine, runPolicyChecks } from "../../src/worker";
+import { probePolicyEngine, runPolicyChecks, splitSentinelParams } from "../../src/worker";
+import { variableValueForWrite } from "../../src/lib/variable-crypto";
 import { eq, inArray } from "drizzle-orm";
 
 // Policy engine coverage (issue #596): OPA and Sentinel execute for real
@@ -36,6 +40,8 @@ describe("policy engine execution and availability (#596)", () => {
   const opaPassId = `pol-poleng-opapass-${suffix}`;
   const opaFailId = `pol-poleng-opafail-${suffix}`;
   const senPassId = `pol-poleng-senpass-${suffix}`;
+  const senParamSetId = `ps-poleng-senparam-${suffix}`;
+  const senParamId = `pol-poleng-senparam-${suffix}`;
 
   const OPA_PASS_REGO = `package terrence
 
@@ -46,6 +52,10 @@ violations := []
 violations := ["always denied"]
 `;
   const SENTINEL_PASS = `main = rule { true }
+`;
+  const SENTINEL_PARAM = `param secret_word
+
+main = rule { secret_word == "s3cret" }
 `;
 
   const withEnv = async <T>(name: string, value: string | undefined, fn: () => Promise<T>): Promise<T> => {
@@ -76,23 +86,39 @@ violations := ["always denied"]
     await db.insert(policySets).values([
       { id: opaSetId, orgId, name: `poleng-opa-${suffix}`, kind: "opa" },
       { id: sentinelSetId, orgId, name: `poleng-sen-${suffix}`, kind: "sentinel" },
+      { id: senParamSetId, orgId, name: `poleng-senparam-${suffix}`, kind: "sentinel" },
     ]);
     await db.insert(policySetWorkspaces).values([
       { id: `psw-poleng-opa-${suffix}`, policySetId: opaSetId, workspaceId: opaWsId },
       { id: `psw-poleng-sen-${suffix}`, policySetId: sentinelSetId, workspaceId: senWsId },
+      { id: `psw-poleng-senparam-${suffix}`, policySetId: senParamSetId, workspaceId: senWsId },
     ]);
     await db.insert(policies).values([
       { id: opaPassId, orgId, policySetId: opaSetId, name: "opa-pass", kind: "opa", enforcementLevel: "advisory", query: "data.terrence", source: OPA_PASS_REGO },
       { id: opaFailId, orgId, policySetId: opaSetId, name: "opa-fail", kind: "opa", enforcementLevel: "hard-mandatory", query: "data.terrence", source: OPA_FAIL_REGO },
       { id: senPassId, orgId, policySetId: sentinelSetId, name: "sen-pass", kind: "sentinel", enforcementLevel: "advisory", source: SENTINEL_PASS },
+      { id: senParamId, orgId, policySetId: senParamSetId, name: "sen-param", kind: "sentinel", enforcementLevel: "advisory", source: SENTINEL_PARAM },
     ]);
+    // Sensitive parameter stored encrypted at rest; the worker must deliver
+    // it via the config file, never argv (CWE-200).
+    const stored = await variableValueForWrite(true, "s3cret");
+    await db.insert(policySetParameters).values({
+      id: `psp-poleng-sen-${suffix}`,
+      policySetId: senParamSetId,
+      key: "secret_word",
+      value: stored.value,
+      valueEncrypted: stored.valueEncrypted,
+      sensitive: true,
+      hcl: false,
+    });
   });
 
   afterAll(async () => {
     await db.delete(policyChecks).where(inArray(policyChecks.runId, [opaRunId, senRunId])).catch((): void => {});
-    await db.delete(policies).where(inArray(policies.id, [opaPassId, opaFailId, senPassId])).catch((): void => {});
+    await db.delete(policySetParameters).where(inArray(policySetParameters.policySetId, [senParamSetId])).catch((): void => {});
+    await db.delete(policies).where(inArray(policies.id, [opaPassId, opaFailId, senPassId, senParamId])).catch((): void => {});
     await db.delete(policySetWorkspaces).where(inArray(policySetWorkspaces.workspaceId, [opaWsId, senWsId])).catch((): void => {});
-    await db.delete(policySets).where(inArray(policySets.id, [opaSetId, sentinelSetId])).catch((): void => {});
+    await db.delete(policySets).where(inArray(policySets.id, [opaSetId, sentinelSetId, senParamSetId])).catch((): void => {});
     await db.delete(runs).where(inArray(runs.id, [opaRunId, senRunId])).catch((): void => {});
     await db.delete(workspaces).where(inArray(workspaces.id, [opaWsId, senWsId])).catch((): void => {});
     await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => {});
@@ -117,10 +143,41 @@ violations := ["always denied"]
     });
   });
 
-  it("probe resolves an override pointing at a real file", async () => {
-    await withEnv("OPA_BINARY_PATH", import.meta.path, async () => {
-      expect(await probePolicyEngine("opa")).toEqual({ path: import.meta.path });
+  it("probe resolves an override pointing at an executable file", async () => {
+    // The override must be an absolute executable: the engine spawns with
+    // cwd set to the run workdir, so a relative path would resolve wrong,
+    // and a non-executable match must report unavailable instead of
+    // failing at spawn (CodeRabbit P1-sweep review).
+    const dir = await mkdtemp(join(tmpdir(), "poleng-probe-"));
+    try {
+      const exePath = join(dir, "fake-opa");
+      const inertPath = join(dir, "notes.txt");
+      await writeFile(exePath, "#!/bin/sh\nexit 0\n");
+      await writeFile(inertPath, "not an engine");
+      await chmod(exePath, 0o755);
+      await withEnv("OPA_BINARY_PATH", exePath, async () => {
+        expect(await probePolicyEngine("opa")).toEqual({ path: exePath });
+      });
+      await withEnv("OPA_BINARY_PATH", inertPath, async () => {
+        expect("missing" in await probePolicyEngine("opa")).toBe(true);
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("splits Sentinel params so secrets never reach argv (CWE-200)", async () => {
+    const { configParams, argvParams } = splitSentinelParams([
+      { key: "db_password", hcl: false, sensitive: true, plaintext: "s3cret" },
+      { key: "region", hcl: false, sensitive: false, plaintext: "us-east-1" },
+      { key: "replicas", hcl: true, sensitive: true, plaintext: "3" },
+    ]);
+    expect(configParams).toEqual({
+      db_password: { value: "s3cret" },
+      replicas: { value: 3 },
     });
+    expect(argvParams).toEqual(["-param", 'region="us-east-1"']);
+    expect(argvParams.join(" ")).not.toContain("s3cret");
   });
 
   it("reports unreachable (not failed) when the OPA engine is missing", async () => {
@@ -167,5 +224,19 @@ violations := ["always denied"]
     expect(result.proceed).toBe(true);
     const passed = await checksFor(senPassId);
     expect(passed[0]?.status).toBe("passed");
+  });
+
+  it("delivers sensitive Sentinel params via config file for real", async () => {
+    // End-to-end proof for the CWE-200 fix: the encrypted secret_word
+    // parameter reaches the real engine through sentinel.json (the policy
+    // passes only if the value arrives), while the unit test above proves
+    // it never appears in argv.
+    if (!sentinelAvailable) return;
+    await db.delete(policyChecks).where(eq(policyChecks.runId, senRunId));
+    const result = await runPolicyChecks(senRunId, senWsId, orgId, undefined, undefined, {});
+    expect(result.proceed).toBe(true);
+    const rows = await checksFor(senParamId);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]?.status).toBe("passed");
   });
 });

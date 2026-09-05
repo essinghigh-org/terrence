@@ -1428,19 +1428,20 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     }
 
     const principal = lockPrincipal(user?.id, principalOrgId, teamId);
+    const lockedAt = Date.now();
     const locked = await db.update(workspaces).set({
       locked: true,
       lockedReason: lockReason.reason,
       lockOwnerType: principal.type,
       lockOwnerId: principal.id,
-      lockedAt: Date.now(),
+      lockedAt,
     }).where(and(eq(workspaces.id, workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
     if (locked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is already locked" }] }; }
     await auditLog("lock", "workspaces", workspaceId, user?.id ?? null, ws.orgId, teamId !== null && teamId !== undefined ? { teamId } : undefined);
     const org = await cachedOrgById(ws.orgId);
     return {
       data: await workspaceResource(
-        { ...ws, locked: true, lockedReason: lockReason.reason, lockOwnerType: principal.type, lockOwnerId: principal.id },
+        { ...ws, locked: true, lockedReason: lockReason.reason, lockOwnerType: principal.type, lockOwnerId: principal.id, lockedAt },
         org?.defaultIacBinary,
         await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
         { orgName: org?.name ?? null },
@@ -1466,7 +1467,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const org = await cachedOrgById(ws.orgId);
     return {
       data: await workspaceResource(
-        { ...ws, locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null },
+        { ...ws, locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null },
         org?.defaultIacBinary,
         await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
         { orgName: org?.name ?? null },
@@ -1484,7 +1485,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const org = await cachedOrgById(ws.orgId);
     return {
       data: await workspaceResource(
-        { ...ws, locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null },
+        { ...ws, locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null },
         org?.defaultIacBinary,
         await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
         { orgName: org?.name ?? null },
