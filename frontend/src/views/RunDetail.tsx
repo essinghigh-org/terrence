@@ -1062,7 +1062,9 @@ export function RunDetail({
         if (statusNow === "" || TERMINAL_STATUSES.has(statusNow)) {
           void refreshFull();
         } else if (PLAN_PHASE_STATUSES.has(statusNow)) {
-          void refreshPhase(["plan", "policy", "cost", "assessments"]);
+          // Issue #595: plan output streams into the logs while planning, so
+          // the log window must refresh on plan transitions too.
+          void refreshPhase(["plan", "policy", "cost", "assessments", "logs"]);
         } else if (APPLY_PHASE_STATUSES.has(statusNow)) {
           void refreshPhase(["apply", "logs"]);
         } else {
@@ -1090,6 +1092,28 @@ export function RunDetail({
   // One app-global SSE stream serves every view (EventProvider): status
   // transitions and new comments for this run dispatch into the effect's
   // refresh machinery above.
+  // Issue #595: fast log polling while the run is active. SSE relays status
+  // transitions only, and the worker sends none during long init/plan/apply
+  // stretches, so without this the log window sits stale until the 30s
+  // degraded timer fires. Polls the same paged logs auxiliary as the other
+  // refresh paths; stops at terminal status and while the tab is hidden
+  // (the visibility handler above refreshes on return).
+  const activeRunStatus = run?.attributes.status ?? null;
+  useEffect((): (() => void) => {
+    if (activeRunStatus === null || TERMINAL_STATUSES.has(activeRunStatus)) return (): void => {};
+    let stopped = false;
+    const controller = new AbortController();
+    const tick = (): void => {
+      if (stopped || controller.signal.aborted || document.hidden) return;
+      void reloadAuxiliaries(["logs"], controller.signal);
+    };
+    const interval = window.setInterval(tick, 4000);
+    return (): void => {
+      stopped = true;
+      controller.abort();
+      window.clearInterval(interval);
+    };
+  }, [runId, activeRunStatus, reloadAuxiliaries]);
   useTerrenceEvent("run.status", (data): boolean => data["run-id"] === runId, (data): void => {
     const status = data["status"];
     eventDispatchRef.current(typeof status === "string" ? status : "");
