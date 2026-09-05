@@ -516,7 +516,7 @@ export function WorkspaceVcs({
                         placeholder="modules/**/*.tf, shared/**/*.tf"
                         disabled={!canUpdate}
                       />
-                      <FieldDescription>Separate glob patterns with commas.</FieldDescription>
+                      <FieldDescription>Separate glob patterns with commas. Entries must be non-blank; a pattern that matches no changed files never triggers a run.</FieldDescription>
                     </Field>
                   </FieldGroup>
                 )}

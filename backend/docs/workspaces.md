@@ -24,6 +24,10 @@ A workspace gets its configuration from one of two places:
 
 A VCS-connected workspace refuses applies from the CLI. The server executes the repository checkout instead. See [VCS integrations](vcs).
 
+## Working directory
+
+The working directory selects the subdirectory Terraform runs in. It must be a relative path without traversal, and — when the workspace has an uploaded configuration — it must match a directory in the latest configuration version; otherwise saving the workspace fails naming the available top-level entries. A directory that stops matching later (the configuration changed after saving) still fails at plan time with the directory named.
+
 ## Execution modes
 
 Workspaces run in one of three modes:

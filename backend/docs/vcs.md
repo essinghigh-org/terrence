@@ -57,6 +57,7 @@ In the workspace settings, choose the VCS provider and the repository. Workspace
 
 - Branch. Defaults to the repository default branch.
 - File triggers: only paths matching the trigger prefixes or patterns create runs.
+  Prefix and pattern entries must be non-blank strings (rejected at save). Patterns are Bun globs matched against repository-relative paths with leading slashes stripped; patterns are OR-ed, and an empty pattern list falls back to prefix matching. A pattern that matches no changed files simply never triggers: dry-run saved patterns against the latest configuration with the trigger-preview endpoint.
 - Ingress submodules: clone submodules.
 - Tags regex: create runs for matching tags.
 

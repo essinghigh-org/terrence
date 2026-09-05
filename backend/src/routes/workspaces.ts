@@ -15,7 +15,7 @@ import { decodeStatePayload, isUniqueConstraintError, validVariableAttributes } 
 import { variableValueForWrite, variableValueForRead } from "../lib/variable-crypto";
 import { validateVersion, caseInsensitiveLike, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, parseStatePayload, auditLog, strictAuditEnabled, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspace, lockPrincipal, ownsWorkspaceLock, ifMatchSatisfied, type DeepReadonly } from "../lib/utils";
 
-import { normalizeWorkingDirectory } from "../workspace";
+import { archiveContainsWorkingDir, invalidTriggerPatternIndexes, invalidTriggerPrefixIndexes, listArchiveMembers, normalizeWorkingDirectory, summarizeTopLevelEntries } from "../workspace";
 import { authPlugin } from "../auth";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
 import { ensureDefaultProject, isAutoDestroyDuration, parseSettingOverwrites } from "./projects";
@@ -1304,6 +1304,62 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       ...pagination(request, number, size, totalCount),
     };
   })
+  // Dry-run trigger-pattern preview (issue #628): match the saved patterns
+  // against the latest uploaded configuration file list so authors see what
+  // would (and would not) trigger a run before pushing. Same normalization
+  // as the webhook matcher, so the preview agrees with live behavior.
+  .get("/api/v2/workspaces/:workspace_id/trigger-preview", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const workspaceId = params["workspace_id"] ?? "";
+    const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null);
+    if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const latestCv = await db.query.configurationVersions.findFirst({
+      where: and(
+        eq(configurationVersions.workspaceId, workspaceId),
+        eq(configurationVersions.status, "uploaded"),
+      ),
+      orderBy: [desc(configurationVersions.createdAt)],
+      columns: { id: true, archivePath: true },
+    });
+    const cvArchivePath = latestCv?.archivePath;
+    if (latestCv === undefined || typeof cvArchivePath !== "string" || cvArchivePath === "" || !(await Bun.file(cvArchivePath).exists())) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Trigger preview needs an uploaded configuration version with a readable archive" }] };
+    }
+    const members = await listArchiveMembers(cvArchivePath);
+    if (members === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Trigger preview could not list the latest configuration archive" }] };
+    }
+    const files = [...members].map((member): string => member.replace(/^\.\//, "")).filter((file): boolean => file !== "" && !file.endsWith("/"));
+    const patterns = Array.isArray(ws.triggerPatterns) ? ws.triggerPatterns.filter((pattern): pattern is string => typeof pattern === "string" && pattern !== "") : [];
+    const previews = patterns.map((pattern): Record<string, unknown> => {
+      let matched: string[] = [];
+      try {
+        const glob = new Bun.Glob(pattern.replace(/^\/+/, ""));
+        matched = files.filter((file): boolean => {
+          try {
+            return glob.match(file);
+          } catch {
+            return false;
+          }
+        });
+      } catch {
+        matched = [];
+      }
+      return { pattern, matches: matched.length, "matched-files": matched.slice(0, 10), truncated: matched.length > 10 };
+    });
+    return {
+      data: {
+        id: workspaceId,
+        type: "trigger-preview",
+        attributes: {
+          "configuration-version-id": latestCv.id,
+          "files-checked": files.length,
+          patterns: previews,
+        },
+      },
+    };
+  })
   .post("/api/v2/workspaces/:workspace_id/vars", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, orgId ?? null, teamId ?? null, "variables-write");
@@ -1772,6 +1828,29 @@ async function updateWorkspaceResponse(
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: msg }] };
     }
   }
+  // Issue #628: fail at save when an explicitly set directory matches
+  // nothing in the latest configuration instead of failing mid-plan.
+  // Skipped when no readable configuration exists yet; drift after save
+  // still surfaces the worker error naming the directory.
+  if (workingDirectory !== undefined && normalizedWorkingDirectory !== null) {
+    const latestCv = await db.query.configurationVersions.findFirst({
+      where: and(
+        eq(configurationVersions.workspaceId, workspace.id),
+        eq(configurationVersions.status, "uploaded"),
+      ),
+      orderBy: [desc(configurationVersions.createdAt)],
+      columns: { archivePath: true },
+    });
+    const cvArchivePath = latestCv?.archivePath;
+    if (typeof cvArchivePath === "string" && cvArchivePath !== "" && await Bun.file(cvArchivePath).exists()) {
+      const members = await listArchiveMembers(cvArchivePath);
+      if (members !== null && !archiveContainsWorkingDir(members, normalizedWorkingDirectory)) {
+        const tops = summarizeTopLevelEntries(members);
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "working-directory " + JSON.stringify(normalizedWorkingDirectory) + " matches no directory in the latest configuration version" + (tops.length === 0 ? "." : " (top-level entries: " + tops.join(", ") + ")") }] };
+      }
+    }
+  }
 
   if (name !== undefined && name !== workspace.name) {
     const duplicate = await findWorkspaceByName(workspace.orgId, name);
@@ -1873,6 +1952,17 @@ async function updateWorkspaceResponse(
   if (lockedTagKey !== undefined) {
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Tag key "${lockedTagKey}" cannot override its inherited project tag` }] };
+  }
+  // Issue #628: fail at save on trigger entries that can never match
+  // (non-strings, blanks) instead of silently matching nothing at webhook
+  // time. Well-typed patterns stay accepted: preview them below.
+  if (Array.isArray(attributes["trigger-prefixes"])) {
+    const badPrefixes = invalidTriggerPrefixIndexes(attributes["trigger-prefixes"] as unknown[]);
+    if (badPrefixes.length > 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "trigger-prefixes entries must be non-blank strings (indexes: " + badPrefixes.join(", ") + ")" }] }; }
+  }
+  if (Array.isArray(attributes["trigger-patterns"])) {
+    const badPatterns = invalidTriggerPatternIndexes(attributes["trigger-patterns"] as unknown[]);
+    if (badPatterns.length > 0) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "trigger-patterns entries must be non-blank strings (indexes: " + badPatterns.join(", ") + ")" }] }; }
   }
   const updated: Partial<typeof workspaces.$inferInsert> = {
     name: name ?? workspace.name,
