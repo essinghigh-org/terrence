@@ -127,6 +127,7 @@ export function WorkspaceSettings({
   const [executionMode, setExecutionMode] = useState<ExecutionModeSetting>(executionModeSetting(workspace));
   const [agentPoolId, setAgentPoolId] = useState(agentPoolSetting(workspace));
   const [projectExecutionMode, setProjectExecutionMode] = useState<ExecutionMode>(workspaceExecutionMode);
+  const [orgDefaultIacBinary, setOrgDefaultIacBinary] = useState<IacBinary | null>(null);
   const [workingDirectory, setWorkingDirectory] = useState(
     workspace.attributes["working-directory"] ?? "",
   );
@@ -154,6 +155,22 @@ export function WorkspaceSettings({
 
   const projectId = workspace.relationships?.project?.data?.id ?? "";
   const effectiveExecutionMode = executionMode === "inherit" ? projectExecutionMode : executionMode;
+  // Issue #600: surface the workspace value next to the effective engine and
+  // warn when agent runs will ignore the organization default (agent
+  // execution pins Terraform unless an engine is set here).
+  const explicitIacBinary = workspace.attributes["iac-binary"] === "terraform"
+    ? "terraform"
+    : workspace.attributes["iac-binary"] === "tofu" ? "tofu" : null;
+  const effectiveIacBinary = explicitIacBinary ?? orgDefaultIacBinary ?? "terraform";
+  const effectiveIacSource = explicitIacBinary !== null
+    ? "this workspace"
+    : orgDefaultIacBinary !== null
+      ? "organization default"
+      : "built-in default";
+  const agentIgnoresOrgDefault = effectiveExecutionMode === "agent"
+    && explicitIacBinary === null
+    && orgDefaultIacBinary === "tofu";
+  const effectiveEngineLabel = `Effective engine: ${effectiveIacBinary === "terraform" ? "Terraform" : "OpenTofu"} (${effectiveIacSource}).`;
   const agentPoolsState = useAgentPools(orgName, canUpdate && effectiveExecutionMode === "agent");
 
   const normalizedName = name.trim();
@@ -277,6 +294,30 @@ export function WorkspaceSettings({
 
     return (): void => { controller.abort(); };
   }, [projectId, workspace.id, workspaceExecutionMode]);
+
+  useEffect((): (() => void) => {
+    const controller = new AbortController();
+    setOrgDefaultIacBinary(null);
+    if (orgName === "") {
+      return (): void => { controller.abort(); };
+    }
+
+    void fetchApi<{ data?: { attributes?: { "default-iac-binary"?: string } } }>(
+      `/organizations/${encodeURIComponent(orgName)}`,
+      { signal: controller.signal },
+    )
+      .then((response): void => {
+        if (controller.signal.aborted) return;
+        const value = response.data?.attributes?.["default-iac-binary"];
+        setOrgDefaultIacBinary(value === "terraform" || value === "tofu" ? value : null);
+      })
+      .catch((): void => {
+        // The effective engine falls back to the built-in default when the
+        // organization document cannot be read by the current principal.
+      });
+
+    return (): void => { controller.abort(); };
+  }, [orgName, workspace.id]);
 
   const saveSettings = async (event: React.SyntheticEvent): Promise<void> => {
     event.preventDefault();
@@ -472,8 +513,15 @@ export function WorkspaceSettings({
                   <SelectItem value="terraform">Terraform</SelectItem>
                 </Select>
                 <FieldDescription>
-                  Binary used for plans and applies.
+                  Binary used for plans and applies. {effectiveEngineLabel}
                 </FieldDescription>
+                {agentIgnoresOrgDefault && (
+                  <p className="text-sm text-muted-foreground mt-1">
+                    <span className="font-medium text-foreground">Agent runs will use Terraform.</span>
+                    {" "}Agent execution ignores the organization default when no engine is set here.
+                    Select an explicit engine to pin both local and agent runs.
+                  </p>
+                )}
               </Field>
 
               <Field data-disabled={!canUpdate}>
