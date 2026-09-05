@@ -541,6 +541,10 @@ describe("AI run explainer caching, kinds, and streaming (21.2)", () => {
     // Same kind as the plan artifact; use the run that has never been explained.
     const missing = await request(`/api/v2/runs/${applyRunId}/explain?kind=apply`, "GET");
     expect(missing.status).toBe(404);
+    // Issue #645: the artifact exists but nothing was requested yet, so the
+    // 404 names the POST that starts a generation.
+    const missingBody = (await missing.json()) as { errors: { detail?: string }[] };
+    expect(missingBody.errors[0]?.detail).toContain("POST");
     // Explain the failed apply (JSON path).
     const generated = await request(`/api/v2/runs/${applyRunId}/explain`, "POST", {
       data: { type: "plan-explanations", attributes: { kind: "apply" } },
