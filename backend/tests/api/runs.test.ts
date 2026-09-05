@@ -578,6 +578,50 @@ describe("run execution correctness (issues #583, #601)", () => {
     expect(body.errors[0]?.detail).toContain("discard");
     expect(body.errors[0]?.detail).toContain(restingId);
   });
+
+  it("prefers the discard hint over force-canceling when active and resting blockers mix (issue #583)", async () => {
+    // Hermetic: earlier tests in this block leave runs behind.
+    await db.delete(runs).where(eq(runs.workspaceId, execWsId));
+    const activeId = `run-exec-mixed-active-${suffix}`;
+    const restingId = `run-exec-mixed-resting-${suffix}`;
+    const pendingId = `run-exec-mixed-pending-${suffix}`;
+    await db.insert(runs).values([
+      { id: activeId, workspaceId: execWsId, configurationVersionId: execCvId, status: "fetching", autoApply: false, createdAt: Date.now() },
+      { id: restingId, workspaceId: execWsId, configurationVersionId: execCvId, status: "planned", autoApply: false, createdAt: Date.now() },
+      { id: pendingId, workspaceId: execWsId, configurationVersionId: execCvId, status: "pending", autoApply: false, createdAt: Date.now() },
+    ]);
+    const response = await app.handle(new Request(
+      `http://localhost/api/v2/runs/${pendingId}/actions/force-execute`,
+      authed(userToken, { method: "POST" }),
+    ));
+    // Clearing only the fetching run would 202 while the planned run still
+    // holds the queue, so the endpoint must refuse and name the discard.
+    expect(response.status).toBe(409);
+    const body = await response.json() as { errors: { detail: string }[] };
+    expect(body.errors[0]?.detail).toContain(restingId);
+    const active = await db.query.runs.findFirst({ where: eq(runs.id, activeId) });
+    expect(active?.status).toBe("fetching");
+  });
+
+  it("ignores a speculative resting blocker that holds no queue (issue #583)", async () => {
+    // Hermetic: earlier tests in this block leave runs behind.
+    await db.delete(runs).where(eq(runs.workspaceId, execWsId));
+    const speculativeId = `run-exec-spec-${suffix}`;
+    const activeId = `run-exec-spec-active-${suffix}`;
+    const pendingId = `run-exec-spec-pending-${suffix}`;
+    await db.insert(runs).values([
+      { id: speculativeId, workspaceId: execWsId, configurationVersionId: execCvId, status: "planned", planOnly: true, autoApply: false, createdAt: Date.now() },
+      { id: activeId, workspaceId: execWsId, configurationVersionId: execCvId, status: "fetching", autoApply: false, createdAt: Date.now() },
+      { id: pendingId, workspaceId: execWsId, configurationVersionId: execCvId, status: "pending", autoApply: false, createdAt: Date.now() },
+    ]);
+    const response = await app.handle(new Request(
+      `http://localhost/api/v2/runs/${pendingId}/actions/force-execute`,
+      authed(userToken, { method: "POST" }),
+    ));
+    expect(response.status).toBe(202);
+    const active = await db.query.runs.findFirst({ where: eq(runs.id, activeId) });
+    expect(active?.status).toBe("force_canceled");
+  });
 });
 
 afterAll(async () => {

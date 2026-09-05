@@ -1669,32 +1669,35 @@ export const runRoutes = new Elysia({ name: "runs" })
     const forceExecuteBlockingStatuses = WORKSPACE_BLOCKING_RUN_STATUSES.filter(
       (status): boolean => !(DISCARDABLE_RUN_STATUSES as readonly string[]).includes(status),
     );
+    const restingBlockingStatuses = WORKSPACE_BLOCKING_RUN_STATUSES.filter(
+      (status): boolean => (DISCARDABLE_RUN_STATUSES as readonly string[]).includes(status),
+    );
+    // A blocker in a discardable resting state (planned, policy_soft_failed)
+    // still holds the queue but must be discarded, not force-executed — and a
+    // force-execute that only clears active blockers would 202 while the
+    // target stays queued behind it. Surface the discard hint before touching
+    // anything. Speculative and save-plan runs never hold the queue, so they
+    // are excluded here exactly as for active blockers below.
+    const restingBlockers = await db.query.runs.findMany({
+      where: and(
+        eq(runs.workspaceId, authorized.workspace.id),
+        inArray(runs.status, [...restingBlockingStatuses]),
+        ne(runs.id, runId),
+      ),
+      columns: { id: true, status: true, planOnly: true, savePlan: true },
+      orderBy: [asc(runs.createdAt), asc(runs.id)],
+    });
+    const resting = restingBlockers.find((run): boolean => run.planOnly !== true && run.savePlan !== true);
+    if (resting !== undefined) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: `Run ${resting.id} is ${resting.status}; discard it before force-executing this run` }] };
+    }
     const blockers = await db.query.runs.findMany({
       where: and(eq(runs.workspaceId, authorized.workspace.id), inArray(runs.status, [...forceExecuteBlockingStatuses]), ne(runs.id, runId)),
       orderBy: [asc(runs.createdAt), asc(runs.id)],
     });
     const blockingRuns = blockers.filter((run): boolean => run.planOnly !== true && run.savePlan !== true);
     if (blockingRuns.length === 0) {
-      // A blocker in a discardable resting state still holds the queue but
-      // must be discarded, not force-executed: say so instead of claiming
-      // nothing is blocking.
-      const restingBlockers = await db.query.runs.findMany({
-        where: and(
-          eq(runs.workspaceId, authorized.workspace.id),
-          inArray(runs.status, [...WORKSPACE_BLOCKING_RUN_STATUSES.filter(
-            (status): boolean => (DISCARDABLE_RUN_STATUSES as readonly string[]).includes(status),
-          )]),
-          ne(runs.id, runId),
-        ),
-        columns: { id: true, status: true },
-        orderBy: [asc(runs.createdAt), asc(runs.id)],
-        limit: 1,
-      });
-      const resting = restingBlockers[0];
-      if (resting !== undefined) {
-        (set as { status: number }).status = 409;
-        return { errors: [{ status: "409", title: "Conflict", detail: `Run ${resting.id} is ${resting.status}; discard it before force-executing this run` }] };
-      }
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "No blocking run is available to force-execute" }] };
     }
     const blockerCanceled = await db.update(runs).set({ status: "force_canceled" }).where(and(
