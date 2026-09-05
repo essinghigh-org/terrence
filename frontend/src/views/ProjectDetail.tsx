@@ -515,8 +515,11 @@ export function ProjectDetail({
                   <EmptyState
                     compact
                     illustration="empty"
-                  title="No workspaces in this project yet"
-                    description="Create a workspace in this project to manage its infrastructure."
+                    headingLevel="h3"
+                    title="No workspaces in this project yet"
+                    description="A workspace holds the code, state and run history for one piece of infrastructure."
+                    actionLabel="Add a workspace"
+                    actionHref={`${orgPath}/workspaces`}
                     docsHref="/app/docs/workspaces"
                   />
                 ) : (
@@ -567,8 +570,11 @@ export function ProjectDetail({
                 <EmptyState
                   compact
                   illustration="empty"
+                  headingLevel="h3"
                   title="No workspaces in this project yet"
-                  description="Create a workspace in this project to manage its infrastructure."
+                  description="A workspace holds the code, state and run history for one piece of infrastructure."
+                  actionLabel="Add a workspace"
+                  actionHref={`${orgPath}/workspaces`}
                   docsHref="/app/docs/workspaces"
                 />
               ) : (
@@ -615,7 +621,7 @@ export function ProjectDetail({
               <div className="flex flex-col gap-1">
                 <CardTitle>Variable sets</CardTitle>
                 <CardDescription>
-                  Project-owned variable sets and organization variable sets applied to this project.
+                  Reusable bundles of variables, shared by every workspace in this project.
                 </CardDescription>
               </div>
               <Button
@@ -633,11 +639,20 @@ export function ProjectDetail({
             </CardHeader>
             <CardContent className="p-0">
               {variableSets.length === 0 ? (
-                <p className="px-5 py-8 text-center text-sm text-muted-foreground">
-                  No variable sets are applied to this project. Create a project variable set, or apply
-                  one from the{" "}
-                  <Link to={`${orgPath}/variable-sets`} className="text-primary hover:underline">organization Variable sets page</Link>.
-                </p>
+                <EmptyState
+                  compact
+                  headingLevel="h3"
+                  title="No variable sets yet"
+                  description="A variable set is a reusable bundle of Terraform variables and environment variables that several workspaces can share, so credentials and common settings live in one place."
+                  actionLabel="New variable set"
+                  onAction={(): void => {
+                    setVsName("");
+                    setVsDescription("");
+                    setVsError("");
+                    setCreateVsOpen(true);
+                  }}
+                  docsHref={`${orgPath}/variable-sets`}
+                />
               ) : (
                 <Table>
                   <TableHeader>

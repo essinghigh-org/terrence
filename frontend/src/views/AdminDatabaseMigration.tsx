@@ -21,6 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "../lib/utils";
+import { Callout } from "@/components/ui/callout";
 
 type StepStatus = "pending" | "running" | "passed" | "failed" | "skipped";
 
@@ -256,7 +257,7 @@ export function AdminDatabaseMigration(): React.JSX.Element {
                 aria-atomic="true"
                 className={cn(
                   "font-medium",
-                  active && "text-amber-600 dark:text-amber-400",
+                  active && "text-warning-text",
                   phase === "ready_to_switch" && "text-success",
                   phase === "switched" && "text-success",
                   terminalFailed && "text-destructive",
@@ -277,10 +278,9 @@ export function AdminDatabaseMigration(): React.JSX.Element {
             )}
 
             {status["environment-database-url"] !== null && (
-              <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
-                <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-                <div>{status["environment-database-url"]}</div>
-              </div>
+              <Callout tone="warning" className="p-3">
+                {status["environment-database-url"]}
+              </Callout>
             )}
 
             {wizard !== null && wizard.steps.length > 0 && (
@@ -356,10 +356,10 @@ export function AdminDatabaseMigration(): React.JSX.Element {
                 {wizard?.report !== null && wizard?.report !== undefined && (
                   <Section defaultOpen={false} title="Migration report">
                     <div className="space-y-1">
-                      <Field label="Triggers skipped" children={<span className={wizard.report.triggersSkipped > 0 ? "text-amber-600 dark:text-amber-400" : undefined}>{wizard.report.triggersSkipped}</span>} />
-                      <Field label="Defaults dropped" children={<span className={wizard.report.defaultsDropped.length > 0 ? "text-amber-600 dark:text-amber-400" : undefined}>{wizard.report.defaultsDropped.length > 0 ? wizard.report.defaultsDropped.join(", ") : "none"}</span>} />
-                      <Field label="Checks skipped" children={<span className={wizard.report.checksSkipped.length > 0 ? "text-amber-600 dark:text-amber-400" : undefined}>{wizard.report.checksSkipped.length > 0 ? wizard.report.checksSkipped.join(", ") : "none"}</span>} />
-                      <Field label="Indexes skipped" children={<span className={wizard.report.indexesSkipped.length > 0 ? "text-amber-600 dark:text-amber-400" : undefined}>{wizard.report.indexesSkipped.length > 0 ? wizard.report.indexesSkipped.join(", ") : "none"}</span>} />
+                      <Field label="Triggers skipped" children={<span className={wizard.report.triggersSkipped > 0 ? "text-warning-text" : undefined}>{wizard.report.triggersSkipped}</span>} />
+                      <Field label="Defaults dropped" children={<span className={wizard.report.defaultsDropped.length > 0 ? "text-warning-text" : undefined}>{wizard.report.defaultsDropped.length > 0 ? wizard.report.defaultsDropped.join(", ") : "none"}</span>} />
+                      <Field label="Checks skipped" children={<span className={wizard.report.checksSkipped.length > 0 ? "text-warning-text" : undefined}>{wizard.report.checksSkipped.length > 0 ? wizard.report.checksSkipped.join(", ") : "none"}</span>} />
+                      <Field label="Indexes skipped" children={<span className={wizard.report.indexesSkipped.length > 0 ? "text-warning-text" : undefined}>{wizard.report.indexesSkipped.length > 0 ? wizard.report.indexesSkipped.join(", ") : "none"}</span>} />
                       <Field label="FK violations" children={<span className={wizard.report.fkViolations.length > 0 ? "text-destructive" : undefined}>{wizard.report.fkViolations.length}</span>} />
                       <Field label="Journal match" children={wizard.report.journalMatch ? "ok" : "mismatch"} />
                     </div>
@@ -511,25 +511,27 @@ export function AdminDatabaseMigration(): React.JSX.Element {
                 Start migration
               </Button>
             ) : (
-              <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-sm">
-                <AlertTriangle className="size-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
-                <span className="text-amber-700 dark:text-amber-300">
-                  The backend enters maintenance mode: existing runs finish, new runs are blocked until the copy
-                  completes and you decide to switch.
-                </span>
-                <div className="flex gap-2">
-                  <Button
-                    disabled={busy !== null}
-                    onClick={(): void => {
-                      setConfirmStart(false);
-                      void runAction("start", "POST", { data: { attributes: { url } } });
-                    }}
-                  >
-                    Confirm start
-                  </Button>
-                  <Button variant="outline" onClick={(): void => { setConfirmStart(false); }}>Back</Button>
-                </div>
-              </div>
+              <Callout
+                tone="warning"
+                className="p-3"
+                actions={
+                  <>
+                    <Button
+                      disabled={busy !== null}
+                      onClick={(): void => {
+                        setConfirmStart(false);
+                        void runAction("start", "POST", { data: { attributes: { url } } });
+                      }}
+                    >
+                      Confirm start
+                    </Button>
+                    <Button variant="outline" onClick={(): void => { setConfirmStart(false); }}>Back</Button>
+                  </>
+                }
+              >
+                The backend enters maintenance mode: existing runs finish, new runs are blocked until the copy
+                completes and you decide to switch.
+              </Callout>
             )}
           </CardContent>
         </Card>

@@ -490,6 +490,13 @@ export function Workspaces(): React.JSX.Element {
   };
 
   const hasFilters = search !== "" || statusFilter !== "" || projectFilter !== "" || activeViewName !== "";
+  const firstWorkspace = !loading && loadError === "" && workspaces.length === 0 && !hasFilters;
+  const clearFilters = (): void => {
+    setSearch("");
+    setStatusFilter("");
+    setProjectFilter("");
+    setActiveViewName("");
+  };
   const tableColumnCount = WORKSPACE_TABLE_COLUMNS.filter((column): boolean => visibleColumns.includes(column.id)).length + 2;
 
   return (
@@ -498,7 +505,7 @@ export function Workspaces(): React.JSX.Element {
         eyebrow={orgName}
         title="Workspaces"
         description="Review workspace health, current runs, and configuration at a glance."
-        action={canManageWorkspaces ? (
+        action={canManageWorkspaces && !firstWorkspace ? (
           <Button onClick={(): void => { setCreateOpen(true); }}>
             <Plus data-icon="inline-start" />
             New workspace
@@ -506,18 +513,29 @@ export function Workspaces(): React.JSX.Element {
         ) : undefined}
       />
 
-      {/* Top KPI Metrics Bar */}
+      {firstWorkspace ? (
+        <section className="rounded-xl border bg-card">
+          <EmptyState
+            illustration="guide"
+            title={canManageWorkspaces ? "Create your first workspace" : "No workspaces yet"}
+            description={canManageWorkspaces
+              ? "A workspace holds the code, state, and history for one part of your infrastructure. Start with your network, a server, or an application. You can organize workspaces into projects later."
+              : "Ask an organization owner to create a workspace or give you access to one."}
+            {...(canManageWorkspaces ? { actionLabel: "New workspace", onAction: (): void => { setCreateOpen(true); } } : {})}
+            docsHref="/app/docs/workspaces"
+          />
+          <p className="border-t px-6 py-4 text-center text-sm text-muted-foreground">Bring a Git repository or use your existing Terraform or OpenTofu CLI. Plans require your approval by default.</p>
+        </section>
+      ) : (
+      <>
+      {/* Organization totals remain visible while filtering. */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <button
           type="button"
-          onClick={(): void => {
-            setSearch("");
-            setStatusFilter("");
-            setProjectFilter("");
-            setActiveViewName("");
-          }}
+          aria-pressed={!hasFilters}
+          onClick={clearFilters}
           className={cn(
-            "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-all hover:border-primary/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
+            "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-colors hover:border-primary/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
             !hasFilters && "border-primary/50 bg-primary/5 ring-1 ring-primary/30"
           )}
         >
@@ -526,9 +544,10 @@ export function Workspaces(): React.JSX.Element {
         </button>
         <button
           type="button"
+          aria-pressed={statusFilter === "running"}
           onClick={(): void => { setStatusFilter(statusFilter === "running" ? "" : "running"); setActiveViewName(""); }}
           className={cn(
-            "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-all hover:border-primary/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
+            "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-colors hover:border-primary/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
             statusFilter === "running" && "border-primary/50 bg-primary/5 ring-1 ring-primary/30"
           )}
         >
@@ -537,9 +556,10 @@ export function Workspaces(): React.JSX.Element {
         </button>
         <button
           type="button"
+          aria-pressed={statusFilter === "attention"}
           onClick={(): void => { setStatusFilter(statusFilter === "attention" ? "" : "attention"); setActiveViewName(""); }}
           className={cn(
-            "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-all hover:border-destructive/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
+            "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-colors hover:border-destructive/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
             statusFilter === "attention" && "border-destructive/50 bg-destructive/5 ring-1 ring-destructive/30"
           )}
         >
@@ -550,12 +570,13 @@ export function Workspaces(): React.JSX.Element {
         </button>
         <button
           type="button"
+          aria-pressed={statusFilter === "locked"}
           onClick={(): void => {
             setStatusFilter(statusFilter === "locked" ? "" : "locked");
             setActiveViewName("");
           }}
           className={cn(
-            "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-all hover:border-warning/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
+            "text-left rounded-xl border bg-card p-4 text-card-foreground shadow-2xs transition-colors hover:border-warning/40 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
             statusFilter === "locked" && "border-warning/50 bg-warning/5 ring-1 ring-warning/30"
           )}
         >
@@ -642,12 +663,7 @@ export function Workspaces(): React.JSX.Element {
             size="sm"
             variant="ghost"
             disabled={!hasFilters}
-            onClick={(): void => {
-              setSearch("");
-              setStatusFilter("");
-              setProjectFilter("");
-              setActiveViewName("");
-            }}
+            onClick={clearFilters}
           >
             <X data-icon="inline-start" />
             Clear
@@ -725,7 +741,7 @@ export function Workspaces(): React.JSX.Element {
       )}
 
       <div className="overflow-x-auto rounded-lg border bg-card shadow-sm">
-        <Table className="min-w-[64rem]" density={density}>
+        <Table className="w-full" density={density}>
           <TableHeader>
             <TableRow>
               <TableHead className="sticky left-0 z-10 bg-card">Workspace</TableHead>
@@ -742,8 +758,17 @@ export function Workspaces(): React.JSX.Element {
               <TableRow><TableCell colSpan={tableColumnCount} className="p-0"><TableSkeleton rows={4} cols={tableColumnCount} /></TableCell></TableRow>
             ) : loadError !== "" && workspaces.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={tableColumnCount} className="py-12 text-center text-muted-foreground">
-                  Workspace data is unavailable. Use Try again above to retry.
+                <TableCell colSpan={tableColumnCount}>
+                  {/* Pointed at a "Try again" control further up the page that
+                      the user may have scrolled past; offer one here. */}
+                  <EmptyState
+                    compact
+                    headingLevel="h3"
+                    title="Workspace data is unavailable"
+                    description="The list could not be loaded. This is usually a connection problem."
+                    actionLabel="Try again"
+                    onAction={(): void => { void loadData(); }}
+                  />
                 </TableCell>
               </TableRow>
             ) : visibleWorkspaces.length === 0 ? (
@@ -758,7 +783,17 @@ export function Workspaces(): React.JSX.Element {
                       : canManageWorkspaces
                         ? "Create your first workspace to get started."
                         : "No workspaces are available in this organization."}
-                    {...(!hasFilters ? { docsHref: "/app/docs/workspaces" } : {})}
+                    {...(hasFilters
+                      ? { actionLabel: "Clear filters", onAction: clearFilters }
+                      : canManageWorkspaces
+                        // The CTA was missing in exactly the case that needed
+                        // it most: an organization with no workspaces at all.
+                        ? {
+                            actionLabel: "New workspace",
+                            onAction: (): void => { setCreateOpen(true); },
+                            docsHref: "/app/docs/workspaces",
+                          }
+                        : { docsHref: "/app/docs/workspaces" })}
                   />
                 </TableCell>
               </TableRow>
@@ -876,6 +911,9 @@ export function Workspaces(): React.JSX.Element {
         </Table>
       </div>
 
+      </>
+      )}
+
       {canManageWorkspaces && (
         <CreateWorkspaceModal
           orgName={orgName}
@@ -975,7 +1013,13 @@ export function Workspaces(): React.JSX.Element {
                 </TableRow>
               ))}
               {tagBindings.length === 0 && (
-                <TableRow><TableCell colSpan={3} className="py-8 text-center text-muted-foreground">No direct tags.</TableCell></TableRow>
+                <TableRow>
+                  <TableCell colSpan={3} className="py-6 text-center text-sm text-muted-foreground">
+                    {/* "No direct tags" assumed the reader knew that tags can
+                        also be inherited from a project. Say it instead. */}
+                    No tags set on this workspace itself. Tags from its project, if any, still apply.
+                  </TableCell>
+                </TableRow>
               )}
             </TableBody>
           </Table>

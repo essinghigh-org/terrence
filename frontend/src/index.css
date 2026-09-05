@@ -34,7 +34,17 @@
   --color-card: hsl(var(--card));
   --color-card-foreground: hsl(var(--card-foreground));
   --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
+  /* Readable success text on a --success/10 tint. `--success` itself is an
+   * icon-weight colour: at small text sizes on a pale tint it does not clear
+   * 4.5:1, which is why success surfaces kept being hand-mixed at call sites. */
+  --color-success-text: var(--success-text);
   --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+  /* Same for warning, and more urgently: amber at 50% lightness fails badly
+   * as body text, which is what drove three separate copies of a
+   * hand-written `text-amber-700 dark:text-amber-300` banner. */
+  --color-warning-text: var(--warning-text);
   --color-code-background: hsl(var(--code-background));
   --color-code-foreground: hsl(var(--code-foreground));
 
@@ -73,10 +83,13 @@
     --input: 223 8% 68%;
     --ring: 217 91% 48%;
     --success: 142 60% 38%;
+    --success-foreground: 220 20% 98%;
+    --success-text: 142 72% 24%;
     --warning: 38 92% 50%;
+    --warning-foreground: 220 7% 13%;
+    --warning-text: 33 88% 26%;
     --code-background: 220 7% 13%;
     --code-foreground: 220 20% 92%;
-    --radius: 0.375rem;
   }
 }
 
@@ -203,6 +216,9 @@
   --brand-paper: #edf3ff;
   --brand-line: #c9d9f2;
   --brand-caption: #536785;
+  /* The single definition of the app's corner radius. It used to be declared
+   * here *and* in the layered :root above with a different value; unlayered
+   * styles win, so the layered one was dead and the two disagreed. */
   --radius: 0.625rem;
 }
 .terrence-mascot { display: block; overflow: visible; flex-shrink: 0; }

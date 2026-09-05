@@ -23304,6 +23304,107 @@
         }
       }
     },
+    "/api/v2/admin/users/{user_id}/actions/reset_password": {
+      "post": {
+        "operationId": "post-api-v2-admin-users-user-id-actions-reset-password",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "POST /api/v2/admin/users/{user_id}/actions/reset_password",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "406": {
+            "description": "Not Acceptable"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "413": {
+            "description": "Payload Too Large"
+          },
+          "415": {
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.api+json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "data"
+                ],
+                "properties": {
+                  "data": {
+                    "type": "object",
+                    "required": [
+                      "attributes"
+                    ],
+                    "properties": {
+                      "attributes": {
+                        "type": "object",
+                        "required": [
+                          "password",
+                          "password-confirmation"
+                        ],
+                        "properties": {
+                          "password": {
+                            "type": "string",
+                            "format": "password"
+                          },
+                          "password-confirmation": {
+                            "type": "string",
+                            "format": "password"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/admin/users/{user_id}/actions/suspend": {
       "post": {
         "operationId": "post-api-v2-admin-users-user-id-actions-suspend",

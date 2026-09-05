@@ -13,7 +13,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Spinner } from "../components/ui/spinner";
 import { Server, Plus, Trash2, Key, ShieldCheck, Cpu } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { PageHeader, PageShell } from "@/components/PageHeader";
 
 type AgentPool = {
@@ -241,13 +240,11 @@ export function AgentPools(): React.JSX.Element {
           { label: "Settings", to: `${orgPath}/settings` },
           { label: "Agent pools" },
         ]}
-        title={
-          <span className="flex items-center gap-2">
-            Agent pools
-            <HelpTooltip content="Self-hosted agent pools execute Terraform runs within your private network or on-prem infrastructure." />
-          </span>
-        }
-        description="Self-hosted agent pools execute Terraform runs within your private network or on-prem infrastructure."
+        // The tooltip used to repeat the description word for word, so the
+        // page carried the same sentence twice and either could go stale
+        // against the other. One explanation, in the description.
+        title="Agent pools"
+        description="An agent is a small worker you run yourself, somewhere that can reach the infrastructure it manages. Use a pool when runs need to touch a private network this server cannot; otherwise leave workspaces on the built-in executor."
         action={canManage ? (
           <Button onClick={(): void => { setPoolDialogOpen(true); }}>
             <Plus className="mr-1.5 size-4" /> Create agent pool

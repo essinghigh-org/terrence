@@ -120,8 +120,12 @@ test("creates a project variable set from the project detail settings", async ()
 
   const view = renderProject("variable-sets");
 
-  const button = await view.findByRole("button", { name: "New variable set" });
-  fireEvent.click(button);
+  // The empty state repeats the header action, so two buttons share the
+  // name when no variable set exists yet: either one opens the dialog.
+  const newButtons = await view.findAllByRole("button", { name: "New variable set" });
+  const button = newButtons[0];
+  expect(button).toBeDefined();
+  fireEvent.click(button as HTMLButtonElement);
 
   await view.findByRole("heading", { name: "Create a new project variable set" });
 

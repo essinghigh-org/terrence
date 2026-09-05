@@ -135,7 +135,8 @@ test("destructive confirmations name the exact user and version (kanban 25.5)", 
   });
 // SAFETY: closest() resolves to the row element that contains the queried text.
   const henryRow = view.getByText("henry.essing").closest("tr") as HTMLElement;
-  fireEvent.click(within(henryRow).getByRole("button", { name: "Delete user" }));
+  fireEvent.click(within(henryRow).getByRole("button", { name: "More actions for henry.essing" }));
+  fireEvent.click(await view.findByRole("menuitem", { name: "Delete user" }));
 
   const userDialog = view.getByRole("dialog");
   expect(within(userDialog).getByText(/Permanently delete user "henry\.essing"\?/)).toBeTruthy();

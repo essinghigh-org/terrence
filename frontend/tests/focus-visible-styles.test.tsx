@@ -5,6 +5,7 @@ import { RunList } from "../src/views/RunList";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
+import { anyPhaseLog } from "./support/run-log-fixture";
 
 // Kanban 25.1: custom-styled buttons must keep a visible keyboard focus
 // indicator. Base UI controls and ui/button already carry ring styles; these
@@ -46,6 +47,10 @@ test("run list sort headers carry a visible focus style", async () => {
           },
         ],
       });
+    }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
   });
@@ -152,6 +157,10 @@ function buildRunDetailMock(): ReturnType<typeof mock> {
     if (url.endsWith("/policy-checks")) return json({ data: [] });
     if (url.endsWith("/check-results")) return json({ data: [] });
     if (url.endsWith("/assessments")) return json({ data: [] });
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
 }

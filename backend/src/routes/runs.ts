@@ -1679,21 +1679,57 @@ export const runRoutes = new Elysia({ name: "runs" })
     (set as { status: number }).status = 202;
     return new Response(null, { status: 202 });
   })
-  .post("/api/v2/runs/:run_id/actions/override-policy", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/runs/:run_id/actions/override-policy", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "policy-override"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const run = authorized.run;
     if (run.status !== "policy_soft_failed") { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be policy_soft_failed to override" }] }; }
-    const updated = await db.update(runs).set({ status: "planned" }).where(and(eq(runs.id, runId), eq(runs.status, "policy_soft_failed"))).returning();
+    // An override is an audited exception: the justification comment is
+    // required and persisted, so the audit trail states the reason at the
+    // moment it matters (CodeRabbit review).
+    const justification = actionComment(body);
+    if (justification === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Overriding a policy check requires a justification comment" }] }; }
+    // One transaction for the whole override (CodeRabbit review): committing
+    // the status change before the justification comment, the policy-check
+    // update, and the audit record would leave a planned run without its
+    // required justification on a mid-flight failure, and a retry would find
+    // nothing left to override. Events publish only after commit.
+    const commentId = `rc-${crypto.randomUUID()}`;
+    const actorId = user?.id ?? null;
+    const workspace = authorized.workspace;
+    const now = Date.now();
+    const updated = await db.transaction(async (tx: unknown) => {
+      const t = tx as typeof db;
+      const rows = await t.update(runs).set({ status: "planned" }).where(and(eq(runs.id, runId), eq(runs.status, "policy_soft_failed"))).returning();
+      if (rows.length === 0) return rows;
+      await t.insert(runComments).values({ id: commentId, runId, userId: actorId, body: justification, createdAt: now });
+      await t.update(policyChecks).set({ status: "overridden" }).where(and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])));
+      await t.insert(auditLogs).values({
+        id: crypto.randomUUID(),
+        orgId: workspace.orgId,
+        userId: actorId,
+        action: "override-policy",
+        resourceType: "runs",
+        resourceId: runId,
+        details: {
+          workspaceId: workspace.id,
+          fromStatus: "policy_soft_failed",
+          toStatus: "planned",
+          justification,
+          ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+        },
+        createdAt: now,
+      });
+      return rows;
+    });
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is no longer awaiting policy override" }] }; }
-    await db.update(policyChecks).set({ status: "overridden" }).where(and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])));
-    await auditLog("override-policy", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
-      workspaceId: authorized.workspace.id,
-      fromStatus: "policy_soft_failed",
-      toStatus: "planned",
-      ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
+    publish("comment.created", {
+      "run-id": runId,
+      "workspace-id": workspace.id,
+      "org-id": workspace.orgId,
+      "comment-id": commentId,
     });
     queueRunNotification(runId, "run:needs_attention", "planned");
     const updatedRun = updated[0];

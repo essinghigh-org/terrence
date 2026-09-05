@@ -120,3 +120,9 @@ The `/metrics` endpoint exposes process, database, and worker gauges. See [Metri
 ## Single control plane
 
 Terrence is a single-process application. Run exactly one control-plane instance. Remote agent pools can scale independently. Multiple control-plane replicas are not supported; PostgreSQL does not make replicas safe.
+
+## Help a user regain access
+
+In **Site administration → Users**, find the user and choose **Reset password**. Enter and confirm a temporary password that satisfies the instance policy, then share it through a secure channel. The user must choose a new password at their next login. Resetting a password revokes existing API tokens and refresh sessions, and invalidates outstanding MFA login challenges. MFA remains enabled.
+
+This action is for other users with local passwords. Use Account settings for your own password, or the identity provider for an SSO-only account. Recovery of the only administrator is described in [Configuration](configuration).

@@ -1,3 +1,4 @@
+import { localSignupEnabled } from "../lib/settings";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { users, apiTokens, refreshSessions, organizationMemberships, organizations, samlSettings, teams, user2FA } from "../db/schema";
@@ -999,9 +1000,9 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     return undefined;
   })
   .post("/api/v2/users", async ({ body, set }: ReqCtx): Promise<unknown> => {
-    if (!envEnabled(process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"])) {
+    if (!await localSignupEnabled()) {
       (set as { status: number }).status = 403;
-      return { errors: [{ status: "403", title: "Forbidden", detail: "Local signup is disabled on this instance. Set TERRENCE_ENABLE_LOCAL_SIGNUP=true or use ADMIN_PASSWORD bootstrap." }] };
+      return { errors: [{ status: "403", title: "Forbidden", detail: "Registration is disabled on this instance. Ask a site administrator to create an account or enable registration in authentication settings." }] };
     }
     const attrs = extractAttrs(body) ?? {};
     const username = typeof attrs["username"] === "string" ? normalizeUsername(attrs["username"]) ?? "" : "";

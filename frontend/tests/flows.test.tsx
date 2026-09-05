@@ -12,6 +12,7 @@ import { Workspaces } from "../src/views/Workspaces";
 import { VariableSets } from "../src/views/VariableSets";
 import { isRecord, isString } from "../src/lib/type-guards";
 import type { JsonObject, JsonValue } from "../src/lib/json";
+import { anyPhaseLog, phaseLogResponse } from "./support/run-log-fixture";
 
 const originalFetch = globalThis.fetch;
 const originalConfirm = globalThis.confirm;
@@ -64,6 +65,10 @@ test("logs in without persisting the access token and navigates home", async () 
     const url = getUrlString(input);
     if (url === "/api/v2/ping") return json({});
     if (url === "/api/v2/users/login") return json({ data: { attributes: { token: "user-token" } } });
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
@@ -112,6 +117,10 @@ test("creates a workspace from the modal", async () => {
     if (url === "/api/v2/organizations/acme/workspaces" && init?.method === "POST") {
       return json({ data: { id: "ws-1", attributes: { name: "production" } } });
     }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   const onCreated = mock((): void => {
@@ -119,14 +128,17 @@ test("creates a workspace from the modal", async () => {
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   const view = render(
-    <CreateWorkspaceModal
-      orgName="acme"
-      open
-      onOpenChange={(): void => {
-        // Intentional noop
-      }}
-      onCreated={onCreated}
-    />,
+    // The modal's dead-end states link to organization settings.
+    <MemoryRouter>
+      <CreateWorkspaceModal
+        orgName="acme"
+        open
+        onOpenChange={(): void => {
+          // Intentional noop
+        }}
+        onCreated={onCreated}
+      />
+    </MemoryRouter>,
   );
 
   changeInput(asElement(view.getByLabelText(/Workspace name/i)), "production");
@@ -140,7 +152,7 @@ test("creates a workspace from the modal", async () => {
   await waitFor((): void => { expect(view.getByText("Acme GitHub — GitHub App")).toBeTruthy(); });
   changeInput(asElement(view.getByLabelText("Repository Identifier")), "hashicorp/terraform");
   fireEvent.change(view.getByLabelText(/VCS connection/i), { target: { value: "github-app:ghain-123" } });
-  fireEvent.click(view.getByLabelText("Auto-apply plans upon completion"));
+  fireEvent.click(view.getByLabelText("Apply changes without manual approval"));
   await act(async () => {
     const form = view.getByRole("button", { name: "Create Workspace" }).closest("form");
     if (form !== null) fireEvent.submit(form);
@@ -158,7 +170,6 @@ test("creates a workspace from the modal", async () => {
       attributes: {
         name: "production",
         "auto-apply": true,
-        "execution-mode": "remote",
         "iac-binary": "terraform",
         "terraform-version": "1.9.3",
         source: "tfe-api",
@@ -198,7 +209,7 @@ test("opens workspace creation from the workspace list", async () => {
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("No workspaces yet")).toBeTruthy(); });
+  await waitFor((): void => { expect(view.getByText("Create your first workspace")).toBeTruthy(); });
   fireEvent.click(view.getByRole("button", { name: "New workspace" }));
   expect(view.getByRole("heading", { name: "New Workspace" })).toBeTruthy();
   await waitFor((): void => {
@@ -214,11 +225,15 @@ test("rejects a partially configured workspace VCS connection", async () => {
       return json({ data: [{ id: "ghain-123", attributes: { name: "Acme GitHub" } }] });
     }
     if (url === "/api/v2/organizations/acme/oauth-clients") return json({ data: [] });
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   const view = render(
-    <>
+    <MemoryRouter>
       <Toaster />
       <CreateWorkspaceModal
         open={true}
@@ -230,7 +245,7 @@ test("rejects a partially configured workspace VCS connection", async () => {
           // Payload is asserted below.
         }}
       />
-    </>,
+    </MemoryRouter>,
   );
   changeInput(asElement(view.getByLabelText(/Workspace name/i)), "production");
   fireEvent.change(view.getByLabelText(/Workspace source/i), { target: { value: "vcs" } });
@@ -270,7 +285,7 @@ test("does not report a successful latest run for a workspace with no runs", asy
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("No runs yet")).toBeTruthy(); });
+  await waitFor((): void => { expect(view.getByText("Ready for your first plan")).toBeTruthy(); });
   expect(view.queryByText("Latest run finished")).toBeNull();
 });
 
@@ -316,6 +331,10 @@ test("creates, edits, and deletes a workspace variable", async () => {
     if (url.endsWith("/workspaces/ws-1/vars/var-1") && init?.method === "DELETE") {
       variables.splice(0);
       return new Response(null, { status: 204 });
+    }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
   });
@@ -416,6 +435,10 @@ test("updates workspace execution and auto-apply settings", async () => {
         },
       });
     }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
@@ -502,6 +525,10 @@ test("assigns an SSH key and enables workspace health assessments", async () => 
           attributes: { ...workspace.attributes, ...payload.data.attributes },
         },
       });
+    }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
   });
@@ -643,6 +670,10 @@ test("manages workspace run triggers and custom team access", async () => {
       teamAccess.splice(0);
       return new Response(null, { status: 204 });
     }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
@@ -765,6 +796,10 @@ test("creates, verifies, edits, and deletes a workspace notification", async () 
       configurations.splice(0);
       return new Response(null, { status: 204 });
     }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
@@ -876,6 +911,10 @@ test("shows effective policy sets and manages workspace VCS settings", async () 
           attributes: { ...workspace.attributes, ...payload.data.attributes },
         },
       });
+    }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
   });
@@ -997,6 +1036,10 @@ test("displays run cost and policy check results", async () => {
         }],
       });
     }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
@@ -1020,7 +1063,7 @@ test("displays run cost and policy check results", async () => {
   expect(view.getByText("2 of 3")).toBeTruthy();
   expect(view.getByText("Restrict regions — 1 violation: eu-west-3")).toBeTruthy();
   expect(view.getByText("polchk-regions")).toBeTruthy();
-  expect(view.getByRole("button", { name: "Override policy" })).toBeTruthy();
+  expect(view.getByRole("button", { name: "Override policy check" })).toBeTruthy();
   expect(view.queryByRole("button", { name: "Confirm & Apply" })).toBeNull();
 });
 
@@ -1095,6 +1138,10 @@ test("keeps advisory policy failures non-blocking and names the policy", async (
       return json({ data: [] });
     }
     if (url.endsWith("/cost-estimate")) return json({ data: null });
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   })) as unknown as typeof fetch;
 
@@ -1137,8 +1184,10 @@ test("queues a run, displays its logs, and applies it", async () => {
       });
     }
     if (url.endsWith("/runs/run-12345678/actions/apply")) return new Response(null, { status: 202 });
-    if (url.endsWith("/runs/run-12345678/logs")) {
-      return json({ logs: [{ message: "Plan: 1 to add." }] });
+    // The page reads the raw log protocol now, not the legacy paged
+    // collection: serve the plan summary line over plan/log.
+    if (url.startsWith("/api/v2/runs/run-12345678/plan/log")) {
+      return phaseLogResponse("Plan: 1 to add.\n", url);
     }
     if (url.endsWith("/runs/run-12345678")) {
       return json({
@@ -1152,6 +1201,10 @@ test("queues a run, displays its logs, and applies it", async () => {
           },
         },
       });
+    }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
   });
@@ -1184,8 +1237,8 @@ test("queues a run, displays its logs, and applies it", async () => {
     </MemoryRouter>,
   );
   await waitFor((): void => { expect(detail.getByText(/Plan: 1 to add./)).toBeTruthy(); }, { timeout: 5000 });
-  fireEvent.click(detail.getByRole("button", { name: "Review & apply" }));
-  fireEvent.click(detail.getByRole("button", { name: "Confirm & apply" }));
+  fireEvent.click(detail.getByRole("button", { name: "Apply changes" }));
+  fireEvent.click(detail.getByRole("button", { name: "Yes, apply changes" }));
   await waitFor((): void => { expect(fetchMock.mock.calls.some(([url, init]): boolean =>
     getUrlString(url).endsWith("/runs/run-12345678/actions/apply") &&
     init?.method === "POST"
@@ -1352,6 +1405,10 @@ const createVarsetsFetchMock = (initialSets: VarSetItem[] = []) => {
     ) {
       return new Response(null, { status: 204 });
     }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
 
@@ -1394,6 +1451,10 @@ test("keeps variable sets readable without workspace management permission", asy
           },
         }],
       });
+    }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url} ${init?.method ?? "GET"}`);
   });

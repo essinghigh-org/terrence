@@ -298,7 +298,15 @@ export function Projects(): React.JSX.Element {
                     <TableCell colSpan={canManageProjects ? 4 : 3} className="py-10 text-center text-muted-foreground">
                       <EmptyState compact illustration={loadError === "" ? "empty" : undefined}
                         title={loadError === "" ? "No projects yet" : "Projects unavailable"}
-                        description={loadError === "" ? "Group related workspaces into a project to share settings and access." : "Use Try again above to reload projects."}
+                        description={loadError === ""
+                          ? "Projects group related workspaces so they can share settings and access. Most homelabs never need one — workspaces work fine on their own."
+                          : "Use Try again above to reload projects."}
+                        {...(loadError === "" && canManageProjects
+                          ? {
+                              actionLabel: "Create a project",
+                              onAction: (): void => { openProjectDialog(null); },
+                            }
+                          : {})}
                         docsHref="/app/docs/projects"
                       />
                     </TableCell>
@@ -383,7 +391,21 @@ export function Projects(): React.JSX.Element {
                 </TableRow>
               ))}
               {workspaces.length === 0 && (
-                <TableRow><TableCell colSpan={2} className="py-8 text-center text-muted-foreground">No workspaces found.</TableCell></TableRow>
+                <TableRow>
+                  <TableCell colSpan={2}>
+                    {/* Reached when the organization has no workspaces at all,
+                        so there is nothing to assign; the way out is to make
+                        one, not to keep looking at this dialog. */}
+                    <EmptyState
+                      compact
+                      headingLevel="h3"
+                      title="No workspaces to assign"
+                      description="Assignments move existing workspaces between projects. Create a workspace first."
+                      actionLabel="Go to workspaces"
+                      actionHref={`${orgPath}/workspaces`}
+                    />
+                  </TableCell>
+                </TableRow>
               )}
             </TableBody>
           </Table>

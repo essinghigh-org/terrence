@@ -397,6 +397,35 @@ for (const route of routes) {
       },
     };
   }
+  if (m === "post" && openApiPath === "/api/v2/admin/users/{user_id}/actions/reset_password") {
+    operation.requestBody = {
+      required: true,
+      content: {
+        "application/vnd.api+json": {
+          schema: {
+            type: "object",
+            required: ["data"],
+            properties: {
+              data: {
+                type: "object",
+                required: ["attributes"],
+                properties: {
+                  attributes: {
+                    type: "object",
+                    required: ["password", "password-confirmation"],
+                    properties: {
+                      password: { type: "string", format: "password" },
+                      "password-confirmation": { type: "string", format: "password" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+  }
   paths[openApiPath][m] = operation;
 }
 

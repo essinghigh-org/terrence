@@ -8,6 +8,7 @@ import {
   auditLogs,
   configurationVersions,
   organizations,
+  runComments,
   runs,
   stateVersions,
   users,
@@ -251,7 +252,12 @@ describe("audit coverage", () => {
       const response = await request(
         `/api/v2/runs/${transition.runId}/actions/${transition.action}`,
         "POST",
-        transition.action === "apply" ? { comment: secretMarker } : undefined,
+        // Overrides require a recorded justification (CodeRabbit review).
+        transition.action === "apply"
+          ? { comment: secretMarker }
+          : transition.action === "override-policy"
+            ? { data: { type: "runs", attributes: { comment: "Accepted: override for audit test." } } }
+            : undefined,
       );
       expect(response.status).toBe(transition.action === "override-policy" ? 200 : 202);
     }
@@ -305,7 +311,10 @@ describe("audit coverage", () => {
         attributes: Record<string, unknown>;
       }[];
     };
-    expect(runEvents.data.map(({ attributes }): unknown => attributes["action"])).toEqual(["create", "override-policy"]);
+    // The justification comment and the override event are written in the
+    // same millisecond, so their relative order is a UUID tiebreak, not a
+    // contract: compare as sets.
+    expect(runEvents.data.map(({ attributes }): unknown => attributes["action"]).sort()).toEqual(["comment", "create", "override-policy"]);
     expect(runEvents.data[0]).toMatchObject({
       type: "run-events",
       attributes: {
@@ -316,5 +325,26 @@ describe("audit coverage", () => {
     });
     expect(runEvents.data[0]?.attributes["created-at"]).toBeString();
     expect(JSON.stringify(runEvents.data)).not.toContain(secretMarker);
+  });
+
+  it("requires a justification comment for policy overrides (CodeRabbit review)", async () => {
+    const runId = `audit-override-justification-${suffix}`;
+    await db.insert(runs).values({ id: runId, workspaceId, status: "policy_soft_failed", createdAt: Date.now() });
+    try {
+      const bare = await request(`/api/v2/runs/${runId}/actions/override-policy`, "POST");
+      expect(bare.status).toBe(422);
+      const justified = await request(`/api/v2/runs/${runId}/actions/override-policy`, "POST", {
+        data: { type: "runs", attributes: { comment: "Accepted: staging-only finding." } },
+      });
+      expect(justified.status).toBe(200);
+      const comments = await db.query.runComments.findMany({ where: eq(runComments.runId, runId) });
+      expect(comments.map((comment): string => comment.body)).toContain("Accepted: staging-only finding.");
+      const entry = await db.query.auditLogs.findFirst({
+        where: and(eq(auditLogs.action, "override-policy"), eq(auditLogs.resourceId, runId)),
+      });
+      expect((entry?.details as Record<string, unknown> | null)?.["justification"]).toBe("Accepted: staging-only finding.");
+    } finally {
+      await db.delete(runs).where(eq(runs.id, runId));
+    }
   });
 });

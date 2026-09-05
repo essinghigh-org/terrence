@@ -269,8 +269,13 @@ describe("remote-workflow runs contract", () => {
       createdAt: Date.now(),
     });
     try {
+      // Overrides require a recorded justification (CodeRabbit review).
       const overridden = await expectSuccessResponse(
-        await request(`/api/v2/runs/${policyRunId}/actions/override-policy`, { method: "POST", headers }),
+        await request(`/api/v2/runs/${policyRunId}/actions/override-policy`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ data: { type: "runs", attributes: { comment: "Accepted risk for this workspace." } } }),
+        }),
         200,
         "runs",
       );

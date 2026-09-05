@@ -235,6 +235,46 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     return {};
   })
   // --- User Actions ---
+  .post("/api/v2/admin/users/:user_id/actions/reset_password", async ({ params, body, user, set }: ParamCtx): Promise<unknown> => {
+    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const userId = params["user_id"] ?? "";
+    const target = await db.query.users.findFirst({ where: and(eq(users.id, userId), isNull(users.deletedAt)) });
+    if (target === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (target.id === user.id || target.ssoProvider !== null || target.passwordHash.startsWith("$disabled$")) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: target.id === user.id
+        ? "Change your own password in account settings."
+        : "Reset this user's password through their identity provider." }] };
+    }
+    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+    const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
+    const attrs = data["attributes"] !== null && typeof data["attributes"] === "object" ? data["attributes"] as Record<string, unknown> : {};
+    const password = typeof attrs["password"] === "string" ? attrs["password"] : "";
+    const policy = checkPasswordPolicy(loadPasswordPolicy(), password, target.username);
+    if (!policy.ok || password !== attrs["password-confirmation"]) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: !policy.ok ? policy.errors.join(" ") : "Passwords do not match." }] };
+    }
+    const passwordHash = await hashPassword(password);
+    const updated = await db.transaction(async (tx: unknown): Promise<UserItem | undefined> => {
+      const t = tx as typeof db;
+      const [changed] = await t.update(users).set({ passwordHash, mustChangePassword: true })
+        .where(and(eq(users.id, userId), eq(users.passwordHash, target.passwordHash), isNull(users.deletedAt)))
+        .returning();
+      if (changed === undefined) return undefined;
+      await t.delete(apiTokens).where(eq(apiTokens.userId, userId));
+      await t.update(refreshSessions).set({ revokedAt: Date.now() })
+        .where(and(eq(refreshSessions.userId, userId), isNull(refreshSessions.revokedAt)));
+      return changed;
+    });
+    if (updated === undefined) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "This account changed while resetting its password. Reload and try again." }] };
+    }
+    await auditLog("reset-password", "users", userId, user.id, null, { "must-change-password": true });
+    publish("authz.changed", { "user-id": userId });
+    return { data: adminUserResource(updated) };
+  })
   .post("/api/v2/admin/users/:user_id/actions/suspend", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
     if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const userId = params["user_id"] ?? "";

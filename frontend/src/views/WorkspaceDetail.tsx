@@ -3,7 +3,7 @@ import { useParams, Link, useLocation, useNavigate } from "react-router-dom";
 import { fetchApi, ApiError } from "../lib/api";
 import { Button, buttonVariants } from "../components/ui/button";
 import { Textarea } from "../components/ui/textarea";
-import { EmptyState } from "../components/EmptyState";
+import { WorkspaceGettingStarted } from "../components/WorkspaceGettingStarted";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import {
   Card,
@@ -192,6 +192,7 @@ type Workspace = {
     "owned-by-type"?: "team" | "user" | "service" | null;
     "owned-by-id"?: string | null;
     "contact-email"?: string | null;
+    source?: string;
     "execution-mode"?: string;
     "iac-binary"?: string;
     "terraform-version"?: string;
@@ -852,13 +853,16 @@ export function WorkspaceDetail({
                           </p>
                         </>
                       ) : (
-                        <EmptyState
-                          compact
-                          headingLevel="h3"
-                          illustration="guide"
-            title="No runs yet"
-                          description="Start a run to plan your infrastructure changes."
-                          docsHref="/app/docs/runs"
+                        <WorkspaceGettingStarted
+                          orgName={orgName ?? ""}
+                          workspaceName={workspace.attributes.name}
+                          engine={workspace.attributes["iac-binary"] ?? "terraform"}
+                          source={workspace.attributes.source}
+                          hasRepository={Boolean(workspace.attributes["vcs-repo"]?.identifier)}
+                          localExecution={workspace.attributes["execution-mode"] === "local"}
+                          canQueueRun={canQueueRun}
+                          canUpdate={canUpdate}
+                          canReadVariable={canReadVariable}
                         />
                       )}
                     </div>

@@ -1047,8 +1047,8 @@ export function Layout({
 
     if (hasOrg) {
       const links = ([
-        { label: "Projects", to: `${orgPath}/projects`, icon: FolderGit2 },
         { label: "Workspaces", to: `${orgPath}/workspaces`, icon: Box },
+        { label: "Projects", to: `${orgPath}/projects`, icon: FolderGit2 },
         { label: "Registry", to: `${orgPath}/registry`, icon: Package },
         { label: "Settings", to: `${orgPath}/settings`, icon: Settings, trailing: true },
       ] as const).filter((link): boolean =>

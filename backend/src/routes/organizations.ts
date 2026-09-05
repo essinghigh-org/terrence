@@ -30,7 +30,7 @@ type ParamCtx = Readonly<{
 type ReservedTagKey = Readonly<typeof reservedTagKeys.$inferSelect>;
 type OrganizationItem = Readonly<typeof organizations.$inferSelect>;
 
-const RESERVED_ORGANIZATION_NAMES = new Set(["account", "admin"]);
+const RESERVED_ORGANIZATION_NAMES = new Set(["account", "admin", "docs"]);
 
 function organizationNameError(name: string): string | null {
   if (RESERVED_ORGANIZATION_NAMES.has(name.toLowerCase())) return "Organization name is reserved";
@@ -625,7 +625,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Module test token TTL must be between ${moduleTestTokenTtlBounds.min} and ${moduleTestTokenTtlBounds.max} seconds` }] };
     }
-    const nameError = organizationNameError(newName);
+    const nameError = newName === org.name ? null : organizationNameError(newName);
     if (nameError !== null) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: nameError }] };

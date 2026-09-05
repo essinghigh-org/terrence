@@ -167,10 +167,10 @@ export function PolicySets(): React.JSX.Element {
         title={
           <span className="flex items-center gap-2">
             Policy sets
-            <HelpTooltip content="Policy sets group Sentinel policies that are run against workspace plans and applies." />
+            <HelpTooltip content="Rules checked against a plan before it can be applied. Written in Sentinel." />
           </span>
         }
-        description="Manage Sentinel policy sets for this organization, attach them to projects and workspaces, and configure enforcement."
+        description="Policy sets are rules checked against a plan before it can be applied — for example, refusing to create a resource without a required tag. Optional: workspaces run fine without any."
         action={canManage ? (
           <Button onClick={(): void => { setCreateDialogOpen(true); }}>
             <Plus className="mr-1.5 size-4" /> Create policy set

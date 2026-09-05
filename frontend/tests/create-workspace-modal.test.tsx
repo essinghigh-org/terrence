@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { CreateWorkspaceModal } from "../src/components/CreateWorkspaceModal";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
+import { MemoryRouter } from "react-router-dom";
 
 const originalFetch = globalThis.fetch;
 
@@ -49,13 +50,17 @@ afterEach((): void => {
 });
 
 function renderModal(): ReturnType<typeof render> {
+  // The modal links to organization settings from its dead-end states (no VCS
+  // connections, no agent pools), so it needs a router in scope.
   return render(
-    <CreateWorkspaceModal
-      orgName="acme"
-      open={true}
-      onOpenChange={(): void => { /* assertions read fetch traffic, not the callback */ }}
-      onCreated={(): void => { /* assertions read fetch traffic, not the callback */ }}
-    />,
+    <MemoryRouter>
+      <CreateWorkspaceModal
+        orgName="acme"
+        open={true}
+        onOpenChange={(): void => { /* assertions read fetch traffic, not the callback */ }}
+        onCreated={(): void => { /* assertions read fetch traffic, not the callback */ }}
+      />
+    </MemoryRouter>,
   );
 }
 
@@ -65,7 +70,7 @@ const modeSelect = (view: ReturnType<typeof render>): HTMLElement =>
 // Issue #598: the creation modal offers engine and version but no execution
 // mode, and picking agent with no pool attached flips runs to unreachable
 // with only a log line.
-test("submits the default remote execution mode", async () => {
+test("inherits project execution settings by default", async () => {
   const posted: unknown[] = [];
   installFetch("empty", posted);
   const view = renderModal();
@@ -73,27 +78,27 @@ test("submits the default remote execution mode", async () => {
   fireEvent.click(view.getByRole("button", { name: "Create Workspace" }));
   await waitFor((): void => { expect(posted).toHaveLength(1); });
   const body = posted[0] as { data: { attributes: Record<string, unknown> } };
-  expect(body.data.attributes["execution-mode"]).toBe("remote");
+  expect(body.data.attributes["execution-mode"]).toBeUndefined();
+  expect(body.data.attributes["agent-pool-id"]).toBeUndefined();
 });
 
 test("warns when agent is selected with no pools available", async () => {
   installFetch("empty", []);
   const view = renderModal();
   fireEvent.change(modeSelect(view), { target: { value: "agent" } });
-  await view.findByText("No agent pools are available in this organization. Runs on this workspace will wait for a pool until one is attached.");
+  await view.findByText(/No agent pools are available/);
 });
 
-test("submits the selected agent mode without blocking on the warning", async () => {
+test("requires an agent pool before submitting agent execution", async () => {
   const posted: unknown[] = [];
   installFetch("empty", posted);
   const view = renderModal();
   fireEvent.change(modeSelect(view), { target: { value: "agent" } });
-  await view.findByText("No agent pools are available in this organization. Runs on this workspace will wait for a pool until one is attached.");
+  await view.findByText(/No agent pools are available/);
   fireEvent.input(view.getByLabelText("Workspace name"), { target: { value: "infra" } });
   fireEvent.click(view.getByRole("button", { name: "Create Workspace" }));
-  await waitFor((): void => { expect(posted).toHaveLength(1); });
-  const body = posted[0] as { data: { attributes: Record<string, unknown> } };
-  expect(body.data.attributes["execution-mode"]).toBe("agent");
+  await view.findByText("Choose an agent pool before creating the workspace.");
+  expect(posted).toHaveLength(0);
 });
 
 test("surfaces agent-pool load failures instead of staying silent", async () => {
@@ -108,5 +113,19 @@ test("stays quiet about pools when they exist", async () => {
   const view = renderModal();
   fireEvent.change(modeSelect(view), { target: { value: "agent" } });
   await view.findByText("Runs wait for an agent pool to pick them up.");
-  expect(view.queryByText("No agent pools are available in this organization. Runs on this workspace will wait for a pool until one is attached.")).toBeNull();
+  expect(view.queryByText(/No agent pools are available/)).toBeNull();
+});
+
+test("submits the selected agent pool", async () => {
+  const posted: unknown[] = [];
+  installFetch("list", posted);
+  const view = renderModal();
+  fireEvent.change(modeSelect(view), { target: { value: "agent" } });
+  fireEvent.change(await view.findByLabelText("Agent pool"), { target: { value: "pool-1" } });
+  fireEvent.input(view.getByLabelText("Workspace name"), { target: { value: "infra" } });
+  fireEvent.click(view.getByRole("button", { name: "Create Workspace" }));
+  await waitFor((): void => { expect(posted).toHaveLength(1); });
+  const body = posted[0] as { data: { attributes: Record<string, unknown> } };
+  expect(body.data.attributes["execution-mode"]).toBe("agent");
+  expect(body.data.attributes["agent-pool-id"]).toBe("pool-1");
 });

@@ -34,7 +34,7 @@ type Organization = Readonly<{
 
 type MetadataDocument = Readonly<{ version?: unknown }>;
 
-const RESERVED_ORGANIZATION_NAMES = new Set(["account", "admin"]);
+const RESERVED_ORGANIZATION_NAMES = new Set(["account", "admin", "docs"]);
 
 export function Dashboard(): React.JSX.Element {
   const navigate = useNavigate();
@@ -47,6 +47,7 @@ export function Dashboard(): React.JSX.Element {
   const [name, setName] = useState("");
   const [iacBinary, setIacBinary] = useState("terraform");
   const [saving, setSaving] = useState(false);
+  const [createError, setCreateError] = useState("");
 
   const loadOrganizations = useCallback(async (signal?: Readonly<AbortSignal>): Promise<void> => {
     setLoading(true);
@@ -76,13 +77,19 @@ export function Dashboard(): React.JSX.Element {
   // picker via the sidebar "Organizations" link or the home logo. The stored
   // org is only honored if it still exists.
   useEffect((): void => {
-    if (loading || location.key !== "default") return;
+    if (loading || loadError !== "" || location.key !== "default") return;
     const lastOrg = getLastOrganization();
-    if (lastOrg === "") return;
+    if (lastOrg === "") {
+      const onlyOrganization = organizations.length === 1 ? organizations[0] : undefined;
+      if (onlyOrganization !== undefined) {
+        void navigate(`/app/${encodeURIComponent(onlyOrganization.attributes.name)}`, { replace: true });
+      }
+      return;
+    }
     if (organizations.some((organization): boolean => organization.attributes.name === lastOrg)) {
       void navigate(`/app/${encodeURIComponent(lastOrg)}`, { replace: true });
     }
-  }, [loading, location.key, organizations, navigate]);
+  }, [loading, loadError, location.key, organizations, navigate]);
 
   const visibleOrganizations = useMemo((): Organization[] => {
     const needle = search.trim().toLowerCase();
@@ -100,6 +107,8 @@ export function Dashboard(): React.JSX.Element {
     event.preventDefault();
     const organizationName = name.trim();
     if (organizationName === "" || RESERVED_ORGANIZATION_NAMES.has(organizationName.toLowerCase())) return;
+    if (saving) return;
+    setCreateError("");
     setSaving(true);
     try {
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
@@ -121,11 +130,7 @@ export function Dashboard(): React.JSX.Element {
       toast.add({ title: "Organization created", type: "success" });
       openOrganization(createdName);
     } catch (error: unknown) {
-      toast.add({
-        title: "Could not create organization",
-        description: error instanceof Error ? error.message : "Unknown error",
-        type: "error",
-      });
+      setCreateError(error instanceof Error ? error.message : "Could not create organization. Try again.");
     } finally {
       setSaving(false);
     }
@@ -149,20 +154,42 @@ export function Dashboard(): React.JSX.Element {
     return (): void => { controller.abort(); };
   }, []);
 
+  const firstRun = !loading && loadError === "" && organizations.length === 0;
+
   return (
     <PageShell>
       <PageHeader
-        eyebrow="Infrastructure administration"
-        title="Organizations"
-        description="Group projects, workspaces, teams, and shared configuration."
-        action={(
-          <Button onClick={(): void => { setCreateOpen(true); }}>
+        eyebrow="Terrence"
+        title={firstRun ? "Welcome to Terrence" : "Organizations"}
+        description={firstRun
+          ? "A home for your infrastructure, from the first plan to the next change."
+          : "Open your infrastructure or create a separate space for another team."}
+        action={!firstRun && (
+          <Button onClick={(): void => { setCreateError(""); setCreateOpen(true); }}>
             <Plus data-icon="inline-start" />
             New organization
           </Button>
         )}
       />
 
+      {firstRun ? (
+        <section aria-labelledby="getting-started-heading" className="grid items-center gap-8 rounded-xl border bg-card p-6 sm:p-10 md:grid-cols-[1fr_auto]">
+          <div className="max-w-xl space-y-6">
+            <div>
+              <h2 id="getting-started-heading" className="text-xl font-semibold tracking-tight">Start small. Make room as you grow.</h2>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">An organization is simply a home for your workspaces. One is enough for most homelabs and small teams.</p>
+            </div>
+            <ol className="space-y-4 text-sm">
+              <li><span className="font-medium">1. Name your organization</span><p className="mt-1 text-muted-foreground">Use your lab or business name, such as homelab.</p></li>
+              <li><span className="font-medium">2. Create a workspace</span><p className="mt-1 text-muted-foreground">Keep one set of infrastructure together: your network, servers, or an application.</p></li>
+              <li><span className="font-medium">3. Review your first plan</span><p className="mt-1 text-muted-foreground">Connect your code, check the proposed changes, and choose when to apply them.</p></li>
+            </ol>
+            <Button onClick={(): void => { setCreateError(""); setCreateOpen(true); }}>Create your organization<ArrowRight data-icon="inline-end" /></Button>
+          </div>
+          <Terrence pose="guide" className="hidden w-48 md:block" />
+        </section>
+      ) : (
+      <>
       <div className="relative max-w-md">
         <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
@@ -234,7 +261,7 @@ export function Dashboard(): React.JSX.Element {
                   </Link>
                 </TableCell>
                 <TableCell className="capitalize text-muted-foreground">
-                  {organization.attributes["default-iac-binary"] ?? "terraform"}
+                  {organization.attributes["default-iac-binary"] === "tofu" ? "OpenTofu" : "Terraform"}
                 </TableCell>
                 <TableCell className="text-right">
                   <Link
@@ -251,14 +278,17 @@ export function Dashboard(): React.JSX.Element {
         </Table>
       </div>
 
+      </>
+      )}
+
       <p className="mt-auto text-xs text-muted-foreground">Terrence{appVersion === "" ? "" : ` v${appVersion}`}</p>
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      <Dialog open={createOpen} onOpenChange={(open): void => { if (!saving) setCreateOpen(open); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create an organization</DialogTitle>
             <DialogDescription>
-              Organizations contain your projects, workspaces, and teams.
+              Give your infrastructure a home. You can add projects and invite people later.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={createOrganization}>
@@ -270,12 +300,13 @@ export function Dashboard(): React.JSX.Element {
                   name="organization-name"
                   autoFocus
                   autoComplete="off"
-                  placeholder="acme…"
+                  placeholder="homelab…"
+                  spellCheck={false}
                   value={name}
                   onInput={(event: React.SyntheticEvent<HTMLInputElement>): void => { setName(event.currentTarget.value); }}
                 />
                 {reservedName && (
-                  <p role="alert" className="text-sm text-destructive">This name is reserved: account and admin collide with app routes.</p>
+                  <p role="alert" className="text-sm text-destructive">This name is already used by Terrence. Choose a name other than account, admin, or docs.</p>
                 )}
               </Field>
               <Field>
@@ -286,8 +317,9 @@ export function Dashboard(): React.JSX.Element {
                 </Select>
               </Field>
             </FieldGroup>
+            {createError !== "" && <p role="alert" className="mt-4 text-sm text-destructive">{createError}</p>}
             <DialogFooter className="mt-6">
-              <Button type="button" variant="outline" onClick={(): void => { setCreateOpen(false); }}>
+              <Button type="button" variant="outline" disabled={saving} onClick={(): void => { setCreateOpen(false); }}>
                 Cancel
               </Button>
               <Button type="submit" disabled={name.trim() === "" || reservedName || saving}>

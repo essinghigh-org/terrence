@@ -94,7 +94,7 @@ test("uses the account API to clear a forced password change", async () => {
     </MemoryRouter>,
   );
   await waitFor((): void => {
-    expect(view.getByText("Change the temporary administrator password before continuing.")).toBeTruthy();
+    expect(view.getByText("Change your temporary password before continuing.")).toBeTruthy();
   });
   expect(fetchMock).toHaveBeenCalledTimes(1);
 
@@ -106,7 +106,7 @@ test("uses the account API to clear a forced password change", async () => {
   });
 
   await waitFor((): void => {
-    expect(view.queryByText("Change the temporary administrator password before continuing.")).toBeNull();
+    expect(view.queryByText("Change your temporary password before continuing.")).toBeNull();
   });
   const passwordCall = fetchMock.mock.calls.find(([url]): boolean =>
     url === "/api/v2/account/password");

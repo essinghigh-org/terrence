@@ -377,7 +377,7 @@ export function StackSettings(): React.JSX.Element {
           { label: "Stacks" },
         ]}
         title="Stacks"
-        description="Stacks let you manage collections of workspaces and the infrastructure they deploy."
+        description="A stack groups workspaces that are deployed together and depend on each other, so one change can roll through them in order. Most setups do not need one."
         action={canManage ? (
           <Button onClick={openCreate}>
             <span className="mr-1.5 text-base leading-none">+</span> New stack

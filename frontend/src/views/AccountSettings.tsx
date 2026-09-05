@@ -487,11 +487,11 @@ export function AccountSettings(): React.JSX.Element {
         <div role="alert" aria-live="polite" className="bg-destructive/10 border border-destructive/30 text-destructive px-4 py-3 rounded-md text-sm">{error}</div>
       )}
       {successMsg !== "" && (
-        <div role="status" aria-live="polite" className="bg-success/10 border border-success/30 text-success px-4 py-3 rounded-md text-sm">{successMsg}</div>
+        <div role="status" aria-live="polite" className="bg-success/10 border border-success/30 text-success-text px-4 py-3 rounded-md text-sm">{successMsg}</div>
       )}
       {mustChangePassword && (
-        <div role="status" className="bg-warning/10 border border-warning/30 text-warning px-4 py-3 rounded-md text-sm">
-          Change the temporary administrator password before continuing.
+        <div role="status" className="bg-warning/10 border border-warning/30 text-warning-text px-4 py-3 rounded-md text-sm">
+          Change your temporary password before continuing.
         </div>
       )}
 
@@ -733,7 +733,7 @@ export function AccountSettings(): React.JSX.Element {
             <Lock className="w-4 h-4" />
             Change Password
           </CardTitle>
-          {mustChangePassword && <CardDescription>A new password is required for this administrator account.</CardDescription>}
+          {mustChangePassword && <CardDescription>Choose a new password for your account before continuing.</CardDescription>}
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1.5">

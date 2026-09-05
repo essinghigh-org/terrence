@@ -399,7 +399,7 @@ export function VcsIntegrations({
           { label: "VCS integrations" },
         ]}
         title="VCS integrations"
-        description="Connect Version Control System (VCS) providers like GitHub, GitLab, and Bitbucket for automated runs."
+        description="Connect GitHub, GitLab or Bitbucket so pushing to a branch starts a run automatically, and pull requests get a plan posted back."
       />
 
       {accessStatus === "loading" && (
