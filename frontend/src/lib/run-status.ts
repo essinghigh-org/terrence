@@ -1,71 +1,7 @@
 import { isString } from "./type-guards";
 
-/**
- * One classification of run status into a visual tone, for the whole app.
- *
- * Before this existed, the run page derived colour from inline status arrays in
- * seven places and `StatusBadge` kept an eighth list, and the two vocabularies
- * disagreed: the badge knew `policy_hard_failed` but not `failed`, the page
- * knew `failed` and `unreachable` but not `policy_hard_failed`. Statuses that
- * appeared in neither list — `apply_queued`, `confirmed`, `queuing`,
- * `post_plan_running`, `force_canceled` — fell through to a neutral grey clock,
- * so a force-canceled run and a queued one looked identical.
- *
- * Every status the backend can emit is classified here, exactly once.
- */
+/** Shared visual-tone vocabulary for run and phase status. */
 export type RunTone = "neutral" | "active" | "success" | "attention" | "danger";
-
-const TONE_BY_STATUS: Readonly<Record<string, RunTone>> = {
-  // Waiting to start: nothing is happening yet.
-  pending: "neutral",
-  queuing: "neutral",
-  plan_queued: "neutral",
-  apply_queued: "neutral",
-  confirmed: "neutral",
-  fetching_completed: "neutral",
-  pre_plan_completed: "neutral",
-  post_plan_completed: "neutral",
-  cost_estimated: "neutral",
-  policy_checked: "neutral",
-
-  // Work in progress: the run is moving under its own power.
-  fetching: "active",
-  pre_plan_running: "active",
-  planning: "active",
-  cost_estimating: "active",
-  policy_checking: "active",
-  post_plan_running: "active",
-  applying: "active",
-  pre_apply_running: "active",
-  post_apply_running: "active",
-
-  // Finished well.
-  applied: "success",
-  planned_and_finished: "success",
-  planned_and_saved: "success",
-
-  // Finished the plan, waiting on a person.
-  planned: "attention",
-  needs_confirmation: "attention",
-  policy_soft_failed: "attention",
-  policy_override: "attention",
-
-  // Finished badly.
-  errored: "danger",
-  failed: "danger",
-  policy_hard_failed: "danger",
-  unreachable: "danger",
-
-  // Stopped deliberately: a real outcome, but not a failure of the code.
-  canceled: "neutral",
-  force_canceled: "neutral",
-  discarded: "neutral",
-};
-
-export function runTone(status: string | null | undefined): RunTone {
-  if (status === null || status === undefined || status === "") return "neutral";
-  return TONE_BY_STATUS[status] ?? "neutral";
-}
 
 /**
  * Tailwind classes for a tinted surface in each tone. Kept as whole recipes

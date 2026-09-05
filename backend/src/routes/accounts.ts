@@ -105,8 +105,6 @@ type AuthReqCtx = Readonly<{
   set: SetObj;
 }>;
 
-export { opaqueToken } from "../lib/token-service";
-
 export function tokenHash(token: string): string {
   return hashAuthenticationToken(token);
 }
