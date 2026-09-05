@@ -1161,3 +1161,135 @@ test("stale agent recovery advances the fencing token", async () => {
     staleLookup: true,
   });
 }, 30_000);
+
+test("cancel holds the workspace lock while a claimed agent job is outstanding (issue #617)", async () => {
+  const result = await runAgentProtocolScript(`
+    const { eq } = await import("drizzle-orm");
+    const { db } = await import("./src/db/index.ts");
+    const { agentJobs, agentPools, agents, organizations, runs, workspaces } = await import("./src/db/schema.ts");
+    const { cancelAgentJobsForRun, completeAgentJob } = await import("./src/lib/agent-jobs.ts");
+
+    const now = Date.now();
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(agentPools).values({ id: "pool", orgId: "org", name: "pool", organizationScoped: true });
+    await db.insert(agents).values({ id: "agent", agentPoolId: "pool", name: "agent", status: "busy", lastPingAt: now });
+    await db.insert(workspaces).values({
+      id: "workspace", orgId: "org", name: "workspace", executionMode: "agent", agentPoolId: "pool",
+      locked: true, lockedReason: "Run run is applying", lockOwnerType: "agent-run", lockOwnerId: "run",
+    });
+    await db.insert(runs).values({ id: "run", workspaceId: "workspace", agentPoolId: "pool", agentId: "agent", status: "applying", createdAt: now });
+    await db.insert(agentJobs).values({
+      id: "job", runId: "run", agentPoolId: "pool", agentId: "agent",
+      phase: "apply", status: "claimed", fencingToken: 0, createdAt: now,
+    });
+
+    await db.update(runs).set({ status: "canceled" }).where(eq(runs.id, "run"));
+    await cancelAgentJobsForRun("run");
+    const jobAfterCancel = await db.query.agentJobs.findFirst({ where: eq(agentJobs.id, "job") });
+    const wsAfterCancel = await db.query.workspaces.findFirst({ where: eq(workspaces.id, "workspace") });
+
+    // The agent's terminal report for the canceled job acknowledges the stop.
+    const ack = await completeAgentJob("agent", "job", 0, {
+      status: "errored", errorMessage: "canceled", resourceAdditions: null, resourceChanges: null,
+      resourceDestructions: null, resourceImports: null, planJson: null, statePayload: null,
+      jsonState: null, jsonStateOutputs: null, result: {},
+    });
+    const wsAfterAck = await db.query.workspaces.findFirst({ where: eq(workspaces.id, "workspace") });
+    const agentAfterAck = await db.query.agents.findFirst({ where: eq(agents.id, "agent") });
+    const runAfterAck = await db.query.runs.findFirst({ where: eq(runs.id, "run") });
+    console.log(JSON.stringify({
+      jobStatus: jobAfterCancel?.status,
+      heldLocked: wsAfterCancel?.locked,
+      heldOwner: wsAfterCancel?.lockOwnerId,
+      acked: ack !== undefined,
+      ackRunStatus: ack?.runStatus,
+      unlocked: wsAfterAck?.locked,
+      agentIdle: agentAfterAck?.status,
+      runStatus: runAfterAck?.status,
+    }));
+    process.exit(0);
+  `);
+  expect(result).toEqual({
+    jobStatus: "canceled",
+    heldLocked: true,
+    heldOwner: "run",
+    acked: true,
+    ackRunStatus: "canceled",
+    unlocked: false,
+    agentIdle: "idle",
+    runStatus: "canceled",
+  });
+}, 30_000);
+
+test("cancel releases the workspace lock when only queued agent jobs existed (issue #617)", async () => {
+  const result = await runAgentProtocolScript(`
+    const { eq } = await import("drizzle-orm");
+    const { db } = await import("./src/db/index.ts");
+    const { agentJobs, agentPools, agents, organizations, runs, workspaces } = await import("./src/db/schema.ts");
+    const { cancelAgentJobsForRun } = await import("./src/lib/agent-jobs.ts");
+
+    const now = Date.now();
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(agentPools).values({ id: "pool", orgId: "org", name: "pool", organizationScoped: true });
+    await db.insert(agents).values({ id: "agent", agentPoolId: "pool", name: "agent", status: "idle", lastPingAt: now });
+    await db.insert(workspaces).values({
+      id: "workspace", orgId: "org", name: "workspace", executionMode: "agent", agentPoolId: "pool",
+      locked: true, lockedReason: "Run run is applying", lockOwnerType: "agent-run", lockOwnerId: "run",
+    });
+    await db.insert(runs).values({ id: "run", workspaceId: "workspace", agentPoolId: "pool", status: "apply_queued", createdAt: now });
+    await db.insert(agentJobs).values({
+      id: "job", runId: "run", agentPoolId: "pool", phase: "apply", status: "queued", createdAt: now,
+    });
+
+    await db.update(runs).set({ status: "canceled" }).where(eq(runs.id, "run"));
+    await cancelAgentJobsForRun("run");
+    const job = await db.query.agentJobs.findFirst({ where: eq(agentJobs.id, "job") });
+    const ws = await db.query.workspaces.findFirst({ where: eq(workspaces.id, "workspace") });
+    console.log(JSON.stringify({ jobStatus: job?.status, locked: ws?.locked, owner: ws?.lockOwnerId }));
+    process.exit(0);
+  `);
+  expect(result).toEqual({ jobStatus: "canceled", locked: false, owner: null });
+}, 30_000);
+
+test("stale sweep releases a cancel-held lock only after the heartbeat lease expires (issue #617)", async () => {
+  const result = await runAgentProtocolScript(`
+    process.env.AGENT_HEARTBEAT_TIMEOUT_MS = "1000";
+    const { eq } = await import("drizzle-orm");
+    const { db } = await import("./src/db/index.ts");
+    const { agentJobs, agentPools, agents, organizations, runs, workspaces } = await import("./src/db/schema.ts");
+    const { recoverStaleAgentJobs } = await import("./src/lib/agent-jobs.ts");
+
+    const now = Date.now();
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(agentPools).values({ id: "pool", orgId: "org", name: "pool", organizationScoped: true });
+    await db.insert(agents).values([
+      { id: "dead-agent", agentPoolId: "pool", name: "dead", status: "busy", lastPingAt: now - 5000 },
+      { id: "live-agent", agentPoolId: "pool", name: "live", status: "busy", lastPingAt: now },
+    ]);
+    await db.insert(workspaces).values([
+      {
+        id: "dead-workspace", orgId: "org", name: "dead-workspace", executionMode: "agent", agentPoolId: "pool",
+        locked: true, lockedReason: "Run dead-run is applying", lockOwnerType: "agent-run", lockOwnerId: "dead-run",
+      },
+      {
+        id: "live-workspace", orgId: "org", name: "live-workspace", executionMode: "agent", agentPoolId: "pool",
+        locked: true, lockedReason: "Run live-run is applying", lockOwnerType: "agent-run", lockOwnerId: "live-run",
+      },
+    ]);
+    await db.insert(runs).values([
+      { id: "dead-run", workspaceId: "dead-workspace", agentPoolId: "pool", agentId: "dead-agent", status: "canceled", createdAt: now - 4000 },
+      { id: "live-run", workspaceId: "live-workspace", agentPoolId: "pool", agentId: "live-agent", status: "canceled", createdAt: now - 4000 },
+    ]);
+    await db.insert(agentJobs).values([
+      { id: "dead-job", runId: "dead-run", agentPoolId: "pool", agentId: "dead-agent", phase: "apply", status: "canceled", createdAt: now - 4000 },
+      { id: "live-job", runId: "live-run", agentPoolId: "pool", agentId: "live-agent", phase: "apply", status: "canceled", createdAt: now - 4000 },
+    ]);
+
+    await recoverStaleAgentJobs(now);
+    const deadWs = await db.query.workspaces.findFirst({ where: eq(workspaces.id, "dead-workspace") });
+    const liveWs = await db.query.workspaces.findFirst({ where: eq(workspaces.id, "live-workspace") });
+    console.log(JSON.stringify({ deadLocked: deadWs?.locked, liveLocked: liveWs?.locked }));
+    process.exit(0);
+  `);
+  expect(result).toEqual({ deadLocked: false, liveLocked: true });
+}, 30_000);

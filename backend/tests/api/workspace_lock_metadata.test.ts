@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import {
-  apiTokens, organizationMemberships, organizations, users, workspaces,
+  agentJobs, agentPools, agents, apiTokens, organizationMemberships, organizations, runs, users, workspaces,
 } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
@@ -124,5 +124,65 @@ describe("workspace lock metadata and force-unlock (#568)", () => {
     expect(unlockAttrs["locked"]).toBe(false);
     expect(unlockAttrs["locked-at"]).toBeNull();
     expect((await attributesOf(ownerToken))["locked-at"]).toBeNull();
+  });
+
+  it("422s force-unlock on a live-run lock without force, allows it with force (#617)", async () => {
+    const runId = `run-live-${suffix}`;
+    await db.insert(runs).values({ id: runId, workspaceId: wsId, status: "applying", createdAt: Date.now() });
+    await db.update(workspaces).set({
+      locked: true, lockedReason: "Run is applying", lockOwnerType: "agent-run", lockOwnerId: runId,
+    }).where(eq(workspaces.id, wsId));
+
+    const refused = await request(otherToken, `/api/v2/workspaces/${wsId}/actions/force-unlock`, "POST");
+    expect(refused.status).toBe(422);
+    const payload = (await refused.json()) as { errors: { detail?: string }[] };
+    expect(payload.errors[0]?.detail).toContain(runId);
+
+    const forced = await request(otherToken, `/api/v2/workspaces/${wsId}/actions/force-unlock`, "POST", {
+      data: { attributes: { force: true } },
+    });
+    expect(forced.status).toBe(200);
+    expect((await attributesOf(ownerToken))["locked"]).toBe(false);
+    await db.delete(runs).where(eq(runs.id, runId));
+  });
+
+  it("allows force-unlock on a terminal-run lock without force (#617)", async () => {
+    const runId = `run-done-${suffix}`;
+    await db.insert(runs).values({ id: runId, workspaceId: wsId, status: "applied", createdAt: Date.now() });
+    await db.update(workspaces).set({
+      locked: true, lockedReason: "stale lock", lockOwnerType: "run", lockOwnerId: runId,
+    }).where(eq(workspaces.id, wsId));
+
+    const res = await request(otherToken, `/api/v2/workspaces/${wsId}/actions/force-unlock`, "POST");
+    expect(res.status).toBe(200);
+    expect((await attributesOf(ownerToken))["locked"]).toBe(false);
+    await db.delete(runs).where(eq(runs.id, runId));
+  });
+
+  it("treats a force-canceled hold with a live agent as live (#617)", async () => {
+    const runId = `run-held-${suffix}`;
+    const now = Date.now();
+    await db.insert(agentPools).values({ id: `pool-${suffix}`, orgId, name: `pool-${suffix}` });
+    await db.insert(agents).values({ id: `agent-${suffix}`, agentPoolId: `pool-${suffix}`, name: `agent-${suffix}`, status: "busy", lastPingAt: now });
+    await db.insert(runs).values({ id: runId, workspaceId: wsId, status: "force_canceled", createdAt: now });
+    await db.insert(agentJobs).values({
+      id: `job-${suffix}`, runId, agentPoolId: `pool-${suffix}`, agentId: `agent-${suffix}`,
+      phase: "apply", status: "canceled", createdAt: now,
+    });
+    await db.update(workspaces).set({
+      locked: true, lockedReason: "Run is applying", lockOwnerType: "agent-run", lockOwnerId: runId,
+    }).where(eq(workspaces.id, wsId));
+
+    const refused = await request(otherToken, `/api/v2/workspaces/${wsId}/actions/force-unlock`, "POST");
+    expect(refused.status).toBe(422);
+
+    const forced = await request(otherToken, `/api/v2/workspaces/${wsId}/actions/force-unlock`, "POST", {
+      data: { attributes: { force: true } },
+    });
+    expect(forced.status).toBe(200);
+    await db.delete(agentJobs).where(eq(agentJobs.id, `job-${suffix}`));
+    await db.delete(agents).where(eq(agents.id, `agent-${suffix}`));
+    await db.delete(agentPools).where(eq(agentPools.id, `pool-${suffix}`));
+    await db.delete(runs).where(eq(runs.id, runId));
   });
 });
