@@ -11,7 +11,7 @@ import {
   tagBindingResource,
   type WorkspaceResourcePermissions,
 } from "../lib/response";
-import { decodeStatePayload, validVariableAttributes } from "../lib/validation";
+import { decodeStatePayload, isUniqueConstraintError, validVariableAttributes } from "../lib/validation";
 import { variableValueForWrite, variableValueForRead } from "../lib/variable-crypto";
 import { validateVersion, caseInsensitiveLike, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, parseStatePayload, auditLog, strictAuditEnabled, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspace, lockPrincipal, ownsWorkspaceLock, ifMatchSatisfied, type DeepReadonly } from "../lib/utils";
 
@@ -204,10 +204,6 @@ async function resourcePermissions(
     canWriteStateVersions: workspaceAllows(sets.stateWrite, workspace.id),
     canManageRunTasks: workspaceAllows(sets.runTasks, workspace.id) && canManageOrgRunTasks,
   };
-}
-
-function isUniqueConstraintError(err: unknown): boolean {
-  return err !== null && typeof err === "object" && (("message" in err && typeof err.message === "string" && (err.message.includes("UNIQUE") || err.message.includes("duplicate key value violates unique constraint"))) || ("code" in err && (err.code === "SQLITE_CONSTRAINT_UNIQUE" || err.code === "23505")));
 }
 
 /** Audit finding 9: single-workspace GETs must honor include=current_run
