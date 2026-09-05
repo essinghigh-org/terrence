@@ -282,7 +282,7 @@ export async function digestTable(
   source: Readonly<Digestable>,
   table: TransferTable,
   options: { readonly fullDigestLimit?: number; readonly sampleLimit?: number } = {},
-): Promise<{ readonly digest: string; readonly rows: number }> {
+): Promise<{ readonly digest: string; readonly rows: number; readonly full: boolean }> {
   const modes = table.columns.map(toColumnMode);
   const fullLimit = options.fullDigestLimit ?? 5000;
   const sampleLimit = options.sampleLimit ?? SAMPLE_LIMIT_DEFAULT;
@@ -301,7 +301,7 @@ export async function digestTable(
         rows += 1;
       }
     });
-    return { digest: hash.digest("hex"), rows };
+    return { digest: hash.digest("hex"), rows, full: true };
   }
 
   // Sample digest: first rows by PK (or a sorted set for PK-less tables).
@@ -309,7 +309,7 @@ export async function digestTable(
   const frames = sampled.map((row) => JSON.stringify(row.map((value, i): string => canonicalCell(value, modes[i] ?? "text"))));
   if (orderColumns.length === 0) frames.sort();
   const digest = new Bun.CryptoHasher("sha256").update(frames.join("\n")).digest("hex");
-  return { digest, rows: sampled.length };
+  return { digest, rows: sampled.length, full: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -1000,6 +1000,8 @@ export type TableVerification = {
     readonly target: string;
     readonly match: boolean;
     readonly rowsHashed: number;
+    /** "full" when every row was hashed, "sample" when only the first rowsHashed rows were. */
+    readonly coverage: "full" | "sample";
   };
 }
 
@@ -1015,6 +1017,10 @@ export type VerificationReport = {
 export type VerifyOptions = {
   /** Max rows hashed per table (sample hash). */
   readonly sampleLimit?: number;
+  /** Tables at or below this row count get a full content digest instead
+   * of a sample hash. Exposed (was a fixed 5000) so large instances can
+   * raise it; the report states per-table coverage either way. */
+  readonly fullDigestLimit?: number;
 }
 
 const SAMPLE_LIMIT_DEFAULT = 1000;
@@ -1078,6 +1084,7 @@ export async function verifyTransfer(
         target: targetDigest.digest,
         match: sourceDigest.digest === targetDigest.digest,
         rowsHashed: sourceDigest.rows,
+        coverage: sourceDigest.full ? "full" : "sample",
       },
     });
   }

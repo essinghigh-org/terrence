@@ -38,6 +38,14 @@ export type ExportJob = {
 // wizard's forward path uses the same model). Completed files are durable
 // on disk and remain downloadable after a restart.
 const jobs = new Map<string, ExportJob>();
+/** Parse an optional positive-integer attribute with an upper cap.
+ * Returns undefined when absent, null when present but invalid. */
+function parseBoundedLimit(value: unknown, cap: number): number | undefined | null {
+  if (value === undefined || value === null || value === "") return undefined;
+  const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > cap) return null;
+  return parsed;
+}
 const MAX_JOBS = 20;
 
 function pruneJobs(): void {
@@ -129,6 +137,14 @@ export function createDbExportRoutes(deps: DbExportRouteDeps = {}) {
         ? attrs["output-name"]
         : undefined;
       const force = attrs["force"] === true;
+      // Issue #620: expose the verification hash bounds. Caps keep a typo
+      // from turning verification into a self-DoS on huge tables.
+      const sampleLimit = parseBoundedLimit(attrs["sample-limit"], 100_000);
+      const fullDigestLimit = parseBoundedLimit(attrs["full-digest-limit"], 1_000_000);
+      if (sampleLimit === null || fullDigestLimit === null) {
+        setStatus(set, 422);
+        return errorBody(422, "Unprocessable Entity", "sample-limit and full-digest-limit must be positive integers within their caps");
+      }
 
       // Only one export may run at a time: concurrent jobs could both pass the
       // output-name existence check and write the same file. Completed and
@@ -150,6 +166,7 @@ export function createDbExportRoutes(deps: DbExportRouteDeps = {}) {
               pgUrl: url,
               ...(outputName === undefined ? {} : { outputName }),
               ...(force ? { force: true } : {}),
+              ...((sampleLimit === undefined && fullDigestLimit === undefined) ? {} : { verify: { ...(sampleLimit === undefined ? {} : { sampleLimit }), ...(fullDigestLimit === undefined ? {} : { fullDigestLimit }) } }),
               ...(deps.sourceFactory === undefined ? {} : { sourceFactory: deps.sourceFactory }),
             },
             (progress: DbExportProgress) => {

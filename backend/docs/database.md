@@ -67,7 +67,7 @@ Precedence (highest wins):
 
 ## Export format
 
-The Postgres-to-SQLite export is a background job (see [Operations](operations) for the endpoint list). The export artifact is a SQLite database file built with the source schema and copied rows, verified against the source snapshot (row counts, invariants, sample hashes) before the job completes. There is no import endpoint: feed the file to the migration wizard, which restores from it. The export does not include storage artifacts; move those separately.
+The Postgres-to-SQLite export is a background job (see [Operations](operations) for the endpoint list). The export artifact is a SQLite database file built with the source schema and copied rows, verified against the source snapshot (row counts, invariants, content hashes) before the job completes. Content hashing is full-table up to the full-digest limit (5000 rows by default, raisable per export via the 'full-digest-limit' attribute) and a first-rows sample beyond it (size via 'sample-limit', 1000 by default); the verification report states per-table coverage 'full' or 'sample' with the rows hashed, so a pass on a sampled table is never mistaken for full coverage. There is no import endpoint: feed the file to the migration wizard, which restores from it. The export does not include storage artifacts; move those separately.
 
 ## Integrity
 

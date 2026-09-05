@@ -18,7 +18,7 @@
 // ---------------------------------------------------------------------------
 import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { createPgSource, createSqliteTarget, transferDatabase, verifyTransfer } from "./db-transfer";
+import { createPgSource, createSqliteTarget, transferDatabase, verifyTransfer, type VerifyOptions } from "./db-transfer";
 import type { TransferSource } from "./db-transfer";
 import type { TransferReport, VerificationReport } from "./db-transfer";
 
@@ -120,6 +120,8 @@ export type DbExportOptions = {
   readonly force?: boolean;
   /** Test hook / forward-wizard reuse: override the source construction. */
   readonly sourceFactory?: (url: string) => TransferSource;
+  /** Verification hash bounds (sample size, full-digest row threshold). */
+  readonly verify?: VerifyOptions;
   readonly storageDirOverride?: string;
 }
 
@@ -200,7 +202,7 @@ export async function runDbExport(
       target,
       { keepSnapshotOpen: true, ...(onProgress === undefined ? {} : { onProgress: (progress) => { onProgress(progress); } }) },
     );
-    const verification = await verifyTransfer(source, target);
+    const verification = await verifyTransfer(source, target, options.verify ?? {});
     await source.endSnapshot();
     if (!verification.allPassed) {
       // Integrity gate: a failed verification must not ship as a successful
