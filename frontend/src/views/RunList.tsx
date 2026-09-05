@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowDown,
@@ -25,13 +25,12 @@ import { Input } from "../components/ui/input";
 import { StatusBadge } from "../components/ui/status-badge";
 import { toast } from "../components/ui/toast";
 import { fetchApi } from "../lib/api";
+import { runHistoryPageUrl } from "../lib/run-history";
 import { useTerrenceEvent } from "../lib/event-provider";
 import { isNumber, isString } from "../lib/type-guards";
 import { safeHttpUrl } from "../lib/safe-url";
 import type { JsonObject } from "@/lib/json";
-import { formatRunSource, formatRunStatusForUi, isVcsRunSource } from "../lib/run-labels";
-
-const MAX_RUN_LIST_PAGES = 3;
+import { formatRunSource, isVcsRunSource } from "../lib/run-labels";
 
 type RunItem = {
   id: string;
@@ -126,6 +125,16 @@ export function RunList({
   // Latest effect's SSE dispatcher (see the refresh effect below).
   const runStatusDispatchRef = useRef<() => void>(() => {});
   const [filter, setFilter] = useState("");
+  // Debounced server-side search: the filter box queries the whole history
+  // (search[basic] matches ID, message, status, creator, and source) instead
+  // of the loaded subset, so older runs are findable (issue #591).
+  const [debouncedFilter, setDebouncedFilter] = useState("");
+  // Server-reported total for the current query, and the next page cursor.
+  // The list loads page 1 on refresh and appends via Load more; the header
+  // always shows "showing X of M" from these instead of implying completeness.
+  const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [nextPage, setNextPage] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [runMessage, setRunMessage] = useState("");
   const [runType, setRunType] = useState<RunType>("standard");
@@ -137,52 +146,42 @@ export function RunList({
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [sort, setSort] = useState<"" | "created-at" | "-created-at" | "status" | "-status">("");
 
-  const loadRuns = useCallback(async (signal: AbortSignal): Promise<void> => {
+  const parseRunPage = (response: {
+    data?: RunItem[];
+    included?: IncludedUser[];
+    meta?: { pagination?: JsonObject };
+  }): { items: RunItem[]; userMap: Map<string, IncludedUser>; total: number; next: number | null } => {
+    const items = Array.isArray(response.data) ? [...response.data] : [];
+    const userMap = new Map<string, IncludedUser>();
+    const userList = Array.isArray(response.included) ? response.included : [];
+    for (const user of userList) {
+      if (user.type === "users") userMap.set(user.id, user);
+    }
+    const pagination = response.meta?.pagination;
+    const total = pagination?.["total-count"];
+    const next = pagination?.["next-page"];
+    return {
+      items,
+      userMap,
+      total: isNumber(total) ? total : items.length,
+      next: isNumber(next) && Number.isSafeInteger(next) && next > 0 ? next : null,
+    };
+  };
+
+  const loadRuns = useCallback(async (signal: AbortSignal, search: string): Promise<void> => {
     try {
-      const endpoint = `/api/v2/workspaces/${workspaceId}/runs`;
-      const firstUrl = new URL(endpoint, "http://terrence.local");
-      if (sort !== "") firstUrl.searchParams.set("sort", sort);
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-      const response = await fetchApi(`${firstUrl.pathname}${firstUrl.search}`, signal === undefined ? {} : { signal }) as {
+      const response = await fetchApi(runHistoryPageUrl(workspaceId, null, sort, search), signal === undefined ? {} : { signal }) as {
         data?: RunItem[];
         included?: IncludedUser[];
         meta?: { pagination?: JsonObject };
       };
       if (!signal.aborted) {
-        const allRuns = Array.isArray(response.data) ? [...response.data] : [];
-        // Build user map from included
-        const userList = Array.isArray(response.included) ? response.included : [];
-        const userMap = new Map<string, IncludedUser>();
-        for (const user of userList) {
-          if (user.type === "users") userMap.set(user.id, user);
-        }
-        // Fetch remaining pages
-        let nextPage = response.meta?.pagination?.["next-page"];
-        let fetchedPages = 1;
-        while (isNumber(nextPage) && Number.isSafeInteger(nextPage) && nextPage > 0 && !signal.aborted && fetchedPages < MAX_RUN_LIST_PAGES) {
-          const nextUrl = new URL(endpoint, "http://terrence.local");
-          nextUrl.searchParams.set("page[number]", String(nextPage));
-          nextUrl.searchParams.set("sort", sort);
-          const nextPath = `${nextUrl.pathname}${nextUrl.search}`;
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-          const nextRes = await fetchApi(nextPath, signal === undefined ? {} : { signal }) as {
-            data?: RunItem[];
-            included?: IncludedUser[];
-            meta?: { pagination?: JsonObject };
-          };
-          if (signal.aborted) break;
-          if (Array.isArray(nextRes.data)) allRuns.push(...nextRes.data);
-          // Add users from included on subsequent pages too
-          if (Array.isArray(nextRes.included)) {
-            for (const user of nextRes.included) {
-              if (user.type === "users" && !userMap.has(user.id)) userMap.set(user.id, user);
-            }
-          }
-          nextPage = nextRes.meta?.pagination?.["next-page"];
-          fetchedPages++;
-        }
-        setRuns(allRuns);
-        setUsersMap(userMap);
+        const page = parseRunPage(response);
+        setRuns(page.items);
+        setUsersMap(page.userMap);
+        setTotalCount(page.total);
+        setNextPage(page.next);
         setError("");
       }
     } catch (error: unknown) {
@@ -192,13 +191,47 @@ export function RunList({
     }
   }, [workspaceId, sort]);
 
+  const loadMoreRuns = useCallback(async (): Promise<void> => {
+    if (nextPage === null || loadingMore) return;
+    setLoadingMore(true);
+    try {
+// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
+      const response = await fetchApi(runHistoryPageUrl(workspaceId, nextPage, sort, debouncedFilter)) as {
+        data?: RunItem[];
+        included?: IncludedUser[];
+        meta?: { pagination?: JsonObject };
+      };
+      const page = parseRunPage(response);
+      setRuns((previous): RunItem[] => [...previous, ...page.items]);
+      setUsersMap((previous): ReadonlyMap<string, IncludedUser> => {
+        const merged = new Map(previous);
+        for (const [id, user] of page.userMap) {
+          if (!merged.has(id)) merged.set(id, user);
+        }
+        return merged;
+      });
+      setTotalCount(page.total);
+      setNextPage(page.next);
+    } catch (error: unknown) {
+      setError(error instanceof Error ? error.message : "Could not load more runs");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [workspaceId, sort, debouncedFilter, nextPage, loadingMore]);
+
+  // Debounce the filter box into the server-side search query.
+  useEffect((): (() => void) => {
+    const timer = window.setTimeout((): void => { setDebouncedFilter(filter); }, 300);
+    return (): void => { window.clearTimeout(timer); };
+  }, [filter]);
+
   useEffect((): (() => void) => {
     let stopped = false;
     let timer: number | undefined;
     const controller = new AbortController();
 
     const refresh = async (): Promise<void> => {
-      await loadRuns(controller.signal);
+      await loadRuns(controller.signal, debouncedFilter);
       if (!stopped && !controller.signal.aborted) {
         // Fast updates arrive over the SSE stream; this timer is a slow
         // safety net for streams that fail (10.20).
@@ -216,7 +249,7 @@ export function RunList({
     const reload = (): void => {
       if (inFlight || stopped || controller.signal.aborted) return;
       inFlight = true;
-      void loadRuns(controller.signal).finally((): void => {
+      void loadRuns(controller.signal, debouncedFilter).finally((): void => {
         inFlight = false;
       });
     };
@@ -235,7 +268,7 @@ export function RunList({
       if (timer !== undefined) window.clearTimeout(timer);
       if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
     };
-  }, [loadRuns, refreshVersion, workspaceId]);
+  }, [loadRuns, debouncedFilter, refreshVersion, workspaceId]);
 
   // App-global SSE (EventProvider): any status transition in this workspace
   // reloads the list through the effect's debounced dispatcher.
@@ -285,24 +318,6 @@ export function RunList({
     if (sort === `-${column}`) return <ArrowDown className="size-3" aria-hidden="true" />;
     return null;
   };
-
-  const filteredRuns = useMemo((): RunItem[] => {
-    const query = filter.trim().toLocaleLowerCase();
-    if (query === "") return runs;
-    return runs.filter((run: RunItem): boolean => {
-      const creatorId = run.relationships?.["created-by"]?.data?.id;
-      const creatorName = creatorId !== undefined ? usersMap.get(creatorId)?.attributes.username : undefined;
-      return [
-        run.id,
-        run.attributes.message,
-        run.attributes.status,
-        formatRunStatusForUi(run.attributes.status),
-        run.attributes.source,
-        run.attributes["trigger-reason"],
-        creatorName,
-      ].some((value: string | null | undefined): boolean => value?.toLocaleLowerCase().includes(query) === true);
-    });
-  }, [filter, runs, usersMap]);
 
   async function handleStartRun(): Promise<void> {
     if (!canStartRun) return;
@@ -409,7 +424,7 @@ export function RunList({
             type="search"
             value={filter}
             onChange={(event): void => { setFilter(event.target.value); }}
-            placeholder="Filter runs…"
+            placeholder="Search by ID, message, status, source, or creator…"
             className="h-9 pl-9"
           />
         </div>
@@ -432,27 +447,32 @@ export function RunList({
 
       <div className="overflow-hidden rounded-lg border border-border bg-card">
         {runs.length === 0 ? (
-          <EmptyState
-            illustration="guide"
-            title="No runs yet"
-            description={canStartRun
-              ? "There is no run history for this workspace."
-              : "There is no run history for this workspace, and you do not have permission to start one."}
-            {...(canStartRun ? { actionLabel: "Start new run", onAction: openNewRunDialog } : {})}
-            docsHref="/app/docs/runs"
-          />
-        ) : filteredRuns.length === 0 ? (
-          <EmptyState
-            compact
-            title="No matching runs"
-            description="Try a different message, status, source, or run ID."
-          />
+          debouncedFilter.trim() !== "" ? (
+            <EmptyState
+              compact
+              title="No matching runs"
+              description="Try a different ID, message, status, source, or creator."
+            />
+          ) : (
+            <EmptyState
+              illustration="guide"
+              title="No runs yet"
+              description={canStartRun
+                ? "There is no run history for this workspace."
+                : "There is no run history for this workspace, and you do not have permission to start one."}
+              {...(canStartRun ? { actionLabel: "Start new run", onAction: openNewRunDialog } : {})}
+              docsHref="/app/docs/runs"
+            />
+          )
         ) : (
           <div>
             <div className="flex flex-wrap items-center justify-between gap-3 p-3 sm:px-4 sm:py-3 border-b border-border bg-muted/20">
               <div>
                 <h2 className="text-sm font-semibold text-foreground">Run history</h2>
-                <p className="text-xs text-muted-foreground">{filteredRuns.length} of {runs.length} runs</p>
+                <p className="text-xs text-muted-foreground">
+                  Showing {runs.length} of {totalCount ?? runs.length} runs
+                  {debouncedFilter.trim() !== "" && ` matching "${debouncedFilter.trim()}"`}
+                </p>
               </div>
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span>Sort by</span>
@@ -477,7 +497,7 @@ export function RunList({
               </div>
             </div>
             <div className="divide-y divide-border">
-              {filteredRuns.map((run: RunItem): React.JSX.Element => {
+              {runs.map((run: RunItem): React.JSX.Element => {
                 const creatorId = run.relationships?.["created-by"]?.data?.id;
                 const creatorUser = creatorId !== undefined ? usersMap.get(creatorId) : undefined;
                 const username = creatorUser?.attributes.username ?? run.attributes["triggered-by"] ?? "System";
@@ -569,6 +589,18 @@ export function RunList({
                 );
               })}
             </div>
+            {nextPage !== null && (
+              <div className="flex justify-center border-t border-border p-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={loadingMore}
+                  onClick={(): void => { void loadMoreRuns(); }}
+                >
+                  {loadingMore ? "Loading…" : `Load more (${runs.length} of ${totalCount ?? runs.length} shown)`}
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </div>
