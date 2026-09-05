@@ -8,6 +8,7 @@ import {
   agentPools, workspaceRunTasks, logs, organizationMemberships, projectTags, reservedTagKeys,
   organizations, registryPartnerships, teams, teamMemberships, teamWorkspaces,
   organizationMembershipRoles, organizationRoles, apiTokens, stackStateLocks, workloadIdentityTokens,
+  registryModules, registryModuleVersions,
 } from "../db/schema";
 import { and, desc, eq, exists, gte, ilike, inArray, isNull, like, lt, notInArray, or, sql } from "drizzle-orm";
 import { timingSafeEqual, createHash, createHmac, randomBytes } from "node:crypto";
@@ -1912,7 +1913,7 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
  */
 export async function deleteOrganization(organizationId: string): Promise<readonly string[]> {
   return withWorkspaceDeletionManifest(async (manifestPath): Promise<readonly string[]> => {
-    return db.transaction(async (tx: unknown): Promise<readonly string[]> => {
+    const outcome = await db.transaction(async (tx: unknown): Promise<{ memberIds: readonly string[]; moduleArchives: readonly string[] }> => {
       const transaction = tx as typeof db;
       const organizationWorkspaces = await transaction.query.workspaces.findMany({
         where: eq(workspaces.orgId, organizationId),
@@ -1927,12 +1928,42 @@ export async function deleteOrganization(organizationId: string): Promise<readon
         organizationWorkspaces.map((workspace): string => workspace.id),
         manifestPath,
       );
+      // Issue #619: registry module rows cascade, but their archive files
+      // would leak on disk. Collect the paths before the cascade deletes
+      // the rows so they can be removed after commit.
+      const orgModules = await transaction.query.registryModules.findMany({
+        where: eq(registryModules.orgId, organizationId),
+        columns: { id: true },
+      });
+      const moduleArchives = orgModules.length === 0
+        ? []
+        : (await transaction.query.registryModuleVersions.findMany({
+          where: inArray(registryModuleVersions.moduleId, orgModules.map((module): string => module.id)),
+          columns: { archivePath: true },
+        }))
+          .map((version): string | null => version.archivePath)
+          .filter((archivePath): archivePath is string => archivePath !== null);
       await transaction.delete(workspaces).where(eq(workspaces.orgId, organizationId));
       await transaction.delete(organizationMemberships).where(eq(organizationMemberships.orgId, organizationId));
       await transaction.delete(apiTokens).where(eq(apiTokens.orgId, organizationId));
       await transaction.delete(organizations).where(eq(organizations.id, organizationId));
-      return [...new Set(memberships.map((membership): string => membership.userId))];
+      return {
+        memberIds: [...new Set(memberships.map((membership): string => membership.userId))],
+        moduleArchives,
+      };
     });
+    for (const archivePath of outcome.moduleArchives) {
+      try {
+        await rm(archivePath, { force: true });
+      } catch (error: unknown) {
+        log.error("Organization deletion could not remove module archive", {
+          organizationId,
+          archivePath,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return outcome.memberIds;
   });
 }
 
