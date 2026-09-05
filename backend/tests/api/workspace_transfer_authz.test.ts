@@ -196,6 +196,15 @@ describe("workspace transfer authorization", () => {
     const outsiderResume = await request(`/api/v2/workspace-transfers/${pausedId}/actions/resume`, "POST", {}, outsiderToken);
     expect(outsiderResume.status).toBe(404);
 
+    // Issue #614: a non-owner member of both orgs can SEE the transfer but
+    // must not cancel or resume it — lifecycle needs the creation bar.
+    const memberGet = await request(`/api/v2/workspace-transfers/${created}`, "GET", undefined, memberToken);
+    expect(memberGet.status).toBe(200);
+    const memberCancel = await request(`/api/v2/workspace-transfers/${created}/actions/cancel`, "POST", {}, memberToken);
+    expect(memberCancel.status).toBe(404);
+    const memberResume = await request(`/api/v2/workspace-transfers/${pausedId}/actions/resume`, "POST", {}, memberToken);
+    expect(memberResume.status).toBe(404);
+
     const resume = await request(`/api/v2/workspace-transfers/${pausedId}/actions/resume`, "POST", {}, ownerToken);
     expect(resume.status).toBe(200);
     const cancel = await request(`/api/v2/workspace-transfers/${created}/actions/cancel`, "POST", {}, ownerToken);
