@@ -3,6 +3,8 @@ import { assertStorageWritable, bootstrapInitialAdmin, resetAdminPassword } from
 import { refreshTrustedClientIpHeaders } from "./src/lib/client-ip";
 import { applyPgMigrations, isPostgres } from "./src/db";
 import { reconcileInterruptedLocalRuns, stopWorkerQueue, terminateActiveRunExecutions, waitForWorkerDrain } from "./src/worker";
+import { sweepUploadTemps } from "./src/lib/upload-sweep";
+import { storageDir } from "./src/db/driver";
 import { shutdownLogging } from "./src/lib/log";
 import { markControlPlaneNodeDraining, startControlPlaneHeartbeat } from "./src/routes/health";
 
@@ -77,6 +79,25 @@ try {
   // A DB hiccup at boot must not take the whole instance down; the next
   // restart reconciles again (the pass is idempotent).
   console.error("[terrence] Startup reconciliation failed; runs from before the restart may still be blocked", error);
+}
+
+// Startup sweep for crash-stranded upload temps and orphaned archives
+// (issue #619): request paths clean up after themselves, so anything left
+// behind is garbage from a crash before cleanup ran. Best-effort and
+// idempotent like the reconciliation above.
+try {
+  const swept = await sweepUploadTemps(storageDir);
+  const sweptTotal = swept.stateUploads + swept.cvTemps + swept.unclaimedArchives + swept.invalidExports + swept.orphanedModuleArchives;
+  if (sweptTotal > 0) {
+    console.log(
+      `[terrence] Startup upload sweep: removed ${sweptTotal} leftover file(s) `
+      + `(state-uploads: ${swept.stateUploads}, cv-temps: ${swept.cvTemps}, `
+      + `unclaimed-archives: ${swept.unclaimedArchives}, invalid-exports: ${swept.invalidExports}, `
+      + `orphaned-module-archives: ${swept.orphanedModuleArchives})`,
+    );
+  }
+} catch (error: unknown) {
+  console.error("[terrence] Startup upload sweep failed; leftover temp files remain for the next restart", error);
 }
 
 app
