@@ -39,6 +39,7 @@ import { tmpdir } from "os";
 import { mkdir, mkdtemp, rm, writeFile, readFile, exists, readdir, rename, stat } from "fs/promises";
 import { ensureBinary } from "./binaryManager";
 import { resolveInfracostBinary } from "./lib/infracost-bin";
+import { resolveManagedOpaBinary } from "./lib/opa-bin";
 import { recordFailure, workerPollerFinished, workerPollFinished, workerPollStarted } from "./lib/process-metrics";
 import {
   captureProcessOutput,
@@ -3130,8 +3131,15 @@ class PolicyEngineMissingError extends Error {
 /**
  * Resolve a policy engine binary without spawning (issue #596). Honors
  * OPA_BINARY_PATH / SENTINEL_BINARY_PATH overrides, otherwise PATH.
- * Neither engine ships in the image; operators install them (OPA is
- * Apache-2.0, Sentinel is proprietary BYOB). Exported for tests.
+ * OPA falls back to the managed on-demand binary (lib/opa-bin.ts,
+ * selected by OPA_VERSION) when no explicit override is set; Sentinel has
+ * no public download and stays bring-your-own (proprietary). Neither engine
+ * ships in the image. Exported for tests.
+ *
+ * An explicit override that resolves to nothing stays missing: explicit
+ * configuration errors must surface, never trigger a surprise download.
+ * Callers that must stay offline (test availability probes) opt out of the
+ * managed tier via { managed: false }.
  *
  * PATH is scanned manually from process.env at call time (instead of
  * Bun.which) so runtime PATH mutations are honored: tests prepend a
@@ -3161,17 +3169,31 @@ async function isExecutableFile(candidate: string): Promise<boolean> {
   }
 }
 
-export async function probePolicyEngine(kind: "opa" | "sentinel"): Promise<{ path: string } | { missing: string }> {
+export async function probePolicyEngine(
+  kind: "opa" | "sentinel",
+  options?: { managed?: boolean },
+): Promise<{ path: string } | { missing: string }> {
   const override = kind === "opa" ? process.env["OPA_BINARY_PATH"] : process.env["SENTINEL_BINARY_PATH"];
-  const command = override !== undefined && override.trim() !== "" ? override.trim() : kind;
-  const candidates = command.includes("/") ? [resolve(command)] : executableCandidates(command);
+  const overridePath = override !== undefined && override.trim() !== "" ? override.trim() : null;
+  const candidates = overridePath !== null && overridePath.includes("/")
+    ? [resolve(overridePath)]
+    : executableCandidates(overridePath ?? kind);
   for (const candidate of candidates) {
     if (await isExecutableFile(candidate)) return { path: candidate };
+  }
+  let managedAttempted = false;
+  if (kind === "opa" && overridePath === null && (options?.managed ?? true)) {
+    managedAttempted = true;
+    const managed = await resolveManagedOpaBinary();
+    if (managed !== null) return { path: managed.binaryPath };
   }
   const install = kind === "opa"
     ? "Install OPA (https://www.openpolicyagent.org/docs/latest/#running-opa) and ensure the `opa` binary is on PATH, or set OPA_BINARY_PATH to its location."
     : "Install Sentinel and ensure the `sentinel` binary is on PATH, or set SENTINEL_BINARY_PATH to its location.";
-  return { missing: `${kind === "opa" ? "OPA" : "Sentinel"} policy engine is not available. ${install}` };
+  const managedNote = managedAttempted
+    ? " The automatic on-demand download (version selected by OPA_VERSION) was attempted and failed; check network access to github.com or pin a working OPA_VERSION."
+    : "";
+  return { missing: `${kind === "opa" ? "OPA" : "Sentinel"} policy engine is not available. ${install}${managedNote}` };
 }
 
 async function requirePolicyEngine(kind: "opa" | "sentinel"): Promise<string> {

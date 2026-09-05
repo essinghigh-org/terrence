@@ -16,14 +16,18 @@ import { eq, inArray } from "drizzle-orm";
 //
 // Real-execution cases gate on engine resolvability so CI without the
 // binaries skips them: OPA via OPA_BINARY_PATH or PATH, Sentinel via
-// SENTINEL_BINARY_PATH or PATH. The missing-engine cases are deterministic
-// and run everywhere by pointing the overrides at nonexistent paths. Each
-// engine gets its own workspace so verdicts cannot leak across cases.
+// SENTINEL_BINARY_PATH or PATH. The availability probes below opt out of
+// the managed OPA download ({ managed: false }) so test collection never
+// performs a network install; the managed tier is covered by
+// tests/unit/opa-bin.test.ts and runs on demand in production only. The
+// missing-engine cases are deterministic and run everywhere by pointing the
+// overrides at nonexistent paths. Each engine gets its own workspace so
+// verdicts cannot leak across cases.
 
-const opaAvailable = await probePolicyEngine("opa").then(
+const opaAvailable = await probePolicyEngine("opa", { managed: false }).then(
   (probed): boolean => !("missing" in probed),
 );
-const sentinelAvailable = await probePolicyEngine("sentinel").then(
+const sentinelAvailable = await probePolicyEngine("sentinel", { managed: false }).then(
   (probed): boolean => !("missing" in probed),
 );
 
