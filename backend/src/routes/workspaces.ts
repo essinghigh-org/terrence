@@ -1475,11 +1475,24 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       ),
     };
   })
-  .post("/api/v2/workspaces/:workspace_id/actions/force-unlock", async ({ params, user, orgId: principalOrgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/workspaces/:workspace_id/actions/force-unlock", async ({ params, user, orgId: principalOrgId, teamId, set, body }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
     const ws = await findAuthorizedWorkspace(workspaceId, user?.id, principalOrgId ?? null, teamId ?? null, "admin");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (ws.locked !== true) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is not locked" }] }; }
+    // Issue #617: a lock held by a live run must not be swept away silently —
+    // a second apply could be handed the workspace while the first is still
+    // writing. Require an explicit force flag for those; stale and manual
+    // locks unlock as before.
+    const payload = body !== null && typeof body === "object" ? (body as { data?: { attributes?: Record<string, unknown> } }) : {};
+    const force = payload.data?.attributes?.["force"] === true;
+    if (!force) {
+      const { isLiveRunLock } = await import("../lib/agent-jobs");
+      if (await isLiveRunLock(ws)) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `Workspace lock is held by a live run (${ws.lockOwnerId ?? "unknown"}); cancel or discard the run first, or retry with force to override` }] };
+      }
+    }
     await promoteIntermediateStateVersion(workspaceId);
     const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true))).returning({ id: workspaces.id });
     if (unlocked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock changed while unlocking" }] }; }

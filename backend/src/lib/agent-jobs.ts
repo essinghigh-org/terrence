@@ -1,5 +1,5 @@
 import { tokenHashCandidates } from "./token-service";
-import { and, asc, desc, eq, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   agentJobs,
@@ -31,6 +31,7 @@ import { insertStateVersionWithSerialTx } from "./state-serial";
 import { encryptStatePayload } from "./validation";
 import { variableValueForRead } from "./variable-crypto";
 import { isAgentPoolTokenActive } from "./agent-token";
+import { isTerminalRunStatus } from "./run-status";
 
 export const MAX_AGENT_RESULT_BYTES = 64 * 1024;
 export const MAX_AGENT_RESULT_DEPTH = 8;
@@ -492,7 +493,90 @@ export async function recoverStaleAgentJobs(now = Date.now()): Promise<string[]>
   }
 
   for (const item of recoveredJobs) void reportRunVcsStatus(item.runId, item.runStatus);
+  await releaseCanceledRunLocks(now);
   return recoveredJobs.map((item): string => item.jobId);
+}
+
+/** Whether any of these agents is still heartbeating (issue #617): fresh
+ * ping and not in a dead-ish status, mirroring the sweep's unavailability
+ * definition. */
+async function hasLiveAgent(agentIds: readonly string[], cutoff: number): Promise<boolean> {
+  if (agentIds.length === 0) return false;
+  const live = await db.query.agents.findFirst({
+    where: and(
+      inArray(agents.id, [...agentIds]),
+      gt(agents.lastPingAt, cutoff),
+      notInArray(agents.status, ["unknown", "exited", "errored"]),
+    ),
+    columns: { id: true },
+  });
+  return live !== undefined;
+}
+
+/** Lease-expiry backstop for locks held after cancel (issue #617): when a
+ * canceled/force-canceled run has no active jobs left and none of its
+ * canceled-out jobs can still have a live agent behind them, no remote apply
+ * can be running — release the run-owned lock. Holds while any agent is
+ * still heartbeating; a truly wedged agent is the operator's force-unlock. */
+async function releaseCanceledRunLocks(now = Date.now()): Promise<void> {
+  const cutoff = now - configuredHeartbeatTimeoutMs();
+  const heldLocks = await db.query.workspaces.findMany({
+    where: and(eq(workspaces.locked, true), eq(workspaces.lockOwnerType, "agent-run")),
+    columns: { id: true, lockOwnerId: true },
+    limit: 100,
+  });
+  for (const held of heldLocks) {
+    if (held.lockOwnerId === null) continue;
+    const run = await db.query.runs.findFirst({
+      where: eq(runs.id, held.lockOwnerId),
+      columns: { id: true, status: true, workspaceId: true },
+    });
+    if (run === undefined || run.workspaceId !== held.id) continue;
+    if (run.status !== "canceled" && run.status !== "force_canceled") continue;
+    const activeJob = await db.query.agentJobs.findFirst({
+      where: and(eq(agentJobs.runId, run.id), inArray(agentJobs.status, ["queued", "claimed"])),
+      columns: { id: true },
+    });
+    // Active jobs are the main sweep's business (or a mid-cancel window).
+    if (activeJob !== undefined) continue;
+    const outstanding = await db.query.agentJobs.findMany({
+      where: and(eq(agentJobs.runId, run.id), eq(agentJobs.status, "canceled")),
+      columns: { agentId: true },
+    });
+    const agentIds = [...new Set(outstanding.map((job): string | null => job.agentId).filter((id): id is string => id !== null))];
+    if (await hasLiveAgent(agentIds, cutoff)) continue;
+    await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
+      eq(workspaces.id, held.id),
+      eq(workspaces.locked, true),
+      eq(workspaces.lockOwnerType, "agent-run"),
+      eq(workspaces.lockOwnerId, run.id),
+    ));
+  }
+}
+
+/** Whether a run-owned workspace lock is held by a live run (issue #617):
+ * manual locks are never live-run locks. A non-terminal owner run (note:
+ * "canceled" is non-terminal in this model) is live. A terminal owner run
+ * (e.g. force_canceled after a hold) is live only while a canceled-out job
+ * may still have a heartbeating agent behind it. Orphaned locks (owner run
+ * gone) and fully terminal local locks are not live. */
+export async function isLiveRunLock(
+  workspace: Readonly<{ lockOwnerType?: string | null; lockOwnerId?: string | null }>,
+): Promise<boolean> {
+  const { lockOwnerType, lockOwnerId } = workspace;
+  if ((lockOwnerType !== "run" && lockOwnerType !== "agent-run") || lockOwnerId === null || lockOwnerId === undefined) {
+    return false;
+  }
+  const run = await db.query.runs.findFirst({ where: eq(runs.id, lockOwnerId), columns: { status: true } });
+  if (run === undefined) return false;
+  if (!isTerminalRunStatus(run.status)) return true;
+  if (lockOwnerType !== "agent-run") return false;
+  const outstanding = await db.query.agentJobs.findMany({
+    where: and(eq(agentJobs.runId, lockOwnerId), eq(agentJobs.status, "canceled")),
+    columns: { agentId: true },
+  });
+  const agentIds = [...new Set(outstanding.map((job): string | null => job.agentId).filter((id): id is string => id !== null))];
+  return hasLiveAgent(agentIds, Date.now() - configuredHeartbeatTimeoutMs());
 }
 
 export async function authenticateAgent(
@@ -680,19 +764,39 @@ export async function claimAgentJob(
 }
 
 export async function cancelAgentJobsForRun(runId: string): Promise<void> {
-  await db.update(agentJobs).set({
+  const now = Date.now();
+  // Claimed jobs are returned so the caller knows whether anything may still
+  // be running remotely: the agent only learns of the cancel on its next
+  // status poll.
+  const claimedJobs = await db.update(agentJobs).set({
     status: "canceled",
-    completedAt: Date.now(),
+    completedAt: now,
     errorMessage: "Run canceled",
   }).where(and(
     eq(agentJobs.runId, runId),
-    inArray(agentJobs.status, ["queued", "claimed"]),
+    eq(agentJobs.status, "claimed"),
+  )).returning({ id: agentJobs.id });
+  await db.update(agentJobs).set({
+    status: "canceled",
+    completedAt: now,
+    errorMessage: "Run canceled",
+  }).where(and(
+    eq(agentJobs.runId, runId),
+    eq(agentJobs.status, "queued"),
   ));
-  await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
-    eq(workspaces.locked, true),
-    eq(workspaces.lockOwnerType, "agent-run"),
-    eq(workspaces.lockOwnerId, runId),
-  ));
+  // Issue #617: a claimed job may still be running remotely. Releasing the
+  // workspace lock now would hand a second apply the workspace while the
+  // first agent may still write. Hold the lock until the agent acknowledges
+  // (terminal completion for the canceled job) or its heartbeat lease
+  // expires (the stale-job sweep releases it). Nothing claimed: nothing runs
+  // remotely, so the lock can go immediately.
+  if (claimedJobs.length === 0) {
+    await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(
+      eq(workspaces.locked, true),
+      eq(workspaces.lockOwnerType, "agent-run"),
+      eq(workspaces.lockOwnerId, runId),
+    ));
+  }
 }
 
 /** ANSI escape sequences: CSI (colors/cursor), OSC (titles/hyperlinks), Fe escapes. */
@@ -1110,6 +1214,36 @@ async function enqueueApplyAfterPlan(
   });
 }
 
+/** Terminal report for a job canceled out from under its agent (issue #617).
+ * The agent stopped its remote run and checked back: release the workspace
+ * lock the cancel held and free the agent. The run itself is already
+ * canceled/force-canceled and is left untouched. Returns undefined unless
+ * this exact (job, agent, fencing) triple is a canceled job of a canceled
+ * run — anything else stays a fencing conflict. */
+async function acknowledgeCanceledAgentJob(
+  // Drizzle's transaction/query client is stateful by design.
+  // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+  database: Database,
+  agentId: string,
+  jobId: string,
+  fencingToken: number,
+): Promise<CompletionResult | undefined> {
+  const job = await database.query.agentJobs.findFirst({
+    where: and(
+      eq(agentJobs.id, jobId),
+      eq(agentJobs.agentId, agentId),
+      eq(agentJobs.fencingToken, fencingToken),
+      eq(agentJobs.status, "canceled"),
+    ),
+  });
+  if (job === undefined) return undefined;
+  const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
+  if (run === undefined || (run.status !== "canceled" && run.status !== "force_canceled")) return undefined;
+  await releaseApplyWorkspaceLock(database, job, run);
+  await database.update(agents).set({ status: "idle", lastPingAt: Date.now() }).where(eq(agents.id, agentId));
+  return { job, runStatus: run.status };
+}
+
 async function completeAgentJobInTransaction(
   // Drizzle's transaction/query client is stateful by design.
   // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
@@ -1128,7 +1262,14 @@ async function completeAgentJobInTransaction(
       eq(agentJobs.status, "claimed"),
     ),
   });
-  if (job === undefined) return undefined;
+  // Issue #617: a claimed job that was canceled out from under the agent
+  // cannot complete normally, but its terminal report IS the acknowledgment
+  // that the remote run stopped: release the run-owned apply lock the cancel
+  // held, free the agent, and ack without touching the (already terminal)
+  // run. Anything else is still a fencing conflict.
+  if (job === undefined) {
+    return acknowledgeCanceledAgentJob(database, agentId, jobId, fencingToken);
+  }
   const run = await database.query.runs.findFirst({ where: eq(runs.id, job.runId) });
   const expectedRunStatus = job.phase === "plan" ? "planning" : "applying";
   if (!await validateAgentCompletion(database, agentId, job, run, completion, expectedRunStatus)) return undefined;
