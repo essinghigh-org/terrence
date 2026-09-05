@@ -104,6 +104,7 @@ describe("agent pool token expiry and revocation", () => {
     const body = await responseJson(response);
     const data = body["data"] as JsonObject;
     const attributes = data["attributes"] as JsonObject;
+    expect(attributes["token"]).toMatch(/^agent-[A-Za-z0-9_-]{43}$/);
     return { id: data["id"] as string, token: attributes["token"] as string };
   };
 

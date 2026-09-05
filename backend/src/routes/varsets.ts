@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { variableSets, variableSetWorkspaces, variableSetProjects, variableSetVariables, stackVariableSets, stacks, workspaces, projects, type users } from "../db/schema";
@@ -181,7 +182,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
       }
     }
     const record = {
-      id: `varset-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
+      id: newResourceId("varset"),
       orgId: org.id,
       parentProjectId,
       name,
@@ -286,7 +287,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     if (targets.length !== projectIds.length || targets.some((p: Readonly<{ readonly orgId: string }>): boolean => p.orgId !== record.orgId)) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Projects must belong to the variable set organization" }] };
     }
-    await db.insert(variableSetProjects).values(projectIds.map((pid: string): typeof variableSetProjects.$inferInsert => ({ id: `vsp-${crypto.randomUUID()}`, variableSetId: record.id, projectId: pid }))).onConflictDoNothing();
+    await db.insert(variableSetProjects).values(projectIds.map((pid: string): typeof variableSetProjects.$inferInsert => ({ id: newResourceId("vsp"), variableSetId: record.id, projectId: pid }))).onConflictDoNothing();
     (set as { status: number }).status = 204;
     return {};
   })
@@ -371,7 +372,7 @@ export const varsetRoutes = new Elysia({ name: "varsets" })
     const description = typeof attributes?.["description"] === "string" ? attributes["description"] : null;
     // Sensitive values are encrypted at rest (todo 167/168).
     const stored = await variableValueForWrite(sensitive, rawValue);
-    const variable = { id: `var-${crypto.randomUUID()}`, variableSetId: record.id, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description };
+    const variable = { id: newResourceId("var"), variableSetId: record.id, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description };
     try { await db.insert(variableSetVariables).values(variable); } catch (error: unknown) {
       if (isUniqueConstraintError(error)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this set" }] }; }
       throw error;

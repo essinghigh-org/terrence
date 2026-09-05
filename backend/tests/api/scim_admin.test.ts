@@ -208,7 +208,7 @@ test("implements the documented admin SCIM lifecycle and linked-team restriction
   expect(secondTokenResponse.status).toBe(201);
   const firstToken = (await firstTokenResponse.json()).data;
   const secondToken = (await secondTokenResponse.json()).data;
-  expect(firstToken.attributes.token).toStartWith("scim-");
+  expect(firstToken.attributes.token).toMatch(/^scim-[A-Za-z0-9_-]{43}$/);
   const storedToken = await db.query.scimTokens.findFirst({ where: eq(scimTokens.id, firstToken.id) });
   expect(storedToken?.tokenHash).toBe(hashAuthenticationToken(firstToken.attributes.token));
   const shownToken = await request("GET", `/api/v2/admin/scim-tokens/${firstToken.id}`, adminToken);

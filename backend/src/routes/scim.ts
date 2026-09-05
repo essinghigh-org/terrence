@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { tokenHashCandidates } from "../lib/token-service";
 import { db } from "../db";
@@ -243,7 +244,7 @@ async function replaceScimGroupMembers(groupId: string, ids: readonly string[], 
     if (identities.length !== ids.length) return false;
     await tx.delete(scimGroupMemberships).where(eq(scimGroupMemberships.groupId, groupId));
     if (ids.length > 0) {
-      await tx.insert(scimGroupMemberships).values(ids.map((scimUserId): typeof scimGroupMemberships.$inferInsert => ({ id: `scimmember-${crypto.randomUUID()}`, groupId, scimUserId })));
+      await tx.insert(scimGroupMemberships).values(ids.map((scimUserId): typeof scimGroupMemberships.$inferInsert => ({ id: newResourceId("scimmember"), groupId, scimUserId })));
     }
     return true;
   };
@@ -362,9 +363,9 @@ export const scimRoutes = new Elysia({ name: "scim" })
     const email = scimEmail(payload);
     if (email === null) return scimError(set, 400, "emails is required");
 
-    const userId = `user-${crypto.randomUUID()}`;
+    const userId = newResourceId("user");
     const passwordHash = await hashPassword(crypto.randomUUID());
-    const scimIdentityId = `scimuser-${crypto.randomUUID()}`;
+    const scimIdentityId = newResourceId("scimuser");
     let rejectedExistingAccount = false;
     try {
       await db.transaction(async (tx): Promise<void> => {
@@ -401,13 +402,13 @@ export const scimRoutes = new Elysia({ name: "scim" })
           createdAt: Date.now(),
           updatedAt: Date.now(),
         });
-        await tx.insert(identityLinks).values({ id: `idlink-${crypto.randomUUID()}`, userId: linkedUserId, provider: "scim", externalId: scimIdentityId, emailAtLinkTime: email, createdAt: Date.now() }).onConflictDoNothing();
+        await tx.insert(identityLinks).values({ id: newResourceId("idlink"), userId: linkedUserId, provider: "scim", externalId: scimIdentityId, emailAtLinkTime: email, createdAt: Date.now() }).onConflictDoNothing();
         // Converge pending invitation for same canonical email (todo #11: merge not duplicate)
         if (email !== null) {
           const pending = await tx.query.organizationInvitations.findFirst({ where: and(eq(organizationInvitations.emailNormalized, email.toLowerCase()), eq(organizationInvitations.status, "pending")) });
           if (pending !== undefined) {
             const { organizationMemberships } = await import("../db/schema");
-            await tx.insert(organizationMemberships).values({ id: `orgmem-${crypto.randomUUID()}`, orgId: pending.orgId, userId: linkedUserId, role: pending.role, status: "active" }).onConflictDoNothing();
+            await tx.insert(organizationMemberships).values({ id: newResourceId("orgmem"), orgId: pending.orgId, userId: linkedUserId, role: pending.role, status: "active" }).onConflictDoNothing();
             await tx.update(organizationInvitations).set({ status: "accepted", acceptedBy: linkedUserId, updatedAt: Date.now() }).where(eq(organizationInvitations.id, pending.id));
           }
         }
@@ -598,7 +599,7 @@ export const scimRoutes = new Elysia({ name: "scim" })
     const displayName = typeof payload["displayName"] === "string" ? payload["displayName"].trim() : "";
     if (displayName === "") return scimError(set, 400, "displayName is required");
 
-    const id = `scimgroup-${crypto.randomUUID()}`;
+    const id = newResourceId("scimgroup");
     const memberIds = payload["members"] === undefined ? [] : scimMemberIds(payload["members"]);
     if (memberIds === null) return scimError(set, 400, "members must be an array of SCIM user identifiers");
     const createdAt = Date.now();

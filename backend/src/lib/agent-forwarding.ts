@@ -1,3 +1,4 @@
+import { newResourceId } from "./resource-id";
 import { and, eq, inArray, lt } from "drizzle-orm";
 import { db } from "../db";
 import { agentForwardedRequests } from "../db/schema";
@@ -130,7 +131,7 @@ export async function forwardFetch(
   const method = validateForwardMethod(init);
   const requestHeaders = buildForwardHeaders(init);
   const bodyBytes = await readForwardBody(init);
-  const id = `afwd-${crypto.randomUUID()}`;
+  const id = newResourceId("afwd");
   await db.insert(agentForwardedRequests).values({
     id, agentPoolId, method, url: url.toString(), headers: requestHeaders,
     body: bodyBytes === null ? null : bodyBytes.toString("base64"), status: "queued", createdAt: Date.now(),

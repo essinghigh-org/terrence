@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { workspaceTransfers, workspaces, organizationMemberships, organizations, projects, type users } from "../db/schema";
@@ -186,7 +187,7 @@ export const workspaceTransferRoutes = new Elysia({ name: "workspace-transfers" 
       }
     }
 
-    const id = `wt-${crypto.randomUUID()}`;
+    const id = newResourceId("wt");
     const transfer: WorkspaceTransferItem = {
       id,
       sourceWorkspaceId,

@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 import { db } from "../db";
@@ -91,7 +92,7 @@ export const emailVerificationRoutes = new Elysia({ name: "email-verification" }
       const t = tx as typeof db;
       await t.delete(emailVerificationTokens).where(eq(emailVerificationTokens.userId, user.id));
       await t.insert(emailVerificationTokens).values({
-        id: `emailverify-${crypto.randomUUID()}`,
+        id: newResourceId("emailverify"),
         userId: user.id,
         email,
         tokenHash,

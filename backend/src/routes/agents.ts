@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import {
@@ -21,7 +22,7 @@ import {
 import { and, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import { checkOrganizationPermission, type DeepReadonly, auditLog, strictAuditEnabled, FINAL_RUN_STATUSES } from "../lib/utils";
 import { organizationName } from "../lib/response";
-import { hashAuthenticationToken, tokenHashCandidates } from "../lib/token-service";
+import { generateAuthenticationToken, hashAuthenticationToken, tokenHashCandidates } from "../lib/token-service";
 import { authPlugin } from "../auth";
 import {
   appendAgentJobLog,
@@ -508,20 +509,20 @@ export const agentRoutes = new Elysia({ name: "agents" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: scopeError }] };
     }
-    const id = `apool-${crypto.randomUUID()}`;
+    const id = newResourceId("apool");
     const orgScoped = attrs["organization-scoped"] !== false;
     await db.transaction(async (tx): Promise<void> => {
       await tx.insert(agentPools).values({ id, orgId: org.id, name, organizationScoped: orgScoped, createdAt: Date.now() });
       if (allowedWorkspaces.ids.length > 0) {
         await tx.insert(agentPoolAllowedWorkspaces).values(allowedWorkspaces.ids.map((workspaceId): typeof agentPoolAllowedWorkspaces.$inferInsert => ({
-          id: `apws-${crypto.randomUUID()}`,
+          id: newResourceId("apws"),
           agentPoolId: id,
           workspaceId,
         })));
       }
       if (allowedProjects.ids.length > 0) {
         await tx.insert(agentPoolAllowedProjects).values(allowedProjects.ids.map((projectId): typeof agentPoolAllowedProjects.$inferInsert => ({
-          id: `apprj-${crypto.randomUUID()}`,
+          id: newResourceId("apprj"),
           agentPoolId: id,
           projectId,
         })));
@@ -610,7 +611,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
         await tx.delete(agentPoolAllowedWorkspaces).where(eq(agentPoolAllowedWorkspaces.agentPoolId, poolId));
         if (allowedWorkspaces.ids.length > 0) {
           await tx.insert(agentPoolAllowedWorkspaces).values(allowedWorkspaces.ids.map((workspaceId): typeof agentPoolAllowedWorkspaces.$inferInsert => ({
-            id: `apws-${crypto.randomUUID()}`,
+            id: newResourceId("apws"),
             agentPoolId: poolId,
             workspaceId,
           })));
@@ -620,7 +621,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
         await tx.delete(agentPoolAllowedProjects).where(eq(agentPoolAllowedProjects.agentPoolId, poolId));
         if (allowedProjects.ids.length > 0) {
           await tx.insert(agentPoolAllowedProjects).values(allowedProjects.ids.map((projectId): typeof agentPoolAllowedProjects.$inferInsert => ({
-            id: `apprj-${crypto.randomUUID()}`,
+            id: newResourceId("apprj"),
             agentPoolId: poolId,
             projectId,
           })));
@@ -630,7 +631,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
         await tx.delete(agentPoolExcludedWorkspaces).where(eq(agentPoolExcludedWorkspaces.agentPoolId, poolId));
         if (excludedWorkspaces.ids.length > 0) {
           await tx.insert(agentPoolExcludedWorkspaces).values(excludedWorkspaces.ids.map((workspaceId): typeof agentPoolExcludedWorkspaces.$inferInsert => ({
-            id: `apexws-${crypto.randomUUID()}`,
+            id: newResourceId("apexws"),
             agentPoolId: poolId,
             workspaceId,
           })));
@@ -776,7 +777,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
     const attrs = getAttrs(body);
     const name = typeof attrs["name"] === "string" ? attrs["name"] : "";
     if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
-    const agentId = `agent-${crypto.randomUUID()}`;
+    const agentId = newResourceId("agent");
     const now = Date.now();
     const status = typeof attrs["status"] === "string" ? attrs["status"] : "idle";
     const ipAddress = typeof attrs["ip-address"] === "string" ? attrs["ip-address"] : null;
@@ -908,7 +909,7 @@ export const agentRoutes = new Elysia({ name: "agents" })
     (set as { status: number }).status = 201;
     return {
       data: {
-        id: `log-${crypto.randomUUID()}`,
+        id: newResourceId("log"),
         type: "agent-job-logs",
         attributes: { "output-text": outputText },
       },
@@ -1129,8 +1130,8 @@ export const agentRoutes = new Elysia({ name: "agents" })
       return { errors: [{ status: "403", title: "Forbidden", detail: policyResolution.detail }] };
     }
     const expiresAt = policyResolution.expiresAt ?? Date.now() + AGENT_POOL_TOKEN_DEFAULT_TTL_MS;
-    const rawToken = `agent-${crypto.randomUUID().replace(/-/g, "")}`;
-    const tokenId = `atok-${crypto.randomUUID()}`;
+    const rawToken = generateAuthenticationToken("agent");
+    const tokenId = newResourceId("atok");
     await db.insert(agentPoolTokens).values({ id: tokenId, agentPoolId: poolId, token: hashAuthenticationToken(rawToken), description, createdAt: Date.now(), expiresAt, revokedAt: null });
     if (strictAuditEnabled()) {
       await auditLog("create", "agent-pool-token", tokenId, user?.id ?? null, pool.orgId, {

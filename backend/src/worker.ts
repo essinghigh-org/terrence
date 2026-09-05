@@ -1,3 +1,4 @@
+import { newResourceId } from "./lib/resource-id";
 import { envEnabled } from "./lib/env";
 import { db } from "./db";
 import {
@@ -939,7 +940,7 @@ async function storePlanCheckResults(
     summary[normalizedStatus] += 1;
     const address = checkAddress(check, index);
     rows.push({
-      id: `checkrs-${crypto.randomUUID()}`,
+      id: newResourceId("checkrs"),
       workspaceId,
       assessmentResultId: association.assessmentResultId ?? null,
       runId: association.runId ?? null,
@@ -1730,7 +1731,7 @@ async function executeRunTasks(
     isGlobal: boolean;
     task: Readonly<typeof runTasks.$inferSelect>;
     resultId: string;
-  }> => ({ enforcementLevel, isGlobal, task, resultId: `taskrs-${crypto.randomUUID()}` }));
+  }> => ({ enforcementLevel, isGlobal, task, resultId: newResourceId("taskrs") }));
   if (entryList.length > 0) {
     await db.insert(runTaskResults).values(
       entryList.map((entry): typeof runTaskResults.$inferInsert => ({
@@ -3444,7 +3445,7 @@ export async function runPolicyChecks(
     await writeLog(runId, "plan", "[terrence ERROR] Plan JSON is unavailable; refusing to evaluate policies against stored state.");
     for (const policy of allPolicies) {
       checkBatch.push({
-        id: `pchk-${crypto.randomUUID()}`,
+        id: newResourceId("pchk"),
         runId,
         policyId: policy.id,
         policySetId: policy.policySetId,
@@ -3462,7 +3463,7 @@ export async function runPolicyChecks(
   await writeLog(runId, "plan", `[terrence] Evaluating ${allPolicies.length} policies across ${allSetIds.length} policy sets...`);
 
   for (const policy of allPolicies) {
-    const checkId = `pchk-${crypto.randomUUID()}`;
+    const checkId = newResourceId("pchk");
     let checkStatus = "unreachable";
     let checkResult: Record<string, unknown> = {};
 
@@ -4016,7 +4017,7 @@ export async function enqueueDueAssessments(now = Date.now()): Promise<string[]>
       || (latestResult !== undefined && latestResult.createdAt > cutoff)
     ) continue;
 
-    const id = `asmtres-${crypto.randomUUID()}`;
+    const id = newResourceId("asmtres");
     batch.push({
       id,
       workspaceId: workspace.id,
@@ -4565,7 +4566,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
         }).where(claimWhere).returning({ id: runs.id });
         if (claimed.length === 0) return false;
         await tx.insert(agentJobs).values({
-          id: `ajob-${crypto.randomUUID()}`,
+          id: newResourceId("ajob"),
           runId: run.id,
           agentPoolId: pool.id,
           phase: "plan",

@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import {
@@ -321,7 +322,7 @@ export const userRoutes = new Elysia({ name: "users" })
     let targetUser: Readonly<typeof users.$inferSelect> | undefined;
     if (email !== undefined && email !== null) targetUser = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${email}` });
     if (targetUser === undefined && username !== undefined) targetUser = await db.query.users.findFirst({ where: eq(users.username, username) });
-    const memId = `orgmem-${crypto.randomUUID()}`;
+    const memId = newResourceId("orgmem");
     const allowedStatuses = new Set(["active", "invited"]);
     const rawRequestedStatus = typeof attrs["status"] === "string" ? attrs["status"] : undefined;
     if (rawRequestedStatus !== undefined && !allowedStatuses.has(rawRequestedStatus)) {
@@ -404,9 +405,9 @@ export const userRoutes = new Elysia({ name: "users" })
           ? undefined
           : await t.query.users.findFirst({ where: eq(users.id, targetUser.id) });
         if (txTargetUser === undefined && email !== undefined && email !== null) {
-          const uid = `usr-${crypto.randomUUID()}`;
+          const uid = newResourceId("user");
           const emailPrefix = email.split("@")[0] ?? "user";
-          const uname = `${emailPrefix}_${crypto.randomUUID().substring(0, 4)}`;
+          const uname = `${emailPrefix}_${uid}`;
           await t.insert(users).values({ id: uid, username: uname, email, passwordHash: `$disabled$${randomBytes(32).toString("base64url")}`, isProvisional: true });
           txTargetUser = await t.query.users.findFirst({ where: eq(users.id, uid) });
         }
@@ -428,7 +429,7 @@ export const userRoutes = new Elysia({ name: "users" })
           // authorization requires an active org membership, and preserving them
           // makes activation deterministic instead of dropping the assignment.
           await t.insert(teamMemberships).values(validatedTeams.map((team): typeof teamMemberships.$inferInsert => ({
-            id: `tmem-${crypto.randomUUID()}`,
+            id: newResourceId("tm"),
             teamId: team.id,
             userId: txTargetUser.id,
             createdAt: Date.now(),

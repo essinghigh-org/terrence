@@ -1,3 +1,4 @@
+import { newResourceId } from "./resource-id";
 import { and, asc, eq, inArray, lt, lte } from "drizzle-orm";
 import { envEnabled } from "./env";
 import { db } from "../db";
@@ -80,7 +81,7 @@ export async function enqueueDurableJob(
   if (existing !== NO_EXISTING_DURABLE_JOB) return existing;
   const now = Date.now();
   const row: typeof durableJobs.$inferInsert = {
-    id: `job-${crypto.randomUUID()}`,
+    id: newResourceId("job"),
     kind,
     dedupeKey: options.dedupeKey ?? null,
     status: "queued",

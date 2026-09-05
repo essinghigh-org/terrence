@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { tokenHashCandidates } from "../lib/token-service";
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
@@ -447,7 +448,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
         lastPingAt: now,
       }).where(eq(agents.id, existing.id));
     } else {
-      agentId = `agent-${crypto.randomUUID()}`;
+      agentId = newResourceId("agent");
       await db.insert(agents).values({
         id: agentId,
         agentPoolId: pool.poolId,

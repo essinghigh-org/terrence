@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { and, desc, eq, inArray, notInArray, or } from "drizzle-orm";
 import { authPlugin } from "../auth";
@@ -289,7 +290,7 @@ function pagedStackRecords(records: StackRecordItem[], request: ParamCtx["reques
 }
 
 async function approveStackRecord(record: StackRecordItem, userId: string | null, reason: string | null): Promise<void> {
-  const approvalId = `sa-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+  const approvalId = newResourceId("sa");
   const now = Date.now();
   const runIds: string[] = [];
   await db.transaction(async (tx): Promise<void> => {
@@ -332,7 +333,7 @@ async function createStackConfigurationRecord(stack: StackItem, source: string, 
     const latestPayload = latest?.payload ?? {};
     const sequence = configurations.length === 0 ? 1 : Number(latestPayload["sequence-number"] ?? configurations.length) + 1;
     const record: typeof stackRecords.$inferInsert = {
-      id: `stc-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
+      id: newResourceId("stc"),
       stackId: stack.id,
       parentId: null,
       recordType: "stack-configurations",
@@ -390,7 +391,7 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     const vcs = stackVcsRepoAttributes(attrs);
     const vcsError = await validStackVcs(vcs, project.orgId);
     if (vcsError !== null) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: vcsError }] }; }
-    const id = `st-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    const id = newResourceId("st");
     const now = Date.now();
     const row: typeof stacks.$inferInsert = {
       id, orgId: project.orgId, projectId, agentPoolId: agentPoolId ?? null, executionMode, name, description: description === "" ? null : description,

@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { sshKeys } from "../db/schema";
@@ -46,7 +47,7 @@ export const sshKeyRoutes = new Elysia({ name: "sshKeys" })
     const name = typeof attrs["name"] === "string" ? attrs["name"] : "";
     const value = typeof attrs["value"] === "string" ? attrs["value"] : "";
     if (name === "" || value === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name and value are required" }] }; }
-    const id = `ssh-${crypto.randomUUID()}`;
+    const id = newResourceId("ssh");
     await db.insert(sshKeys).values({ id, orgId: org.id, name, value: await encryptSecret(value), createdAt: Date.now() });
     if (strictAuditEnabled()) {
       await auditLog("create", "ssh-key", id, user?.id ?? null, org.id, { name });

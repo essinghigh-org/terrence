@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import {
@@ -398,7 +399,7 @@ async function createRegistryModuleVersion(
     ? attributes["commit-sha"]
     : null;
   const now = Date.now();
-  const id = `modver-${crypto.randomUUID()}`;
+  const id = newResourceId("modver");
   const created: typeof registryModuleVersions.$inferInsert = {
     id,
     moduleId: mod.id,
@@ -733,7 +734,7 @@ async function replaceVariableOptions(noCodeModuleId: string, options: readonly 
   if (options.length === 0) return;
   const now = Date.now();
   await db.insert(noCodeVariableOptions).values(options.map((option): typeof noCodeVariableOptions.$inferInsert => ({
-    id: `ncvaropt-${crypto.randomUUID()}`,
+    id: newResourceId("ncvaropt"),
     noCodeModuleId,
     variableName: option.variableName,
     variableType: option.variableType,
@@ -767,7 +768,7 @@ async function patchVariableOptions(noCodeModuleId: string, options: readonly Va
   for (const option of options) {
     if (option.id === undefined) {
       await db.insert(noCodeVariableOptions).values({
-        id: `ncvaropt-${crypto.randomUUID()}`,
+        id: newResourceId("ncvaropt"),
         noCodeModuleId,
         variableName: option.variableName,
         variableType: option.variableType,
@@ -1296,7 +1297,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Private modules use the organization namespace and private registry" }] };
     }
-    const id = `mod-${crypto.randomUUID()}`;
+    const id = newResourceId("mod");
     const now = Date.now();
     const created: typeof registryModules.$inferInsert = {
       id,
@@ -1387,7 +1388,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The selected VCS connection is unavailable or unsupported" }] };
     }
     const now = Date.now();
-    const id = `mod-${crypto.randomUUID()}`;
+    const id = newResourceId("mod");
     const rawRepositoryUrl = vcsRepo["repository-url"];
     let repositoryUrl: string | null = null;
     if (repositoryBaseUrl !== null) {
@@ -1699,7 +1700,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const existing = await db.query.noCodeModules.findFirst({ where: eq(noCodeModules.moduleId, mod.id) });
     const now = Date.now();
     const noCode = existing === undefined
-      ? { id: `nocode-${crypto.randomUUID()}`, moduleId: mod.id, versionId: version.id, enabled: input.enabled ?? false, createdAt: now, updatedAt: now }
+      ? { id: newResourceId("nocode"), moduleId: mod.id, versionId: version.id, enabled: input.enabled ?? false, createdAt: now, updatedAt: now }
       : { ...existing, versionId: version.id, enabled: input.enabled ?? false, updatedAt: now };
     if (existing === undefined) {
       await db.insert(noCodeModules).values(noCode);
@@ -1899,7 +1900,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
         const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
         const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
         if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name (type) is required" }] }; }
-        const id = `prov-${crypto.randomUUID()}`;
+        const id = newResourceId("prov");
         const namespace = typeof attributes["namespace"] === "string" ? attributes["namespace"] : org.name;
         const registryName = typeof attributes["registry-name"] === "string" ? attributes["registry-name"] : "private";
         await db.insert(registryProviders).values({ id, orgId: org.id, namespace, type: name, registryName, createdAt: Date.now() });
@@ -1955,7 +1956,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key in the provider namespace" }] };
     }
-    const id = `provver-${crypto.randomUUID()}`;
+    const id = newResourceId("provver");
     const protocols = Array.isArray(attributes["protocols"]) ? (attributes["protocols"] as string[]) : ["5.0"];
     const shasumsUrl = typeof attributes["shasums-url"] === "string" ? attributes["shasums-url"] : null;
     const shasumsSignatureUrl = typeof attributes["shasums-signature-url"] === "string" ? attributes["shasums-signature-url"] : null;
@@ -2006,7 +2007,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     if (os === "" || arch === "" || filename === "" || downloadUrl === "" || shasum === "") {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "os, arch, filename, download-url, and shasum are required" }] };
     }
-    const id = `provplat-${crypto.randomUUID()}`;
+    const id = newResourceId("provplat");
     await db.insert(registryProviderPlatforms).values({ id, versionId, os, arch, filename, downloadUrl, shasum, createdAt: Date.now() });
     (set as { status: number }).status = 201;
     return { data: { id, type: "registry-provider-platforms", attributes: { os, arch, filename, "download-url": downloadUrl, shasum } } };
@@ -2055,7 +2056,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     if (rawKeyId !== undefined && (typeof rawKeyId !== "string" || rawKeyId === "")) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key" }] }; }
     const keyId = typeof rawKeyId === "string" ? rawKeyId.toUpperCase() : null;
     if (keyId !== null && await registrySigningKey(org.id, provider.namespace, keyId) === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "key-id must identify a GPG key in the provider namespace" }] }; }
-    const id = `provver-${crypto.randomUUID()}`;
+    const id = newResourceId("provver");
     const protocols = Array.isArray(attrs["protocols"]) ? (attrs["protocols"] as string[]) : ["5.0"];
     const createdAt = Date.now();
     try {
@@ -2095,7 +2096,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const downloadUrl = typeof attrs["download-url"] === "string" ? attrs["download-url"] : "";
     const shasum = typeof attrs["shasum"] === "string" ? attrs["shasum"] : "";
     if (os === "" || arch === "" || filename === "" || downloadUrl === "" || shasum === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "os, arch, filename, download-url, and shasum are required" }] }; }
-    const id = `provplat-${crypto.randomUUID()}`;
+    const id = newResourceId("provplat");
     try {
       await db.insert(registryProviderPlatforms).values({ id, versionId: version.id, os, arch, filename, downloadUrl, shasum, createdAt: Date.now() });
     } catch (error: unknown) {
@@ -2196,7 +2197,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: configuration.error }] };
     }
-    const legacyRunId = `legacy-module-test-${crypto.randomUUID()}`;
+    const legacyRunId = newResourceId("legacy-module-test");
     let result: Awaited<ReturnType<typeof runModuleTest>>;
     try {
       result = await runModuleTest(target.version.id, target.version.archivePath, configuration, undefined, await moduleTestEnvironmentFactory(target.mod.id, target.mod.name, target.mod.orgId, legacyRunId));
@@ -2340,7 +2341,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     const mod = await findTestRunModule(params);
     if (mod === undefined || !(await checkOrganizationPermission(mod.orgId, user?.id, tokenOrgId, teamId ?? null, "manage-modules"))) return registryNotFound(set);
     const now = Date.now();
-    const id = `cv-${crypto.randomUUID()}`;
+    const id = newResourceId("cv");
     await db.insert(moduleTestConfigurationVersions).values({ id, moduleId: mod.id, archivePath: null, status: "pending", createdAt: now, uploadedAt: null });
     (set as { status: number }).status = 201;
     return { data: testConfigurationVersionResource({ id, moduleId: mod.id, archivePath: null, status: "pending", createdAt: now, uploadedAt: null }, mod.id, request) };
@@ -2425,7 +2426,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The module archive is not available for testing" }] };
     }
     const now = Date.now();
-    const id = `trun-${crypto.randomUUID()}`;
+    const id = newResourceId("trun");
     const runValues: typeof moduleTestRuns.$inferInsert = {
       id,
       moduleId: mod.id,
@@ -2537,7 +2538,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
     if ("error" in input) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: input.error }] }; }
     const existing = await db.query.testVariables.findFirst({ where: and(eq(testVariables.moduleId, mod.id), eq(testVariables.key, input.key ?? "")) });
     if (existing !== undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "A test variable with this key already exists" }] }; }
-    const id = `var-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    const id = newResourceId("var");
     const now = Date.now();
     const created = { id, moduleId: mod.id, key: input.key ?? "", value: input.value ?? "", sensitive: input.sensitive ?? false, hcl: input.hcl ?? false, category: input.category ?? "terraform", description: input.description ?? null, createdAt: now, updatedAt: now };
     await db.insert(testVariables).values(created);
@@ -2741,7 +2742,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "The module version has no published archive" }] };
     }
-    const legacyRunId = `legacy-module-test-${crypto.randomUUID()}`;
+    const legacyRunId = newResourceId("legacy-module-test");
     let result: Awaited<ReturnType<typeof runModuleTest>>;
     try {
       result = await runModuleTest(ver.id, ver.archivePath, {

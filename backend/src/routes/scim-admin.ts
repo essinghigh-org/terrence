@@ -1,4 +1,5 @@
-import { hashAuthenticationToken } from "../lib/token-service";
+import { newResourceId } from "../lib/resource-id";
+import { generateAuthenticationToken, hashAuthenticationToken } from "../lib/token-service";
 import { Elysia } from "elysia";
 import { and, asc, count, eq, inArray, isNull } from "drizzle-orm";
 import { authPlugin } from "../auth";
@@ -139,7 +140,7 @@ export async function reconcileTeam(team: MappedTeam, groupId: string, transacti
     const membership = existingMemberships.get(userId);
     if (membership === undefined) {
       await tx.insert(organizationMemberships).values({
-        id: `orgmem-${crypto.randomUUID()}`,
+        id: newResourceId("orgmem"),
         userId,
         orgId: team.orgId,
         role: "member",
@@ -147,7 +148,7 @@ export async function reconcileTeam(team: MappedTeam, groupId: string, transacti
       });
     }
     await tx.insert(teamMemberships).values({
-      id: `tm-${crypto.randomUUID()}`,
+      id: newResourceId("tm"),
       teamId: team.id,
       userId,
       createdAt: Date.now(),
@@ -300,9 +301,9 @@ export const scimAdminRoutes = new Elysia({ name: "scim-admin" })
     if (!Number.isFinite(expiresAt) || expiresAt - now < 29 * DAY_MS || expiresAt - now > 365 * DAY_MS) {
       return apiError(set, 400, "Bad Request", "expired-at must be between 29 and 365 days in the future");
     }
-    const rawToken = `scim-${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
+    const rawToken = generateAuthenticationToken("scim");
     const token = {
-      id: `at-${crypto.randomUUID()}`,
+      id: newResourceId("at"),
       tokenHash: hashAuthenticationToken(rawToken),
       description: typeof description === "string" ? description : null,
       createdAt: now,

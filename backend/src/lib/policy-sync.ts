@@ -1,3 +1,4 @@
+import { newResourceId } from "./resource-id";
 import { mkdir, mkdtemp, open, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
@@ -365,7 +366,7 @@ export async function synchronizeVcsPolicySet(
   fetchArchive: () => Promise<Uint8Array>,
 ): Promise<void> {
   const now = Date.now();
-  const versionId = `polsetver-${crypto.randomUUID()}`;
+  const versionId = newResourceId("polsetver");
   const baseIngress = {
     provider,
     repository: details.repoFullName,
@@ -418,7 +419,7 @@ export async function synchronizeVcsPolicySet(
     await db.transaction(async (tx): Promise<void> => {
       await tx.delete(policies).where(eq(policies.policySetId, policySet.id));
       await tx.insert(policies).values(parsed.policies.map((policy): typeof policies.$inferInsert => ({
-        id: `pol-${crypto.randomUUID()}`,
+        id: newResourceId("pol"),
         policySetId: policySet.id,
         policySetVersionId: versionId,
         name: policy.name,

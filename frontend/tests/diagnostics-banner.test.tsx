@@ -3,6 +3,18 @@ import { render } from "@testing-library/react";
 import { DiagnosticsBanner } from "../src/components/DiagnosticsBanner";
 
 describe("DiagnosticsBanner", () => {
+  it("opens compact diagnostics by default and preserves manual collapse on updates", () => {
+    const diagnostics = [{ severity: "warning" as const, title: "Deprecated", body: "\n\non main.tf line 5\n\n\n  5: old = true\n\n" }];
+    const { container, rerender } = render(<DiagnosticsBanner severity="warning" diagnostics={diagnostics} collapsible />);
+    const disclosure = container.querySelector("details");
+    expect(disclosure?.open).toBe(true);
+    expect(container.querySelector("pre")?.textContent).toBe("on main.tf line 5\n  5: old = true");
+    if (disclosure === null) throw new Error("Missing diagnostics disclosure");
+    disclosure.open = false;
+    rerender(<DiagnosticsBanner severity="warning" diagnostics={[...diagnostics]} collapsible />);
+    expect(disclosure.open).toBe(false);
+  });
+
   it("renders warnings with title and body", () => {
     const { getByText, container } = render(
       <DiagnosticsBanner

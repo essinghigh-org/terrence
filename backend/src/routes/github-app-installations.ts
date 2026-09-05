@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { and, eq, sql } from "drizzle-orm";
 import jwt from "jsonwebtoken";
@@ -706,7 +707,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       return { errors: [{ status: "409", title: "Conflict", detail: "Installation ID is already registered in this organization" }] };
     }
     const installation = {
-      id: `ghain-${crypto.randomUUID()}`,
+      id: newResourceId("ghain"),
       orgId: org.id,
       name,
       installationId,
@@ -835,7 +836,7 @@ export const githubAppInstallationRoutes = new Elysia({ name: "githubAppInstalla
       return flowError(set, 502, "GitHub App Verification Failed", "GitHub did not return a matching installation for this App");
     }
 
-    const insertedId = `ghain-${crypto.randomUUID()}`;
+    const insertedId = newResourceId("ghain");
     await db.insert(githubAppInstallations).values({
       id: insertedId,
       orgId: org.id,

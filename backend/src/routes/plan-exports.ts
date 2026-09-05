@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { planExports, type users } from "../db/schema";
@@ -67,7 +68,7 @@ export const planExportRoutes = new Elysia({ name: "plan-exports" })
       return { errors: [{ status: "404", title: "Not Found" }] };
     }
 
-    const id = `pe-${crypto.randomUUID()}`;
+    const id = newResourceId("pe");
     if (typeof attributes["data-type"] !== "string" || !["sentinel-mock-bundle-v0", "configuration-version"].includes(attributes["data-type"])) {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data-type must be one of: sentinel-mock-bundle-v0, configuration-version" }] };

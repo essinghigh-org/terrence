@@ -51,9 +51,7 @@ describe("remote-workflow configuration versions contract", () => {
     );
     cvId = resource.id;
     uploadUrl = resource.attributes["upload-url"] as string;
-        // the reference format emits ids prefixed with "cv-"; Terrence uses bare UUIDs (opaque to clients).
-    expect(cvId).toBeTypeOf("string");
-    expect(cvId).not.toBe("");
+    expect(cvId).toMatch(/^cv-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
     expect(resource.attributes["source"]).toBe("tfe-api");
     expect(resource.attributes["status"]).toBe("pending");
     expect(resource.attributes["speculative"]).toBe(true);
@@ -86,6 +84,17 @@ describe("remote-workflow configuration versions contract", () => {
     expect(resource.attributes["status"]).toBe("uploaded");
     expect(resource.attributes["speculative"]).toBe(true);
     expectSelfLink(resource, "/api/v2/configuration-versions/");
+  });
+
+  it("still reads existing compact configuration IDs", async () => {
+    const legacyId = `cv-${crypto.randomUUID().replaceAll("-", "").slice(0, 14)}`;
+    await db.insert(configurationVersions).values({ id: legacyId, workspaceId, status: "pending" });
+    const resource = await expectSuccessResponse(
+      await request(`/api/v2/configuration-versions/${legacyId}`, { headers }),
+      200,
+      "configuration-versions",
+    );
+    expect(resource.id).toBe(legacyId);
   });
 
   it("downloads the uploaded configuration", async () => {

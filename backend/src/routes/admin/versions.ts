@@ -1,3 +1,4 @@
+import { newResourceId } from "../../lib/resource-id";
 import { Elysia } from "elysia";
 import { authPlugin } from "../../auth";
 import { db } from "../../db";
@@ -25,7 +26,7 @@ export const versionsRoutes = new Elysia({ name: "admin-versions" })
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const version = typeof attrs["version"] === "string" ? attrs["version"] : "";
     if (version === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Version is required" }] }; }
-    const id = `tfver-${crypto.randomUUID()}`;
+    const id = newResourceId("tfver");
     const url = typeof attrs["url"] === "string" ? attrs["url"] : null;
     const sha = typeof attrs["sha"] === "string" ? attrs["sha"] : null;
     const deprecated = typeof attrs["deprecated"] === "boolean" ? attrs["deprecated"] : false;
@@ -89,7 +90,7 @@ export const versionsRoutes = new Elysia({ name: "admin-versions" })
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const version = typeof attrs["version"] === "string" ? attrs["version"] : "";
     if (version === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
-    const id = `sver-${crypto.randomUUID()}`;
+    const id = newResourceId("sver");
     const url = typeof attrs["url"] === "string" ? attrs["url"] : null;
     const sha = typeof attrs["sha"] === "string" ? attrs["sha"] : null;
     const deprecated = typeof attrs["deprecated"] === "boolean" ? attrs["deprecated"] : false;
@@ -153,7 +154,7 @@ export const versionsRoutes = new Elysia({ name: "admin-versions" })
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const version = typeof attrs["version"] === "string" ? attrs["version"] : "";
     if (version === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
-    const id = `opa-${crypto.randomUUID()}`;
+    const id = newResourceId("opa");
     const url = typeof attrs["url"] === "string" ? attrs["url"] : null;
     const sha = typeof attrs["sha"] === "string" ? attrs["sha"] : null;
     const deprecated = typeof attrs["deprecated"] === "boolean" ? attrs["deprecated"] : false;

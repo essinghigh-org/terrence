@@ -1,3 +1,4 @@
+import { newResourceId } from "./resource-id";
 import { tokenHashCandidates } from "./token-service";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { db } from "../db";
@@ -362,7 +363,7 @@ async function recordAgentPolicyChecks(
         ? "soft_failed"
         : checkStatus;
       await database.insert(policyChecks).values({
-        id: `pchk-${crypto.randomUUID()}`,
+        id: newResourceId("pchk"),
         runId,
         policyId: policy.id,
         policySetId: policySet.id,
@@ -882,7 +883,7 @@ export async function insertAgentApplyJobTx(
   // for agent execution (tfc-agent contract), never the org default.
   const iacBinary = workspace?.iacBinary ?? "terraform";
   const job: AgentJob = {
-    id: `ajob-${crypto.randomUUID()}`,
+    id: newResourceId("ajob"),
     runId,
     agentPoolId,
     agentId: null,
@@ -1231,7 +1232,7 @@ async function enqueueApplyAfterPlan(
     columns: { iacBinary: true },
   });
   await database.insert(agentJobs).values({
-    id: `ajob-${crypto.randomUUID()}`,
+    id: newResourceId("ajob"),
     runId: run.id,
     agentPoolId: job.agentPoolId,
     phase: "apply",

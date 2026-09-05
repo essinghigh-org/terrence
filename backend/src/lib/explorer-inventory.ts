@@ -1,3 +1,4 @@
+import { newResourceId } from "./resource-id";
 import { and, asc, count, countDistinct, desc, eq, gt, inArray } from "drizzle-orm";
 import { db } from "../db";
 import {
@@ -90,7 +91,7 @@ function membershipRows(row: ExplorerInventoryCatalogRow): typeof explorerCatalo
     ...jsonItems(row.moduleItems ?? "[]").map((item): Readonly<{ kind: string; item: ExplorerCatalogItem }> => ({ kind: "modules", item })),
   ];
   return items.map(({ kind, item }): typeof explorerCatalogMemberships.$inferInsert => ({
-    id: `ecm-${crypto.randomUUID()}`,
+    id: newResourceId("ecm"),
     orgId: row.orgId,
     workspaceId: row.workspaceId,
     workspaceName: row.workspaceName,

@@ -57,15 +57,16 @@ import { useUnsavedChangesWarning } from "../lib/use-unsaved-changes";
 import { isBigInt, isBoolean, isNumber, isObjectLike, isString } from "../lib/type-guards";
 import { formatRunSource, formatRunStatus, isVcsRunSource } from "../lib/run-labels";
 import { StatusBadge } from "../components/ui/status-badge";
+import { RunLogOutput } from "../components/RunLogOutput";
 import { RunDecisionPanel } from "../components/RunDecisionPanel";
 import { RunStageStrip, resolveStages } from "../components/RunStageStrip";
 import { ACTION_CONFIRMATIONS, resolveRunDecision, type RunActionKind } from "../lib/run-decision";
 import { useRunView } from "../lib/use-run-view";
 import { sectionLabel, TERMINAL_STATUSES, type PolicyCheck, type RunComment, type RunEvent } from "../lib/run-view-state";
-import { formatPhaseState, phaseTone, runTone, TONE_ACCENT } from "../lib/run-status";
+import { formatPhaseState, phaseTone, resolvePhaseStatus, TONE_ACCENT } from "../lib/run-status";
 import { Callout } from "../components/ui/callout";
 import { Disclosure } from "../components/ui/disclosure";
-import { MetaList, MetaStrip } from "../components/ui/meta-list";
+import { MetaList } from "../components/ui/meta-list";
 import type { JsonObject } from "@/lib/json";
 
 const RUN_EVENT_LABELS = {
@@ -238,51 +239,6 @@ function isAdvisoryPolicyIssue(check: PolicyCheck): boolean {
     && ((result as JsonObject)["advisory-failed"] as number) > 0;
 }
 
-function phaseStatusFromRun(
-  status: string,
-  phase: "plan" | "apply",
-  timestamps: Readonly<Record<string, string>>,
-): string {
-  const planStarted = isString(timestamps["planning-at"]);
-  const planFinished = isString(timestamps["planned-at"])
-    || isString(timestamps["planned-and-finished-at"])
-    || isString(timestamps["planned-and-saved-at"]);
-  const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"]
-    .some((key: string): boolean => isString(timestamps[key]));
-  if (phase === "apply") {
-    if (status === "applied") return "finished";
-    if (status === "applying") return "running";
-    if (["confirmed", "apply_queued"].includes(status)) return "queued";
-    if (["errored", "failed", "unreachable"].includes(status)) return applyStarted ? "errored" : "pending";
-    if (["canceled", "discarded", "force_canceled"].includes(status)) return applyStarted ? "canceled" : "pending";
-    return "pending";
-  }
-  if (status === "planning") return "running";
-  if (["queuing", "plan_queued"].includes(status)) return "queued";
-  if ([
-    "planned",
-    "cost_estimating",
-    "cost_estimated",
-    "policy_checking",
-    "policy_override",
-    "policy_checked",
-    "policy_soft_failed",
-    "post_plan_running",
-    "post_plan_completed",
-    "planned_and_finished",
-    "planned_and_saved",
-    "confirmed",
-    "apply_queued",
-    "applying",
-    "applied",
-  ].includes(status)) return "finished";
-  if (["errored", "failed", "unreachable"].includes(status)) return planFinished ? "finished" : "errored";
-  if (["canceled", "discarded", "force_canceled"].includes(status)) {
-    return planFinished ? "finished" : planStarted ? "canceled" : "pending";
-  }
-  return "pending";
-}
-
 /**
  * Phase icons take their colour from the shared tone map so the plan and apply
  * headings, the header badge and the stage strip cannot land on three
@@ -296,8 +252,7 @@ function PhaseIcon({ status }: Readonly<{ status: string }>): React.JSX.Element 
   if (status === "running") {
     return (
       <span className="relative flex size-5 items-center justify-center">
-        <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-75" />
-        <Clock className={cn("relative size-4", accent)} aria-hidden="true" />
+        <Spinner className={cn("size-5 motion-reduce:animate-none", accent)} aria-label="Phase running" />
       </span>
     );
   }
@@ -355,7 +310,7 @@ function PhaseMeta({
   onToggleLogWrap: () => void;
 }>): React.JSX.Element {
   const started = timestamps[phase === "plan" ? "planning-at" : "applying-at"];
-  const completed = (phase === "plan"
+  const completed = status === "running" ? undefined : (phase === "plan"
     ? timestamps["planned-at"]
       ?? timestamps["planned-and-finished-at"]
       ?? timestamps["planned-and-saved-at"]
@@ -369,13 +324,13 @@ function PhaseMeta({
     : status === "canceled"
       ? "Canceled"
       : "Finished";
-  const hasLogUrl = safeHttpUrl(logUrl) !== null;
+  const hasLogUrl = !["pending", "queued"].includes(status) && safeHttpUrl(logUrl) !== null;
   const phaseDurationLabel = started !== undefined && completed !== undefined
     ? formatDuration(started, completed)
     : null;
   if (started === undefined && completed === undefined && !hasLogUrl) return <></>;
   return (
-    <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 text-xs text-muted-foreground">
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
       {started !== undefined && (
         <span>Started <time dateTime={started} title={formatDateTime(started)}>{formatRelativeTime(started)}</time></span>
       )}
@@ -407,6 +362,23 @@ function PhaseMeta({
         </>
       )}
     </div>
+  );
+}
+
+function RunLogDisclosure({ label, status, children }: Readonly<{
+  label: string;
+  status: string;
+  children: React.ReactNode;
+}>): React.JSX.Element {
+  const [expanded, setExpanded] = useState<boolean | null>(null);
+  const open = expanded ?? ["running", "errored", "unreachable"].includes(status);
+  return (
+    <Disclosure label={label} open={open}
+      onToggle={(next): void => { if (next !== open) setExpanded(next); }}
+      className="rounded-none border-0" summaryClassName="pr-16" bodyClassName="border-0"
+    >
+      {children}
+    </Disclosure>
   );
 }
 
@@ -1009,15 +981,13 @@ export function RunDetail({
   };
 
   const timestamps = attributes["status-timestamps"] ?? {};
-  const planStatus = plan?.attributes.status ?? phaseStatusFromRun(status, "plan", timestamps);
-  const applyStatus = apply?.attributes.status ?? phaseStatusFromRun(status, "apply", timestamps);
-  // Once a run has applied, surface the apply phase as the default-expanded
-  // section and collapse the plan (user preference).
-  const applied = applyStatus === "finished";
-  const autoPlanOpen = !applied && ["running", "finished", "errored", "unreachable"].includes(planStatus);
+  const planStatus = resolvePhaseStatus(status, "plan", timestamps, plan?.attributes.status);
+  const applyStatus = resolvePhaseStatus(status, "apply", timestamps, apply?.attributes.status);
+  // Surface the apply output once it starts, preserving explicit disclosure choices.
+  const autoApplyOpen = ["running", "finished", "errored", "unreachable"].includes(applyStatus);
+  const autoPlanOpen = !autoApplyOpen && ["running", "finished", "errored", "unreachable"].includes(planStatus);
   const planIsOpen = planExpanded ?? autoPlanOpen;
   planOpenRendered.current = planIsOpen;
-  const autoApplyOpen = applied || ["running", "errored", "unreachable"].includes(applyStatus);
   const applyIsOpen = applyExpanded ?? autoApplyOpen;
   applyOpenRendered.current = applyIsOpen;
   const planActionCount = planSummary?.runId === runId ? planSummary.summary.actionCount : null;
@@ -1187,7 +1157,7 @@ export function RunDetail({
     <>
       {/* The background page goes inert while the fullscreen log overlay is
           open so assistive tech cannot walk out of the modal (issue #625). */}
-      <div className="w-full" inert={fullscreenLog !== null}>
+      <div className="mx-auto w-full max-w-[1600px]" inert={fullscreenLog !== null}>
       {showBreadcrumb && (
         <Breadcrumbs
           items={[
@@ -1216,7 +1186,7 @@ export function RunDetail({
         />
       )}
 
-      <header className="mb-6 flex flex-col gap-4 border-b border-border pb-5 lg:flex-row lg:items-start lg:justify-between">
+      <header className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap items-center gap-2">
             {/* One badge, one status vocabulary (lib/run-status). The page used
@@ -1231,16 +1201,14 @@ export function RunDetail({
           </div>
           {/* A run page is now its own page rather than a panel nested under the
               workspace header, so its title is the document's h1. */}
-          <h1 className="break-words text-3xl font-bold tracking-tight text-foreground">
+          <h1 className="break-words text-2xl font-semibold tracking-tight sm:text-3xl text-foreground">
             {attributes.message ?? "Manual run"}
           </h1>
-          {/* Where the run is, in one line, derived from the same status the
-              badge uses so the two cannot disagree. */}
-          <RunStageStrip stages={stages} className="mt-3" />
-          <p className="mt-3 text-sm text-muted-foreground">
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          <p>
             {formatRunSource(attributes.source, attributes["trigger-reason"])} · Created {formatDate(attributes["created-at"])}
           </p>
-          <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1">
             <span>Run ID:</span>
             <code className="select-all font-mono">{runId}</code>
             <Button
@@ -1254,7 +1222,7 @@ export function RunDetail({
             </Button>
           </div>
           {isVcsRunSource(attributes.source, attributes["trigger-reason"]) && (
-            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span>{isString(attributes.branch) ? attributes.branch : "Default branch"}</span>
               {attributes["commit-sha"] !== undefined && attributes["commit-sha"] !== null && attributes["commit-sha"] !== "" && (
                 isString(attributes["commit-url"]) && safeHttpUrl(attributes["commit-url"]) !== null ? (
@@ -1274,8 +1242,9 @@ export function RunDetail({
               )}
             </div>
           )}
+          </div>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2 lg:max-w-sm lg:justify-end">
           <Button
             variant="outline"
             size="sm"
@@ -1310,7 +1279,7 @@ export function RunDetail({
             </Button>
           )}
           {rerunBlockedReason !== null && (
-            <span className="text-xs text-muted-foreground">{rerunBlockedReason}</span>
+            <span className="w-full text-xs text-muted-foreground lg:text-right">{rerunBlockedReason}</span>
           )}
           {rerunError !== "" && (
             <p role="alert" className="w-full text-xs text-destructive">{rerunError}</p>
@@ -1322,7 +1291,9 @@ export function RunDetail({
           </div>
       </header>
 
-      <div className="mb-6">
+      <RunStageStrip stages={stages} className="mb-5" />
+
+      <div className="mb-5">
         <RunDecisionPanel
           decision={decision}
           status={status}
@@ -1376,98 +1347,11 @@ export function RunDetail({
         </Callout>
       )}
 
-      <MetaStrip
-        className="mb-5"
-        items={[
-          {
-            label: durationLabel,
-            value: duration,
-            ...(slowRunNote === null ? {} : { note: slowRunNote }),
-          },
-          {
-            label: "Resources changed",
-            value: (
-              <ResourceCounts
-                additions={summaryCounts?.["resource-additions"]}
-                changes={summaryCounts?.["resource-changes"]}
-                destructions={summaryCounts?.["resource-destructions"]}
-                imports={summaryImportCount}
-                status={applyStatus === "finished" ? applyStatus : planStatus}
-              />
-            ),
-          },
-          {
-            label: "Actions",
-            value: planActionCount === null
-              ? "Unavailable"
-              : `${planActionCount} ${applyStatus === "finished" ? "invoked" : "to invoke"}`,
-          },
-        ]}
-      />
-
-      <Disclosure label="Run details" className="mb-5">
-        <MetaList
-          columns={5}
-          className="px-5 py-4"
-          items={[
-            { label: "Status", value: formatRunStatus(status) },
-            ...(creatorUsername === "" ? [] : [{
-              label: "Created by",
-              value: (
-                <span className="flex items-center gap-2">
-                  <Avatar className="size-6 rounded-full">
-                    {creatorAvatarUrl !== "" ? (
-                      <AvatarImage src={creatorAvatarUrl} alt={creatorUsername} className="rounded-full object-cover" />
-                    ) : (
-                      <AvatarFallback className="rounded-full bg-muted text-2xs text-muted-foreground">
-                        {creatorUsername.slice(0, 2).toUpperCase()}
-                      </AvatarFallback>
-                    )}
-                  </Avatar>
-                  {creatorUsername}
-                </span>
-              ),
-            }]),
-            {
-              label: "Workspace",
-              value: (
-                <Link to={workspacePath} className="text-primary hover:underline">
-                  {workspaceName}
-                </Link>
-              ),
-            },
-            { label: "Operation", value: formatRunStatus(attributes.operation ?? "plan_and_apply") },
-            { label: "Auto apply", value: attributes["auto-apply"] === true ? "Enabled" : "Disabled" },
-            { label: "Engine version", value: attributes["terraform-version"] ?? "Workspace default" },
-          ]}
-        />
-        {(timestampEntries.length > 0 || inputStateSerial !== undefined) && (
-          <div className="border-t border-border px-5 py-4">
-            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Run timeline</h3>
-            <dl className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
-              {timestampEntries.map(([key, value]): React.JSX.Element => (
-                <div key={key}>
-                  <dt className="capitalize text-muted-foreground">{key.replace(/-at$/, "").replace(/-/g, " ")}</dt>
-                  <dd className="mt-0.5 text-foreground">{formatDate(value)}</dd>
-                </div>
-              ))}
-              {inputStateSerial !== undefined && /^\d+$/.test(inputStateSerial) && (
-                <div>
-                  <dt className="text-muted-foreground">Input state serial</dt>
-                  <dd className="mt-0.5 text-foreground" title="The workspace state snapshot used as this run's plan input.">
-                    #{inputStateSerial}
-                  </dd>
-                </div>
-              )}
-            </dl>
-          </div>
-        )}
-      </Disclosure>
-
+      <div className="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_264px]">
       <div className="min-w-0 space-y-5">
           <details
             aria-labelledby="plan-heading"
-            className="group overflow-hidden rounded-md border border-border bg-background shadow-sm"
+            className="group overflow-hidden rounded-lg border border-border bg-card"
             open={planIsOpen}
             onToggle={(event): void => {
               if (event.currentTarget.open !== planOpenRendered.current) {
@@ -1475,8 +1359,8 @@ export function RunDetail({
               }
             }}
           >
-            <summary className="cursor-pointer list-none border-b border-border px-5 py-4 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <summary className="cursor-pointer list-none px-5 py-4 group-open:border-b group-open:border-border hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+              <div className="flex flex-col gap-3">
                 <div className="flex items-center gap-3">
                   <ChevronRight className="size-4 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
                   <PhaseIcon status={planStatus} />
@@ -1484,13 +1368,12 @@ export function RunDetail({
                     Plan{" "}
                     <span className="ml-2 font-normal text-muted-foreground">{formatPhaseState(planStatus)}</span>
                   </h3>
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-4">
                   {["finished", "planned_and_saved"].includes(planStatus) && planExplainerEnabled && (
                     <Button
                       type="button"
-                      variant="outline"
+                      variant="ghost"
                       size="sm"
+                      className="ml-auto"
                       onClick={(event: React.MouseEvent<HTMLButtonElement>): void => {
                         // Inside the plan <summary>: opening the dialog must
                         // not toggle the details section open/closed.
@@ -1504,10 +1387,12 @@ export function RunDetail({
                       Explain plan
                     </Button>
                   )}
+                </div>
+                <div className="flex flex-wrap items-center gap-4">
                   <PhaseMeta
                     phase="plan"
                     status={planStatus}
-                    timestamps={plan?.attributes["status-timestamps"] ?? timestamps}
+                    timestamps={{ ...timestamps, ...plan?.attributes["status-timestamps"] }}
                     logUrl={plan?.attributes["log-read-url"]}
                     logWrap={logWrap}
                     onToggleLogWrap={() => { setLogWrap((wrap) => !wrap); }}
@@ -1547,15 +1432,12 @@ export function RunDetail({
             />
 
             <div className="relative border-t border-border">
-              <details className="group">
-              <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 pr-16 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-                <span>Raw plan log</span>
-              </summary>
+              <RunLogDisclosure key={`plan-${runId}`} label="Raw plan log" status={planStatus}>
               {truncationNotice(view.planLog.truncated)}
-              <pre className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
+              <RunLogOutput active={planStatus === "running"} className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
                 {planLogs !== "" ? truncateLogForDisplay(planLogs) : planRawLogMessage}
-              </pre>
-              </details>
+              </RunLogOutput>
+              </RunLogDisclosure>
               <Button
                 type="button"
                 variant="ghost"
@@ -1570,7 +1452,7 @@ export function RunDetail({
           </details>
 
           {showCostEstimate && (
-          <section aria-labelledby="cost-heading" className="overflow-hidden rounded-md border border-border bg-background shadow-sm">
+          <section aria-labelledby="cost-heading" className="overflow-hidden rounded-lg border border-border bg-card">
             <div className="flex items-center justify-between gap-4 px-5 py-4">
               <div className="flex items-center gap-3">
                 {costPending ? (
@@ -1619,7 +1501,7 @@ export function RunDetail({
           )}
 
           {showPolicyChecks && (
-          <section aria-labelledby="policy-heading" className="overflow-hidden rounded-md border border-border bg-background shadow-sm">
+          <section aria-labelledby="policy-heading" className="overflow-hidden rounded-lg border border-border bg-card">
             <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
               <div className="flex items-center gap-3">
                 {hasFailedPolicy ? (
@@ -1683,7 +1565,7 @@ export function RunDetail({
           )}
 
           {assessmentChecks.length > 0 && (
-            <details className="group overflow-hidden rounded-md border border-border bg-background shadow-sm">
+            <details className="group overflow-hidden rounded-lg border border-border bg-card">
               <summary className="cursor-pointer list-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
                 <div className="flex items-center justify-between gap-3 px-5 py-4 group-open:border-b group-open:border-border">
                   <div className="flex items-center gap-3">
@@ -1721,8 +1603,8 @@ export function RunDetail({
           {showApply && (
           <details
             aria-labelledby="apply-heading"
-            className={`group overflow-hidden rounded-md border bg-background shadow-sm ${
-              runTone(applyStatus) === "danger" ? "border-destructive/50" : "border-border"
+            className={`group overflow-hidden rounded-lg border bg-card ${
+              phaseTone(applyStatus) === "danger" ? "border-destructive/50" : "border-border"
             }`}
             open={applyIsOpen}
             onToggle={(event): void => {
@@ -1731,8 +1613,8 @@ export function RunDetail({
               }
             }}
           >
-            <summary className="cursor-pointer list-none border-b border-border px-5 py-4 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <summary className="cursor-pointer list-none px-5 py-4 group-open:border-b group-open:border-border hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+              <div className="flex flex-col gap-3">
                 <div className="flex items-center gap-3">
                   <ChevronRight className="size-4 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
                   <PhaseIcon status={applyStatus} />
@@ -1744,13 +1626,12 @@ export function RunDetail({
                         could disagree by a refresh. */}
                     <span className="ml-2 font-normal text-muted-foreground">{formatPhaseState(applyStatus)}</span>
                   </h3>
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-4">
                   {["errored", "unreachable"].includes(applyStatus) && planExplainerEnabled && (
                     <Button
                       type="button"
-                      variant="outline"
+                      variant="ghost"
                       size="sm"
+                      className="ml-auto"
                       onClick={(event: React.MouseEvent<HTMLButtonElement>): void => {
                         // Inside the apply <summary>: opening the dialog must
                         // not toggle the details section open/closed.
@@ -1764,10 +1645,12 @@ export function RunDetail({
                       Explain failure
                     </Button>
                   )}
+                </div>
+                <div className="flex flex-wrap items-center gap-4">
                   <PhaseMeta
                     phase="apply"
                     status={applyStatus}
-                    timestamps={apply?.attributes["status-timestamps"] ?? timestamps}
+                    timestamps={{ ...timestamps, ...apply?.attributes["status-timestamps"] }}
                     logUrl={apply?.attributes["log-read-url"]}
                     logWrap={logWrap}
                     onToggleLogWrap={() => { setLogWrap((wrap) => !wrap); }}
@@ -1791,15 +1674,6 @@ export function RunDetail({
               </p>
             )}
 
-            {applyStatus !== "pending" && (
-              <ApplyOutput
-                runId={runId}
-                status={status}
-                applyStatus={applyStatus}
-                applyLogs={applyLogs}
-              />
-            )}
-
             {applyWarnings.length > 0 && (
               <DiagnosticsBanner severity="warning" diagnostics={applyWarnings} collapsible />
             )}
@@ -1816,16 +1690,22 @@ export function RunDetail({
                 </section>
               )
             )}
+            {applyStatus !== "pending" && (
+              <ApplyOutput
+                runId={runId}
+                status={status}
+                applyStatus={applyStatus}
+                applyLogs={applyLogs}
+              />
+            )}
+
             <div className="relative">
-                <details className="group">
-                <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 pr-16 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-                  <span>Raw apply log</span>
-                </summary>
+                <RunLogDisclosure key={`apply-${runId}`} label="Raw apply log" status={applyStatus}>
                 {truncationNotice(view.applyLog.truncated)}
-                <pre className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
+                <RunLogOutput active={applyStatus === "running"} className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
                   {applyLogs !== "" ? truncateLogForDisplay(applyLogs) : applyRawLogMessage}
-                </pre>
-                </details>
+                </RunLogOutput>
+                </RunLogDisclosure>
                 <Button
                   type="button"
                   variant="ghost"
@@ -1841,8 +1721,92 @@ export function RunDetail({
           )}
 
 
+      </div>
+      <aside aria-label="Run context" className="min-w-0 space-y-5">
+      <section aria-labelledby="run-details-heading" className="overflow-hidden rounded-lg border border-border bg-card">
+        <h2 id="run-details-heading" className="border-b border-border px-5 py-4 text-sm font-semibold">Run details</h2>
+        <MetaList
+          columns={2}
+          className="grid-cols-1 px-5 py-4 sm:grid-cols-1"
+          items={[
+            {
+              label: durationLabel,
+              value: duration,
+              ...(slowRunNote === null ? {} : { note: slowRunNote }),
+            },
+            {
+              label: "Resources changed",
+              value: (
+                <ResourceCounts
+                  additions={summaryCounts?.["resource-additions"]}
+                  changes={summaryCounts?.["resource-changes"]}
+                  destructions={summaryCounts?.["resource-destructions"]}
+                  imports={summaryImportCount}
+                  status={applyStatus === "finished" ? applyStatus : planStatus}
+                />
+              ),
+            },
+            {
+              label: "Actions",
+              value: planActionCount === null
+                ? "Unavailable"
+                : `${planActionCount} ${applyStatus === "finished" ? "invoked" : "to invoke"}`,
+            },
+            { label: "Status", value: formatRunStatus(status) },
+            ...(creatorUsername === "" ? [] : [{
+              label: "Created by",
+              value: (
+                <span className="flex items-center gap-2">
+                  <Avatar className="size-6 rounded-full">
+                    {creatorAvatarUrl !== "" ? (
+                      <AvatarImage src={creatorAvatarUrl} alt={creatorUsername} className="rounded-full object-cover" />
+                    ) : (
+                      <AvatarFallback className="rounded-full bg-muted text-2xs text-muted-foreground">
+                        {creatorUsername.slice(0, 2).toUpperCase()}
+                      </AvatarFallback>
+                    )}
+                  </Avatar>
+                  {creatorUsername}
+                </span>
+              ),
+            }]),
+            {
+              label: "Workspace",
+              value: (
+                <Link to={workspacePath} className="break-all text-primary hover:underline">
+                  {workspaceName}
+                </Link>
+              ),
+            },
+            { label: "Operation", value: formatRunStatus(attributes.operation ?? "plan_and_apply") },
+            { label: "Auto apply", value: attributes["auto-apply"] === true ? "Enabled" : "Disabled" },
+            { label: "Engine version", value: attributes["terraform-version"] ?? "Workspace default" },
+          ]}
+        />
+        {(timestampEntries.length > 0 || inputStateSerial !== undefined) && (
+          <Disclosure label="Run timeline" className="rounded-none border-0 border-t" bodyClassName="px-5 py-4">
+            <dl className="grid gap-3 text-xs">
+              {timestampEntries.map(([key, value]): React.JSX.Element => (
+                <div key={key}>
+                  <dt className="capitalize text-muted-foreground">{key.replace(/-at$/, "").replace(/-/g, " ")}</dt>
+                  <dd className="mt-0.5 text-foreground">{formatDate(value)}</dd>
+                </div>
+              ))}
+              {inputStateSerial !== undefined && /^\d+$/.test(inputStateSerial) && (
+                <div>
+                  <dt className="text-muted-foreground">Input state serial</dt>
+                  <dd className="mt-0.5 text-foreground" title="The workspace state snapshot used as this run's plan input.">
+                    #{inputStateSerial}
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </Disclosure>
+        )}
+      </section>
+
           {showCombinedEmptyActivity ? (
-            <section aria-labelledby="activity-heading" className="rounded-md border border-border bg-background shadow-sm">
+            <section aria-labelledby="activity-heading" className="rounded-lg border border-border bg-card">
               <div className="flex items-center gap-3 border-b border-border px-5 py-4">
                 <History className="size-5 text-muted-foreground/70" aria-hidden="true" />
                 <MessageSquare className="size-5 text-muted-foreground/70" aria-hidden="true" />
@@ -1854,7 +1818,7 @@ export function RunDetail({
             </section>
           ) : (
             <>
-          <section aria-labelledby="activity-heading" className="rounded-md border border-border bg-background shadow-sm">
+          <section aria-labelledby="activity-heading" className="rounded-lg border border-border bg-card">
             <div className="flex items-center gap-3 border-b border-border px-5 py-4">
               <History className="size-5 text-muted-foreground/70" aria-hidden="true" />
               <h3 id="activity-heading" className="font-semibold text-foreground">Activity</h3>
@@ -1914,7 +1878,7 @@ export function RunDetail({
             )}
           </section>
 
-          <section aria-labelledby="comments-heading" className="rounded-md border border-border bg-background shadow-sm">
+          <section aria-labelledby="comments-heading" className="rounded-lg border border-border bg-card">
             <div className="flex items-center gap-3 border-b border-border px-5 py-4">
               <MessageSquare className="size-5 text-muted-foreground/70" aria-hidden="true" />
               <h3 id="comments-heading" className="font-semibold text-foreground">Comments</h3>
@@ -1925,7 +1889,7 @@ export function RunDetail({
                 <p className="px-5 py-4 text-sm text-muted-foreground">No comments yet.</p>
               ) : comments.map((comment: RunComment): React.JSX.Element => (
                 <article key={comment.id} className="px-5 py-4">
-                  <div className="mb-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                  <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                     <span className="flex items-center gap-2 font-medium text-foreground/85">
                       <Avatar className="size-5 rounded-full">
                         {comment.attributes["actor-avatar-url"] ? (
@@ -1948,6 +1912,7 @@ export function RunDetail({
           </section>
             </>
           )}
+      </aside>
       </div>
 
       <Dialog
@@ -2073,11 +2038,11 @@ export function RunDetail({
             </Button>
           </div>
           {truncationNotice(fullscreenLog === "plan" ? view.planLog.truncated : view.applyLog.truncated)}
-          <pre className={`flex-1 overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
+          <RunLogOutput key={fullscreenLog} active={(fullscreenLog === "plan" ? planStatus : applyStatus) === "running"} className={`flex-1 overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
             {fullscreenLog === "plan"
               ? planLogs !== "" ? truncateLogForDisplay(planLogs) : planRawLogMessage
               : applyLogs !== "" ? truncateLogForDisplay(applyLogs) : applyRawLogMessage}
-          </pre>
+          </RunLogOutput>
         </div>
       )}
     </>

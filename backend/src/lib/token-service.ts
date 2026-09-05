@@ -8,8 +8,7 @@ import { join, resolve } from "node:path";
 // endpoint. Existing tokens stay valid until revoked — authentication accepts
 // both the current keyed digest and the old unkeyed SHA-256 digest.
 //
-// Resource IDs stay UUIDs (todo 3/18/421): they are identifiers, not secrets,
-// and keep their existing shapes for compatibility.
+// Resource IDs are generated separately by resource-id.ts; they are not secrets.
 
 /**
  * Generate a 256-bit opaque bearer secret with a type prefix, e.g.

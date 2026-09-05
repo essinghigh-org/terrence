@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 import { cn } from "@/lib/utils";
@@ -36,9 +36,6 @@ function decisionTone(decision: RunDecision): RunTone {
 
 function ToneIcon({ decision }: Readonly<{ decision: RunDecision }>): React.JSX.Element {
   const tone = decisionTone(decision);
-  if (decision.kind === "waiting") {
-    return <Loader2 className={`size-5 shrink-0 animate-spin ${TONE_ACCENT[tone]}`} aria-hidden="true" />;
-  }
   if (decision.kind === "settled") {
     return <CheckCircle2 className={`size-5 shrink-0 ${TONE_ACCENT[tone]}`} aria-hidden="true" />;
   }
@@ -89,7 +86,7 @@ function ConfirmStep({
   return (
     <section
       aria-labelledby="run-decision-heading"
-      className={cn("rounded-lg border p-5 shadow-sm", surface)}
+      className={cn("rounded-lg border p-4 sm:p-5", surface)}
     >
       <h2 id="run-decision-heading" className="text-base font-semibold text-foreground">
         {copy.title}
@@ -188,7 +185,7 @@ export function RunDecisionPanel({
   // the header badge and the phase sections already report the outcome.
   const silent = decision.detail === "" && decision.offers.length === 0;
   if (decision.kind === "settled" && silent) return null;
-  if (decision.kind === "waiting" && silent && !decision.showProgress) return null;
+  if (decision.kind === "waiting" && silent) return null;
 
   const surface = TONE_SURFACE[decisionTone(decision)];
 
@@ -211,24 +208,25 @@ export function RunDecisionPanel({
   return (
     <section
       aria-labelledby="run-decision-heading"
-      className={cn("rounded-lg border p-5 shadow-sm", surface)}
+      className={decision.kind === "waiting" ? "flex justify-end" : cn("rounded-lg border p-4 sm:p-5", surface)}
     >
       <div className="flex items-start gap-3">
-        <ToneIcon decision={decision} />
-        <div className="min-w-0 flex-1">
-          <h2 id="run-decision-heading" className="text-base font-semibold text-foreground">
+        {decision.kind !== "waiting" && <ToneIcon decision={decision} />}
+        <div className="grid min-w-0 flex-1 items-center gap-x-6 sm:grid-cols-[minmax(0,1fr)_auto]">
+          <h2 id="run-decision-heading" className={decision.kind === "waiting" ? "sr-only" : "text-sm font-semibold text-foreground"}>
             {decision.headline}
           </h2>
           {decision.detail !== "" && (
-            <p className="mt-1 max-w-prose text-sm text-muted-foreground">{decision.detail}</p>
+            <p className="mt-1 max-w-prose text-sm text-muted-foreground sm:col-start-1">{decision.detail}</p>
           )}
           {decision.offers.length > 0 && (
-            <div className="mt-4 flex flex-wrap items-center gap-2">
+            <div className="mt-3 flex flex-wrap items-center gap-2 sm:col-start-2 sm:row-span-2 sm:row-start-1 sm:mt-0">
               {decision.offers.map((item: RunActionOffer): React.JSX.Element => (
                 <Button
                   key={item.kind}
                   type="button"
                   {...offerButtonProps(item.emphasis)}
+                  size={decision.kind === "waiting" ? "sm" : "default"}
                   disabled={item.blockedReason !== null || pending !== ""}
                   // The blocker rides on the button it blocks; the list below
                   // repeats it as text so the reason stays reachable by

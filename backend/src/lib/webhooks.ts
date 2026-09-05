@@ -1,3 +1,4 @@
+import { newResourceId } from "./resource-id";
 import { copyFile, mkdir, open, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import jwt from "jsonwebtoken";
@@ -1657,7 +1658,7 @@ export async function createConfigurationVersionFromVcs(
     }
   }
 
-  const cvId = `cv-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
+  const cvId = newResourceId("cv");
   await db.insert(configurationVersions).values({
     id: cvId,
     workspaceId: workspace.id,
@@ -1898,7 +1899,7 @@ async function createWebhookRun(
   if (isSpeculative && workspace.speculativeEnabled === false) return undefined;
   if (!isSpeculative && workspace.autoApplyRunTrigger !== true && workspace.queueAllRuns !== true) return undefined;
   const credentials = await resolveCredentials();
-  const configurationVersionId = `cv-${crypto.randomUUID().slice(0, 16).replace(/-/g, "")}`;
+  const configurationVersionId = newResourceId("cv");
   const runId = newRunId();
   await persistWebhookRun(provider, kind, details, workspace, credentials, configurationVersionId, runId, isSpeculative);
   if (credentials !== undefined) void reportRunVcsStatus(runId, "pending");

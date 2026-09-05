@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { agentPools, projects, projectTags, workspaces, teamWorkspaces, type users } from "../db/schema";
@@ -197,13 +198,9 @@ async function projectSettings(
   };
 }
 
-function newProjectId(): string {
-  return `prj-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
-}
-
 export function defaultProjectValues(orgId: string): typeof projects.$inferInsert {
   return {
-    id: newProjectId(),
+    id: newResourceId("prj"),
     orgId,
     name: "Default Project",
     description: "Default Project for Organization",
@@ -271,7 +268,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
     const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
     if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
     await ensureDefaultProject(org.id);
-    const id = newProjectId();
+    const id = newResourceId("prj");
     const settings = await projectSettings(org.id, id, data, attributes);
     if ("error" in settings) {
       (set as { status: number }).status = 422;
@@ -433,7 +430,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Tag binding keys must be unique" }] };
     }
-    await db.insert(projectTags).values(entries.map((entry): typeof projectTags.$inferInsert => ({ id: `ptag-${crypto.randomUUID()}`, projectId, key: entry.key, value: entry.value }))).onConflictDoUpdate({ target: [projectTags.projectId, projectTags.key], set: { value: sql`excluded.value` } });
+    await db.insert(projectTags).values(entries.map((entry): typeof projectTags.$inferInsert => ({ id: newResourceId("ptag"), projectId, key: entry.key, value: entry.value }))).onConflictDoUpdate({ target: [projectTags.projectId, projectTags.key], set: { value: sql`excluded.value` } });
     const tags = await db.query.projectTags.findMany({ where: eq(projectTags.projectId, projectId) });
     (set as { status: number }).status = 200;
     return { data: tags.map((tag): Record<string, unknown> => projectTagBindingResource(tag)) };
@@ -462,7 +459,7 @@ export const projectRoutes = new Elysia({ name: "projects" })
     // (insert new keys, update values for existing ones) instead of a
     // per-row UPDATE loop on top of a separate INSERT.
     await db.insert(projectTags).values(
-      entries.map((e: TagEntry): typeof projectTags.$inferInsert => ({ id: `ptag-${crypto.randomUUID()}`, projectId, key: e.key, value: e.value })),
+      entries.map((e: TagEntry): typeof projectTags.$inferInsert => ({ id: newResourceId("ptag"), projectId, key: e.key, value: e.value })),
     ).onConflictDoUpdate({
       target: [projectTags.projectId, projectTags.key],
       set: { value: sql`excluded.value` },

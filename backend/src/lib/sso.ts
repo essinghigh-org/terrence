@@ -1,3 +1,4 @@
+import { newResourceId } from "./resource-id";
 // Shared plumbing for SAML, OIDC, and LDAP authentication: settings reads,
 // external-identity provisioning with a well-defined conflict policy, group
 // mapping, and SSO session issuance.
@@ -179,7 +180,7 @@ async function insertSsoIdentityLink(
   email: string | null,
 ): Promise<void> {
   await db.insert(identityLinks).values({
-    id: `idlink-${crypto.randomUUID()}`,
+    id: newResourceId("idlink"),
     userId,
     provider: identity.provider,
     externalId: subject,
@@ -293,7 +294,7 @@ async function createProvisionedSsoUser(
     if (emailOwner !== undefined) insertEmail = null;
   }
 
-  const userId = `usr-${crypto.randomUUID()}`;
+  const userId = newResourceId("user");
   // Deliberately malformed bcrypt value: Bun.password.verify rejects it, and
   // passwordMatches' catch returns false without spending work deriving a
   // password hash for an account that cannot use one.
@@ -413,7 +414,7 @@ async function applySamlGroupMapping(
     const isOwner = org.ownersTeamSamlRoleId !== null && groupSet.has(org.ownersTeamSamlRoleId);
     if (existing === undefined) {
       membershipInserts.push({
-        id: `orgmem-${crypto.randomUUID()}`,
+        id: newResourceId("orgmem"),
         orgId: org.id,
         userId,
         role: isOwner ? "owner" : "member",
@@ -439,7 +440,7 @@ async function applySamlGroupMapping(
     const inserts = matchedTeams
       .filter((team): boolean => !existingTeamIds.has(team.id))
       .map((team): typeof teamMemberships.$inferInsert => ({
-        id: `tmem-${crypto.randomUUID()}`,
+        id: newResourceId("tm"),
         teamId: team.id,
         userId,
         createdAt: Date.now(),

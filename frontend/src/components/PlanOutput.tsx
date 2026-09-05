@@ -1125,6 +1125,7 @@ export function PlanOutput({
   }, [loadState, search, selectedOps]);
 
   if (activeRunId.current !== runId || loadState.kind === "loading") {
+    if (planStatus === "running") return <></>;
     return (
       <div role="status" className="flex items-center gap-2 border-t border-border px-5 py-4 text-sm text-muted-foreground">
         <Spinner className="size-4" />
@@ -1134,6 +1135,7 @@ export function PlanOutput({
   }
 
   if (loadState.kind === "waiting") {
+    if (planStatus === "running") return <></>;
     return (
       <div role="status" className="flex items-start gap-3 border-t border-border bg-primary/10 px-5 py-4 text-sm text-muted-foreground">
         <Spinner className="mt-0.5 size-4 text-primary" />

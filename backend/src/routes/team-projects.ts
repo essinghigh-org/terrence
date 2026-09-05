@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { teamProjects, teams, projects, type users } from "../db/schema";
@@ -150,7 +151,7 @@ export const teamProjectRoutes = new Elysia({ name: "team-projects" })
       return { data: teamProjectResource(existing) };
     }
 
-    const id = `tprj-${crypto.randomUUID()}`;
+    const id = newResourceId("tprj");
     const tp: TeamProjectItem = {
       id,
       teamId: team.id,

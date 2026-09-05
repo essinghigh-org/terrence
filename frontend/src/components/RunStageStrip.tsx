@@ -1,4 +1,5 @@
-import { Check, Circle, Loader2, Minus, X } from "lucide-react";
+import { Check, Circle, CircleDot, Minus, X } from "lucide-react";
+import { resolvePhaseStatus } from "@/lib/run-status";
 import { cn } from "@/lib/utils";
 
 /**
@@ -12,7 +13,7 @@ import { cn } from "@/lib/utils";
  * so it cannot disagree with itself.
  */
 
-export type StageState = "pending" | "active" | "done" | "failed" | "skipped";
+export type StageState = "pending" | "active" | "done" | "failed" | "stopped" | "skipped";
 
 export type Stage = Readonly<{
   id: string;
@@ -83,26 +84,28 @@ export function resolveStages(
   const planDone = reached("planned-at") || reached("planned-and-finished-at") || reached("planned-and-saved-at");
   const policyReached = reached("policy-checking-at") || reached("cost-estimating-at") || reached("post-plan-running-at");
   const applyReached = reached("confirmed-at") || reached("apply-queued-at") || reached("applying-at");
-  const applyDone = reached("applied-at");
 
   const stopped = FAILED_STATUSES.has(status) || STOPPED_STATUSES.has(status);
   const failed = FAILED_STATUSES.has(status);
   const currentStage = STAGE_OF_STATUS[status];
 
   // Where the run got to, for a terminal status with no stage of its own.
-  const furthest: typeof STAGE_ORDER[number] = applyReached
+  const furthest: typeof STAGE_ORDER[number] = currentStage ?? (applyReached
     ? "apply"
     : policyReached
       ? "policy"
-      : planReached
+      : planReached || planDone
         ? "plan"
-        : "queue";
+        : "queue");
 
   const stageDone: Readonly<Record<typeof STAGE_ORDER[number], boolean>> = {
     queue: planReached || planDone || policyReached || applyReached,
-    plan: planDone,
-    policy: applyReached || (status === "planned_and_finished") || (policyReached && planDone),
-    apply: applyDone,
+    plan: resolvePhaseStatus(status, "plan", timestamps) === "finished",
+    policy: !["policy_checking", "cost_estimating", "post_plan_running"].includes(status)
+      && (applyReached || status === "planned_and_finished"
+        || reached("policy-checked-at") || reached("post-plan-completed-at")
+        || ["policy_checked", "post_plan_completed", "needs_confirmation", "planned_and_saved"].includes(status)),
+    apply: resolvePhaseStatus(status, "apply", timestamps) === "finished",
   };
 
   const currentIndex = currentStage === undefined ? 0 : STAGE_ORDER.indexOf(currentStage);
@@ -111,10 +114,11 @@ export function resolveStages(
   const stateFor = (id: typeof STAGE_ORDER[number]): StageState => {
     const index = STAGE_ORDER.indexOf(id);
     if (stopped) {
-      if (index < furthestIndex) return "done";
-      if (index === furthestIndex) return failed ? "failed" : "skipped";
+      if (stageDone[id] || index < furthestIndex) return "done";
+      if (index === furthestIndex) return failed ? "failed" : "stopped";
       return "skipped";
     }
+    if (id === "apply" && status === "planned_and_finished") return "skipped";
     if (stageDone[id]) return "done";
     if (id === currentStage) return "active";
     return index < currentIndex ? "done" : "pending";
@@ -125,7 +129,7 @@ export function resolveStages(
     // no cost estimation: it would sit permanently grey between two real
     // stages. Show it only once something has actually run there.
     .filter((id: typeof STAGE_ORDER[number]): boolean =>
-      id !== "policy" || options.hasPolicyChecks || policyReached)
+      id !== "policy" || options.hasPolicyChecks || policyReached || currentStage === "policy")
     .filter((id: typeof STAGE_ORDER[number]): boolean =>
       id !== "apply" || !options.planOnly)
     .map((id: typeof STAGE_ORDER[number]): Stage => ({
@@ -136,11 +140,11 @@ export function resolveStages(
 }
 
 function StageIcon({ state }: Readonly<{ state: StageState }>): React.JSX.Element {
-  const base = "size-3.5 shrink-0";
+  const base = "size-4 shrink-0";
   if (state === "done") return <Check className={cn(base, "text-success")} aria-hidden="true" />;
-  if (state === "active") return <Loader2 className={cn(base, "animate-spin text-primary")} aria-hidden="true" />;
+  if (state === "active") return <CircleDot className={cn(base, "text-primary")} aria-hidden="true" />;
   if (state === "failed") return <X className={cn(base, "text-destructive")} aria-hidden="true" />;
-  if (state === "skipped") return <Minus className={cn(base, "text-muted-foreground/50")} aria-hidden="true" />;
+  if (state === "skipped" || state === "stopped") return <Minus className={cn(base, "text-muted-foreground/50")} aria-hidden="true" />;
   return <Circle className={cn(base, "text-muted-foreground/40")} aria-hidden="true" />;
 }
 
@@ -148,6 +152,7 @@ const STAGE_TEXT: Readonly<Record<StageState, string>> = {
   done: "text-foreground",
   active: "font-medium text-primary",
   failed: "font-medium text-destructive",
+  stopped: "text-muted-foreground",
   skipped: "text-muted-foreground/60 line-through decoration-muted-foreground/40",
   pending: "text-muted-foreground/70",
 };
@@ -156,6 +161,7 @@ const STAGE_STATE_WORDS: Readonly<Record<StageState, string>> = {
   done: "complete",
   active: "in progress",
   failed: "failed",
+  stopped: "stopped",
   skipped: "not reached",
   pending: "not started",
 };
@@ -167,16 +173,23 @@ export function RunStageStrip({
   return (
     <ol
       aria-label="Run progress"
-      className={cn("flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm", className)}
+      className={cn("grid grid-flow-col auto-cols-fr overflow-hidden rounded-lg border border-border bg-card text-sm", className)}
     >
       {stages.map((stage: Stage, index: number): React.JSX.Element => (
-        <li key={stage.id} className="flex items-center gap-1.5">
-          {index > 0 && (
-            <span aria-hidden="true" className="mr-0.5 text-muted-foreground/40">›</span>
-          )}
-          <StageIcon state={stage.state} />
-          <span className={STAGE_TEXT[stage.state]}>{stage.label}</span>
-          <span className="sr-only">{STAGE_STATE_WORDS[stage.state]}</span>
+        <li key={stage.id} aria-current={stage.state === "active" ? "step" : undefined}
+          className={cn("relative flex min-w-0 flex-col items-center gap-2 px-2 py-3 sm:flex-row sm:gap-3 sm:px-5 sm:py-4",
+            index > 0 && "border-l border-border",
+            stage.state === "active" && "bg-primary/5 after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-primary")}
+        >
+          <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-background",
+            stage.state === "active" && "border-primary/30",
+            stage.state === "done" && "border-success/20 bg-success/5")}
+          ><StageIcon state={stage.state} /></span>
+          <span className="min-w-0">
+            <span className={cn("block", STAGE_TEXT[stage.state])}>{stage.label}</span>
+            <span className="hidden text-xs capitalize text-muted-foreground sm:block">{STAGE_STATE_WORDS[stage.state]}</span>
+            <span className="sr-only sm:hidden">{STAGE_STATE_WORDS[stage.state]}</span>
+          </span>
         </li>
       ))}
     </ol>

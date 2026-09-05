@@ -179,7 +179,7 @@ describe("terraform login.v1 OAuth flow", () => {
       token_type?: string;
     };
     expect(json.token_type?.toLowerCase()).toBe("bearer");
-    expect(json.access_token).toBeTruthy();
+    expect(json.access_token).toMatch(/^user-[A-Za-z0-9_-]{43}$/);
   });
 
   test("MFA-enabled user with a browser session is NOT auto-approved (redirected to login)", async () => {
