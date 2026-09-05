@@ -53,6 +53,16 @@ Use the explorer for a fast inventory without querying every workspace.
 
 The workspace page shows the state version history with serials and dates. Select a version to download or inspect it.
 
+## Interrupted-apply recovery
+
+Power loss mid-apply is the standard homelab failure mode. When the process restarts with a run stuck in `applying`, boot reconciliation copies the run's `terraform.tfstate` into `<storage>/recovery/<run-id>/` (atomically written, read-back verified, marked complete) and the run log tells you a copy was captured.
+
+- `GET /api/v2/runs/:run_id/recovery-state` downloads the captured state (requires workspace admin). Returns 404 when no verified copy exists.
+- `POST /api/v2/runs/:run_id/actions/recover-state` promotes the captured state into a new finalized state version (requires state-write permission plus holding the workspace lock). A successful recovery consumes the copy: it is deleted afterwards.
+- The run page shows a Recover action whenever a verified copy exists.
+
+Unrecovered copies are kept until they are recovered: they may be the only record of the infrastructure state, so they are never time-pruned. `TERRENCE_RECOVERY_RETENTION_MS` (default 7 days) now governs saved-plan expiry only.
+
 ## API surface
 
 - `GET /api/v2/workspaces/:id/current-state-version`

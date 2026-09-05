@@ -90,6 +90,7 @@ type RunAttributes = {
     "is-slow"?: boolean;
   } | null;
   "has-changes"?: boolean;
+  "has-recovery-state"?: boolean;
   "is-destroy"?: boolean;
   message?: string | null;
   operation?: string;
@@ -630,6 +631,8 @@ export function RunDetail({
   const [applyLogs, setApplyLogs] = useState("");
   const [rerunPending, setRerunPending] = useState(false);
   const [rerunError, setRerunError] = useState("");
+  const [recoveryPending, setRecoveryPending] = useState(false);
+  const [recoveryError, setRecoveryError] = useState("");
   const [fullscreenLog, setFullscreenLog] = useState<"plan" | "apply" | null>(null);
   // Focus management for the fullscreen log dialog (kanban 25.2): remember
   // whichever control opened it so focus can return there after close.
@@ -1132,6 +1135,48 @@ export function RunDetail({
   function beginRunConfirmation(action: ConfirmationAction): void {
     setConfirmationAction(action);
     setActionComment("");
+  }
+
+  // Issue #580: interrupted-apply recovery copy actions. The copy may be the
+  // only record of the infrastructure state: download it for inspection or
+  // promote it into a new finalized state version (which consumes the copy).
+  async function downloadRecoveryState(): Promise<void> {
+    setRecoveryPending(true);
+    setRecoveryError("");
+    try {
+      const payload = await fetchApi(`/api/v2/runs/${runId}/recovery-state`);
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `recovery-${runId}.tfstate.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error: unknown) {
+      setRecoveryError(error instanceof Error ? error.message : "Could not download the recovery copy.");
+    } finally {
+      setRecoveryPending(false);
+    }
+  }
+
+  async function recoverState(): Promise<void> {
+    setRecoveryPending(true);
+    setRecoveryError("");
+    try {
+      await fetchApi(`/api/v2/runs/${runId}/actions/recover-state`, { method: "POST" });
+      toast.add({ title: "Recovery state promoted to a new state version", type: "success" });
+      setRefreshVersion((value: number): number => value + 1);
+    } catch (error: unknown) {
+      if (error instanceof ApiError && error.status === 409) {
+        setRecoveryError("The workspace must be locked by you before recovering state. Lock it on the workspace page, then try again.");
+      } else {
+        setRecoveryError(error instanceof Error ? error.message : "Could not recover the state copy.");
+      }
+    } finally {
+      setRecoveryPending(false);
+    }
   }
 
   async function confirmRunAction(): Promise<void> {
@@ -1789,6 +1834,45 @@ export function RunDetail({
             )}
           </div>
       </header>
+
+      {attributes["has-recovery-state"] === true && (
+        <section
+          aria-label="Interrupted-apply recovery"
+          className="mb-5 rounded-md border border-amber-500/40 bg-amber-500/10 p-5 text-sm"
+        >
+          <p className="font-medium text-foreground">Recovery state available</p>
+          <p className="mt-1 text-muted-foreground">
+            This run was interrupted during apply. The captured state may be the only record of
+            your infrastructure: download it for inspection, or recover it into a new state
+            version. Recovering consumes the copy; unrecovered copies are kept, never pruned.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={recoveryPending}
+              onClick={(): void => { void downloadRecoveryState(); }}
+            >
+              {recoveryPending ? "Working…" : "Download recovery state"}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={recoveryPending}
+              onClick={(): void => { void recoverState(); }}
+            >
+              {recoveryPending ? "Working…" : "Recover into new state version"}
+            </Button>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Recovering requires state-write permission and the workspace lock held by you.
+          </p>
+          {recoveryError !== "" && (
+            <p role="alert" className="mt-2 text-xs text-destructive">{recoveryError}</p>
+          )}
+        </section>
+      )}
 
       <dl className="mb-5 grid overflow-hidden rounded-md border border-border bg-background shadow-sm sm:grid-cols-3">
         <div className="border-b border-border px-5 py-4 sm:border-b-0 sm:border-r">

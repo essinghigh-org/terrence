@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
+import { exists } from "node:fs/promises";
+import { join } from "node:path";
 import { Elysia } from "elysia";
 import { db } from "../db";
+import { storageDir } from "../db/driver";
 import { agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, policyEvaluations, taskStages, runComments, auditLogs, users, organizations, notificationConfigurations, notificationConfigurationWorkspaceExclusions } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt, sql } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource, taskStageResource, type RunRelationshipLinkage } from "../lib/response";
@@ -1155,6 +1158,10 @@ export const runRoutes = new Elysia({ name: "runs" })
       : lockedReason !== undefined && lockedReason !== null && lockedReason !== ""
         ? lockedReason
         : "Locked manually";
+    // Issue #580: run-page Recover action signal. A verified recovery copy
+    // (capture completion marker present) may be the only record of the
+    // infrastructure state after an interrupted apply.
+    detailAttributes["has-recovery-state"] = await exists(join(storageDir, "recovery", runId, ".recovered"));
     const includes = requestedRunIncludes(request);
     const included = await includedRunResources([authorized.run], request, includes);
     return { data, ...(included.length > 0 ? { included } : {}) };

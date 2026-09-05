@@ -2997,7 +2997,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
           runId,
           "apply",
           captured
-            ? "[terrence] Apply was canceled; encrypted recovery state was captured before cleanup. Fetch it from GET /api/v2/runs/:run_id/recovery-state before TERRENCE_RECOVERY_RETENTION_MS expires it (default 7 days)."
+            ? "[terrence] Apply was canceled; encrypted recovery state was captured before cleanup. Fetch it from GET /api/v2/runs/:run_id/recovery-state or the run page Recover action. The copy is kept until it is recovered."
             : recoveryCaptureFailed
               ? `[terrence] Apply was canceled; recovery copy failed, so the run work directory was preserved at ${runWorkDir(runId)} for manual recovery.`
               : "[terrence] Apply was canceled; no local state file was available to capture.",
@@ -5160,23 +5160,6 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
       return null;
     }
   };
-  const pruneRoot = async (root: string, requireRecoveredMarker = false): Promise<void> => {
-    const entries = await readCleanupEntries(root, "Could not scan cleanup directory");
-    if (entries === null) return;
-    await Promise.all(entries
-      .filter((entry): boolean => entry.isDirectory())
-      .map(async (entry): Promise<void> => {
-        const path = join(root, entry.name);
-        try {
-          if (requireRecoveredMarker && !(await exists(join(path, ".recovered")))) return;
-          if ((await stat(path)).mtimeMs < cutoff) await rm(path, { recursive: true, force: true });
-        } catch (error: unknown) {
-          if (!isMissingFileError(error)) {
-            logBestEffortFailure("Could not prune interrupted-apply recovery", { path }, error);
-          }
-        }
-      }));
-  };
   const pruneSavedPlans = async (): Promise<void> => {
     const root = join(storageDir, "saved-plans");
     const entries = await readCleanupEntries(root, "Could not scan saved-plan cleanup directory");
@@ -5195,7 +5178,11 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
         }
       }));
   };
-  await Promise.all([pruneRoot(join(storageDir, "recovery"), true), pruneSavedPlans()]);
+  // Issue #580: recovery copies are consumed by a successful recover-state
+  // action (which deletes them) and are otherwise never time-pruned: a
+  // remaining copy may be the only record of the infrastructure state, and
+  // must not age out while the operator is away. Only saved plans expire.
+  await pruneSavedPlans();
 }
 
 export async function reconcileInterruptedLocalRuns(): Promise<{
@@ -5265,7 +5252,7 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
       }
       const message = applySide
         ? run.status === "applying"
-          ? `Terrence restarted during apply; infrastructure state may be partially changed. This run was NOT re-executed automatically.${capturedPartialState ? " A durable recovery copy was captured." : " No local state file was available to capture."}`
+          ? `Terrence restarted during apply; infrastructure state may be partially changed. This run was NOT re-executed automatically.${capturedPartialState ? " A durable recovery copy was captured: fetch it from GET /api/v2/runs/:run_id/recovery-state or the run page Recover action. The copy is kept until it is recovered." : " No local state file was available to capture."}`
           : "Terrence restarted before this apply began; the run was confirmed but never executed. Discard it or start a new run."
         : run.status === "pre_plan_running" || run.status === "pre_plan_completed"
           ? "Terrence restarted while running pre-plan tasks, which may already have executed. This run was marked errored."
