@@ -1,3 +1,4 @@
+import { Select } from "../components/ui/select";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
@@ -439,10 +440,10 @@ export function VcsIntegrations({
           )}
 
         {/* GitHub App Installations Section */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <h2 className="text-xl font-semibold">GitHub App Installations</h2>
+              <h2 className="font-heading text-xl font-semibold">GitHub App installations</h2>
               <p className="text-sm text-muted-foreground">Manage your Terrence GitHub App installations.</p>
             </div>
             <Button disabled={startingGitHubSetup} onClick={(): void => { void handleGitHubSetup(); }}>
@@ -522,9 +523,9 @@ export function VcsIntegrations({
 
         {/* OAuth Section (Existing) */}
         <div>
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <h2 className="text-xl font-semibold">OAuth Clients (Legacy)</h2>
+              <h2 className="font-heading text-xl font-semibold">OAuth Clients (Legacy)</h2>
               <p className="text-sm text-muted-foreground">Legacy OAuth VCS providers.</p>
             </div>
             <Button onClick={(): void => { setDialogOpen(true); }}>
@@ -668,10 +669,10 @@ export function VcsIntegrations({
 
             <div className="space-y-1.5">
               <label htmlFor="vcs-provider" className="text-sm font-medium">VCS Type</label>
-              <select
+              <Select
                 id="vcs-provider"
                 name="service-provider"
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+
                 value={serviceProvider}
                 onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
 // SAFETY: the select options are generated from the same union; the change event carries one of them.
@@ -685,7 +686,7 @@ export function VcsIntegrations({
                 <option value="github_enterprise">GitHub Enterprise Server</option>
                 <option value="gitlab">GitLab.com / GitLab EE</option>
                 <option value="bitbucket">Bitbucket Cloud</option>
-              </select>
+              </Select>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">

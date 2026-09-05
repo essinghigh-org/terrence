@@ -1,3 +1,4 @@
+import { Select } from "../components/ui/select";
 import { useState, useEffect, useRef } from "react";
 import { useLocation, useOutletContext, useSearchParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
@@ -571,14 +572,14 @@ export function AccountSettings(): React.JSX.Element {
         </CardHeader>
         <CardContent className="space-y-2">
           <label htmlFor="account-theme" className="text-sm font-medium">Theme</label>
-          <select
+          <Select
             id="account-theme"
             name="theme"
             autoComplete="off"
             value={themeId}
             disabled={updatingTheme}
             onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { void handleThemeChange(event.target.value); }}
-            className="h-9 w-full rounded-lg border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+
           >
             <optgroup label="Light themes">
               {THEMES.filter((theme): boolean => theme.mode === "light").map((theme): React.JSX.Element => (
@@ -590,7 +591,7 @@ export function AccountSettings(): React.JSX.Element {
                 <option key={theme.id} value={theme.id}>{theme.label}</option>
               ))}
             </optgroup>
-          </select>
+          </Select>
           <p className="text-xs text-muted-foreground" aria-live="polite">
             {updatingTheme ? "Saving theme…" : "Changes save automatically."}
           </p>
@@ -599,7 +600,7 @@ export function AccountSettings(): React.JSX.Element {
             Date and time
           </div>
           <label htmlFor="account-timezone" className="text-sm font-medium">Timezone</label>
-          <select
+          <Select
             id="account-timezone"
             name="timezone"
             autoComplete="off"
@@ -607,13 +608,13 @@ export function AccountSettings(): React.JSX.Element {
             onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
               setDisplayTimezone(event.target.value === "utc" ? "utc" : "local");
             }}
-            className="h-9 w-full rounded-lg border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+
           >
             <option value="local">Browser local timezone</option>
             <option value="utc">UTC</option>
-          </select>
+          </Select>
           <label htmlFor="account-time-format" className="mt-4 block text-sm font-medium">Time format</label>
-          <select
+          <Select
             id="account-time-format"
             name="time-format"
             autoComplete="off"
@@ -621,11 +622,11 @@ export function AccountSettings(): React.JSX.Element {
             onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => {
               setDisplayTimeFormat(event.target.value === "12" ? "12" : "24");
             }}
-            className="h-9 w-full rounded-lg border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+
           >
             <option value="24">24-hour (e.g. 14:30)</option>
             <option value="12">12-hour (e.g. 2:30 PM)</option>
-          </select>
+          </Select>
           <p className="text-xs text-muted-foreground">Controls timestamps throughout the application.</p>
         </CardContent>
       </Card>

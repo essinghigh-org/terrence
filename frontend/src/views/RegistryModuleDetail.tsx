@@ -1,3 +1,4 @@
+import { EmptyState } from "../components/EmptyState";
 import { AlertTriangle, Check, Copy, ExternalLink, RefreshCw, Settings2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -5,7 +6,7 @@ import { Breadcrumbs } from "../components/Breadcrumbs";
 import { MarkdownContent } from "../components/MarkdownContent";
 import { PageShell } from "../components/PageHeader";
 import { Badge } from "../components/ui/badge";
-import { Button } from "../components/ui/button";
+import { Button, buttonVariants } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
@@ -237,8 +238,7 @@ export function RegistryModuleDetail(): React.JSX.Element {
   };
 
   if (loading) return <PageShell><div className="flex min-h-64 items-center justify-center gap-2 text-sm text-muted-foreground" role="status"><Spinner />Loading module…</div></PageShell>;
-  if (error !== null && module === null) return <PageShell><Empty className="min-h-64 border"><EmptyHeader><EmptyTitle>Module unavailable</EmptyTitle><EmptyDescription>{error}</EmptyDescription></EmptyHeader></Empty></PageShell>;
-  if (module === null) return <PageShell><Empty><EmptyHeader><EmptyTitle>Module not found</EmptyTitle></EmptyHeader></Empty></PageShell>;
+  if (module === null) return <PageShell><div role={error !== null ? "alert" : undefined}><EmptyState illustration={error !== null ? "failed" : "lost"} title={error !== null ? "Module unavailable" : "Module not found"} description={error ?? "This module may have moved or been removed."} /><div className="text-center"><Link className={buttonVariants({ variant: "outline" })} to={`/app/${encodeURIComponent(orgName)}/registry`}>Back to registry</Link></div></div></PageShell>;
 
   const tabs: readonly Readonly<{ id: DetailTab; label: string; count?: number }>[] = [
     { id: "readme", label: "README" },

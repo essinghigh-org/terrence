@@ -1,3 +1,4 @@
+import { Terrence } from "../components/brand/Terrence";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -9,7 +10,6 @@ import {
   Package,
   Search,
   SearchX,
-  ServerCrash,
   Tag,
   Upload,
   X,
@@ -534,9 +534,9 @@ export function Registry(): React.JSX.Element {
           Loading registry…
         </div>
       ) : error !== null ? (
-        <Empty className="min-h-64 border">
+        <Empty role="alert" className="min-h-64 border">
           <EmptyHeader>
-            <EmptyMedia variant="icon"><ServerCrash /></EmptyMedia>
+            <Terrence pose="failed" className="w-36" />
             <EmptyTitle>{activeTab === "modules" ? "Modules" : "Providers"} unavailable</EmptyTitle>
             <EmptyDescription>{error}</EmptyDescription>
           </EmptyHeader>
@@ -547,7 +547,7 @@ export function Registry(): React.JSX.Element {
       ) : visibleItems.length === 0 ? (
         <Empty className="min-h-64 border">
           <EmptyHeader>
-            <EmptyMedia variant="icon"><SearchX /></EmptyMedia>
+            {!activeFilters && !pageHasNoResults ? <Terrence pose="empty" className="w-40" /> : <EmptyMedia variant="icon"><SearchX aria-hidden="true" /></EmptyMedia>}
             <EmptyTitle>
               {pageHasNoResults
                 ? "No modules on this page"

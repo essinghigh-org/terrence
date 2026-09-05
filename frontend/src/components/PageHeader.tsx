@@ -66,9 +66,9 @@ export function PageHeader({ action, breadcrumbs, description, eyebrow, title }:
         {eyebrow !== undefined && (
           <div className="mb-3 text-xs font-medium text-muted-foreground">{eyebrow}</div>
         )}
-        <h1 className="text-balance text-3xl font-bold tracking-tight text-foreground">{title}</h1>
+        <h1 className="font-heading text-balance text-3xl font-bold tracking-tight text-foreground">{title}</h1>
         {description !== undefined && (
-          <p className="mt-1 max-w-3xl text-pretty text-sm text-muted-foreground">{description}</p>
+          <p className="mt-2 max-w-3xl text-pretty text-sm leading-relaxed text-muted-foreground">{description}</p>
         )}
       </div>
       {action !== undefined && (

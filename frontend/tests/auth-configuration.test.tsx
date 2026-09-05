@@ -285,7 +285,7 @@ test("shows SAML and OIDC auth configuration in the admin dashboard", async (): 
   expect(oidcPatchAttributes?.["client-secret"]).toBeUndefined();
 
   // --- Local authentication section ---
-  const localAuthCard = view.getByText("Local Authentication").closest<HTMLElement>('[data-slot="card"]');
+  const localAuthCard = view.getByText("Local authentication").closest<HTMLElement>('[data-slot="card"]');
   expect(localAuthCard).not.toBeNull();
   if (localAuthCard === null) throw new Error("Local authentication card is missing");
 // SAFETY: the component renders this element type for the queried role/label.

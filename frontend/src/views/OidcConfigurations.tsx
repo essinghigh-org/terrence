@@ -1,3 +1,4 @@
+import { EmptyState } from "../components/EmptyState";
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { fetchApi } from "../lib/api";
@@ -207,10 +208,7 @@ export function OidcConfigurations(): React.JSX.Element {
               ) : configs.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={3} className="h-32 text-center text-muted-foreground">
-                    <div className="flex flex-col items-center justify-center gap-2">
-                      <Fingerprint className="h-8 w-8 text-muted-foreground/60" />
-                      <p className="text-sm">No OIDC configurations.</p>
-                    </div>
+                    <EmptyState compact title="No OIDC configurations." description="Configure short-lived cloud credentials for your runs." docsHref="/app/docs/oidc-runs" />
                   </TableCell>
                 </TableRow>
               ) : configs.map((config): React.JSX.Element => {

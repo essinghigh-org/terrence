@@ -1,3 +1,4 @@
+import { buttonVariants } from "../components/ui/button";
 import { Terrence } from "../components/brand/Terrence";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -73,7 +74,12 @@ export function Docs(): React.JSX.Element {
     return (
       <PageShell variant="form">
         <PageHeader title="Documentation" description="The documentation could not be loaded." />
-        <p className="text-sm text-muted-foreground">Check that the documentation bundle is present in the deployment, then reload.</p>
+        <div role="alert" className="rounded-xl border bg-card px-6 py-10 text-center">
+          <Terrence pose="lost" className="mx-auto mb-4 w-44" />
+          <h2 className="font-heading text-xl font-semibold">This guide is unavailable</h2>
+          <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">Choose another guide from the sidebar, or reload the page to try again.</p>
+          <button type="button" className={buttonVariants({ variant: "outline", className: "mt-5" })} onClick={(): void => { window.location.reload(); }}>Reload documentation</button>
+        </div>
       </PageShell>
     );
   }

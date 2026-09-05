@@ -1,3 +1,4 @@
+import { EmptyState } from "../components/EmptyState";
 import { useEffect, useRef, useState } from "react";
 import { isString } from "../lib/type-guards";
 import { Link } from "react-router-dom";
@@ -305,7 +306,7 @@ s.attributes["serial"] as number}</p>
             {loadState.kind === "ready" && loadState.states.length === 0 && (
               <TableRow>
                 <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
-                  No state versions recorded yet.
+                  <EmptyState compact title="No state versions recorded yet." description="State versions appear after an apply or a state upload." docsHref="/app/docs/state" />
                 </TableCell>
               </TableRow>
             )}

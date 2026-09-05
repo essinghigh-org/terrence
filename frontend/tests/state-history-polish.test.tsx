@@ -42,7 +42,7 @@ test("loads every state-version page without showing a false empty state", async
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
-  const view = render(<StateHistory workspaceId="ws-1" />);
+  const view = render(<MemoryRouter><StateHistory workspaceId="ws-1" /></MemoryRouter>);
 
   expect(view.getByRole("status").textContent).toContain("Loading state versions");
   expect(view.queryByText("No state versions recorded yet.")).toBeNull();
@@ -80,7 +80,7 @@ test("shows a retryable error separately from the empty state", async () => {
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
-  const view = render(<StateHistory workspaceId="ws-1" />);
+  const view = render(<MemoryRouter><StateHistory workspaceId="ws-1" /></MemoryRouter>);
 
   await waitFor((): void => {
     expect(view.getByRole("alert").textContent).toContain("State service unavailable");
@@ -110,7 +110,7 @@ test("uploads a Terraform state file and adds the new state version", async () =
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
-  const view = render(<StateHistory workspaceId="ws-1" />);
+  const view = render(<MemoryRouter><StateHistory workspaceId="ws-1" /></MemoryRouter>);
   await waitFor((): void => {
     expect(view.getByText("No state versions recorded yet.")).toBeTruthy();
   });
@@ -139,7 +139,7 @@ test("falls back to the raw state payload when the fetched state JSON cannot be 
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
-  const view = render(<StateHistory workspaceId="ws-1" />);
+  const view = render(<MemoryRouter><StateHistory workspaceId="ws-1" /></MemoryRouter>);
   await waitFor((): void => {
     expect(view.getByText("sv-raw")).toBeTruthy();
   });

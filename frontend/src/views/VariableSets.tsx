@@ -1,3 +1,4 @@
+import { EmptyState } from "../components/EmptyState";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { buttonVariants, Button } from "@/components/ui/button";
@@ -788,10 +789,10 @@ export function VariableSets(): React.JSX.Element {
                   </TableCell>
                 </TableRow>
               ))}
-            {!loading && variableSets.length === 0 && (
+            {!loading && pageError === "" && variableSets.length === 0 && (
               <TableRow>
                 <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                  No variable sets yet.
+                  <EmptyState compact title="No variable sets yet." description="Share Terraform variables and environment settings across workspaces." docsHref="/app/docs/variables" />
                 </TableCell>
               </TableRow>
             )}

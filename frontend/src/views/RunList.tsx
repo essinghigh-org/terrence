@@ -429,6 +429,7 @@ export function RunList({
       <div className="overflow-hidden rounded-lg border border-border bg-card">
         {runs.length === 0 ? (
           <EmptyState
+            illustration="guide"
             title="No runs yet"
             description={canStartRun
               ? "There is no run history for this workspace."

@@ -1,6 +1,7 @@
+import { EmptyState } from "../components/EmptyState";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { FolderKanban, Layers, Pencil, Plus, Trash2 } from "lucide-react";
+import { Layers, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -295,8 +296,11 @@ export function Projects(): React.JSX.Element {
                 {projects.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={canManageProjects ? 4 : 3} className="py-10 text-center text-muted-foreground">
-                      <FolderKanban className="mx-auto mb-2 size-8 opacity-50" />
-                      No projects yet
+                      <EmptyState compact illustration={loadError === "" ? "empty" : undefined}
+                        title={loadError === "" ? "No projects yet" : "Projects unavailable"}
+                        description={loadError === "" ? "Group related workspaces into a project to share settings and access." : "Use Try again above to reload projects."}
+                        docsHref="/app/docs/projects"
+                      />
                     </TableCell>
                   </TableRow>
                 )}

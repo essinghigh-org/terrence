@@ -1,3 +1,4 @@
+import { Terrence } from "./brand/Terrence";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { JsonValue } from "../lib/json";
 import { Button } from "@/components/ui/button";
@@ -383,11 +384,13 @@ export function WorkspaceHealth({
   const [saved, setSaved] = useState(false);
   const [assessments, setAssessments] = useState<HealthAssessment[]>([]);
   const [assessmentsLoading, setAssessmentsLoading] = useState(true);
+  const [assessmentError, setAssessmentError] = useState(false);
   const canUpdate = workspace.attributes.permissions?.["can-update"] === true;
 
   useEffect((): (() => void) => {
     const controller = new AbortController();
     setAssessmentsLoading(true);
+    setAssessmentError(false);
     void fetchApi<{ data?: HealthAssessment[] }>(
       `/workspaces/${encodeURIComponent(workspace.id)}/assessment-results`,
       { signal: controller.signal },
@@ -396,7 +399,7 @@ export function WorkspaceHealth({
         if (!controller.signal.aborted) setAssessments(Array.isArray(response.data) ? response.data : []);
       })
       .catch((): void => {
-        if (!controller.signal.aborted) setAssessments([]);
+        if (!controller.signal.aborted) { setAssessments([]); setAssessmentError(true); }
       })
       .finally((): void => {
         if (!controller.signal.aborted) setAssessmentsLoading(false);
@@ -440,14 +443,27 @@ export function WorkspaceHealth({
         </CardHeader>
         <CardContent>
           {assessmentsLoading && <p className="text-sm text-muted-foreground">Loading health results…</p>}
-          {!assessmentsLoading && assessments[0] === undefined && (
-            <p className="text-sm text-muted-foreground">No health assessment has run yet.</p>
+          {!assessmentsLoading && assessmentError && (
+            <p role="alert" className="text-sm text-destructive">Health results could not be loaded. Reload the page to try again.</p>
+          )}
+          {!assessmentsLoading && !assessmentError && assessments[0] === undefined && (
+            <div className="flex flex-col items-center gap-4 py-6 text-center sm:flex-row sm:text-left">
+              <Terrence pose="guide" className="w-32" />
+              <div><h3 className="font-heading font-semibold">No health assessment has run yet.</h3><p className="mt-1 max-w-md text-sm text-muted-foreground">Health assessments check for infrastructure drift and validation failures. Configure the schedule below to get started.</p></div>
+            </div>
           )}
           {!assessmentsLoading && assessments[0] !== undefined && ((): React.JSX.Element => {
             const latest = assessments[0];
             const attrs = latest.attributes;
             const checksFailed = (attrs["checks-failed"] ?? 0) + (attrs["checks-errored"] ?? 0);
             return (
+              <div className="space-y-5">
+              {attrs.status === "completed" && attrs.drifted === false && attrs["all-checks-succeeded"] === true && checksFailed === 0 && (attrs["checks-unknown"] ?? 0) === 0 && !attrs["error-msg"] && (
+                <div className="flex items-center gap-4 rounded-lg border border-success/20 bg-success/5 px-4 py-2">
+                  <Terrence pose="healthy" className="w-28" />
+                  <div><h3 className="font-heading text-lg font-semibold">Everything healthy</h3><p className="mt-1 text-sm text-muted-foreground">The latest assessment found no drift or failing checks.</p></div>
+                </div>
+              )}
               <dl className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
                 <div><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</dt><dd className="mt-1 font-medium capitalize">{attrs.status.replace(/_/g, " ")}</dd></div>
                 <div><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Drift</dt><dd className="mt-1 font-medium">{attrs.drifted === true ? `${attrs["resources-drifted"] ?? 0} resource(s) drifted` : attrs.drifted === false ? "No drift detected" : "Not available"}</dd></div>
@@ -455,6 +471,7 @@ export function WorkspaceHealth({
                 <div><dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Completed</dt><dd className="mt-1 font-medium">{attrs["completed-at"] === null || attrs["completed-at"] === undefined ? "In progress" : formatDate(attrs["completed-at"])}</dd></div>
                 {attrs["error-msg"] !== null && attrs["error-msg"] !== undefined && <div className="sm:col-span-2 lg:col-span-4"><dt className="text-xs font-semibold uppercase tracking-wide text-destructive">Error</dt><dd className="mt-1 text-sm text-destructive">{attrs["error-msg"]}</dd></div>}
               </dl>
+              </div>
             );
           })()}
         </CardContent>

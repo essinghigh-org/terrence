@@ -8,7 +8,7 @@ function Empty({ className, ...props }: Readonly<React.ComponentProps<"div">>): 
     <div
       data-slot="empty"
       className={cn(
-        "flex w-full min-w-0 flex-1 flex-col items-center justify-center gap-4 rounded-xl border-dashed p-6 text-center text-balance",
+        "flex w-full min-w-0 flex-1 flex-col items-center justify-center gap-4 rounded-xl border-dashed p-6 text-center text-balance whitespace-normal",
         className
       )}
       {...props}
@@ -60,7 +60,7 @@ function EmptyTitle({ className, ...props }: Readonly<React.ComponentProps<"div"
   return (
     <div
       data-slot="empty-title"
-      className={cn("text-sm font-medium tracking-tight", className)}
+      className={cn("font-heading text-base font-semibold tracking-tight", className)}
       {...props}
     />
   )

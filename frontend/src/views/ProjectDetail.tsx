@@ -514,7 +514,8 @@ export function ProjectDetail({
                 {workspaces.length === 0 ? (
                   <EmptyState
                     compact
-                    title="No workspaces in this project yet"
+                    illustration="empty"
+                  title="No workspaces in this project yet"
                     description="Create a workspace in this project to manage its infrastructure."
                     docsHref="/app/docs/workspaces"
                   />
@@ -565,6 +566,7 @@ export function ProjectDetail({
               {workspaces.length === 0 ? (
                 <EmptyState
                   compact
+                  illustration="empty"
                   title="No workspaces in this project yet"
                   description="Create a workspace in this project to manage its infrastructure."
                   docsHref="/app/docs/workspaces"

@@ -852,7 +852,8 @@ export function WorkspaceDetail({
                         <EmptyState
                           compact
                           headingLevel="h3"
-                          title="No runs yet"
+                          illustration="guide"
+            title="No runs yet"
                           description="Start a run to plan your infrastructure changes."
                           docsHref="/app/docs/runs"
                         />

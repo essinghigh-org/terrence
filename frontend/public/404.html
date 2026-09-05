@@ -3,44 +3,38 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>404 - Page not found</title>
+<meta name="color-scheme" content="light dark">
+<title>404 · Terrence</title>
 <meta name="robots" content="noindex">
 <style>
-  :root { color-scheme: light; }
+  :root { color-scheme: light dark; --paper: #edf3ff; --surface: #fff; --ink: #233654; --muted: #536785; --line: #c9d9f2; --button: #234f95; --button-text: #fff; }
   * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #ffffff;
-    color: #1e2023;
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  }
-  main { text-align: center; padding: 2rem; max-width: 28rem; }
-  .code { font-size: 3.5rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
-  h1 { font-size: 1.25rem; font-weight: 600; margin: 1rem 0 0.5rem; }
-  p { color: #4a4d52; font-size: 0.9rem; margin: 0 0 1.75rem; }
-  a {
-    display: inline-block;
-    background: #1e2023;
-    color: #ffffff;
-    text-decoration: none;
-    font-size: 0.875rem;
-    font-weight: 500;
-    padding: 0.6rem 1.25rem;
-    border-radius: 0.5rem;
-  }
-  a:hover { background: #33363a; }
+  body { margin: 0; min-height: 100svh; background: var(--surface); color: var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 1.5rem clamp(1.5rem, 5vw, 4rem); }
+  .brand { display: inline-flex; align-items: center; gap: .65rem; color: var(--ink); text-decoration: none; font: 700 1.25rem "Trebuchet MS", sans-serif; }
+  .brand svg { width: 2rem; height: 2rem; }
+  main { display: grid; min-height: calc(100svh - 6rem); place-content: center; padding: 2rem 1.5rem 5rem; text-align: center; }
+  .illustration { width: min(17rem, 75vw); margin: 0 auto 1.5rem; border-radius: 50%; background: var(--paper); }
+  .illustration svg { display: block; width: 100%; height: auto; }
+  .code { margin: 0 0 .75rem; color: var(--muted); font: .75rem ui-monospace, monospace; letter-spacing: .12em; }
+  h1 { margin: 0; font: 700 clamp(1.75rem, 5vw, 2.25rem)/1.2 "Trebuchet MS", ui-sans-serif, sans-serif; letter-spacing: -.03em; }
+  .description { max-width: 29rem; margin: 1rem auto 1.75rem; color: var(--muted); font-size: .9375rem; line-height: 1.7; }
+  .actions { display: flex; justify-content: center; flex-wrap: wrap; gap: .75rem; }
+  .button { display: inline-flex; align-items: center; justify-content: center; min-height: 2.75rem; padding: .65rem 1.15rem; border: 1px solid transparent; border-radius: .5rem; background: var(--button); color: var(--button-text); text-decoration: none; font-size: .875rem; font-weight: 600; }
+  .button.secondary { border-color: var(--line); background: transparent; color: var(--ink); }
+  a:hover { filter: brightness(.9); }
+  a:focus-visible { outline: 3px solid var(--button); outline-offset: 4px; }
+  @media (prefers-color-scheme: dark) { :root { --paper: #233654; --surface: #171f2e; --ink: #edf3ff; --muted: #b8c9e2; --line: #415775; --button: #96b9f6; --button-text: #17243b; } }
 </style>
 </head>
 <body>
+<header><a class="brand" href="/" aria-label="Terrence home"><!-- terrence-logo --><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none" class="size-8 shrink-0" aria-hidden="true" focusable="false"><rect width="40" height="40" rx="12" fill="#233654"></rect><path d="M10 18V10h7v5h6v-5h7v8l-2 10q-8 6-16 0Z" fill="#96B9F6"></path><path d="M16 21v3m8-3v3" stroke="#233654" stroke-width="3" stroke-linecap="round"></path></svg><!-- /terrence-logo --><span>terrence.</span></a></header>
 <main>
-  <div class="code">404</div>
+  <div class="illustration"><!-- terrence-lost --><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 280" fill="none" aria-hidden="true" focusable="false" class="terrence-mascot" data-pose="lost"><ellipse cx="159" cy="252" rx="99" ry="12" fill="currentColor" opacity=".07"></ellipse><g class="terrence-body" stroke="#233654" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M105 104 79 83 79 48 106 48 116 89M212 104 239 83 239 48 212 48 201 89" fill="#739BE8"></path><path d="M88 73V58H101M230 73V58H217" stroke="#C8DDFF" stroke-width="5"></path><path d="M107 216C83 234 86 251 115 248L138 233M184 233 205 248C233 252 239 236 213 216" fill="#739BE8"></path><path d="M99 145C73 143 56 163 61 182 66 193 80 179 94 178" fill="#96B9F6"></path><path d="M220 148C242 144 262 160 257 179 254 192 239 179 224 179" fill="#96B9F6"></path><path d="M89 160C89 121 103 97 131 90L137 76 152 85 163 72 174 85 190 78 195 94C224 105 233 131 233 164L229 200C225 226 202 239 161 239 117 239 93 225 90 201Z" fill="#96B9F6"></path><path d="M113 185C116 165 136 156 161 156 189 156 210 170 210 192 210 216 191 229 161 229 130 229 111 215 113 185Z" fill="#DCEAFF" stroke="none"></path><g class="terrence-face"><ellipse cx="132" cy="142" rx="5" ry="8" fill="#233654" stroke="none"></ellipse><ellipse cx="190" cy="142" rx="5" ry="8" fill="#233654" stroke="none"></ellipse><ellipse cx="115" cy="157" rx="10" ry="5" fill="#739BE8" stroke="none"></ellipse><ellipse cx="207" cy="157" rx="10" ry="5" fill="#739BE8" stroke="none"></ellipse><path d="M151 174q10-9 20 0"></path></g><g><path d="m101 194 39-11 40 15 40-11v55l-40 11-40-15-39 11Z" fill="#FFF1D5"></path><path d="M140 183v55m40-40v55" stroke="#C7A76B"></path><path d="m238 90 1-4c2-9 18-9 18 2 0 7-10 7-10 15m0 10v1" stroke="#739BE8" stroke-width="5"></path></g></g></svg><!-- /terrence-lost --></div>
+  <p class="code">404 / UNCHARTED TERRITORY</p>
   <h1>Page not found</h1>
-  <p>This page does not exist or may have moved.</p>
-  <a href="/app">Go to dashboard</a>
+  <p class="description">This page does not exist or may have moved. Head back to your organizations, or open the docs to find your way.</p>
+  <div class="actions"><a class="button" href="/app">Go to dashboard</a><a class="button secondary" href="/app/docs">Read the docs</a></div>
 </main>
 </body>
 </html>

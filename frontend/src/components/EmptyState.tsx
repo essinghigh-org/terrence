@@ -29,7 +29,7 @@ export function EmptyState(props: Readonly<{
   const hasAction = actionLabel !== undefined && onAction !== undefined;
   const footerVisible = hasAction || docsHref !== undefined;
   return (
-    <Empty className={compact === true ? "p-6" : "p-12"}>
+    <Empty className={compact === true ? "p-6" : "px-6 py-12"}>
       {illustration !== undefined && <Terrence pose={illustration} className={compact === true ? "w-32" : "w-44"} />}
       <EmptyHeader>
         {/* EmptyTitle is a div; render a real heading inside it so empty
@@ -44,7 +44,7 @@ export function EmptyState(props: Readonly<{
         {description !== undefined && <EmptyDescription>{description}</EmptyDescription>}
       </EmptyHeader>
       {footerVisible && (
-        <EmptyContent className="max-w-none flex-row items-center justify-center gap-3">
+        <EmptyContent className="max-w-none flex-row flex-wrap items-center justify-center gap-3">
           {hasAction && <Button onClick={onAction}>{actionLabel}</Button>}
           {docsHref !== undefined &&
             (docsHref.startsWith("/app/") ? (
