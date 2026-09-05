@@ -106,7 +106,20 @@ const EDGES: Readonly<Record<string, readonly string[]>> = {
   pre_plan_completed: ["queuing", "errored", "canceled", "discarded", "force_canceled"],
   queuing: ["plan_queued", "errored", "canceled", "discarded", "force_canceled"],
   plan_queued: ["planning", "pending", "errored", "canceled", "discarded", "force_canceled"],
-  planning: ["planned", "errored", "canceled", "discarded", "force_canceled"],
+  planning: [
+    "planned",
+    // Agent plan-job completion writes its verdict directly (issue #587):
+    // the agent already ran policies/cost remotely, so there is no local
+    // post-plan sequence to walk through.
+    "planned_and_saved", // agent savePlan run
+    "planned_and_finished", // agent planOnly run
+    "policy_soft_failed", // agent soft-mandatory policy failure
+    "apply_queued", // agent autoApply run (confirmation was given at creation)
+    "errored",
+    "canceled",
+    "discarded",
+    "force_canceled",
+  ],
   planned: [
     "cost_estimating",
     "confirmed", // user confirm action
