@@ -97,8 +97,9 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `TERRENCE_AGENT_UPDATE_URL` / `TERRENCE_AGENT_UPDATE_SHA256` / `TERRENCE_AGENT_UPDATE_VERSION` | none | Agent binary self-update source: URL plus expected SHA256 plus version pin. |
 | `TERRAFORM_CONFIG_INSPECT_PATH` | bundled | Path to the config inspector binary. |
 | `TERRAFORM_TEST_BINARY_PATH` | none | Path for the module test binary. |
-| `SENTINEL_BINARY_PATH` | none | Path to the policy engine binary. |
-| `OPA_BINARY_PATH` | none | Path to the OPA policy engine binary. |
+| `SENTINEL_BINARY_PATH` | none | Path to the Sentinel policy engine binary (bring-your-own; Sentinel is proprietary with no public download, so there is no managed install). |
+| `OPA_BINARY_PATH` | none | Explicit path to the OPA policy engine binary, used as-is instead of the managed install. An override that resolves to nothing reports checks unreachable; it never triggers a download. |
+| `OPA_VERSION` | `1.20.2` | OPA version to manage on demand into `<STORAGE_DIR>/binaries/opa/<version>/` (digest-verified) when a workspace with OPA policies runs and no override or PATH binary resolves. |
 | `GPG_BINARY_PATH` | system | Path to the GPG binary for provider signing keys. |
 | `TERRENCE_STACK_IAC_BINARY` | `terraform` | IaC binary for stack runs. |
 | `TERRENCE_STACK_IAC_VERSION` | `latest` | IaC binary version for stack runs. |
