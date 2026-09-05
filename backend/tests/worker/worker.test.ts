@@ -114,7 +114,7 @@ test("plans uploaded cloud configuration against the latest local state and reco
       "record_dir=" + JSON.stringify(recordDir),
       "case \\"$1\\" in",
       '  init) echo "$@" > "$record_dir/init-args"; cp terrence_backend_override.tf "$record_dir/backend-override" ;;',
-      '  plan) printf "plan-first\\n"; touch "$record_dir/wait-sentinel"; while [ -f "$record_dir/wait-sentinel" ]; do sleep 0.01; done; printf "plan-second\\n"; printf "Plan: 9 to import, 9 to add, 9 to change, 9 to destroy.\\n"; echo "$@" > "$record_dir/plan-args"; echo "$PROVIDER_TOKEN" > "$record_dir/provider-token"; echo "$TF_LOG" > "$record_dir/plan-tf-log"; cp terraform.tfstate "$record_dir/planned-state"; cp terrence.workspace.tfvars "$record_dir/terrence.workspace.tfvars"; cp z.auto.tfvars "$record_dir/uploaded.auto.tfvars"; : > tfplan ;;',
+      '  plan) printf "plan-first\\n"; touch "$record_dir/wait-sentinel"; while [ -f "$record_dir/wait-sentinel" ]; do sleep 0.01; done; printf "plan-second\\n"; printf "Plan: 9 to import, 9 to add, 9 to change, 9 to destroy.\\n"; echo "$@" > "$record_dir/plan-args"; echo "$PROVIDER_TOKEN" > "$record_dir/provider-token"; echo "$TF_LOG" > "$record_dir/plan-tf-log"; cp terraform.tfstate "$record_dir/planned-state"; cp terrence.workspace.tfvars "$record_dir/terrence.workspace.tfvars"; cp terrence.run.tfvars "$record_dir/terrence.run.tfvars"; cp z.auto.tfvars "$record_dir/uploaded.auto.tfvars"; : > tfplan ;;',
       '  show) cat "$record_dir/plan.json" ;;',
       '  apply) printf "Apply complete! Resources: 2 imported, 3 added, 4 changed, 5 destroyed.\\n"; echo "$PROVIDER_TOKEN" > "$record_dir/apply-provider-token"; echo "$TF_LOG" > "$record_dir/apply-tf-log"; cp "$record_dir/applied-state" terraform.tfstate ;;',
       "  *) exit 2 ;;",
@@ -243,6 +243,7 @@ test("plans uploaded cloud configuration against the latest local state and reco
     const backendOverride = await readFile(join(recordDir, "backend-override"), "utf8");
     const seededState = JSON.parse(await readFile(join(recordDir, "planned-state"), "utf8"));
     const tfvars = await readFile(join(recordDir, "terrence.workspace.tfvars"), "utf8");
+    const runTfvars = await readFile(join(recordDir, "terrence.run.tfvars"), "utf8");
     const uploadedTfvars = await readFile(join(recordDir, "uploaded.auto.tfvars"), "utf8");
     const providerToken = (await readFile(join(recordDir, "provider-token"), "utf8")).trim();
     const applyProviderToken = (await readFile(join(recordDir, "apply-provider-token"), "utf8")).trim();
@@ -260,6 +261,7 @@ test("plans uploaded cloud configuration against the latest local state and reco
       backendOverride,
       seededSerial: seededState.serial,
       tfvars,
+      runTfvars,
       uploadedTfvars,
       providerToken,
       applyProviderToken,
@@ -297,13 +299,18 @@ test("plans uploaded cloud configuration against the latest local state and reco
   expect(result.planArgs).toContain("-target=test_resource.target");
   expect(result.planArgs).toContain("-replace=test_resource.replace");
   expect(result.planArgs).toContain("-var-file=terrence.workspace.tfvars");
-  expect(result.planArgs).toContain('-var=plain="run"');
-  expect(result.planArgs).toContain('-var=priority_only="run-priority"');
+  expect(result.planArgs).toContain("-var-file=terrence.run.tfvars");
+  // Issue #577: run variables ride a var-file (later = wins) instead of raw
+  // -var flags, so undeclared keys and secrets never reach process args.
+  expect(result.planArgs).not.toContain("-var=plain=");
+  expect(result.planArgs).not.toContain('-var=priority_only="run-priority"');
   expect(result.planArgs).toContain('-var=priority_only="set-priority"');
   expect(result.planArgs).toContain("-var=priority_hcl={ enabled = true }");
-  expect(result.planArgs.indexOf('-var=priority_only="run-priority"')).toBeLessThan(
-    result.planArgs.indexOf('-var=priority_only="set-priority"'),
+  expect(result.planArgs.indexOf("-var-file=terrence.workspace.tfvars")).toBeLessThan(
+    result.planArgs.indexOf("-var-file=terrence.run.tfvars"),
   );
+  expect(result.runTfvars).toContain('plain = "\\"run\\""');
+  expect(result.runTfvars).toContain('priority_only = "\\"run-priority\\""');
   expect(result.backendOverride).toContain('backend "local"');
   expect(result.tfvars).toContain('plain = "hello"');
   expect(result.tfvars).toContain('global_only = "global"');
