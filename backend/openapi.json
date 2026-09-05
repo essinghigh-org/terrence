@@ -3,7 +3,7 @@
   "info": {
     "title": "Terrence API",
     "description": "Machine-readable contract generated from the registered route table. Per-route request/response schemas are added incrementally.",
-    "version": "1.1.14"
+    "version": "1.2.0"
   },
   "servers": [
     {
