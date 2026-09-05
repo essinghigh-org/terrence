@@ -1224,6 +1224,7 @@ async function waitForTrackedProcess<T>(
   output: Promise<T>,
   timeoutMs: number,
 ): Promise<readonly [number, T]> {
+  const timeoutDetail = phaseTimeoutDetail(phase, timeoutMs);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let cancelEscalationTimer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
@@ -1259,7 +1260,7 @@ async function waitForTrackedProcess<T>(
   const timeout = new Promise<never>((_, reject): void => {
     timer = setTimeout((): void => {
       timedOut = true;
-      reject(new Error(`${phase} process timed out after ${String(timeoutMs)} ms`));
+      reject(new Error(`${phase} process timed out after ${timeoutDetail}`));
     }, timeoutMs);
   });
   try {
@@ -1282,6 +1283,26 @@ async function waitForTrackedProcess<T>(
     if (cancelEscalationTimer !== undefined) clearTimeout(cancelEscalationTimer);
     clearInterval(cancellationPoller);
   }
+}
+
+// Issue #645: timeout errors used to reach the logs as raw milliseconds.
+// Name the governing knob so an admin knows where to raise the limit.
+function phaseTimeoutDetail(phase: string, timeoutMs: number): string {
+  const totalSeconds = Math.max(1, Math.round(timeoutMs / 1000));
+  const human = totalSeconds >= 3600
+    ? `${String(Math.floor(totalSeconds / 3600))}h ${String(Math.floor((totalSeconds % 3600) / 60))}m`
+    : totalSeconds >= 60
+      ? `${String(Math.floor(totalSeconds / 60))}m ${String(totalSeconds % 60)}s`
+      : `${String(totalSeconds)}s`;
+  const knob = phase === "apply"
+    ? "applyTimeout"
+    : phase === "policy"
+      ? "POLICY_EVALUATION_TIMEOUT_MS"
+      : phase === "run-task"
+        ? "RUN_TASK_TIMEOUT_MS"
+        : "planTimeout";
+  const source = phase === "policy" ? "built-in cap" : phase === "run-task" ? "environment" : "admin General setting";
+  return `${human} (${source} ${knob}; ${String(timeoutMs)} ms)`;
 }
 
 async function streamLog(
@@ -1843,7 +1864,7 @@ async function executeRunTasks(
         resultUrl = latest.url;
       } else {
         status = "failed";
-        message = `Run task callback timed out after ${String(timeoutMs)}ms`;
+        message = `Run task callback timed out after ${phaseTimeoutDetail("run-task", timeoutMs)}`;
         await db.update(runTaskResults).set({ status, message }).where(eq(runTaskResults.id, resultId));
       }
     }
@@ -2621,6 +2642,9 @@ async function executeApplyImpl(runId: string): Promise<void> {
     if (scheduledBlockReasons.get(key) !== "workspace-locked") {
       scheduledBlockReasons.set(key, "workspace-locked");
       await writeLog(runId, "apply", "[terrence] Apply deferred because the workspace is locked.");
+      // The status row is unchanged by a deferral, so without this the UI
+      // would show no signal beyond the log line (issue #645).
+      publish("run.status", { "run-id": runId, "workspace-id": workspace.id, "org-id": workspace.orgId, status: "confirmed", at: new Date().toISOString() });
     }
     await db.update(runs).set({
       status: "confirmed",
@@ -5013,8 +5037,8 @@ function acquireLocalRunExecutionSlot(runId: string): Promise<void> {
       while (localRunCapacityUsed() >= localRunConcurrencyLimit()) {
         await new Promise<void>((resolve): void => { localRunWaiters.push(resolve); });
       }
-      localRunReservations.add(runId);
-      localRunReservations.delete(runId);
+      // Capacity was awaited above; the reservation was never taken on this
+      // path, so there is nothing to convert: mark the slot active directly.
       activeLocalRunExecutions.set(runId, 1);
     })();
   }

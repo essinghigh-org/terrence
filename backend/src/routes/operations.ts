@@ -44,7 +44,7 @@ function notFound(set: SetObj): { errors: { status: string; title: string }[] } 
 
 export const operationsRoutes = new Elysia({ name: "operations" })
   .use(authPlugin)
-  // --- AI run explainer (kanban 21.2) ------------------------------------
+  // --- AI run explainer ---------------------------------------------------
     // Read-only convenience: feeds the sanitized stored plan JSON (or a failed
     // apply log) to a user-configured OpenAI-compatible endpoint and returns the
     // plain-language explanation. Explanations are cached per (run, kind) so
@@ -91,7 +91,12 @@ export const operationsRoutes = new Elysia({ name: "operations" })
         (set as { status: number }).status = err.status;
         return err.body;
       }
-      return notFound(set);
+      // Read-only probe: the artifact exists but nobody asked for an
+      // explanation yet. Tell the client to POST instead of a bare 404
+      // (issue #645); the source build above is what distinguishes this
+      // from the missing-artifact 409.
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found", detail: "No explanation has been requested for this run yet. POST to this endpoint to generate one." }] };
     })
     .post("/api/v2/runs/:run_id/explain", async ({ params, body, user, orgId, teamId, set, request }: ParamCtx): Promise<unknown> => {
       const runId = params["run_id"] ?? "";

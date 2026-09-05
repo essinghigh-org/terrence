@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { Bookmark, Columns3, Pencil, Plus, Rows3, Star, Tags, Trash2, X } from "lucide-react";
 
 import { useSyncedSearchParam } from "@/hooks/useSyncedSearchParam";
@@ -46,7 +46,7 @@ import type { JsonObject } from "@/lib/json";
 
 type Project = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
 
-/** Toggleable table columns (kanban 14.21). "workspace" is always shown. */
+/** Toggleable table columns. "workspace" is always shown. */
 const WORKSPACE_TABLE_COLUMNS: readonly { id: string; label: string }[] = [
   { id: "repository", label: "Repository" },
   { id: "tags", label: "Tags" },
@@ -189,6 +189,7 @@ function runsByWorkspace(
 export function Workspaces(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
+  const navigate = useNavigate();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   // Org-wide totals are independent of the status filter; the workspace list
   // itself is server-filtered when one is active (review item 1.9).
@@ -230,8 +231,8 @@ export function Workspaces(): React.JSX.Element {
   // Pending tag removal, confirmed through a dialog (issue #588).
   const [pendingTagDelete, setPendingTagDelete] = useState<TagBinding | null>(null);
 
-  const loadData = useCallback(async (signal?: Readonly<AbortSignal>): Promise<void> => {
-    setLoading(true);
+  const loadData = useCallback(async (signal?: Readonly<AbortSignal>, quiet = false): Promise<void> => {
+    if (!quiet) setLoading(true);
     setLoadError("");
     setCanManageWorkspaces(false);
     try {
@@ -308,7 +309,7 @@ export function Workspaces(): React.JSX.Element {
         type: "error",
       });
     } finally {
-      if (signal?.aborted !== true) setLoading(false);
+      if (signal?.aborted !== true && !quiet) setLoading(false);
     }
   }, [orgName, statusFilter]);
 
@@ -320,7 +321,7 @@ export function Workspaces(): React.JSX.Element {
     };
   }, [loadData, orgName]);
 
-  // Persist table density and column visibility (kanban 14.22/14.21).
+  // Persist table density and column visibility.
   // An empty column list is a valid choice (all optional columns hidden);
   // it must be persisted as-is, never replaced with the defaults.
   useEffect((): void => {
@@ -378,7 +379,7 @@ export function Workspaces(): React.JSX.Element {
       const matchesLocked = statusFilter !== "locked" || workspace.attributes.locked === true;
       return matchesSearch && matchesProject && matchesLocked;
     });
-    // Pinned workspaces float to the top (kanban 26.12); order is otherwise
+    // Pinned workspaces float to the top; order is otherwise
     // stable (API order).
     return matches.sort((a, b): number => {
       const aPinned = pinnedNames.has(a.attributes.name);
@@ -450,7 +451,7 @@ export function Workspaces(): React.JSX.Element {
       setTagKey("");
       setTagValue("");
       setEditingTagKey(null);
-      await Promise.all([loadTags(tagWorkspace), loadData()]);
+      await Promise.all([loadTags(tagWorkspace), loadData(undefined, true)]);
       toast.add({ title: editingTagKey === null ? "Tag added" : "Tag updated", type: "success" });
     } catch (error: unknown) {
       toast.add({
@@ -470,7 +471,7 @@ export function Workspaces(): React.JSX.Element {
         method: "DELETE",
         body: JSON.stringify({ data: [{ id: tag.attributes.key, type: "tags" }] }),
       });
-      await Promise.all([loadTags(tagWorkspace), loadData()]);
+      await Promise.all([loadTags(tagWorkspace), loadData(undefined, true)]);
       toast.add({ title: "Tag removed", type: "success" });
     } catch (error: unknown) {
       toast.add({
@@ -883,7 +884,10 @@ export function Workspaces(): React.JSX.Element {
           projects={projects}
           open={createOpen}
           onOpenChange={setCreateOpen}
-          onCreated={(): void => { void loadData(); }}
+          onCreated={(created): void => {
+            void loadData();
+            void navigate(`/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(created.name)}`);
+          }}
         />
       )}
 

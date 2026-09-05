@@ -5,6 +5,7 @@ import type { users } from "../db/schema";
 import { organizationMemberships } from "../db/schema";
 import { authPlugin } from "../auth";
 import { subscribe } from "../lib/event-bus";
+import { workspaceIdsForPermission } from "../lib/utils";
 
 type ParamCtx = Readonly<{
   user?: Readonly<typeof users.$inferSelect> | null;
@@ -19,7 +20,7 @@ const MAX_CONNECTIONS = 50;
 const MAX_CONNECTIONS_PER_USER = 5;
 // Topics relayed to browser streams. Each payload must carry "org-id" (and
 // ideally "workspace-id"/"run-id") so the connect-time permission snapshot
-// can filter it in memory.
+// can filter it in memory by org and workspace.
 const RELAYED_TOPICS = ["run.status", "plan.output.ready", "comment.created"] as const;
 let activeConnections = 0;
 const activeConnectionsByUser = new Map<string, number>();
@@ -29,16 +30,37 @@ function sseFrame(event: string, data: unknown): Uint8Array {
 }
 
 /**
- * Authenticated Server-Sent Events stream (10.20). Replaces client polling
+ * Union of readable workspace ids across orgs for an SSE snapshot. Returns
+ * null when any org grants org-wide read (callers then skip workspace
+ * filtering for the whole stream).
+ */
+async function readableWorkspaceIdsForOrgs(
+  orgIds: readonly string[],
+  userId: string,
+  tokenOrgId: string | null,
+  tokenTeamId: string | null,
+): Promise<Set<string> | null> {
+  const union = new Set<string>();
+  for (const id of orgIds) {
+    const ids = await workspaceIdsForPermission(id, userId, tokenOrgId, tokenTeamId, "read");
+    if (ids === null) return null;
+    for (const workspaceId of ids) union.add(workspaceId);
+  }
+  return union;
+}
+
+/**
+ * Authenticated Server-Sent Events stream. Replaces client polling
  * for run status: worker status transitions are published on the in-process
  * bus and relayed to every connection whose principal belongs to the
- * event's organization. Permissions are resolved once at connect time
- * (org memberships / org token / site admin), then events are filtered in
- * memory. Heartbeats keep proxies and dead connections honest.
+ * event's organization and can read the event's workspace. Permissions are
+ * resolved once at connect time (org memberships / org token / site admin),
+ * then events are filtered in memory. Heartbeats keep proxies and dead
+ * connections honest.
  */
 export const eventsRoutes = new Elysia({ name: "events" })
   .use(authPlugin)
-  .get("/api/v2/events", async ({ user, orgId, request }: ParamCtx): Promise<Response> => {
+  .get("/api/v2/events", async ({ user, orgId, teamId, request }: ParamCtx): Promise<Response> => {
     if (user === null || user === undefined) {
       return new Response(JSON.stringify({ errors: [{ status: "401", title: "Unauthorized" }] }), {
         status: 401,
@@ -76,17 +98,25 @@ export const eventsRoutes = new Elysia({ name: "events" })
     // Allowed orgs resolved once: site admins see everything; org tokens see
     // their org; users see their memberships.
     let allowedOrgIds: Set<string> | null = null;
+    // Readable workspaces resolved once alongside the orgs (issue #645): a
+    // null set means org-wide read access, otherwise events for other
+    // workspaces are dropped even inside an allowed org.
+    let readableWorkspaceIds: Set<string> | null = null;
     try {
       if (user.isSiteAdmin === true) {
         allowedOrgIds = null; // null = all orgs
+        readableWorkspaceIds = null; // null = all workspaces
       } else if (orgId !== null && orgId !== undefined) {
         allowedOrgIds = new Set([orgId]);
+        readableWorkspaceIds = await readableWorkspaceIdsForOrgs([orgId], user.id, orgId, teamId);
       } else {
         const memberships = await db.query.organizationMemberships.findMany({
           where: eq(organizationMemberships.userId, user.id),
           columns: { orgId: true },
         });
-        allowedOrgIds = new Set(memberships.map((row): string => row.orgId));
+        const memberOrgIds = memberships.map((row): string => row.orgId);
+        allowedOrgIds = new Set(memberOrgIds);
+        readableWorkspaceIds = await readableWorkspaceIdsForOrgs(memberOrgIds, user.id, null, teamId);
       }
     } catch {
       releaseSlot();
@@ -159,6 +189,14 @@ export const eventsRoutes = new Elysia({ name: "events" })
           disposers.push(subscribe(topic, (payload: Readonly<Record<string, unknown>>): void => {
             const eventOrgId = typeof payload["org-id"] === "string" ? payload["org-id"] : "";
             if (allowedOrgIds !== null && (eventOrgId === "" || !allowedOrgIds.has(eventOrgId))) return;
+            // Issue #645: org membership alone must not leak run metadata
+            // for workspaces the principal cannot read. The snapshot is
+            // connect-time (re-resolved on reconnect); events without a
+            // workspace id keep the org-only behavior.
+            if (readableWorkspaceIds !== null) {
+              const eventWorkspaceId = typeof payload["workspace-id"] === "string" ? payload["workspace-id"] : "";
+              if (eventWorkspaceId !== "" && !readableWorkspaceIds.has(eventWorkspaceId)) return;
+            }
             enqueue(topic, payload);
           }));
         }
@@ -175,7 +213,7 @@ export const eventsRoutes = new Elysia({ name: "events" })
           enqueue("ping", { at: new Date().toISOString() });
         }, HEARTBEAT_MS);
 
-        // One-hour lifetime: the allowed-org snapshot ages; closing forces
+        // One-hour lifetime: the permission snapshot ages; closing forces
         // clients to reconnect and re-resolve permissions.
         lifetime = setTimeout(cleanup, 60 * 60 * 1000);
         const abort = (): void => {

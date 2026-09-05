@@ -27,7 +27,7 @@ type CreateWorkspaceModalProps = {
   projects?: readonly WorkspaceProject[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated: (ws: Readonly<{ id: string }>) => void;
+  onCreated: (ws: Readonly<{ id: string; name: string }>) => void;
 }
 
 type WorkspaceProject = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
@@ -205,7 +205,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
           },
         }),
       }) as { data: { id: string } };
-      onCreated(res.data);
+      onCreated({ id: res.data.id, name: workspaceName });
       onOpenChange(false);
       setName("");
       setProjectId("");
@@ -412,7 +412,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
 
             {sourceType === "local" && (
               <p className="text-sm text-muted-foreground">
-                Code will be loaded from `/app/backend/storage/local/{orgName}/{"{project_name}"}/{name}`. Make sure to bind mount this path to your Terraform code.
+                Code will be loaded from <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">/app/backend/storage/local/{orgName}/{projectId === "" ? "default" : projectId}/{name.trim() === "" ? "{name}" : name.trim()}</code>. Make sure to bind mount this path to your Terraform code.
               </p>
             )}
           </div>

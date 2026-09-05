@@ -79,7 +79,7 @@ Use conventional commits:
 ### Backend
 
 - **Framework**: [Elysia](https://elysiajs.com/) — a Bun-native HTTP framework
-- **Database**: SQLite (default, `DATABASE_URL=file:...`) or PostgreSQL (`DATABASE_URL=postgres://...`) via [Drizzle ORM](https://orm.drizzle.team/) — a dedicated `backend-postgres` CI job covers the pg backend, and there are 37+ pg migrations
+- **Database**: SQLite (default, `DATABASE_URL=file:...`) or PostgreSQL (`DATABASE_URL=postgres://...`) via [Drizzle ORM](https://orm.drizzle.team/) — a dedicated `backend-postgres` CI job covers the pg backend, and there are 50+ pg migrations
 - **API Format**: JSON:API (compatible with the Terraform CLI remote-workflow format)
 - **Auth**: Bearer token with session rotation
 - **Run Execution**: Background worker using `Bun.spawn()` for OpenTofu/Terraform
