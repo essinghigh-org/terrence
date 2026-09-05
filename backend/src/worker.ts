@@ -845,6 +845,24 @@ function parseResourceCounts(output: string): PlanResourceCounts {
   };
 }
 
+/** Issue #618: fetch only the log rows that can hold a plan/apply summary
+ * line instead of loading the whole phase log into memory to run four
+ * regexes over it. A summary keyword split across chunk rows matches
+ * neither here nor in the old full-log scan, so results are equivalent. */
+async function findSummaryLogRows(runId: string, phase: RunLogPhase): Promise<string[]> {
+  const rows = await db.query.logs.findMany({
+    where: and(
+      eq(logs.runId, runId),
+      eq(logs.phase, phase),
+      or(like(logs.outputText, "%Plan:%"), like(logs.outputText, "%Apply complete!%")),
+    ),
+    columns: { outputText: true },
+    orderBy: [asc(logs.createdAt), asc(logs.id)],
+    limit: 10,
+  });
+  return rows.map((row: Readonly<{ outputText: string }>): string => row.outputText);
+}
+
 type JsonObject = Readonly<Record<string, unknown>>;
 
 type StoredCheckSummary = Readonly<{
@@ -2301,14 +2319,12 @@ async function executeRunImpl(runId: string): Promise<void> {
       );
     }
 
-    // Parse resource counts from plan log output
-    const planLogs = await db.query.logs.findMany({
-      where: and(eq(logs.runId, runId), eq(logs.phase, "plan")),
-      orderBy: [asc(logs.createdAt), asc(logs.id)],
-    });
-    const resourceCounts =
-      (planJson === undefined ? undefined : planJsonResourceCounts(planJson))
-      ?? parseResourceCounts(planLogs.map((log: Readonly<{ outputText: string }>): string => log.outputText).join("\n"));
+    // Parse resource counts from the structured plan JSON when it supplied
+    // them; only the log summary line is ever needed otherwise (issue #618),
+    // so match just those rows in SQL instead of loading the whole plan log.
+    const jsonCounts = planJson === undefined ? undefined : planJsonResourceCounts(planJson);
+    const resourceCounts = jsonCounts
+      ?? parseResourceCounts((await findSummaryLogRows(runId, "plan")).join("\n"));
 
     await updateRunStatus(runId, "planned", {
       planResourceAdditions: resourceCounts.additions,
@@ -3089,12 +3105,9 @@ async function executeApplyImpl(runId: string): Promise<void> {
       throw new Error(`Apply preflight failed: ${failedChecks.join(", ") || "unknown_failure"}.`);
     }
 
-    // Parse resource counts from apply log output
-    const applyLogs = await db.query.logs.findMany({
-      where: and(eq(logs.runId, runId), eq(logs.phase, "apply")),
-      orderBy: [asc(logs.createdAt), asc(logs.id)],
-    });
-    const applyResourceCounts = parseResourceCounts(applyLogs.map((log: Readonly<{ outputText: string }>): string => log.outputText).join("\n"));
+    // Parse resource counts from the apply summary line (issue #618): match
+    // only those rows in SQL instead of loading the whole apply log.
+    const applyResourceCounts = parseResourceCounts((await findSummaryLogRows(runId, "apply")).join("\n"));
 
     await updateRunStatus(runId, "applied", {
       applyResourceAdditions: applyResourceCounts.additions,
