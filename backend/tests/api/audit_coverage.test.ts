@@ -311,7 +311,10 @@ describe("audit coverage", () => {
         attributes: Record<string, unknown>;
       }[];
     };
-    expect(runEvents.data.map(({ attributes }): unknown => attributes["action"])).toEqual(["create", "override-policy", "comment"]);
+    // The justification comment and the override event are written in the
+    // same millisecond, so their relative order is a UUID tiebreak, not a
+    // contract: compare as sets.
+    expect(runEvents.data.map(({ attributes }): unknown => attributes["action"]).sort()).toEqual(["comment", "create", "override-policy"]);
     expect(runEvents.data[0]).toMatchObject({
       type: "run-events",
       attributes: {
