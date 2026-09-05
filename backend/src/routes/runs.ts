@@ -17,6 +17,7 @@ import { deletePlanJsonArtifact, readPlanJsonArtifact, readPlanJsonSideArtifact,
 import { readCostEstimateArtifact } from "../lib/cost-estimate";
 import { costEstimationEnabledForOrganization } from "../lib/settings";
 import { applyGateBlockReason } from "../lib/operations";
+import { preflightBinaryAvailability } from "../binaryManager";
 import { authPlugin } from "../auth";
 import { queueRunNotification } from "../lib/notifications";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
@@ -827,12 +828,33 @@ export async function createRun(
   // Issue #599: backfill an unset binary from the org default (matching
   // workspace creation), not a hardcoded terraform — otherwise a first run
   // permanently flips a tofu-default org's workspace to terraform.
-  if (workspace.iacBinary === null) {
+  // Issue #602: the worker falls back to the org default version when the run
+  // and workspace both leave it unset, so load it here too for the preflight.
+  let effectiveTool = workspace.iacBinary;
+  let orgDefaultVersion: string | null = null;
+  if (effectiveTool === null || (terraformVersion === undefined && workspace.terraformVersion === null)) {
     const org = await db.query.organizations.findFirst({
       where: eq(organizations.id, workspace.orgId),
-      columns: { defaultIacBinary: true },
+      columns: { defaultIacBinary: true, defaultTerraformVersion: true },
     });
-    await db.update(workspaces).set({ iacBinary: org?.defaultIacBinary ?? "terraform" }).where(eq(workspaces.id, workspace.id));
+    orgDefaultVersion = org?.defaultTerraformVersion ?? null;
+    if (effectiveTool === null) {
+      effectiveTool = org?.defaultIacBinary ?? "terraform";
+      await db.update(workspaces).set({ iacBinary: effectiveTool }).where(eq(workspaces.id, workspace.id));
+    }
+  }
+  // Issue #602: fail fast on an exact version that can never resolve (typo'd
+  // or unpublished) instead of failing mid-run. The preflight is network-free
+  // and only rejects on affirmative knowledge; cold caches and
+  // constraints/"latest" defer to run-time resolution so on-demand download
+  // keeps working.
+  const effectiveVersion = terraformVersion ?? workspace.terraformVersion ?? orgDefaultVersion;
+  if (typeof effectiveVersion === "string") {
+    const preflight = await preflightBinaryAvailability(effectiveTool, effectiveVersion);
+    if (!preflight.ok) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: preflight.detail }] };
+    }
   }
   const id = newRunId();
   const createdAt = Date.now();

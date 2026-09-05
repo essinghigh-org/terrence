@@ -2246,7 +2246,12 @@ async function executeRunImpl(runId: string): Promise<void> {
       await writeLog(runId, "plan", `[terrence] Execution engine: Simulated plan completed successfully.`);
       await writeLog(runId, "plan", `Plan: 1 to add, 0 to change, 0 to destroy.`);
     } else if (resolved === null) {
-      throw new Error(`Unable to resolve CLI binary '${requestedTool}' (version: ${requestedVersion}).`);
+      // Issue #602: name the version and the remedies (the download already
+      // retried with backoff): an unpublished version fails here even on a
+      // fast link, while timeouts and rate-limited enumeration are
+      // operator-fixable.
+      await writeLog(runId, "plan", `[terrence] Failed to resolve ${requestedTool} v${requestedVersion}: no cached binary and the download failed. Verify the version was published for this OS/arch; on slow links raise TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS; set GITHUB_TOKEN or GH_TOKEN when release enumeration is rate-limited.`);
+      throw new Error(`Unable to resolve CLI binary '${requestedTool}' (version: ${requestedVersion}): no cached binary and the download failed after retries. Verify the version exists; on slow links raise TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS, and set GITHUB_TOKEN or GH_TOKEN when release enumeration is rate-limited.`);
     } else {
       throw new Error(`No Terraform configuration (.tf or .tf.json) files were found in workspace directory '${executionDir}'.`);
     }

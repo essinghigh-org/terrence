@@ -447,6 +447,206 @@ export async function availableVersions(tool: "tofu" | "terraform"): Promise<str
   return fetchAvailableVersions(tool);
 }
 
+// ---------------------------------------------------------------------------
+// Binary download resilience (issue #602). Archives are 60-100 MiB, so the
+// old 30s hard timeout was too short for slow links: 120s per attempt with
+// an env override, plus bounded retries with backoff. Unknown versions and
+// rejected archives fail fast instead of burning the retry budget.
+// ---------------------------------------------------------------------------
+
+/** Per-attempt binary download timeout. Overridable for slow links. */
+export function resolveBinaryDownloadTimeoutMs(): number {
+  const configured = Number(process.env["TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS"]);
+  return Number.isSafeInteger(configured) && configured > 0 ? configured : 120_000;
+}
+
+/** Retries for timed-out or transient binary downloads. Capped so a wedged
+ * upstream cannot stall run startup for long. */
+export function resolveBinaryDownloadRetries(): number {
+  const configured = Number(process.env["TERRENCE_BINARY_DOWNLOAD_RETRIES"]);
+  if (!Number.isSafeInteger(configured) || configured < 0) return 2;
+  return Math.min(configured, 5);
+}
+
+/** A failed binary-archive download. `retryable` is false for failures
+ * another attempt cannot fix (unpublished version, rejected archive). */
+export class BinaryDownloadError extends Error {
+  public readonly retryable: boolean;
+  constructor(message: string, retryable: boolean) {
+    super(message);
+    this.name = "BinaryDownloadError";
+    this.retryable = retryable;
+  }
+}
+
+export function isRetryableBinaryDownloadError(error: unknown): boolean {
+  return error instanceof BinaryDownloadError && error.retryable;
+}
+
+const MAX_BINARY_SIZE = 100 * 1024 * 1024;
+
+/** Read a response body with a running byte cap so a lying content-length or
+ * an unbounded chunked response cannot allocate past the limit before the
+ * size check runs. Stream failures become retryable download errors. */
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+async function readBoundedBody(res: Response): Promise<ArrayBuffer> {
+  const reader = res.body?.getReader();
+  if (reader === undefined) {
+    const arrayBuffer = await res.arrayBuffer().catch((err: unknown): never => {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new BinaryDownloadError(`Binary download body read failed: ${message}`, true);
+    });
+    if (arrayBuffer.byteLength > MAX_BINARY_SIZE) {
+      throw new BinaryDownloadError(`Binary package too large: ${arrayBuffer.byteLength} bytes exceeds ${MAX_BINARY_SIZE} limit`, false);
+    }
+    return arrayBuffer;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_BINARY_SIZE) {
+        throw new BinaryDownloadError(`Binary package too large: response exceeds ${MAX_BINARY_SIZE} limit`, false);
+      }
+      chunks.push(value);
+    }
+  } catch (err: unknown) {
+    if (err instanceof BinaryDownloadError) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    throw new BinaryDownloadError(`Binary download body read failed: ${message}`, true);
+  } finally {
+    reader.releaseLock();
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged.buffer;
+}
+
+/** Fetch one binary archive with a bounded timeout. Throws
+ * BinaryDownloadError: retryable for timeouts, network failures, and
+ * 429/5xx; fail-fast for 404/4xx and oversize archives. */
+export async function fetchBinaryArchive(downloadUrl: string, timeoutMs: number): Promise<ArrayBuffer> {
+  let res: Response;
+  try {
+    res = await fetch(downloadUrl, { signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "TimeoutError") {
+      throw new BinaryDownloadError(
+        `Binary download timed out after ${timeoutMs}ms (raise TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS on slow links)`,
+        true,
+      );
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    throw new BinaryDownloadError(`Binary download failed: ${message}`, true);
+  }
+  if (res.status === 404) {
+    throw new BinaryDownloadError(
+      `Binary archive not found at ${downloadUrl} (HTTP 404): the requested version was never published for this OS/arch`,
+      false,
+    );
+  }
+  if (!res.ok) {
+    const retryable = res.status === 429 || res.status >= 500;
+    throw new BinaryDownloadError(`HTTP status ${res.status} when fetching binary package`, retryable);
+  }
+  const contentLength = res.headers.get("content-length");
+  if (contentLength !== null) {
+    const parsed = Number.parseInt(contentLength, 10);
+    if (Number.isFinite(parsed) && parsed > MAX_BINARY_SIZE) {
+      throw new BinaryDownloadError(`Binary package too large: ${parsed} bytes exceeds ${MAX_BINARY_SIZE} limit`, false);
+    }
+  }
+  const arrayBuffer = await readBoundedBody(res);
+  return arrayBuffer;
+}
+
+// ---------------------------------------------------------------------------
+// Run-creation preflight (issue #602). Network-free: only the on-disk cache,
+// a PATH probe, and release lists already known from earlier discovery.
+// Anything inconclusive defers to ensureBinary at run time so on-demand
+// download keeps working.
+// ---------------------------------------------------------------------------
+
+/** Exact versions with a directory in the on-disk binary cache. */
+export async function installedBinaryVersions(tool: "tofu" | "terraform"): Promise<string[]> {
+  try {
+    const entries = await readdir(join(BINARY_BASE_DIR, tool));
+    return entries.filter((entry): boolean => /^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$/.test(entry));
+  } catch {
+    return [];
+  }
+}
+
+/** Release versions already known without network: the live discovery cache
+ * (fresh or stale — staleness only matters for brand-new releases), falling
+ * back to the persisted discovery file. Empty when nothing is known yet. */
+export function knownAvailableVersions(tool: "tofu" | "terraform"): string[] {
+  const live = versionCache.get(tool);
+  if (live !== undefined && live.versions.length > 0) return [...live.versions];
+  return [...(loadVersionCacheFile(VERSION_CACHE_FILE)[tool]?.versions ?? [])];
+}
+
+/** Closest candidate to an exact target: the highest version at or below the
+ * target, else the highest known. Undefined when there are no candidates. */
+export function closestKnownVersion(target: string, candidates: readonly string[]): string | undefined {
+  const normalized = target.replace(/^v/, "");
+  let below: string | undefined;
+  let highest: string | undefined;
+  for (const candidate of candidates) {
+    if (highest === undefined || compareSemver(candidate, highest) > 0) highest = candidate;
+    if (compareSemver(candidate, normalized) <= 0 && (below === undefined || compareSemver(candidate, below) > 0)) {
+      below = candidate;
+    }
+  }
+  return below ?? highest;
+}
+
+export type BinaryPreflight = { ok: true } | { ok: false; detail: string };
+
+/**
+ * Fail fast on exact versions that can never resolve: well-formed but absent
+ * from the known release list with nothing usable installed. Returns ok for
+ * constraints/"latest" (they need network to resolve) and whenever nothing
+ * is known locally (a cold or offline host defers to the run-time download
+ * attempt, which reports the failure with remedies).
+ */
+export async function preflightBinaryAvailability(
+  toolInput?: string | null,
+  versionInput?: string | null,
+): Promise<BinaryPreflight> {
+  const tool = toolInput?.toLowerCase() === "terraform" ? "terraform" : "tofu";
+  const raw = versionInput !== null && versionInput !== undefined && versionInput !== "" ? versionInput : "latest";
+  if (!validateVersion(raw)) {
+    return { ok: false, detail: `Invalid ${tool} version "${raw}": expected an exact version such as 1.9.0, "latest", or a constraint such as ">= 1.5, < 2.0".` };
+  }
+  const exact = /^v?([0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.]+)?)$/.exec(raw.trim())?.[1];
+  if (exact === undefined) return { ok: true };
+  // Release discovery only tracks stable versions, so a prerelease pin can
+  // never be confirmed from the known list; defer it to run-time resolution
+  // (unchanged behavior) rather than 422ing a published prerelease.
+  if (exact.includes("-")) return { ok: true };
+  if (await exists(join(BINARY_BASE_DIR, tool, exact, tool))) return { ok: true };
+  if ((await systemBinaryFallback(tool, exact)) !== null) return { ok: true };
+  const known = knownAvailableVersions(tool);
+  if (known.length === 0) return { ok: true };
+  if (known.includes(exact)) return { ok: true };
+  const closest = closestKnownVersion(exact, [...(await installedBinaryVersions(tool)), ...known]);
+  const hint = closest === undefined ? "no versions are cached or known" : `closest known version: ${closest}`;
+  return {
+    ok: false,
+    detail: `${tool} version ${exact} is not available (${hint}). `
+      + `The run would fail while resolving its CLI binary. If the version was just released, wait for version discovery to refresh or pre-install the binary; `
+      + `set GITHUB_TOKEN or GH_TOKEN when release enumeration is rate-limited.`,
+  };
+}
+
 async function resolveVersionConstraint(tool: "tofu" | "terraform", constraintExpr: string): Promise<string> {
   if (constraintExpr === "latest") {
     return resolveLatestVersion(tool);
@@ -654,24 +854,27 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
       : `https://releases.hashicorp.com/terraform/${version}/${zipFilename}`;
 
     log.info(`Downloading ${tool} v${version} from ${downloadUrl}`);
-    const res = await fetch(downloadUrl, { signal: AbortSignal.timeout(30000) });
-
-    if (!res.ok) {
-      throw new Error(`HTTP status ${res.status} when fetching binary package`);
-    }
-
-    const MAX_BINARY_SIZE = 100 * 1024 * 1024;
-    const contentLength = res.headers.get("content-length");
-    if (contentLength !== null) {
-      const parsed = Number.parseInt(contentLength, 10);
-      if (Number.isFinite(parsed) && parsed > MAX_BINARY_SIZE) {
-        throw new Error(`Binary package too large: ${parsed} bytes exceeds ${MAX_BINARY_SIZE} limit`);
+    // Issue #602: retry slow-link timeouts and transient upstream failures
+    // with backoff; unpublished versions and rejected archives fail fast.
+    const downloadTimeoutMs = resolveBinaryDownloadTimeoutMs();
+    const downloadRetries = resolveBinaryDownloadRetries();
+    let arrayBuffer: ArrayBuffer | null = null;
+    for (let attempt = 0; ; attempt++) {
+      if (attempt > 0) {
+        const backoffMs = Math.min(1000 * 2 ** (attempt - 1), 10_000);
+        log.info(`Retrying ${tool} v${version} download (attempt ${attempt + 1} of ${downloadRetries + 1})`);
+        await new Promise<void>((resolve): void => {
+          setTimeout(resolve, backoffMs);
+        });
+      }
+      try {
+        arrayBuffer = await fetchBinaryArchive(downloadUrl, downloadTimeoutMs);
+        break;
+      } catch (downloadErr: unknown) {
+        if (attempt >= downloadRetries || !isRetryableBinaryDownloadError(downloadErr)) throw downloadErr;
       }
     }
-    const arrayBuffer = await res.arrayBuffer();
-    if (arrayBuffer.byteLength > MAX_BINARY_SIZE) {
-      throw new Error(`Binary package too large: ${arrayBuffer.byteLength} bytes exceeds ${MAX_BINARY_SIZE} limit`);
-    }
+    // The loop only exits via break (arrayBuffer just assigned) or throw.
 
     const isValidHash = await verifySha256(tool, version, zipFilename, arrayBuffer);
     if (!isValidHash) {
