@@ -105,6 +105,8 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `TERRENCE_STACK_IAC_VERSION` | `latest` | IaC binary version for stack runs. |
 | `TERRENCE_SANDBOX_EXTRA_RW_ALLOW_STORAGE` | off | Allow extra sandbox read-write paths under the storage directory. |
 | `TERRENCE_BINARY_PROBE_TIMEOUT_MS` | `10000` | Timeout for probing an IaC binary version. |
+| `TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS` | `120000` | Per-attempt timeout for IaC binary archive downloads (60-100 MiB archives need headroom on slow links). |
+| `TERRENCE_BINARY_DOWNLOAD_RETRIES` | `2` | Retries for timed-out or transient (429/5xx) binary downloads, with backoff (capped at 5). Unpublished versions (404) and rejected archives fail fast. |
 | `TERRENCE_AGENT_FORWARD_TIMEOUT_MS` | `60000` | Agent forward deadline. Clamped to 1s..300s. |
 | `TERRENCE_COMPATIBILITY_VERSION` | `2.5.0` | Advertised TFE compatibility version. Keep dotted: the tfe provider feature gates fail on release-style strings. |
 | `TERRENCE_TFE_COMPATIBILITY_VERSION` | alias | Older alias for the same setting; `TERRENCE_COMPATIBILITY_VERSION` wins when both are set. |
