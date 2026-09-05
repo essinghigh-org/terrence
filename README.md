@@ -34,7 +34,7 @@
 - State storage and version history
 - Workspace variables and variable sets
 - Sentinel and OPA policy checks
-- VCS integration with GitHub
+- VCS integration (GitHub, GitLab, Bitbucket)
 - SSO support (SAML, OIDC, LDAP)
 - Private module registry
 - Run tasks and notifications

@@ -635,7 +635,7 @@ export function RunDetail({
   const [recoveryPending, setRecoveryPending] = useState(false);
   const [recoveryError, setRecoveryError] = useState("");
   const [fullscreenLog, setFullscreenLog] = useState<"plan" | "apply" | null>(null);
-  // Focus management for the fullscreen log dialog (kanban 25.2): remember
+  // Focus management for the fullscreen log dialog: remember
   // whichever control opened it so focus can return there after close.
   const fullscreenTriggerRef = useRef<HTMLElement | null>(null);
   const fullscreenCloseRef = useRef<HTMLButtonElement | null>(null);
@@ -1253,7 +1253,7 @@ export function RunDetail({
     }
   }
 
-  // kanban 21.2: plain-language explanation of the stored plan JSON or a
+  // Plain-language explanation of the stored plan JSON or a
   // failed apply log via the configured OpenAI-compatible endpoint. Read-only;
   // never mutates the run. Streaming path: the backend relays upstream deltas
   // as SSE events and replays cached generations under the same envelope, so
@@ -1638,7 +1638,7 @@ export function RunDetail({
     && status !== "planned_and_finished"
     && !terminatedBeforeApply;
 
-  // Explain why Apply is disabled (kanban 15.10), mirroring the gate at top:
+  // Explain why Apply is disabled, mirroring the gate at top:
   const applyDisabledReasons: string[] = [];
   const applyGated = showApply
     && !canApply
@@ -1785,7 +1785,6 @@ export function RunDetail({
             size="sm"
             className="gap-1.5"
             aria-label="Copy run permalink"
-            disabled={pendingAction !== ""}
             onClick={(): void => { void copyRunPermalink(); }}
           >
             <Link2 className="size-3.5" aria-hidden="true" />

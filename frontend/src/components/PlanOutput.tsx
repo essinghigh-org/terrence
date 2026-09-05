@@ -763,7 +763,7 @@ function ResourceRow({ resource }: Readonly<{ resource: ResourceChange }>): Reac
               type="button"
               aria-label={`Copy ${resource.address} address`}
               title={copied ? "Copied address!" : "Copy resource address"}
-              className="size-6 shrink-0 rounded p-1 text-muted-foreground/60 opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
+              className="size-6 shrink-0 rounded p-1 text-muted-foreground/60 opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover/resource:opacity-100"
               onClick={handleCopy}
             >
               {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
