@@ -6,7 +6,7 @@ import { db } from "../../src/db";
 import {
   organizations, policyChecks, policies, policySetParameters, policySets, policySetWorkspaces, runs, workspaces,
 } from "../../src/db/schema";
-import { probePolicyEngine, runPolicyChecks, splitSentinelParams } from "../../src/worker";
+import { probePolicyEngine, redactSecrets, runPolicyChecks, splitSentinelParams } from "../../src/worker";
 import { variableValueForWrite } from "../../src/lib/variable-crypto";
 import { eq, inArray } from "drizzle-orm";
 
@@ -180,6 +180,26 @@ main = rule { secret_word == "s3cret" }
     expect(argvParams.join(" ")).not.toContain("s3cret");
   });
 
+  it("redacts sensitive plaintexts from persisted engine output (CWE-312)", async () => {
+    // Synthetic echo: the pinned engine does not echo evaluated values, but
+    // failure traces may in other versions, so the mechanism itself is proven
+    // here with a fabricated output blob.
+    const echoed = {
+      result: false,
+      trace: { rules: { main: { value: false, message: "expected s3cret" } }, print: ["s3cret"] },
+      nested: [{ stderr: "s3cret leaked" }],
+      duration: 3,
+      ok: true,
+    };
+    const scrubbed = redactSecrets(echoed, ["s3cret"]) as Record<string, unknown>;
+    expect(JSON.stringify(scrubbed)).not.toContain("s3cret");
+    expect(JSON.stringify(scrubbed)).toContain("[redacted]");
+    expect(scrubbed["duration"]).toBe(3);
+    expect(scrubbed["ok"]).toBe(true);
+    expect(redactSecrets("plain", [])).toBe("plain");
+    expect(redactSecrets(42, ["s3cret"])).toBe(42);
+  });
+
   it("reports unreachable (not failed) when the OPA engine is missing", async () => {
     await withEnv("OPA_BINARY_PATH", "/nonexistent/opa-xyz", async () => {
       await db.delete(policyChecks).where(eq(policyChecks.runId, opaRunId));
@@ -238,5 +258,8 @@ main = rule { secret_word == "s3cret" }
     const rows = await checksFor(senParamId);
     expect(rows.length).toBeGreaterThan(0);
     expect(rows[0]?.status).toBe("passed");
+    // CWE-312: the persisted check result must not retain the secret even if
+    // a future engine version echoes evaluated values in its trace.
+    expect(JSON.stringify(rows[0]?.result ?? {})).not.toContain("s3cret");
   });
 });

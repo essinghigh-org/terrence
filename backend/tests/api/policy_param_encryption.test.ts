@@ -106,6 +106,19 @@ describe("policy-set parameter encryption (#577)", () => {
     expect(await variableValueForRead({ value: after?.value ?? "", valueEncrypted: after?.valueEncrypted ?? null })).toBe("topsecret");
   });
 
+  it("refuses to downgrade a sensitive parameter with an explicit null value", async () => {
+    const created = await (await createParam("NO_NULL_DOWNGRADE", "nullsecret", true)).json() as { data: { id: string } };
+    const patchRes = await request(`/api/v2/policy-sets/${setId}/parameters/${created.data.id}`, "PATCH", {
+      data: { type: "vars", attributes: { sensitive: false, value: null } },
+    });
+    expect(patchRes.status).toBe(200);
+    const after = await db.query.policySetParameters.findFirst({ where: eq(policySetParameters.id, created.data.id) });
+    expect(after?.sensitive).toBe(true);
+    expect(after?.value).toBe("");
+    expect(after?.valueEncrypted).toBeTruthy();
+    expect(await variableValueForRead({ value: after?.value ?? "", valueEncrypted: after?.valueEncrypted ?? null })).toBe("nullsecret");
+  });
+
   it("stores non-sensitive parameters in plaintext", async () => {
     const res = await createParam("REGION", "us-east-1", false);
     expect(res.status).toBe(201);

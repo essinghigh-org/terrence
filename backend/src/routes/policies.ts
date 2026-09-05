@@ -1414,9 +1414,10 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const suppliedValue = typeof attrs["value"] === "string" ? attrs["value"] : null;
     // Mirror the workspace-variable PATCH guard (CodeRabbit P1-sweep review):
     // a sensitive parameter cannot be downgraded to plaintext without
-    // supplying the value, otherwise flipping the flag alone would decrypt
-    // the stored secret into a readable column.
-    if ((param.sensitive ?? false) && !sensitive && attrs["value"] === undefined) sensitive = true;
+    // supplying a replacement string. An explicit null is not a value
+    // (second review pass): without this, {"sensitive": false, "value": null}
+    // would decrypt the stored secret into the readable column.
+    if ((param.sensitive ?? false) && !sensitive && suppliedValue === null) sensitive = true;
     if (suppliedValue !== null || typeof attrs["sensitive"] === "boolean") {
       // The downgrade guard above guarantees sensitive is still true here
       // unless a replacement value was supplied, so decrypting the stored

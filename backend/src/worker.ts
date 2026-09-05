@@ -3134,6 +3134,33 @@ export type SentinelParamInput = Readonly<{
 }>;
 
 /**
+ * Scrub sensitive parameter plaintexts from a persisted policy-engine output
+ * blob (CodeRabbit P1-sweep review, CWE-312): Sentinel auto-generates an
+ * execution trace on failure and future engine versions may echo evaluated
+ * values, so the stored check result must not retain secret-bearing strings.
+ * Substring matching is deliberate: an echoed secret embedded in a larger
+ * message is still a leak. The tradeoff is cosmetic mangling of diagnostic
+ * text on secret-bearing sets, which is acceptable for a stored audit blob.
+ * Exported for tests.
+ */
+export function redactSecrets(value: unknown, secrets: readonly string[]): unknown {
+  if (typeof value === "string") {
+    let scrubbed = value;
+    for (const secret of secrets) {
+      if (secret !== "") scrubbed = scrubbed.split(secret).join("[redacted]");
+    }
+    return scrubbed;
+  }
+  if (Array.isArray(value)) return value.map((item) => redactSecrets(item, secrets));
+  if (value !== null && typeof value === "object") {
+    const scrubbed: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) scrubbed[key] = redactSecrets(entry, secrets);
+    return scrubbed;
+  }
+  return value;
+}
+
+/**
  * Split Sentinel parameters across delivery channels (CodeRabbit P1-sweep
  * review, CWE-200): sensitive values ride the 0600 config file's `param`
  * section, never process arguments (visible in /proc, logs, and audit for
@@ -3383,6 +3410,14 @@ export async function runPolicyChecks(
           sentinel = { output: sentinelStdout };
         }
         if (sentinelStderr !== "") sentinel["stderr"] = sentinelStderr;
+        // Scrub sensitive parameter plaintexts before persisting (CodeRabbit
+        // P1-sweep review, CWE-312): failure traces may echo evaluated values.
+        const sensitivePlaintexts = paramInputs
+          .filter((param) => param.sensitive && param.plaintext !== "")
+          .map((param) => param.plaintext);
+        if (sensitivePlaintexts.length > 0) {
+          sentinel = redactSecrets(sentinel, sensitivePlaintexts) as Record<string, unknown>;
+        }
         if (sentinelExit === 0 || sentinelExit === 1 || sentinelExit === 2) {
           const passed = sentinelExit === 0;
           checkStatus = passed ? "passed" : "failed";
