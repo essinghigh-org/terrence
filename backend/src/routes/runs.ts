@@ -10,9 +10,9 @@ import { runResource, planResource, applyResource, userResource, taskStageResour
 import { tfPolicyEvaluationResource, tfStageTypesForEvaluations } from "./policy-evaluations";
 import { configurationVersionResource, configurationVersionIngressResource } from "./configuration-versions";
 import { costEstimateResource } from "./misc";
-import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, cursorPagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, organizationRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, DISCARDABLE_RUN_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
+import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, cursorPagination, workspaceIdsForPermission, workspaceRunHistoryWhere, organizationRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, DISCARDABLE_RUN_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
-import { deleteRunLogArchive, readRunLogs, readRunLogsPage } from "../lib/run-logs";
+import { deleteRunLogArchive, parseLogSliceParams, readRunLogSlice, readRunLogsPage } from "../lib/run-logs";
 import { deletePlanJsonArtifact, readPlanJsonArtifact, readPlanJsonSideArtifact, sanitizePlanJson } from "../lib/plan-json";
 import { readCostEstimateArtifact } from "../lib/cost-estimate";
 import { costEstimationEnabledForOrganization } from "../lib/settings";
@@ -117,6 +117,25 @@ function rawRunLogFilename(runId: string, phase: "plan" | "apply"): string {
   const safeRunId = runId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128);
   const base = safeRunId.startsWith("run-") ? safeRunId : `run-${safeRunId}`;
   return `${base}-${phase}.txt`;
+}
+
+/** Raw phase-log download (issue #585): SQL-level byte-window streaming so
+ * offset polling costs O(window), with explicit truncation headers instead
+ * of the old silent 10000-row cut.
+ */
+async function rawRunLogResponse(
+  runId: string,
+  phase: "plan" | "apply",
+  request: Readonly<{ url: string }>,
+  set: SetObj,
+): Promise<Uint8Array> {
+  const { offset, limit } = parseLogSliceParams(request);
+  const slice = await readRunLogSlice(runId, phase, offset, limit);
+  set.headers["Content-Type"] = "text/plain; charset=utf-8";
+  set.headers["Content-Disposition"] = `attachment; filename="${rawRunLogFilename(runId, phase)}"`;
+  set.headers["X-Terrence-Log-Total-Bytes"] = String(slice.totalBytes);
+  set.headers["X-Terrence-Log-Truncated"] = slice.truncated ? "true" : "false";
+  return slice.bytes;
 }
 
 function originForConfiguration(
@@ -1338,47 +1357,37 @@ export const runRoutes = new Elysia({ name: "runs" })
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const page = pageRequest(request);
-    const { logs: runLogs, totalCount } = await readRunLogsPage(runId, page);
+    const { logs: runLogs, totalCount, truncated } = await readRunLogsPage(runId, page);
+    const paging = pagination(request, page.number, page.size, totalCount);
     return {
       data: runLogs.map((l: LogItem): Record<string, unknown> => ({ id: l.id, type: "logs", attributes: { phase: l.phase, "output-text": l.outputText, "created-at": l.createdAt } })),
-      ...pagination(request, page.number, page.size, totalCount),
+      links: paging.links,
+      meta: { ...paging.meta, truncated },
     };
   })
   .get("/api/v2/runs/:run_id/plan/log/:log_token", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const logToken = params["log_token"] ?? "";
     if ((await findLogCapability(runId, logToken)) === undefined) { (set as { status: number }).status = 404; return "Not Found"; }
-    const planLogs = await readRunLogs(runId, "plan");
-    set.headers["Content-Type"] = "text/plain; charset=utf-8";
-    set.headers["Content-Disposition"] = `attachment; filename="${rawRunLogFilename(runId, "plan")}"`;
-    return logChunk(planLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
+    return rawRunLogResponse(runId, "plan", request, set);
   })
   .get("/api/v2/runs/:run_id/apply/log/:log_token", async ({ params, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const logToken = params["log_token"] ?? "";
     if ((await findLogCapability(runId, logToken)) === undefined) { (set as { status: number }).status = 404; return "Not Found"; }
-    const applyLogs = await readRunLogs(runId, "apply");
-    set.headers["Content-Type"] = "text/plain; charset=utf-8";
-    set.headers["Content-Disposition"] = `attachment; filename="${rawRunLogFilename(runId, "apply")}"`;
-    return logChunk(applyLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
+    return rawRunLogResponse(runId, "apply", request, set);
   })
   .get("/api/v2/runs/:run_id/plan/log", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const planLogs = await readRunLogs(runId, "plan");
-    set.headers["Content-Type"] = "text/plain; charset=utf-8";
-    set.headers["Content-Disposition"] = `attachment; filename="${rawRunLogFilename(runId, "plan")}"`;
-    return logChunk(planLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
+    return rawRunLogResponse(runId, "plan", request, set);
   })
   .get("/api/v2/runs/:run_id/apply/log", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    const applyLogs = await readRunLogs(runId, "apply");
-    set.headers["Content-Type"] = "text/plain; charset=utf-8";
-    set.headers["Content-Disposition"] = `attachment; filename="${rawRunLogFilename(runId, "apply")}"`;
-    return logChunk(applyLogs.map((l: Readonly<{ readonly outputText: string }>): string => l.outputText).join("\n"), request);
+    return rawRunLogResponse(runId, "apply", request, set);
   })
   .get("/api/v2/runs/:run_id/apply", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";

@@ -1503,16 +1503,6 @@ export function validateExternalUrl(url: string, allowPrivate = false): string |
   }
 }
 
-export function logChunk(output: string, request: RequestWithUrl): Uint8Array {
-  const params = new URL(request.url).searchParams;
-  const parsedOffset = Number.parseInt(params.get("offset") ?? "0", 10);
-  const parsedLimit = Number.parseInt(params.get("limit") ?? "", 10);
-  const offset = Number.isInteger(parsedOffset) && parsedOffset > 0 ? parsedOffset : 0;
-  const bytes = Buffer.from(output);
-  const limit = Number.isInteger(parsedLimit) && parsedLimit >= 0 ? parsedLimit : bytes.length;
-  return bytes.subarray(offset, offset + limit);
-}
-
 /** Map VCS service provider identifier to human-readable display name */
 export function serviceProviderDisplayName(provider: string): string {
   const map: Record<string, string> = {
