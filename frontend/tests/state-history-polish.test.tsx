@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { StateHistory } from "../src/views/StateHistory";
 import { isString } from "../src/lib/type-guards";
@@ -117,6 +117,11 @@ test("uploads a Terraform state file and adds the new state version", async () =
 
   const file = new File([uploadedState], "terraform.tfstate", { type: "application/json" });
   fireEvent.change(view.getByLabelText("Upload Terraform/OpenTofu state"), { target: { files: [file] } });
+
+  await waitFor((): void => {
+    expect(view.getByRole("heading", { name: "Upload state version?" })).toBeTruthy();
+  });
+  fireEvent.click(within(view.getByRole("dialog")).getByRole("button", { name: "Upload state" }));
 
   await waitFor((): void => {
     expect(view.getByText("sv-uploaded")).toBeTruthy();

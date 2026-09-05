@@ -340,6 +340,7 @@ export function ApplyOutput({
   applyLogs: string;
 }>): React.JSX.Element {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
+  const [retry, setRetry] = useState(0);
   const [search, setSearch] = useState("");
   const [selectedOps, setSelectedOps] = useState<ReadonlySet<Operation>>(new Set(DEFAULT_APPLY_OPS));
 
@@ -371,7 +372,7 @@ export function ApplyOutput({
 
     void load();
     return (): void => { cancelled = true; };
-  }, [runId]);
+  }, [runId, retry]);
 
   const derived = useMemo((): DerivedApplyOutput | null => {
     if (loadState.kind !== "ready") return null;
@@ -431,7 +432,26 @@ export function ApplyOutput({
     );
   }
 
-  if (loadState.kind === "error" || loadState.kind !== "ready" || derived === null) {
+  if (loadState.kind === "error") {
+    return (
+      <div role="alert" className="border-t border-border bg-destructive/10 px-5 py-4">
+        <p className="text-sm font-medium text-destructive">Could not load apply output</p>
+        <p className="mt-1 text-xs text-destructive">{loadState.message}</p>
+        <button
+          type="button"
+          className="mt-3 rounded border border-destructive/30 bg-background px-2.5 py-1 text-xs font-medium text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={(): void => {
+            setLoadState({ kind: "loading" });
+            setRetry((value): number => value + 1);
+          }}
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+
+  if (loadState.kind !== "ready" || derived === null) {
     return (
       <div role="status" className="border-t border-border bg-muted px-5 py-4 text-xs text-muted-foreground">
         Apply view is unavailable. See raw apply logs below.
