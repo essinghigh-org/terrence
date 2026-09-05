@@ -85,8 +85,9 @@ See [Tokens](tokens).
 
 ## Concurrency
 
+- At most `TERRENCE_RUN_CONCURRENCY` local runs execute at once (default 5). Lower it on small hosts: parallel plans each hold provider processes and state in memory and can OOM. The admin runs tab shows the live limit with executing and queued counts (system-info worker block).
 - The queue poll claims at most 5 runs per cycle.
-- One executing run per workspace.
+- One executing run per workspace, regardless of the limit.
 - Health assessments run under `HEALTH_ASSESSMENT_CONCURRENCY` (default 2).
 
 ## Restart safety

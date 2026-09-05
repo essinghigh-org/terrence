@@ -4941,7 +4941,7 @@ async function trackLocalExecution<T>(promise: Promise<T>): Promise<T> {
   );
 }
 
-function localRunConcurrencyLimit(): number {
+export function localRunConcurrencyLimit(): number {
   const configured = Number(process.env["TERRENCE_RUN_CONCURRENCY"] ?? 5);
   return Number.isSafeInteger(configured) && configured > 0 ? configured : 5;
 }
@@ -4969,6 +4969,22 @@ export function clearPlanLockLoggedForTests(): void {
   planLockLoggedAt.clear();
 }
 
+/** Local runs waiting for an execution slot: pending runs on non-agent
+ * workspaces (issue #632). Best-effort read for the admin UI; the queue
+ * poll remains the source of truth for claiming. */
+export async function localRunQueueDepth(): Promise<number> {
+  try {
+    const [pending, agentWorkspaces] = await Promise.all([
+      db.query.runs.findMany({ where: eq(runs.status, "pending"), columns: { workspaceId: true } }),
+      db.query.workspaces.findMany({ where: eq(workspaces.executionMode, "agent"), columns: { id: true } }),
+    ]);
+    const agentIds = new Set(agentWorkspaces.map((workspace): string => workspace.id));
+    return pending.filter((run): boolean => !agentIds.has(run.workspaceId)).length;
+  } catch (error: unknown) {
+    logBestEffortFailure("Local run queue depth read failed", {}, error);
+    return 0;
+  }
+}
 function localRunCapacityUsed(): number {
   return activeLocalRunExecutions.size + localRunReservations.size;
 }

@@ -172,3 +172,31 @@ test("destructive confirmations name the exact user and version (kanban 25.5)", 
     expect(deleted).toContain("version");
   });
 });
+
+test("runs tab surfaces live concurrency, executing, and queued counts", async () => {
+  const fetchMock = mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
+    const url = urlOf(input);
+    if (url === "/api/v2/admin/runs") return json({ data: [] });
+    if (url === "/api/v2/admin/system-info") {
+      return json({ data: { worker: { "run-concurrency-limit": 5, "local-runs-executing": 2, "runs-queued": 3 } } });
+    }
+    throw new Error("Unexpected request: " + url);
+  });
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+
+  const view = render(
+    <MemoryRouter initialEntries={["/admin/runs"]}>
+      <Routes>
+        <Route element={<Outlet context={{ accountLoaded: true, siteAdmin: true }} />}>
+          <Route path="/admin/runs" element={<AdminDashboard section="runs" />} />
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await waitFor((): void => {
+    expect(view.getByText(/Concurrency limit 5/)).toBeTruthy();
+  });
+  expect(view.getByText(/2 executing/)).toBeTruthy();
+  expect(view.getByText(/3 queued/)).toBeTruthy();
+});

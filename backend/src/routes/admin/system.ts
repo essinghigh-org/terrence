@@ -12,6 +12,7 @@ import { statfsSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import type { ParamCtx } from "./types";
+import { activeLocalRunExecutionCount, localRunConcurrencyLimit, localRunQueueDepth } from "../../worker";
 import { envEnabled } from "../../lib/env";
 import { currentSamlSettings } from "./helpers";
 import { TOKEN_FORMAT_VERSION } from "../../lib/token-service";
@@ -53,6 +54,10 @@ export const systemRoutes = new Elysia({ name: "admin-system" })
           enabled: !envEnabled(process.env["TERRENCE_DISABLE_WORKER"]),
           "drain-mode": envEnabled(process.env["TERRENCE_DISABLE_WORKER"]),
           "poll-interval-ms": Number.isFinite(workerPoll) && workerPoll > 0 ? workerPoll : 1500,
+          // Issue #632: live run-concurrency surface for the admin UI.
+          "run-concurrency-limit": localRunConcurrencyLimit(),
+          "local-runs-executing": activeLocalRunExecutionCount(),
+          "runs-queued": await localRunQueueDepth(),
         },
         sandbox: {
           enabled: sandboxRequired,
