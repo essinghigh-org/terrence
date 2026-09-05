@@ -7,6 +7,7 @@ import { MAX_LEGACY_STATE_OUTPUT_CANDIDATES } from "../../src/routes/state-versi
 import { db } from "../../src/db";
 import {
   apiTokens,
+  configurationVersions,
   organizationMemberships,
   organizations,
   runs,
@@ -97,6 +98,12 @@ describe("workspace run history and state metadata", () => {
       { id: workspaceId, name: "History", orgId },
       { id: otherWorkspaceId, name: "Other", orgId },
     ]);
+    await db.insert(configurationVersions).values({
+      id: `cv-github-${suffix}`,
+      workspaceId,
+      status: "uploaded",
+      source: "github",
+    });
     await db.insert(runs).values([
       {
         id: runIds.planned,
@@ -121,6 +128,8 @@ describe("workspace run history and state metadata", () => {
         status: "applied",
         message: "release complete",
         isDestroy: false,
+        createdBy: userId,
+        configurationVersionId: `cv-github-${suffix}`,
         createdAt: now - 3_000,
       },
       {
@@ -172,6 +181,10 @@ describe("workspace run history and state metadata", () => {
       [{ "filter[timeframe]": String(currentYear) }, [runIds.planned, runIds.destroy, runIds.applied, runIds.speculative]],
       [{ "filter[timeframe]": "year" }, [runIds.planned, runIds.destroy, runIds.applied, runIds.speculative]],
       [{ "search[basic]": "search-needle" }, [runIds.planned]],
+      [{ "search[basic]": "errored" }, [runIds.old]],
+      [{ "search[basic]": "planned" }, [runIds.planned, runIds.speculative]],
+      [{ "search[basic]": `run-state-${suffix}` }, [runIds.applied]],
+      [{ "search[basic]": "github" }, [runIds.applied]],
     ];
 
     for (const [query, expected] of cases) {

@@ -1607,7 +1607,20 @@ function addTimeframeFilter(conditions: readonly RunWhereCondition[], timeframe:
 
 function addBasicSearchFilter(conditions: readonly RunWhereCondition[], basic: string | undefined): RunWhereConditions {
   if (basic === undefined || basic === "") return conditions;
-  return [...conditions, or(caseInsensitiveLike(runs.id, `%${basic}%`), caseInsensitiveLike(runs.message, `%${basic}%`))];
+  // Issue #591: the run list filter is server-side, so basic search must
+  // cover everything the old client-side filter matched: id, message,
+  // status, creator username, and configuration source.
+  const pattern = `%${basic}%`;
+  const creatorMatches = db.select({ id: users.id }).from(users).where(caseInsensitiveLike(users.username, pattern));
+  const sourceMatches = db.select({ id: configurationVersions.id }).from(configurationVersions)
+    .where(caseInsensitiveLike(configurationVersions.source, pattern));
+  return [...conditions, or(
+    caseInsensitiveLike(runs.id, pattern),
+    caseInsensitiveLike(runs.message, pattern),
+    caseInsensitiveLike(runs.status, pattern),
+    inArray(runs.createdBy, creatorMatches),
+    inArray(runs.configurationVersionId, sourceMatches),
+  )];
 }
 
 function addUserSearchFilter(conditions: readonly RunWhereCondition[], userSearch: string | undefined): RunWhereConditions {
