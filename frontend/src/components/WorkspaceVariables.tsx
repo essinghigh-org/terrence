@@ -91,9 +91,15 @@ type EffectiveVariable = {
   attributes: {
     key: string;
     category: VariableCategory;
+    "variable-set-id"?: string;
     "variable-set-name"?: string;
   };
 };
+
+// Winning source per duplicated key, compared by set ID (CodeRabbit
+// review): set names are not unique per organization, so two same-named
+// sets must not both appear to win. Null ID means the workspace value won.
+type WinnerInfo = Readonly<{ id: string | null; name: string }>;
 
 const messageFrom = (error: unknown, fallback: string): string =>
   error instanceof Error ? error.message : fallback;
@@ -139,7 +145,7 @@ export function WorkspaceVariables({
   // endpoint resolves precedence server-side and names the winning set.
   // Advisory only: a failed load leaves rows unannotated rather than
   // blocking the lists, so tests and offline reads still render.
-  const [winners, setWinners] = useState<ReadonlyMap<string, string>>(new Map());
+  const [winners, setWinners] = useState<ReadonlyMap<string, WinnerInfo>>(new Map());
 
   // Keys defined by more than one source: only these get won-by titles.
   const duplicatedKeys = useMemo((): ReadonlySet<string> => {
@@ -156,19 +162,41 @@ export function WorkspaceVariables({
   }, [variables, setsVars]);
 
   // Title naming the winning source for a duplicated key, or undefined
-  // when the winner is unknown or this row is the only source.
-  const winnerTitle = (category: string, key: string, ownLabel: string): string | undefined => {
+  // when the winner is unknown or this row is the only source. Identity is
+  // by set ID (null for the workspace row); the name is display-only.
+  const winnerTitle = (category: string, key: string, ownId: string | null): string | undefined => {
     if (!duplicatedKeys.has(category + ':' + key)) return undefined;
     const winner = winners.get(category + ':' + key);
     if (winner === undefined) return undefined;
-    if (winner === ownLabel) return "Effective value for " + key + " (wins for this workspace)";
-    const winnerLabel = winner === "Workspace" ? "the workspace value" : "variable set " + JSON.stringify(winner);
+    if (winner.id === ownId) return "Effective value for " + key + " (wins for this workspace)";
+    const winnerLabel = winner.id === null ? "the workspace value" : "variable set " + JSON.stringify(winner.name);
     return "Overridden by " + winnerLabel + " for this workspace";
   };
 
   // Generation guard: invalidated on unmount, workspaceId change, or a newer
   // attach/detach refresh so stale variable-set responses cannot update this view.
   const attachedLoadGeneration = useRef(0);
+
+  // Winner metadata must refresh after every mutation that can change
+  // precedence (CodeRabbit review): attach, detach, save, and delete all
+  // re-resolve here so a stale map never marks a new winner as overridden.
+  const reloadWinners = useCallback(async (signal?: Readonly<AbortSignal>): Promise<void> => {
+    try {
+      const data = await fetchAllApiPages<EffectiveVariable>(`/workspaces/${workspaceId}/all-vars?page[size]=100`, signal);
+      if (signal?.aborted === true) return;
+      const map = new Map<string, WinnerInfo>();
+      for (const row of data) {
+        const setId = row.attributes["variable-set-id"];
+        map.set(row.attributes.category + ':' + row.attributes.key, {
+          id: setId ?? null,
+          name: row.attributes["variable-set-name"] ?? "Workspace",
+        });
+      }
+      setWinners(map);
+    } catch {
+      if (signal?.aborted !== true) setWinners(new Map());
+    }
+  }, [workspaceId]);
 
   const loadAttachedSets = useCallback((): void => {
     const generation = attachedLoadGeneration.current + 1;
@@ -217,18 +245,7 @@ export function WorkspaceVariables({
         if (!signal.aborted) setLoading(false);
       });
 
-    fetchAllApiPages<EffectiveVariable>(`/workspaces/${workspaceId}/all-vars?page[size]=100`, signal)
-      .then((data: EffectiveVariable[]): void => {
-        if (signal.aborted) return;
-        const map = new Map<string, string>();
-        for (const row of data) {
-          map.set(row.attributes.category + ':' + row.attributes.key, row.attributes["variable-set-name"] ?? "Workspace");
-        }
-        setWinners(map);
-      })
-      .catch((): void => {
-        if (!signal.aborted) setWinners(new Map());
-      });
+    void reloadWinners(signal);
 
     loadAttachedSets();
 
@@ -236,7 +253,7 @@ export function WorkspaceVariables({
       controller.abort();
       attachedLoadGeneration.current += 1;
     };
-  }, [workspaceId, loadAttachedSets]);
+  }, [workspaceId, loadAttachedSets, reloadWinners]);
 
   const openAttach = (): void => {
     if (!canUpdate) return;
@@ -265,6 +282,7 @@ export function WorkspaceVariables({
       });
       loadAttachedSets();
       setAttachOpen(false);
+      void reloadWinners();
     } catch (error: unknown) {
       setAttachError(messageFrom(error, "Failed to attach variable set"));
     } finally {
@@ -282,6 +300,7 @@ export function WorkspaceVariables({
         body: JSON.stringify({ data: [{ type: "workspaces", id: workspaceId }] }),
       });
       loadAttachedSets();
+      void reloadWinners();
     } catch (error: unknown) {
       setSetsError(messageFrom(error, "Failed to detach variable set"));
     } finally {
@@ -346,6 +365,7 @@ export function WorkspaceVariables({
         );
       });
       setEditorOpen(false);
+      void reloadWinners();
     } catch (error: unknown) {
       setEditorError(messageFrom(error, "Failed to save variable"));
     } finally {
@@ -361,6 +381,7 @@ export function WorkspaceVariables({
       setVariables((current: WorkspaceVariable[]): WorkspaceVariable[] =>
         current.filter((item: WorkspaceVariable): boolean => item.id !== variable.id),
       );
+      void reloadWinners();
     } catch (error: unknown) {
       setPageError(messageFrom(error, "Failed to delete variable"));
     } finally {
@@ -423,7 +444,7 @@ export function WorkspaceVariables({
                 )}
                 {!loading && variables.map((variable: WorkspaceVariable): React.JSX.Element => (
                   <TableRow key={variable.id}>
-                    <TableCell className="font-mono font-medium" title={winnerTitle(variable.attributes.category, variable.attributes.key, "Workspace") ?? undefined}>
+                    <TableCell className="font-mono font-medium" title={winnerTitle(variable.attributes.category, variable.attributes.key, null) ?? undefined}>
                       <div className="flex items-center gap-2">
                         {variable.attributes.key}
                         {variable.attributes.sensitive && (
@@ -562,7 +583,7 @@ export function WorkspaceVariables({
                       )}
                       {inherited.map((variable: VariableSetVariable): React.JSX.Element => (
                         <TableRow key={variable.id}>
-                          <TableCell className="font-mono font-medium" title={winnerTitle(variable.attributes.category, variable.attributes.key, set.attributes.name) ?? undefined}>
+                          <TableCell className="font-mono font-medium" title={winnerTitle(variable.attributes.category, variable.attributes.key, set.id) ?? undefined}>
                             <div className="flex items-center gap-2">
                               {variable.attributes.key}
                               {variable.attributes.sensitive && (

@@ -38,6 +38,15 @@ describe("archiveContainsWorkingDir", (): void => {
     expect(archiveContainsWorkingDir(members, "terraform/clust")).toBe(false);
     expect(archiveContainsWorkingDir(members, "")).toBe(true);
   });
+
+  test("rejects an exact match against a regular file (CodeRabbit review)", (): void => {
+    // A regular file named "terraform" with no directory entry or
+    // descendants must not satisfy working-directory "terraform".
+    expect(archiveContainsWorkingDir(new Set(["./main.tf", "terraform"]), "terraform")).toBe(false);
+    // Directory entries (trailing slash) and descendants still count.
+    expect(archiveContainsWorkingDir(new Set(["./main.tf", "terraform/"]), "terraform")).toBe(true);
+    expect(archiveContainsWorkingDir(new Set(["terraform/main.tf"]), "terraform")).toBe(true);
+  });
 });
 
 describe("summarizeTopLevelEntries", (): void => {

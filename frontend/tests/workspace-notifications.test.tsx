@@ -68,7 +68,7 @@ test("shows a discord option and failed last deliveries", async () => {
 
   // Failed last delivery surfaces inline on the failing row only.
   const failingRow = view.getByText("Ops channel").closest("tr") as HTMLElement;
-  expect(within(failingRow).getByText(/Last delivery failed \(HTTP 500\)/)).toBeTruthy();
+  expect(within(failingRow).getByText(/Last delivery failed \(500\)/)).toBeTruthy();
   const healthyRow = view.getByText("Healthy hook").closest("tr") as HTMLElement;
   expect(within(healthyRow).queryByText(/Last delivery failed/)).toBeNull();
 

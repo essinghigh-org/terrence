@@ -1,5 +1,64 @@
 import { isAbsolute, normalize, resolve, sep } from "path";
 
+export const MAX_ARCHIVE_METADATA_BYTES = 4 * 1024 * 1024;
+export const ARCHIVE_LIST_TIMEOUT_MS = 5_000;
+
+/** Bound tar/subprocess stdout so malformed archives cannot make the API
+ * buffer unbounded data. Kills and reaps the process when the byte cap or
+ * the deadline is exceeded; null on any failure. Moved here from the
+ * workspaces route so archive listing shares the same bounds. */
+export async function readBoundedProcessOutput(process: Readonly<{
+  exited: Promise<number>;
+  stdout: Readonly<ReadableStream<Uint8Array>>;
+  kill: (exitCode?: number | NodeJS.Signals) => void;
+}>, maxBytes: number, timeoutMs: number): Promise<string | null> {
+  const read = async (): Promise<string | null> => {
+    const reader = process.stdout.getReader();
+    const decoder = new TextDecoder();
+    let bytes = 0;
+    let output = "";
+    try {
+      while (true) {
+        const result = await reader.read();
+        if (result.done) break;
+        bytes += result.value.byteLength;
+        if (bytes > maxBytes) {
+          process.kill("SIGKILL");
+          return null;
+        }
+        output += decoder.decode(result.value, { stream: true });
+      }
+      output += decoder.decode();
+      return await process.exited === 0 ? output : null;
+    } finally {
+      reader.releaseLock();
+    }
+  };
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const readPromise = read();
+  const timeoutPromise = new Promise<null>((resolve): void => {
+    timer = setTimeout((): void => {
+      process.kill("SIGKILL");
+      resolve(null);
+    }, timeoutMs);
+  });
+  try {
+    const result = await Promise.race([readPromise, timeoutPromise]);
+    if (result === null) {
+      process.kill("SIGKILL");
+      await Promise.allSettled([readPromise, process.exited]);
+    }
+    return result;
+  } catch {
+    process.kill("SIGKILL");
+    await Promise.allSettled([readPromise, process.exited]);
+    return null;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export function normalizeWorkingDirectory(value: unknown): string | null {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value !== "string" || value.includes("\0") || value.includes("\\")) {
@@ -43,14 +102,20 @@ export function invalidTriggerPrefixIndexes(prefixes: readonly unknown[]): numbe
   return invalid;
 }
 
-/** Member names of a .tar.gz archive, or null when it cannot be listed. */
+/** Member names of a .tar.gz archive, or null when it cannot be listed.
+ * Output and runtime are bounded (CodeRabbit review): a hostile archive
+ * cannot make trigger-preview or save-time validation buffer unbounded
+ * tar output or hang the request. */
 export async function listArchiveMembers(archivePath: string): Promise<Set<string> | null> {
   try {
-    const proc = Bun.spawn(["tar", "-tzf", archivePath], { stdout: "pipe", stderr: "ignore" });
-    const [exited, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
-    if (exited !== 0) return null;
+    const listing = await readBoundedProcessOutput(
+      Bun.spawn(["tar", "-tzf", archivePath], { stdout: "pipe", stderr: "ignore" }),
+      MAX_ARCHIVE_METADATA_BYTES,
+      ARCHIVE_LIST_TIMEOUT_MS,
+    );
+    if (listing === null) return null;
     const members = new Set<string>();
-    for (const line of stdout.split("\n")) {
+    for (const line of listing.split("\n")) {
       const trimmed = line.trim();
       if (trimmed !== "") members.add(trimmed);
     }
@@ -65,14 +130,22 @@ function normalizeArchiveMember(member: string): string {
 }
 
 /** True when a normalized working directory matches something inside the
- * configuration: the directory itself or anything beneath it. */
+ * configuration: a directory entry itself or anything beneath it. An exact
+ * match against a regular file does NOT count (CodeRabbit review): tar
+ * lists directories with a trailing slash, so a slash-less exact match is
+ * a file the worker could not `readdir`. */
 // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
 export function archiveContainsWorkingDir(members: ReadonlySet<string>, workingDirectory: string): boolean {
   const dir = workingDirectory.replace(/^\/+/, "").replace(/\/+$/, "");
   if (dir === "") return true;
   for (const member of members) {
-    const normalized = normalizeArchiveMember(member);
-    if (normalized === dir || normalized.startsWith(dir + "/")) return true;
+    const stripped = member.replace(/^\.\//, "");
+    const normalized = stripped.replace(/\/+$/, "");
+    if (normalized === dir) {
+      if (stripped.endsWith("/")) return true;
+      continue;
+    }
+    if (normalized.startsWith(dir + "/")) return true;
   }
   return false;
 }

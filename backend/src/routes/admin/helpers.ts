@@ -398,7 +398,8 @@ export function adminOrganizationResource(org: OrgItem): Record<string, unknown>
       "owners-team-saml-role-id": org.ownersTeamSamlRoleId,
       // The default IaC engine, so the admin org table reflects the org's
       // actual setting (Terraform vs OpenTofu) instead of a hardcoded fallback.
-      "iac-binary": org.defaultIacBinary ?? "terraform",
+      // Keyed "default-iac-binary" to match the public organization resource.
+      "default-iac-binary": org.defaultIacBinary ?? "terraform",
     },
   };
 }

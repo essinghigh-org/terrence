@@ -6,7 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { type DataItem, } from "./types";
 // Live run-concurrency surface (issue #632), best-effort: the queue table
 // renders without it when system-info is unreachable.
-type QueueStats = { limit: number; executing: number; queued: number };
+type QueueStats = { limit: number; executing: number; queued: number | null };
 
 export function RunsAdmin(props: Readonly<{ runs: DataItem[]; handleCancelRun: (runId: string, force?: boolean) => Promise<void>; }>): React.JSX.Element {
   const { runs, handleCancelRun } = props;
@@ -21,7 +21,10 @@ export function RunsAdmin(props: Readonly<{ runs: DataItem[]; handleCancelRun: (
         const limit = worker["run-concurrency-limit"];
         const executing = worker["local-runs-executing"];
         const queued = worker["runs-queued"];
-        if (typeof limit !== "number" || typeof executing !== "number" || typeof queued !== "number") return;
+        if (typeof limit !== "number" || typeof executing !== "number") return;
+        // Null queued means the backend read failed: show the rest and mark
+        // the queue count unknown rather than rendering a false 0.
+        if (queued !== null && typeof queued !== "number") return;
         setQueue({ limit, executing, queued });
       })
       .catch((): void => {
@@ -35,7 +38,7 @@ export function RunsAdmin(props: Readonly<{ runs: DataItem[]; handleCancelRun: (
         <CardTitle className="text-lg">System run queue</CardTitle>
         <CardDescription>Monitor and control active execution runs</CardDescription>
         {queue !== null && (
-          <p className="mt-2 text-sm text-muted-foreground">Concurrency limit {queue.limit} · {queue.executing} executing · {queue.queued} queued (limit from TERRENCE_RUN_CONCURRENCY)</p>
+          <p className="mt-2 text-sm text-muted-foreground">Concurrency limit {queue.limit} · {queue.executing} executing · {queue.queued === null ? "queued unknown" : `${String(queue.queued)} queued`} (limit from TERRENCE_RUN_CONCURRENCY)</p>
         )}
       </CardHeader>
       <CardContent>

@@ -240,11 +240,14 @@ const lastDeliveries = new Map<string, LastDelivery>();
 const LAST_DELIVERY_CAP = 500;
 
 function recordLastDelivery(configurationId: string, delivery: NotificationDelivery): void {
+  // The surface is readable beyond managers, so the error is a fixed
+  // summary keyed by the failure code: upstream bodies can echo secrets
+  // back (CodeRabbit review, issue #633 follow-up).
   lastDeliveries.set(configurationId, {
     sentAt: delivery.sentAt,
     successful: delivery.successful,
     code: delivery.code,
-    error: delivery.successful ? null : delivery.body.slice(0, 500),
+    error: delivery.successful ? null : `Delivery failed with code ${delivery.code}.`,
   });
   if (lastDeliveries.size > LAST_DELIVERY_CAP) {
     const oldest = lastDeliveries.keys().next();
@@ -253,8 +256,11 @@ function recordLastDelivery(configurationId: string, delivery: NotificationDeliv
 }
 
 /** Last delivery outcome for API surfacing; null when nothing was sent yet. */
-export function lastDeliveryForResource(configurationId: string): LastDelivery | null {
-  return lastDeliveries.get(configurationId) ?? null;
+export function lastDeliveryForResource(configurationId: string): Record<string, unknown> | null {
+  const last = lastDeliveries.get(configurationId) ?? null;
+  if (last === null) return null;
+  // JSON:API attributes use kebab-case; the frontend reads "sent-at".
+  return { "sent-at": last.sentAt, successful: last.successful, code: last.code, error: last.error };
 }
 export async function postNotification(
   configuration: NotificationConfiguration,
@@ -676,19 +682,29 @@ const FAILED_STATUS_COLORS: ReadonlySet<string> = new Set([
 ]);
 
 /** Discord webhook embeds (issue #633): title, description, capped fields,
- * and a red accent for failure statuses, mirroring the Teams card. */
+ * and a red accent for failure statuses, mirroring the Teams card. Field
+ * limits are per Discord docs; the running budget enforces the 6,000-char
+ * aggregate embed cap (CodeRabbit review) so oversized runs fail closed
+ * into truncation instead of a Discord 400. */
 function renderDiscord(payload: Readonly<Record<string, unknown>>): string {
   const summary = summarizePayload(payload);
-  const fields = summary.fields.slice(0, 10).map((field) => ({
-    name: field.label.slice(0, 256),
-    value: field.value.slice(0, 1024),
-    inline: true,
-  }));
-  const embed: Record<string, unknown> = {
-    title: summary.title.slice(0, 256),
-    color: summary.status !== undefined && FAILED_STATUS_COLORS.has(summary.status) ? 0xc0392b : 0x2b579a,
+  let budget = 6_000;
+  const take = (text: string, perField: number): string => {
+    const out = text.slice(0, Math.max(0, Math.min(perField, budget)));
+    budget -= out.length;
+    return out;
   };
-  if (summary.subtext !== "") embed["description"] = summary.subtext.slice(0, 4096);
+  const title = take(summary.title, 256);
+  const description = summary.subtext === "" ? "" : take(summary.subtext, 4096);
+  const fields: { name: string; value: string; inline: boolean }[] = [];
+  for (const field of summary.fields.slice(0, 10)) {
+    if (budget <= 0) break;
+    const name = take(field.label, 256);
+    const value = take(field.value, 1024);
+    if (name !== "" && value !== "") fields.push({ name, value, inline: true });
+  }
+  const embed: Record<string, unknown> = { title, color: summary.status !== undefined && FAILED_STATUS_COLORS.has(summary.status) ? 0xc0392b : 0x2b579a };
+  if (description !== "") embed["description"] = description;
   if (fields.length > 0) embed["fields"] = fields;
   if (summary.linkUrl !== "") embed["url"] = summary.linkUrl;
   return JSON.stringify({ content: summary.title.slice(0, 2000), embeds: [embed] });

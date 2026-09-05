@@ -15,7 +15,7 @@ import { decodeStatePayload, isUniqueConstraintError, validVariableAttributes } 
 import { variableValueForWrite, variableValueForRead } from "../lib/variable-crypto";
 import { validateVersion, caseInsensitiveLike, checkOrgPermission, checkOrganizationPermission, checkWorkspacePermission, workspacePermissionSets, workspaceAllows, findAuthorizedWorkspace, findWorkspaceByName, findLockedInheritedTagKey, pageRequest, pagination, parseTagBindings, parseStatePayload, auditLog, strictAuditEnabled, applyDataRetentionGarbageCollection, promoteIntermediateStateVersion, safeDeleteWorkspace, deleteWorkspace, lockPrincipal, ownsWorkspaceLock, ifMatchSatisfied, type DeepReadonly } from "../lib/utils";
 
-import { archiveContainsWorkingDir, invalidTriggerPatternIndexes, invalidTriggerPrefixIndexes, listArchiveMembers, normalizeWorkingDirectory, summarizeTopLevelEntries } from "../workspace";
+import { archiveContainsWorkingDir, invalidTriggerPatternIndexes, invalidTriggerPrefixIndexes, listArchiveMembers, MAX_ARCHIVE_METADATA_BYTES, normalizeWorkingDirectory, readBoundedProcessOutput, summarizeTopLevelEntries } from "../workspace";
 import { authPlugin } from "../auth";
 import { agentPoolAllowsWorkspace } from "../lib/agent-pool-scope";
 import { ensureDefaultProject, isAutoDestroyDuration, parseSettingOverwrites } from "./projects";
@@ -101,7 +101,6 @@ function dependencyGraphFromState(statePayload: string | null): readonly Depende
 }
 
 const MAX_README_BYTES = 256 * 1024;
-const MAX_ARCHIVE_METADATA_BYTES = 4 * 1024 * 1024;
 const README_ARCHIVE_TIMEOUT_MS = 5_000;
 
 // Bound tar output so malformed archives cannot make the API buffer unbounded data.
@@ -110,51 +109,7 @@ async function readProcessOutput(process: Readonly<{
   stdout: Readonly<ReadableStream<Uint8Array>>;
   kill: (exitCode?: number | NodeJS.Signals) => void;
 }>, maxBytes: number): Promise<string | null> {
-  const read = async (): Promise<string | null> => {
-    const reader = process.stdout.getReader();
-    const decoder = new TextDecoder();
-    let bytes = 0;
-    let output = "";
-    try {
-      while (true) {
-        const result = await reader.read();
-        if (result.done) break;
-        bytes += result.value.byteLength;
-        if (bytes > maxBytes) {
-          process.kill("SIGKILL");
-          return null;
-        }
-        output += decoder.decode(result.value, { stream: true });
-      }
-      output += decoder.decode();
-      return await process.exited === 0 ? output : null;
-    } finally {
-      reader.releaseLock();
-    }
-  };
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const readPromise = read();
-  const timeoutPromise = new Promise<null>((resolve): void => {
-    timer = setTimeout((): void => {
-      process.kill("SIGKILL");
-      resolve(null);
-    }, README_ARCHIVE_TIMEOUT_MS);
-  });
-  try {
-    const result = await Promise.race([readPromise, timeoutPromise]);
-    if (result === null) {
-      process.kill("SIGKILL");
-      await Promise.allSettled([readPromise, process.exited]);
-    }
-    return result;
-  } catch {
-    process.kill("SIGKILL");
-    await Promise.allSettled([readPromise, process.exited]);
-    return null;
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
+  return readBoundedProcessOutput(process, maxBytes, README_ARCHIVE_TIMEOUT_MS);
 }
 
 async function readmeFromArchive(archivePath: string): Promise<string | null> {
@@ -1844,7 +1799,11 @@ async function updateWorkspaceResponse(
     const cvArchivePath = latestCv?.archivePath;
     if (typeof cvArchivePath === "string" && cvArchivePath !== "" && await Bun.file(cvArchivePath).exists()) {
       const members = await listArchiveMembers(cvArchivePath);
-      if (members !== null && !archiveContainsWorkingDir(members, normalizedWorkingDirectory)) {
+      if (members === null) {
+        (set as { status: number }).status = 422;
+        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "working-directory could not be validated: the latest configuration archive cannot be listed" }] };
+      }
+      if (!archiveContainsWorkingDir(members, normalizedWorkingDirectory)) {
         const tops = summarizeTopLevelEntries(members);
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "working-directory " + JSON.stringify(normalizedWorkingDirectory) + " matches no directory in the latest configuration version" + (tops.length === 0 ? "." : " (top-level entries: " + tops.join(", ") + ")") }] };

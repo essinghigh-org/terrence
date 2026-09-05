@@ -4971,8 +4971,9 @@ export function clearPlanLockLoggedForTests(): void {
 
 /** Local runs waiting for an execution slot: pending runs on non-agent
  * workspaces (issue #632). Best-effort read for the admin UI; the queue
- * poll remains the source of truth for claiming. */
-export async function localRunQueueDepth(): Promise<number> {
+ * poll remains the source of truth for claiming. Null when the read
+ * itself fails so the UI omits the metric instead of showing 0 queued. */
+export async function localRunQueueDepth(): Promise<number | null> {
   try {
     const [pending, agentWorkspaces] = await Promise.all([
       db.query.runs.findMany({ where: eq(runs.status, "pending"), columns: { workspaceId: true } }),
@@ -4982,7 +4983,7 @@ export async function localRunQueueDepth(): Promise<number> {
     return pending.filter((run): boolean => !agentIds.has(run.workspaceId)).length;
   } catch (error: unknown) {
     logBestEffortFailure("Local run queue depth read failed", {}, error);
-    return 0;
+    return null;
   }
 }
 function localRunCapacityUsed(): number {

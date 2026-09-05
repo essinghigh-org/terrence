@@ -365,7 +365,7 @@ export function WorkspaceNotifications(props: NotificationProps): React.JSX.Elem
                     <TableCell>{configuration.attributes["destination-type"]}{((): React.JSX.Element | null => {
                       const last = configuration.attributes["last-delivery"];
                       if (last === undefined || last === null || last.successful) return null;
-                      const detail = "Last delivery failed (HTTP " + last.code + ")" + (last.error === null || last.error === "" ? "" : ": " + last.error);
+                      const detail = "Last delivery failed (" + last.code + ")" + (last.error === null || last.error === "" ? "" : ": " + last.error);
                       return (<p className="mt-1 text-xs text-destructive" title={"Sent at " + last["sent-at"]}>{detail}</p>);
                     })()}</TableCell>
                     <TableCell>{configuration.attributes.triggers.length}</TableCell>
