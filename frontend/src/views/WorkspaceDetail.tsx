@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, Link, useLocation, useNavigate } from "react-router-dom";
-import { fetchApi } from "../lib/api";
+import { fetchApi, ApiError } from "../lib/api";
 import { Button, buttonVariants } from "../components/ui/button";
 import { Textarea } from "../components/ui/textarea";
 import { EmptyState } from "../components/EmptyState";
@@ -41,7 +41,7 @@ import { PageShell, SettingsSection, type PageShellVariant } from "../components
 import { RunDetail } from "./RunDetail";
 import { RunList } from "./RunList";
 import { StateHistory } from "./StateHistory";
-import { Play, Lock, LockOpen, Info, CheckCircle2, Copy } from "lucide-react";
+import { Play, Lock, LockOpen, ShieldAlert, Info, CheckCircle2, Copy } from "lucide-react";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { copyTextToClipboard } from "../lib/utils";
 import { formatDate, formatDateTime, formatRelativeTime } from "../lib/utils";
@@ -184,6 +184,9 @@ type Workspace = {
     "working-directory"?: string | null;
     locked?: boolean;
     "locked-reason"?: string | null;
+    "locked-at"?: string | null;
+    "locked-by-type"?: string | null;
+    "locked-by-id"?: string | null;
     description?: string | null;
     "owned-by-type"?: "team" | "user" | "service" | null;
     "owned-by-id"?: string | null;
@@ -202,6 +205,7 @@ type Workspace = {
       "can-write-state-versions"?: boolean;
       "can-read-variable"?: boolean;
       "can-unlock"?: boolean;
+      "can-force-unlock"?: boolean;
       "can-update"?: boolean;
       "can-update-variable"?: boolean;
     };
@@ -229,6 +233,16 @@ type RunSummary = {
   };
 }
 
+/**
+ * Failure title with the server's reason (issue #568): ApiError already
+ * carries the JSON:API error detail (e.g. "Only the lock owner can unlock
+ * this workspace"), so surface it instead of a generic failure toast.
+ */
+function lockFailureTitle(action: string, err: unknown): string {
+  const detail = err instanceof ApiError ? err.message : "";
+  return detail !== "" ? `${action}: ${detail}` : action;
+}
+
 export function WorkspaceDetail({
   section,
 }: Readonly<{ readonly section?: WorkspaceSection }>): React.JSX.Element {
@@ -249,6 +263,7 @@ export function WorkspaceDetail({
   const [togglingLock, setTogglingLock] = useState(false);
   const [lockDialogOpen, setLockDialogOpen] = useState(false);
   const [unlockDialogOpen, setUnlockDialogOpen] = useState(false);
+  const [forceUnlockDialogOpen, setForceUnlockDialogOpen] = useState(false);
   const [lockReason, setLockReason] = useState("");
   const activeSection = section ?? "overview";
   const isRunDetail = activeSection === "run-detail";
@@ -436,23 +451,26 @@ export function WorkspaceDetail({
       setLockReason("");
       void loadWorkspace();
       toast.add({ title: "Workspace locked", type: "success" });
-    } catch {
-      toast.add({ title: "Failed to lock workspace", type: "error" });
+    } catch (err) {
+      toast.add({ title: lockFailureTitle("Failed to lock workspace", err), type: "error" });
     } finally {
       setTogglingLock(false);
     }
   }
 
-  async function submitUnlock(): Promise<void> {
+  async function submitUnlock(force = false): Promise<void> {
     if (workspace == null || togglingLock || workspace.attributes.locked !== true) return;
+    if (force && workspace.attributes.permissions?.["can-force-unlock"] !== true) return;
     setTogglingLock(true);
+    const action = force ? "force-unlock" : "unlock";
     try {
-      await fetchApi(`/workspaces/${workspace.id}/actions/unlock`, { method: "POST" });
+      await fetchApi(`/workspaces/${workspace.id}/actions/${action}`, { method: "POST" });
       setUnlockDialogOpen(false);
+      setForceUnlockDialogOpen(false);
       void loadWorkspace();
-      toast.add({ title: "Workspace unlocked", type: "success" });
-    } catch {
-      toast.add({ title: "Failed to unlock workspace", type: "error" });
+      toast.add({ title: force ? "Workspace force-unlocked" : "Workspace unlocked", type: "success" });
+    } catch (err) {
+      toast.add({ title: lockFailureTitle(force ? "Failed to force-unlock workspace" : "Failed to unlock workspace", err), type: "error" });
     } finally {
       setTogglingLock(false);
     }
@@ -543,6 +561,27 @@ export function WorkspaceDetail({
   const canToggleLock = workspace.attributes.locked === true
     ? workspace.attributes.permissions?.["can-unlock"] === true
     : workspace.attributes.permissions?.["can-lock"] === true;
+  // Issue #568: lock holder summary for the banner and unlock dialogs.
+  // Owner type/id come from the lock principal (user/team/service); age
+  // from locked-at. All three are nullable for legacy ownerless locks.
+  const lockByType = workspace.attributes["locked-by-type"];
+  const lockById = workspace.attributes["locked-by-id"];
+  const lockHolderName = isString(lockByType) && lockByType !== ""
+    ? (isString(lockById) && lockById !== "" ? `${lockByType} ${lockById}` : lockByType)
+    : null;
+  const lockReasonAttr = workspace.attributes["locked-reason"];
+  const lockReasonText = isString(lockReasonAttr) && lockReasonAttr !== "" ? lockReasonAttr : null;
+  const lockedAtAttr = workspace.attributes["locked-at"];
+  const lockAgeText = isString(lockedAtAttr) && lockedAtAttr !== "" && !Number.isNaN(Date.parse(lockedAtAttr))
+    ? formatRelativeTime(lockedAtAttr)
+    : null;
+  const lockSummaryLine = workspace.attributes.locked === true
+    ? [
+      lockHolderName !== null ? `Locked by ${lockHolderName}` : "Locked",
+      lockReasonText,
+      lockAgeText,
+    ].filter((part): part is string => part !== null).join(" · ")
+    : null;
   const executionMode = workspace.attributes["execution-mode"] ?? "remote";
   const iacBinary = workspace.attributes["iac-binary"] ?? "tofu";
   const iacBinaryLabel = iacBinary === "tofu" ? "OpenTofu" : iacBinary;
@@ -632,6 +671,12 @@ export function WorkspaceDetail({
               )}
             </Button>
           )}
+          {workspace.attributes.locked === true
+            && workspace.attributes.permissions?.["can-force-unlock"] === true && (
+            <Button variant="outline" disabled={togglingLock} onClick={(): void => { setForceUnlockDialogOpen(true); }}>
+              <ShieldAlert data-icon="inline-start" /> {togglingLock ? "Unlocking…" : "Force unlock"}
+            </Button>
+          )}
           {activeSection !== "runs" && (
             <Link
               to={canQueueRun && activeSection === "overview"
@@ -647,6 +692,27 @@ export function WorkspaceDetail({
           )}
         </div>
       </header>
+
+      {workspace.attributes.locked === true
+        && (activeSection === "overview" || activeSection === "runs")
+        && lockSummaryLine !== null && (
+        <div role="status" className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+          <Lock aria-hidden="true" className="size-4" />
+          <span>{lockSummaryLine}</span>
+          {workspace.attributes.permissions?.["can-force-unlock"] === true && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={togglingLock}
+              className="ml-auto"
+              onClick={(): void => { setForceUnlockDialogOpen(true); }}
+            >
+              {togglingLock ? "Unlocking…" : "Force unlock"}
+            </Button>
+          )}
+        </div>
+      )}
 
       <Dialog
         open={lockDialogOpen}
@@ -708,6 +774,9 @@ export function WorkspaceDetail({
         title={`Unlock workspace ${workspace.attributes.name}`}
         description={(
           <>
+            {lockSummaryLine !== null && (
+              <span className="mb-2 block text-sm text-muted-foreground">{lockSummaryLine}</span>
+            )}
             <span className="block">
               Unlocking this workspace will allow other users to run Terraform. Be careful: if a remote Terraform run is still using the lock, this may lead to inconsistent state.
             </span>
@@ -720,6 +789,33 @@ export function WorkspaceDetail({
         cancelText="Cancel"
         confirmVariant="destructive"
         onConfirm={submitUnlock}
+        loading={togglingLock}
+      />
+
+      <ConfirmDialog
+        open={forceUnlockDialogOpen}
+        onOpenChange={(open: boolean): void => {
+          if (!open && !togglingLock) setForceUnlockDialogOpen(false);
+        }}
+        title={`Force unlock workspace ${workspace.attributes.name}`}
+        description={(
+          <>
+            {lockSummaryLine !== null && (
+              <span className="mb-2 block text-sm text-muted-foreground">Current lock: {lockSummaryLine}</span>
+            )}
+            <span className="block">
+              This overrides a lock held by someone else (a CI run, a teammate, or a crashed run that can no longer
+              release it). Only force-unlock when you have confirmed nothing is actively writing state.
+            </span>
+            <span className="mt-4 block">
+              This operation <strong className="font-semibold text-foreground">cannot be undone</strong>. Are you sure?
+            </span>
+          </>
+        )}
+        confirmText="Yes, force unlock"
+        cancelText="Cancel"
+        confirmVariant="destructive"
+        onConfirm={(): Promise<void> => submitUnlock(true)}
         loading={togglingLock}
       />
 

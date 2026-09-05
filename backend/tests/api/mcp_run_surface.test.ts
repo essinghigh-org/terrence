@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
-import { apiTokens, runs, workspaces } from "../../src/db/schema";
+import { apiTokens, configurationVersions, runs, workspaces } from "../../src/db/schema";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { deletePlanJsonArtifact, writePlanJsonArtifact } from "../../src/lib/plan-json";
 import {
@@ -56,6 +56,13 @@ describe("mcp run plan surface", () => {
       { id: workspaceId, name: "mcp-run-ws", orgId: seed.orgId, autoApply: false, terraformVersion: "latest" },
       { id: otherWorkspaceId, name: "mcp-run-ws-other", orgId: seed.orgId, autoApply: false, terraformVersion: "latest" },
     ]);
+    // Issue #574 rejects CV-less run creation; create_run targets workspaceId.
+    await db.insert(configurationVersions).values({
+      id: `cv-mcp-${seed.suffix}`,
+      workspaceId,
+      status: "uploaded",
+      archivePath: "test-only/cv-mcp.tar.gz",
+    });
     await db.insert(runs).values({
       id: runId,
       workspaceId,
@@ -87,6 +94,7 @@ describe("mcp run plan surface", () => {
     await deletePlanJsonArtifact(runId).catch(() => undefined);
     await db.delete(apiTokens).where(eq(apiTokens.id, scopedTokenId));
     await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
+    await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, workspaceId));
     await db.delete(workspaces).where(eq(workspaces.orgId, seed.orgId));
     await cleanupSeed(seed);
   });

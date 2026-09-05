@@ -34,7 +34,7 @@ import {
 import { eq, desc, asc, and, gt, lt, like, inArray, notInArray, or, sql, isNotNull, isNull } from "drizzle-orm";
 import { spawn } from "bun";
 import { createHash, createHmac } from "node:crypto";
-import { join } from "path";
+import { join, resolve } from "path";
 import { tmpdir } from "os";
 import { mkdir, mkdtemp, rm, writeFile, readFile, exists, readdir, rename, stat } from "fs/promises";
 import { ensureBinary } from "./binaryManager";
@@ -74,6 +74,7 @@ import { publish } from "./lib/event-bus";
 import { probeLandlockAbi, RunSandbox, removeSandboxWorkDir, runNetDenyEnabled, runSandboxRequired } from "./lib/sandbox";
 import { createRunCgroup, destroyRunCgroup, killRunCgroup } from "./lib/run-cgroup";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "./lib/secrets";
+import { variableValueForRead } from "./lib/variable-crypto";
 import { encryptStatePayload } from "./lib/validation";
 import { log, safeJsonStringify } from "./lib/log";
 export type { ExecutionPhase } from "./worker/phases";
@@ -106,14 +107,17 @@ import { jitteredPollDelay } from "./lib/poll-jitter";
 // a filesystem allow-list (workdir + binary dir + system libraries) to itself
 // before exec. Provider plugins and local-exec provisioners inherit the
 // restrictions, so they cannot see STORAGE_DIR (DB, encryption key, state
-// archives) or other workspaces. Enable it with TERRENCE_RUN_SANDBOX=true.
+// archives) or other workspaces. The sandbox is required by default
+// (TERRENCE_RUN_SANDBOX unset means sandboxed); disable it explicitly with
+// TERRENCE_RUN_SANDBOX=false.
 const RUN_SANDBOX_REQUIRED = runSandboxRequired();
 const runSandbox = RUN_SANDBOX_REQUIRED && RunSandbox.isUsable() ? new RunSandbox() : null;
 const POLICY_EVALUATION_TIMEOUT_MS = 30_000;
 if (RUN_SANDBOX_REQUIRED && runSandbox === null) {
   log.error(
-    "Run sandbox is enabled (TERRENCE_RUN_SANDBOX=true) but Landlock is unavailable. "
+    "Run sandbox is required (the default) but Landlock is unavailable. "
     + "Runs will FAIL until Landlock is enabled on the host kernel or the sandbox is disabled. "
+    + "Set TERRENCE_RUN_SANDBOX=false, or use `docker compose -f docker-compose.yml -f docker-compose.unsandboxed.yml up -d`. "
     + "See https://docs.kernel.org/userspace-api/landlock.html",
   );
 }
@@ -1251,7 +1255,7 @@ async function streamLog(
   await flush();
 }
 
-function buildSanitizedEnv(
+export function buildSanitizedEnv(
   workspaceVars: readonly { readonly key: string; readonly value: string; readonly category: string; readonly sensitive?: boolean }[],
   extraEnv?: Readonly<Record<string, string>>,
 ): Record<string, string> {
@@ -1293,6 +1297,29 @@ type ExecutionVariable = {
   priority: boolean;
   sensitive: boolean;
 };
+
+/**
+ * Normalize per-run variables for execution (issue #577). Items carry key
+ * and value with optional category ("env" or "terraform", defaulting to
+ * terraform) and sensitive flag. Malformed entries are skipped: validation
+ * at creation rejects them, so anything reaching here predates it.
+ */
+export function normalizeRunVariables(variables: unknown): { key: string; value: string; category: string; sensitive: boolean }[] {
+  if (!Array.isArray(variables)) return [];
+  const normalized: { key: string; value: string; category: string; sensitive: boolean }[] = [];
+  for (const item of variables) {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) continue;
+    const record = item as Readonly<Record<string, unknown>>;
+    if (typeof record["key"] !== "string" || typeof record["value"] !== "string") continue;
+    normalized.push({
+      key: record["key"],
+      value: record["value"],
+      category: record["category"] === "env" ? "env" : "terraform",
+      sensitive: record["sensitive"] === true,
+    });
+  }
+  return normalized;
+}
 
 export async function executionVariables(
   workspaceId: string,
@@ -2031,13 +2058,8 @@ async function executeRunImpl(runId: string): Promise<void> {
       workspace.projectId,
     );
 
-    const extraTfVars: Record<string, string> = {};
-    for (const variable of run.variables ?? []) {
-      if (typeof (variable as unknown as { sensitive?: unknown }).sensitive === "boolean" && (variable as unknown as { sensitive: boolean }).sensitive) {
-        extraTfVars[`TF_VAR_${variable.key}`] = variable.value;
-      }
-    }
-    const envVars = { ...buildSanitizedEnv(vars), ...extraTfVars, ...(await runTerraformEnv(run.id, workspace, "plan", vars)) };
+    const runVars = normalizeRunVariables(run.variables);
+    const envVars = { ...buildSanitizedEnv(vars), ...buildSanitizedEnv(runVars), ...(await runTerraformEnv(run.id, workspace, "plan", vars)) };
     if (run.debuggingMode) envVars["TF_LOG"] = "TRACE";
     const tfVarsLines = vars
       .filter((variable: { readonly category: string }): boolean => variable.category === "terraform")
@@ -2046,6 +2068,17 @@ async function executeRunImpl(runId: string): Promise<void> {
     if (tfVarsLines.length > 0) {
       await writeFile(join(executionDir, "terrence.workspace.tfvars"), tfVarsLines.join("\n"), { mode: 0o600 });
       await writeLog(runId, "plan", `[terrence] Injected ${tfVarsLines.length} workspace Terraform variables.`);
+    }
+    // Non-sensitive terraform run variables ride a separate var-file passed
+    // after the workspace one so they win (issue #577). JSON quoting keeps
+    // values with spaces intact, and undeclared keys are ignored instead of
+    // aborting the plan the way raw -var flags do.
+    const runTfVarsLines = runVars
+      .filter((variable): boolean => variable.category === "terraform" && !variable.sensitive)
+      .map((variable): string => `${variable.key} = ${JSON.stringify(variable.value)}`);
+    if (runTfVarsLines.length > 0) {
+      await writeFile(join(executionDir, "terrence.run.tfvars"), runTfVarsLines.join("\n"), { mode: 0o600 });
+      await writeLog(runId, "plan", `[terrence] Injected ${runTfVarsLines.length} run Terraform variables.`);
     }
 
     const requestedTool = workspace.iacBinary ?? org?.defaultIacBinary ?? "terraform";
@@ -2105,10 +2138,7 @@ async function executeRunImpl(runId: string): Promise<void> {
       for (const target of run.targetAddrs ?? []) planArgs.push(`-target=${target}`);
       for (const replacement of run.replaceAddrs ?? []) planArgs.push(`-replace=${replacement}`);
       if (tfVarsLines.length > 0) planArgs.push("-var-file=terrence.workspace.tfvars");
-      for (const variable of run.variables ?? []) {
-        if (typeof (variable as unknown as { sensitive?: unknown }).sensitive === "boolean" && (variable as unknown as { sensitive: boolean }).sensitive) continue;
-        planArgs.push(`-var=${variable.key}=${variable.value}`);
-      }
+      if (runTfVarsLines.length > 0) planArgs.push("-var-file=terrence.run.tfvars");
       for (const variable of vars) {
         if (variable.category === "terraform" && variable.priority) {
           if (variable.sensitive) continue;
@@ -2734,7 +2764,10 @@ async function executeApplyImpl(runId: string): Promise<void> {
       const binary = resolved.binaryPath;
       if (runSandbox !== null) await runSandbox.ensureTool(resolved.tool, resolved.version, binary);
       const vars = await executionVariables(workspace.id, workspace.orgId, workspace.projectId ?? null);
-      const envVars = { ...buildSanitizedEnv(vars), ...(await runTerraformEnv(run.id, workspace, "apply", vars)) };
+      // Run-scoped variables ride the apply environment exactly like the
+      // plan environment (issue #577): provider credentials injected at
+      // plan time must still be present at apply time.
+      const envVars = { ...buildSanitizedEnv(vars), ...buildSanitizedEnv(normalizeRunVariables(run.variables)), ...(await runTerraformEnv(run.id, workspace, "apply", vars)) };
       if (run.debuggingMode) envVars["TF_LOG"] = "TRACE";
       const applyTimeoutMs = await executionTimeoutMs("apply");
 
@@ -3022,10 +3055,148 @@ async function executeApplyImpl(runId: string): Promise<void> {
 }
 
 /**
+ * Policy engine resolution failure: the binary is not installed, not on
+ * PATH, and no override points at it. Distinct from evaluation errors so
+ * callers can report "engine unavailable" instead of "policy failed".
+ */
+class PolicyEngineMissingError extends Error {
+  readonly engine: "opa" | "sentinel";
+  constructor(engine: "opa" | "sentinel", message: string) {
+    super(message);
+    this.name = "PolicyEngineMissingError";
+    this.engine = engine;
+  }
+}
+
+/**
+ * Resolve a policy engine binary without spawning (issue #596). Honors
+ * OPA_BINARY_PATH / SENTINEL_BINARY_PATH overrides, otherwise PATH.
+ * Neither engine ships in the image; operators install them (OPA is
+ * Apache-2.0, Sentinel is proprietary BYOB). Exported for tests.
+ *
+ * PATH is scanned manually from process.env at call time (instead of
+ * Bun.which) so runtime PATH mutations are honored: tests prepend a
+ * fixture directory with a fake engine, and operators may extend PATH in
+ * wrapper scripts after the server starts.
+ *
+ * Returned paths are absolute regular executable files (CodeRabbit P1-sweep
+ * review): a relative override is resolved against the server working
+ * directory because the engine is spawned with cwd set to the run workdir,
+ * and a non-executable match is skipped so it reports unavailable instead
+ * of failing at spawn.
+ */
+function* executableCandidates(command: string): Generator<string> {
+  const pathEnv = process.env["PATH"] ?? "";
+  for (const dir of pathEnv.split(":")) {
+    if (dir === "") continue;
+    yield resolve(dir, command);
+  }
+}
+
+async function isExecutableFile(candidate: string): Promise<boolean> {
+  try {
+    const info = await stat(candidate);
+    return info.isFile() && (info.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
+}
+
+export async function probePolicyEngine(kind: "opa" | "sentinel"): Promise<{ path: string } | { missing: string }> {
+  const override = kind === "opa" ? process.env["OPA_BINARY_PATH"] : process.env["SENTINEL_BINARY_PATH"];
+  const command = override !== undefined && override.trim() !== "" ? override.trim() : kind;
+  const candidates = command.includes("/") ? [resolve(command)] : executableCandidates(command);
+  for (const candidate of candidates) {
+    if (await isExecutableFile(candidate)) return { path: candidate };
+  }
+  const install = kind === "opa"
+    ? "Install OPA (https://www.openpolicyagent.org/docs/latest/#running-opa) and ensure the `opa` binary is on PATH, or set OPA_BINARY_PATH to its location."
+    : "Install Sentinel and ensure the `sentinel` binary is on PATH, or set SENTINEL_BINARY_PATH to its location.";
+  return { missing: `${kind === "opa" ? "OPA" : "Sentinel"} policy engine is not available. ${install}` };
+}
+
+async function requirePolicyEngine(kind: "opa" | "sentinel"): Promise<string> {
+  const probed = await probePolicyEngine(kind);
+  if ("missing" in probed) throw new PolicyEngineMissingError(kind, probed.missing);
+  return probed.path;
+}
+
+/**
  * Evaluate policies attached to a workspace after a plan completes.
  * Returns an object indicating whether the run should proceed to apply.
  * Exported for tests; the worker is the only production caller.
  */
+export type SentinelParamInput = Readonly<{
+  key: string;
+  hcl: boolean;
+  sensitive: boolean;
+  plaintext: string;
+}>;
+
+/**
+ * Scrub sensitive parameter plaintexts from a persisted policy-engine output
+ * blob (CodeRabbit P1-sweep review, CWE-312): Sentinel auto-generates an
+ * execution trace on failure and future engine versions may echo evaluated
+ * values, so the stored check result must not retain secret-bearing strings.
+ * Substring matching is deliberate: an echoed secret embedded in a larger
+ * message is still a leak. The tradeoff is cosmetic mangling of diagnostic
+ * text on secret-bearing sets, which is acceptable for a stored audit blob.
+ * Exported for tests.
+ */
+export function redactSecrets(value: unknown, secrets: readonly string[]): unknown {
+  if (typeof value === "string") {
+    let scrubbed = value;
+    for (const secret of secrets) {
+      if (secret !== "") scrubbed = scrubbed.split(secret).join("[redacted]");
+    }
+    return scrubbed;
+  }
+  if (Array.isArray(value)) return value.map((item) => redactSecrets(item, secrets));
+  if (value !== null && typeof value === "object") {
+    const scrubbed: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) scrubbed[key] = redactSecrets(entry, secrets);
+    return scrubbed;
+  }
+  return value;
+}
+
+/**
+ * Split Sentinel parameters across delivery channels (CodeRabbit P1-sweep
+ * review, CWE-200): sensitive values ride the 0600 config file's `param`
+ * section, never process arguments (visible in /proc, logs, and audit for
+ * the process lifetime). Non-sensitive values keep the `-param` argv form.
+ * Exported for tests.
+ *
+ * Config-file values are native: plain strings pass through, while hcl
+ * values attempt a JSON parse (numbers, booleans, quoted strings, JSON
+ * objects) and fall back to the raw string for non-JSON HCL.
+ */
+export function splitSentinelParams(
+  parameters: readonly SentinelParamInput[],
+): { configParams: Record<string, { value: unknown }>; argvParams: string[] } {
+  const configParams: Record<string, { value: unknown }> = {};
+  const argvParams: string[] = [];
+  for (const parameter of parameters) {
+    if (parameter.sensitive) {
+      let value: unknown = parameter.plaintext;
+      if (parameter.hcl) {
+        try {
+          value = JSON.parse(parameter.plaintext) as unknown;
+        } catch {
+          value = parameter.plaintext;
+        }
+      }
+      configParams[parameter.key] = { value };
+    } else {
+      argvParams.push(
+        "-param",
+        `${parameter.key}=${parameter.hcl ? parameter.plaintext : JSON.stringify(parameter.plaintext)}`,
+      );
+    }
+  }
+  return { configParams, argvParams };
+}
+
 export async function runPolicyChecks(
   runId: string,
   workspaceId: string,
@@ -3140,7 +3311,7 @@ export async function runPolicyChecks(
         const opaQuerySafe = /^[a-zA-Z0-9_.]+$/.test(opaQuery) ? opaQuery : "data";
         const opaProc = spawnRunProcess(
           runId,
-          ["opa", "eval", "--data", policyPath, "--input", dataPath, opaQuerySafe],
+          [await requirePolicyEngine("opa"), "eval", "--data", policyPath, "--input", dataPath, opaQuerySafe],
           {
             cwd: workDir,
             env: { PATH: process.env["PATH"] ?? "" },
@@ -3183,22 +3354,32 @@ export async function runPolicyChecks(
         await writeFile(policyPath, policySource, { mode: 0o600 });
         // Keep the potentially large plan out of argv (/proc and ARG_MAX). A
         // JSON config preserves the plan as data without HCL interpolation.
+        // Sensitive parameters ride the same 0600 config file (CWE-200):
+        // decrypted values must never appear in process arguments.
+        const paramInputs: SentinelParamInput[] = [];
+        for (const parameter of (policy.policySetId !== null ? parametersBySet.get(policy.policySetId) ?? [] : [])) {
+          // Sensitive parameters are stored encrypted (issue #577):
+          // resolve the plaintext for the engine invocation.
+          paramInputs.push({
+            key: parameter.key,
+            hcl: parameter.hcl === true,
+            sensitive: parameter.sensitive === true,
+            plaintext: await variableValueForRead(parameter),
+          });
+        }
+        const { configParams, argvParams } = splitSentinelParams(paramInputs);
         await writeFile(configPath, JSON.stringify({
           global: { tfplan: { value: generatedPlanJson ?? {} } },
+          ...(Object.keys(configParams).length > 0 ? { param: configParams } : {}),
         }), { mode: 0o600 });
         const args = [
-          process.env["SENTINEL_BINARY_PATH"] ?? "sentinel",
+          await requirePolicyEngine("sentinel"),
           "apply",
           "-json",
           "-timeout=30s",
           `-config=${configPath}`,
+          ...argvParams,
         ];
-        for (const parameter of (policy.policySetId !== null ? parametersBySet.get(policy.policySetId) ?? [] : [])) {
-          args.push(
-            "-param",
-            `${parameter.key}=${parameter.hcl === true ? parameter.value : JSON.stringify(parameter.value)}`,
-          );
-        }
         args.push(policyPath);
 
         const policySandbox = policyEvaluationSandbox();
@@ -3229,6 +3410,14 @@ export async function runPolicyChecks(
           sentinel = { output: sentinelStdout };
         }
         if (sentinelStderr !== "") sentinel["stderr"] = sentinelStderr;
+        // Scrub sensitive parameter plaintexts before persisting (CodeRabbit
+        // P1-sweep review, CWE-312): failure traces may echo evaluated values.
+        const sensitivePlaintexts = paramInputs
+          .filter((param) => param.sensitive && param.plaintext !== "")
+          .map((param) => param.plaintext);
+        if (sensitivePlaintexts.length > 0) {
+          sentinel = redactSecrets(sentinel, sensitivePlaintexts) as Record<string, unknown>;
+        }
         if (sentinelExit === 0 || sentinelExit === 1 || sentinelExit === 2) {
           const passed = sentinelExit === 0;
           checkStatus = passed ? "passed" : "failed";
@@ -3292,6 +3481,24 @@ export async function runPolicyChecks(
         await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" ${checkStatus}: ${JSON.stringify(checkResult)}`);
       }
     } catch (err: unknown) {
+      // A missing engine is unreachable, not errored (issue #596): the
+      // policy never evaluated. Blocking semantics match errored
+      // (mandatory and soft-mandatory stop the run; advisory warns).
+      if (err instanceof PolicyEngineMissingError) {
+        checkBatch.push({
+          id: checkId,
+          runId,
+          policyId: policy.id,
+          policySetId: policy.policySetId,
+          status: "unreachable",
+          result: { error: err.message },
+          createdAt: Date.now(),
+        });
+        if (policy.enforcementLevel === "hard-mandatory") hardFailed = true;
+        if (policy.enforcementLevel === "soft-mandatory") softFailed = true;
+        await writeLog(runId, "plan", `[terrence] Policy "${policy.name}" unreachable: ${err.message}`);
+        continue;
+      }
       const errMsg = err instanceof Error ? err.message : String(err);
       checkBatch.push({
         id: checkId,
@@ -3756,7 +3963,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
         phase: "plan",
         ttlSeconds: timeoutSeconds(settings?.planTimeout, 7_200),
       }, variables, executionDir);
-      const environment = { ...buildSanitizedEnv(variables), ...identity.environment };
+      const environment = { ...buildSanitizedEnv(variables), ...buildSanitizedEnv(normalizeRunVariables(appliedRun.variables)), ...identity.environment };
       const terraformVariables = variables
         .filter((variable: Readonly<{ category: string }>): boolean => variable.category === "terraform")
         .map((variable: Readonly<{ key: string; hcl: boolean; value: string }>): string =>
@@ -3765,6 +3972,18 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
         await writeFile(
           join(executionDir, "terrence.workspace.tfvars"),
           terraformVariables.join("\n"),
+          { mode: 0o600 },
+        );
+      }
+      // Run-scoped terraform variables ride their own var-file like the plan
+      // path (issue #577) instead of raw -var flags.
+      const appliedRunTfVarsLines = normalizeRunVariables(appliedRun.variables)
+        .filter((variable): boolean => variable.category === "terraform" && !variable.sensitive)
+        .map((variable): string => `${variable.key} = ${JSON.stringify(variable.value)}`);
+      if (appliedRunTfVarsLines.length > 0) {
+        await writeFile(
+          join(executionDir, "terrence.run.tfvars"),
+          appliedRunTfVarsLines.join("\n"),
           { mode: 0o600 },
         );
       }
@@ -3800,7 +4019,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
         "-out=tfplan",
       ];
       if (terraformVariables.length > 0) planArgs.push("-var-file=terrence.workspace.tfvars");
-      for (const variable of appliedRun.variables ?? []) planArgs.push(`-var=${variable.key}=${variable.value}`);
+      if (appliedRunTfVarsLines.length > 0) planArgs.push("-var-file=terrence.run.tfvars");
       for (const variable of variables) {
         if (variable.category === "terraform" && variable.priority) {
           planArgs.push(`-var=${variable.key}=${variable.hcl ? variable.value : JSON.stringify(variable.value)}`);
@@ -4072,7 +4291,18 @@ export async function pollWorkerQueue(): Promise<string[]> {
     if (claimedWorkspaceIds.has(run.workspaceId)) continue;
 
     const workspace = workspacesById.get(run.workspaceId);
-    if (workspace === undefined || workspace.locked === true) continue;
+    if (workspace === undefined) continue;
+    // A lock acquired after run creation parks the run silently (issue
+    // #575). Log the block throttled instead of parking with no signal.
+    if (workspace.locked === true) {
+      if (notePlanLockLogged(run.id)) {
+        const reason = typeof workspace.lockedReason === "string" && workspace.lockedReason !== ""
+          ? ` Reason: ${workspace.lockedReason}`
+          : "";
+        await writeLog(run.id, "plan", `[terrence] Run is waiting: the workspace is locked.${reason} Unlock the workspace or cancel this run.`);
+      }
+      continue;
+    }
 
     // Atomic conditional claim: only claim if no planning/applying run exists for this workspace,
     // and the run is still pending.
@@ -4216,6 +4446,30 @@ export async function pollWorkerQueue(): Promise<string[]> {
       }
     }
 
+    // Local-execution workspaces never run on the server (issue #567):
+    // remote runs are rejected at creation, so any pending row here
+    // predates the gate. Error it with an explanation instead of
+    // executing it or leaving it stuck forever.
+    if (workspace.executionMode === "local") {
+      const blocked = await db.update(runs).set({
+        status: "errored",
+        statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+      }).where(and(claimWhere, eq(runs.status, "pending"))).returning({ id: runs.id });
+      if (blocked.length > 0) {
+        await writeLog(run.id, "plan", "[terrence ERROR] Remote runs cannot execute on workspaces with local execution mode. Plan and apply locally with the CLI; this run predates local-execution enforcement.");
+        queueRunNotification(run.id, "run:errored", "errored");
+        void reportRunVcsStatus(run.id, "errored");
+        publish("run.status", {
+          "run-id": run.id,
+          "workspace-id": workspace.id,
+          "org-id": workspace.orgId,
+          status: "errored",
+          at: new Date().toISOString(),
+        });
+      }
+      continue;
+    }
+
     let localReservationHeld = workspace.executionMode !== "agent" && reserveLocalRunExecution(run.id);
     if (!localReservationHeld && workspace.executionMode !== "agent") continue;
 
@@ -4229,6 +4483,7 @@ export async function pollWorkerQueue(): Promise<string[]> {
       if (claimed.length > 0) {
         claimedRunIds.push(run.id);
         claimedWorkspaceIds.add(run.workspaceId);
+        planLockLoggedAt.delete(run.id);
         // Advance through plan_queued then dispatch to planning
         executeRun(run.id).catch((err: unknown): void => { log.error("Worker error on run", { runId: run.id, error: err }); });
         localReservationHeld = false;
@@ -4285,7 +4540,7 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
   const scheduledWorkspaceRows = dueRuns.length === 0
     ? []
     : await db.query.workspaces.findMany({
-        columns: { id: true, orgId: true, locked: true, executionMode: true, agentPoolId: true, projectId: true },
+        columns: { id: true, orgId: true, locked: true, lockedReason: true, executionMode: true, agentPoolId: true, projectId: true },
         where: inArray(workspaces.id, [...new Set(dueRuns.map((run): string => run.workspaceId))]),
       });
   const workspacesById = new Map(scheduledWorkspaceRows.map((workspace): readonly [string, typeof workspace] => [workspace.id, workspace]));
@@ -4294,7 +4549,37 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
     if (run.planOnly === true) continue;
     try {
       const workspace = workspacesById.get(run.workspaceId);
-      if (workspace === undefined || workspace.locked === true) continue;
+      if (workspace === undefined) continue;
+      // A lock acquired after the apply was confirmed parks the run
+      // silently (issue #575). Log the block throttled like the other
+      // deferral reasons instead of parking with no signal.
+      if (workspace.locked === true) {
+        const reason = typeof workspace.lockedReason === "string" && workspace.lockedReason !== ""
+          ? workspace.lockedReason
+          : "locked";
+        const key = `scheduled:${run.id}`;
+        if (scheduledBlockReasons.get(key) !== `workspace-locked:${reason}`) {
+          scheduledBlockReasons.set(key, `workspace-locked:${reason}`);
+          await writeLog(run.id, "apply", `[terrence] Apply is waiting: the workspace is locked (${reason}). Unlock the workspace or cancel this run.`);
+        }
+        continue;
+      }
+      if (workspace.executionMode === "local") {
+        // Local-execution workspaces never run on the server (issue #567):
+        // a confirmed row here predates the creation gate. Error it with
+        // an explanation instead of dispatching or leaving it confirmed
+        // forever.
+        const blocked = await db.update(runs).set({
+          status: "errored",
+          statusTimestamps: { ...(run.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+        }).where(and(eq(runs.id, run.id), eq(runs.status, "confirmed"))).returning({ id: runs.id });
+        if (blocked.length > 0) {
+          await writeLog(run.id, "apply", "[terrence ERROR] Remote runs cannot execute on workspaces with local execution mode. This apply predates local-execution enforcement.");
+          queueRunNotification(run.id, "run:errored", "errored");
+          void reportRunVcsStatus(run.id, "errored");
+        }
+        continue;
+      }
       const gateBlockReason = await applyGateBlockReason(new Date());
       if (gateBlockReason !== null) {
         // Log the deferral only when the block reason changes so a closed
@@ -4499,6 +4784,29 @@ async function trackLocalExecution<T>(promise: Promise<T>): Promise<T> {
 function localRunConcurrencyLimit(): number {
   const configured = Number(process.env["TERRENCE_RUN_CONCURRENCY"] ?? 5);
   return Number.isSafeInteger(configured) && configured > 0 ? configured : 5;
+}
+
+/** Last lock-blocked log per pending run (issue #575): re-log at most every
+ * 5 minutes so the queue poll does not spam. Bounded; stale entries are
+ * harmless because run ids are unique (a stale timestamp only triggers a
+ * fresh, accurate log if the id ever reappears as pending). */
+const planLockLoggedAt = new Map<string, number>();
+const PLAN_LOCK_LOG_INTERVAL_MS = 5 * 60 * 1000;
+
+function notePlanLockLogged(runId: string): boolean {
+  const now = Date.now();
+  const last = planLockLoggedAt.get(runId);
+  if (last !== undefined && now - last < PLAN_LOCK_LOG_INTERVAL_MS) return false;
+  planLockLoggedAt.set(runId, now);
+  if (planLockLoggedAt.size > 2000) {
+    const oldest = planLockLoggedAt.keys().next();
+    if (!oldest.done) planLockLoggedAt.delete(oldest.value);
+  }
+  return true;
+}
+
+export function clearPlanLockLoggedForTests(): void {
+  planLockLoggedAt.clear();
 }
 
 function localRunCapacityUsed(): number {
@@ -4784,6 +5092,7 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
   requeued: number;
   errored: number;
   assessmentsErrored: number;
+  rearmed: number;
 }> {
   await pruneInterruptedApplyRecovery();
   const pendingAt = new Date().toISOString();
@@ -4869,6 +5178,51 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
     }
   }
 
+  // Orphaned manual-apply dispatches (issue #572): the apply route writes
+  // confirmed with scheduledAt null and dispatches fire-and-forget. A crash
+  // in between leaves a resting state that no poller selects
+  // (applyDueScheduledRuns requires scheduledAt) yet still blocks the
+  // workspace queue. At boot no dispatcher can be alive, so re-arm these
+  // for the scheduled-apply poller by stamping scheduledAt now. The
+  // poller's atomic confirmed -> apply_queued claim keeps this safe
+  // against double dispatch, and agent-mode runs stay with
+  // recoverStaleAgentJobs.
+  let rearmed = 0;
+  const orphanedApplies = await db.query.runs.findMany({
+    where: and(
+      eq(runs.status, "confirmed"),
+      isNull(runs.scheduledAt),
+      eq(runs.planOnly, false),
+    ),
+    columns: { id: true, workspaceId: true },
+  });
+  if (orphanedApplies.length > 0) {
+    const orphanWorkspaceIds = [...new Set(orphanedApplies.map((run): string => run.workspaceId))];
+    const orphanWorkspaces = await db.query.workspaces.findMany({
+      where: inArray(workspaces.id, orphanWorkspaceIds),
+      columns: { id: true, executionMode: true },
+    });
+    const orphanAgentWorkspaceIds = new Set(
+      orphanWorkspaces.filter((ws): boolean => ws.executionMode === "agent").map((ws): string => ws.id),
+    );
+    for (const run of orphanedApplies) {
+      if (orphanAgentWorkspaceIds.has(run.workspaceId)) continue;
+      try {
+        const rearmedRows = await db.update(runs).set({ scheduledAt: Date.now() }).where(and(
+          eq(runs.id, run.id),
+          eq(runs.status, "confirmed"),
+          isNull(runs.scheduledAt),
+        )).returning({ id: runs.id });
+        if (rearmedRows.length === 0) continue;
+        rearmed += 1;
+        await writeLog(run.id, "apply", "[terrence] Run re-armed: the Terrence process restarted after apply was confirmed but before dispatch. The scheduled-apply poller will dispatch it.");
+      } catch (error: unknown) {
+        const detail = error instanceof Error ? error.message : String(error);
+        logBestEffortFailure("Startup reconciliation failed to re-arm orphaned apply", { runId: run.id }, detail);
+      }
+    }
+  }
+
   // Running assessments die with the process too; they count against the
   // assessment concurrency budget, so error them and let the next discovery
   // cycle create a fresh pending result.
@@ -4899,7 +5253,7 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
     }
   }
 
-  return { requeued, errored, assessmentsErrored };
+  return { requeued, errored, assessmentsErrored, rearmed };
 }
 
 export function startWorkerQueue(): void {

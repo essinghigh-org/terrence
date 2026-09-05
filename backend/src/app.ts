@@ -499,9 +499,15 @@ export const app = new Elysia()
   })
   .onBeforeHandle(({ request, user, set }: PasswordGuardContext): Record<string, unknown> | undefined => {
     if (user?.mustChangePassword !== true) return;
+    // Allow-list, not prefix match (issue #570): a forced password change
+    // must gate every authenticated surface, including /mcp and /scim/,
+    // with only the account-read and password-change endpoints exempt.
+    // Logout and session refresh carry no data access, so they stay open:
+    // a flagged user can abandon the session or keep the change-password
+    // flow alive across an access-token expiry (CodeRabbit P1-sweep review).
     const path = new URL(request.url).pathname;
     if (path === "/api/v2/account/details" || path === "/api/v2/account/password") return;
-    if (!path.startsWith("/api/")) return;
+    if (path === "/api/v2/users/logout" || path === "/api/v2/users/refresh") return;
     (set as { status: number }).status = 403;
     return {
       errors: [{
@@ -857,9 +863,12 @@ export const app = new Elysia()
     // Any valid JSON media type (vnd.api+json, application/json,
     // application/scim+json, ...) is capped and parsed here so chunked
     // bodies without Content-Length cannot buffer up to the 100 MiB server
-    // limit. Arbitrary strings that merely contain "json" are not treated as
-    // JSON and fall through to Elysia's default parser.
-    if (isJsonContentType(contentType)) {
+    // limit. Archive-upload paths are exempt: state and configuration
+    // uploads legitimately carry JSON content types up to the 100 MiB
+    // server cap, and their routes enforce their own limits. Arbitrary
+    // strings that merely contain "json" are not treated as JSON and fall
+    // through to Elysia's default parser.
+    if (isJsonContentType(contentType) && !isUploadPath(pathname)) {
       const text = await readTextWithLimit(request as unknown as Request, API_BODY_LIMIT_BYTES);
       try {
         return JSON.parse(text) as Record<string, unknown>;

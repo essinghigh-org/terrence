@@ -351,6 +351,10 @@ export const workspaces = sqliteTable("workspaces", {
   lockedReason: text("locked_reason"),
   lockOwnerType: text("lock_owner_type"),
   lockOwnerId: text("lock_owner_id"),
+  // Issue #568: when the current lock was taken (ms epoch), so the UI can
+  // show lock age. Set on lock, cleared on unlock/force-unlock. Older
+  // databases converge via the idempotent boot repair in db/index.ts.
+  lockedAt: integer("locked_at"),
   // Executor policy (36/37/39): per-workspace isolation level. When
   // `trustedExecution` is false, local Landlock execution is refused and the
   // run must be dispatched to an isolated executor (agent/container/k8s).
@@ -1460,6 +1464,10 @@ export const policySetParameters = sqliteTable("policy_set_parameters", {
   policySetId: text("policy_set_id").notNull().references(() => policySets.id, { onDelete: "cascade" }),
   key: text("key").notNull(),
   value: text("value").notNull(),
+  // Sensitive values are encrypted at rest (issue #577), mirroring
+  // workspace variables: when sensitive is true, `value` holds "" and
+  // `valueEncrypted` holds the AES-256-GCM enc:v1 payload.
+  valueEncrypted: text("value_encrypted"),
   sensitive: integer("sensitive", { mode: "boolean" }).default(false),
   hcl: integer("hcl", { mode: "boolean" }).default(false),
 });

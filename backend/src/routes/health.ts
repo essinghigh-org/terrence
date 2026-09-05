@@ -459,15 +459,20 @@ async function readinessResponse(
   });
   const disk = isStorageDegraded() ? "ERROR" : "OK";
   const worker = envEnabled(process.env["TERRENCE_DISABLE_WORKER"]) ? "ERROR" : "OK";
-  // Todo 64: fail readiness when operator policy demands a newer Landlock ABI than the host provides.
+  // Fail readiness when the sandbox is required but the host cannot
+  // provide Landlock at all (issue #566); the operator policy floor
+  // still applies on top for newer-ABI requirements.
   const sandboxMinAbi = (() => {
     const raw = process.env["TERRENCE_SANDBOX_MIN_ABI"];
     if (raw === undefined || raw.trim() === "") return null;
     const n = Number.parseInt(raw.trim(), 10);
     return Number.isSafeInteger(n) && n >= 1 ? n : null;
   })();
+  const hostAbi = probeLandlockAbi();
   const sandboxAbiStatus: "OK" | "ERROR" =
-    sandboxMinAbi !== null && probeLandlockAbi() < sandboxMinAbi ? "ERROR" : "OK";
+    sandboxMinAbi !== null
+      ? hostAbi < sandboxMinAbi ? "ERROR" : "OK"
+      : runSandboxRequired() && hostAbi < 1 ? "ERROR" : "OK";
   const maintenance = maintenanceSnapshot();
   const draining = maintenance.active || ["draining", "maintenance"].includes((process.env["TERRENCE_NODE_STATUS"] ?? "").toLowerCase());
   const status =

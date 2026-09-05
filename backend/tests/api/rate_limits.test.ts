@@ -152,10 +152,28 @@ describe("rate limiting", () => {
         data: { attributes: { username: user!.username, password: user!.password } },
       }),
     });
-    for (let index = 0; index < 5; index += 1) {
-      expect((await app.handle(loginRequest())).status).toBe(200);
-    }
-    const throttledLogin = await app.handle(loginRequest());
+    // Window boundaries are shared process-global state: a 60s boundary
+    // falling mid-burst restarts the streak (reproduced locally by anchoring
+    // the bucket, sleeping 59s, then bursting: all six logins return 200).
+    // Poll for the throttle point instead of assuming a fresh bucket. The
+    // first `limit` hits must pass through (proving the limit is not lower)
+    // and the 429 must land within 2×limit+1 (a second boundary cannot fall
+    // inside a burst far shorter than the window).
+    const pollToThrottle = async (
+      limit: number,
+      passStatus: number,
+      attempt: () => Promise<Response>,
+    ): Promise<Response> => {
+      let throttled: Response | undefined;
+      for (let index = 0; index < 2 * limit + 1 && throttled === undefined; index += 1) {
+        const response = await attempt();
+        if (index < limit) expect(response.status).toBe(passStatus);
+        if (response.status === 429) throttled = response;
+      }
+      if (throttled === undefined) throw new Error(`never throttled within ${String(2 * limit + 1)} attempts`);
+      return throttled;
+    };
+    const throttledLogin = await pollToThrottle(5, 200, (): Promise<Response> => app.handle(loginRequest()));
     expect(throttledLogin.status).toBe(429);
     expect(throttledLogin.headers.get("x-ratelimit-limit")).toBe("5");
 
@@ -167,10 +185,7 @@ describe("rate limiting", () => {
       },
       body: "{}",
     });
-    for (let index = 0; index < 5; index += 1) {
-      expect((await app.handle(bootstrapRequest())).status).toBe(404);
-    }
-    expect((await app.handle(bootstrapRequest())).status).toBe(429);
+    expect((await pollToThrottle(5, 404, (): Promise<Response> => app.handle(bootstrapRequest()))).status).toBe(429);
   });
 
   it("applies the sensitive bucket to OAuth GET and MFA verification/removal endpoints", async () => {

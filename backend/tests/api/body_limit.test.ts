@@ -106,4 +106,24 @@ describe("request body size guard", () => {
     }));
     expect(response.status).not.toBe(413);
   });
+
+  test("does not apply the small limit to uploads with a JSON content type", async () => {
+    // The UI state import posts raw state with application/vnd.api+json, so
+    // the onParse JSON branch must exempt upload paths as well (issue #573).
+    const response = await app.handle(new Request("http://localhost/api/v2/workspaces/ws-guard-test/state-versions/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/vnd.api+json" },
+      body: "x".repeat(5 * 1024 * 1024),
+    }));
+    expect(response.status).not.toBe(413);
+  });
+
+  test("does not apply the small limit to json-outputs-upload paths", async () => {
+    const response = await app.handle(new Request("http://localhost/api/v2/state-versions/sv-guard-test/json-outputs-upload", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: "x".repeat(5 * 1024 * 1024),
+    }));
+    expect(response.status).not.toBe(413);
+  });
 });

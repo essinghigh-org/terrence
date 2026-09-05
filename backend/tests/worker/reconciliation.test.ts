@@ -23,8 +23,10 @@ const agentWsId = `ws-recon-agent-${suffix}`;
 // One fixture row per reconciliation branch: requeue states (fetching,
 // queuing), error states with distinct messages (planning, applying,
 // apply_queued, pre_plan_running), resting states that must survive
-// (planned, confirmed), and agent-mode runs that recoverStaleAgentJobs owns.
-const RUNS: readonly { id: string; ws: string; status: string }[] = [
+// (planned, a scheduled confirmed apply), an orphaned manual-apply dispatch
+// (confirmed with no scheduledAt, re-armed for the scheduled-apply poller),
+// and agent-mode runs that recoverStaleAgentJobs owns.
+const RUNS: readonly { id: string; ws: string; status: string; scheduledAt?: number }[] = [
   { id: `run-recon-fetching-${suffix}`, ws: localWsId, status: "fetching" },
   { id: `run-recon-queuing-${suffix}`, ws: localWsId, status: "queuing" },
   { id: `run-recon-preplan-${suffix}`, ws: localWsId, status: "pre_plan_running" },
@@ -32,7 +34,8 @@ const RUNS: readonly { id: string; ws: string; status: string }[] = [
   { id: `run-recon-applyqueued-${suffix}`, ws: localWsId, status: "apply_queued" },
   { id: `run-recon-applying-${suffix}`, ws: localWsId, status: "applying" },
   { id: `run-recon-planned-${suffix}`, ws: localWsId, status: "planned" },
-  { id: `run-recon-confirmed-${suffix}`, ws: localWsId, status: "confirmed" },
+  { id: `run-recon-confirmed-${suffix}`, ws: localWsId, status: "confirmed", scheduledAt: 1 },
+  { id: `run-recon-orphan-${suffix}`, ws: localWsId, status: "confirmed" },
   { id: `run-recon-agent-applying-${suffix}`, ws: agentWsId, status: "applying" },
   { id: `run-recon-agent-planqueued-${suffix}`, ws: agentWsId, status: "plan_queued" },
 ];
@@ -43,7 +46,7 @@ const PENDING_ASSESSMENT_ID = `asmt-recon-pending-${suffix}`;
 const WORKSPACE_IDS = [localWsId, agentWsId];
 
 describe("startup reconciliation of interrupted local runs", () => {
-  let result: { requeued: number; errored: number; assessmentsErrored: number };
+  let result: { requeued: number; errored: number; assessmentsErrored: number; rearmed: number };
 
   beforeAll(async () => {
     const now = Date.now();
@@ -57,6 +60,7 @@ describe("startup reconciliation of interrupted local runs", () => {
       workspaceId: run.ws,
       status: run.status,
       createdAt: now - index,
+      ...(run.scheduledAt !== undefined ? { scheduledAt: run.scheduledAt } : {}),
     })));
     await db.insert(assessmentResults).values([
       { id: RUNNING_ASSESSMENT_ID, workspaceId: localWsId, status: "running", createdAt: now },
@@ -86,14 +90,15 @@ describe("startup reconciliation of interrupted local runs", () => {
     await db.delete(organizations).where(eq(organizations.id, orgId)).catch((): void => {});
   });
 
-  it("requeues pre-execution states, errors execution states, and never touches agent-mode or resting runs", async () => {
+  it("requeues pre-execution states, errors execution states, re-arms orphaned applies, and never touches agent-mode or resting runs", async () => {
     expect(result.requeued).toBe(2); // fetching + queuing
     expect(result.errored).toBe(4); // pre_plan_running + planning + apply_queued + applying
     expect(result.assessmentsErrored).toBe(1); // running only
+    expect(result.rearmed).toBe(1); // confirmed with no scheduledAt (orphaned manual dispatch)
 
     const rows = await db.query.runs.findMany({
       where: inArray(runs.id, RUN_IDS),
-      columns: { id: true, status: true },
+      columns: { id: true, status: true, scheduledAt: true },
     });
     const after = Object.fromEntries(rows.map((row): [string, string] => [row.id, row.status]));
     expect(after[`run-recon-fetching-${suffix}`]).toBe("pending");
@@ -104,6 +109,11 @@ describe("startup reconciliation of interrupted local runs", () => {
     expect(after[`run-recon-applying-${suffix}`]).toBe("errored");
     expect(after[`run-recon-planned-${suffix}`]).toBe("planned");
     expect(after[`run-recon-confirmed-${suffix}`]).toBe("confirmed");
+    // The orphaned dispatch stays confirmed but gains a scheduledAt so the
+    // scheduled-apply poller dispatches it.
+    const orphan = rows.find((row): boolean => row.id === `run-recon-orphan-${suffix}`);
+    expect(orphan?.status).toBe("confirmed");
+    expect(orphan?.scheduledAt).not.toBeNull();
     expect(after[`run-recon-agent-applying-${suffix}`]).toBe("applying");
     expect(after[`run-recon-agent-planqueued-${suffix}`]).toBe("plan_queued");
   });
@@ -142,5 +152,6 @@ describe("startup reconciliation of interrupted local runs", () => {
     expect(second.requeued).toBe(0);
     expect(second.errored).toBe(0);
     expect(second.assessmentsErrored).toBe(0);
+    expect(second.rearmed).toBe(0);
   });
 });

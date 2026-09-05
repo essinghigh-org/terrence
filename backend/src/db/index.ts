@@ -476,6 +476,16 @@ if (!isPostgres) {
     client.run("ALTER TABLE agent_jobs ADD COLUMN fencing_token INTEGER NOT NULL DEFAULT 0");
   }
 
+  // Workspace lock age (issue #568) is additive. The generated migration
+  // covers fresh databases, while this idempotent repair keeps
+  // sparse-journal installs convergent without replaying the journal.
+  const workspaceColumns = new Set(
+    (client.query("PRAGMA table_info(workspaces)").all() as { name: string }[]).map((row): string => row.name),
+  );
+  if (!workspaceColumns.has("locked_at")) {
+    client.run("ALTER TABLE workspaces ADD COLUMN locked_at INTEGER");
+  }
+
   // TOTP replay protection is additive and intentionally idempotent here so
   // older installations converge without relying on a generated migration.
   const user2FAColumns = new Set(
@@ -847,6 +857,9 @@ export async function applyPgMigrations(): Promise<void> {
     // Agent claim fencing is additive and intentionally kept idempotent here;
     // the generated journal also carries the additive fencing-column change.
     await pg.unsafe("ALTER TABLE agent_jobs ADD COLUMN IF NOT EXISTS fencing_token bigint NOT NULL DEFAULT 0");
+    // Workspace lock age (issue #568): ms-epoch timestamp set on lock,
+    // cleared on unlock. Idempotent for sparse-journal installs.
+    await pg.unsafe("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS locked_at bigint");
     await pg.unsafe("UPDATE organizations SET default_iac_binary = 'terraform' WHERE default_iac_binary = 'tofu'");
     await pg.unsafe("UPDATE team_projects SET organization_id = projects.org_id FROM projects WHERE team_projects.organization_id IS NULL AND projects.id = team_projects.project_id");
     // Hot-path query indexes (benchmarked: queue scan 200x, workspace run
@@ -875,6 +888,9 @@ export async function applyPgMigrations(): Promise<void> {
     // Sensitive-variable at-rest encryption (todo 167-169, see sqlite boot path).
     await pg.unsafe("ALTER TABLE workspace_variables ADD COLUMN IF NOT EXISTS value_encrypted text");
     await pg.unsafe("ALTER TABLE variable_set_variables ADD COLUMN IF NOT EXISTS value_encrypted text");
+    // Policy-set parameter encryption (issue #577, CodeRabbit P1-sweep
+    // review): same idempotent repair so sparse-journal installs converge.
+    await pg.unsafe("ALTER TABLE policy_set_parameters ADD COLUMN IF NOT EXISTS value_encrypted text");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS configuration_versions_workspace_created_idx ON configuration_versions (workspace_id, created_at)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS workspaces_org_idx ON workspaces (org_id)");
     // Agent heartbeat sweep (recoverStaleAgentJobs) filters on lastPingAt/status

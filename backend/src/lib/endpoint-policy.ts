@@ -247,6 +247,8 @@ export function workspaceRunHistoryPath(request: Readonly<{ method: string; url:
  * Paths that count toward the global API rate limit. Everything else (SPA
  * shell, /assets/*, favicon) is static content and must not consume the
  * bucket. /api/v2/ping is explicitly exempt (go-tfe feature detection).
+ * /mcp and /scim/ are authenticated API surfaces and belong in the global
+ * bucket (issue #570), not outside rate limiting entirely.
  */
 export function serverEndpointPath(request: Readonly<{ method: string; url: string }>): string | undefined {
   const path = pathnameOf(request);
@@ -255,7 +257,9 @@ export function serverEndpointPath(request: Readonly<{ method: string; url: stri
     path.startsWith("/api/") ||
     path.startsWith("/oauth/") ||
     path.startsWith("/users/") ||
-    path.startsWith("/admin/")
+    path.startsWith("/admin/") ||
+    path === "/mcp" ||
+    path.startsWith("/scim/")
   ) {
     return path;
   }

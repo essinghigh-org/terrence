@@ -6,6 +6,7 @@ import { db } from "../../src/db";
 import { costEstimateResource } from "../../src/routes/misc";
 import {
   apiTokens,
+  configurationVersions,
   organizationMemberships,
   organizations,
   runs,
@@ -39,9 +40,18 @@ beforeAll(async () => {
   await db.insert(organizationMemberships).values({ id: `sm-m-${suffix}`, userId, orgId, role: "owner" });
   await db.insert(apiTokens).values({ id: `sm-t-${suffix}`, token: hashAuthenticationToken(token), userId });
   await db.insert(workspaces).values({ id: workspaceId, name: "sm-workspace", orgId });
+  // Issue #574 rejects CV-less run creation; seed one uploaded
+  // configuration so this file's run-creation helper keeps working.
+  await db.insert(configurationVersions).values({
+    id: `cv-sm-${suffix}`,
+    workspaceId,
+    status: "uploaded",
+    archivePath: `test-only/cv-sm-${suffix}.tar.gz`,
+  });
 });
 
 afterAll(async () => {
+  await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, workspaceId));
   await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
   await db.delete(apiTokens).where(eq(apiTokens.token, token));
   await db.delete(organizationMemberships).where(eq(organizationMemberships.orgId, orgId));

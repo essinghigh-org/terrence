@@ -6,8 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
-import { agents, agentPools, apiTokens, organizationMemberships, organizations, policies, policySetParameters, policySets, projects, runs, teams, teamMemberships, users, workspaceVariables, workspaces, workspaceTags } from "../../src/db/schema";
+import { agents, agentPools, apiTokens, organizationMemberships, organizations, policies, policySetParameters, policySets, projects, runs, teams, teamMemberships, users, workspaceVariables, workspaces, workspaceTags, configurationVersions } from "../../src/db/schema";
 import { MAX_TAG_RULE_DEPTH } from "../../src/lib/token-scopes";
+import { variableValueForRead } from "../../src/lib/variable-crypto";
 
 const AUTH_PREFIX = "Bea" + "rer ";
 
@@ -129,6 +130,12 @@ async function seedOrgFixtures(s: ScopedSeed, opts: { tags?: boolean; includeUse
     { id: s.tagWsId, orgId: s.orgId, projectId: s.projectB, name: "ws-tag" },
     { id: s.wsA3, orgId: s.orgId, projectId: s.projectB, name: "ws-and-half" },
   ]);
+  // Runs require an uploaded configuration version (issue #574): seed one
+  // on wsA1 so run-creation helpers keep working (workers never run here,
+  // so no archive on disk is needed).
+  await db.insert(configurationVersions).values({
+    id: `cv-seed-${s.suffix}`, workspaceId: s.wsA1, status: "uploaded",
+  });
   if (opts.tags === true) {
     await db.insert(workspaceTags).values([
       { id: `wtag-${s.suffix}`, workspaceId: s.tagWsId, key: "environment", value: "prod" },
@@ -906,6 +913,28 @@ describe("fine-grained user tokens", () => {
       const secretRow = readRows.find((r): boolean => r.key === "MCP_SECRET");
       expect(secretRow?.sensitive).toBe(true);
       expect(secretRow?.value).toBeNull();
+      // Sensitive values are encrypted at rest, never stored plaintext (issue #577).
+      const stored = await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, secretCreated.id) });
+      expect(stored?.value).toBe("");
+      expect(stored?.valueEncrypted).toBeTruthy();
+      expect(await variableValueForRead({ value: stored?.value ?? "", valueEncrypted: stored?.valueEncrypted ?? null })).toBe("top-secret");
+      // Rotation via update persists the new value (issue #577).
+      const rotated = await call(varWrite.secret, "update_workspace_variable", {
+        workspace_id: s.wsA1, variable_id: secretCreated.id, value: "rotated-secret",
+      });
+      expect(rotated.status).toBe(200);
+      const storedAfter = await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, secretCreated.id) });
+      expect(storedAfter?.value).toBe("");
+      expect(storedAfter?.valueEncrypted).not.toBe(stored?.valueEncrypted);
+      expect(await variableValueForRead({ value: storedAfter?.value ?? "", valueEncrypted: storedAfter?.valueEncrypted ?? null })).toBe("rotated-secret");
+      // A metadata-only update keeps the stored secret untouched (issue #577).
+      const touched = await call(varWrite.secret, "update_workspace_variable", {
+        workspace_id: s.wsA1, variable_id: secretCreated.id, description: "rotated",
+      });
+      expect(touched.status).toBe(200);
+      const storedTouched = await db.query.workspaceVariables.findFirst({ where: eq(workspaceVariables.id, secretCreated.id) });
+      expect(storedTouched?.valueEncrypted).toBe(storedAfter?.valueEncrypted);
+      expect(await variableValueForRead({ value: storedTouched?.value ?? "", valueEncrypted: storedTouched?.valueEncrypted ?? null })).toBe("rotated-secret");
       await db.delete(workspaceVariables).where(eq(workspaceVariables.id, secretCreated.id));
 
       // Without workspaces:lock, lock is blocked; with it, lock/unlock work.
@@ -1675,6 +1704,10 @@ describe("fine-grained org-level read grants", () => {
       });
       expect(wsRes.status).toBe(201);
       const wsBody = await wsRes.json() as { data: { id: string } };
+      // Runs require an uploaded configuration version (issue #574).
+      await db.insert(configurationVersions).values({
+        id: `cv-seed-${s.suffix}-read`, workspaceId: wsBody.data.id, status: "uploaded",
+      });
       const run = await createRunWith(s.adminToken, wsBody.data.id);
       expect(run.status).toBe(201);
       const getRun = await request(`/api/v2/runs/${run.id}`, { headers: headers(writeOnly.secret) });

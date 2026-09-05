@@ -8,9 +8,10 @@
 // paths, using the Content-Length header when present (early rejection, no
 // buffering) and a capped stream read for chunked bodies.
 //
-// Upload paths are matched by suffix (ends with /upload or /json-upload):
-// configuration versions, policy sets, state versions, registry module
-// versions, and policy content uploads all follow that shape.
+// Upload paths are matched by suffix (ends with /upload, /json-upload, or
+// /json-outputs-upload, plus the agent filesystem path): configuration
+// versions, policy sets, state versions, registry module versions, and
+// policy content uploads all follow that shape.
 
 export const API_BODY_LIMIT_BYTES = 4 * 1024 * 1024;
 
@@ -22,10 +23,10 @@ export class BodyTooLargeError extends Error {
 }
 
 /** True for the archive-upload paths that keep the 100 MiB server limit. */
-/** True for the archive-upload paths that keep the 100 MiB server limit. */
 export function isUploadPath(pathname: string): boolean {
   return pathname.endsWith("/upload")
     || pathname.endsWith("/json-upload")
+    || pathname.endsWith("/json-outputs-upload")
     || /^\/api\/agent\/jobs\/[^/]+\/filesystem$/.test(pathname);
 }
 

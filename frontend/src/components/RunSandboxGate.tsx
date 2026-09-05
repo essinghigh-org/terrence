@@ -24,9 +24,12 @@ async function fetchRunSandboxStatus(): Promise<RunSandboxStatus | null> {
 }
 
 /**
- * Full-page gate: if the run sandbox is required (TERRENCE_RUN_SANDBOX not
- * "false") but Landlock is unavailable on the host kernel, the UI is locked
- * down so the operator must explicitly acknowledge the disabled control.
+ * Sandbox warning banner (issue #566): when the run sandbox is required but
+ * Landlock is unavailable on the host, show a persistent, non-dismissing
+ * banner instead of locking the whole UI. Navigation, login, state, and
+ * docs keep working; only remote execution is affected. Previously this was
+ * a full-page gate that blocked login and configuration on hosts without
+ * Landlock (Docker Desktop, unprivileged LXC, NAS appliances, old kernels).
  */
 export function RunSandboxGate({ children }: Readonly<{ readonly children: ReactNode }>): JSX.Element {
   const [status, setStatus] = useState<RunSandboxStatus | null | undefined>(undefined);
@@ -41,62 +44,26 @@ export function RunSandboxGate({ children }: Readonly<{ readonly children: React
     };
   }, []);
 
-  if (status === undefined) {
-    // Still probing — render nothing to avoid a flash.
-    return <div className="min-h-screen bg-background" />;
-  }
+  const blocked = status !== null && status !== undefined && status.enabled && !status.available;
+  const docsUrl = blocked ? safeHttpUrl(status.docs) : null;
 
-  if (status !== null && status.enabled && !status.available) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background p-6">
-        <div className="max-w-2xl rounded-lg border border-amber-500/40 bg-card p-8 text-card-foreground shadow-xl">
-          <div className="mb-3 flex items-center gap-3">
-            <span className="text-3xl" role="img" aria-label="warning">⚠️</span>
-            <h1 className="text-2xl font-semibold">Run sandbox is unavailable</h1>
-          </div>
-          <p className="mb-4 leading-relaxed text-muted-foreground">
-            Terrence requires its Landlock-based run sandbox to isolate
-            Terraform/OpenTofu execution from the control plane, but Landlock
-            is not available on this host.
-          </p>
-          <p className="mb-4 leading-relaxed text-muted-foreground">
-            {status.reason ?? "Unknown reason"} (probed ABI: {status.abi}).
-            Terraform provider and provisioner code would otherwise be able to
-            read the application database, encryption key, state archives and
-            other workspaces&apos; configuration.
-          </p>
-          <div className="mb-6 rounded-md border border-border bg-muted/40 p-4">
-            <p className="mb-2 font-medium">To continue, either:</p>
-            <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
-              <li>
-                Enable Landlock on the host kernel (see{" "}
-                <a
-                  className="text-primary underline hover:text-primary/80"
-                  href={safeHttpUrl(status.docs) ?? "#"}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  the kernel documentation
-                </a>
-                ). Requires Linux &ge; 5.13 with <code className="rounded bg-muted px-1">CONFIG_SECURITY_LANDLOCK</code>{" "}
-                and the <code className="rounded bg-muted px-1">landlock</code> LSM enabled, or
-                a container runtime configured to allow it.
-              </li>
-              <li>
-                Explicitly disable the control by setting{" "}
-                <code className="rounded bg-muted px-1">TERRENCE_RUN_SANDBOX=false</code>{" "}
-                on the server and restarting. This acknowledges that runs are
-                <strong> not isolated</strong> and untrusted IaC can access the host filesystem.
-              </li>
-            </ul>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            Runs are blocked until this is resolved. This page will re-check automatically on reload.
-          </p>
+  return (
+    <>
+      {blocked && (
+        <div role="alert" className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b border-warning/40 bg-warning/10 px-4 py-2 text-center text-sm text-warning">
+          <span aria-hidden="true">⚠️</span>
+          <span>
+            Run sandbox unavailable{status.reason !== null && status.reason !== "" ? `: ${status.reason}` : ""} (probed ABI: {status.abi}).
+            Remote runs will fail. Enable Landlock on the host kernel or set <code className="rounded bg-muted px-1">TERRENCE_RUN_SANDBOX=false</code> on the server and restart.
+          </span>
+          {docsUrl !== null && (
+            <a className="underline hover:text-warning/80" href={docsUrl} target="_blank" rel="noreferrer">
+              Kernel docs
+            </a>
+          )}
         </div>
-      </div>
-    );
-  }
-
-  return <>{children}</>;
+      )}
+      {children}
+    </>
+  );
 }

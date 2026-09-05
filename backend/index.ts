@@ -64,10 +64,11 @@ startControlPlaneHeartbeat();
 // replayed. Agent-mode runs are left to recoverStaleAgentJobs.
 try {
   const reconciled = await reconcileInterruptedLocalRuns();
-  if (reconciled.requeued > 0 || reconciled.errored > 0 || reconciled.assessmentsErrored > 0) {
+  if (reconciled.requeued > 0 || reconciled.errored > 0 || reconciled.assessmentsErrored > 0 || reconciled.rearmed > 0) {
     console.log(
       `[terrence] Startup reconciliation: ${reconciled.requeued} run(s) requeued, `
-      + `${reconciled.errored} run(s) errored, ${reconciled.assessmentsErrored} assessment(s) errored`,
+      + `${reconciled.errored} run(s) errored, ${reconciled.assessmentsErrored} assessment(s) errored, `
+      + `${reconciled.rearmed} apply(s) re-armed for dispatch`,
     );
   }
 } catch (error: unknown) {
@@ -108,6 +109,18 @@ if (isPostgres) {
   console.warn(
     "[terrence] Multiple control-plane replicas are not currently supported. "
     + "Run exactly one Terrence control-plane instance; remote agent pools may be scaled independently.",
+  );
+}
+
+// Generated links (uploads, downloads, private registry, email) fall back
+// to proxy headers and finally the connection address without it (issue
+// #576). Warn once so reverse-proxy deployments set it.
+if (typeof process.env["PUBLIC_URL"] !== "string" || process.env["PUBLIC_URL"] === "") {
+  console.warn(
+    "[terrence] PUBLIC_URL is not set. Generated upload/download URLs and private "
+    + "registry resolution fall back to proxy headers, then localhost. Set PUBLIC_URL "
+    + "to the outward address (for example https://terraform.example.com) when serving "
+    + "behind a reverse proxy or using the private registry.",
   );
 }
 

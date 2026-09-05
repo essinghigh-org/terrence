@@ -29,6 +29,7 @@ import {
 import type { DeepReadonly } from "./utils";
 import { insertStateVersionWithSerialTx } from "./state-serial";
 import { encryptStatePayload } from "./validation";
+import { variableValueForRead } from "./variable-crypto";
 import { isAgentPoolTokenActive } from "./agent-token";
 
 export const MAX_AGENT_RESULT_BYTES = 64 * 1024;
@@ -262,7 +263,8 @@ async function getAgentPolicyEvaluation(
       orderBy: [asc(policySetParameters.key), asc(policySetParameters.id)],
     }),
   ]);
-  const policySetsWithPolicies = effectiveSets.flatMap((policySet): AgentPolicyEvaluation["policySets"] => {
+  const policySetsWithPolicies: Array<AgentPolicyEvaluation["policySets"][number]> = [];
+  for (const policySet of effectiveSets) {
     const setPolicies = effectivePolicies
       .filter((policy): boolean => policy.policySetId === policySet.id)
       .map((policy): AgentPolicy => ({
@@ -273,8 +275,17 @@ async function getAgentPolicyEvaluation(
         query: policy.query,
         source: policy.source,
       }));
-    if (setPolicies.length === 0) return [];
-    return [{
+    if (setPolicies.length === 0) continue;
+    // Sensitive parameters are stored encrypted (issue #577): resolve the
+    // plaintext for the agent payload, which the agent passes to the engine.
+    const setParameters = parameters.filter((parameter): boolean => parameter.policySetId === policySet.id);
+    const decryptedParameters = await Promise.all(setParameters.map(async (parameter): Promise<AgentPolicyParameter> => ({
+      key: parameter.key,
+      value: await variableValueForRead(parameter),
+      sensitive: parameter.sensitive === true,
+      hcl: parameter.hcl === true,
+    })));
+    policySetsWithPolicies.push({
       id: policySet.id,
       name: policySet.name,
       description: policySet.description,
@@ -282,16 +293,9 @@ async function getAgentPolicyEvaluation(
       policyToolVersion: policySet.policyToolVersion ?? "latest",
       overridable: policySet.overridable !== false,
       policies: setPolicies,
-      parameters: parameters
-        .filter((parameter): boolean => parameter.policySetId === policySet.id)
-        .map((parameter): AgentPolicyParameter => ({
-          key: parameter.key,
-          value: parameter.value,
-          sensitive: parameter.sensitive === true,
-          hcl: parameter.hcl === true,
-        })),
-    }];
-  });
+      parameters: decryptedParameters,
+    });
+  }
   return policySetsWithPolicies.length === 0 ? null : { policySets: policySetsWithPolicies };
 }
 

@@ -1,5 +1,7 @@
 import { describe, expect, test, beforeAll } from "bun:test";
 import { app } from "../../src/app";
+import { db } from "../../src/db";
+import { configurationVersions } from "../../src/db/schema";
 import { createHash } from "node:crypto";
 
 describe("the reference format API v2 - State-Run Relationships & Locking", () => {
@@ -62,6 +64,14 @@ describe("the reference format API v2 - State-Run Relationships & Locking", () =
     );
     const wsBody = await wsRes.json();
     workspaceId = wsBody.data.id;
+
+    // Issue #574 rejects CV-less run creation; the run below needs one.
+    await db.insert(configurationVersions).values({
+      id: `cv-${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}`,
+      workspaceId,
+      status: "uploaded",
+      archivePath: "test-only/cv-staterel.tar.gz",
+    });
 
     // Create run
     const runRes = await app.handle(

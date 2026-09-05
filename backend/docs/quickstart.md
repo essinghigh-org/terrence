@@ -7,7 +7,7 @@ description: Bootstrap an instance, log in with the Terraform CLI, and run a fir
 
 # Quick start
 
-This guide takes you from an empty deployment to a completed plan. It assumes Terrence is already running and reachable over HTTPS.
+This guide takes you from an empty deployment to a completed plan. It assumes Terrence is already running and reachable over HTTPS. If it is not yet behind TLS, set that up first: [Reverse proxy (HTTPS)](reverse-proxy).
 
 ## Step 1: Create the first administrator
 

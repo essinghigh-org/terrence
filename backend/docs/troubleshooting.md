@@ -57,6 +57,7 @@ A VCS-connected workspace refuses CLI applies. The server executes the repositor
 - The instance must be reachable over HTTPS from your machine.
 - The login flow requires the browser. Use a token from the account page if the browser flow fails.
 - Check `PUBLIC_URL`. Callbacks use it.
+- Walk through [Reverse proxy (HTTPS)](reverse-proxy): TLS termination, `PUBLIC_URL`, and trusted proxy CIDRs.
 
 ## Runs fail with a sandbox error
 

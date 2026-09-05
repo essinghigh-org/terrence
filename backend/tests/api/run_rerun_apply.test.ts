@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, beforeAll, afterAll } from "bun:test";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { users, apiTokens, organizations, workspaces, runs } from "../../src/db/schema";
+import { users, apiTokens, configurationVersions, organizations, workspaces, runs } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 
 // Covers kanban 15.13 (re-run queues a fresh run from the same workspace) and
@@ -38,12 +38,20 @@ describe("run detail lock fields + re-run (kanban 15.10 / 15.13)", () => {
     await db.insert(workspaces).values([
       { id: workspaceId, name: "rr-workspace", orgId, autoApply: false },
     ]);
+    // Issue #574 rejects CV-less run creation; the re-run test queues via API.
+    await db.insert(configurationVersions).values({
+      id: `cv-rr-${suffix}`,
+      workspaceId,
+      status: "uploaded",
+      archivePath: `test-only/cv-rr-${suffix}.tar.gz`,
+    });
   });
 
   afterAll(async () => {
     // Scoped teardown: only records owned by this suite's fixture, so a
     // parallel suite's rows can never be clobbered by this cleanup.
     await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
+    await db.delete(configurationVersions).where(eq(configurationVersions.workspaceId, workspaceId));
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
     await db.delete(organizations).where(eq(organizations.id, orgId));
     await db.delete(apiTokens).where(eq(apiTokens.id, tokenId));

@@ -1428,18 +1428,20 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     }
 
     const principal = lockPrincipal(user?.id, principalOrgId, teamId);
+    const lockedAt = Date.now();
     const locked = await db.update(workspaces).set({
       locked: true,
       lockedReason: lockReason.reason,
       lockOwnerType: principal.type,
       lockOwnerId: principal.id,
+      lockedAt,
     }).where(and(eq(workspaces.id, workspaceId), or(eq(workspaces.locked, false), isNull(workspaces.locked)))).returning({ id: workspaces.id });
     if (locked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is already locked" }] }; }
     await auditLog("lock", "workspaces", workspaceId, user?.id ?? null, ws.orgId, teamId !== null && teamId !== undefined ? { teamId } : undefined);
     const org = await cachedOrgById(ws.orgId);
     return {
       data: await workspaceResource(
-        { ...ws, locked: true, lockedReason: lockReason.reason, lockOwnerType: principal.type, lockOwnerId: principal.id },
+        { ...ws, locked: true, lockedReason: lockReason.reason, lockOwnerType: principal.type, lockOwnerId: principal.id, lockedAt },
         org?.defaultIacBinary,
         await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
         { orgName: org?.name ?? null },
@@ -1459,13 +1461,13 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const ownerPredicate = ownerlessLegacyLock
       ? and(isNull(workspaces.lockOwnerType), isNull(workspaces.lockOwnerId))
       : and(eq(workspaces.lockOwnerType, principal.type), eq(workspaces.lockOwnerId, principal.id));
-    const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true), ownerPredicate)).returning({ id: workspaces.id });
+    const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true), ownerPredicate)).returning({ id: workspaces.id });
     if (unlocked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock changed while unlocking" }] }; }
     await promoteIntermediateStateVersion(workspaceId);
     const org = await cachedOrgById(ws.orgId);
     return {
       data: await workspaceResource(
-        { ...ws, locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null },
+        { ...ws, locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null },
         org?.defaultIacBinary,
         await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
         { orgName: org?.name ?? null },
@@ -1478,12 +1480,12 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (ws.locked !== true) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace is not locked" }] }; }
     await promoteIntermediateStateVersion(workspaceId);
-    const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true))).returning({ id: workspaces.id });
+    const unlocked = await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null }).where(and(eq(workspaces.id, workspaceId), eq(workspaces.locked, true))).returning({ id: workspaces.id });
     if (unlocked.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock changed while unlocking" }] }; }
     const org = await cachedOrgById(ws.orgId);
     return {
       data: await workspaceResource(
-        { ...ws, locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null },
+        { ...ws, locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null, lockedAt: null },
         org?.defaultIacBinary,
         await resourcePermissions(ws, user?.id, principalOrgId ?? null, teamId ?? null),
         { orgName: org?.name ?? null },

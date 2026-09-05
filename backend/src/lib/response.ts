@@ -288,6 +288,11 @@ function buildWorkspaceAttributes(workspace: WorkspaceParam, permissions: Worksp
     "iac-binary": iacBinary,
     locked: workspace.locked === true,
     "locked-reason": workspace.lockedReason ?? (workspace.locked === true ? "Locked manually" : null),
+    "locked-at": workspace.lockedAt !== null && workspace.lockedAt !== undefined
+      ? new Date(workspace.lockedAt).toISOString()
+      : null,
+    "locked-by-type": workspace.lockOwnerType ?? null,
+    "locked-by-id": workspace.lockOwnerId ?? null,
     permissions: buildWorkspacePermissions(permissions),
     "owned-by-type": workspace.ownedByType ?? null,
     "owned-by-id": workspace.ownedById ?? null,
