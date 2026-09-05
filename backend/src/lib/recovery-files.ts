@@ -1,0 +1,292 @@
+import { chmod, mkdir, open, readdir, readFile, rename, rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
+
+import { decodeStatePayload, decryptStatePayload, encryptStatePayload, parseTerraformStatePayload } from "./validation";
+import { log } from "./log";
+
+// ---------------------------------------------------------------------------
+// Interrupted-apply recovery files (issue #579).
+//
+// When the process dies mid-apply, boot reconciliation copies the run's
+// terraform.tfstate into <storage>/recovery/<runId>/ so the operator can
+// fetch it (GET /api/v2/runs/:id/recovery-state) or promote it into a real
+// state version (POST .../actions/recover-state, which deletes the copy on
+// success). A power loss between a bare write and the workdir cleanup it
+// precedes used to leave truncated ciphertext whose only source was then
+// deleted, so every write here is durable and verified:
+//
+//   - state bytes go to a temp sibling, are fsynced, and are atomically
+//     renamed into place, followed by a directory fsync;
+//   - the published copy is read back, decrypted, and compared to the
+//     source before anything else happens;
+//   - the `.recovered` completion marker is written last (durably). A
+//     state file without the marker is an unverified partial: readers
+//     refuse it, and the boot sweep adopts it (marker it) when it
+//     decrypts and parses, or deletes it when it does not.
+//
+// storageDir is a parameter (not the import-captured driver value) so tests
+// can redirect it per case.
+// ---------------------------------------------------------------------------
+
+export const RECOVERY_STATE_FILENAME = "terraform.tfstate";
+export const RECOVERY_MARKER_FILENAME = ".recovered";
+const STAGING_PREFIX = ".staging-";
+
+export function recoveryDirFor(storageDir: string, runId: string): string {
+  return join(storageDir, "recovery", runId);
+}
+
+export function recoveryStatePathFor(storageDir: string, runId: string): string {
+  return join(recoveryDirFor(storageDir, runId), RECOVERY_STATE_FILENAME);
+}
+
+export function recoveryMarkerPathFor(storageDir: string, runId: string): string {
+  return join(recoveryDirFor(storageDir, runId), RECOVERY_MARKER_FILENAME);
+}
+
+function stagingPathFor(dir: string, name: string): string {
+  return join(dir, `${STAGING_PREFIX}${name}-${process.pid}-${crypto.randomUUID().slice(0, 8)}`);
+}
+
+function isErrno(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === code;
+}
+
+async function fsyncDirectory(dir: string): Promise<void> {
+  const handle = await open(dir, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Recursively create `dir` (mode 0700: this module only manages the
+ * recovery area) and fsync every created level's parent, so a power loss
+ * cannot drop a newly created recovery directory entry. A plain recursive
+ * mkdir plus a leaf-only fsync leaves exactly that window on first capture.
+ */
+async function mkdirDurable(dir: string): Promise<void> {
+  const missing: string[] = [];
+  let cur = dir;
+  for (;;) {
+    missing.unshift(cur);
+    try {
+      await mkdir(cur, { mode: 0o700 });
+      break;
+    } catch (error: unknown) {
+      if (isErrno(error, "EEXIST")) break;
+      if (!isErrno(error, "ENOENT")) throw error;
+      const parent = dirname(cur);
+      if (parent === cur) throw error;
+      cur = parent;
+    }
+  }
+  // missing[0] exists (pre-existing, or just created with an existing
+  // parent); create downward, fsyncing each parent.
+  const top = missing[0];
+  if (top === undefined) throw new Error(`Cannot create recovery directory ${dir}: path resolution failed`);
+  let parent = top;
+  for (const child of missing.slice(1)) {
+    try {
+      await mkdir(child, { mode: 0o700 });
+    } catch (error: unknown) {
+      if (!isErrno(error, "EEXIST")) throw error;
+    }
+    await fsyncDirectory(parent);
+    parent = child;
+  }
+  const topParent = dirname(top);
+  if (topParent !== top) await fsyncDirectory(topParent);
+  await fsyncDirectory(dir);
+}
+
+/** Durably publish `data` as `dir/name`: temp sibling, file fsync, atomic
+ * rename, directory fsync, then mode bits. A crash can leave the staging
+ * temp behind (swept at boot) but never a partial published file. Staging
+ * temps from a failed attempt are removed before throwing. */
+export async function writeFileDurable(
+  dir: string,
+  name: string,
+  data: string,
+  mode: number,
+): Promise<void> {
+  await mkdirDurable(dir);
+  const staging = stagingPathFor(dir, name);
+  try {
+    const handle = await open(staging, "w", mode);
+    try {
+      await handle.writeFile(data, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(staging, join(dir, name));
+    await fsyncDirectory(dir);
+    await chmod(join(dir, name), mode);
+  } catch (error: unknown) {
+    await rm(staging, { force: true });
+    throw error;
+  }
+}
+
+/** Capture the run's terraform.tfstate into the recovery area (issue #579).
+ *
+ * Returns true when a copy was captured and read-back verified, false when
+ * the work root holds no state file at all. Throws when a state file exists
+ * but cannot be captured intact (unreadable, unencryptable, unverifiable):
+ * callers must treat that as a failed capture and preserve the work
+ * directory for manual recovery instead of deleting it.
+ */
+export async function captureInterruptedApplyState(
+  storageDir: string,
+  runId: string,
+  workRoot: string,
+): Promise<boolean> {
+  let source: string | null = null;
+  for await (const candidate of new Bun.Glob("**/terraform.tfstate").scan({ cwd: workRoot, onlyFiles: true })) {
+    source = candidate.startsWith("/") ? candidate : join(workRoot, candidate);
+    break;
+  }
+  if (source === null) return false;
+
+  const recoveryDir = recoveryDirFor(storageDir, runId);
+  const markerPath = recoveryMarkerPathFor(storageDir, runId);
+  await mkdirDurable(recoveryDir);
+  let markerWritten = false;
+  let stateReplaced = false;
+  let previousMarker: string | null = null;
+  try {
+    // A retry can run after a crash that landed between a previous
+    // capture's marker write and the run status change: drop any stale
+    // marker first so a replacement state is never mistaken for complete
+    // before it passes read-back verification below.
+    try {
+      previousMarker = await readFile(markerPath, "utf8");
+    } catch {
+      previousMarker = null;
+    }
+    if (previousMarker !== null) {
+      await rm(markerPath, { force: true });
+      await fsyncDirectory(recoveryDir);
+    }
+    // Raw bytes on purpose: utf8 decoding replaces split multibyte
+    // sequences, which would let a corrupted copy pass verification. If
+    // the source is not valid UTF-8 the encryption layer cannot preserve
+    // it, so reject here (throwing preserves the work directory).
+    const raw = await readFile(source);
+    const payload = raw.toString("utf8");
+    if (!Buffer.from(payload, "utf8").equals(raw)) {
+      throw new Error("source state file is not valid UTF-8; leaving the work directory for manual recovery");
+    }
+    const encrypted = await encryptStatePayload(payload);
+    if (encrypted === null) throw new Error("state encryption produced no output");
+    await writeFileDurable(recoveryDir, RECOVERY_STATE_FILENAME, encrypted, 0o600);
+    stateReplaced = true;
+    // Verify the published copy before it becomes anyone's only record: a
+    // truncated or bit-rotted write must fail here, while the source still
+    // exists, and never surface later as a 404 on read. Decrypt-only on
+    // purpose: interrupted applies can leave partial, non-JSON bytes, and
+    // the cancel path contract is to preserve whatever the engine wrote
+    // (read-time parsing still gates the download/recover endpoints).
+    const stored = await readFile(recoveryStatePathFor(storageDir, runId), "utf8");
+    if (decryptStatePayload(stored) !== payload) {
+      throw new Error("recovery copy failed read-back verification");
+    }
+    await writeFileDurable(recoveryDir, RECOVERY_MARKER_FILENAME, new Date().toISOString(), 0o600);
+    markerWritten = true;
+    return true;
+  } catch (error: unknown) {
+    if (!stateReplaced && previousMarker !== null) {
+      // The published state is still the previous complete copy; restore
+      // its marker so the retry failure does not orphan a good copy.
+      try {
+        await writeFileDurable(recoveryDir, RECOVERY_MARKER_FILENAME, previousMarker, 0o600);
+        markerWritten = true;
+      } catch {
+        // Fall through to removal below.
+      }
+    }
+    // Never leave a markerless partial behind: without the marker the copy
+    // is unreadable by design, so an incomplete capture is just garbage.
+    // (When the replacement itself was published but unverifiable, the
+    // source work directory is preserved by the caller, so nothing is lost.)
+    if (!markerWritten) await rm(recoveryDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+export type RecoverySweepResult = Readonly<{
+  removedStaging: number;
+  adoptedComplete: number;
+  removedPartial: number;
+}>;
+
+/** Boot sweep for recovery-area leftovers (issue #579).
+ *
+ * Crash windows are tiny but nonzero: a staging temp means a capture died
+ * before its atomic rename, and a markerless state means it died between
+ * the rename and the marker. Staging temps are always safe to delete.
+ * A markerless state that still decrypts and parses is a complete copy
+ * missing only its marker, so it is adopted (marker written); anything
+ * else is an unverifiable partial and is deleted. station-keeping runs at
+ * boot, when no capture can be in flight.
+ */
+export async function sweepIncompleteRecoveryCopies(storageDir: string): Promise<RecoverySweepResult> {
+  let removedStaging = 0;
+  let adoptedComplete = 0;
+  let removedPartial = 0;
+  let entries: string[];
+  try {
+    entries = await readdir(join(storageDir, "recovery"));
+  } catch {
+    return { removedStaging, adoptedComplete, removedPartial };
+  }
+  for (const entry of entries) {
+    const dir = join(storageDir, "recovery", entry);
+    let children: string[];
+    try {
+      children = await readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const child of children) {
+      if (!child.startsWith(STAGING_PREFIX)) continue;
+      try {
+        await rm(join(dir, child), { force: true });
+        removedStaging += 1;
+      } catch {
+        // Best-effort; the next boot retries.
+      }
+    }
+    let hasMarker = false;
+    try {
+      children = await readdir(dir);
+      hasMarker = children.includes(RECOVERY_MARKER_FILENAME);
+    } catch {
+      continue;
+    }
+    if (hasMarker) continue;
+    let adoptable = false;
+    try {
+      const stored = await readFile(join(dir, RECOVERY_STATE_FILENAME), "utf8");
+      adoptable = parseTerraformStatePayload(decodeStatePayload(stored)) !== null;
+    } catch {
+      adoptable = false;
+    }
+    try {
+      if (adoptable) {
+        await writeFileDurable(dir, RECOVERY_MARKER_FILENAME, new Date().toISOString(), 0o600);
+        adoptedComplete += 1;
+        log.info(`[terrence] Adopted interrupted-apply recovery copy for run ${entry} (state intact, marker missing)`);
+      } else {
+        await rm(dir, { recursive: true, force: true });
+        removedPartial += 1;
+        log.warn(`[terrence] Removed incomplete interrupted-apply recovery copy for run ${entry}`);
+      }
+    } catch {
+      // Best-effort; the next boot retries.
+    }
+  }
+  return { removedStaging, adoptedComplete, removedPartial };
+}

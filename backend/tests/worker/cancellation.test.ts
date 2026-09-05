@@ -217,6 +217,84 @@ test("cancel captures partial apply state before deleting the work directory", a
   expect(result.marker).toBe(true);
 }, { timeout: 30000 });
 
+test("failed recovery capture preserves the work directory (issue #579)", async () => {
+  // The fake apply writes partial state and then blocks, like the capture
+  // test above. A blocker file where the recovery run directory goes forces
+  // capture to throw, which must preserve the work directory for manual
+  // recovery instead of deleting the only source.
+  const fakeTofu = [
+    "#!/bin/sh",
+    "case \"$1\" in",
+    "  init) : ;;",
+    "  plan) echo \"Plan: 1 to add, 0 to change, 0 to destroy.\"; : > tfplan ;;",
+    "  show) echo \"{}\" ;;",
+    "  apply) printf \"%s\" partial-state > terraform.tfstate; while :; do sleep 30; done ;;",
+    "  *) exit 2 ;;",
+    "esac",
+  ].join("\n");
+  const result = await runCancellationScript(`
+    const { chmod, exists, mkdir, readFile, rm, writeFile } = await import("fs/promises");
+    const { join } = await import("path");
+    const { db } = await import("./src/db/index.ts");
+    const { eq } = await import("drizzle-orm");
+    const { organizations, projects, workspaces, configurationVersions, runs } = await import("./src/db/schema.ts");
+    const { executeRun, cancelRunExecution, runWorkDir } = await import("./src/worker.ts");
+
+    const testDir = process.env.TEST_DIR;
+    const recordDir = join(testDir, "record");
+    const binaryDir = join(process.env.STORAGE_DIR, "binaries", "tofu", "1.2.3");
+    const binaryPath = join(binaryDir, "tofu");
+    const runId = "cancel-preserve-run";
+    await mkdir(recordDir, { recursive: true });
+    await mkdir(binaryDir, { recursive: true });
+    await writeFile(binaryPath, process.env.FAKE_TOFU);
+    await chmod(binaryPath, 0o755);
+
+    const configDir = join(testDir, "config");
+    const archivePath = join(testDir, "config.tar.gz");
+    await mkdir(configDir);
+    await writeFile(join(configDir, "main.tf"), 'output "x" { value = "y" }');
+    const tar = Bun.spawn(["tar", "-czf", archivePath, "-C", configDir, "."]);
+    if (await tar.exited !== 0) throw new Error("tar failed");
+
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(projects).values({ id: "project", orgId: "org", name: "project" });
+    await db.insert(workspaces).values({
+      id: "workspace", name: "workspace", orgId: "org", projectId: "project",
+      iacBinary: "tofu", terraformVersion: "1.2.3", autoApply: true,
+    });
+    await db.insert(configurationVersions).values({
+      id: "configuration", workspaceId: "workspace", status: "uploaded", archivePath,
+    });
+    await db.insert(runs).values({
+      id: runId, workspaceId: "workspace", configurationVersionId: "configuration",
+      status: "pending", autoApply: true, terraformVersion: "1.2.3", createdAt: Date.now(),
+    });
+
+    const runPromise = executeRun(runId);
+    const workRoot = runWorkDir(runId);
+    let attempts = 0;
+    while (attempts++ < 1000 && !(await exists(join(workRoot, "terraform.tfstate")))) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (!(await exists(join(workRoot, "terraform.tfstate")))) throw new Error("apply did not write state");
+    await mkdir(join(process.env.STORAGE_DIR, "recovery"), { recursive: true });
+    await writeFile(join(process.env.STORAGE_DIR, "recovery", runId), "blocker");
+
+    await db.update(runs).set({ status: "canceled" }).where(eq(runs.id, runId));
+    cancelRunExecution(runId);
+    await runPromise.catch(() => undefined);
+
+    const final = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { status: true } });
+    const workDirExists = await exists(workRoot);
+    process.stdout.write(JSON.stringify({ status: final?.status, workDirExists }) + "\\n");
+    await rm(workRoot, { recursive: true, force: true });
+  `, { FAKE_TOFU: fakeTofu });
+
+  expect(result.status).toBe("canceled");
+  expect(result.workDirExists).toBe(true);
+}, { timeout: 30000 });
+
 test("a canceled plan failure writes Run canceled, not a state-machine error (issue #615)", async () => {
   const result = await runCancellationScript(`
     const { chmod, exists, mkdir, writeFile } = await import("fs/promises");
