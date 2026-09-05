@@ -231,12 +231,37 @@ export async function deliveryDedupRecord(scope: "run" | "assessment", key: stri
   });
 }
 
+// Last delivery outcome per configuration (issue #633): surfaced on the
+// configuration resource so failures are visible without reading server
+// logs. In-process like the breaker and ownership state, bounded and
+// evicted; a restart simply reports unknown until the next send.
+type LastDelivery = Readonly<{ sentAt: string; successful: boolean; code: string; error: string | null }>;
+const lastDeliveries = new Map<string, LastDelivery>();
+const LAST_DELIVERY_CAP = 500;
+
+function recordLastDelivery(configurationId: string, delivery: NotificationDelivery): void {
+  lastDeliveries.set(configurationId, {
+    sentAt: delivery.sentAt,
+    successful: delivery.successful,
+    code: delivery.code,
+    error: delivery.successful ? null : delivery.body.slice(0, 500),
+  });
+  if (lastDeliveries.size > LAST_DELIVERY_CAP) {
+    const oldest = lastDeliveries.keys().next();
+    if (!oldest.done) lastDeliveries.delete(oldest.value);
+  }
+}
+
+/** Last delivery outcome for API surfacing; null when nothing was sent yet. */
+export function lastDeliveryForResource(configurationId: string): LastDelivery | null {
+  return lastDeliveries.get(configurationId) ?? null;
+}
 export async function postNotification(
   configuration: NotificationConfiguration,
   payload: Readonly<Record<string, unknown>>,
 ): Promise<NotificationDelivery> {
   if (breakerRefusesDelivery(configuration.id)) {
-    return Promise.resolve({
+    const refused: NotificationDelivery = {
       body: `Destination temporarily disabled by circuit breaker (${BREAKER_OPEN_MS / 1000}s cooldown).`,
       code: "0",
       headers: {},
@@ -244,9 +269,13 @@ export async function postNotification(
       successful: false,
       url: configuration.url,
       attempts: 0,
-    });
+    };
+    recordLastDelivery(configuration.id, refused);
+    return refused;
   }
-  return doPostNotification(configuration, payload);
+  const delivery = await doPostNotification(configuration, payload);
+  recordLastDelivery(configuration.id, delivery);
+  return delivery;
 }
 
 async function doPostNotification(
@@ -639,15 +668,34 @@ function renderSlack(payload: Readonly<Record<string, unknown>>): string {
   return JSON.stringify({ text: summary.title, blocks });
 }
 
+const FAILED_STATUS_COLORS: ReadonlySet<string> = new Set([
+  "canceled",
+  "errored",
+  "force_canceled",
+  "discarded",
+]);
+
+/** Discord webhook embeds (issue #633): title, description, capped fields,
+ * and a red accent for failure statuses, mirroring the Teams card. */
+function renderDiscord(payload: Readonly<Record<string, unknown>>): string {
+  const summary = summarizePayload(payload);
+  const fields = summary.fields.slice(0, 10).map((field) => ({
+    name: field.label.slice(0, 256),
+    value: field.value.slice(0, 1024),
+    inline: true,
+  }));
+  const embed: Record<string, unknown> = {
+    title: summary.title.slice(0, 256),
+    color: summary.status !== undefined && FAILED_STATUS_COLORS.has(summary.status) ? 0xc0392b : 0x2b579a,
+  };
+  if (summary.subtext !== "") embed["description"] = summary.subtext.slice(0, 4096);
+  if (fields.length > 0) embed["fields"] = fields;
+  if (summary.linkUrl !== "") embed["url"] = summary.linkUrl;
+  return JSON.stringify({ content: summary.title.slice(0, 2000), embeds: [embed] });
+}
 function renderTeams(payload: Readonly<Record<string, unknown>>): string {
   const summary = summarizePayload(payload);
   const facts = summary.fields.slice(0, 10).map((field) => ({ name: field.label, value: field.value }));
-  const FAILED_STATUS_COLORS: ReadonlySet<string> = new Set([
-    "canceled",
-    "errored",
-    "force_canceled",
-    "discarded",
-  ]);
   const card: Record<string, unknown> = {
     "@type": "MessageCard",
     "@context": "http://schema.org/extensions",
@@ -671,6 +719,8 @@ export function renderPayloadForDestination(
 ): DestinationRender {
   if (configuration.destinationType === "slack") {
     return { body: renderSlack(payload), contentType: "application/json" };
+  }  if (configuration.destinationType === "discord") {
+    return { body: renderDiscord(payload), contentType: "application/json" };
   }
   if (configuration.destinationType === "microsoft-teams") {
     return { body: renderTeams(payload), contentType: "application/json" };

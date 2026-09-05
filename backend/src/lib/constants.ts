@@ -33,7 +33,7 @@ export const COMPATIBILITY_VERSION =
 // Keep the API version in its own constant, overridable independently.
 export const TFP_API_VERSION = process.env["TERRENCE_TFP_API_VERSION"]?.trim() || "2.6";
 
-export const NOTIFICATION_DESTINATIONS = ["generic", "slack", "microsoft-teams", "email"] as const;
+export const NOTIFICATION_DESTINATIONS = ["generic", "slack", "discord", "microsoft-teams", "email"] as const;
 export type NotificationDestination = (typeof NOTIFICATION_DESTINATIONS)[number];
 
 export const RUN_NOTIFICATION_TRIGGERS = [

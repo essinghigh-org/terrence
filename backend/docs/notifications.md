@@ -67,6 +67,12 @@ Run events include:
 
 Assessment events report completed and errored assessments.
 
+## Workspace webhook destinations
+
+Workspace, project, and team notification configurations post to a webhook URL with a destination-native payload: generic (raw event JSON), Slack blocks, Discord embeds, Microsoft Teams MessageCards, or email. A failing destination trips a per-configuration circuit breaker after three consecutive failures (one-minute cooldown); deliveries retry twice on timeouts and 5xx.
+
+Post a fixture event without enabling anything with the verify action (`POST /api/v2/notification-configurations/:id/actions/verify`); `?preview=true` returns the exact body that would be sent. Every send records a last-delivery outcome (`last-delivery` on the configuration resource, null until the first send) so failures surface on the notifications tab instead of living only in server logs.
+
 ## Delivery
 
 Notifications are queued and delivered asynchronously. A failed delivery logs the error and increments the failure metric. The notification page shows recent deliveries.
