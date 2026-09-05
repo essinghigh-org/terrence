@@ -73,7 +73,7 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS` | off | Allow HTTP pre-apply and enabled global task endpoints. Use only for trusted development; HTTPS is required by default. |
 | `GC_GRACE_PERIOD_DAYS` | default | Grace period for soft-deleted runs before garbage collection. |
 | `TERRENCE_RUN_CONCURRENCY` | `5` | Parallel local runs. Non-positive or non-integer values fall back to the default. |
-| `TERRENCE_RECOVERY_RETENTION_MS` | `604800000` (7 days) | Retention for interrupted-apply recovery records. |
+| `TERRENCE_RECOVERY_RETENTION_MS` | `604800000` (7 days) | Retention for saved plans. Interrupted-apply recovery copies are kept until recovered (consumed) and never time-pruned. |
 | `MIGRATION_SKIP_DRAIN` | off | Migration wizard skips waiting for active runs to drain. |
 | `TERRENCE_DISABLE_RESTART` | off | Test/benchmark mode: the migration wizard suppresses the post-migration restart. Restart the process manually to boot on PostgreSQL. |
 

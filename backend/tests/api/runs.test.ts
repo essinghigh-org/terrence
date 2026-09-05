@@ -1,7 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
+import { storageDir } from "../../src/db/driver";
 import {
   apiTokens, configurationVersions, organizationMemberships, organizations,
   runs, stateVersions, teams, teamWorkspaces, users, workspaceTags, workspaceVariables, workspaces,
@@ -198,6 +201,75 @@ describe("the reference format API v2 - Runs", () => {
     expect(includedUser).toBeDefined();
     expect(includedUser!.attributes["username"]).toBe(TEST_USERNAME);
     expect(includedUser!.attributes["avatar-url"]).toMatch(/^\/api\/v2\/avatars\/[0-9a-f]{64}$/);
+  });
+
+  it("should report has-recovery-state false on a run without a recovery copy (issue #580)", async () => {
+    const createRes = await app.handle(
+      new Request("http://localhost/api/v2/runs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "Authorization": `Bearer ${userToken}`
+        },
+        body: JSON.stringify({
+          data: {
+            attributes: { message: "Test recovery signal default" },
+            relationships: {
+              workspace: { data: { id: workspaceId, type: "workspaces" } },
+            },
+          },
+        }),
+      })
+    );
+    expect(createRes.status).toBe(201);
+    const created = await createRes.json() as { data: { id: string } };
+
+    const response = await app.handle(
+      new Request(`http://localhost/api/v2/runs/${created.data.id}`, {
+        headers: { "Authorization": `Bearer ${userToken}` }
+      })
+    );
+    expect(response.status).toBe(200);
+    const document = await response.json() as { data: { attributes: Record<string, unknown> } };
+    expect(document.data.attributes["has-recovery-state"]).toBe(false);
+  });
+
+  it("should report has-recovery-state true when a verified recovery copy exists (issue #580)", async () => {
+    const createRes = await app.handle(
+      new Request("http://localhost/api/v2/runs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/vnd.api+json",
+          "Authorization": `Bearer ${userToken}`
+        },
+        body: JSON.stringify({
+          data: {
+            attributes: { message: "Test recovery signal positive" },
+            relationships: {
+              workspace: { data: { id: workspaceId, type: "workspaces" } },
+            },
+          },
+        }),
+      })
+    );
+    expect(createRes.status).toBe(201);
+    const created = await createRes.json() as { data: { id: string } };
+
+    const recoveryDir = join(storageDir, "recovery", created.data.id);
+    await mkdir(recoveryDir, { recursive: true });
+    await writeFile(join(recoveryDir, ".recovered"), new Date().toISOString());
+    try {
+      const response = await app.handle(
+        new Request(`http://localhost/api/v2/runs/${created.data.id}`, {
+          headers: { "Authorization": `Bearer ${userToken}` }
+        })
+      );
+      expect(response.status).toBe(200);
+      const document = await response.json() as { data: { attributes: Record<string, unknown> } };
+      expect(document.data.attributes["has-recovery-state"]).toBe(true);
+    } finally {
+      await rm(recoveryDir, { recursive: true, force: true });
+    }
   });
 
   it("lists runs with created-by included user data", async () => {
