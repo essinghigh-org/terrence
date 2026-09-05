@@ -16,11 +16,16 @@
  */
 import { Database } from "bun:sqlite";
 import { existsSync, statSync, statfsSync, accessSync, constants } from "node:fs";
-import { join, resolve } from "node:path";
+import { request } from "node:https";
+import { connect } from "node:net";
 import { platform, release, arch } from "node:os";
 import { promises as dns } from "node:dns";
-import { request } from "node:https";
 import { probeLandlockAbi, runSandboxRequired } from "../src/lib/sandbox";
+// Issue #593: boolean flags and storage paths share the app's helpers
+// instead of duplicating them. (The database target is resolved dynamically
+// in main() so a broken DATABASE_URL becomes a clean config finding instead
+// of an import-time crash — importing the driver module runs its resolver.)
+import { envEnabled } from "../src/lib/env";
 
 const args = new Set(process.argv.slice(2));
 const asJson = args.has("--json");
@@ -40,12 +45,36 @@ function record(name: string, status: Status, detail: string): void {
     checks.push({ name, status, detail });
 }
 
-const storageDir = resolve(process.env.STORAGE_DIR ?? join(import.meta.dir, "../storage"));
-const dbUrl = process.env.DATABASE_URL ?? `file:${join(storageDir, "terrence.db")}`;
-const dbPath = dbUrl === ":memory:" ? ":memory:" : dbUrl.replace(/^file:/, "");
+type DatabaseTarget =
+    | Readonly<{ kind: "sqlite-file"; dbPath: string }>
+    | Readonly<{ kind: "memory" }>
+    | Readonly<{ kind: "postgres"; host: string; port: number }>
+    | Readonly<{ kind: "broken"; message: string }>;
+
+/** Resolve storage and database targets through the app's own driver module. */
+async function resolveTargets(): Promise<{ storageDir: string; db: DatabaseTarget }> {
+    try {
+        const driver = await import("../src/db/driver");
+        const url = driver.databaseUrl;
+        const storageDir: string = driver.storageDir;
+        if (driver.isPostgres) {
+            const parsed = new URL(url);
+            const port = parsed.port === "" ? 5432 : Number(parsed.port);
+            return { storageDir, db: { kind: "postgres", host: parsed.hostname, port } };
+        }
+        if (url === ":memory:") return { storageDir, db: { kind: "memory" } };
+        return { storageDir, db: { kind: "sqlite-file", dbPath: url.replace(/^file:/, "") } };
+    } catch (error) {
+        const { resolve, join } = await import("node:path");
+        return {
+            storageDir: resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../storage")),
+            db: { kind: "broken", message: error instanceof Error ? error.message : String(error) },
+        };
+    }
+}
 
 /** Check storage: exists, writable, free/total bytes via statfs when the runtime supports it. */
-function checkStorage(): void {
+function checkStorage(storageDir: string): void {
     if (!existsSync(storageDir)) {
         record("storage", "fail", `STORAGE_DIR does not exist: ${storageDir}`);
         return;
@@ -71,11 +100,20 @@ function checkStorage(): void {
     record("storage", "ok", detail);
 }
 
-function checkDatabase(): void {
-    if (dbPath === ":memory:") {
+async function checkDatabase(db: DatabaseTarget): Promise<void> {
+    if (db.kind === "broken") {
+        record("database", "fail", `database configuration is invalid: ${db.message}`);
+        return;
+    }
+    if (db.kind === "memory") {
         record("database", "warn", "DATABASE_URL is :memory: — data is lost on restart (dev-only configuration)");
         return;
     }
+    if (db.kind === "postgres") {
+        await checkPostgres(db.host, db.port);
+        return;
+    }
+    const dbPath = db.dbPath;
     if (!existsSync(dbPath)) {
         record("database", "fail", `database file does not exist: ${dbPath}`);
         return;
@@ -101,6 +139,64 @@ function checkDatabase(): void {
         }
     } catch (error) {
         record("database", "fail", `could not open database: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+
+/** TCP reachability for PostgreSQL backends (issue #593): previously any
+ * non-sqlite DATABASE_URL failed the file-existence check, so every
+ * Postgres instance misreported as FAIL. */
+function checkPostgres(host: string, port: number): Promise<void> {
+    return new Promise((resolvePromise) => {
+        const target = host === "" ? "localhost" : host;
+        let settled = false;
+        const socket = connect(port, target);
+        const done = (status: Status, detail: string): void => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            socket.destroy();
+            record("database", status, detail);
+            resolvePromise();
+        };
+        const timer = setTimeout((): void => {
+            done("fail", `PostgreSQL at ${target}:${port} did not accept a connection within 5s`);
+        }, 5000);
+        socket.on("connect", (): void => {
+            done("ok", `PostgreSQL reachable at ${target}:${port} (TCP handshake ok; authentication not attempted)`);
+        });
+        socket.on("error", (error: Error): void => {
+            done("fail", `PostgreSQL at ${target}:${port} unreachable: ${error.message}`);
+        });
+    });
+}
+
+/** Admin bootstrap (issue #593): ADMIN_PASSWORD is consumed (deleted) at
+ * first boot, so requiring it flagged every correct post-boot instance.
+ * Instead: set is fine, otherwise the sqlite users table proves bootstrap
+ * completed; PostgreSQL cannot be inspected from here and stays a warning.
+ */
+function checkAdminBootstrap(db: DatabaseTarget): void {
+    const password = process.env["ADMIN_PASSWORD"];
+    if (typeof password === "string" && password !== "") {
+        record("admin-bootstrap", "ok", "ADMIN_PASSWORD is set (consumed into the admin account at first boot)");
+        return;
+    }
+    if (db.kind !== "sqlite-file") {
+        record("admin-bootstrap", "warn", "ADMIN_PASSWORD is unset and the admin account cannot be verified on a non-sqlite database from here");
+        return;
+    }
+    try {
+        const engine = new Database(db.dbPath, { readonly: true });
+        const rows = engine.query("SELECT COUNT(*) AS total FROM users").all() as { total: number }[];
+        engine.close();
+        const total = rows.length > 0 ? Number(rows[0]?.total ?? 0) : 0;
+        if (total > 0) {
+            record("admin-bootstrap", "ok", `${total} local user(s) present; bootstrap complete (ADMIN_PASSWORD unset, as expected after first boot)`);
+        } else {
+            record("admin-bootstrap", "warn", "no local users yet; set ADMIN_PASSWORD or enable local signup to bootstrap an admin");
+        }
+    } catch {
+        record("admin-bootstrap", "warn", "ADMIN_PASSWORD is unset and the users table could not be read (fresh install or unreadable database)");
     }
 }
 
@@ -186,7 +282,10 @@ function checkConfig(): void {
         ["PORT", "optional"],
         ["STORAGE_DIR", "optional"],
         ["DATABASE_URL", "optional"],
-        ["ADMIN_PASSWORD", "required"],
+        // Issue #593: ADMIN_PASSWORD is consumed at first boot, so it must
+        // not be required here — the admin-bootstrap check verifies the
+        // resulting admin account instead.
+        ["ADMIN_PASSWORD", "optional"],
         ["TERRENCE_ENABLE_LOCAL_SIGNUP", "optional"],
         ["GITHUB_APP_ID", "optional"],
         ["TERRENCE_DISABLE_WORKER", "optional"],
@@ -214,18 +313,21 @@ function checkKernel(): void {
 }
 
 function checkWorker(): void {
-    const disabled = process.env.TERRENCE_DISABLE_WORKER === "1";
+    // Issue #593: TERRENCE_DISABLE_WORKER accepts "1" or "true" everywhere
+    // (shared envEnabled helper); the old === "1" test reported drain-mode
+    // instances with =true as healthy and enabled.
+    const disabled = envEnabled(process.env["TERRENCE_DISABLE_WORKER"]);
     record(
         "worker",
         disabled ? "warn" : "ok",
-        disabled ? "drain mode (TERRENCE_DISABLE_WORKER=1) — no runs will execute" : "enabled",
+        disabled ? "drain mode (TERRENCE_DISABLE_WORKER is set) — no runs will execute" : "enabled",
     );
 }
 
-function printHuman(): void {
+function printHuman(storageDir: string, db: DatabaseTarget): void {
     console.log(`Terrence doctor — ${new Date().toISOString()}`);
     console.log(`storage dir: ${storageDir}`);
-    console.log(`database:    ${dbPath}`);
+    console.log(`database:    ${describeDatabaseTarget(db)}`);
     console.log("");
     const maxNameWidth = checks.reduce((acc, c) => Math.max(acc, c.name.length), 0);
     for (const c of checks) {
@@ -249,10 +351,19 @@ function printJson(): void {
     console.log(JSON.stringify({ generatedAt: new Date().toISOString(), checks }, null, 2));
 }
 
+function describeDatabaseTarget(db: DatabaseTarget): string {
+    if (db.kind === "sqlite-file") return db.dbPath;
+    if (db.kind === "postgres") return `postgres://${db.host}:${db.port} (credentials redacted)`;
+    if (db.kind === "memory") return ":memory:";
+    return `(unresolvable: ${db.message})`;
+}
+
 async function main(): Promise<void> {
+    const { storageDir, db } = await resolveTargets();
     checkKernel();
-    checkStorage();
-    checkDatabase();
+    checkStorage(storageDir);
+    await checkDatabase(db);
+    checkAdminBootstrap(db);
     checkWorker();
     checkConfig();
     checkSandbox();
@@ -263,7 +374,7 @@ async function main(): Promise<void> {
     if (asJson) {
         printJson();
     } else {
-        printHuman();
+        printHuman(storageDir, db);
     }
     // --fail is opt-in: without it, doctor only reports and always exits 0.
     if (failOnFinding && checks.some((c) => c.status === "fail")) process.exit(1);
