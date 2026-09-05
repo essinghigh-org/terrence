@@ -2904,7 +2904,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
           runId,
           "apply",
           captured
-            ? "[terrence] Apply was canceled; encrypted recovery state was captured before cleanup."
+            ? "[terrence] Apply was canceled; encrypted recovery state was captured before cleanup. Fetch it from GET /api/v2/runs/:run_id/recovery-state before TERRENCE_RECOVERY_RETENTION_MS expires it (default 7 days)."
             : "[terrence] Apply was canceled; no local state file was available to capture.",
         );
         return;

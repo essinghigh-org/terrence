@@ -1,7 +1,10 @@
 import { count, eq } from "drizzle-orm";
+import { accessSync, constants as fsConstants, mkdirSync } from "node:fs";
 import { db } from "../db";
+import { storageDir } from "../db/driver";
 import { organizationMemberships, organizations, samlSettings, users } from "../db/schema";
 import { auditLog } from "./utils";
+import { envEnabled } from "./env";
 import { checkPasswordPolicy, loadPasswordPolicy } from "./password-policy";
 import { lockFirstUserElection } from "../db/first-user";
 import { hashPassword } from "./password-hashing";
@@ -89,4 +92,54 @@ export async function bootstrapInitialAdmin(): Promise<"created" | "disabled" | 
     });
   }
   return "created";
+}
+
+/**
+ * One-shot solo-admin password recovery (issue #631). The bootstrap and the
+ * account endpoints both refuse password changes without the current
+ * password, which leaves a solo admin who lost theirs with no supported
+ * path short of database surgery. With TERRENCE_ADMIN_PASSWORD_RESET=1 and
+ * ADMIN_PASSWORD set, this resets the named site-admin account
+ * (ADMIN_USERNAME, default admin) to the new password and forces a change
+ * at next login. Anything else (flag unset, missing password, unknown or
+ * non-admin user) leaves the instance untouched. Runs before
+ * bootstrapInitialAdmin: the bootstrap consumes ADMIN_PASSWORD on fresh
+ * installs, so ordering keeps both paths intact.
+ */
+export async function resetAdminPassword(): Promise<"reset" | "disabled"> {
+  if (!envEnabled(process.env["TERRENCE_ADMIN_PASSWORD_RESET"])) return "disabled";
+  const password = process.env["ADMIN_PASSWORD"];
+  if (password === undefined || password === "") return "disabled";
+  const username = (process.env["ADMIN_USERNAME"] ?? "admin").trim();
+  if (username === "") return "disabled";
+  validateBootstrapPassword(password, username);
+  const target = await db.query.users.findFirst({ where: eq(users.username, username) });
+  if (target === undefined || target.isSiteAdmin !== true) return "disabled";
+  await db.update(users)
+    .set({ passwordHash: await hashPassword(password), mustChangePassword: true })
+    .where(eq(users.id, target.id));
+  delete process.env["ADMIN_PASSWORD"];
+  await auditLog("update", "users", target.id, target.id, null, { username, source: "ADMIN_PASSWORD_RESET" });
+  return "reset";
+}
+
+/**
+ * Fail fast when the storage directory is not writable (issue #631).
+ * Without this, a skipped volume-ownership step surfaces later as cryptic
+ * permission errors on the first Docker run. The message names the path,
+ * the process identity, and the exact host command that fixes it.
+ */
+export function assertStorageWritable(dir: string = storageDir): void {
+  try {
+    mkdirSync(dir, { recursive: true });
+    accessSync(dir, fsConstants.W_OK);
+  } catch {
+    const uid = typeof process.getuid === "function" ? process.getuid() : null;
+    const gid = typeof process.getgid === "function" ? process.getgid() : null;
+    const owner = uid !== null && gid !== null ? `${uid}:${gid}` : "<uid>:<gid>";
+    throw new Error(
+      `[terrence] STORAGE_DIR is not writable: ${dir} (process uid:gid ${owner}). ` +
+      `Fix volume ownership on the host, then restart: chown -R ${owner} ${dir} && chmod u+rwX ${dir}`,
+    );
+  }
 }

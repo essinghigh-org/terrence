@@ -46,6 +46,10 @@ Terrence extracts metadata per section: inputs, outputs, resources, and dependen
 
 Module versions follow semantic versioning. Version status is tracked per version. A failed ingestion shows the error and can be retried.
 
+### Deleting versions
+
+Deletion is immediate and permanent: the version row and its archive file are removed. There is no yank state, and runs pinned to a deleted version fail when they fetch it. Prefer publishing a new version over deleting a bad one; delete only to remove something that must never be fetched (for example leaked secrets), then tell consumers to move.
+
 ### Provider-managed no-code resource
 
 The backend retains the `tfe_no_code_module` provider resource and its schema/API behavior. It is managed through provider configuration rather than a Terrence provisioning UI.

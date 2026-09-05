@@ -18,8 +18,8 @@ Set variables through the container environment or an `.env` file.
 | `PORT` | `3000` | HTTP listen port. |
 | `NODE_ENV` | `development` | Set `production` for production behavior. |
 | `PUBLIC_URL` | derived | Public URL of the instance. Used for webhook callbacks, redirects, and registry hostname resolution. |
-| `DATABASE_URL` | `file:./storage/terrence.db` | Database connection. PostgreSQL strings select the PostgreSQL backend. |
-| `STORAGE_DIR` | `./storage` | Directory for archives, state, binaries, and the version cache. Must persist. |
+| `DATABASE_URL` | `file:<storage>/terrence.db` | Database connection. PostgreSQL strings select the PostgreSQL backend. `<storage>` is `STORAGE_DIR`, default `<repo>/backend/storage`. |
+| `STORAGE_DIR` | `<repo>/backend/storage` | Directory for archives, state, binaries, and the version cache. `/app/backend/storage` in the container. Must persist. |
 | `CORS_ORIGIN` | dev default | Allowed CORS origin for the web interface. |
 | `ENCRYPTION_PASSWORD` | generated | Password for encryption-at-rest features. |
 | `SIGNED_URL_SECRET` | generated | Secret for signed URL tokens (state downloads). |
@@ -34,12 +34,13 @@ Set variables through the container environment or an `.env` file.
 | `ADMIN_PASSWORD` | none | Bootstraps the first administrator. Minimum 10 characters. Runs once. |
 | `ADMIN_USERNAME` | `admin` | Username of the bootstrapped administrator. |
 | `ADMIN_EMAIL` | none | Email of the bootstrapped administrator. |
-| `ADMIN_ORGANIZATION` | none | Organization created for the administrator at bootstrap. |
+| `ADMIN_ORGANIZATION` | `default` | Organization created for the administrator at bootstrap. |
+| `TERRENCE_ADMIN_PASSWORD_RESET` | off | One-shot solo-admin recovery: with `ADMIN_PASSWORD` set, reset the named site-admin account at boot and force a password change at next login. Anything else leaves the instance untouched. |
 | `TERRENCE_ENABLE_LOCAL_SIGNUP` | off | Allow registration through the API. Registrations never become site admins. |
 | `TERRENCE_PASSWORD_MIN_LENGTH` | policy | Minimum password length. |
 | `CLI_TOKEN_TTL_MS` | default | Lifetime of CLI-issued tokens. |
 | `IACT_TOKEN` | none | Installer access token accepted during bootstrap. |
-| `IACT_QUERY_TOKEN_DISABLED` | off | When set, refuse `?token=` query authentication for installer compatibility. |
+| `IACT_QUERY_TOKEN_ENABLED` | off | When `1`, accept the `?token=` query form for the reference installer. Default is the header-only flow (`X-IACT-Token` or `Authorization: Bearer`), which keeps the secret out of proxy logs and browser history. |
 
 ## Worker and scheduler
 
@@ -86,6 +87,7 @@ Set variables through the container environment or an `.env` file.
 | `TERRENCE_BINARY_PROBE_TIMEOUT_MS` | `10000` | Timeout for probing an IaC binary version. |
 | `TERRENCE_AGENT_FORWARD_TIMEOUT_MS` | `60000` | Agent forward deadline. Clamped to 1s..300s. |
 | `TERRENCE_COMPATIBILITY_VERSION` | `2.5.0` | Advertised TFE compatibility version. Keep dotted: the tfe provider feature gates fail on release-style strings. |
+| `GITHUB_TOKEN` / `GH_TOKEN` | none | Token for OpenTofu/Terraform release enumeration. Behind shared IPs the unauthenticated rate budget burns through deep paging; setting either token raises the ceiling and fixes stalled binary downloads. |
 
 ## VCS integration
 

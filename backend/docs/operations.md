@@ -29,43 +29,53 @@ On SIGTERM, the instance:
 4. Checkpoints the database.
 5. Exits.
 
-A failed WAL checkpoint exits non-zero so supervisors can react. Set a container stop grace period longer than the drain grace, so SIGTERM has time to finish.
+A failed WAL checkpoint exits non-zero so supervisors can react. Set a container stop grace period longer than the drain grace, so SIGTERM has time to finish. The shipped `docker-compose.yml` sets `stop_grace_period: 30s` for this reason; bare `docker run` needs `--stop-timeout 30`.
 
 ## Storage layout
 
-The storage directory (`STORAGE_DIR`, default `./storage`) holds:
+The storage directory (`STORAGE_DIR`, default `<repo>/backend/storage`, `/app/backend/storage` in the container) holds:
 
-- The SQLite database (`terrence.db` with WAL files).
-- Configuration version archives.
-- State payloads.
-- Downloaded binaries.
-- Version cache.
-- Run artifacts.
+- The SQLite database (`terrence.db` with WAL files) unless `DATABASE_URL` selects PostgreSQL.
+- `storage/terrence.json`: boot configuration written by the migration wizard (see [Database](database)).
+- Encryption material: `.encryption-key` (auto-generated when `ENCRYPTION_PASSWORD` is unset), `.encryption-salt` (KDF salt, no env override), `.token-hash-secret`.
+- `secrets/`: encrypted blobs referenced by name (for example the migration wizard's database-URL secret). SSH keys, OAuth tokens, and variable values are encrypted columns in the database.
+- `cv/`: configuration-version archives. `state-uploads/`: pending state-upload temp files.
+- `saved-plans/`: saved plan files. `recovery/`: interrupted-apply recovery copies (see below).
+- `exports/`: Postgres-to-SQLite export job files. `binaries/`: downloaded Terraform/OpenTofu/Infracost binaries.
+- Version cache file.
 
-The directory must persist across container restarts. Mount it as a volume.
+State payloads, run logs, and variable values live as encrypted blobs in the database, not as files. The directory must persist across container restarts. Mount it as a volume. At boot Terrence fails fast when the directory is not writable and logs the exact `chown` fix with path and UID.
 
 ## Backups
 
-A consistent backup (323) captures DB and storage at one logical point: stop the instance or quiesce writes, then copy both. The WAL checkpoint at shutdown makes the main database file complete, so a backup taken right after stop never misses WAL tail pages. A backup manifest (324) records the DB schema version, file list, and per-artifact hashes; each artifact is hashed (325) for verification and encrypted independently (326) when `TERRENCE_BACKUP_ENCRYPTION_KEY` is set.
+There is no backup manifest, hashing, encryption, restore test, or RPO alarm feature: anything promising those describes roadmap, not the product. A consistent backup captures the database and the storage directory at one logical point:
 
-For PostgreSQL, use the database's own backup tooling; combine a `pg_dump`/`pg_basebackup` window with a storage snapshot taken at the same logical point.
+1. Stop the instance (or quiesce writes). The WAL checkpoint at shutdown makes the main database file complete.
+2. Copy the database file and the whole storage directory together. A database-only copy is not restorable: state payloads, outputs, SSH keys, OAuth tokens, and sensitive variables decrypt only with `.encryption-key` (or the stable `ENCRYPTION_PASSWORD`) plus `.encryption-salt` from the same storage directory (SSH keys and tokens are encrypted database columns; the wizard's URL secret is a file under `secrets/`). The salt has no env override, so restoring the database on a new host with the same password but a fresh salt still fails to decrypt.
+3. Verify by starting a scratch instance against the copy and logging in.
+
+For PostgreSQL, use the database's own backup tooling; combine a `pg_dump`/`pg_basebackup` window with a storage snapshot taken at the same logical point. Downgrades are not supported: migrations are forward-only, so a backup taken before an upgrade is the only way back.
+
+## Interrupted-apply recovery
+
+When an apply is canceled or the process dies mid-apply, the worker captures the local `terraform.tfstate` (if present) encrypted into `recovery/<run-id>/`. Fetch it before it expires:
+
+- `GET /api/v2/runs/:run_id/recovery-state`
+
+Unrecovered copies are pruned after `TERRENCE_RECOVERY_RETENTION_MS` (default 7 days). The run log names the endpoint and the expiry when a copy is captured.
 
 ## Database export
 
-The administration database section exports the database in a portable format:
+The Postgres-to-SQLite export runs as a background job for the migration wizard:
 
-- The export includes the schema and the data.
-- Storage artifacts (archives and state payloads) are handled separately.
+- `POST /api/v2/admin/db-export/test-connection`
+- `POST /api/v2/admin/db-export`
+- `GET /api/v2/admin/db-export/jobs/:job_id`
+- `GET /api/v2/admin/db-export`
+- `GET /api/v2/admin/db-export/files/:file_name`
+- `DELETE /api/v2/admin/db-export/files/:file_name`
 
-Restore an export into an empty instance, then restore the storage artifacts to the same paths.
-
-## Restore verification (327,328)
-
-An automated restore test (327) imports the backup into an empty instance and verifies row counts, FKs and artifact hashes match the manifest. The admin UI shows the last verified restore timestamp (328).
-
-## Monitoring (329,330)
-
-A configurable RPO warning (329) and backup-age alarm (330) are set via `TERRENCE_BACKUP_RPO_HOURS` and `TERRENCE_BACKUP_MAX_AGE_HOURS`; the health check and `/metrics` surface staleness.
+There is no generic export endpoint and no import endpoint. Default SQLite installs back up with the stop-and-copy procedure above. See [Database](database) for the wizard flow and the boot-config interaction.
 
 ## Diagnostics
 

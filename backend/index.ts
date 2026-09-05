@@ -1,5 +1,5 @@
 import { app, systemApiApp } from "./src/app";
-import { bootstrapInitialAdmin } from "./src/lib/bootstrap";
+import { assertStorageWritable, bootstrapInitialAdmin, resetAdminPassword } from "./src/lib/bootstrap";
 import { refreshTrustedClientIpHeaders } from "./src/lib/client-ip";
 import { applyPgMigrations, isPostgres } from "./src/db";
 import { reconcileInterruptedLocalRuns, stopWorkerQueue, terminateActiveRunExecutions, waitForWorkerDrain } from "./src/worker";
@@ -47,6 +47,8 @@ if (systemTls !== undefined && (!(await systemTls.cert.exists()) || !(await syst
 // module evaluation so the TLA module graph fully resolves first). Do NOT
 // add a second startWorkerQueue() call here — the worker must have exactly
 // one startup location.
+assertStorageWritable();
+await resetAdminPassword();
 await bootstrapInitialAdmin();
 await refreshTrustedClientIpHeaders();
 // PostgreSQL schema migrations are async (the sqlite migrator runs

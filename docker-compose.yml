@@ -53,8 +53,12 @@ services:
     # for relative weighting). Omit or raise both for large configurations.
     mem_limit: 4g
     cpus: "2.0"
+    # Grace above the drain budget: 2s draining write plus 5s HTTP stop plus
+    # 6s drain grace before WAL checkpoint (see Operations: drain mode).
+    stop_grace_period: 30s
     # No healthcheck override: the image's own Bun-based HEALTHCHECK (Dockerfile)
-    # is authoritative. This image ships no curl binary.
+    # is authoritative. The image ships curl, wget, git, and unzip alongside
+    # the runtime for VCS fetches and diagnostics.
 
 
 volumes:
