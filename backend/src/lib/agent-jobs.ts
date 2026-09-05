@@ -31,7 +31,7 @@ import { insertStateVersionWithSerialTx } from "./state-serial";
 import { encryptStatePayload } from "./validation";
 import { variableValueForRead } from "./variable-crypto";
 import { isAgentPoolTokenActive } from "./agent-token";
-import { isTerminalRunStatus } from "./run-status";
+import { canTransitionRunStatus, isTerminalRunStatus } from "./run-status";
 
 export const MAX_AGENT_RESULT_BYTES = 64 * 1024;
 export const MAX_AGENT_RESULT_DEPTH = 8;
@@ -1046,12 +1046,34 @@ async function persistAgentJobCompletion(
   return updatedJobs[0];
 }
 
-function resolvePlanStatus(policyOutcome: AgentPolicyOutcome, run: AgentRunRow): string {
+/** Narrow plan inputs for the agent plan-status decision (issue #587).
+ * Exported for tests; the full row types remain module-private. */
+export type AgentPlanFlags = Readonly<{
+  autoApply: boolean;
+  allowEmptyApply: boolean;
+  savePlan: boolean;
+  planOnly: boolean;
+}>;
+
+export type AgentPolicyVerdict = Readonly<{
+  hardFailed: boolean;
+  softFailed: boolean;
+}>;
+
+/**
+ * Decide the run status after an agent plan job completes. Exported for tests.
+ *
+ * allow-empty-apply only PERMITS applying an empty plan (mirroring the local
+ * worker, where an empty plan with the flag stops at planned for
+ * confirmation instead of finishing): it never triggers an automatic apply
+ * on its own. Only an explicit autoApply queues the apply phase.
+ */
+export function resolvePlanStatus(policyOutcome: AgentPolicyVerdict, run: AgentPlanFlags): string {
   if (policyOutcome.hardFailed) return "errored";
   if (policyOutcome.softFailed) return "policy_soft_failed";
   if (run.savePlan) return "planned_and_saved";
   if (run.planOnly) return "planned_and_finished";
-  if (run.autoApply || run.allowEmptyApply) return "apply_queued";
+  if (run.autoApply) return "apply_queued";
   return "planned";
 }
 
@@ -1123,6 +1145,12 @@ async function persistRunCompletion(
   now: number,
 ): Promise<void> {
   const statusTimestamps = completionStatusTimestamps(run, job, completion, policyOutcome);
+  // Issue #587: agent completions must honor the declared state machine like
+  // every other writer. The expected-status guard below races safely, but an
+  // illegal edge is a code bug, so fail loudly instead of persisting it.
+  if (!canTransitionRunStatus(run.status, runStatus)) {
+    throw new Error(`Refusing illegal agent completion transition ${run.status} -> ${runStatus} for run ${run.id}`);
+  }
   const resourceValues = job.phase === "plan"
     ? {
         planResourceAdditions: structuredPlanCounts?.additions ?? completion.resourceAdditions,
