@@ -158,6 +158,7 @@ test("creates a workspace from the modal", async () => {
       attributes: {
         name: "production",
         "auto-apply": true,
+        "execution-mode": "remote",
         "iac-binary": "terraform",
         "terraform-version": "1.9.3",
         source: "tfe-api",
