@@ -17,6 +17,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
+import { useAgentPools } from "@/hooks/useAgentPools";
 import { isString } from "../lib/type-guards";
 
 type CreateWorkspaceModalProps = {
@@ -52,6 +53,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
   const [autoApply, setAutoApply] = useState(false);
   const [iacBinary, setIacBinary] = useState(defaultIacBinary ?? "tofu");
   const [terraformVersion, setTerraformVersion] = useState(defaultTerraformVersion ?? "latest");
+  const [executionMode, setExecutionMode] = useState("remote");
   const [availableVersions, setAvailableVersions] = useState<string[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -150,6 +152,10 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
     };
   }, [open, orgName, sourceType, vcsConnectionValue]);
 
+  // Issue #598: when agent execution is selected, surface whether any agent
+  // pool can actually pick up runs before the workspace is created.
+  const agentPools = useAgentPools(orgName, open && executionMode === "agent");
+
   const handleSubmit = async (e: React.SyntheticEvent): Promise<void> => {
     e.preventDefault();
     const workspaceName = name.trim();
@@ -186,6 +192,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
             attributes: {
               name: workspaceName,
               "auto-apply": autoApply,
+              "execution-mode": executionMode,
               "iac-binary": iacBinary,
               "terraform-version": normalizedVersion,
               source: sourceType === "vcs" ? "tfe-api" : sourceType,
@@ -203,6 +210,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
       setName("");
       setProjectId("");
       setAutoApply(false);
+      setExecutionMode("remote");
       setIacBinary(defaultIacBinary ?? "tofu");
       setTerraformVersion(defaultTerraformVersion ?? "latest");
       setVcsIdentifier("");
@@ -256,6 +264,42 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
               <p className="text-xs text-muted-foreground">Choose the project that will own this workspace.</p>
             </div>
           )}
+
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-1">
+              <label htmlFor="exec-mode" className="text-sm font-medium">Execution mode</label>
+              <HelpTooltip content="Remote runs execute on the built-in Terrence server worker, agent runs execute in an agent pool, and local runs execute on your CLI." />
+            </div>
+            <Select
+              id="exec-mode"
+              name="execution-mode"
+              value={executionMode}
+              onValueChange={setExecutionMode}
+            >
+              <SelectItem value="remote">Remote</SelectItem>
+              <SelectItem value="agent">Agent</SelectItem>
+              <SelectItem value="local">Local</SelectItem>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {executionMode === "agent"
+                ? "Runs wait for an agent pool to pick them up."
+                : executionMode === "local"
+                  ? "Runs execute on your CLI; the server only tracks state."
+                  : "Runs execute on the built-in Terrence server worker."}
+            </p>
+            {executionMode === "agent" && agentPools.loading && (
+              <p className="text-xs text-muted-foreground">Checking organization agent pools…</p>
+            )}
+            {executionMode === "agent" && !agentPools.loading && agentPools.error !== "" && (
+              <p role="alert" className="text-xs text-destructive">{agentPools.error}</p>
+            )}
+            {executionMode === "agent" && !agentPools.loading && agentPools.error === "" && agentPools.pools.length === 0 && (
+              <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                No agent pools are available in this organization. Runs on this workspace will wait
+                for a pool until one is attached.
+              </p>
+            )}
+          </div>
 
           <div className="flex flex-col gap-1.5">
             <label htmlFor="iac-tool" className="text-sm font-medium">Execution engine</label>

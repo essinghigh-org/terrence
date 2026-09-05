@@ -945,7 +945,7 @@ export function WorkspaceDetail({
                   <div>
                     <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1">
                       Execution mode
-                      <HelpTooltip icon="info" content="Execution mode determines whether Terraform or OpenTofu runs execute remotely in Terrence agent pools or locally on your CLI." />
+                      <HelpTooltip icon="info" content="Remote runs execute on the built-in Terrence server worker, agent runs execute in an agent pool, and local runs execute on your CLI." />
                     </div>
                     <div className="text-sm text-foreground flex items-center gap-1.5">
                        <span className="capitalize">{executionMode}</span>

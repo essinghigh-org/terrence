@@ -105,6 +105,7 @@ test("creates a VCS workspace from choices listed for a manage-workspaces-only s
       attributes: {
         name: "production",
         "auto-apply": false,
+        "execution-mode": "remote",
         "iac-binary": "tofu",
         "terraform-version": "latest",
         source: "tfe-api",
