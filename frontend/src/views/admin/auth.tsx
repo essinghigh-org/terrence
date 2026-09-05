@@ -10,6 +10,8 @@ export function AuthAdmin(props: Readonly<{
     saving: boolean;
     error: string | null;
     localAuthEnabled: boolean;
+    localSignup: string;
+    setLocalSignup: React.Dispatch<React.SetStateAction<string>>;
     setLocalAuthEnabled: React.Dispatch<React.SetStateAction<boolean>>;
     trustedClientIpHeaders: string;
     setTrustedClientIpHeaders: React.Dispatch<React.SetStateAction<string>>;
@@ -113,6 +115,8 @@ export function AuthAdmin(props: Readonly<{
       saving: generalSaving,
       error: generalError,
       localAuthEnabled,
+      localSignup,
+      setLocalSignup,
       setLocalAuthEnabled,
       trustedClientIpHeaders,
       setTrustedClientIpHeaders,
@@ -245,6 +249,16 @@ export function AuthAdmin(props: Readonly<{
                 When disabled, the sign-in page accepts only single sign-on (SAML, OIDC, or LDAP where
                 configured). Existing local accounts cannot sign in with a password until this is re-enabled.
               </p>
+              <div className="space-y-2">
+                <label htmlFor="local-signup-enabled" className="block text-sm font-medium">New account registration</label>
+                <Select id="local-signup-enabled" name="local-signup-enabled" value={localSignup} onValueChange={setLocalSignup}>
+                  <option value="environment">Use deployment setting</option>
+                  <option value="disabled">Invite only — admins create accounts</option>
+                  <option value="enabled">Allow anyone to register</option>
+                </Select>
+                <p className="text-xs text-muted-foreground">Invite only is a good fit for a private lab or small team. Registered users still need organization access. Changes take effect immediately after saving.</p>
+                {localSignup === "environment" && <p className="text-xs text-muted-foreground">Uses TERRENCE_ENABLE_LOCAL_SIGNUP from the server environment.</p>}
+              </div>
               <div className="space-y-2 pt-1">
                 <label htmlFor="trusted-client-ip-headers" className="block text-sm font-medium text-foreground">
                   Trusted client-IP headers
@@ -279,8 +293,12 @@ export function AuthAdmin(props: Readonly<{
           )}
         </CardContent>
       </Card>
+      <details className="rounded-xl border bg-card" open={samlEnabled || samlError !== null}>
+        <summary className="cursor-pointer rounded-xl px-5 py-4 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          SAML single sign-on<span className="ml-2 text-xs font-normal text-muted-foreground">{samlEnabled ? "Enabled" : "Not enabled"}</span>
+        </summary>
       {/* SAML SSO */}
-      <Card>
+      <Card className="border-0 border-t rounded-t-none shadow-none">
         <CardHeader variant="section">
           <div className="flex items-center justify-between">
             <div>
@@ -484,8 +502,13 @@ export function AuthAdmin(props: Readonly<{
           )}
         </CardContent>
       </Card>
+      </details>
+      <details className="rounded-xl border bg-card" open={oidcEnabled || oidcError !== null}>
+        <summary className="cursor-pointer rounded-xl px-5 py-4 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          OpenID Connect sign-in<span className="ml-2 text-xs font-normal text-muted-foreground">{oidcEnabled ? "Enabled" : "Not enabled"}</span>
+        </summary>
       {/* OIDC */}
-      <Card>
+      <Card className="border-0 border-t rounded-t-none shadow-none">
         <CardHeader variant="section">
           <CardTitle className="text-lg">OpenID Connect</CardTitle>
           <CardDescription>OpenID Connect provider configuration</CardDescription>
@@ -610,8 +633,13 @@ export function AuthAdmin(props: Readonly<{
           )}
         </CardContent>
       </Card>
+      </details>
+      <details className="rounded-xl border bg-card" open={ldapEnabled || ldapError !== null}>
+        <summary className="cursor-pointer rounded-xl px-5 py-4 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          LDAP directory<span className="ml-2 text-xs font-normal text-muted-foreground">{ldapEnabled ? "Enabled" : "Not enabled"}</span>
+        </summary>
       {/* LDAP */}
-      <Card>
+      <Card className="border-0 border-t rounded-t-none shadow-none">
         <CardHeader variant="section">
           <CardTitle className="text-lg">LDAP</CardTitle>
           <CardDescription>Lightweight Directory Access Protocol password authentication</CardDescription>
@@ -803,6 +831,7 @@ export function AuthAdmin(props: Readonly<{
           )}
         </CardContent>
       </Card>
+      </details>
     </div>
   );
 };

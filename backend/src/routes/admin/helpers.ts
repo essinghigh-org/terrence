@@ -376,6 +376,8 @@ export function adminUserResource(u: UserItem): Record<string, unknown> {
       "is-admin": u.isSiteAdmin === true,
       "is-site-auditor": (u as Record<string, unknown>)["isSiteAuditor"] === true,
       "is-suspended": (u as Record<string, unknown>)["isSuspended"] === true,
+      "must-change-password": u.mustChangePassword === true,
+      "can-reset-password": u.ssoProvider === null && !u.passwordHash.startsWith("$disabled$"),
       "avatar-url": gravatarUrl(u.email),
     },
   };

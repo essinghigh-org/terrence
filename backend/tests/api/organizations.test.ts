@@ -56,8 +56,23 @@ describe("the reference format API v2 - Organizations", () => {
     expect(orgInDb).toBeDefined();
   });
 
+  it("keeps legacy reserved-name organizations editable", async () => {
+    await db.update(organizations).set({ name: "docs" }).where(eq(organizations.name, orgName));
+    try {
+      const res = await app.handle(new Request("http://localhost/api/v2/organizations/docs", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/vnd.api+json", Authorization: `Bearer ${userToken}` },
+        body: JSON.stringify({ data: { attributes: { name: "docs", email: "updated@example.com" } } }),
+      }));
+      expect(res.status).toBe(200);
+      expect((await res.json()).data.attributes.email).toBe("updated@example.com");
+    } finally {
+      await db.update(organizations).set({ name: orgName }).where(eq(organizations.name, "docs"));
+    }
+  });
+
   it("rejects reserved and path-unsafe organization names on create and rename", async () => {
-    const invalidNames = ["account", "ADMIN", "nested/name", "contains space", "contains.dot"];
+    const invalidNames = ["account", "ADMIN", "docs", "DOCS", "nested/name", "contains space", "contains.dot"];
     for (const name of invalidNames) {
       const res = await app.handle(
         new Request("http://localhost/api/v2/organizations", {

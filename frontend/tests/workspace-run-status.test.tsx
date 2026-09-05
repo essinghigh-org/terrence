@@ -89,7 +89,7 @@ test("fails closed when workspace management permission cannot be loaded", async
   );
 
   await waitFor((): void => { expect(view.getByText("No workspaces yet")).toBeTruthy(); });
-  expect(view.getByText("No workspaces are available in this organization.")).toBeTruthy();
+  expect(view.getByText("Ask an organization owner to create a workspace or give you access to one.")).toBeTruthy();
   expect(view.queryByRole("button", { name: "New workspace" })).toBeNull();
   expect(view.queryByRole("heading", { name: "New Workspace" })).toBeNull();
 });

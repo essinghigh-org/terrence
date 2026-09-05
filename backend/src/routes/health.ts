@@ -1,3 +1,4 @@
+import { localSignupEnabled } from "../lib/settings";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { authPlugin } from "../auth";
@@ -723,6 +724,7 @@ export const healthRoutes = new Elysia({ name: "health" })
     headers["TFE-Version"] = COMPATIBILITY_VERSION;
     headers["X-TFE-Version"] = COMPATIBILITY_VERSION;
     headers["X-TFE-Current-Version"] = COMPATIBILITY_VERSION;
+    const signupEnabled = await localSignupEnabled().catch((): boolean => false);
     let sso;
     try {
       sso = await pingSsoSnapshot();
@@ -730,7 +732,7 @@ export const healthRoutes = new Elysia({ name: "health" })
       log.error("Unable to read SSO configuration for ping", { error: error instanceof Error ? error.message : String(error) });
       const lastKnown = pingSsoLastKnown;
       return {
-        "signup-enabled": envEnabled(process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"]),
+        "signup-enabled": signupEnabled,
         "local-auth-enabled": lastKnown?.localAuthEnabled ?? true,
         sso: {
           saml: lastKnown?.samlEnabled ?? false,
@@ -740,7 +742,7 @@ export const healthRoutes = new Elysia({ name: "health" })
       };
     }
     return {
-      "signup-enabled": envEnabled(process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"]),
+      "signup-enabled": signupEnabled,
       "local-auth-enabled": sso.localAuthEnabled,
       sso: { saml: sso.samlEnabled, oidc: sso.oidcEnabled, ldap: sso.ldapEnabled },
     };

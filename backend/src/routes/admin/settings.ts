@@ -31,6 +31,10 @@ export const settingsRoutes = new Elysia({ name: "admin-settings" })
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const current = await getSettings("general");
+    if (attrs["local-signup-enabled"] !== undefined && attrs["local-signup-enabled"] !== null && typeof attrs["local-signup-enabled"] !== "boolean") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "local-signup-enabled must be a boolean or null to use the environment setting" }] };
+    }
     if (attrs["local-auth-enabled"] !== undefined && typeof attrs["local-auth-enabled"] !== "boolean") {
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "local-auth-enabled must be a boolean" }] };

@@ -491,7 +491,7 @@ export function AccountSettings(): React.JSX.Element {
       )}
       {mustChangePassword && (
         <div role="status" className="bg-warning/10 border border-warning/30 text-warning px-4 py-3 rounded-md text-sm">
-          Change the temporary administrator password before continuing.
+          Change your temporary password before continuing.
         </div>
       )}
 
@@ -733,7 +733,7 @@ export function AccountSettings(): React.JSX.Element {
             <Lock className="w-4 h-4" />
             Change Password
           </CardTitle>
-          {mustChangePassword && <CardDescription>A new password is required for this administrator account.</CardDescription>}
+          {mustChangePassword && <CardDescription>Choose a new password for your account before continuing.</CardDescription>}
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1.5">

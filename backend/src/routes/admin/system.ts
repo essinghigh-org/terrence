@@ -1,3 +1,4 @@
+import { localSignupEnabled } from "../../lib/settings";
 import { Elysia } from "elysia";
 import { authPlugin } from "../../auth";
 import { db } from "../../db";
@@ -66,7 +67,7 @@ export const systemRoutes = new Elysia({ name: "admin-system" })
           reason: sandboxReason,
         },
         integrations: {
-          "signup-enabled": envEnabled(process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"]),
+          "signup-enabled": await localSignupEnabled(),
           "saml-enabled": saml,
           "oidc-enabled": oidc,
           "ldap-enabled": ldap,

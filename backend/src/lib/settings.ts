@@ -8,7 +8,7 @@ import { decryptSecret, encryptSecret, isEncryptedSecret } from "./secrets";
 export type Settings = Record<string, unknown>;
 
 const settingDefaults: Record<string, Settings> = {
-  general: { "local-auth-enabled": true, "limit-user-organization-creation": false, "api-rate-limiting-enabled": false, "api-rate-limit": 30, "plan-timeout": 3600, "apply-timeout": 3600, "send-passing-statuses-for-untriggered-speculative-plans": false, "allow-speculative-plans-on-pull-requests-from-forks": false, "default-remote-state-access": false, "trusted-client-ip-headers": [] },
+  general: { "local-auth-enabled": true, "local-signup-enabled": null, "limit-user-organization-creation": false, "api-rate-limiting-enabled": false, "api-rate-limit": 30, "plan-timeout": 3600, "apply-timeout": 3600, "send-passing-statuses-for-untriggered-speculative-plans": false, "allow-speculative-plans-on-pull-requests-from-forks": false, "default-remote-state-access": false, "trusted-client-ip-headers": [] },
   retention: { "delete-older-than-n-days": null },
   cost: { enabled: false, "infracost-api-key": null, "aws-access-key-id": null, "aws-secret-key": null, "gcp-credentials": null, "azure-client-id": null, "azure-client-secret": null, "azure-subscription-id": null, "azure-tenant-id": null },
   smtp: { enabled: false, host: null, port: 25, username: null, password: null, "sender-email": null, auth: "plain", encryption: "starttls" },
@@ -207,4 +207,12 @@ export async function getSiteCapabilities(): Promise<Readonly<Record<string, boo
     "cost-estimation": cost["enabled"] === true,
     "plan-explainer": await planExplainerUsable(explainer),
   };
+}
+
+/** A saved registration preference overrides the deployment default without a restart. */
+export async function localSignupEnabled(): Promise<boolean> {
+  const settings = await getSettings("general");
+  return typeof settings["local-signup-enabled"] === "boolean"
+    ? settings["local-signup-enabled"]
+    : envEnabled(process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"]);
 }

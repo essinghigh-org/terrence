@@ -140,7 +140,7 @@ test("creates a workspace from the modal", async () => {
   await waitFor((): void => { expect(view.getByText("Acme GitHub — GitHub App")).toBeTruthy(); });
   changeInput(asElement(view.getByLabelText("Repository Identifier")), "hashicorp/terraform");
   fireEvent.change(view.getByLabelText(/VCS connection/i), { target: { value: "github-app:ghain-123" } });
-  fireEvent.click(view.getByLabelText("Auto-apply plans upon completion"));
+  fireEvent.click(view.getByLabelText("Apply changes without manual approval"));
   await act(async () => {
     const form = view.getByRole("button", { name: "Create Workspace" }).closest("form");
     if (form !== null) fireEvent.submit(form);
@@ -158,7 +158,6 @@ test("creates a workspace from the modal", async () => {
       attributes: {
         name: "production",
         "auto-apply": true,
-        "execution-mode": "remote",
         "iac-binary": "terraform",
         "terraform-version": "1.9.3",
         source: "tfe-api",
@@ -198,7 +197,7 @@ test("opens workspace creation from the workspace list", async () => {
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("No workspaces yet")).toBeTruthy(); });
+  await waitFor((): void => { expect(view.getByText("Create your first workspace")).toBeTruthy(); });
   fireEvent.click(view.getByRole("button", { name: "New workspace" }));
   expect(view.getByRole("heading", { name: "New Workspace" })).toBeTruthy();
   await waitFor((): void => {
@@ -270,7 +269,7 @@ test("does not report a successful latest run for a workspace with no runs", asy
     </MemoryRouter>,
   );
 
-  await waitFor((): void => { expect(view.getByText("No runs yet")).toBeTruthy(); });
+  await waitFor((): void => { expect(view.getByText("Ready for your first plan")).toBeTruthy(); });
   expect(view.queryByText("Latest run finished")).toBeNull();
 });
 

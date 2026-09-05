@@ -480,7 +480,7 @@ test("fails closed for organization and team mutations without explicit permissi
   );
 
   await generalView.findByText("Organization owner access is required to change these settings.");
-  expect((generalView.getByLabelText("Organization Name") as HTMLInputElement).disabled).toBeTrue();
+  expect((generalView.getByLabelText("Organization name") as HTMLInputElement).disabled).toBeTrue();
   expect((generalView.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled).toBeTrue();
   expect((generalView.getByRole("button", { name: "Delete Organization" }) as HTMLButtonElement).disabled).toBeTrue();
   expect(fetchMock.mock.calls.every(([, init]): boolean => init?.method === undefined)).toBeTrue();
@@ -602,7 +602,7 @@ test("reloads organization settings at the renamed path", async () => {
     </MemoryRouter>,
   );
 
-  const input = await view.findByLabelText("Organization Name");
+  const input = await view.findByLabelText("Organization name");
   fireEvent.change(input, { target: { value: "renamed-org" } });
   fireEvent.click(view.getByRole("button", { name: "Save settings" }));
   await waitFor((): void => {
@@ -698,7 +698,7 @@ test("toggles dense table density and persists the preference", async () => {
   window.localStorage.removeItem("terrence-table-prefs:workspaces");
 });
 
-test("sizes workspace placeholders to the recognized visible columns", async () => {
+test("replaces an empty workspace table with a permission-aware getting-started state", async () => {
   window.localStorage.setItem(
     "terrence-table-prefs:workspaces",
     JSON.stringify({ density: "comfortable", visibleColumns: ["stale-column"] }),
@@ -721,7 +721,8 @@ test("sizes workspace placeholders to the recognized visible columns", async () 
   );
 
   await waitFor((): void => { expect(view.getByText("No workspaces yet")).toBeTruthy(); });
-  expect(view.getByRole("cell").getAttribute("colspan")).toBe("2");
+  expect(view.queryByRole("table")).toBeNull();
+  expect(view.queryByRole("button", { name: "New workspace" })).toBeNull();
   expect(view.queryByRole("columnheader", { name: "Repository" })).toBeNull();
 
   window.localStorage.removeItem("terrence-table-prefs:workspaces");

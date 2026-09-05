@@ -16,7 +16,7 @@ import { OrganizationCidrRanges } from "../components/OrganizationCidrRanges";
 import { OrganizationTags } from "../components/OrganizationTags";
 import { OrganizationSshKeys } from "../components/OrganizationSshKeys";
 import { Breadcrumbs } from "../components/Breadcrumbs";
-import { PageHeader, PageShell } from "../components/PageHeader";
+import { PageHeader, PageShell, SettingsSection } from "../components/PageHeader";
 import { isRecord, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
 
@@ -611,17 +611,11 @@ export function OrganizationSettings(): React.JSX.Element {
       <div className="space-y-6">
           {activeTab === "general" && (
             <>
-              <Card className="border-border shadow-sm rounded-md">
-                <CardHeader variant="section">
-                  <CardTitle>General settings</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <form onSubmit={saveSettings} className="space-y-6 max-w-lg">
-                    {!canUpdateOrganization && (
-                      <p className="text-sm text-muted-foreground">Organization owner access is required to change these settings.</p>
-                    )}
+              <form onSubmit={saveSettings} className="space-y-6">
+                {!canUpdateOrganization && <p className="text-sm text-muted-foreground">Organization owner access is required to change these settings.</p>}
+                <SettingsSection title="Organization" description="The name and contact address for your infrastructure.">
                     <div className="space-y-1.5">
-                      <label htmlFor="org-name" className="text-sm font-semibold text-foreground">Organization Name</label>
+                      <label htmlFor="org-name" className="text-sm font-semibold text-foreground">Organization name</label>
                       <Input
                         id="org-name"
                         name="organization-name"
@@ -631,40 +625,6 @@ export function OrganizationSettings(): React.JSX.Element {
                         onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setName(event.target.value); }}
                         disabled={!canUpdateOrganization}
                         required
-                        className="h-10"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label htmlFor="org-iac" className="text-sm font-semibold text-foreground flex items-center gap-1">
-                        Default IaC Binary
-                        <HelpTooltip content="The IaC engine (OpenTofu or Terraform) used by default when creating new workspaces in this organization." />
-                      </label>
-                      <Select
-                        id="org-iac"
-                        name="default-iac-binary"
-
-                        value={defaultIacBinary}
-                        onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setDefaultIacBinary(event.target.value); }}
-                        disabled={!canUpdateOrganization}
-                      >
-                        <option value="tofu">OpenTofu</option>
-                        <option value="terraform">Terraform</option>
-                      </Select>
-                      <p className="text-sm text-muted-foreground mt-1">The engine used by default for new workspaces.</p>
-                    </div>
-                    <div className="space-y-1.5">
-                      <label htmlFor="org-version" className="text-sm font-semibold text-foreground flex items-center gap-1">
-                        Default Version Constraint
-                        <HelpTooltip content="Specifies the default version of Terraform or OpenTofu for new workspaces (e.g. 'latest' or '~> 1.6.0')." />
-                      </label>
-                      <Input
-                        id="org-version"
-                        name="terraform-version"
-                        autoComplete="off"
-                        value={defaultTerraformVersion}
-                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDefaultTerraformVersion(event.target.value); }}
-                        disabled={!canUpdateOrganization}
-                        placeholder="latest"
                         className="h-10"
                       />
                     </div>
@@ -684,6 +644,92 @@ export function OrganizationSettings(): React.JSX.Element {
                       />
                       <p className="text-sm text-muted-foreground mt-1">Email address used for organization notifications.</p>
                     </div>
+                </SettingsSection>
+                <SettingsSection title="Workspace defaults" description="Choose the starting settings for new workspaces. Individual workspaces can override these defaults.">
+                    <div className="space-y-1.5">
+                      <label htmlFor="org-iac" className="text-sm font-semibold text-foreground flex items-center gap-1">
+                        Default engine
+                        <HelpTooltip content="The IaC engine (OpenTofu or Terraform) used by default when creating new workspaces in this organization." />
+                      </label>
+                      <Select
+                        id="org-iac"
+                        name="default-iac-binary"
+
+                        value={defaultIacBinary}
+                        onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => { setDefaultIacBinary(event.target.value); }}
+                        disabled={!canUpdateOrganization}
+                      >
+                        <option value="tofu">OpenTofu</option>
+                        <option value="terraform">Terraform</option>
+                      </Select>
+                      <p className="text-sm text-muted-foreground mt-1">The engine used by default for new workspaces.</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label htmlFor="org-version" className="text-sm font-semibold text-foreground flex items-center gap-1">
+                        Default engine version
+                        <HelpTooltip content="Specifies the default version of Terraform or OpenTofu for new workspaces (e.g. 'latest' or '~> 1.6.0')." />
+                      </label>
+                      <Input
+                        id="org-version"
+                        name="terraform-version"
+                        autoComplete="off"
+                        value={defaultTerraformVersion}
+                        onChange={(event: React.ChangeEvent<HTMLInputElement>): void => { setDefaultTerraformVersion(event.target.value); }}
+                        disabled={!canUpdateOrganization}
+                        placeholder="latest"
+                        className="h-10"
+                      />
+                    </div>
+                    <div className="space-y-2 border-t pt-4">
+                      <p className="text-sm font-semibold text-foreground">Organizational default execution mode</p>
+                      <p className="text-sm text-muted-foreground">Changing the execution mode discards any active runs in workspaces.</p>
+                      <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+                        <input
+                          type="radio"
+                          name="org-exec-mode"
+                          className="size-4 accent-primary"
+                          checked={defaultExecutionMode === "remote"}
+                          onChange={(): void => { setDefaultExecutionMode("remote"); }}
+                          disabled={!canUpdateOrganization}
+                        />
+                        <span>
+                          Remote
+                          <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on Terrence's infrastructure, and your team can review and collaborate on runs directly in the app.</span>
+                        </span>
+                      </label>
+                      <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+                        <input
+                          type="radio"
+                          name="org-exec-mode"
+                          className="size-4 accent-primary"
+                          checked={defaultExecutionMode === "local"}
+                          onChange={(): void => { setDefaultExecutionMode("local"); }}
+                          disabled={!canUpdateOrganization}
+                        />
+                        <span>
+                          Local
+                          <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on your own machines. Terrence only stores and synchronizes state.</span>
+                        </span>
+                      </label>
+                      <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+                        <input
+                          type="radio"
+                          name="org-exec-mode"
+                          className="size-4 accent-primary"
+                          checked={defaultExecutionMode === "agent"}
+                          onChange={(): void => { setDefaultExecutionMode("agent"); }}
+                          disabled={!canUpdateOrganization}
+                        />
+                        <span>
+                          Agent
+                          <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on a configured agent pool in your organization.</span>
+                        </span>
+                      </label>
+                    </div>
+                </SettingsSection>
+                <details className="rounded-xl border bg-card">
+                  <summary className="cursor-pointer rounded-xl px-6 py-4 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Advanced organization settings<span className="mt-1 block text-xs font-normal text-muted-foreground">Module tests, Git status checks, Stacks, and deletion permissions</span></summary>
+                  <div className="space-y-6 border-t p-6">
                     <div className="space-y-1.5">
                       <label htmlFor="org-module-test-token-ttl" className="text-sm font-semibold text-foreground">Module test token lifetime</label>
                       <Input
@@ -762,59 +808,32 @@ export function OrganizationSettings(): React.JSX.Element {
                         </span>
                       </label>
                     </div>
-                    <div className="space-y-2 border-t pt-4">
-                      <p className="text-sm font-semibold text-foreground">Organizational default execution mode</p>
-                      <p className="text-sm text-muted-foreground">Changing the execution mode discards any active runs in workspaces.</p>
-                      <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-                        <input
-                          type="radio"
-                          name="org-exec-mode"
-                          className="size-4 accent-primary"
-                          checked={defaultExecutionMode === "remote"}
-                          onChange={(): void => { setDefaultExecutionMode("remote"); }}
-                          disabled={!canUpdateOrganization}
-                        />
-                        <span>
-                          Remote
-                          <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on Terrence's infrastructure, and your team can review and collaborate on runs directly in the app.</span>
-                        </span>
-                      </label>
-                      <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-                        <input
-                          type="radio"
-                          name="org-exec-mode"
-                          className="size-4 accent-primary"
-                          checked={defaultExecutionMode === "local"}
-                          onChange={(): void => { setDefaultExecutionMode("local"); }}
-                          disabled={!canUpdateOrganization}
-                        />
-                        <span>
-                          Local
-                          <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on your own machines. Terrence only stores and synchronizes state.</span>
-                        </span>
-                      </label>
-                      <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-                        <input
-                          type="radio"
-                          name="org-exec-mode"
-                          className="size-4 accent-primary"
-                          checked={defaultExecutionMode === "agent"}
-                          onChange={(): void => { setDefaultExecutionMode("agent"); }}
-                          disabled={!canUpdateOrganization}
-                        />
-                        <span>
-                          Agent
-                          <span className="block text-sm font-normal text-muted-foreground">Your plans and applies run on a configured agent pool in your organization.</span>
-                        </span>
-                      </label>
-                    </div>
-                    <Button type="submit" disabled={saving || !canUpdateOrganization} className="bg-primary hover:bg-primary/90 h-9">
-                          {saving ? "Saving…" : "Save settings"}
-                    </Button>
-                  </form>
-                </CardContent>
-              </Card>
+                  </div>
+                </details>
+                <div className="flex justify-end">
+                  <Button type="submit" disabled={saving || !canUpdateOrganization}>{saving ? "Saving…" : "Save settings"}</Button>
+                </div>
+              </form>
 
+
+
+              <Card className="border-border shadow-sm rounded-md">
+                <CardHeader variant="section">
+                  <CardTitle className="flex items-center gap-2"><History className="size-4" />Organization data retention</CardTitle>
+                  <CardDescription>Apply a default state-version cleanup policy to workspaces in this organization.</CardDescription>
+                </CardHeader>
+                <form onSubmit={saveRetention} className="contents">
+                  <CardContent>
+                    {retentionLoading ? <p className="text-sm text-muted-foreground">Loading retention policy…</p> : (
+                      <FieldGroup className="grid gap-4 sm:grid-cols-2">
+                        <Field><FieldLabel htmlFor="org-retention-count">Keep state versions</FieldLabel><Input id="org-retention-count" name="retention-count" type="number" inputMode="numeric" min="0" value={retentionCount} onChange={(event): void => { setRetentionCount(Number(event.target.value)); }} /></Field>
+                        <Field><FieldLabel htmlFor="org-retention-days">Delete older than (days)</FieldLabel><Input id="org-retention-days" name="retention-days" type="number" inputMode="numeric" min="0" value={retentionDays} onChange={(event): void => { setRetentionDays(Number(event.target.value)); }} /></Field>
+                      </FieldGroup>
+                    )}
+                  </CardContent>
+                  <CardFooter><Button type="submit" disabled={retentionLoading || retentionSaving || !canUpdateOrganization}>{retentionSaving ? "Saving…" : "Save retention policy"}</Button></CardFooter>
+                </form>
+              </Card>
               {/* Danger Zone */}
               <Card className="border-destructive/30 shadow-sm rounded-md overflow-hidden">
                 <CardHeader variant="danger">
@@ -833,24 +852,6 @@ export function OrganizationSettings(): React.JSX.Element {
                     <Trash2 className="w-4 h-4 mr-2" /> Delete Organization
                   </Button>
                 </CardContent>
-              </Card>
-
-              <Card className="border-border shadow-sm rounded-md">
-                <CardHeader variant="section">
-                  <CardTitle className="flex items-center gap-2"><History className="size-4" />Organization data retention</CardTitle>
-                  <CardDescription>Apply a default state-version cleanup policy to workspaces in this organization.</CardDescription>
-                </CardHeader>
-                <form onSubmit={saveRetention} className="contents">
-                  <CardContent>
-                    {retentionLoading ? <p className="text-sm text-muted-foreground">Loading retention policy…</p> : (
-                      <FieldGroup className="grid gap-4 sm:grid-cols-2">
-                        <Field><FieldLabel htmlFor="org-retention-count">Keep state versions</FieldLabel><Input id="org-retention-count" name="retention-count" type="number" inputMode="numeric" min="0" value={retentionCount} onChange={(event): void => { setRetentionCount(Number(event.target.value)); }} /></Field>
-                        <Field><FieldLabel htmlFor="org-retention-days">Delete older than (days)</FieldLabel><Input id="org-retention-days" name="retention-days" type="number" inputMode="numeric" min="0" value={retentionDays} onChange={(event): void => { setRetentionDays(Number(event.target.value)); }} /></Field>
-                      </FieldGroup>
-                    )}
-                  </CardContent>
-                  <CardFooter><Button type="submit" disabled={retentionLoading || retentionSaving || !canUpdateOrganization}>{retentionSaving ? "Saving…" : "Save retention policy"}</Button></CardFooter>
-                </form>
               </Card>
             </>
           )}

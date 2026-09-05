@@ -17,7 +17,7 @@ The administrator username defaults to `admin`. You can change it with `ADMIN_US
 
 The bootstrap runs exactly once. Later restarts do not create or reset accounts. If the solo administrator password is lost, see [Configuration](configuration) for the one-shot `TERRENCE_ADMIN_PASSWORD_RESET` recovery.
 
-Local registration is disabled by default. To allow anyone to register, set `TERRENCE_ENABLE_LOCAL_SIGNUP=true`. Registrations never become site administrators.
+Local registration is disabled by default. To allow anyone to register, use **Site administration → Authentication → Local registration**, or set `TERRENCE_ENABLE_LOCAL_SIGNUP=true` as the environment default. Registrations never become site administrators.
 
 ## Step 2: Log in with the CLI
 
@@ -35,23 +35,13 @@ Terraform stores the token in `~/.terraform.d/credentials.tfrc.json`. The CLI us
 
 Bootstrap already created an organization named `default` and made the administrator its owner. Use it, or create more organizations in the web interface or with the API. `ADMIN_ORGANIZATION` overrides the bootstrap organization name.
 
-```bash
-curl -X POST https://terraform.example.com/api/v2/organizations \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/vnd.api+json" \
-  -d '{"data":{"type":"organizations","attributes":{"name":"example-org","email":"ops@example.com"}}}'
-```
+For a homelab, one organization is usually enough. It already has a default project; you do not need to create another project before adding workspaces.
 
 ## Step 4: Create a workspace and run your first plan
 
-Create a workspace:
+Open **Workspaces → New workspace**. Enter a name, choose Terraform or OpenTofu, and keep **CLI or CI pipeline** as the source. Execution, project, version, and automatic-apply controls are under **Advanced settings**. Agent execution requires an agent pool.
 
-```bash
-curl -X POST https://terraform.example.com/api/v2/organizations/example-org/workspaces \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/vnd.api+json" \
-  -d '{"data":{"type":"workspaces","attributes":{"name":"my-first-workspace"}}}'
-```
+The new workspace shows connection instructions using its actual organization, workspace name, and engine. Copy those instructions into your configuration. The example below uses Terraform.
 
 In a directory with a Terraform configuration, add a `cloud` block:
 

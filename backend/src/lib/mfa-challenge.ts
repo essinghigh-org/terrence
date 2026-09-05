@@ -1,4 +1,7 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { eq } from "drizzle-orm";
+import { db } from "../db";
+import { users } from "../db/schema";
 import { consumeSsoChallenge, storeSsoChallenge } from "./sso-challenges";
 
 /**
@@ -16,11 +19,14 @@ const MFA_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 
 /** Issue a challenge token bound to a user. Returns the opaque token. */
 export async function issueMfaChallenge(userId: string): Promise<string> {
+  const user = await db.query.users.findFirst({ where: eq(users.id, userId), columns: { passwordHash: true } });
+  if (user === undefined) throw new Error("MFA user not found");
+  const credential = createHash("sha256").update(user.passwordHash).digest("hex");
   const token = `mfa-${randomBytes(32).toString("base64url")}`;
   const written = await storeSsoChallenge(
     MFA_CHALLENGE_KIND,
     token,
-    { userId },
+    { userId, credential },
     Date.now() + MFA_CHALLENGE_TTL_MS,
   );
   if (!written) throw new Error("MFA challenge token collision");
@@ -34,5 +40,9 @@ export async function issueMfaChallenge(userId: string): Promise<string> {
 export async function consumeMfaChallenge(token: string): Promise<{ userId: string } | null> {
   const payload = await consumeSsoChallenge(MFA_CHALLENGE_KIND, token);
   const userId = payload?.["userId"];
-  return typeof userId === "string" && userId !== "" ? { userId } : null;
+  if (typeof userId !== "string" || userId === "" || typeof payload?.["credential"] !== "string") return null;
+  const user = await db.query.users.findFirst({ where: eq(users.id, userId), columns: { passwordHash: true } });
+  // A password reset also invalidates partially completed logins, on every replica.
+  if (user === undefined || createHash("sha256").update(user.passwordHash).digest("hex") !== payload["credential"]) return null;
+  return { userId };
 }

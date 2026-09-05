@@ -32,7 +32,7 @@ test("creates an organization and opens the working destination", async () => {
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
-    <MemoryRouter initialEntries={["/app"]}>
+    <MemoryRouter initialEntries={[{ pathname: "/app", key: "picker" }]}>
       <Routes>
         <Route path="/app" element={<Dashboard />} />
         <Route path="/app/:orgName" element={<p>Organization opened</p>} />
@@ -135,7 +135,7 @@ test("reserved organization names explain the route collision (issue #639)", asy
   fireEvent.input(view.getByLabelText("Name"), { target: { value: "admin" } });
 
   await waitFor((): void => {
-    expect(view.getByRole("alert").textContent).toContain("collide with app routes");
+    expect(view.getByRole("alert").textContent).toContain("Choose a name other than account, admin, or docs");
   });
   expect(view.getByRole("button", { name: "Create organization" }).hasAttribute("disabled")).toBe(true);
   expect(fetchMock.mock.calls.some(([input, init]): boolean =>

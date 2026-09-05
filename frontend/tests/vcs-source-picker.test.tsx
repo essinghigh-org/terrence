@@ -105,7 +105,6 @@ test("creates a VCS workspace from choices listed for a manage-workspaces-only s
       attributes: {
         name: "production",
         "auto-apply": false,
-        "execution-mode": "remote",
         // Issue #629: no org default here, so the canonical terraform default applies.
         "iac-binary": "terraform",
         "terraform-version": "latest",
