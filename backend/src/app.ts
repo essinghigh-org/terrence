@@ -130,6 +130,17 @@ function pathnameBucket(path: string): string {
     .join("/");
 }
 
+/** Scrub replayable bearer material out of request paths before they reach
+ * log sinks (issue #609): the never-expiring run log capability token (the
+ * UI polls these URLs repeatedly, multiplying exposure) and the invitation
+ * accept token. Query strings are left for the query-parameter redaction;
+ * everything else passes through untouched. */
+export function redactPathSecrets(path: string): string {
+  return path
+    .replace(/(\/api\/v2\/runs\/[^/?#]+\/(?:plan|apply)\/log\/)[^/?#]+/, "$1[REDACTED]")
+    .replace(/(\/api\/v2\/organization-invitations\/)[^/?#]+(\/accept)/, "$1[REDACTED]$2");
+}
+
 type HeaderGetter = { readonly get: (name: string) => string | null };
 type CustomRequest = Readonly<{
   readonly url: string;
@@ -284,7 +295,7 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
   mutableSet.status = 500;
   log.error("Unhandled request error", {
     code,
-    path: pathname,
+    path: redactPathSecrets(pathname),
     error: error instanceof Error ? error.message : String(error),
     stack: error instanceof Error ? error.stack : undefined,
   });
@@ -709,12 +720,13 @@ export const app = new Elysia()
           requestId: meta.correlationId,
           http: {
             method,
-            path,
+            path: redactPathSecrets(path),
             status: numericStatus,
             durationMs: duration,
           },
           // High-cardinality route bucket (no ids) so aggregations group
-          // cleanly while the raw path stays available for exact search.
+          // cleanly; the raw path stays available for exact search except
+          // for redacted bearer segments (issue #609).
           routeBucket: method + " " + pathnameBucket(path),
           outcome: numericStatus < 400 ? "success" : numericStatus < 500 ? "client-error" : "server-error",
         });
