@@ -48,6 +48,10 @@ import {
 } from "./lib/process-output";
 import { isStorageDegraded, isDiskFullError, markStorageDegraded } from "./lib/storage-health";
 import { workspaceExecutionDirectory } from "./workspace";
+import {
+  captureInterruptedApplyState,
+  sweepIncompleteRecoveryCopies,
+} from "./lib/recovery-files";
 import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
 import { canTransitionRunStatus, isTerminalRunStatus } from "./lib/run-status";
 import { FINAL_RUN_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, apiURL, signedApiURL, decodeStatePayload } from "./lib/utils";
@@ -2956,7 +2960,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
 
       if (await runWasCanceled(runId)) {
         applyCanceled = true;
-        const captured = await captureInterruptedApplyState(runId).catch((captureError: unknown): boolean => {
+        const captured = await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId)).catch((captureError: unknown): boolean => {
           log.error("Could not capture state after canceled apply", { runId, error: captureError });
           return false;
         });
@@ -2978,7 +2982,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
         } catch (saveError: unknown) {
           await writeLog(runId, "apply", `[terrence] Could not record partial state after failed apply: ${saveError instanceof Error ? saveError.message : String(saveError)}`);
           try {
-            await captureInterruptedApplyState(runId);
+            await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId));
           } catch (captureError: unknown) {
             log.error("Could not capture state after partial apply persistence failure", { runId, error: captureError });
           }
@@ -2990,7 +2994,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
         await saveStateAfterApply();
       } catch (saveError: unknown) {
         try {
-          await captureInterruptedApplyState(runId);
+          await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId));
         } catch (captureError: unknown) {
           log.error("Could not capture state after apply state persistence failure", { runId, error: captureError });
         }
@@ -3060,7 +3064,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
     if (await runWasCanceled(runId)) {
       applyCanceled = true;
       if (applyStarted) {
-        await captureInterruptedApplyState(runId).catch((captureError: unknown): void => {
+        await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId)).catch((captureError: unknown): void => {
           log.error("Could not capture state after canceled apply", { runId, error: captureError });
         });
       }
@@ -5100,23 +5104,6 @@ const ERROR_AFTER_RESTART = new Set([
   "applying",
 ]);
 
-async function captureInterruptedApplyState(runId: string): Promise<boolean> {
-  const root = runWorkDir(runId);
-  if (!(await exists(root))) return false;
-  const recoveryDir = join(storageDir, "recovery", runId);
-  for await (const candidate of new Bun.Glob("**/terraform.tfstate").scan({ cwd: root, onlyFiles: true })) {
-    const source = typeof candidate === "string" && candidate.startsWith("/") ? candidate : join(root, String(candidate));
-    await mkdir(recoveryDir, { recursive: true, mode: 0o700 });
-    const payload = await readFile(source, "utf8");
-    const encrypted = await encryptStatePayload(payload);
-    if (encrypted === null) return false;
-    await writeFile(join(recoveryDir, "terraform.tfstate"), encrypted, { mode: 0o600 });
-    await writeFile(join(recoveryDir, ".recovered"), new Date().toISOString(), { mode: 0o600 });
-    return true;
-  }
-  return false;
-}
-
 async function pruneInterruptedApplyRecovery(): Promise<void> {
   const rawRetention = process.env["TERRENCE_RECOVERY_RETENTION_MS"];
   const parsedRetention = rawRetention === undefined || rawRetention === "" ? 7 * 24 * 60 * 60 * 1000 : Number(rawRetention);
@@ -5176,6 +5163,10 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
   rearmed: number;
 }> {
   await pruneInterruptedApplyRecovery();
+  // Issue #579: adopt or drop markerless/staging recovery leftovers before
+  // new captures land, so an unverified partial can never sit beside (or be
+  // mistaken for) a complete copy.
+  await sweepIncompleteRecoveryCopies(storageDir);
   const pendingAt = new Date().toISOString();
   const candidates = await db.query.runs.findMany({
     where: or(
@@ -5218,10 +5209,15 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
     } else {
       const applySide = run.status === "apply_queued" || run.status === "applying";
       let capturedPartialState = false;
+      let recoveryCaptureFailed = false;
       if (run.status === "applying") {
         try {
-          capturedPartialState = await captureInterruptedApplyState(run.id);
+          capturedPartialState = await captureInterruptedApplyState(storageDir, run.id, runWorkDir(run.id));
         } catch (error: unknown) {
+          // Issue #579: a state file existed but could not be captured
+          // intact. The work directory is preserved below for manual
+          // recovery instead of deleting the only source.
+          recoveryCaptureFailed = true;
           logBestEffortFailure("Could not capture state after interrupted apply", { runId: run.id }, error);
         }
       }
@@ -5238,7 +5234,13 @@ export async function reconcileInterruptedLocalRuns(): Promise<{
       await updateRunStatus(run.id, "errored");
       if (applySide) await releaseRunWorkspaceLock(run.workspaceId, run.id);
       try {
-        if (runSandbox !== null) await removeSandboxWorkDir(run.id);
+        if (recoveryCaptureFailed) {
+          await writeLog(
+            run.id,
+            "apply",
+            `[terrence ERROR] Recovery copy failed; the run work directory was preserved at ${runWorkDir(run.id)} for manual recovery.`,
+          );
+        } else if (runSandbox !== null) await removeSandboxWorkDir(run.id);
         else await rm(runWorkDir(run.id), { recursive: true, force: true });
       } catch (error: unknown) {
         logBestEffortFailure("Startup reconciliation workdir cleanup failed", { runId: run.id }, error);

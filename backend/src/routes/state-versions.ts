@@ -1,7 +1,7 @@
 import { Elysia } from "elysia";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { exists, mkdir, readFile, rm } from "node:fs/promises";
 import { db } from "../db";
 import { stateOutputIndex, stateVersions, workspaces, runs, organizationMemberships, teams, type users } from "../db/schema";
 import { eq, and, desc, count, inArray } from "drizzle-orm";
@@ -112,6 +112,13 @@ function stateLineageError(
 
 function recoveryStatePath(runId: string): string {
   return join(storageDir, "recovery", runId, "terraform.tfstate");
+}
+
+/** Issue #579: only a capture that wrote its completion marker is a
+ * verified copy. A markerless state file is an unverified partial from a
+ * capture that died mid-write and must read as absent. */
+async function recoveryCaptureComplete(runId: string): Promise<boolean> {
+  return exists(join(storageDir, "recovery", runId, ".recovered"));
 }
 
 export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
@@ -682,6 +689,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     let payload: string;
     try {
+      if (!(await recoveryCaptureComplete(runId))) throw new Error("recovery capture incomplete");
       payload = decodeStatePayload(await readFile(recoveryStatePath(runId), "utf8"));
       if (parseTerraformStatePayload(payload) === null) throw new Error("invalid recovery state");
     } catch {
@@ -713,6 +721,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     let rawState: string;
     let parsed: ReturnType<typeof parseTerraformStatePayload>;
     try {
+      if (!(await recoveryCaptureComplete(runId))) throw new Error("recovery capture incomplete");
       rawState = decodeStatePayload(await readFile(recoveryStatePath(runId), "utf8"));
       parsed = parseTerraformStatePayload(rawState);
     } catch {
