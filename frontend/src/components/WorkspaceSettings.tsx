@@ -156,20 +156,24 @@ export function WorkspaceSettings({
   const projectId = workspace.relationships?.project?.data?.id ?? "";
   const effectiveExecutionMode = executionMode === "inherit" ? projectExecutionMode : executionMode;
   // Issue #600: surface the workspace value next to the effective engine and
-  // warn when agent runs will ignore the organization default (agent
-  // execution pins Terraform unless an engine is set here).
+  // warn when agent runs will ignore the organization default. Agent
+  // execution pins Terraform unless an engine is set here, so on agent
+  // workspaces the agent default wins over the organization default.
   const explicitIacBinary = workspace.attributes["iac-binary"] === "terraform"
     ? "terraform"
     : workspace.attributes["iac-binary"] === "tofu" ? "tofu" : null;
-  const effectiveIacBinary = explicitIacBinary ?? orgDefaultIacBinary ?? "terraform";
-  const effectiveIacSource = explicitIacBinary !== null
-    ? "this workspace"
-    : orgDefaultIacBinary !== null
-      ? "organization default"
-      : "built-in default";
-  const agentIgnoresOrgDefault = effectiveExecutionMode === "agent"
-    && explicitIacBinary === null
-    && orgDefaultIacBinary === "tofu";
+  const agentPinsTerraform = effectiveExecutionMode === "agent" && explicitIacBinary === null;
+  const effectiveIacBinary = agentPinsTerraform
+    ? "terraform"
+    : (explicitIacBinary ?? orgDefaultIacBinary ?? "terraform");
+  const effectiveIacSource = agentPinsTerraform
+    ? "agent execution default"
+    : explicitIacBinary !== null
+      ? "this workspace"
+      : orgDefaultIacBinary !== null
+        ? "organization default"
+        : "built-in default";
+  const agentIgnoresOrgDefault = agentPinsTerraform && orgDefaultIacBinary === "tofu";
   const effectiveEngineLabel = `Effective engine: ${effectiveIacBinary === "terraform" ? "Terraform" : "OpenTofu"} (${effectiveIacSource}).`;
   const agentPoolsState = useAgentPools(orgName, canUpdate && effectiveExecutionMode === "agent");
 

@@ -61,7 +61,7 @@ test("shows the effective engine and warns when agents ignore a tofu org default
       onSaved={(): void => { /* assertions read the DOM, not the callback */ }}
     />,
   );
-  await view.findByText(exactText("Binary used for plans and applies. Effective engine: OpenTofu (organization default)."));
+  await view.findByText(exactText("Binary used for plans and applies. Effective engine: Terraform (agent execution default)."));
   await view.findByText(exactText("Agent runs will use Terraform."));
 });
 
@@ -87,6 +87,6 @@ test("stays quiet for agent runs when the org default is already terraform", asy
       onSaved={(): void => { /* assertions read the DOM, not the callback */ }}
     />,
   );
-  await view.findByText(exactText("Binary used for plans and applies. Effective engine: Terraform (organization default)."));
+  await view.findByText(exactText("Binary used for plans and applies. Effective engine: Terraform (agent execution default)."));
   expect(view.queryByText(exactText("Agent runs will use Terraform."))).toBeNull();
 });
