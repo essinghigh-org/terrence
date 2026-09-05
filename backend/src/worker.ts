@@ -656,6 +656,15 @@ async function runWasCanceled(runId: string): Promise<boolean> {
   return row?.status === "canceled" || row?.status === "force_canceled";
 }
 
+/** Plan-phase cancel exit (issue #615): leave a user-visible line so a
+ *  canceled run never ends in log silence or, worse, an internal
+ *  state-machine error. Returns true when the caller must return. */
+async function returnIfRunCanceled(runId: string): Promise<boolean> {
+  if (!(await runWasCanceled(runId))) return false;
+  await writeLog(runId, "plan", "[terrence] Run canceled.");
+  return true;
+}
+
 type RunLogPhase = "plan" | "apply";
 type RunDiagnosticLevel = "info" | "warn" | "error";
 
@@ -2015,7 +2024,7 @@ async function executeRunImpl(runId: string): Promise<void> {
     }
 
     await updateRunStatus(runId, "fetching_completed");
-    if (await runWasCanceled(runId)) return;
+    if (await returnIfRunCanceled(runId)) return;
     await updateRunStatus(runId, "pre_plan_running");
     if (!(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "pre_plan"))) {
       throw new Error("Run blocked by mandatory pre-plan task failure.");
@@ -2027,7 +2036,7 @@ async function executeRunImpl(runId: string): Promise<void> {
     await updateRunStatus(runId, "queuing");
     await updateRunStatus(runId, "plan_queued");
     await updateRunStatus(runId, "planning");
-    if (await runWasCanceled(runId)) return;
+    if (await returnIfRunCanceled(runId)) return;
 
     const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
     try {
@@ -2101,7 +2110,7 @@ async function executeRunImpl(runId: string): Promise<void> {
       if (runSandbox !== null) await runSandbox.ensureTool(resolved.tool, resolved.version, binary);
 
       // 1. Run init
-      if (await runWasCanceled(runId)) return;
+      if (await returnIfRunCanceled(runId)) return;
       await writeLog(runId, "plan", `\n--- Executing ${resolved.tool} init ---`);
       if (runSandbox !== null) await runSandbox.prepareWorkDir(runId);
       const initProc = spawnRunProcess(
@@ -2122,13 +2131,13 @@ async function executeRunImpl(runId: string): Promise<void> {
       ]);
       const [initExit] = await waitForTrackedProcess(runId, "plan", initProc, initOutput, planTimeoutMs);
 
-      if (await runWasCanceled(runId)) return;
+      if (await returnIfRunCanceled(runId)) return;
       if (initExit !== 0) {
         throw new Error(`${resolved.tool} init failed with exit code ${initExit}`);
       }
 
       // 2. Run plan
-      if (await runWasCanceled(runId)) return;
+      if (await returnIfRunCanceled(runId)) return;
       await writeLog(runId, "plan", `\n--- Executing ${resolved.tool} plan ---`);
       const planArgs = [binary, "plan", "-no-color", "-input=false"];
       if (!run.refresh) planArgs.push("-refresh=false");
@@ -2165,7 +2174,7 @@ async function executeRunImpl(runId: string): Promise<void> {
       ]);
       const [planExit] = await waitForTrackedProcess(runId, "plan", planProc, planOutput, planTimeoutMs);
 
-      if (await runWasCanceled(runId)) return;
+      if (await returnIfRunCanceled(runId)) return;
       if (planExit !== 0) {
         throw new Error(`${resolved.tool} plan failed with exit code ${planExit}`);
       }
@@ -2235,16 +2244,16 @@ async function executeRunImpl(runId: string): Promise<void> {
       );
       await recordPlanInput(runId, plannedAgainstState, durablePlan);
     };
-    if (await runWasCanceled(runId)) return;
+    if (await returnIfRunCanceled(runId)) return;
     await writeLog(runId, "plan", `[terrence] Plan completed successfully.`);
 
     await updateRunStatus(runId, "cost_estimating");
     await executeCostEstimate(runId, executionDir);
-    if (await runWasCanceled(runId)) return;
+    if (await returnIfRunCanceled(runId)) return;
     await updateRunStatus(runId, "cost_estimated");
 
     await updateRunStatus(runId, "policy_checking");
-    if (await runWasCanceled(runId)) return;
+    if (await returnIfRunCanceled(runId)) return;
     const policyResult = await runPolicyChecks(
       runId,
       workspace.id,
@@ -2267,13 +2276,13 @@ async function executeRunImpl(runId: string): Promise<void> {
       }
     } else {
       await updateRunStatus(runId, "policy_checked");
-      if (await runWasCanceled(runId)) return;
+      if (await returnIfRunCanceled(runId)) return;
       await updateRunStatus(runId, "post_plan_running");
       if (!(await executeRunTasks(runId, workspace, org?.name ?? workspace.orgId, "post_plan"))) {
         throw new Error("Run blocked by mandatory post-plan task failure.");
       }
       await updateRunStatus(runId, "post_plan_completed");
-      if (await runWasCanceled(runId)) return;
+      if (await returnIfRunCanceled(runId)) return;
 
       const hasNoResourceChanges = resourceCounts.additions === 0
         && resourceCounts.changes === 0
@@ -2290,7 +2299,7 @@ async function executeRunImpl(runId: string): Promise<void> {
         // approval workflow would be bypassed whenever the caller created
         // the run through a path that requires apply permission (enforced
         // at create time, but the gate is defense-in-depth here too).
-        if (await runWasCanceled(runId)) return;
+        if (await returnIfRunCanceled(runId)) return;
         const actionOnlyBlockReason = await import("./lib/operations").then(async (mod): Promise<string | null> =>
           mod.applyGateBlockReason(new Date()),
         );
@@ -2308,7 +2317,7 @@ async function executeRunImpl(runId: string): Promise<void> {
       } else if (run.planOnly) {
         await updateRunStatus(runId, "planned_and_finished");
       } else if (run.autoApply === true) {
-        if (await runWasCanceled(runId)) return;
+        if (await returnIfRunCanceled(runId)) return;
         // Auto-apply must not bypass the site-wide apply gates: when an
         // approval workflow or a maintenance window blocks applies, fall
         // back to the needs-attention state instead of applying.
@@ -2340,6 +2349,13 @@ async function executeRunImpl(runId: string): Promise<void> {
       }
     }
   } catch (error: unknown) {
+    // Issue #615: a cancel that wins the race against a plan-phase write must
+    // not surface internal state-machine errors in the user-visible log. The
+    // apply path already guards this way; mirror it here.
+    if (await runWasCanceled(runId)) {
+      await writeLog(runId, "plan", "[terrence] Run canceled.");
+      throw error;
+    }
     const errMsg = error instanceof Error ? error.message : String(error);
     log.error(`Run ${runId} planning failed`, { error });
     await writeRunDiagnostic(

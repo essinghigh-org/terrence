@@ -216,3 +216,84 @@ test("cancel captures partial apply state before deleting the work directory", a
   expect(result.encrypted).toBe(true);
   expect(result.marker).toBe(true);
 }, { timeout: 30000 });
+
+test("a canceled plan failure writes Run canceled, not a state-machine error (issue #615)", async () => {
+  const result = await runCancellationScript(`
+    const { chmod, exists, mkdir, writeFile } = await import("fs/promises");
+    const { join } = await import("path");
+    const { db } = await import("./src/db/index.ts");
+    const { and, eq } = await import("drizzle-orm");
+    const { organizations, projects, workspaces, configurationVersions, runs, logs } = await import("./src/db/schema.ts");
+    const { executeRun, cancelRunExecution } = await import("./src/worker.ts");
+
+    const testDir = process.env.TEST_DIR;
+    const recordDir = join(testDir, "record");
+    const binaryDir = join(process.env.STORAGE_DIR, "binaries", "tofu", "1.2.3");
+    const binaryPath = join(binaryDir, "tofu");
+    const pidFile = join(recordDir, "plan-pid");
+    const runId = "cancel-plan-log-run";
+    await mkdir(recordDir, { recursive: true });
+    await mkdir(binaryDir, { recursive: true });
+
+    // Fake tofu: the plan blocks until killed. Cancellation SIGKILLs it, so
+    // the plan phase fails exactly while the run reads canceled — the race
+    // from issue #615.
+    await writeFile(binaryPath, [
+      "#!/bin/sh",
+      "case $1 in",
+      '  init) : ;;',
+      "  plan) echo $$ > " + pidFile + "; sleep 30 ;;",
+      '  show) echo "{}" ;;',
+      "  *) exit 2 ;;",
+      "esac",
+    ].join(String.fromCharCode(10)));
+    await chmod(binaryPath, 0o755);
+
+    const configDir = join(testDir, "config");
+    const archivePath = join(testDir, "config.tar.gz");
+    await mkdir(configDir);
+    await writeFile(join(configDir, "main.tf"), 'output "x" { value = "y" }');
+    const tar = Bun.spawn(["tar", "-czf", archivePath, "-C", configDir, "."]);
+    if (await tar.exited !== 0) throw new Error("tar failed");
+
+    await db.insert(organizations).values({ id: "org", name: "org" });
+    await db.insert(projects).values({ id: "project", orgId: "org", name: "project" });
+    await db.insert(workspaces).values({
+      id: "workspace", name: "workspace", orgId: "org", projectId: "project",
+      iacBinary: "tofu", terraformVersion: "1.2.3", autoApply: false,
+    });
+    await db.insert(configurationVersions).values({
+      id: "configuration", workspaceId: "workspace", status: "uploaded", archivePath,
+    });
+    await db.insert(runs).values({
+      id: runId, workspaceId: "workspace", configurationVersionId: "configuration",
+      status: "pending", autoApply: false, terraformVersion: "1.2.3", createdAt: Date.now(),
+    });
+
+    const runPromise = executeRun(runId);
+    let attempts = 0;
+    while (attempts++ < 1000 && !(await exists(pidFile))) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (!(await exists(pidFile))) throw new Error("plan subprocess did not start");
+
+    await db.update(runs).set({ status: "canceled" }).where(eq(runs.id, runId));
+    cancelRunExecution(runId);
+    await runPromise.catch(() => undefined);
+
+    const planLogs = await db.query.logs.findMany({
+      where: and(eq(logs.runId, runId), eq(logs.phase, "plan")),
+      columns: { outputText: true },
+    });
+    const text = planLogs.map((row) => row.outputText).join("\\n");
+    process.stdout.write(JSON.stringify({
+      canceledLine: text.includes("[terrence] Run canceled."),
+      stateMachineLeak: text.includes("Illegal run status transition"),
+      errorLeak: text.includes("[terrence ERROR]"),
+    }) + "\\n");
+  `);
+
+  expect(result.canceledLine).toBe(true);
+  expect(result.stateMachineLeak).toBe(false);
+  expect(result.errorLeak).toBe(false);
+}, { timeout: 45000 });

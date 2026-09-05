@@ -7,7 +7,7 @@ import { runResource, planResource, applyResource, userResource, taskStageResour
 import { tfPolicyEvaluationResource, tfStageTypesForEvaluations } from "./policy-evaluations";
 import { configurationVersionResource, configurationVersionIngressResource } from "./configuration-versions";
 import { costEstimateResource } from "./misc";
-import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, cursorPagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, organizationRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, DISCARDABLE_RUN_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
+import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, pageRequest, pagination, cursorPagination, logChunk, workspaceIdsForPermission, workspaceRunHistoryWhere, organizationRunHistoryWhere, apiURL, signedApiURL, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, DISCARDABLE_RUN_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, readRunLogs, readRunLogsPage } from "../lib/run-logs";
 import { deletePlanJsonArtifact, readPlanJsonArtifact, readPlanJsonSideArtifact, sanitizePlanJson } from "../lib/plan-json";
@@ -760,6 +760,10 @@ export async function createRun(
   const canApply = await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "apply");
   if (!canApply && (requestedAutoApply === true || allowEmptyApply || operation === "action_only")) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
   const autoApply = operation === "action_only" ? canApply : canApply && (requestedAutoApply ?? workspace.autoApply === true);
+  // Issue #601: inheriting the workspace default while lacking apply rights
+  // silently drops auto-apply (explicit requests already 403 above). Flag it
+  // on the created run so planners see why their run waits for confirmation.
+  const autoApplySuppressed = !canApply && requestedAutoApply === undefined && workspace.autoApply === true && operation !== "action_only";
   let configurationVersion: typeof configurationVersions.$inferSelect | undefined;
   if (cvId !== undefined) {
     configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
@@ -840,7 +844,12 @@ export async function createRun(
   scheduleExplorerInventory(workspaceId);
   const createdRun = { id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: user?.id ?? null, appliedAt: null, scheduledAt: null, softDeletedAt: null, createdAt };
   const createdLinkage = await linkageForRuns([createdRun]);
-  return { data: runResource(createdRun, canApply, false, origin, undefined, undefined, createdLinkage.get(id)) };
+  const createdResource = runResource(createdRun, canApply, false, origin, undefined, undefined, createdLinkage.get(id));
+  if (autoApplySuppressed) {
+    (createdResource["attributes"] as Record<string, unknown>)["auto-apply-warning"] =
+      "Auto-apply is enabled on this workspace, but you do not have apply permission, so this run was created with auto-apply off and will wait for confirmation.";
+  }
+  return { data: createdResource };
 }
 
 /**
@@ -1653,16 +1662,44 @@ export const runRoutes = new Elysia({ name: "runs" })
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     if (authorized.run.status !== "pending") { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be pending to force-execute" }] }; }
-    const activeBlockingStatuses = ["plan_queued", "planning", "apply_queued", "applying"] as const;
+    // Issue #583: derive the stoppable list from the workspace blocking set
+    // minus the resting states a user can discard themselves (planned,
+    // policy_soft_failed). The old four-status list reported nothing blocking
+    // while fetching/confirmed/policy runs held the queue.
+    const forceExecuteBlockingStatuses = WORKSPACE_BLOCKING_RUN_STATUSES.filter(
+      (status): boolean => !(DISCARDABLE_RUN_STATUSES as readonly string[]).includes(status),
+    );
     const blockers = await db.query.runs.findMany({
-      where: and(eq(runs.workspaceId, authorized.workspace.id), inArray(runs.status, [...activeBlockingStatuses]), ne(runs.id, runId)),
+      where: and(eq(runs.workspaceId, authorized.workspace.id), inArray(runs.status, [...forceExecuteBlockingStatuses]), ne(runs.id, runId)),
       orderBy: [asc(runs.createdAt), asc(runs.id)],
     });
     const blockingRuns = blockers.filter((run): boolean => run.planOnly !== true && run.savePlan !== true);
-    if (blockingRuns.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "No blocking run is available to force-execute" }] }; }
+    if (blockingRuns.length === 0) {
+      // A blocker in a discardable resting state still holds the queue but
+      // must be discarded, not force-executed: say so instead of claiming
+      // nothing is blocking.
+      const restingBlockers = await db.query.runs.findMany({
+        where: and(
+          eq(runs.workspaceId, authorized.workspace.id),
+          inArray(runs.status, [...WORKSPACE_BLOCKING_RUN_STATUSES.filter(
+            (status): boolean => (DISCARDABLE_RUN_STATUSES as readonly string[]).includes(status),
+          )]),
+          ne(runs.id, runId),
+        ),
+        columns: { id: true, status: true },
+        orderBy: [asc(runs.createdAt), asc(runs.id)],
+        limit: 1,
+      });
+      const resting = restingBlockers[0];
+      if (resting !== undefined) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: `Run ${resting.id} is ${resting.status}; discard it before force-executing this run` }] };
+      }
+      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "No blocking run is available to force-execute" }] };
+    }
     const blockerCanceled = await db.update(runs).set({ status: "force_canceled" }).where(and(
       inArray(runs.id, blockingRuns.map((run): string => run.id)),
-      inArray(runs.status, [...activeBlockingStatuses]),
+      inArray(runs.status, [...forceExecuteBlockingStatuses]),
     )).returning({ id: runs.id });
     if (blockerCanceled.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "The blocking run changed before it could be stopped" }] }; }
     const { cancelRunExecution, cleanupSavedPlan } = await import("../worker");
