@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { registryComponents } from "../db/schema";
@@ -78,7 +79,7 @@ export const registryComponentsRoutes = new Elysia({ name: "registry-components"
     const sourceIdentifier = typeof attrs["source-identifier"] === "string" && String(attrs["source-identifier"]).trim() !== "" ? String(attrs["source-identifier"]).trim() : name;
     const version = typeof attrs["version"] === "string" && attrs["version"].trim() !== "" ? attrs["version"].trim() : "0.1.0";
     const description = typeof attrs["description"] === "string" ? attrs["description"] : null;
-    const id = `rcomp-${crypto.randomUUID()}`;
+    const id = newResourceId("rcomp");
     const now = Date.now();
     const row: typeof registryComponents.$inferInsert = { id, orgId: org.id, name, namespace, description, source: "registry", sourceIdentifier, version, status: "pending", publishedAt: now, createdAt: now, updatedAt: now };
     try {

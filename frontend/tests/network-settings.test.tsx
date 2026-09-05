@@ -39,7 +39,7 @@ test("lists and creates workspace configuration versions", async () => {
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   const view = render(<WorkspaceConfigurationVersions workspaceId="ws-1" />);
   await waitFor(() => { expect(view.getByText("cv-1")).toBeTruthy(); });
-  fireEvent.click(view.getByRole("button", { name: "New version" }));
+  fireEvent.click(view.getByRole("button", { name: "Prepare upload" }));
   await waitFor(() => { expect(view.getByText("cv-2")).toBeTruthy(); });
 });
 

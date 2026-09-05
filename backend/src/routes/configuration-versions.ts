@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { configurationVersions, runs, type users } from "../db/schema";
@@ -128,7 +129,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
 
-    const id = `cv-${crypto.randomUUID()}`;
+    const id = newResourceId("cv");
     const speculative = typeof attributes["speculative"] === "boolean" ? attributes["speculative"] : false;
     const provisional = typeof attributes["provisional"] === "boolean" ? attributes["provisional"] : false;
     // The Terraform/OpenTofu CLI does not send a source attribute; detect it

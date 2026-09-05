@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { createHmac, createSign } from "node:crypto";
 import { db, isPostgres } from "../db";
@@ -507,7 +508,7 @@ async function replaceProjectScope(oauthClientId: string, projectIds: readonly s
     await t.delete(oauthClientProjects).where(eq(oauthClientProjects.oauthClientId, oauthClientId));
     if (projectIds.length > 0) {
       await t.insert(oauthClientProjects).values(projectIds.map((projectId: string): typeof oauthClientProjects.$inferInsert => ({
-        id: `ocp-${crypto.randomUUID()}`,
+        id: newResourceId("ocp"),
         oauthClientId,
         projectId,
       })));
@@ -608,7 +609,7 @@ async function completeOAuthHandshake(
   serviceProviderUser: string | null,
   request: Readonly<{ url: string }>,
 ): Promise<Response> {
-  const tokenId = `ot-${crypto.randomUUID()}`;
+  const tokenId = newResourceId("ot");
   await db.insert(oauthTokens).values({
     id: tokenId,
     oauthClientId: oc.id,
@@ -643,7 +644,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
     if (name === "") return unprocessable(set, "Name is required");
-    const id = `oc-${crypto.randomUUID()}`;
+    const id = newResourceId("oc");
     const rawServiceProvider = attributes["service-provider"];
     if (rawServiceProvider !== undefined && typeof rawServiceProvider !== "string") return unprocessable(set, "Unsupported service provider");
     const serviceProvider = rawServiceProvider ?? "github";
@@ -684,7 +685,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
       });
       if (projectIds !== undefined && projectIds.length > 0) {
         await t.insert(oauthClientProjects).values(projectIds.map((projectId: string): typeof oauthClientProjects.$inferInsert => ({
-          id: `ocp-${crypto.randomUUID()}`,
+          id: newResourceId("ocp"),
           oauthClientId: id,
           projectId,
         })));
@@ -761,7 +762,7 @@ export const oauthClientRoutes = new Elysia({ name: "oauthClients" })
     if (!(await validProjectScope(projectIds, oc.orgId))) return unprocessable(set, "One or more projects do not belong to the organization");
     if (projectIds.length > 0) {
       await db.insert(oauthClientProjects).values(projectIds.map((projectId: string): typeof oauthClientProjects.$inferInsert => ({
-        id: `ocp-${crypto.randomUUID()}`,
+        id: newResourceId("ocp"),
         oauthClientId: ocId,
         projectId,
       }))).onConflictDoNothing();

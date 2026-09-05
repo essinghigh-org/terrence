@@ -1,3 +1,4 @@
+import { newResourceId } from "../../lib/resource-id";
 import { Elysia } from "elysia";
 import { authPlugin } from "../../auth";
 import { db } from "../../db";
@@ -8,7 +9,7 @@ import { auditLog, caseInsensitiveLike, pageRequest, pagination, sensitiveIdenti
 import { isUniqueConstraintError } from "../../lib/validation";
 import { checkPasswordPolicy, loadPasswordPolicy } from "../../lib/password-policy";
 import { hashPassword } from "../../lib/password-hashing";
-import { hashAuthenticationToken } from "../../lib/token-service";
+import { generateAuthenticationToken, hashAuthenticationToken } from "../../lib/token-service";
 import type { ParamCtx } from "./types";
 import { type UserItem, adminUserResource } from "./helpers";
 import { publish } from "../../lib/event-bus";
@@ -69,7 +70,7 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
       return { errors: [{ status: "409", title: "Conflict", detail: "User already exists" }] };
     }
     const passwordHash = await hashPassword(password);
-    const id = `user-${crypto.randomUUID()}`;
+    const id = newResourceId("user");
     try {
       await db.insert(users).values({ id, username, email, passwordHash, isSiteAdmin });
     } catch (e: unknown) {
@@ -391,7 +392,7 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found", detail: "User not found" }] };
     }
-    const rawToken = `imp-${crypto.randomUUID()}-${crypto.randomUUID()}`;
+    const rawToken = generateAuthenticationToken("imp");
     const expiresAt = Date.now() + 15 * 60 * 1000;
     const impersonationTokenId = `${IMPERSONATION_TOKEN_PREFIX}${crypto.randomUUID()}`;
     await db.insert(apiTokens).values({

@@ -1,3 +1,4 @@
+import { newResourceId } from "./resource-id";
 import { count, eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -45,8 +46,8 @@ export async function bootstrapInitialAdmin(): Promise<"created" | "disabled" | 
   validateBootstrapPassword(password, bootstrapUsername);
 
   const { username, email, organizationName } = resolveBootstrapIdentity(bootstrapUsername);
-  const id = `user-${crypto.randomUUID()}`;
-  const organizationId = `org-${crypto.randomUUID()}`;
+  const id = newResourceId("user");
+  const organizationId = newResourceId("org");
   const passwordHash = await hashPassword(password);
 
   const created = await db.transaction(async (tx: unknown): Promise<{ created: boolean; organizationCreated: boolean }> => {
@@ -77,7 +78,7 @@ export async function bootstrapInitialAdmin(): Promise<"created" | "disabled" | 
       });
     }
     await t.insert(organizationMemberships).values({
-      id: `oum-${crypto.randomUUID()}`,
+      id: newResourceId("orgmem"),
       userId: id,
       orgId: targetOrganizationId,
       role: "owner",

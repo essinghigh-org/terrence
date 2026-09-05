@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { organizations, organizationMemberships, organizationDataRetentionPolicies, reservedTagKeys, samlSettings, teams, workspaces, workspaceTags, registryPartnerships, agentPools, projects, type users } from "../db/schema";
@@ -193,7 +194,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
     try {
-      const id = crypto.randomUUID();
+      const id = newResourceId("org");
       if ((user as unknown as Record<string, unknown>)["isProvisional"] === true) {
         (set as { status: number }).status = 403;
         return { errors: [{ status: "403", title: "Forbidden", detail: "Provisional accounts cannot create organizations" }] };
@@ -231,7 +232,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
         const t = tx as typeof db;
         await t.insert(organizations).values(org);
         await t.insert(organizationMemberships).values({
-          id: crypto.randomUUID(), userId: user.id, orgId: id, role: "owner",
+          id: newResourceId("orgmem"), userId: user.id, orgId: id, role: "owner",
         });
         await t.insert(projects).values(defaultProjectValues(id));
       });
@@ -318,7 +319,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
     }
     const now = Date.now();
     const tag = {
-      id: `rtk-${crypto.randomUUID()}`,
+      id: newResourceId("rtk"),
       orgId: org.id,
       key: input.key,
       disableOverrides: input.disableOverrides,
@@ -500,7 +501,7 @@ export const organizationRoutes = new Elysia({ name: "organizations" })
         ? rawDeleteOlderThanNDays
         : existing?.deleteOlderThanNDays ?? null;
     const values = {
-      id: existing?.id ?? `drp-${crypto.randomUUID()}`,
+      id: existing?.id ?? newResourceId("drp"),
       organizationId: org.id,
       stateVersionsCount,
       deleteOlderThanNDays,

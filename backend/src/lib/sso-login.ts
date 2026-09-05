@@ -1,6 +1,7 @@
+import { opaqueToken } from "./token-service";
 import { db } from "../db";
 import { apiTokens, type users } from "../db/schema";
-import { accessTokenDocument, issueLoginSession, opaqueToken, tokenHash } from "../routes/accounts";
+import { accessTokenDocument, issueLoginSession, tokenHash } from "../routes/accounts";
 
 type HeaderValue = string | number | readonly string[];
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, HeaderValue>> }>;

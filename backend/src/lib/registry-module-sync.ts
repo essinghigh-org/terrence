@@ -1,3 +1,4 @@
+import { newResourceId } from "./resource-id";
 import { open, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -251,7 +252,7 @@ async function synchronizeRegistryModuleOnce(
       // took over this module mid-sync, so keep writing would work on a lock
       // this instance no longer owns.
       if (!shouldContinue()) throw new Error("Registry module sync lease lost; another replica took over ingestion");
-      const id = `modver-${crypto.randomUUID()}`;
+      const id = newResourceId("modver");
       const archivePath = join(MODULE_STORAGE_DIR, `${id}.tar.gz`);
       const metadata = await withDownloadedArchive(mod, credentials, candidate.sha, async (downloaded): Promise<RegistryModuleMetadata> =>
         ingestModuleArchive(downloaded, archivePath, mod.sourceDirectory, inspectRegistryModule));

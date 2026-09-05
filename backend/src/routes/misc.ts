@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { envEnabled } from "../lib/env";
@@ -603,7 +604,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     // Sensitive values are encrypted at rest (todo 167/168).
     const stored = await variableValueForWrite(sensitiveValue, normalizedAttributes.value);
     const variable: typeof workspaceVariables.$inferInsert = {
-      id: `var-${crypto.randomUUID()}`,
+      id: newResourceId("var"),
       workspaceId,
       key: normalizedAttributes["key"] as string,
       value: stored.value,
@@ -787,7 +788,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     const srcWs = await db.query.workspaces.findFirst({ where: eq(workspaces.id, srcId) });
     if (srcWs === undefined || srcWs.orgId !== ws.orgId) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Sourceable workspace must belong to the same organization" }] }; }
     if (srcId === workspaceId) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Sourceable workspace cannot be the workspace itself" }] }; }
-    const id = `rt-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    const id = newResourceId("rt");
     await db.insert(runTriggers).values({ id, workspaceId, sourceWorkspaceId: srcId }).onConflictDoNothing();
     (set as { status: number }).status = 201;
     return { data: { id, type: "run-triggers", attributes: { "created-at": new Date().toISOString(), "sourceable-name": srcWs.name, "workspace-name": ws.name }, relationships: { sourceable: { data: { id: srcId, type: "workspaces" } }, "sourceable-workspace": { data: { id: srcId, type: "workspaces" } }, workspace: { data: { id: workspaceId, type: "workspaces" } } } } };
@@ -844,7 +845,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
     }
     if (uniqueSourceIds.length > 0) {
       await db.insert(runTriggers).values(uniqueSourceIds.map((sourceWorkspaceId: string): typeof runTriggers.$inferInsert => ({
-        id: `rt-${crypto.randomUUID()}`,
+        id: newResourceId("rt"),
         workspaceId,
         sourceWorkspaceId,
       }))).onConflictDoNothing();

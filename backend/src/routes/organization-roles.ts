@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "../db";
@@ -28,7 +29,7 @@ export const organizationRoleRoutes = new Elysia({ name: "organization-roles" })
     const org = await db.query.organizations.findFirst({ where: eq(organizations.name, params["org_name"] ?? "") });
     if (org === undefined || !(await checkOrganizationPermission(org.id, user?.id, orgId, teamId, "manage-organization-access"))) return error(set, 404, "Organization not found");
     const parsed = input(body); if (parsed === null) return error(set, 422, "name and boolean permissions are required");
-    const role = { id: `role-${crypto.randomUUID()}`, orgId: org.id, ...parsed, createdAt: Date.now(), updatedAt: Date.now() } satisfies typeof organizationRoles.$inferInsert;
+    const role = { id: newResourceId("role"), orgId: org.id, ...parsed, createdAt: Date.now(), updatedAt: Date.now() } satisfies typeof organizationRoles.$inferInsert;
     try { await db.insert(organizationRoles).values(role); } catch { return error(set, 409, "A role with this name already exists"); }
     set.status = 201; return { data: resource(role) };
   })

@@ -1,3 +1,4 @@
+import { newResourceId } from "./resource-id";
 import { createHash } from "node:crypto";
 import { cp, chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile, rename, copyFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
@@ -430,7 +431,7 @@ export function isCurrentStackStateRecord(record: Readonly<{ status: string; pay
 
 export async function saveStackState(stackId: string, deployment: string, runId: string, statePayload: string | null = null, fencingToken?: number): Promise<string> {
   const path = stateFilePath(stackId, deployment);
-  const recordId = `sst-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+  const recordId = newResourceId("sst");
   const snapshotPath = stateSnapshotPath(stackId, deployment, recordId);
   let temporary: string | null = null;
   let snapshotTemporary: string | null = null;
@@ -700,8 +701,8 @@ async function persistTerraformComponentArtifacts(
   if (operation === "plan" && (commandResult.code === 0 || commandResult.code === 2) && await Bun.file(planPath).exists()) await copyFile(planPath, join(STACK_STORAGE_DIR, `${stepId}-plan`));
   const now = Date.now();
   await db.insert(stackRecords).values([
-    { id: `sart-${crypto.randomUUID()}`, stackId, parentId: stepId, recordType: "stack-artifacts", name: `${operation}-description`, status: "ready", payload: { path: descriptionPath }, createdAt: now, updatedAt: now },
-    { id: `sart-${crypto.randomUUID()}`, stackId, parentId: stepId, recordType: "stack-artifacts", name: `${operation}-debug-log`, status: "ready", payload: { path: logPath }, createdAt: now, updatedAt: now },
+    { id: newResourceId("sart"), stackId, parentId: stepId, recordType: "stack-artifacts", name: `${operation}-description`, status: "ready", payload: { path: descriptionPath }, createdAt: now, updatedAt: now },
+    { id: newResourceId("sart"), stackId, parentId: stepId, recordType: "stack-artifacts", name: `${operation}-debug-log`, status: "ready", payload: { path: logPath }, createdAt: now, updatedAt: now },
   ]);
 }
 
@@ -827,7 +828,7 @@ export async function refreshStackStateLock(stackId: string, deployment: string,
 
 async function acquireStackStateLock(stackId: string, deployment: string, runId: string): Promise<number | null> {
   const now = Date.now();
-  const id = `ssl-${crypto.randomUUID()}`;
+  const id = newResourceId("ssl");
   await db.insert(stackStateLocks).values({ id, stackId, deployment, runId: null, fencingToken: 0, acquiredAt: null, leaseExpiresAt: null, releasedAt: now, updatedAt: now }).onConflictDoNothing({ target: [stackStateLocks.stackId, stackStateLocks.deployment] });
   const current = await db.query.stackStateLocks.findFirst({ where: and(eq(stackStateLocks.stackId, stackId), eq(stackStateLocks.deployment, deployment), eq(stackStateLocks.runId, runId)) });
   if (current !== undefined && current.leaseExpiresAt !== null && current.leaseExpiresAt > now && await refreshStackStateLock(stackId, deployment, runId, current.fencingToken)) return current.fencingToken;
@@ -850,7 +851,7 @@ async function releaseStackStateLock(stackId: string, deployment: string, runId:
 
 async function createDeploymentStep(stackId: string, runId: string, component: StoredComponent, index: number, phase: "plan" | "apply" | "convergence", requiresStateLock: boolean, fencingToken?: number): Promise<DeepReadonly<typeof stackRecords.$inferSelect>> {
   const step: typeof stackRecords.$inferInsert = {
-    id: `sds-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
+    id: newResourceId("sds"),
     stackId,
     parentId: runId,
     recordType: "stack-deployment-steps",
@@ -875,7 +876,7 @@ async function queueStackAgentStep(stack: Stack, runId: string, step: DeepReadon
     await db.update(stackAgentJobs).set({ status: "queued", agentId: null, result: null, errorMessage: null, claimedAt: null, completedAt: null, updatedAt: Date.now() }).where(and(eq(stackAgentJobs.id, existing.id), inArray(stackAgentJobs.status, ["completed", "errored", "canceled"])));
     return;
   }
-  await db.insert(stackAgentJobs).values({ id: `saj-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`, stackId: stack.id, deploymentRunId: runId, stepId: step.id, agentPoolId: stack.agentPoolId, agentId: null, phase, iacBinary: process.env["TERRENCE_STACK_IAC_BINARY"] ?? "terraform", status: "queued", result: null, errorMessage: null, claimedAt: null, completedAt: null, createdAt: Date.now(), updatedAt: Date.now() }).onConflictDoNothing({ target: [stackAgentJobs.stepId, stackAgentJobs.phase] });
+  await db.insert(stackAgentJobs).values({ id: newResourceId("saj"), stackId: stack.id, deploymentRunId: runId, stepId: step.id, agentPoolId: stack.agentPoolId, agentId: null, phase, iacBinary: process.env["TERRENCE_STACK_IAC_BINARY"] ?? "terraform", status: "queued", result: null, errorMessage: null, claimedAt: null, completedAt: null, createdAt: Date.now(), updatedAt: Date.now() }).onConflictDoNothing({ target: [stackAgentJobs.stepId, stackAgentJobs.phase] });
 }
 
 async function scheduleStackRun(runId: string, delay = 0): Promise<void> {
@@ -1204,7 +1205,7 @@ export async function runStackDeploymentJob(job: Job, context: DurableJobContext
 }
 
 async function addDiagnostic(configId: string, stackId: string, detail: string): Promise<void> {
-  await db.insert(stackRecords).values({ id: `sdiag-${crypto.randomUUID()}`, stackId, parentId: configId, recordType: "stack-diagnostics", name: null, status: "error", payload: { severity: "error", summary: "Stack configuration failed", detail }, createdAt: Date.now(), updatedAt: Date.now() });
+  await db.insert(stackRecords).values({ id: newResourceId("sdiag"), stackId, parentId: configId, recordType: "stack-diagnostics", name: null, status: "error", payload: { severity: "error", summary: "Stack configuration failed", detail }, createdAt: Date.now(), updatedAt: Date.now() });
 }
 
 type ComponentPayload = Readonly<{ name: string; directory: string; source: string | null; dependsOn: readonly string[] }>;
@@ -1329,9 +1330,9 @@ async function insertPreparedDeployment(
 ): Promise<string> {
   const deploymentFirst = deployment.components[0];
   if (deploymentFirst === undefined) throw new Error(`Deployment ${deployment.name} contains no components`);
-  const groupId = `sdg-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
-  const deploymentRunId = `sdr-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
-  const stepId = `sds-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
+  const groupId = newResourceId("sdg");
+  const deploymentRunId = newResourceId("sdr");
+  const stepId = newResourceId("sds");
   const now = Date.now();
   await tx.insert(stackRecords).values({ id: groupId, stackId: stack.id, parentId: configuration.id, recordType: "stack-deployment-groups", name: deployment.name, status: "pending", payload: { "deployment-group-config": { "auto-approve-checks": [] }, latestRunId: deploymentRunId }, createdAt: now, updatedAt: now });
   await tx.insert(stackRecords).values({ id: deploymentRunId, stackId: stack.id, parentId: groupId, recordType: "stack-deployment-runs", name: deployment.name, status: "planning", payload: { configurationId: configuration.id, components: deployment.components, archivePath: deployment.archivePath, "plan-mode": initialPayload["speculative"] === true ? "speculative" : "normal", component: deploymentFirst.name, componentIndex: 0, cycle: 0, destroy: deployment.destroy || initialPayload["destroy-all"] === true }, createdAt: now, updatedAt: now });

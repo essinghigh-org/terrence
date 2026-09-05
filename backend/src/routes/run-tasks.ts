@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { envEnabled } from "../lib/env";
@@ -196,7 +197,7 @@ const createOrgRunTask = async ({ params, body, user, orgId: tokenOrgId, teamId:
   const name = typeof attrs["name"] === "string" ? attrs["name"] : "";
   const url = typeof attrs["url"] === "string" ? attrs["url"] : "";
   if (name === "" || url === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
-  const id = `task-${crypto.randomUUID()}`;
+  const id = newResourceId("task");
   const description = typeof attrs["description"] === "string" ? attrs["description"] : null;
   const category = typeof attrs["category"] === "string" && attrs["category"].trim() !== "" ? attrs["category"] : "general";
   const enabled = typeof attrs["enabled"] === "boolean" ? attrs["enabled"] : true;
@@ -447,7 +448,7 @@ const attachWorkspaceRunTask = async ({ params, body, user, orgId: tokenOrgId, t
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
   }
-  const id = `wrt-${crypto.randomUUID()}`;
+  const id = newResourceId("wrt");
   try {
     await db.insert(workspaceRunTasks).values({ id, workspaceId, runTaskId: taskId, stage, enforcementLevel });
   } catch (error: unknown) {

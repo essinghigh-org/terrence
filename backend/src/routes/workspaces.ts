@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db, isPostgres, rawQueryAll } from "../db";
 import { agentPools, projects, workspaces, workspaceTags, projectTags, workspaceVariables, runs, configurationVersions, remoteStateConsumers, dataRetentionPolicies, githubAppInstallations, oauthClients, oauthTokens, stateVersions, variableSets, variableSetWorkspaces, sshKeys, type users } from "../db/schema";
@@ -655,7 +656,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
         (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: msg }] };
       }
     }
-    const id = `ws-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    const id = newResourceId("ws");
     const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
     const rawTagBindings = rels["tag-bindings"] as Record<string, unknown> | undefined;
     const tagBindingsData = rawTagBindings?.["data"];
@@ -1325,7 +1326,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (data?.["type"] !== "vars" || !validVariableAttributes(attributes)) {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Invalid variable attributes" }] };
     }
-    const varId = `wsvar-${crypto.randomUUID()}`;
+    const varId = newResourceId("wsvar");
     const key = typeof attributes["key"] === "string" ? attributes["key"] : "";
     const value = typeof attributes["value"] === "string" ? attributes["value"] : "";
     const category = typeof attributes["category"] === "string" ? attributes["category"] : "terraform";
@@ -1549,7 +1550,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote state consumers must reference existing workspaces in the same organization" }] };
     }
     const batch = consumerWorkspaceIds.map((consumerWorkspaceId: string): { id: string; workspaceId: string; consumerWorkspaceId: string } => ({
-      id: `rsc-${crypto.randomUUID()}`,
+      id: newResourceId("rsc"),
       workspaceId,
       consumerWorkspaceId,
     }));
@@ -1574,7 +1575,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote state consumers must reference existing workspaces in the same organization" }] };
     }
     const batch = consumerWorkspaceIds.map((consumerWorkspaceId: string): { id: string; workspaceId: string; consumerWorkspaceId: string } => ({
-      id: `rsc-${crypto.randomUUID()}`,
+      id: newResourceId("rsc"),
       workspaceId,
       consumerWorkspaceId,
     }));
@@ -1632,7 +1633,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const existing = await db.query.dataRetentionPolicies.findFirst({ where: eq(dataRetentionPolicies.workspaceId, workspaceId) });
-    const pid = existing?.id ?? `drp-${crypto.randomUUID()}`;
+    const pid = existing?.id ?? newResourceId("drp");
     const policyType = typeof data?.["type"] === "string" ? data["type"] : null;
     const rawDeleteOlderThanNDays = attrs["delete-older-than-n-days"] ?? attrs["deleteOlderThanNDays"];
     const stateVersionsCount = typeof attrs["state-versions-count"] === "number"

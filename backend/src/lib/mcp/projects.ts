@@ -1,3 +1,4 @@
+import { newResourceId } from "../resource-id";
 import { asc, eq, sql, and } from "drizzle-orm";
 import { db } from "../../db";
 import { projects, teamProjects, workspaces } from "../../db/schema";
@@ -102,7 +103,7 @@ export const projectTools: readonly McpTool[] = [
       if (name === "" || name.length > 90) return toolBadRequest("Project name must be between 1 and 90 characters");
       const existing = await db.query.projects.findFirst({ where: and(eq(projects.orgId, org.id), eq(projects.name, name)) });
       if (existing !== undefined) return toolBadRequest(`Project "${name}" already exists in this organization`);
-      const id = `prj-${crypto.randomUUID().replace(/-/g, "").slice(0, 14)}`;
+      const id = newResourceId("prj");
       const createdAt = Date.now();
       await db.insert(projects).values({
         id,

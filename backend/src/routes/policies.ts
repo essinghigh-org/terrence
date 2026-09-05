@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { policySets, policySetVersions, policySetWorkspaces, policySetProjects, policySetExclusions, policySetProjectExclusions, policySetTagSelectors, policySetParameters, policies, policyChecks, projects, runs, workspaces, organizations, oauthClients, oauthTokens, githubAppInstallations, type users } from "../db/schema";
@@ -410,7 +411,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: `enforcement-level must be ${allowedLevels.join(", ")}` }] };
     }
-    const id = `pol-${crypto.randomUUID()}`;
+    const id = newResourceId("pol");
     // Optional policy_sets relationship attaches this standalone policy to a set.
     let policySetId: string | null = null;
     const rels = typeof data?.["relationships"] === "object" && data["relationships"] !== null ? (data["relationships"] as Record<string, unknown>) : {};
@@ -825,7 +826,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     }
     const now = Date.now();
     const version = {
-      id: `polsetver-${crypto.randomUUID()}`,
+      id: newResourceId("polsetver"),
       policySetId,
       source: "tfe-api",
       status: "pending",
@@ -954,7 +955,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
           where: and(eq(workspaces.orgId, ps.orgId), inArray(workspaces.id, workspaceIds)),
         });
       const batch = workspacesInOrg.map((workspace): { id: string; policySetId: string; workspaceId: string } => ({
-        id: `psw-${crypto.randomUUID()}`,
+        id: newResourceId("psw"),
         policySetId,
         workspaceId: workspace.id,
       }));
@@ -981,7 +982,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
           where: and(eq(projects.orgId, ps.orgId), inArray(projects.id, projectIds)),
         });
       const batch = projectsInOrg.map((project): { id: string; policySetId: string; projectId: string } => ({
-        id: `pspj-${crypto.randomUUID()}`,
+        id: newResourceId("pspj"),
         policySetId,
         projectId: project.id,
       }));
@@ -1018,7 +1019,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
           where: and(eq(workspaces.orgId, ps.orgId), inArray(workspaces.id, workspaceIds)),
         });
       const batch = workspacesInOrg.map((workspace): { id: string; policySetId: string; workspaceId: string } => ({
-        id: `psex-${crypto.randomUUID()}`,
+        id: newResourceId("psex"),
         policySetId,
         workspaceId: workspace.id,
       }));
@@ -1062,7 +1063,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
           where: and(eq(projects.orgId, ps.orgId), inArray(projects.id, projectIds)),
         });
       const batch = projectsInOrg.map((project): { id: string; policySetId: string; projectId: string } => ({
-        id: `pspex-${crypto.randomUUID()}`,
+        id: newResourceId("pspex"),
         policySetId,
         projectId: project.id,
       }));
@@ -1170,7 +1171,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     if (data?.["type"] !== "policies") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be policies" }] }; }
     const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
     if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
-    const id = `pol-${crypto.randomUUID()}`;
+    const id = newResourceId("pol");
     const description = typeof attributes["description"] === "string" ? attributes["description"] : null;
     const kind = ps.kind === "opa" ? "opa" : "sentinel";
     const enforcementLevel = requestedPolicyEnforcementLevel(attributes) ?? (kind === "opa" ? "mandatory" : "soft-mandatory");
@@ -1371,7 +1372,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const key = typeof attrs["key"] === "string" ? attrs["key"] : "";
     if (key === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity" }] }; }
-    const id = `psparam-${crypto.randomUUID()}`;
+    const id = newResourceId("psparam");
     const value = typeof attrs["value"] === "string" ? attrs["value"] : "";
     const sensitive = typeof attrs["sensitive"] === "boolean" ? attrs["sensitive"] : false;
     const hcl = typeof attrs["hcl"] === "boolean" ? attrs["hcl"] : false;

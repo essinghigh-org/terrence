@@ -365,6 +365,7 @@ describe("GitHub Webhooks", () => {
     if (run === undefined) return;
     expect(run.id).toMatch(/^run-[a-f0-9]{14}$/);
     expect(run.id).toHaveLength(18);
+    expect(run.configurationVersionId).toMatch(/^cv-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
     expect(run.message).toBe("Update Terraform");
     expect(run.createdBy).toBeNull();
     const runResponse = await app.handle(new Request(`http://127.0.0.1/api/v2/runs/${run.id}`, {

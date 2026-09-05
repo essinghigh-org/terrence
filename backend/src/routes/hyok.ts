@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { hyokConfigurations, hyokCustomerKeyVersions, organizations, type users } from "../db/schema";
@@ -125,7 +126,7 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
     const kms = attributes?.["kms-options"] !== null && typeof attributes?.["kms-options"] === "object"
       ? attributes["kms-options"] as Record<string, string>
       : null;
-    const id = `hyok-${crypto.randomUUID()}`;
+    const id = newResourceId("hyok");
     const now = Date.now();
     const row: HyokRow = {
       id, orgId: org.id, name, kekId, kmsOptions: kms, agentPoolId: agentPoolRef?.id ?? null,
@@ -136,7 +137,7 @@ export const hyokRoutes = new Elysia({ name: "hyok" })
     // the reference format auto-generates a customer key version (and encrypted data key) when a
     // HYOK configuration is created — the KMS key pair. Mirror that so the
     // hyok key-version data sources have something to read.
-    const keyVersionId = `hyokcv-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    const keyVersionId = newResourceId("hyokcv");
     await db.insert(hyokCustomerKeyVersions).values({
       id: keyVersionId,
       hyokConfigId: id,

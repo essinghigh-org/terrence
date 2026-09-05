@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { and, asc, count, eq, gt, inArray, lt, sql } from "drizzle-orm";
 import { authPlugin } from "../auth";
@@ -276,7 +277,7 @@ function createValues(
   if (!valid) return undefined;
 
   return {
-    id: `nc-${crypto.randomUUID()}`,
+    id: newResourceId("nc"),
     workspaceId: scope.workspaceId ?? null,
     projectId: scope.projectId ?? null,
     teamId: scope.teamId ?? null,
@@ -508,7 +509,7 @@ export const notificationRoutes = new Elysia({ name: "notifications" })
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "All excluded workspaces must belong to the notification project" }] };
     }
     await db.insert(notificationConfigurationWorkspaceExclusions).values([...new Set(ids)].map((workspaceId): typeof notificationConfigurationWorkspaceExclusions.$inferInsert => ({
-      id: `nce-${crypto.randomUUID()}`,
+      id: newResourceId("nce"),
       notificationConfigurationId: configuration.id,
       workspaceId,
       createdAt: Date.now(),

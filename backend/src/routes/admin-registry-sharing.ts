@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { and, eq, inArray, or } from "drizzle-orm";
 import { authPlugin } from "../auth";
@@ -111,7 +112,7 @@ async function replaceConsumers(
     }
     for (const consumerOrgId of desiredIds) {
       await t.insert(registryPartnerships).values({
-        id: `rp-${crypto.randomUUID()}`,
+        id: newResourceId("rp"),
         producerOrgId: producer.id,
         consumerOrgId,
         modules: kind === "modules",
@@ -204,7 +205,7 @@ export const adminRegistrySharingRoutes = new Elysia({ name: "admin-registry-sha
       where: and(eq(registryPartnerships.producerOrgId, producer.id), eq(registryPartnerships.consumerOrgId, consumer.id)),
     });
     const partnership = existing ?? {
-      id: `rp-${crypto.randomUUID()}`,
+      id: newResourceId("rp"),
       producerOrgId: producer.id,
       consumerOrgId: consumer.id,
       modules: true,

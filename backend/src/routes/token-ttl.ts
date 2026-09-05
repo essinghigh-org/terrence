@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { orgTokenTTLPolicies, type users } from "../db/schema";
@@ -78,7 +79,7 @@ export const tokenTtlRoutes = new Elysia({ name: "token-ttl" })
         (set as { status: number }).status = 422;
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "each policy requires a whitelisted token-type string (\"\" (empty, organization token slot) | user | team | team-legacy | audit-trails | agent; empty = org token slot) and a non-negative max-ttl-ms number" }] };
       }
-      cleaned.push({ id: `ttl-${crypto.randomUUID()}`, orgId: org.id, tokenType, maxTtlMs, createdAt: now, updatedAt: now });
+      cleaned.push({ id: newResourceId("ttl"), orgId: org.id, tokenType, maxTtlMs, createdAt: now, updatedAt: now });
     }
     await db.transaction(async (tx): Promise<void> => {
       await tx.delete(orgTokenTTLPolicies).where(eq(orgTokenTTLPolicies.orgId, org.id));

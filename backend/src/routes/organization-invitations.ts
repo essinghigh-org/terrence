@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { organizationInvitations, organizationMemberships, users } from "../db/schema";
@@ -83,7 +84,7 @@ export const organizationInvitationRoutes = new Elysia({ name: "organization-inv
     const tokenHash = hashAuthenticationToken(rawToken);
     const tokenPrefix = rawToken.slice(0, 8);
     const now = Date.now();
-    const id = `orginv-${crypto.randomUUID()}`;
+    const id = newResourceId("orginv");
     await db.insert(organizationInvitations).values({
       id, orgId: org.id, email, emailNormalized: email, role, status: "pending",
       tokenHash, tokenPrefix, expiresAt: now + INVITE_TTL_MS, createdBy: user?.id ?? null, acceptedBy: null, createdAt: now, updatedAt: now,
@@ -173,7 +174,7 @@ export const organizationInvitationRoutes = new Elysia({ name: "organization-inv
       const t = tx as typeof db;
       const claim = await t.update(organizationInvitations).set({ status: "accepted", acceptedBy: user.id, updatedAt: Date.now() }).where(and(eq(organizationInvitations.id, invite.id), eq(organizationInvitations.status, "pending"))).returning();
       if (claim.length === 0) throw new Error("invitation no longer pending");
-      await t.insert(organizationMemberships).values({ id: `orgmem-${crypto.randomUUID()}`, orgId: invite.orgId, userId: user.id, role: invite.role, status: "active" }).onConflictDoNothing();
+      await t.insert(organizationMemberships).values({ id: newResourceId("orgmem"), orgId: invite.orgId, userId: user.id, role: invite.role, status: "active" }).onConflictDoNothing();
       // Clear provisional if this invite resolves it
       if ((user as unknown as Record<string,unknown>)["isProvisional"] === true) {
         await t.update(users).set({ isProvisional: false }).where(eq(users.id, user.id));

@@ -228,6 +228,12 @@ export function logPollIntervalMs(status: string | null): number | null {
 
 /** Statuses whose arrival means the plan-side derived sections have moved. */
 const PLAN_PHASE_STATUSES: ReadonlySet<string> = new Set([
+  "plan_queued",
+  "pre_plan_running",
+  "pre_plan_completed",
+  "planning",
+  "post_plan_running",
+  "post_plan_completed",
   "planned",
   "planned_and_saved",
   "planned_and_finished",
@@ -241,7 +247,10 @@ const PLAN_PHASE_STATUSES: ReadonlySet<string> = new Set([
   "policy_hard_failed",
 ]);
 
-const APPLY_PHASE_STATUSES: ReadonlySet<string> = new Set(["applying", "applied"]);
+const APPLY_PHASE_STATUSES: ReadonlySet<string> = new Set([
+  "confirmed", "apply_queued", "pre_apply_running", "pre_apply_completed",
+  "applying", "post_apply_running", "post_apply_completed", "applied",
+]);
 
 /**
  * Which sections a status transition invalidates. A terminal transition

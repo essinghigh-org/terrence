@@ -1,69 +1,7 @@
-/**
- * One classification of run status into a visual tone, for the whole app.
- *
- * Before this existed, the run page derived colour from inline status arrays in
- * seven places and `StatusBadge` kept an eighth list, and the two vocabularies
- * disagreed: the badge knew `policy_hard_failed` but not `failed`, the page
- * knew `failed` and `unreachable` but not `policy_hard_failed`. Statuses that
- * appeared in neither list — `apply_queued`, `confirmed`, `queuing`,
- * `post_plan_running`, `force_canceled` — fell through to a neutral grey clock,
- * so a force-canceled run and a queued one looked identical.
- *
- * Every status the backend can emit is classified here, exactly once.
- */
+import { isString } from "./type-guards";
+
+/** Shared visual-tone vocabulary for run and phase status. */
 export type RunTone = "neutral" | "active" | "success" | "attention" | "danger";
-
-const TONE_BY_STATUS: Readonly<Record<string, RunTone>> = {
-  // Waiting to start: nothing is happening yet.
-  pending: "neutral",
-  queuing: "neutral",
-  plan_queued: "neutral",
-  apply_queued: "neutral",
-  confirmed: "neutral",
-  fetching_completed: "neutral",
-  pre_plan_completed: "neutral",
-  post_plan_completed: "neutral",
-  cost_estimated: "neutral",
-  policy_checked: "neutral",
-
-  // Work in progress: the run is moving under its own power.
-  fetching: "active",
-  pre_plan_running: "active",
-  planning: "active",
-  cost_estimating: "active",
-  policy_checking: "active",
-  post_plan_running: "active",
-  applying: "active",
-  pre_apply_running: "active",
-  post_apply_running: "active",
-
-  // Finished well.
-  applied: "success",
-  planned_and_finished: "success",
-  planned_and_saved: "success",
-
-  // Finished the plan, waiting on a person.
-  planned: "attention",
-  needs_confirmation: "attention",
-  policy_soft_failed: "attention",
-  policy_override: "attention",
-
-  // Finished badly.
-  errored: "danger",
-  failed: "danger",
-  policy_hard_failed: "danger",
-  unreachable: "danger",
-
-  // Stopped deliberately: a real outcome, but not a failure of the code.
-  canceled: "neutral",
-  force_canceled: "neutral",
-  discarded: "neutral",
-};
-
-export function runTone(status: string | null | undefined): RunTone {
-  if (status === null || status === undefined || status === "") return "neutral";
-  return TONE_BY_STATUS[status] ?? "neutral";
-}
 
 /**
  * Tailwind classes for a tinted surface in each tone. Kept as whole recipes
@@ -116,4 +54,59 @@ const PHASE_LABELS: Readonly<Record<PhaseState, string>> = {
 
 export function formatPhaseState(state: string): string {
   return PHASE_LABELS[state as PhaseState] ?? state.replace(/_/g, " ");
+}
+
+/** The run lifecycle takes precedence over phase snapshots fetched earlier. */
+export function resolvePhaseStatus(
+  status: string,
+  phase: "plan" | "apply",
+  timestamps: Readonly<Record<string, string>>,
+  artifactStatus?: string,
+): string {
+  const planStarted = isString(timestamps["planning-at"]) || isString(timestamps["pre-plan-running-at"]);
+  const planFinished = artifactStatus === "finished" && phase === "plan"
+    || isString(timestamps["planned-at"])
+    || isString(timestamps["planned-and-finished-at"])
+    || isString(timestamps["planned-and-saved-at"]);
+  const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"]
+    .some((key: string): boolean => isString(timestamps[key]));
+  if (phase === "apply") {
+    if (["applied", "post_apply_completed"].includes(status)) return "finished";
+    if (["applying", "post_apply_running"].includes(status)) return "running";
+    if (["confirmed", "apply_queued", "pre_apply_running", "pre_apply_completed"].includes(status)) return "queued";
+    if (artifactStatus === "finished" || isString(timestamps["applied-at"])) return "finished";
+    if (["errored", "failed", "unreachable"].includes(status)) return applyStarted ? "errored" : artifactStatus ?? "pending";
+    if (["canceled", "discarded", "force_canceled"].includes(status)) return applyStarted ? "canceled" : "pending";
+    return artifactStatus ?? "pending";
+  }
+  if (status === "planning") return "running";
+  if (["queuing", "plan_queued", "pre_plan_running", "pre_plan_completed"].includes(status)) return "queued";
+  if ([
+    "planned",
+    "needs_confirmation",
+    "policy_hard_failed",
+    "pre_apply_running",
+    "pre_apply_completed",
+    "post_apply_running",
+    "post_apply_completed",
+    "cost_estimating",
+    "cost_estimated",
+    "policy_checking",
+    "policy_override",
+    "policy_checked",
+    "policy_soft_failed",
+    "post_plan_running",
+    "post_plan_completed",
+    "planned_and_finished",
+    "planned_and_saved",
+    "confirmed",
+    "apply_queued",
+    "applying",
+    "applied",
+  ].includes(status)) return "finished";
+  if (["errored", "failed", "unreachable"].includes(status)) return planFinished ? "finished" : "errored";
+  if (["canceled", "discarded", "force_canceled"].includes(status)) {
+    return planFinished ? "finished" : planStarted ? "canceled" : "pending";
+  }
+  return artifactStatus ?? "pending";
 }

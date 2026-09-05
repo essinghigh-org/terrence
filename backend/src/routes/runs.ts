@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { createHash } from "node:crypto";
 import { exists } from "node:fs/promises";
 import { join } from "node:path";
@@ -375,7 +376,7 @@ async function createRunComment(input: Readonly<{
   workspaceId: string;
   orgId: string;
 }>): Promise<Readonly<{ id: string; createdAt: number }>> {
-  const id = `rc-${crypto.randomUUID()}`;
+  const id = newResourceId("rc");
   const createdAt = Date.now();
   await db.insert(runComments).values({ id, runId: input.runId, userId: input.userId, body: input.body, createdAt });
   publish("comment.created", {
@@ -1696,7 +1697,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     // update, and the audit record would leave a planned run without its
     // required justification on a mid-flight failure, and a retry would find
     // nothing left to override. Events publish only after commit.
-    const commentId = `rc-${crypto.randomUUID()}`;
+    const commentId = newResourceId("rc");
     const actorId = user?.id ?? null;
     const workspace = authorized.workspace;
     const now = Date.now();

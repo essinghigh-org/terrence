@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { oidcConfigs, organizations, type users } from "../db/schema";
@@ -50,7 +51,7 @@ export const oidcConfigRoutes = new Elysia({ name: "oidc-configs" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "OIDC configuration type and attributes are required" }] };
     }
-    const id = `oidc-${crypto.randomUUID()}`;
+    const id = newResourceId("oidc");
     const now = Date.now();
     const row: OidcRow = { id, orgId: org.id, configType: type, config: attributes, createdAt: now, updatedAt: now };
     await db.insert(oidcConfigs).values(row);

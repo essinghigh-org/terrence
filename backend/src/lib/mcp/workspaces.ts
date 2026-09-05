@@ -1,3 +1,4 @@
+import { newResourceId } from "../resource-id";
 import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "../../db";
 import {
@@ -187,7 +188,7 @@ export const workspaceTools: readonly McpTool[] = [
       const projectResult = await resolveWorkspaceProject(args, org.id);
       if ("error" in projectResult) return toolBadRequest(projectResult.error);
       const project = projectResult;
-      const id = `ws-${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+      const id = newResourceId("ws");
       const finalTfVer = options.terraformVersion ?? "latest";
       await db.insert(workspaces).values({
         id, name: options.name, orgId: org.id, description: options.description, projectId: project.id,
@@ -310,7 +311,7 @@ export const workspaceTools: readonly McpTool[] = [
         where: and(eq(workspaceVariables.workspaceId, wsId), eq(workspaceVariables.key, key)),
       });
       if (existing !== undefined) return toolBadRequest(`Variable "${key}" already exists in this workspace`);
-      const id = `wsvar-${crypto.randomUUID()}`;
+      const id = newResourceId("wsvar");
       // Sensitive values are encrypted at rest like the API path (issue
       // #577): plaintext never lands in the value column.
       const stored = await variableValueForWrite(sensitive, value);

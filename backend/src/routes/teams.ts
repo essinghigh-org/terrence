@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { teams, teamMemberships, teamWorkspaces, organizationMemberships, apiTokens, workspaces, users, scimGroups, scimSettings, teamScimGroupMappings, notificationConfigurations } from "../db/schema";
@@ -343,7 +344,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
     const name = typeof attributes["name"] === "string" ? attributes["name"] : "";
     if (name === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Name is required" }] }; }
-    const id = `team-${crypto.randomUUID()}`;
+    const id = newResourceId("team");
     const rawOrgAccess = attributes["organization-access"] !== undefined && typeof attributes["organization-access"] === "object" && attributes["organization-access"] !== null
       ? attributes["organization-access"] as Record<string, unknown>
       : {};
@@ -364,7 +365,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       const t = tx as typeof db;
       await t.insert(teams).values(newTeam);
       await t.insert(notificationConfigurations).values({
-        id: `nc-${crypto.randomUUID()}`,
+        id: newResourceId("nc"),
         teamId: id,
         workspaceId: null,
         projectId: null,
@@ -522,7 +523,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       for (const userId of userIds) {
         const membership = memberships.get(userId);
         if (membership?.status === "active") {
-          batch.push({ id: `tm-${crypto.randomUUID()}`, teamId, userId, createdAt: Date.now() });
+          batch.push({ id: newResourceId("tm"), teamId, userId, createdAt: Date.now() });
         }
       }
       if (batch.length > 0) await db.insert(teamMemberships).values(batch).onConflictDoNothing();
@@ -567,7 +568,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       for (const memId of memIds) {
         const mem = memberships.get(memId);
         if (mem?.orgId === team.orgId) {
-          batch.push({ id: `tm-${crypto.randomUUID()}`, teamId, userId: mem.userId, createdAt: Date.now() });
+          batch.push({ id: newResourceId("tm"), teamId, userId: mem.userId, createdAt: Date.now() });
         }
       }
       if (batch.length > 0) await db.insert(teamMemberships).values(batch).onConflictDoNothing();
@@ -608,7 +609,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const rawToken = generateAuthenticationToken("team-tok");
-    const id = `tok-${crypto.randomUUID()}`;
+    const id = newResourceId("tok");
     const tokenHash = hashAuthenticationToken(rawToken);
     // The org TTL policy governs the legacy team token too (todo 72-74):
     // a zero-TTL policy forbids rotation, otherwise no expiry is imposed
@@ -655,7 +656,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
     const team = await db.query.teams.findFirst({ where: eq(teams.id, teamId) });
     if (team === undefined || !(await checkOrganizationPermission(team.orgId, user?.id, tokenOrgId, tokenTeamId ?? null, "manage-teams"))) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const secret = generateAuthenticationToken("team");
-    const tokenId = `tok-${crypto.randomUUID()}`;
+    const tokenId = newResourceId("tok");
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attrs = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
@@ -772,7 +773,7 @@ export const teamRoutes = new Elysia({ name: "teams" })
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden", detail: "manage-policy-overrides is required to grant policy overrides" }] };
     }
-    const id = `tw-${crypto.randomUUID()}`;
+    const id = newResourceId("tw");
     await db.insert(teamWorkspaces).values({ id, teamId, workspaceId, access, permissions });
     (set as { status: number }).status = 201;
     return { data: { id, type: "team-workspaces", attributes: { access, permissions: permissions ?? { runs: "write", variables: "write" } }, relationships: { team: { data: { id: teamId, type: "teams" } }, workspace: { data: { id: workspaceId, type: "workspaces" } } } } };

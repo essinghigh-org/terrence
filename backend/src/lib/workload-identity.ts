@@ -1,3 +1,4 @@
+import { newResourceId } from "./resource-id";
 import { createHash, createPublicKey, generateKeyPair, type KeyObject } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -79,7 +80,7 @@ async function generateKeyRow(): Promise<KeyRow> {
   const privatePem = pair.privateKey.export({ format: "pem", type: "pkcs8" }).toString();
   const now = Date.now();
   const row: typeof workloadIdentityKeys.$inferInsert = {
-    id: `wik-${crypto.randomUUID()}`,
+    id: newResourceId("wik"),
     keyId,
     encryptedPrivateKey: await encryptSecret(privatePem),
     publicJwk: jwk,

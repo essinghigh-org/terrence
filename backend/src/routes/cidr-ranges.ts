@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { agentPools, cidrRangeListAgentPools, cidrRangeLists, cidrRanges, organizations, type users } from "../db/schema";
@@ -41,7 +42,7 @@ async function createCidrRange(listId: string, attributes: Record<string, unknow
   if (rawValue === "") return undefined;
   if (!isCidrBlock(rawValue)) return "invalid";
   const range: CidrRangeItem = {
-    id: `cr-${crypto.randomUUID()}`,
+    id: newResourceId("cr"),
     cidrRangeListId: listId,
     value: rawValue,
     description: typeof attributes["description"] === "string" ? attributes["description"] : null,
@@ -123,7 +124,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
     if (name === "") {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "name is required" }] };
     }
-    const id = `crl-${crypto.randomUUID()}`;
+    const id = newResourceId("crl");
     const enforcementScope = typeof attributes["enforcement-scope"] === "string" ? attributes["enforcement-scope"] : "organization";
     if (!enforcementScopes.has(enforcementScope)) {
       (set as { status: number }).status = 422;
@@ -336,7 +337,7 @@ export const cidrRangeRoutes = new Elysia({ name: "cidr-ranges" })
       if (current.enforcementScope !== "selected_agent_pools") return "invalid";
       if (poolIds.length > 0) {
         await tx.insert(cidrRangeListAgentPools).values(poolIds.map((agentPoolId) => ({
-          id: `crlap-${crypto.randomUUID()}`,
+          id: newResourceId("crlap"),
           cidrRangeListId: list.id,
           agentPoolId,
         }))).onConflictDoNothing();

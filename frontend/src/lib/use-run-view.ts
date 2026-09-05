@@ -131,14 +131,14 @@ export function useRunView(runId: string): RunView {
   const controllerRunIdRef = useRef<string>("");
   const statusRef = useRef<string | null>(null);
 
-  const loadRun = useCallback(async (signal: Readonly<AbortSignal>): Promise<void> => {
+  const loadRun = useCallback(async (signal: Readonly<AbortSignal>): Promise<string | null> => {
     const seq = claim();
     try {
       const response = await fetchApi<{ data: RunResource; included?: unknown }>(
         `/api/v2/runs/${runId}`,
         { signal },
       );
-      if (signal.aborted || !isCurrent("run", seq)) return;
+      if (signal.aborted || !isCurrent("run", seq)) return null;
       const creator = resolveCreator(response.data, response.included);
       dispatch({
         type: "run-loaded",
@@ -146,16 +146,18 @@ export function useRunView(runId: string): RunView {
         creatorUsername: creator.username,
         creatorAvatarUrl: creator.avatarUrl,
       });
+      return response.data.attributes.status;
     } catch (error: unknown) {
-      if (signal.aborted || !isCurrent("run", seq)) return;
+      if (signal.aborted || !isCurrent("run", seq)) return null;
       if (error instanceof ApiError && error.status === 404) {
         dispatch({ type: "run-missing" });
-        return;
+        return null;
       }
       dispatch({
         type: "run-failed",
         message: error instanceof Error ? error.message : "Could not load run",
       });
+      return null;
     }
   }, [runId, claim, isCurrent]);
 
@@ -220,13 +222,20 @@ export function useRunView(runId: string): RunView {
       for (;;) {
         if (signal.aborted) break;
         const wantRun = pendingRunRef.current;
-        const kinds = [...pendingKindsRef.current];
+        let kinds = [...pendingKindsRef.current];
         if (!wantRun && kinds.length === 0) break;
         pendingRunRef.current = false;
         pendingKindsRef.current = new Set();
         // The run row first: sections are interpreted relative to its status,
         // and reading it last would describe old sections with a new status.
-        if (wantRun) await loadRun(signal);
+        if (wantRun) {
+          const loadedStatus = await loadRun(signal);
+          // A fallback refresh may discover a transition newer than its SSE
+          // event or timer. Refresh the phases for the status we actually read.
+          if (loadedStatus !== null) {
+            kinds = [...new Set([...kinds, ...auxKindsForStatus(loadedStatus)])];
+          }
+        }
         await loadSections(kinds, signal);
       }
     } finally {

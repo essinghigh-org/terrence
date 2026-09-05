@@ -1,9 +1,10 @@
+import { newResourceId } from "../lib/resource-id";
 import { localSignupEnabled } from "../lib/settings";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { users, apiTokens, refreshSessions, organizationMemberships, organizations, samlSettings, teams, user2FA } from "../db/schema";
 import { and, count, eq, gt, inArray, isNull, lt, ne, or } from "drizzle-orm";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import { userResource } from "../lib/response";
 import { isUniqueConstraintError } from "../lib/validation";
 import { envEnabled } from "../lib/env";
@@ -13,7 +14,7 @@ import { authPlugin } from "../auth";
 import { lockFirstUserElection } from "../db/first-user";
 import { generateTotpSecret, matchingTotpCounter, otpauthUrl } from "../lib/totp";
 import { encryptSecret, decryptSecret, isEncryptedSecret } from "../lib/secrets";
-import { generateAuthenticationToken, hashAuthenticationToken, tokenHashCandidates } from "../lib/token-service";
+import { generateAuthenticationToken, hashAuthenticationToken, opaqueToken, tokenHashCandidates } from "../lib/token-service";
 
 import { issueMfaChallenge, consumeMfaChallenge } from "../lib/mfa-challenge";
 import { withDbLock } from "../lib/db-lock";
@@ -103,10 +104,6 @@ type AuthReqCtx = Readonly<{
   body?: unknown;
   set: SetObj;
 }>;
-
-export function opaqueToken(prefix: string): string {
-  return `${prefix}-${randomBytes(32).toString("base64url")}`;
-}
 
 export function tokenHash(token: string): string {
   return hashAuthenticationToken(token);
@@ -527,8 +524,8 @@ export const accountRoutes = new Elysia({ name: "accounts" })
       return { status: "error", error: setupPolicy.errors.join(" ") };
     }
 
-    const userId = `user-${crypto.randomUUID()}`;
-    const organizationId = `org-${crypto.randomUUID()}`;
+    const userId = newResourceId("user");
+    const organizationId = newResourceId("org");
     const configuredOrganizationName = (process.env["ADMIN_ORGANIZATION"] ?? "default").trim();
     const organizationName = configuredOrganizationName === "" ? "default" : configuredOrganizationName;
     const token = generateAuthenticationToken("user");
@@ -559,7 +556,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
         });
       }
       await t.insert(organizationMemberships).values({
-        id: `oum-${crypto.randomUUID()}`,
+        id: newResourceId("orgmem"),
         userId,
         orgId: targetOrganizationId,
         role: "owner",
@@ -1033,7 +1030,7 @@ export const accountRoutes = new Elysia({ name: "accounts" })
     // Hash before the lookup so duplicate and new registrations do not expose
     // username existence through a cheap-vs-expensive timing difference.
     const passwordHash = await hashPassword(password);
-    const id = crypto.randomUUID();
+    const id = newResourceId("user");
     const normalizedEmail = emailStr;
     const existing = await db.query.users.findFirst({
       where: or(eq(users.username, username), eq(users.email, normalizedEmail)),

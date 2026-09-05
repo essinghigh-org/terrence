@@ -1,4 +1,5 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { newResourceId } from "./resource-id";
+import { randomBytes } from "node:crypto";
 import { hashAuthenticationToken } from "./token-service";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
@@ -19,7 +20,7 @@ export async function createSystemApiToken(
   if (!Number.isFinite(ttlHours) || ttlHours <= 0 || ttlHours > 8760) throw new Error("ttl must be between 1 and 8760 hours");
   const token = `tfe-system-${randomBytes(32).toString("base64url")}`;
   const values = {
-    id: `system-token-${randomUUID()}`,
+    id: newResourceId("system-token"),
     tokenHash: hashSystemApiToken(token),
     description: normalizedDescription,
     expiresAt: Date.now() + Math.floor(ttlHours * 60 * 60 * 1000),

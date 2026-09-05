@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { actionInvocations, actions, organizationMemberships, runs, stacks, workspaces } from "../db/schema";
@@ -128,7 +129,7 @@ export const actionsRoutes = new Elysia({ name: "actions" })
     const actionType = typeof attrs["action-type"] === "string" ? String(attrs["action-type"]) : "custom";
     const description = typeof attrs["description"] === "string" ? attrs["description"] : null;
     const configuration = attrs["configuration"] !== null && typeof attrs["configuration"] === "object" ? (attrs["configuration"] as Record<string, unknown>) : {};
-    const id = `action-${crypto.randomUUID()}`;
+    const id = newResourceId("action");
     const now = Date.now();
     await db.insert(actions).values({ id, orgId: org.id, name, description, actionType, status: "active", configuration, createdAt: now, updatedAt: now });
     const row = await db.query.actions.findFirst({ where: eq(actions.id, id) });
@@ -194,7 +195,7 @@ export const actionsRoutes = new Elysia({ name: "actions" })
         return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "stack not found" }] };
       }
     }
-    const id = `actinv-${crypto.randomUUID()}`;
+    const id = newResourceId("actinv");
     const now = Date.now();
     const output = attrs["output"] !== null && typeof attrs["output"] === "object" ? (attrs["output"] as Record<string, unknown>) : null;
     await db.insert(actionInvocations).values({

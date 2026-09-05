@@ -1,3 +1,4 @@
+import { newResourceId } from "../resource-id";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db";
 import { agentPools, runs, runComments } from "../../db/schema";
@@ -47,7 +48,7 @@ async function selectApplyAgentPool(authorized: AuthorizedRun): Promise<AgentPoo
 
 async function addRunComment(runId: string, comment: unknown, userId: string | null): Promise<void> {
   if (typeof comment === "string" && comment.trim() !== "") {
-    await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId, body: comment.trim(), createdAt: Date.now() });
+    await db.insert(runComments).values({ id: newResourceId("rc"), runId, userId, body: comment.trim(), createdAt: Date.now() });
   }
 }
 
@@ -273,7 +274,7 @@ export const runTools: readonly McpTool[] = [
       )).returning();
       if (updated.length === 0) return toolBadRequest("Run is not discardable");
       if (typeof args["comment"] === "string" && args["comment"].trim() !== "") {
-        await db.insert(runComments).values({ id: `rc-${crypto.randomUUID()}`, runId, userId: session.userId ?? null, body: args["comment"].trim(), createdAt: Date.now() });
+        await db.insert(runComments).values({ id: newResourceId("rc"), runId, userId: session.userId ?? null, body: args["comment"].trim(), createdAt: Date.now() });
       }
       await auditLog("discard", "runs", runId, session.userId ?? null, authorized.workspace.orgId, {
         workspaceId: authorized.workspace.id,

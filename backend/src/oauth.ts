@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import { and, eq, isNull, or } from "drizzle-orm";
 import { db } from "./db";
 import { apiTokens, user2FA, users } from "./db/schema";
-import { hashAuthenticationToken } from "./lib/token-service";
+import { generateAuthenticationToken, hashAuthenticationToken } from "./lib/token-service";
 import { peekOAuthHandshakeState, putOAuthHandshakeState, takeOAuthHandshakeState } from "./lib/oauth-handshake";
 import { browserSessionDetails, isUserLoginBlocked } from "./routes/accounts";
 import { secureRequest } from "./lib/secure-request";
@@ -338,7 +338,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
       return oauthError(set, "invalid_grant");
     }
 
-    const accessToken = `user-${crypto.randomUUID()}`;
+    const accessToken = generateAuthenticationToken("user");
     const cliTokenTtlMs = Number(process.env["CLI_TOKEN_TTL_MS"]);
     const defaultTtl = 30 * 24 * 60 * 60 * 1000;
     const expiresAt = Date.now() + (Number.isFinite(cliTokenTtlMs) && cliTokenTtlMs > 0 ? cliTokenTtlMs : defaultTtl);

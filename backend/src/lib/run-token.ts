@@ -1,4 +1,5 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { newResourceId } from "./resource-id";
+import { randomBytes } from "node:crypto";
 import { hashAuthenticationToken } from "./token-service";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -25,7 +26,7 @@ export async function mintRunToken(
   const token = `trun_${randomBytes(32).toString("base64url")}`;
   const now = Date.now();
   await db.insert(runTokens).values({
-    id: `rtok-${randomUUID()}`,
+    id: newResourceId("rtok"),
     tokenHash: hashRunToken(token),
     runId,
     workspaceId,

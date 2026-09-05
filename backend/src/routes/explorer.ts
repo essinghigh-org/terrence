@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import {
@@ -639,7 +640,7 @@ function explorerBulkActionRecordValues(
   now: number,
 ): ExplorerBulkActionRecord {
   return {
-    id: `ebar-${crypto.randomUUID()}`,
+    id: newResourceId("ebar"),
     workspaceId,
     subject,
     message,
@@ -859,7 +860,7 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
     if (name.length > 255) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "Name too long"); }
     const query = queryObject(data?.["query"], data?.["query_type"] ?? data?.["query-type"]);
     if (name === "" || query === undefined) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "name, query_type, and query are required"); }
-    const saved: typeof explorerSavedQueries.$inferInsert = { id: `sq-${crypto.randomUUID()}`, orgId: org.id, name, queryType: query.type, query: { type: query.type, filter: query.filter, fields: query.fields, sort: query.sort }, createdAt: Date.now() };
+    const saved: typeof explorerSavedQueries.$inferInsert = { id: newResourceId("sq"), orgId: org.id, name, queryType: query.type, query: { type: query.type, filter: query.filter, fields: query.fields, sort: query.sort }, createdAt: Date.now() };
     await db.insert(explorerSavedQueries).values(saved);
     (set as { status: number }).status = 201;
     return { data: savedQueryResource(saved as typeof explorerSavedQueries.$inferSelect) };

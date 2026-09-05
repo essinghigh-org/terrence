@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { organizations, providerSets, type users } from "../db/schema";
@@ -74,7 +75,7 @@ export const providerSetRoutes = new Elysia({ name: "provider-sets" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "name and provider-source are required" }] };
     }
-    const id = `pset-${crypto.randomUUID()}`;
+    const id = newResourceId("pset");
     const row: ProviderSetRow = {
       id,
       orgId: org.id,

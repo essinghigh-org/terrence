@@ -1,3 +1,4 @@
+import { newResourceId } from "../resource-id";
 // In-app SQLite → PostgreSQL migration wizard.
 //
 // Owns the full crash-safe migration flow:
@@ -544,7 +545,7 @@ export function startMigration(url: string): WizardState {
     throw new WizardError("A different target was used by the previous attempt. Abort it first, or reuse the same connection URL.");
   }
   const state: WizardState = saveWizardState({
-    id: existing?.id ?? `mig-${crypto.randomUUID()}`,
+    id: existing?.id ?? newResourceId("mig"),
     phase: "draining",
     createdAt: existing?.createdAt ?? new Date().toISOString(),
     updatedAt: new Date().toISOString(),

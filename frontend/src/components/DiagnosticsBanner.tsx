@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { AlertTriangle, XCircle } from "lucide-react";
+import { AlertTriangle, ChevronRight, XCircle } from "lucide-react";
 import type { TerraformDiagnostic, TerraformDiagnosticSeverity } from "../lib/diagnostics";
 
 const SEVERITY_STYLES = {
@@ -33,7 +33,7 @@ export function DiagnosticsBanner(props: Readonly<{
   collapsible?: boolean;
   defaultOpen?: boolean;
 }>): React.JSX.Element | null {
-  const { severity, diagnostics, collapsible = false, defaultOpen = false } = props;
+  const { severity, diagnostics, collapsible = false, defaultOpen = true } = props;
   const headingId = useId();
   if (diagnostics.length === 0) return null;
   const styles = SEVERITY_STYLES[severity];
@@ -41,8 +41,9 @@ export function DiagnosticsBanner(props: Readonly<{
 
   if (collapsible) {
     return (
-      <details className="border-t border-border group" open={defaultOpen ? true : undefined}>
-        <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+      <details className="border-t border-border group/diagnostics" open={defaultOpen ? true : undefined}>
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+          <ChevronRight className="size-3.5 text-muted-foreground group-open/diagnostics:rotate-90" aria-hidden="true" />
           <div className="flex items-center gap-2">
             <Icon className={`size-4 ${styles.text}`} aria-hidden="true" />
             <span>
@@ -50,19 +51,18 @@ export function DiagnosticsBanner(props: Readonly<{
               <span className="font-normal text-muted-foreground">({diagnostics.length})</span>
             </span>
           </div>
-          <span className="text-xs text-muted-foreground group-open:hidden">Click to expand</span>
         </summary>
-        <div className={`border-t ${styles.section} px-5 py-4`}>
-          <ul className="space-y-3">
+        <div className="border-t border-border px-4 py-2">
+          <ul className="space-y-2">
             {diagnostics.map((diagnostic, index): React.JSX.Element => (
               <li
                 key={`${diagnostic.severity}-${diagnostic.title}-${index}`}
-                className="overflow-hidden rounded-md border border-border bg-background p-3"
+                className={`min-w-0 rounded-sm border px-3 py-2 ${styles.section}`}
               >
-                <p className={`text-sm font-medium ${styles.text}`}>{diagnostic.title}</p>
+                <p className={`break-words text-sm font-medium ${styles.text}`}>{diagnostic.title}</p>
                 {diagnostic.body !== "" && (
-                  <pre className="mt-2 overflow-auto whitespace-pre-wrap font-mono text-xs leading-5 text-foreground/85">
-                    {diagnostic.body}
+                  <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-xs leading-4 text-foreground/85">
+                    {diagnostic.body.trim().replace(/\n(?:[ \t]*\n)+/g, "\n")}
                   </pre>
                 )}
               </li>
@@ -74,21 +74,21 @@ export function DiagnosticsBanner(props: Readonly<{
   }
 
   return (
-    <section aria-labelledby={headingId} className={`border-t ${styles.section} px-5 py-4`}>
+    <section aria-labelledby={headingId} className="border-t border-border px-4 py-2">
       <h4 id={headingId} className={`flex items-center gap-2 text-sm font-semibold ${styles.text}`}>
         <Icon className="size-4" aria-hidden="true" />
         {styles.label}
       </h4>
-      <ul className="mt-3 space-y-3">
+      <ul className="mt-2 space-y-2">
         {diagnostics.map((diagnostic, index): React.JSX.Element => (
           <li
             key={`${diagnostic.severity}-${diagnostic.title}-${index}`}
-            className="overflow-hidden rounded-md border border-border bg-background p-3"
+            className={`min-w-0 rounded-sm border px-3 py-2 ${styles.section}`}
           >
-            <p className={`text-sm font-medium ${styles.text}`}>{diagnostic.title}</p>
+            <p className={`break-words text-sm font-medium ${styles.text}`}>{diagnostic.title}</p>
             {diagnostic.body !== "" && (
-              <pre className="mt-2 overflow-auto whitespace-pre-wrap font-mono text-xs leading-5 text-foreground/85">
-                {diagnostic.body}
+              <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-xs leading-4 text-foreground/85">
+                {diagnostic.body.trim().replace(/\n(?:[ \t]*\n)+/g, "\n")}
               </pre>
             )}
           </li>

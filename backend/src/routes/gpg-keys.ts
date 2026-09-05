@@ -1,3 +1,4 @@
+import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { and, desc, eq, inArray, count} from "drizzle-orm";
 import { authPlugin } from "../auth";
@@ -194,7 +195,7 @@ export const gpgKeyRoutes = new Elysia({ name: "registry-gpg-keys" })
     }
     const now = Date.now();
     const key = {
-      id: `gpg-${crypto.randomUUID()}`,
+      id: newResourceId("gpg"),
       orgId: org.id,
       namespace: input.namespace,
       keyId: inspected.keyId,
