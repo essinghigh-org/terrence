@@ -7,7 +7,8 @@ import { envEnabled } from "./lib/env";
 import { authPlugin, authenticatedRateLimitKey } from "./auth";
 import { distributedFixedWindowContext } from "./lib/distributed-rate-limit";
 import { isPostgres } from "./db/driver";
-import { trustedClientIpForPeer } from "./lib/client-ip";
+import { trustedClientIpForPeer, socketPeerAddress } from "./lib/client-ip";
+import { recordRequestPeer } from "./lib/utils";
 import { oauthPlugin } from "./oauth";
 import { applyLoggingSettings, log } from "./lib/log";
 import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
@@ -154,6 +155,7 @@ type SetObject = Readonly<{ status?: number | string; headers: Readonly<Record<s
 
 type RequestContext = Readonly<{
   request: CustomRequest;
+  server: RateLimitServer | null;
   set: SetObject;
 }>;
 
@@ -628,7 +630,7 @@ export const app = new Elysia()
     },
   }))
   .use(oauthPlugin)
-  .onRequest(({ request, set }: RequestContext): Record<string, unknown> | undefined => {
+  .onRequest(({ request, server, set }: RequestContext): Record<string, unknown> | undefined => {
     const url = new URL(request.url);
     const pathname = url.pathname;
     const method = request.method;
@@ -636,6 +638,9 @@ export const app = new Elysia()
     const suppliedId = request.headers.get("x-request-id") ?? request.headers.get("x-correlation-id");
     const correlationId = suppliedId !== null && CORRELATION_ID_PATTERN.test(suppliedId) ? suppliedId : crypto.randomUUID();
     requestMeta.set(request as unknown as Request, { startTime: Date.now(), method, path: pathname, correlationId });
+    // Issue #648: remember the socket peer so generated links only honor
+    // X-Forwarded-Host/Proto from a configured trusted proxy.
+    recordRequestPeer(request as unknown as object, socketPeerAddress(request, server));
     (set.headers as Record<string, string | number>)["X-Request-Id"] = correlationId;
     requestStarted();
 

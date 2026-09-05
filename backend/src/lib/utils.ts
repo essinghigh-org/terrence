@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { recordFailure } from "./process-metrics";
+import { isTrustedProxyPeer } from "./client-ip";
 import { log } from "./log";
 import { isDiskFullError, markStorageDegraded } from "./storage-health";
 import { jsonExtract } from "./db-json";
@@ -1424,25 +1425,63 @@ export function sensitiveIdentifierHash(value: string): string {
 }
 
 /**
- * Outward-facing base URL for generated links (issue #576). PUBLIC_URL is
- * authoritative when set. Otherwise derive from reverse-proxy headers when
- * present (standard homelab proxies preserve Host or set
- * X-Forwarded-Host/Proto), falling back to the connection address. The
- * header path is best-effort: proxy deployments should set PUBLIC_URL.
+ * Outward-facing base URL for generated links (issues #576, #648).
+ * PUBLIC_URL is authoritative when set. Otherwise derive from headers with
+ * peer-gated trust: X-Forwarded-Host/Proto are honored only when the socket
+ * peer is a configured trusted proxy (TERRENCE_TRUSTED_PROXY_CIDRS or the
+ * `trusted-client-ip-cidrs` general setting); a plain Host header covers
+ * direct connections, with the scheme taken from the connection URL.
+ * Anything else falls back to the connection origin. Proxy deployments
+ * should set PUBLIC_URL.
  */
 type HeaderCarrier = Readonly<{
   readonly url: string;
   readonly headers?: Readonly<{ get(name: string): string | null }>;
+  /** Socket peer address when the caller knows it; else the recorded map. */
+  readonly peerAddress?: string | null;
 }>;
+
+/** Socket peers recorded per request by the app onRequest hook (issue #648). */
+const requestPeerByRequest = new WeakMap<object, string | null>();
+
+/** Record the socket peer for later base-URL trust decisions. */
+export function recordRequestPeer(request: object, peer: string | null): void {
+  requestPeerByRequest.set(request, peer);
+}
+
+function requestPeer(request: HeaderCarrier): string | null {
+  if (request.peerAddress !== undefined) return request.peerAddress;
+  return requestPeerByRequest.get(request) ?? null;
+}
 
 function proxyBaseUrl(request: HeaderCarrier): string | null {
   const headers = request.headers;
   if (headers === undefined) return null;
-  const host = headers.get("x-forwarded-host") ?? headers.get("host");
+  const forwardedHost = headers.get("x-forwarded-host");
+  if (forwardedHost !== null && forwardedHost !== "") {
+    // Forwarded host is proxy-claimed: trust it only from a configured proxy.
+    if (!isTrustedProxyPeer(requestPeer(request))) return null;
+    const proto = headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ?? "http";
+    if (!/^[A-Za-z0-9._~-]+(?::\d+)?$/.test(forwardedHost)) return null;
+    if (proto !== "http" && proto !== "https") return null;
+    return `${proto}://${forwardedHost}`;
+  }
+  const host = headers.get("host");
   if (host === null || host === "") return null;
-  const proto = headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ?? "http";
   if (!/^[A-Za-z0-9._~-]+(?::\d+)?$/.test(host)) return null;
-  if (proto !== "http" && proto !== "https") return null;
+  let proto = "http";
+  try {
+    const scheme = new URL(request.url).protocol;
+    if (scheme === "http:" || scheme === "https:") proto = scheme.slice(0, -1);
+  } catch {
+    // Keep the http default when the URL is not parseable.
+  }
+  // A trusted proxy that preserves Host still gets its scheme honored; an
+  // untrusted or malformed proto never overrides the connection scheme.
+  const forwardedProto = headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ?? "";
+  if ((forwardedProto === "http" || forwardedProto === "https") && isTrustedProxyPeer(requestPeer(request))) {
+    proto = forwardedProto;
+  }
   return `${proto}://${host}`;
 }
 
