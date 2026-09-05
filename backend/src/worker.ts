@@ -1298,6 +1298,24 @@ export function buildSanitizedEnv(
   return env;
 }
 
+/** One environment recipe for both phases (issues #607, #608): workspace
+ * variables, then run-scoped variables with identical category routing (env
+ * keys verbatim, sensitive terraform as TF_VAR_, non-sensitive terraform via
+ * the tfvars files, never -var flags), then the phase-specific identity
+ * environment the caller resolved. Sharing the recipe keeps plan and apply
+ * from drifting apart again. */
+export function buildRunPhaseEnv(
+  workspaceVars: readonly { readonly key: string; readonly value: string; readonly category: string; readonly sensitive?: boolean }[],
+  runVariables: unknown,
+  phaseEnv: Readonly<Record<string, string>>,
+): Record<string, string> {
+  return {
+    ...buildSanitizedEnv(workspaceVars),
+    ...buildSanitizedEnv(normalizeRunVariables(runVariables)),
+    ...phaseEnv,
+  };
+}
+
 type ExecutionVariable = {
   key: string;
   value: string;
@@ -2089,7 +2107,7 @@ async function executeRunImpl(runId: string): Promise<void> {
     );
 
     const runVars = normalizeRunVariables(run.variables);
-    const envVars = { ...buildSanitizedEnv(vars), ...buildSanitizedEnv(runVars), ...(await runTerraformEnv(run.id, workspace, "plan", vars)) };
+    const envVars = buildRunPhaseEnv(vars, run.variables, await runTerraformEnv(run.id, workspace, "plan", vars));
     if (run.debuggingMode) envVars["TF_LOG"] = "TRACE";
     const tfVarsLines = vars
       .filter((variable: { readonly category: string }): boolean => variable.category === "terraform")
@@ -2808,7 +2826,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
       // Run-scoped variables ride the apply environment exactly like the
       // plan environment (issue #577): provider credentials injected at
       // plan time must still be present at apply time.
-      const envVars = { ...buildSanitizedEnv(vars), ...buildSanitizedEnv(normalizeRunVariables(run.variables)), ...(await runTerraformEnv(run.id, workspace, "apply", vars)) };
+      const envVars = buildRunPhaseEnv(vars, run.variables, await runTerraformEnv(run.id, workspace, "apply", vars));
       if (run.debuggingMode) envVars["TF_LOG"] = "TRACE";
       const applyTimeoutMs = await executionTimeoutMs("apply");
 
