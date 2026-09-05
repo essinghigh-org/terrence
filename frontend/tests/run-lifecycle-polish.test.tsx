@@ -6,6 +6,7 @@ import { RunList } from "../src/views/RunList";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
+import { anyPhaseLog, handlePhaseLogs } from "./support/run-log-fixture";
 
 const originalFetch = globalThis.fetch;
 const originalClipboard = navigator.clipboard;
@@ -93,15 +94,12 @@ test("separates phase logs and only renders backend-authorized run actions", asy
         },
       });
     }
-    if (url === "/api/v2/runs/run-polished/logs") {
-      return json({
-        data: [
-          { attributes: { phase: "plan", "output-text": "PLAN_PHASE_ONLY" } },
-          { attributes: { phase: "plan", "output-text": "PLAN_PHASE_SECOND" } },
-          { attributes: { phase: "apply", "output-text": "APPLY_PHASE_ONLY" } },
-          { attributes: { phase: "apply", "output-text": "APPLY_PHASE_SECOND" } },
-        ],
+    {
+      const phaseLog = handlePhaseLogs(url, "run-polished", {
+        plan: "PLAN_PHASE_ONLY\nPLAN_PHASE_SECOND",
+        apply: "APPLY_PHASE_ONLY\nAPPLY_PHASE_SECOND",
       });
+      if (phaseLog !== null) return phaseLog;
     }
     if (url === "/api/v2/runs/run-polished/plan") {
       return json({
@@ -198,6 +196,10 @@ test("separates phase logs and only renders backend-authorized run actions", asy
       });
     }
     if (url.endsWith("/policy-checks")) return json({ data: [] });
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
@@ -221,8 +223,10 @@ test("separates phase logs and only renders backend-authorized run actions", asy
     expect(view.getByText("aws_instance.web", { selector: "code" })).toBeTruthy();
   });
 
-  const planSection = view.getByRole("heading", { name: "Plan finished" }).closest("details");
-  const applySection = view.getByRole("heading", { name: "Apply needs confirmation" }).closest("details");
+  // Query by the id the <details> points its aria-labelledby at: the decision
+  // panel's own heading can also begin with "Apply".
+  const planSection = view.container.querySelector("#plan-heading")?.closest("details") ?? null;
+  const applySection = view.container.querySelector("#apply-heading")?.closest("details") ?? null;
   expect(planSection).not.toBeNull();
   expect(applySection).not.toBeNull();
   // SAFETY: closest("details") above resolved the details elements for the headings.
@@ -250,7 +254,9 @@ test("separates phase logs and only renders backend-authorized run actions", asy
   expect(view.getByText("Plan & apply duration")).toBeTruthy();
   expect(view.getByText("Less than a minute")).toBeTruthy();
   expect(view.getByText("Resources changed", { selector: "dt" })).toBeTruthy();
-  expect(view.getByRole("heading", { name: "Please review the planned changes before continuing" }))
+  // One decision surface, stating what the run wants rather than four
+  // separately-derived claims about it.
+  expect(view.getByRole("heading", { name: "This run is waiting for you to apply it" }))
     .toBeTruthy();
 // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(planSection as HTMLElement).queryByText("&2 to import")).toBeNull();
@@ -259,7 +265,7 @@ test("separates phase logs and only renders backend-authorized run actions", asy
     expect(view.getByText("Actions", { selector: "dt" }).closest("div")?.textContent).toContain("2 to invoke");
   });
 
-  expect(view.getByRole("button", { name: "Review & apply" })).toBeTruthy();
+  expect(view.getByRole("button", { name: "Apply changes" })).toBeTruthy();
   expect(view.getByRole("link", { name: "New run" }).getAttribute("href"))
     .toBe("/app/acme/workspaces/production/runs?new-run=true");
   expect(view.getAllByRole("navigation", { name: "Breadcrumb" })).toHaveLength(1);
@@ -284,17 +290,19 @@ test("separates phase logs and only renders backend-authorized run actions", asy
 // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(commentsSection as HTMLElement).getByText("Approved for production")).toBeTruthy();
 
-  fireEvent.click(view.getByRole("button", { name: "Review & apply" }));
-  expect(view.getByRole("heading", { name: "Confirm apply" })).toBeTruthy();
+  fireEvent.click(view.getByRole("button", { name: "Apply changes" }));
+  expect(view.getByRole("heading", { name: "Apply these changes?" })).toBeTruthy();
 // SAFETY: the component renders this element type for the queried role/label.
-  const actionComment = view.getByLabelText("Optional comment") as HTMLTextAreaElement;
-  fireEvent.input(actionComment, {
+  const actionComment = view.getByLabelText(/^Comment/) as HTMLTextAreaElement;
+  fireEvent.change(actionComment, {
     target: { value: "Approved after reviewing the dependency graph" },
   });
   expect(actionComment.value).toBe("Approved after reviewing the dependency graph");
-  fireEvent.click(view.getByRole("button", { name: "Confirm & apply" }));
+  // The committal button does not share its name with the offer that opened
+  // it, so the two steps are distinguishable by label alone.
+  fireEvent.click(view.getByRole("button", { name: "Yes, apply changes" }));
   await waitFor((): void => {
-    expect(view.getByRole("heading", { name: "Apply finished" })).toBeTruthy();
+    expect(view.container.querySelector("#apply-heading")?.textContent ?? "").toContain("Finished");
   });
   expect(applyBody).toMatchObject({
     data: { attributes: { comment: "Approved after reviewing the dependency graph" } },
@@ -314,6 +322,10 @@ test("opens a requested run dialog, sends the selected run type, and navigates t
 // SAFETY: the request body was JSON.stringify'd by the caller before fetch.
       createBody = JSON.parse(init.body) as unknown;
       return json({ data: { id: "run-plan-only" } }, 201);
+    }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
   });
@@ -383,6 +395,10 @@ test("clones an existing run's settings into the new-run dialog", async () => {
       createBody = JSON.parse(init.body) as unknown;
       return json({ data: { id: "run-cloned" } }, 201);
     }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
@@ -449,6 +465,10 @@ test("closing a deep-linked new-run dialog clears the query", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     if (requestUrl(input) === "/api/v2/workspaces/ws-1/runs" || requestUrl(input) === "/api/v2/workspaces/ws-1/runs?sort=-created-at") return json({ data: [] });
+    {
+      const phaseLogFallback = anyPhaseLog(requestUrl(input));
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${requestUrl(input)}`);
   })) as unknown as typeof fetch;
 
@@ -483,6 +503,10 @@ test("does not offer run creation without workspace permission", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     if (requestUrl(input) === "/api/v2/workspaces/ws-readonly/runs" || requestUrl(input) === "/api/v2/workspaces/ws-readonly/runs?sort=-created-at") return json({ data: [] });
+    {
+      const phaseLogFallback = anyPhaseLog(requestUrl(input));
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${requestUrl(input)}`);
   })) as unknown as typeof fetch;
 
@@ -536,6 +560,10 @@ test("omits stages that cannot run for a finished plan-only run", async () => {
       return json({ data: [] });
     }
     if (url.endsWith("/cost-estimate")) return json({ data: null });
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   })) as unknown as typeof fetch;
 
@@ -617,6 +645,10 @@ test("opens failed applies and presents their diagnostics", async () => {
       || url.endsWith("/comments")) {
       return json({ data: [] });
     }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   })) as unknown as typeof fetch;
 
@@ -696,6 +728,10 @@ test("clears stale activity immediately when navigating to another run", async (
     if (url.endsWith("/cost-estimate")) return json({ data: null });
     if (url.endsWith("/logs") || url.endsWith("/policy-checks") || url.endsWith("/comments")) {
       return json({ data: [] });
+    }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
   })) as unknown as typeof fetch;

@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
+import { anyPhaseLog } from "./support/run-log-fixture";
 
 // Kanban 25.2: the fullscreen plan/apply log dialog must move focus into the
 // dialog when it opens and hand focus back to the trigger button on close
@@ -114,6 +115,10 @@ function buildFetchMock(
     if (url === "/api/v2/runs/run-focus/comments") return json({ data: [] });
     if (url.endsWith("/policy-checks")) return json({ data: [] });
     if (url.endsWith("/assessments")) return json({ data: [] });
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
 }

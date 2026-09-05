@@ -5,6 +5,7 @@ import { RunDetail } from "../src/views/RunDetail";
 import { RunList } from "../src/views/RunList";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
+import { anyPhaseLog } from "./support/run-log-fixture";
 
 const originalFetch = globalThis.fetch;
 
@@ -12,6 +13,17 @@ function json(data: JsonValue, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/vnd.api+json" },
+  });
+}
+
+/** A whole phase log served over the byte-offset raw log protocol. */
+function rawLog(body: string): Response {
+  return new Response(body, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "X-Terrence-Log-Total-Bytes": String(new TextEncoder().encode(body).byteLength),
+      "X-Terrence-Log-Truncated": "false",
+    },
   });
 }
 
@@ -80,7 +92,8 @@ function baseMock(
     if (url === `/api/v2/runs/${runId}`) return json(run);
     if (url === `/api/v2/runs/${runId}/plan`) return json({ data: { attributes: { status: "finished" } } });
     if (url === `/api/v2/applies/apply-${runId}`) return json({ data: { attributes: { status: "pending" } } });
-    if (url === `/api/v2/runs/${runId}/logs`) return json({ data: [] });
+    if (url.startsWith(`/api/v2/runs/${runId}/plan/log`)) return rawLog("");
+    if (url.startsWith(`/api/v2/runs/${runId}/apply/log`)) return rawLog("");
     if (url.endsWith("/cost-estimate")) return json({ data: null });
     return json({ data: [] });
   };
@@ -114,12 +127,8 @@ test("failed apply keeps the raw log visible beside diagnostics (issue #589)", a
     if (url === "/api/v2/applies/apply-run-failed") {
       return json({ data: { attributes: { status: "errored" } } });
     }
-    if (url === "/api/v2/runs/run-failed/logs") {
-      return json({
-        data: [
-          { attributes: { phase: "apply", "output-text": "Error: Apply failed\n\n  on main.tf line 1:\n  boom\n" } },
-        ],
-      });
+    if (url.startsWith("/api/v2/runs/run-failed/apply/log")) {
+      return rawLog("Error: Apply failed\n\n  on main.tf line 1:\n  boom\n");
     }
     return null;
   }, seen)) as unknown as typeof fetch;
@@ -129,17 +138,37 @@ test("failed apply keeps the raw log visible beside diagnostics (issue #589)", a
   expect(seen).toEqual([]);
 });
 
-test("missing actions explain themselves inline (issue #597)", async () => {
+test("a blocked action names its blocker on the button it blocks (issue #597)", async () => {
   const seen: string[] = [];
   globalThis.fetch = mock(baseMock("run-planned", runFixture({
     id: "run-planned",
-    permissions: { "can-discard": true },
+    actions: { "is-confirmable": true, "is-discardable": true },
+    permissions: { "can-apply": false, "can-discard": true },
   }), () => null, seen)) as unknown as typeof fetch;
 
   const view = renderDetail("run-planned");
-  await waitFor((): void => { expect(view.getByText("Why are actions unavailable?")).toBeTruthy(); });
-  expect(view.getByText(/You do not have permission to cancel runs/).textContent).toBeTruthy();
-  expect(view.getByText(/Only pending, planned, saved/).textContent).toBeTruthy();
+  const apply = await waitFor((): HTMLElement => view.getByRole("button", { name: "Apply changes" }));
+  // Disabled, with the reason on the control rather than in a separate list
+  // that had to restate which action each line referred to.
+  expect(apply.hasAttribute("disabled")).toBe(true);
+  expect(apply.getAttribute("title")).toContain("permission to apply");
+  // The action the user *can* take is still live beside it.
+  expect(view.getByRole("button", { name: "Discard plan" }).hasAttribute("disabled")).toBe(false);
+});
+
+test("actions the run cannot take at all are not rendered as dead buttons", async () => {
+  const seen: string[] = [];
+  globalThis.fetch = mock(baseMock("run-quiet", runFixture({
+    id: "run-quiet",
+    status: "planning",
+    actions: { "is-cancelable": false, "is-force-cancelable": false },
+  }), () => null, seen)) as unknown as typeof fetch;
+
+  const view = renderDetail("run-quiet");
+  await waitFor((): void => { expect(view.getByText("Planning")).toBeTruthy(); });
+  expect(view.queryByRole("button", { name: "Force cancel" })).toBeNull();
+  // And no panel asking the user to review changes that do not exist yet.
+  expect(view.queryByText(/review the planned changes/i)).toBeNull();
 });
 
 test("cancel during apply warns about partial state before firing (issue #604)", async () => {
@@ -158,10 +187,10 @@ test("cancel during apply warns about partial state before firing (issue #604)",
   const view = renderDetail("run-applying");
   await waitFor((): void => { expect(view.getByRole("button", { name: "Cancel run" })).toBeTruthy(); });
   fireEvent.click(view.getByRole("button", { name: "Cancel run" }));
-  await waitFor((): void => { expect(view.getByRole("heading", { name: "Confirm cancel" })).toBeTruthy(); });
+  await waitFor((): void => { expect(view.getByRole("heading", { name: "Cancel this run?" })).toBeTruthy(); });
   expect(view.getByText(/partial state/).textContent).toBeTruthy();
   expect(seen).toEqual([]);
-  fireEvent.click(view.getByRole("button", { name: "Confirm cancel" }));
+  fireEvent.click(view.getByRole("button", { name: "Yes, cancel the run" }));
   await waitFor((): void => { expect(seen).toContain("POST /api/v2/runs/run-applying/actions/cancel"); });
 }, 15000);
 
@@ -178,7 +207,7 @@ test("force cancel and override route through confirmation with copy (issue #610
   const view = renderDetail("run-stuck");
   await waitFor((): void => { expect(view.getByRole("button", { name: "Force cancel" })).toBeTruthy(); });
   fireEvent.click(view.getByRole("button", { name: "Force cancel" }));
-  await waitFor((): void => { expect(view.getByRole("heading", { name: "Confirm force cancel" })).toBeTruthy(); });
+  await waitFor((): void => { expect(view.getByRole("heading", { name: "Force cancel this run?" })).toBeTruthy(); });
   expect(view.getByText(/without waiting for the process to exit/).textContent).toBeTruthy();
   expect(seen).toEqual([]);
 }, 15000);
@@ -210,7 +239,9 @@ test("speculative runs get a badge and a never-applies note (issue #603)", async
 
   const view = renderDetail("run-spec");
   await waitFor((): void => { expect(view.getByText("Speculative")).toBeTruthy(); });
-  expect(view.getByText("Speculative plan: Apply is disabled and this run never applies.")).toBeTruthy();
+  await waitFor((): void => {
+    expect(view.getByRole("heading", { name: /Speculative plan .* never applies/ })).toBeTruthy();
+  });
 });
 
 test("destroy runs from the dialog confirm and pin auto-apply false (issue #586)", async () => {
@@ -224,6 +255,10 @@ test("destroy runs from the dialog confirm and pin auto-apply false (issue #586)
       if (!isString(init.body)) throw new Error("Expected a JSON request body");
       createBody = JSON.parse(init.body) as unknown;
       return json({ data: { id: "run-destroy-new" } }, 201);
+    }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
   }) as unknown as typeof fetch;

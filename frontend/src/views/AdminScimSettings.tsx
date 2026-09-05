@@ -109,7 +109,7 @@ export function AdminScimSettings(): React.JSX.Element {
       <PageHeader
         eyebrow="Site administration"
         title={<span className="flex items-center gap-2"><UserCog className="size-7 text-primary" aria-hidden="true" />SCIM settings</span>}
-        description="Configure automated user and group provisioning for this installation."
+        description="SCIM lets an identity provider create, update and deactivate accounts here automatically. Only useful if you already run one \u2014 otherwise add users directly."
       />
 
       <Card>

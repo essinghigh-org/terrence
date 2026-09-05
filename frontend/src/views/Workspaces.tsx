@@ -758,8 +758,17 @@ export function Workspaces(): React.JSX.Element {
               <TableRow><TableCell colSpan={tableColumnCount} className="p-0"><TableSkeleton rows={4} cols={tableColumnCount} /></TableCell></TableRow>
             ) : loadError !== "" && workspaces.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={tableColumnCount} className="py-12 text-center text-muted-foreground">
-                  Workspace data is unavailable. Use Try again above to retry.
+                <TableCell colSpan={tableColumnCount}>
+                  {/* Pointed at a "Try again" control further up the page that
+                      the user may have scrolled past; offer one here. */}
+                  <EmptyState
+                    compact
+                    headingLevel="h3"
+                    title="Workspace data is unavailable"
+                    description="The list could not be loaded. This is usually a connection problem."
+                    actionLabel="Try again"
+                    onAction={(): void => { void loadData(); }}
+                  />
                 </TableCell>
               </TableRow>
             ) : visibleWorkspaces.length === 0 ? (
@@ -776,7 +785,15 @@ export function Workspaces(): React.JSX.Element {
                         : "No workspaces are available in this organization."}
                     {...(hasFilters
                       ? { actionLabel: "Clear filters", onAction: clearFilters }
-                      : { docsHref: "/app/docs/workspaces" })}
+                      : canManageWorkspaces
+                        // The CTA was missing in exactly the case that needed
+                        // it most: an organization with no workspaces at all.
+                        ? {
+                            actionLabel: "New workspace",
+                            onAction: (): void => { setCreateOpen(true); },
+                            docsHref: "/app/docs/workspaces",
+                          }
+                        : { docsHref: "/app/docs/workspaces" })}
                   />
                 </TableCell>
               </TableRow>
@@ -996,7 +1013,13 @@ export function Workspaces(): React.JSX.Element {
                 </TableRow>
               ))}
               {tagBindings.length === 0 && (
-                <TableRow><TableCell colSpan={3} className="py-8 text-center text-muted-foreground">No direct tags.</TableCell></TableRow>
+                <TableRow>
+                  <TableCell colSpan={3} className="py-6 text-center text-sm text-muted-foreground">
+                    {/* "No direct tags" assumed the reader knew that tags can
+                        also be inherited from a project. Say it instead. */}
+                    No tags set on this workspace itself. Tags from its project, if any, still apply.
+                  </TableCell>
+                </TableRow>
               )}
             </TableBody>
           </Table>

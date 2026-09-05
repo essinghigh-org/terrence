@@ -35,6 +35,10 @@ type ThemeInput = Readonly<{
   readonly ring?: string;
 }>;
 
+const color = (name: string): string => `hsl(var(--${name}))`;
+const shade = (name: string, amount: number): string =>
+  `color-mix(in srgb, ${color(name)} ${amount}%, ${color("code-background")})`;
+
 function createTheme(
   id: string,
   label: string,
@@ -74,6 +78,18 @@ function createTheme(
       ring: input.ring ?? input.primary,
       success: input.success,
       warning: input.warning,
+      // Contrast pairs for the success and warning tints, derived per theme
+      // rather than mixed at call sites. `--success` and `--warning` are
+      // icon-weight colours: amber at 50% lightness fails 4.5:1 as body text
+      // on a pale tint, which is why three separate hand-written amber
+      // banners had grown in the app, each with its own dark-mode override.
+      //
+      // `-foreground` sits on a solid fill of the colour; `-text` sits on a
+      // 10% tint of it over the page background.
+      "success-foreground": mode === "light" ? input.background : input.codeBackground,
+      "warning-foreground": input.codeBackground,
+      "success-text": mode === "light" ? shade("success", 62) : color("success"),
+      "warning-text": mode === "light" ? shade("warning", 52) : color("warning"),
       "code-background": input.codeBackground,
       "code-foreground": input.codeForeground,
     },
@@ -241,98 +257,22 @@ const defaultTheme = ((): ThemeDefinition => {
   return theme;
 })();
 
-const color = (name: string): string => `hsl(var(--${name}))`;
-const tint = (name: string, amount: number): string =>
-  `color-mix(in srgb, ${color(name)} ${amount}%, ${color("background")})`;
-const shade = (name: string, amount: number): string =>
-  `color-mix(in srgb, ${color(name)} ${amount}%, ${color("code-background")})`;
-
-// The older UI uses Tailwind's gray/status palette directly. These aliases keep it
-// in the selected theme until those components are moved to semantic classes.
-//
-// Text-tier status shades (600+) are darkened in light mode so they clear WCAG:
-//   - icons need >= 3:1  (amber-600 / emerald-600)
-//   - small text needs >= 4.5:1 (amber-700+, emerald-700+, green-700+)
-// In dark mode the tokens are already light-on-dark (>= 9:1), so they map to the
-// raw token — no darkening needed.
-const legacyPalette = (mode: "light" | "dark"): Readonly<Record<string, string>> => {
-  const warn = (lightPct: number): string => (mode === "light" ? shade("warning", lightPct) : color("warning"));
-  const succ = (lightPct: number): string => (mode === "light" ? shade("success", lightPct) : color("success"));
-  return {
-  "color-white": color("card"),
-  "color-black": color("code-background"),
-  "color-gray-50": color("background"),
-  "color-gray-100": color("muted"),
-  "color-gray-200": color("border"),
-  "color-gray-300": color("input"),
-  "color-gray-400": color("muted-foreground"),
-  "color-gray-500": color("muted-foreground"),
-  "color-gray-600": color("foreground"),
-  "color-gray-700": color("foreground"),
-  "color-gray-800": color("foreground"),
-  "color-gray-900": color("foreground"),
-  "color-gray-950": color("foreground"),
-  "color-slate-50": color("background"),
-  "color-slate-100": color("code-foreground"),
-  "color-slate-200": color("border"),
-  "color-slate-700": color("foreground"),
-  "color-slate-900": color("code-background"),
-  "color-neutral-100": color("code-foreground"),
-  "color-neutral-300": color("code-foreground"),
-  "color-neutral-500": color("muted-foreground"),
-  "color-neutral-700": color("code-background"),
-  "color-neutral-800": color("code-background"),
-  "color-neutral-900": color("code-background"),
-  "color-neutral-950": color("code-background"),
-  "color-red-50": tint("destructive", 8),
-  "color-red-100": tint("destructive", 14),
-  "color-red-200": tint("destructive", 24),
-  "color-red-300": tint("destructive", 38),
-  "color-red-500": color("destructive"),
-  "color-red-600": color("destructive"),
-  "color-red-700": color("destructive"),
-  "color-red-800": color("destructive"),
-  "color-red-900": color("destructive"),
-  "color-amber-50": tint("warning", 8),
-  "color-amber-200": tint("warning", 24),
-  "color-amber-300": tint("warning", 38),
-  "color-amber-400": color("warning"),
-  "color-amber-500": color("warning"),
-  "color-amber-600": warn(80),
-  "color-amber-700": warn(55),
-  "color-amber-800": warn(45),
-  "color-amber-900": warn(38),
-  "color-amber-950": warn(30),
-  "color-blue-50": tint("primary", 8),
-  "color-blue-100": tint("primary", 14),
-  "color-blue-200": tint("primary", 24),
-  "color-blue-300": tint("primary", 38),
-  "color-blue-400": color("primary"),
-  "color-blue-500": color("primary"),
-  "color-blue-600": color("primary"),
-  "color-blue-700": color("primary"),
-  "color-blue-800": color("primary"),
-  "color-green-50": tint("success", 8),
-  "color-green-200": tint("success", 24),
-  "color-green-600": succ(80),
-  "color-green-700": succ(68),
-  "color-green-800": succ(58),
-  "color-emerald-50": tint("success", 8),
-  "color-emerald-100": tint("success", 14),
-  "color-emerald-300": tint("success", 38),
-  "color-emerald-400": color("success"),
-  "color-emerald-500": color("success"),
-  "color-emerald-600": succ(80),
-  "color-emerald-700": succ(66),
-  "color-emerald-800": succ(55),
-  "color-emerald-950": succ(42),
-  "color-purple-50": tint("accent", 8),
-  "color-purple-200": tint("accent", 24),
-  "color-purple-700": color("accent"),
-  "color-sky-300": color("primary"),
-  "color-sky-400": color("primary"),
-  };
-};
+/*
+ * A `legacyPalette()` shadow layer used to live here: 72 aliases re-pointing
+ * Tailwind's own palette variables (--color-amber-500, --color-emerald-700,
+ * --color-gray-*, --color-sky-400, …) at semantic tokens, so that components
+ * still written against raw palette classes would follow the selected theme.
+ *
+ * Those components are gone. A sweep found 6 of the 72 aliases still
+ * referenced — all amber, all part of one hand-written warning-banner recipe
+ * that had been copied into three files — and the fix was the missing token
+ * the recipe was standing in for (--warning-text) plus a shared Callout, not
+ * more aliases. The other 66 were paying a setProperty() call each on every
+ * theme switch to define variables nothing read.
+ *
+ * The one remaining palette class in the app is `bg-black/60` on the dialog
+ * scrim, which wants true black rather than a themed near-black.
+ */
 
 export function getTheme(themeId: unknown): ThemeDefinition {
   return isString(themeId) ? themesById.get(themeId) ?? defaultTheme : defaultTheme;
@@ -372,7 +312,6 @@ export function applyTheme(themeId?: unknown): ThemeId {
   root.classList.toggle("dark", theme.mode === "dark");
   root.style.colorScheme = theme.mode;
   for (const [name, value] of Object.entries(theme.colors)) root.style.setProperty(`--${name}`, value);
-  for (const [name, value] of Object.entries(legacyPalette(theme.mode))) root.style.setProperty(`--${name}`, value);
   syncThemeColorMeta(theme);
 
   try {

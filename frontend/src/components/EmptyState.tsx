@@ -1,7 +1,7 @@
 import { Terrence, type TerrencePose } from "./brand/Terrence";
 import { Link } from "react-router-dom";
 
-import { Button } from "./ui/button";
+import { Button, buttonVariants } from "./ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "./ui/empty";
 
 /**
@@ -21,12 +21,23 @@ export function EmptyState(props: Readonly<{
   description?: string;
   actionLabel?: string;
   onAction?: () => void;
+  /**
+   * Where the primary action goes, when the next step is a different page
+   * rather than a callback on this one.
+   *
+   * Several empty states used to *describe* the way out in prose — "Create a
+   * workspace in this project to get started", "Add one in organization VCS
+   * settings" — without offering a control, leaving the user to go and find
+   * the page named. Pass this with `actionLabel` and the description can stop
+   * doing the navigation's job.
+   */
+  actionHref?: string;
   docsHref?: string;
   compact?: boolean;
   headingLevel?: "h2" | "h3" | "h4";
 }>): React.JSX.Element {
-  const { illustration, title, description, actionLabel, onAction, docsHref, compact, headingLevel = "h2" } = props;
-  const hasAction = actionLabel !== undefined && onAction !== undefined;
+  const { illustration, title, description, actionLabel, onAction, actionHref, docsHref, compact, headingLevel = "h2" } = props;
+  const hasAction = actionLabel !== undefined && (onAction !== undefined || actionHref !== undefined);
   const footerVisible = hasAction || docsHref !== undefined;
   return (
     <Empty className={compact === true ? "p-6" : "px-6 py-12"}>
@@ -45,7 +56,13 @@ export function EmptyState(props: Readonly<{
       </EmptyHeader>
       {footerVisible && (
         <EmptyContent className="max-w-none flex-row flex-wrap items-center justify-center gap-3">
-          {hasAction && <Button onClick={onAction}>{actionLabel}</Button>}
+          {hasAction && (onAction !== undefined
+            ? <Button onClick={onAction}>{actionLabel}</Button>
+            : (
+              <Link to={actionHref ?? "#"} className={buttonVariants()}>
+                {actionLabel}
+              </Link>
+            ))}
           {docsHref !== undefined &&
             (docsHref.startsWith("/app/") ? (
               <Link

@@ -630,6 +630,106 @@ function parseExplainFrame(frame: string): ExplainStreamEvent | null {
   }
 }
 
+export type RunLogTail = Readonly<{
+  /** Bytes appended since `offset`, decoded as UTF-8. */
+  chunk: string;
+  /** Total size of the whole phase log, in bytes. */
+  totalBytes: number;
+  /**
+   * False when the server did not report a total (a proxy stripping `X-*`
+   * headers), so `totalBytes` is a floor rather than a fact. Callers must not
+   * conclude "the stream shrank" from an unknown total.
+   */
+  totalKnown: boolean;
+  /** Byte offset immediately after `chunk` — pass it as the next `offset`. */
+  nextOffset: number;
+  /** True when the stream no longer covers every row ever written. */
+  truncated: boolean;
+}>;
+
+/**
+ * Read a phase log forward from a byte offset.
+ *
+ * The paged `/runs/:id/logs` JSON:API collection returns page 1 of 20 rows by
+ * default, so a view that re-read it on a timer showed the *first* twenty rows
+ * of a growing log forever — the window looked frozen while the run streamed.
+ * The raw log endpoints speak the TFE log-read protocol instead
+ * (`?offset=&limit=` over the joined byte stream, with the true total in
+ * `X-Terrence-Log-Total-Bytes`), which makes a tail append-only by
+ * construction: a late response can only ever carry bytes the caller does not
+ * have yet, so log text can never move backwards.
+ *
+ * `offset` past the end returns an empty chunk, which is the idle case while a
+ * phase is running but quiet.
+ *
+ * DELIBERATELY sends no `limit`. The server documents that a windowed read is
+ * byte-exact and may therefore split a multibyte character, whereas an
+ * unlimited read always ends at end-of-stream and so is always complete, valid
+ * UTF-8. That is what makes the `text()` → byte-length round-trip below exact.
+ * Adding a `limit` here without switching to an incremental streaming decoder
+ * would let a split codepoint decode to U+FFFD, re-encode to three bytes, and
+ * put `nextOffset` permanently out of step with the server.
+ */
+export async function fetchRunLogTail(
+  runId: string,
+  phase: "plan" | "apply",
+  offset: number,
+  signal?: Readonly<AbortSignal>,
+): Promise<RunLogTail> {
+  const from = Number.isSafeInteger(offset) && offset > 0 ? offset : 0;
+  const path = `${API_BASE_URL}/runs/${encodeURIComponent(runId)}/${phase}/log?offset=${from}`;
+  const send = async (accessToken: string | null): Promise<Response> => {
+    const headers = new Headers();
+    if (accessToken !== null && accessToken !== "") {
+      headers.set("Authorization", `Bearer ${accessToken}`);
+    }
+    return fetch(path, { headers, ...(signal === undefined ? {} : { signal }) });
+  };
+
+  const token = await prepareAuthToken();
+  let response = await send(token);
+  // `prepareAuthToken` only refreshes when the local clock already says the
+  // token expired. Without this retry a token revoked or expired server-side
+  // froze both log panes silently and permanently, while the rest of the page
+  // (which goes through fetchApi, and does retry) carried on working.
+  if (response.status === 401 && token !== null && token !== "" && isRefreshableSession()) {
+    const refreshed = await refreshAccessToken().catch((): null => null);
+    if (refreshed !== null) {
+      response = await send(refreshed);
+    }
+    if (response.status === 401) expireAuthSession();
+  }
+
+  if (!response.ok) {
+    throw new ApiError(response.status, `Could not read the ${phase} log (${response.status})`);
+  }
+  // The raw log endpoints answer in text/plain. Anything else is a misrouted
+  // response — a JSON:API error envelope from a proxy, say — and rendering its
+  // body into the log pane as if it were Terraform output would be worse than
+  // showing nothing.
+  const contentType = response.headers.get("Content-Type") ?? "";
+  if (contentType !== "" && !contentType.startsWith("text/")) {
+    return { chunk: "", totalBytes: from, totalKnown: false, nextOffset: from, truncated: false };
+  }
+  const chunk = await response.text();
+  // The byte length of the chunk, not its character length: a multibyte
+  // character makes the two disagree, and the next offset must be in bytes.
+  const chunkBytes = new TextEncoder().encode(chunk).byteLength;
+  const headerTotal = Number.parseInt(response.headers.get("X-Terrence-Log-Total-Bytes") ?? "", 10);
+  const knownTotal = Number.isSafeInteger(headerTotal) && headerTotal >= 0;
+  return {
+    chunk,
+    // Falling back to `from + chunkBytes` when the header is missing is not
+    // merely approximate: it is always >= the requested offset, which makes
+    // the caller's "the stream shrank, restart it" branch unreachable. Say so
+    // via `totalKnown` rather than quietly reporting a total we do not have.
+    totalBytes: knownTotal ? headerTotal : from + chunkBytes,
+    totalKnown: knownTotal,
+    nextOffset: from + chunkBytes,
+    truncated: response.headers.get("X-Terrence-Log-Truncated") === "true",
+  };
+}
+
 /** Resolve the bearer token, refreshing it first when it is about to expire. */
 export async function prepareAuthToken(): Promise<string | null> {
   let token = getAuthToken();

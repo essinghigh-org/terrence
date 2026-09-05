@@ -101,7 +101,7 @@ export function PolicySetsTags(): React.JSX.Element {
           { label: "Tag-based policy sets" },
         ]}
         title="Tag-based policy sets"
-        description="Policy sets scoped by tag selectors are automatically applied to workspaces whose tags match."
+        description="Instead of attaching a policy set to workspaces one at a time, match on a tag: every workspace carrying that tag picks the rules up automatically."
       />
 
       <Card>

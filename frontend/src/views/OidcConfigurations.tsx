@@ -173,7 +173,7 @@ export function OidcConfigurations(): React.JSX.Element {
           { label: "OIDC configurations" },
         ]}
         title="OIDC configurations"
-        description="Identity provider configurations used by the organization&apos;s runs to authenticate with cloud providers."
+        description="Let a run prove who it is to AWS, Azure or GCP without storing long-lived keys as variables. The cloud provider trusts a short-lived token signed by this instance instead."
         action={canManage ? (
           <Button onClick={(): void => { setCreateDialogOpen(true); }}>
             <Plus className="mr-2 h-4 w-4" />

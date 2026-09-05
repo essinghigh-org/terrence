@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { fetchApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Callout } from "@/components/ui/callout";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
@@ -309,16 +311,26 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
                       <SelectItem key={connection.value} value={connection.value}>{connection.label}</SelectItem>
                     ))}
                   </Select>
-                  <p
-                    role={vcsConnectionsError === "" ? undefined : "alert"}
-                    className={vcsConnectionsError === "" ? "text-xs text-muted-foreground" : "text-xs text-destructive"}
-                  >
-                    {vcsConnectionsError !== ""
-                      ? vcsConnectionsError
-                      : vcsConnections.length === 0 && !vcsConnectionsLoading
-                        ? "No registered connections are available. Add one in organization VCS settings."
-                        : "Choose a connection first, then search repositories by organization or name."}
-                  </p>
+                  {vcsConnectionsError !== "" ? (
+                    <p role="alert" className="text-xs text-destructive">{vcsConnectionsError}</p>
+                  ) : vcsConnections.length === 0 && !vcsConnectionsLoading ? (
+                    // Named the place to go without linking to it, which left
+                    // the user to find "organization VCS settings" themselves.
+                    <p className="text-xs text-muted-foreground">
+                      No connections are set up yet.{" "}
+                      <Link
+                        to={`/app/${encodeURIComponent(orgName)}/settings?tab=vcs`}
+                        className="font-medium text-primary underline hover:no-underline"
+                      >
+                        Connect GitHub, GitLab or Bitbucket
+                      </Link>
+                      {" "}to run from a repository.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Choose a connection first, then search repositories by organization or name.
+                    </p>
+                  )}
                 </div>
 
                 <div className="flex flex-col gap-2">
@@ -421,9 +433,18 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
               <p role="alert" className="text-xs text-destructive">{agentPools.error}</p>
             )}
             {executionMode === "agent" && !agentPools.loading && agentPools.error === "" && agentPools.pools.length === 0 && (
-              <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                No agent pools are available. Create a pool in organization settings, or choose server or local execution.
-              </p>
+              <Callout tone="warning" className="p-3 text-xs">
+                <p>
+                  No agent pools are available.{" "}
+                  <Link
+                    to={`/app/${encodeURIComponent(orgName)}/settings?tab=agent-pools`}
+                    className="font-medium text-primary underline hover:no-underline"
+                  >
+                    Create a pool in organization settings
+                  </Link>
+                  , or choose server or local execution.
+                </p>
+              </Callout>
             )}
           </div>
 

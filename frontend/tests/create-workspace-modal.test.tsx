@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { CreateWorkspaceModal } from "../src/components/CreateWorkspaceModal";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
+import { MemoryRouter } from "react-router-dom";
 
 const originalFetch = globalThis.fetch;
 
@@ -49,13 +50,17 @@ afterEach((): void => {
 });
 
 function renderModal(): ReturnType<typeof render> {
+  // The modal links to organization settings from its dead-end states (no VCS
+  // connections, no agent pools), so it needs a router in scope.
   return render(
-    <CreateWorkspaceModal
-      orgName="acme"
-      open={true}
-      onOpenChange={(): void => { /* assertions read fetch traffic, not the callback */ }}
-      onCreated={(): void => { /* assertions read fetch traffic, not the callback */ }}
-    />,
+    <MemoryRouter>
+      <CreateWorkspaceModal
+        orgName="acme"
+        open={true}
+        onOpenChange={(): void => { /* assertions read fetch traffic, not the callback */ }}
+        onCreated={(): void => { /* assertions read fetch traffic, not the callback */ }}
+      />
+    </MemoryRouter>,
   );
 }
 
@@ -81,7 +86,7 @@ test("warns when agent is selected with no pools available", async () => {
   installFetch("empty", []);
   const view = renderModal();
   fireEvent.change(modeSelect(view), { target: { value: "agent" } });
-  await view.findByText("No agent pools are available. Create a pool in organization settings, or choose server or local execution.");
+  await view.findByText(/No agent pools are available/);
 });
 
 test("requires an agent pool before submitting agent execution", async () => {
@@ -89,7 +94,7 @@ test("requires an agent pool before submitting agent execution", async () => {
   installFetch("empty", posted);
   const view = renderModal();
   fireEvent.change(modeSelect(view), { target: { value: "agent" } });
-  await view.findByText("No agent pools are available. Create a pool in organization settings, or choose server or local execution.");
+  await view.findByText(/No agent pools are available/);
   fireEvent.input(view.getByLabelText("Workspace name"), { target: { value: "infra" } });
   fireEvent.click(view.getByRole("button", { name: "Create Workspace" }));
   await view.findByText("Choose an agent pool before creating the workspace.");
@@ -108,7 +113,7 @@ test("stays quiet about pools when they exist", async () => {
   const view = renderModal();
   fireEvent.change(modeSelect(view), { target: { value: "agent" } });
   await view.findByText("Runs wait for an agent pool to pick them up.");
-  expect(view.queryByText("No agent pools are available. Create a pool in organization settings, or choose server or local execution.")).toBeNull();
+  expect(view.queryByText(/No agent pools are available/)).toBeNull();
 });
 
 test("submits the selected agent pool", async () => {

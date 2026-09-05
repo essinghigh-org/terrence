@@ -66,14 +66,17 @@ test("creates a VCS workspace from choices listed for a manage-workspaces-only s
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
-    <CreateWorkspaceModal
-      orgName="acme"
-      open
-      onOpenChange={(): void => {
-        // Dialog state is controlled by the test.
-      }}
-      onCreated={onCreated}
-    />,
+    // The modal's dead-end states link to organization settings.
+    <MemoryRouter>
+      <CreateWorkspaceModal
+        orgName="acme"
+        open
+        onOpenChange={(): void => {
+          // Dialog state is controlled by the test.
+        }}
+        onCreated={onCreated}
+      />
+    </MemoryRouter>,
   );
 
   changeInput(view.getByLabelText(/Workspace Name/i), "production");
@@ -235,16 +238,18 @@ test("keeps local workspace creation independent from VCS connections", async ()
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(
-    <CreateWorkspaceModal
-      orgName="acme"
-      open
-      onOpenChange={(): void => {
-        // Dialog state is controlled by the test.
-      }}
-      onCreated={(): void => {
-        // Payload is asserted below.
-      }}
-    />,
+    <MemoryRouter>
+      <CreateWorkspaceModal
+        orgName="acme"
+        open
+        onOpenChange={(): void => {
+          // Dialog state is controlled by the test.
+        }}
+        onCreated={(): void => {
+          // Payload is asserted below.
+        }}
+      />
+    </MemoryRouter>,
   );
   changeInput(view.getByLabelText(/Workspace Name/i), "local");
   fireEvent.change(view.getByLabelText(/Workspace Source/i), { target: { value: "local" } });

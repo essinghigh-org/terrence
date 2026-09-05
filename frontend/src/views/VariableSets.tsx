@@ -679,7 +679,7 @@ export function VariableSets(): React.JSX.Element {
           { label: "Variable sets" },
         ]}
         title="Variable sets"
-        description="Reuse configuration across workspaces in this organization."
+        description="A variable set is a reusable bundle of Terraform and environment variables. Attach one to several workspaces so shared credentials and settings live in a single place."
         action={(
           <div className="flex items-center gap-2">
             <Link to={`/app/${encodeURIComponent(orgName)}`} className={buttonVariants({ variant: "outline" })}>

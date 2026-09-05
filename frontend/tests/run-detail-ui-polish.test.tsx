@@ -6,6 +6,7 @@ import { OperationFilterDropdown } from "../src/components/OperationFilterDropdo
 import type { Operation } from "../src/lib/plan-operations";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
+import { handlePhaseLogs } from "./support/run-log-fixture";
 
 const originalFetch = globalThis.fetch;
 
@@ -92,17 +93,11 @@ test("collapsible plan warnings appear at top of plan with diagnostic details", 
     if (url === "/api/v2/applies/apply-run-warn") {
       return json({ data: { attributes: { status: "pending" } } });
     }
-    if (url === "/api/v2/runs/run-warn/logs") {
-      return json({
-        data: [
-          {
-            attributes: {
-              phase: "plan",
-              "output-text": "Warning: Argument is deprecated\n\n  on main.tf line 5:\n  Use new_param instead of old_param.\n",
-            },
-          },
-        ],
+    {
+      const phaseLog = handlePhaseLogs(url, "run-warn", {
+        plan: "Warning: Argument is deprecated\n\n  on main.tf line 5:\n  Use new_param instead of old_param.\n",
       });
+      if (phaseLog !== null) return phaseLog;
     }
     if (url === "/api/v2/plans/plan-run-warn/json-output") {
       return json({
@@ -196,17 +191,11 @@ test("when apply is running, apply disabled reasons are NOT shown", async () => 
         },
       });
     }
-    if (url === "/api/v2/runs/run-applying/logs") {
-      return json({
-        data: [
-          {
-            attributes: {
-              phase: "apply",
-              "output-text": "aws_instance.web: Creating...\n",
-            },
-          },
-        ],
+    {
+      const phaseLog = handlePhaseLogs(url, "run-applying", {
+        apply: "aws_instance.web: Creating...\n",
       });
+      if (phaseLog !== null) return phaseLog;
     }
     if (url === "/api/v2/plans/plan-run-applying/json-output") {
       return json({
@@ -239,10 +228,14 @@ test("when apply is running, apply disabled reasons are NOT shown", async () => 
     expect(view.getByText("Applying run")).toBeTruthy();
   });
 
-  // Verify that "Why is Apply disabled?" / "Why am I unable to run this plan" is NOT rendered
+  // A run that is already applying must not be told its apply is waiting on
+  // anything, in any of the wordings this page has used for that.
   expect(view.queryByText(/Why is Apply disabled/i)).toBeNull();
   expect(view.queryByText(/Why am I unable to run this plan/i)).toBeNull();
   expect(view.queryByText(/Plan, policy checks, and pre-apply tasks are still running/i)).toBeNull();
+  expect(view.queryByText(/have to finish before anything can be applied/i)).toBeNull();
+  // Nor asked to review changes it is in the middle of making.
+  expect(view.queryByText(/review the planned changes/i)).toBeNull();
 });
 
 test("OperationFilterDropdown toggles operations, select all, clear, and reset", () => {

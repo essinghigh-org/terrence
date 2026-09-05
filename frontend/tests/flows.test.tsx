@@ -12,6 +12,7 @@ import { Workspaces } from "../src/views/Workspaces";
 import { VariableSets } from "../src/views/VariableSets";
 import { isRecord, isString } from "../src/lib/type-guards";
 import type { JsonObject, JsonValue } from "../src/lib/json";
+import { anyPhaseLog } from "./support/run-log-fixture";
 
 const originalFetch = globalThis.fetch;
 const originalConfirm = globalThis.confirm;
@@ -64,6 +65,10 @@ test("logs in without persisting the access token and navigates home", async () 
     const url = getUrlString(input);
     if (url === "/api/v2/ping") return json({});
     if (url === "/api/v2/users/login") return json({ data: { attributes: { token: "user-token" } } });
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
@@ -112,6 +117,10 @@ test("creates a workspace from the modal", async () => {
     if (url === "/api/v2/organizations/acme/workspaces" && init?.method === "POST") {
       return json({ data: { id: "ws-1", attributes: { name: "production" } } });
     }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   const onCreated = mock((): void => {
@@ -119,14 +128,17 @@ test("creates a workspace from the modal", async () => {
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   const view = render(
-    <CreateWorkspaceModal
-      orgName="acme"
-      open
-      onOpenChange={(): void => {
-        // Intentional noop
-      }}
-      onCreated={onCreated}
-    />,
+    // The modal's dead-end states link to organization settings.
+    <MemoryRouter>
+      <CreateWorkspaceModal
+        orgName="acme"
+        open
+        onOpenChange={(): void => {
+          // Intentional noop
+        }}
+        onCreated={onCreated}
+      />
+    </MemoryRouter>,
   );
 
   changeInput(asElement(view.getByLabelText(/Workspace name/i)), "production");
@@ -213,11 +225,15 @@ test("rejects a partially configured workspace VCS connection", async () => {
       return json({ data: [{ id: "ghain-123", attributes: { name: "Acme GitHub" } }] });
     }
     if (url === "/api/v2/organizations/acme/oauth-clients") return json({ data: [] });
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   const view = render(
-    <>
+    <MemoryRouter>
       <Toaster />
       <CreateWorkspaceModal
         open={true}
@@ -229,7 +245,7 @@ test("rejects a partially configured workspace VCS connection", async () => {
           // Payload is asserted below.
         }}
       />
-    </>,
+    </MemoryRouter>,
   );
   changeInput(asElement(view.getByLabelText(/Workspace name/i)), "production");
   fireEvent.change(view.getByLabelText(/Workspace source/i), { target: { value: "vcs" } });
@@ -315,6 +331,10 @@ test("creates, edits, and deletes a workspace variable", async () => {
     if (url.endsWith("/workspaces/ws-1/vars/var-1") && init?.method === "DELETE") {
       variables.splice(0);
       return new Response(null, { status: 204 });
+    }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
   });
@@ -415,6 +435,10 @@ test("updates workspace execution and auto-apply settings", async () => {
         },
       });
     }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
@@ -501,6 +525,10 @@ test("assigns an SSH key and enables workspace health assessments", async () => 
           attributes: { ...workspace.attributes, ...payload.data.attributes },
         },
       });
+    }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
   });
@@ -642,6 +670,10 @@ test("manages workspace run triggers and custom team access", async () => {
       teamAccess.splice(0);
       return new Response(null, { status: 204 });
     }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
@@ -764,6 +796,10 @@ test("creates, verifies, edits, and deletes a workspace notification", async () 
       configurations.splice(0);
       return new Response(null, { status: 204 });
     }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
@@ -875,6 +911,10 @@ test("shows effective policy sets and manages workspace VCS settings", async () 
           attributes: { ...workspace.attributes, ...payload.data.attributes },
         },
       });
+    }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
   });
@@ -996,6 +1036,10 @@ test("displays run cost and policy check results", async () => {
         }],
       });
     }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
@@ -1094,6 +1138,10 @@ test("keeps advisory policy failures non-blocking and names the policy", async (
       return json({ data: [] });
     }
     if (url.endsWith("/cost-estimate")) return json({ data: null });
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   })) as unknown as typeof fetch;
 
@@ -1151,6 +1199,10 @@ test("queues a run, displays its logs, and applies it", async () => {
           },
         },
       });
+    }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
   });
@@ -1351,6 +1403,10 @@ const createVarsetsFetchMock = (initialSets: VarSetItem[] = []) => {
     ) {
       return new Response(null, { status: 204 });
     }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
 
@@ -1393,6 +1449,10 @@ test("keeps variable sets readable without workspace management permission", asy
           },
         }],
       });
+    }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url} ${init?.method ?? "GET"}`);
   });

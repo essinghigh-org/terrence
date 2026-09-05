@@ -52,209 +52,21 @@ import {
 } from "../components/ui/table";
 import { toast } from "../components/ui/toast";
 import { ApiError, fetchApi, streamExplain, type ExplainKind, type ReasoningEffort } from "../lib/api";
-import { useTerrenceEvent } from "../lib/event-provider";
 import { CAPABILITY_PLAN_EXPLAINER, useCapability } from "../lib/capabilities";
 import { useUnsavedChangesWarning } from "../lib/use-unsaved-changes";
 import { isBigInt, isBoolean, isNumber, isObjectLike, isString } from "../lib/type-guards";
 import { formatRunSource, formatRunStatus, isVcsRunSource } from "../lib/run-labels";
+import { StatusBadge } from "../components/ui/status-badge";
+import { RunDecisionPanel } from "../components/RunDecisionPanel";
+import { RunStageStrip, resolveStages } from "../components/RunStageStrip";
+import { ACTION_CONFIRMATIONS, resolveRunDecision, type RunActionKind } from "../lib/run-decision";
+import { useRunView } from "../lib/use-run-view";
+import { sectionLabel, TERMINAL_STATUSES, type PolicyCheck, type RunComment, type RunEvent } from "../lib/run-view-state";
+import { formatPhaseState, phaseTone, TONE_ACCENT } from "../lib/run-status";
+import { Callout } from "../components/ui/callout";
+import { Disclosure } from "../components/ui/disclosure";
+import { MetaList, MetaStrip } from "../components/ui/meta-list";
 import type { JsonObject } from "@/lib/json";
-
-type RunActions = {
-  "is-cancelable"?: boolean;
-  "is-confirmable"?: boolean;
-  "is-discardable"?: boolean;
-  "is-force-cancelable"?: boolean;
-};
-
-type ConfirmationAction = "apply" | "discard" | "cancel" | "force-cancel" | "override-policy";
-
-type RunPermissions = {
-  "can-apply"?: boolean;
-  "can-cancel"?: boolean;
-  "can-comment"?: boolean;
-  "can-discard"?: boolean;
-  "can-force-cancel"?: boolean;
-  "can-override-policy-check"?: boolean;
-};
-
-type RunAttributes = {
-  actions?: RunActions;
-  "allow-empty-apply"?: boolean;
-  "auto-apply"?: boolean;
-  "branch"?: string | null;
-  "commit-sha"?: string | null;
-  "commit-url"?: string | null;
-  "created-at"?: string;
-  "duration-baseline"?: {
-    "duration-seconds"?: number | null;
-    "median-duration-seconds"?: number | null;
-    "is-slow"?: boolean;
-  } | null;
-  "has-changes"?: boolean;
-  "has-recovery-state"?: boolean;
-  "is-destroy"?: boolean;
-  message?: string | null;
-  operation?: string;
-  permissions?: RunPermissions;
-  "plan-only"?: boolean;
-  "refresh-only"?: boolean;
-  "resource-additions"?: number;
-  "resource-changes"?: number;
-  "resource-destructions"?: number;
-  "resource-imports"?: number;
-  source?: string;
-  status: string;
-  "status-timestamps"?: Record<string, string> | null;
-  "terraform-version"?: string | null;
-  "trigger-reason"?: string;
-  "triggered-by"?: string | null;
-  "triggered-by-avatar-url"?: string | null;
-  "workspace-locked"?: boolean;
-  "workspace-locked-reason"?: string | null;
-};
-
-type RunResource = {
-  id: string;
-  attributes: RunAttributes;
-  relationships?: {
-    "created-by"?: {
-      data: { id: string; type: string } | null;
-    };
-    workspace?: {
-      data: { id: string; type: string };
-    };
-    "configuration-version"?: {
-      data: { id: string; type: string } | null;
-    };
-  };
-};
-
-type PhaseResource = {
-  attributes: {
-    "log-read-url"?: string | null;
-    status: string;
-    "resource-additions"?: number | null;
-    "resource-changes"?: number | null;
-    "resource-destructions"?: number | null;
-    "resource-imports"?: number | null;
-    "status-timestamps"?: Record<string, string> | null;
-  };
-};
-
-type LogItem = {
-  attributes?: {
-    phase?: string;
-    "output-text"?: string;
-  };
-};
-
-type RunComment = {
-  id: string;
-  attributes: {
-    "actor-username"?: string | null;
-    "actor-avatar-url"?: string | null;
-    body: string;
-    "created-at"?: string;
-  };
-};
-
-type RunEvent = {
-  id: string;
-  attributes: {
-    action: string;
-    "actor-username"?: string | null;
-    "actor-avatar-url"?: string | null;
-    "created-at"?: string;
-    details?: {
-      fromStatus?: string;
-      source?: string;
-      toStatus?: string;
-      triggerReason?: string;
-    };
-  };
-};
-
-type CostEstimate = {
-  id: string;
-  attributes: {
-    status: string;
-    "prior-monthly-cost"?: string;
-    "proposed-monthly-cost"?: string;
-    "delta-monthly-cost"?: string;
-    "resources-count"?: number;
-    "matched-resources-count"?: number;
-    "unmatched-resources-count"?: number;
-    "error-message"?: string | null;
-    "terrence:infracost-enabled"?: boolean;
-  };
-};
-
-type IncludedUser = {
-  id: string;
-  type: string;
-  attributes: {
-    username: string;
-    "avatar-url"?: string;
-  };
-};
-
-type PolicyCheck = {
-  id: string;
-  attributes: {
-    status: string;
-    result?: unknown;
-    "policy-name"?: string | null;
-    "enforcement-level"?: string | null;
-    "created-at"?: string;
-  };
-};
-
-type AssessmentCheck = {
-  id: string;
-  attributes: {
-    address?: string | null;
-    kind?: string | null;
-    status: string;
-    message?: string | null;
-    detail?: unknown;
-  };
-};
-
-const TERMINAL_STATUSES = new Set([
-  "applied",
-  "canceled",
-  "discarded",
-  "errored",
-  "failed",
-  "force_canceled",
-  "planned_and_finished",
-  "unreachable",
-]);
-
-// Statuses whose transitions change the plan-side derived sections (plan,
-// policy checks, cost estimate, assessments) and the apply-side sections
-// (apply phase, logs). Used to refetch only what an SSE transition
-// announced instead of the whole run.
-const PLAN_PHASE_STATUSES = new Set([
-  "planned",
-  "planned_and_saved",
-  "planned_and_finished",
-  "cost_estimating",
-  "cost_estimated",
-  "policy_checking",
-  "policy_override",
-  "policy_checked",
-  "policy_soft_failed",
-]);
-
-const APPLY_PHASE_STATUSES = new Set([
-  "applying",
-  "applied",
-]);
-
-/** Run sections that can be refetched independently (see reloadAuxiliaries). */
-type AuxKind = "logs" | "plan" | "apply" | "cost" | "policy" | "assessments" | "events" | "comments";
-const ALL_AUX_KINDS: readonly AuxKind[] = ["logs", "plan", "apply", "cost", "policy", "assessments", "events", "comments"];
 
 const RUN_EVENT_LABELS = {
   apply: "Run confirmed",
@@ -471,20 +283,26 @@ function phaseStatusFromRun(
   return "pending";
 }
 
+/**
+ * Phase icons take their colour from the shared tone map so the plan and apply
+ * headings, the header badge and the stage strip cannot land on three
+ * different colours for one run.
+ */
 function PhaseIcon({ status }: Readonly<{ status: string }>): React.JSX.Element {
-  if (status === "finished") return <CheckCircle2 className="size-5 text-success" aria-hidden="true" />;
-  if (status === "errored" || status === "unreachable") return <XCircle className="size-5 text-destructive" aria-hidden="true" />;
-  if (status === "canceled") return <AlertCircle className="size-5 text-muted-foreground" aria-hidden="true" />;
+  const accent = TONE_ACCENT[phaseTone(status)];
+  if (status === "finished") return <CheckCircle2 className={cn("size-5", accent)} aria-hidden="true" />;
+  if (status === "errored" || status === "unreachable") return <XCircle className={cn("size-5", accent)} aria-hidden="true" />;
+  if (status === "canceled") return <AlertCircle className={cn("size-5", accent)} aria-hidden="true" />;
   if (status === "running") {
     return (
       <span className="relative flex size-5 items-center justify-center">
         <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-75" />
-        <Clock className="relative size-4 text-primary" aria-hidden="true" />
+        <Clock className={cn("relative size-4", accent)} aria-hidden="true" />
       </span>
     );
   }
-  if (status === "queued") return <Clock className="size-5 text-primary" aria-hidden="true" />;
-  return <Circle className="size-5 text-muted-foreground/50" aria-hidden="true" />;
+  if (status === "queued") return <Clock className={cn("size-5", accent)} aria-hidden="true" />;
+  return <Circle className="size-5 text-muted-foreground/40" aria-hidden="true" />;
 }
 
 function ResourceCounts({
@@ -625,11 +443,28 @@ export function RunDetail({
   const planExplainerEnabled = useCapability(CAPABILITY_PLAN_EXPLAINER);
   const orgPath = `/app/${encodeURIComponent(orgName)}`;
   const workspacePath = `${orgPath}/workspaces/${encodeURIComponent(workspaceName)}`;
-  const [run, setRun] = useState<RunResource | null>(null);
-  const [plan, setPlan] = useState<PhaseResource | null>(null);
-  const [apply, setApply] = useState<PhaseResource | null>(null);
-  const [planLogs, setPlanLogs] = useState("");
-  const [applyLogs, setApplyLogs] = useState("");
+  // One hook owns the run and every section derived from it. See useRunView
+  // for why the page used to disagree with itself.
+  const { state: view, refreshAll, refresh, markActionSent, markActionSettled } = useRunView(runId);
+  const {
+    run,
+    plan,
+    apply,
+    cost: costEstimate,
+    policyChecks,
+    assessments: assessmentChecks,
+    events: runEvents,
+    comments,
+    loading,
+    loadError,
+    fresh,
+    failedSections,
+    creatorUsername,
+    creatorAvatarUrl,
+    awaitingAction,
+  } = view;
+  const planLogs = view.planLog.text;
+  const applyLogs = view.applyLog.text;
   const [rerunPending, setRerunPending] = useState(false);
   const [rerunError, setRerunError] = useState("");
   const [recoveryPending, setRecoveryPending] = useState(false);
@@ -640,18 +475,11 @@ export function RunDetail({
   const fullscreenTriggerRef = useRef<HTMLElement | null>(null);
   const fullscreenCloseRef = useRef<HTMLButtonElement | null>(null);
   const fullscreenContainerRef = useRef<HTMLDivElement | null>(null);
-  const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
-  const [policyChecks, setPolicyChecks] = useState<PolicyCheck[]>([]);
-  const [assessmentChecks, setAssessmentChecks] = useState<AssessmentCheck[]>([]);
-  const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
   const [planExpanded, setPlanExpanded] = useState<boolean | null>(null);
   const [applyExpanded, setApplyExpanded] = useState<boolean | null>(null);
   const planOpenRendered = useRef<boolean>(false);
   const applyOpenRendered = useRef<boolean>(false);
-  const [comments, setComments] = useState<RunComment[]>([]);
   const [commentBody, setCommentBody] = useState("");
-  const [confirmationAction, setConfirmationAction] = useState<ConfirmationAction | null>(null);
-  const [actionComment, setActionComment] = useState("");
   const [speculativeRun, setSpeculativeRun] = useState(false);
   const cvId = run?.relationships?.["configuration-version"]?.data?.id ?? null;
   const planOnlyRun = run?.attributes["plan-only"] === true;
@@ -703,27 +531,15 @@ export function RunDetail({
     const timer = window.setInterval(updateElapsed, 1000);
     return (): void => { window.clearInterval(timer); };
   }, [explainerStartedAt, explaining]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
-  const [auxiliaryError, setAuxiliaryError] = useState(false);
-  const [fresh, setFresh] = useState(false);
-  const [creatorUsername, setCreatorUsername] = useState("");
-  const [creatorAvatarUrl, setCreatorAvatarUrl] = useState("");
   const [pendingAction, setPendingAction] = useState("");
   const [copiedPermalink, setCopiedPermalink] = useState(false);
   const copiedPermalinkResetTimerRef = useRef<number | undefined>(undefined);
   const mountedRef = useRef(true);
-  const [refreshVersion, setRefreshVersion] = useState(0);
   const [logWrap, setLogWrap] = useState<boolean>(true);
   const [planSummary, setPlanSummary] = useState<Readonly<{
     runId: string;
     summary: PlanOutputSummary;
   }> | null>(null);
-  const activeRunId = useRef<string | null>(null);
-  // Latest effect's SSE dispatchers: the event handlers (registered once via
-  // the provider) must reach the current run's refresh machinery.
-  const eventDispatchRef = useRef<(status: string) => void>(() => {});
-  const commentDispatchRef = useRef<() => void>(() => {});
   const handlePlanSummaryChange = useCallback((summary: PlanOutputSummary | null): void => {
     setPlanSummary(summary === null ? null : { runId, summary });
   }, [runId]);
@@ -818,316 +634,22 @@ export function RunDetail({
     };
   }, [fullscreenLog]);
 
-  const loadRun = useCallback(async (signal: AbortSignal): Promise<string | null> => {
-    try {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-      const response = await fetchApi(`/api/v2/runs/${runId}`, { signal }) as { data: RunResource; included?: IncludedUser[] };
-      if (signal.aborted) return null;
-      setRun(response.data);
-      setFresh(true);
-      setLoadError("");
 
-      // Extract creator user info from included data
-      const creatorId = response.data.relationships?.["created-by"]?.data?.id;
-      if (creatorId !== undefined && Array.isArray(response.included)) {
-        const creator = response.included.find((u: IncludedUser): boolean => u.id === creatorId && u.type === "users");
-        if (creator !== undefined) {
-          setCreatorUsername(creator.attributes.username);
-          setCreatorAvatarUrl(creator.attributes["avatar-url"] ?? "");
-        } else {
-          setCreatorUsername(response.data.attributes["triggered-by"] ?? "");
-          setCreatorAvatarUrl(response.data.attributes["triggered-by-avatar-url"] ?? "");
-        }
-      } else {
-        setCreatorUsername(response.data.attributes["triggered-by"] ?? "");
-        setCreatorAvatarUrl(response.data.attributes["triggered-by-avatar-url"] ?? "");
-      }
-      return response.data.attributes.status;
-    } catch (error: unknown) {
-      if (signal.aborted) return null;
-      setFresh(false);
-      setLoadError(error instanceof Error ? error.message : "Could not load run");
-      if (error instanceof ApiError && error.status === 404) {
-        setRun(null);
-        return "not_found";
-      }
-      return null;
-    } finally {
-      if (!signal.aborted) setLoading(false);
-    }
-  }, [runId]);
-
-  // Reload only the run sections that changed: SSE events refetch what they
-  // announce instead of invalidating the whole run (every status transition
-  // used to refetch all nine endpoints).
-  const reloadAuxiliaries = useCallback(async (kinds: readonly AuxKind[], signal: AbortSignal): Promise<void> => {
-    const fetchers: Record<AuxKind, () => Promise<unknown>> = {
-      logs: async (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/logs`, { signal }),
-      plan: async (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/plan`, { signal }),
-      apply: async (): Promise<unknown> => fetchApi(`/api/v2/applies/apply-${runId}`, { signal }),
-      cost: async (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/cost-estimate`, { signal }),
-      policy: async (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/policy-checks`, { signal }),
-      assessments: async (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/check-results`, { signal }),
-      events: async (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/run-events`, { signal }),
-      comments: async (): Promise<unknown> => fetchApi(`/api/v2/runs/${runId}/comments`, { signal }),
-    };
-    const results = await Promise.allSettled(kinds.map(async (kind: AuxKind): Promise<unknown> => fetchers[kind]()));
-    if (signal.aborted) return;
-    let failed = false;
-    for (let index = 0; index < kinds.length; index += 1) {
-      const kind = kinds[index];
-      const result = results[index];
-      if (result === undefined || result.status === "rejected") {
-        failed = true;
-        continue;
-      }
-      const value = result.value;
-      if (kind === "logs") {
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-        const logData = value as {
-          data?: LogItem[];
-          logs?: { message: string; phase?: string }[];
-        };
-        if (Array.isArray(logData.data)) {
-          setPlanLogs(logData.data
-            .filter((entry: LogItem): boolean => (entry.attributes?.phase ?? "plan") === "plan")
-            .map((entry: LogItem): string => entry.attributes?.["output-text"] ?? "")
-            .join("\n"));
-          setApplyLogs(logData.data
-            .filter((entry: LogItem): boolean => entry.attributes?.phase === "apply")
-            .map((entry: LogItem): string => entry.attributes?.["output-text"] ?? "")
-            .join("\n"));
-        } else if (Array.isArray(logData.logs)) {
-          setPlanLogs(logData.logs
-            .filter((entry): boolean => (entry.phase ?? "plan") === "plan")
-            .map((entry): string => entry.message)
-            .join("\n"));
-          setApplyLogs(logData.logs
-            .filter((entry): boolean => entry.phase === "apply")
-            .map((entry): string => entry.message)
-            .join("\n"));
-        }
-      } else if (kind === "plan") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        setPlan((value as { data?: PhaseResource }).data ?? null);
-      } else if (kind === "apply") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        setApply((value as { data?: PhaseResource }).data ?? null);
-      } else if (kind === "cost") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        setCostEstimate((value as { data?: CostEstimate }).data ?? null);
-      } else if (kind === "policy") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const data = (value as { data?: PolicyCheck[] }).data;
-        setPolicyChecks(Array.isArray(data) ? data : []);
-      } else if (kind === "assessments") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const data = (value as { data?: AssessmentCheck[] }).data;
-        setAssessmentChecks(Array.isArray(data) ? data : []);
-      } else if (kind === "events") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const data = (value as { data?: RunEvent[] }).data;
-        setRunEvents(Array.isArray(data) ? data : []);
-      } else if (kind === "comments") {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const data = (value as { data?: RunComment[] }).data;
-        setComments(Array.isArray(data) ? data : []);
-      }
-    }
-    setAuxiliaryError(failed);
-  }, [runId]);
-
-  useEffect((): (() => void) => {
-    let stopped = false;
-    let timer: number | undefined;
-    let refreshing = false;
-    const controller = new AbortController();
-    const runChanged = activeRunId.current !== runId;
-    activeRunId.current = runId;
-    if (runChanged) {
-      setRun(null);
-      setPlan(null);
-      setApply(null);
-      setPlanLogs("");
-      setApplyLogs("");
-      setCostEstimate(null);
-      setPolicyChecks([]);
-      setAssessmentChecks([]);
-      setRunEvents([]);
-      setPlanExpanded(null);
-      setApplyExpanded(null);
-      planOpenRendered.current = false;
-      applyOpenRendered.current = false;
-      setComments([]);
-      setAuxiliaryError(false);
-      setCreatorUsername("");
-      setCreatorAvatarUrl("");
-      setCommentBody("");
-      setConfirmationAction(null);
-      setActionComment("");
-      setLoading(true);
-    }
-    setLoadError("");
-    setFresh(false);
-
-    const armTimer = (): void => {
-      if (stopped || controller.signal.aborted || document.hidden) return;
-      if (timer !== undefined) window.clearTimeout(timer);
-      timer = window.setTimeout((): void => { void refreshFull(); }, 30000);
-    };
-    const refreshFull = async (): Promise<void> => {
-      // Guard against overlapping loops: a visibility-triggered refresh can
-      // fire while a timer refresh is still awaiting loadRun.
-      if (stopped || controller.signal.aborted) return;
-      if (refreshing) {
-        // The 30s tick fired while an SSE-triggered refresh is in flight.
-        // The fired timer is consumed; re-arm it now, or the degraded-mode
-        // chain stops permanently for this run.
-        armTimer();
-        return;
-      }
-      refreshing = true;
-      try {
-        const status = await loadRun(controller.signal);
-        if (!stopped && !controller.signal.aborted && status !== "not_found") {
-          await reloadAuxiliaries(ALL_AUX_KINDS, controller.signal);
-          if (status === null || !TERMINAL_STATUSES.has(status)) armTimer();
-        }
-      } finally {
-        refreshing = false;
-      }
-    };
-    // Light refresh: status moved but no derived section completed. Logs and
-    // the run event timeline change with every transition; the rest is
-    // refetched when a phase completes or the 30s safety net fires.
-    const refreshLight = async (): Promise<void> => {
-      if (stopped || controller.signal.aborted) return;
-      if (refreshing) {
-        armTimer();
-        return;
-      }
-      refreshing = true;
-      try {
-        await loadRun(controller.signal);
-        await reloadAuxiliaries(["logs", "events"], controller.signal);
-      } finally {
-        refreshing = false;
-      }
-    };
-    const refreshPhase = async (kinds: readonly AuxKind[]): Promise<void> => {
-      if (stopped || controller.signal.aborted) return;
-      if (refreshing) {
-        armTimer();
-        return;
-      }
-      refreshing = true;
-      try {
-        await loadRun(controller.signal);
-        await reloadAuxiliaries(kinds, controller.signal);
-      } finally {
-        refreshing = false;
-      }
-    };
-    const onVisibilityChange = (): void => {
-      if (document.hidden) {
-        // Tab hidden mid-poll: drop any pending timer so a scheduled refresh
-        // can never fire (and fetch) while the page is invisible.
-        if (timer !== undefined) window.clearTimeout(timer);
-        timer = undefined;
-        return;
-      }
-      if (!stopped) {
-        // Drop any pending timer so a visibility resume starts exactly one
-        // fresh refresh instead of stacking on the scheduled one.
-        if (timer !== undefined) window.clearTimeout(timer);
-        timer = undefined;
-        void refreshFull();
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    void refreshFull();
-
-    // The app-global SSE stream (EventProvider, 10.20) delivers run status
-    // transitions; a trailing debounce lets the final transition of a burst
-    // win. Only the sections the transition announced are refetched; the
-    // 30s timer above remains the degraded-mode safety net.
-    let debounceTimer: number | undefined;
-    let latestStatus: string | null = null;
-    eventDispatchRef.current = (status: string): void => {
-      latestStatus = status;
-      if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
-      debounceTimer = window.setTimeout((): void => {
-        debounceTimer = undefined;
-        if (stopped || controller.signal.aborted) return;
-        const statusNow = latestStatus ?? "";
-        if (statusNow === "" || TERMINAL_STATUSES.has(statusNow)) {
-          void refreshFull();
-        } else if (PLAN_PHASE_STATUSES.has(statusNow)) {
-          // Issue #595: plan output streams into the logs while planning, so
-          // the log window must refresh on plan transitions too.
-          void refreshPhase(["plan", "policy", "cost", "assessments", "logs"]);
-        } else if (APPLY_PHASE_STATUSES.has(statusNow)) {
-          void refreshPhase(["apply", "logs"]);
-        } else {
-          void refreshLight();
-        }
-      }, 500);
-    };
-    commentDispatchRef.current = (): void => {
-      if (!stopped && !controller.signal.aborted) {
-        void reloadAuxiliaries(["comments"], controller.signal);
-      }
-    };
-
-    return (): void => {
-      stopped = true;
-      controller.abort();
-      eventDispatchRef.current = (): void => {};
-      commentDispatchRef.current = (): void => {};
-      if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [loadRun, reloadAuxiliaries, refreshVersion, runId]);
-
-  // One app-global SSE stream serves every view (EventProvider): status
-  // transitions and new comments for this run dispatch into the effect's
-  // refresh machinery above.
-  // Issue #595: fast log polling while the run is active. SSE relays status
-  // transitions only, and the worker sends none during long init/plan/apply
-  // stretches, so without this the log window sits stale until the 30s
-  // degraded timer fires. Polls the same paged logs auxiliary as the other
-  // refresh paths; stops at terminal status and while the tab is hidden
-  // (the visibility handler above refreshes on return).
-  const activeRunStatus = run?.attributes.status ?? null;
-  useEffect((): (() => void) => {
-    if (activeRunStatus === null || TERMINAL_STATUSES.has(activeRunStatus)) return (): void => {};
-    let stopped = false;
-    const controller = new AbortController();
-    const tick = (): void => {
-      if (stopped || controller.signal.aborted || document.hidden) return;
-      void reloadAuxiliaries(["logs"], controller.signal);
-    };
-    const interval = window.setInterval(tick, 4000);
-    return (): void => {
-      stopped = true;
-      controller.abort();
-      window.clearInterval(interval);
-    };
-  }, [runId, activeRunStatus, reloadAuxiliaries]);
-  useTerrenceEvent("run.status", (data): boolean => data["run-id"] === runId, (data): void => {
-    const status = data["status"];
-    eventDispatchRef.current(typeof status === "string" ? status : "");
-  });
-  useTerrenceEvent("comment.created", (data): boolean => data["run-id"] === runId, (): void => {
-    commentDispatchRef.current();
-  });
-
-  async function performRunAction(
-    action: "apply" | "cancel" | "discard" | "force-cancel" | "override-policy",
+  /**
+   * Send a run action.
+   *
+   * `markActionSent` records that the run was asked to move, so the decision
+   * panel reports the action as in flight until the run's status actually
+   * changes. Without it, the refresh that follows the POST usually lands
+   * before the worker has picked the job up, so the page re-rendered the same
+   * "Apply changes" button it had just accepted a click on — which reads as
+   * the click having failed.
+   */
+  const performRunAction = useCallback(async (
+    action: RunActionKind,
     successTitle: string,
     comment = "",
-  ): Promise<boolean> {
+  ): Promise<boolean> => {
     setPendingAction(action);
     try {
       const trimmedComment = comment.trim();
@@ -1144,23 +666,21 @@ export function RunDetail({
       };
       await fetchApi(`/api/v2/runs/${runId}/actions/${action}`, actionBody);
       toast.add({ title: successTitle, type: "success" });
-      setRefreshVersion((value: number): number => value + 1);
+      markActionSent(action);
       return true;
     } catch (error: unknown) {
       toast.add({
         title: error instanceof Error ? error.message : `Failed to ${action.replace("-", " ")} run`,
         type: "error",
       });
+      // The action never took, so the page must go back to offering it.
+      markActionSettled();
+      refreshAll();
       return false;
     } finally {
       setPendingAction("");
     }
-  }
-
-  function beginRunConfirmation(action: ConfirmationAction): void {
-    setConfirmationAction(action);
-    setActionComment("");
-  }
+  }, [runId, markActionSent, markActionSettled, refreshAll]);
 
   // Issue #580: interrupted-apply recovery copy actions. The copy may be the
   // only record of the infrastructure state: download it for inspection or
@@ -1192,7 +712,7 @@ export function RunDetail({
     try {
       await fetchApi(`/api/v2/runs/${runId}/actions/recover-state`, { method: "POST" });
       toast.add({ title: "Recovery state promoted to a new state version", type: "success" });
-      setRefreshVersion((value: number): number => value + 1);
+      refreshAll();
     } catch (error: unknown) {
       if (error instanceof ApiError && error.status === 409) {
         setRecoveryError("The workspace must be locked by you before recovering state. Lock it on the workspace page, then try again.");
@@ -1204,28 +724,9 @@ export function RunDetail({
     }
   }
 
-  async function confirmRunAction(): Promise<void> {
-    if (confirmationAction === null) return;
-    const action = confirmationAction;
-    const successTitle = action === "apply"
-      ? "Run queued for apply"
-      : action === "discard"
-        ? "Run discarded"
-        : action === "cancel"
-          ? "Run canceled"
-          : action === "force-cancel"
-            ? "Run force canceled"
-            : "Policy check overridden";
-    const succeeded = await performRunAction(
-      action,
-      successTitle,
-      actionComment,
-    );
-    if (succeeded) {
-      setConfirmationAction(null);
-      setActionComment("");
-    }
-  }
+  const handleDecisionConfirm = useCallback((action: RunActionKind, comment: string): void => {
+    void performRunAction(action, ACTION_CONFIRMATIONS[action].successTitle, comment);
+  }, [performRunAction]);
 
   // Durable: non-stream POST enqueues a background job (tab-close safe).
   // The GET polls that job until the cached explanation appears. Abort-aware
@@ -1369,7 +870,9 @@ export function RunDetail({
       });
       setCommentBody("");
       toast.add({ title: "Comment added", type: "success" });
-      setRefreshVersion((value: number): number => value + 1);
+      // Only the comment list changed; reloading the whole run to see it was
+      // eight redundant requests per comment.
+      refresh(["comments"]);
     } catch (error: unknown) {
       toast.add({
         title: error instanceof Error ? error.message : "Failed to add comment",
@@ -1426,7 +929,7 @@ export function RunDetail({
     return (
       <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-5 text-sm text-destructive">
         <p className="font-medium">{loadError !== "" ? loadError : "Run not found"}</p>
-        <Button className="mt-3" variant="outline" onClick={(): void => { setRefreshVersion((value): number => value + 1); }}>
+        <Button className="mt-3" variant="outline" onClick={(): void => { refreshAll(); }}>
           Try again
         </Button>
       </div>
@@ -1434,44 +937,21 @@ export function RunDetail({
   }
 
   const attributes = run.attributes;
-  const { actions, permissions, status } = attributes;
+  const { actions, status } = attributes;
+  const permissions = attributes.permissions;
   const canApply = fresh
     && actions?.["is-confirmable"] === true
     && permissions?.["can-apply"] === true;
-  const canDiscard = fresh
-    && actions?.["is-discardable"] === true
-    && permissions?.["can-discard"] === true;
-  const canCancel = fresh
-    && actions?.["is-cancelable"] === true
-    && permissions?.["can-cancel"] === true;
-  const canForceCancel = fresh
-    && actions?.["is-force-cancelable"] === true
-    && permissions?.["can-force-cancel"] === true;
-  const canOverridePolicy = fresh
-    && status === "policy_soft_failed"
-    && permissions?.["can-override-policy-check"] === true;
   const canComment = fresh && permissions?.["can-comment"] === true;
 
-  // Explain missing run actions (issue #597), mirroring the Why-is-Apply
-  // pattern below. Terminal runs need no explanation.
-  const actionDisabledReasons: { action: string; reason: string }[] = [];
-  if (!TERMINAL_STATUSES.has(status)) {
-    if (!canCancel) {
-      if (!fresh) actionDisabledReasons.push({ action: "Cancel", reason: "This run is no longer current." });
-      else if (permissions?.["can-cancel"] !== true) actionDisabledReasons.push({ action: "Cancel", reason: "You do not have permission to cancel runs in this workspace." });
-      else if (actions?.["is-cancelable"] !== true) actionDisabledReasons.push({ action: "Cancel", reason: `Runs in ${status} state cannot be canceled.` });
-    }
-    if (!canDiscard) {
-      if (!fresh) actionDisabledReasons.push({ action: "Discard", reason: "This run is no longer current." });
-      else if (permissions?.["can-discard"] !== true) actionDisabledReasons.push({ action: "Discard", reason: "You do not have permission to discard runs in this workspace." });
-      else if (actions?.["is-discardable"] !== true) actionDisabledReasons.push({ action: "Discard", reason: "Only pending, planned, saved, soft-failed, and unreachable runs can be discarded." });
-    }
-    if (!canForceCancel) {
-      if (!fresh) actionDisabledReasons.push({ action: "Force cancel", reason: "This run is no longer current." });
-      else if (permissions?.["can-force-cancel"] !== true) actionDisabledReasons.push({ action: "Force cancel", reason: "Force cancel requires workspace admin permission." });
-      else if (actions?.["is-force-cancelable"] !== true) actionDisabledReasons.push({ action: "Force cancel", reason: "Cancel the run first; force cancel is for stuck canceled runs." });
-    }
-  }
+  // The run's single pending decision. Everything that used to derive its own
+  // answer from the raw status — the header, the apply heading, the action
+  // buttons, the bottom warning panel — now reads this.
+  const decision = resolveRunDecision(attributes, {
+    fresh,
+    speculative: speculativeRun,
+    awaitingAction,
+  });
 
   // Statuses where a run is actively heading toward apply; re-running another
   // run from this page while one is in flight would queue a duplicate.
@@ -1574,6 +1054,21 @@ export function RunDetail({
   const applyRawLogMessage = applyStatus === "finished"
     ? "No raw apply log was captured for this run."
     : "Apply output is not available yet.";
+
+  /**
+   * A log the server can no longer serve in full — a run that outran the
+   * per-run retention cap. The server has always reported this; nothing in
+   * the UI read it, so the pane silently presented a partial log as if it
+   * were the whole thing.
+   */
+  const truncationNotice = (truncated: boolean): React.JSX.Element | null => truncated
+    ? (
+      <p className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning-text">
+        This log is longer than the retention limit, so the earliest output is no longer stored.
+        What follows is the end of the log.
+      </p>
+    )
+    : null;
   const summaryCounts = applyStatus === "finished" ? applyCounts : planCounts;
   const summaryImportCount = applyStatus === "finished"
     ? applyCounts?.["resource-imports"] ?? planImportCount
@@ -1638,31 +1133,34 @@ export function RunDetail({
     && status !== "planned_and_finished"
     && !terminatedBeforeApply;
 
-  // Explain why Apply is disabled, mirroring the gate at top:
-  const applyDisabledReasons: string[] = [];
-  const applyGated = showApply
+  // Why the apply has not started, said once, in the apply section. The
+  // reasons the *user* can act on live in the decision panel; this is the
+  // descriptive counterpart for the phase that has not begun.
+  const applyWaitingReason = showApply
     && !canApply
     && applyStatus === "pending"
     && !applyStarted
-    && !TERMINAL_STATUSES.has(status);
-  if (applyGated) {
-    if (["policy_checking", "policy_checked", "post_plan_running", "post_plan_completed", "queuing", "plan_queued", "planning"].includes(status)) {
-      applyDisabledReasons.push("Plan, policy checks, and pre-apply tasks are still running. Apply becomes available once they finish.");
-    }
-    if (status === "policy_soft_failed") {
-      applyDisabledReasons.push("A policy check soft-failed. Someone with override permission must override it before this run can be applied.");
-    }
-    if (attributes["workspace-locked"] === true) {
-      applyDisabledReasons.push(`Workspace is locked: ${isString(attributes["workspace-locked-reason"]) ? attributes["workspace-locked-reason"] : "Locked manually"}`);
-    }
-    if (permissions?.["can-apply"] !== true) {
-      applyDisabledReasons.push("You do not have permission to apply in this workspace.");
-    }
-    if (!fresh) {
-      applyDisabledReasons.push("This run is no longer current. Start a new run to apply these changes.");
-    }
-  }
-  const successfulStatus = ["applied", "planned_and_finished"].includes(status);
+    && !TERMINAL_STATUSES.has(status)
+    ? ["policy_checking", "policy_checked", "post_plan_running", "post_plan_completed", "queuing", "plan_queued", "planning", "pending", "fetching", "pre_plan_running"].includes(status)
+      ? "The plan and its checks have to finish before anything can be applied."
+      : null
+    : null;
+
+  const stages = resolveStages(status, timestamps, {
+    planOnly: attributes["plan-only"] === true,
+    hasPolicyChecks: policyChecks.length > 0,
+  });
+
+  const baseline = attributes["duration-baseline"];
+  const medianSeconds = baseline?.["median-duration-seconds"];
+  const slowRunNote = baseline?.["is-slow"] === true && isNumber(medianSeconds)
+    ? (
+      <span className="font-medium text-warning-text">
+        Slower than typical (median {formatDurationSeconds(medianSeconds)})
+      </span>
+    )
+    : null;
+
   const showCombinedEmptyActivity = TERMINAL_STATUSES.has(status)
     && runEvents.length === 0
     && comments.length === 0;
@@ -1706,26 +1204,25 @@ export function RunDetail({
         <DegradedBanner
           title="Run data may be out of date. Actions are disabled until it refreshes."
           actionLabel="Try again"
-          onAction={(): void => { setRefreshVersion((value): number => value + 1); }}
+          onAction={(): void => { refreshAll(); }}
         />
       )}
-      {fresh && auxiliaryError && (
+      {fresh && failedSections.length > 0 && (
         <DegradedBanner
-          title="Some run details could not be refreshed."
+          // Naming the sections beats "some run details": the reader can tell
+          // whether the part they came for is the stale one.
+          title={`Could not refresh ${failedSections.map(sectionLabel).join(", ")}. The rest of this page is current.`}
           actionLabel="Try again"
-          onAction={(): void => { setRefreshVersion((value): number => value + 1); }}
+          onAction={(): void => { refreshAll(); }}
         />
       )}
 
       <header className="mb-6 flex flex-col gap-4 border-b border-border pb-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <Badge
-              variant={["errored", "failed", "unreachable"].includes(status) ? "destructive" : "secondary"}
-              className={successfulStatus ? "rounded bg-success/10 text-success" : "rounded"}
-            >
-              {formatRunStatus(status)}
-            </Badge>
+            {/* One badge, one status vocabulary (lib/run-status). The page used
+                to hand-roll this mapping here and in six other places. */}
+            <StatusBadge status={status} className="rounded" />
             <span aria-live="polite" className="sr-only">Run status: {formatRunStatus(status)}</span>
             {attributes["plan-only"] === true && <Badge variant="outline" className="rounded">Plan only</Badge>}
             {speculativeRun && <Badge variant="outline" className="rounded" title="This speculative plan never applies">Speculative</Badge>}
@@ -1738,12 +1235,12 @@ export function RunDetail({
           <h1 className="break-words text-3xl font-bold tracking-tight text-foreground">
             {attributes.message ?? "Manual run"}
           </h1>
-          <p className="mt-2 text-sm text-muted-foreground">
+          {/* Where the run is, in one line, derived from the same status the
+              badge uses so the two cannot disagree. */}
+          <RunStageStrip stages={stages} className="mt-3" />
+          <p className="mt-3 text-sm text-muted-foreground">
             {formatRunSource(attributes.source, attributes["trigger-reason"])} · Created {formatDate(attributes["created-at"])}
           </p>
-          {speculativeRun && (
-            <p className="mt-1 text-xs text-muted-foreground">Speculative plan: Apply is disabled and this run never applies.</p>
-          )}
           <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
             <span>Run ID:</span>
             <code className="select-all font-mono">{runId}</code>
@@ -1819,176 +1316,130 @@ export function RunDetail({
           {rerunError !== "" && (
             <p role="alert" className="w-full text-xs text-destructive">{rerunError}</p>
           )}
-          {(canCancel || canForceCancel || canOverridePolicy) && (
-            <div aria-label="Run actions" className="flex shrink-0 flex-wrap gap-2">
-                {canCancel && (
-                  <Button
-                    variant="outline"
-                    disabled={pendingAction !== ""}
-                    onClick={(): void => { beginRunConfirmation("cancel"); }}
-                  >
-                    Cancel run
-                  </Button>
-                )}
-                {canForceCancel && (
-                  <Button
-                    variant="destructive"
-                    disabled={pendingAction !== ""}
-                    onClick={(): void => { beginRunConfirmation("force-cancel"); }}
-                  >
-                    Force cancel
-                  </Button>
-                )}
-                {canOverridePolicy && (
-                  <Button
-                    className="bg-primary text-primary-foreground hover:bg-primary/90"
-                    disabled={pendingAction !== ""}
-                    onClick={(): void => { beginRunConfirmation("override-policy"); }}
-                  >
-                    Override policy
-                  </Button>
-                )}
-              </div>
-            )}
-            {actionDisabledReasons.length > 0 && (
-              <div className="mt-2 w-full">
-                <p className="text-xs font-medium text-foreground/85">Why are actions unavailable?</p>
-                <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-muted-foreground">
-                  {actionDisabledReasons.map(({ action, reason }: { action: string; reason: string }): React.JSX.Element => (
-                    <li key={action}><span className="font-medium">{action}:</span> {reason}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+          {/* Cancel, force cancel, apply, discard and override all live in the
+              decision panel below. They used to be split between here and a
+              panel at the foot of the page, with a third block explaining why
+              the ones here were missing. */}
           </div>
       </header>
 
+      <div className="mb-6">
+        <RunDecisionPanel
+          decision={decision}
+          status={status}
+          canComment={canComment}
+          pending={pendingAction}
+          onConfirm={handleDecisionConfirm}
+        />
+      </div>
+
       {attributes["has-recovery-state"] === true && (
-        <section
+        <Callout
+          tone="warning"
           aria-label="Interrupted-apply recovery"
-          className="mb-5 rounded-md border border-amber-500/40 bg-amber-500/10 p-5 text-sm"
+          title="Recovery state available"
+          className="mb-5"
+          actions={
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={recoveryPending}
+                onClick={(): void => { void downloadRecoveryState(); }}
+              >
+                {recoveryPending ? "Working…" : "Download recovery state"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={recoveryPending}
+                onClick={(): void => { void recoverState(); }}
+              >
+                {recoveryPending ? "Working…" : "Recover into new state version"}
+              </Button>
+            </>
+          }
         >
-          <p className="font-medium text-foreground">Recovery state available</p>
-          <p className="mt-1 text-muted-foreground">
+          <p>
             This run was interrupted during apply. The captured state may be the only record of
             your infrastructure: download it for inspection, or recover it into a new state
             version. Recovering consumes the copy; unrecovered copies are kept, never pruned.
           </p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={recoveryPending}
-              onClick={(): void => { void downloadRecoveryState(); }}
-            >
-              {recoveryPending ? "Working…" : "Download recovery state"}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              disabled={recoveryPending}
-              onClick={(): void => { void recoverState(); }}
-            >
-              {recoveryPending ? "Working…" : "Recover into new state version"}
-            </Button>
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">
+          <p className="mt-2 text-xs">
             Recovering requires state-write permission and the workspace lock held by you.
           </p>
           {recoveryError !== "" && (
-            <p role="alert" className="mt-2 text-xs text-destructive">{recoveryError}</p>
+            <p role="alert" className="mt-2 text-xs font-medium text-destructive">{recoveryError}</p>
           )}
-        </section>
+        </Callout>
       )}
 
-      <dl className="mb-5 grid overflow-hidden rounded-md border border-border bg-background shadow-sm sm:grid-cols-3">
-        <div className="border-b border-border px-5 py-4 sm:border-b-0 sm:border-r">
-          <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {durationLabel}
-          </dt>
-          <dd className="mt-1 text-sm font-semibold text-foreground">{duration}</dd>
-          {(() => {
-            const baseline = attributes["duration-baseline"];
-            if (baseline?.["is-slow"] !== true || baseline["median-duration-seconds"] === null || baseline["median-duration-seconds"] === undefined) {
-              return null;
-            }
-            return (
-              <p className="mt-1 text-xs font-medium text-warning">
-                Slower than typical (median {formatDurationSeconds(baseline["median-duration-seconds"])})
-              </p>
-            );
-          })()}
-        </div>
-        <div className="border-b border-border px-5 py-4 sm:border-b-0 sm:border-r">
-          <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Resources changed</dt>
-          <dd className="mt-1">
-            <ResourceCounts
-              additions={summaryCounts?.["resource-additions"]}
-              changes={summaryCounts?.["resource-changes"]}
-              destructions={summaryCounts?.["resource-destructions"]}
-              imports={summaryImportCount}
-              status={applyStatus === "finished" ? applyStatus : planStatus}
-            />
-          </dd>
-        </div>
-        <div className="px-5 py-4">
-          <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Actions</dt>
-          <dd className="mt-1 text-sm font-semibold text-foreground">
-            {planActionCount === null
+      <MetaStrip
+        className="mb-5"
+        items={[
+          {
+            label: durationLabel,
+            value: duration,
+            ...(slowRunNote === null ? {} : { note: slowRunNote }),
+          },
+          {
+            label: "Resources changed",
+            value: (
+              <ResourceCounts
+                additions={summaryCounts?.["resource-additions"]}
+                changes={summaryCounts?.["resource-changes"]}
+                destructions={summaryCounts?.["resource-destructions"]}
+                imports={summaryImportCount}
+                status={applyStatus === "finished" ? applyStatus : planStatus}
+              />
+            ),
+          },
+          {
+            label: "Actions",
+            value: planActionCount === null
               ? "Unavailable"
-              : `${planActionCount} ${applyStatus === "finished" ? "invoked" : "to invoke"}`}
-          </dd>
-        </div>
-      </dl>
+              : `${planActionCount} ${applyStatus === "finished" ? "invoked" : "to invoke"}`,
+          },
+        ]}
+      />
 
-      <details className="mb-5 overflow-hidden rounded-md border border-border bg-background shadow-sm">
-        <summary className="cursor-pointer px-5 py-3 text-sm font-semibold text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-          Run details
-        </summary>
-        <dl className="grid gap-4 border-t border-border px-5 py-4 text-sm sm:grid-cols-2 lg:grid-cols-5">
-          <div>
-            <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</dt>
-            <dd className="mt-1 font-medium text-foreground">{formatRunStatus(status)}</dd>
-          </div>
-          {creatorUsername !== "" && (
-            <div>
-              <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Created by</dt>
-              <dd className="mt-1 flex items-center gap-2">
-                <Avatar className="size-6 rounded-full">
-                  {creatorAvatarUrl !== "" ? (
-                    <AvatarImage src={creatorAvatarUrl} alt={creatorUsername} className="rounded-full object-cover" />
-                  ) : (
-                    <AvatarFallback className="rounded-full bg-muted text-2xs text-muted-foreground">
-                      {creatorUsername.slice(0, 2).toUpperCase()}
-                    </AvatarFallback>
-                  )}
-                </Avatar>
-                <span className="font-medium text-foreground/85">{creatorUsername}</span>
-              </dd>
-            </div>
-          )}
-          <div>
-            <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Workspace</dt>
-            <dd className="mt-1">
-              <Link to={workspacePath} className="font-medium text-primary hover:underline">
-                {workspaceName}
-              </Link>
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Operation</dt>
-            <dd className="mt-1 capitalize text-foreground">{formatRunStatus(attributes.operation ?? "plan_and_apply")}</dd>
-          </div>
-          <div>
-            <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Auto apply</dt>
-            <dd className="mt-1 text-foreground">{attributes["auto-apply"] === true ? "Enabled" : "Disabled"}</dd>
-          </div>
-          <div>
-            <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Engine version</dt>
-            <dd className="mt-1 text-foreground">{attributes["terraform-version"] ?? "Workspace default"}</dd>
-          </div>
-        </dl>
+      <Disclosure label="Run details" className="mb-5">
+        <MetaList
+          columns={5}
+          className="px-5 py-4"
+          items={[
+            { label: "Status", value: formatRunStatus(status) },
+            ...(creatorUsername === "" ? [] : [{
+              label: "Created by",
+              value: (
+                <span className="flex items-center gap-2">
+                  <Avatar className="size-6 rounded-full">
+                    {creatorAvatarUrl !== "" ? (
+                      <AvatarImage src={creatorAvatarUrl} alt={creatorUsername} className="rounded-full object-cover" />
+                    ) : (
+                      <AvatarFallback className="rounded-full bg-muted text-2xs text-muted-foreground">
+                        {creatorUsername.slice(0, 2).toUpperCase()}
+                      </AvatarFallback>
+                    )}
+                  </Avatar>
+                  {creatorUsername}
+                </span>
+              ),
+            }]),
+            {
+              label: "Workspace",
+              value: (
+                <Link to={workspacePath} className="text-primary hover:underline">
+                  {workspaceName}
+                </Link>
+              ),
+            },
+            { label: "Operation", value: formatRunStatus(attributes.operation ?? "plan_and_apply") },
+            { label: "Auto apply", value: attributes["auto-apply"] === true ? "Enabled" : "Disabled" },
+            { label: "Engine version", value: attributes["terraform-version"] ?? "Workspace default" },
+          ]}
+        />
         {(timestampEntries.length > 0 || inputStateSerial !== undefined) && (
           <div className="border-t border-border px-5 py-4">
             <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Run timeline</h3>
@@ -2010,7 +1461,7 @@ export function RunDetail({
             </dl>
           </div>
         )}
-      </details>
+      </Disclosure>
 
       <div className="min-w-0 space-y-5">
           <details
@@ -2028,8 +1479,9 @@ export function RunDetail({
                 <div className="flex items-center gap-3">
                   <ChevronRight className="size-4 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
                   <PhaseIcon status={planStatus} />
-                  <h3 id="plan-heading" className="font-semibold capitalize text-foreground">
-                    Plan {planStatus.replace(/_/g, " ")}
+                  <h3 id="plan-heading" className="font-semibold text-foreground">
+                    Plan
+                    <span className="ml-2 font-normal text-muted-foreground">{formatPhaseState(planStatus)}</span>
                   </h3>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-4">
@@ -2098,6 +1550,7 @@ export function RunDetail({
               <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 pr-16 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
                 <span>Raw plan log</span>
               </summary>
+              {truncationNotice(view.planLog.truncated)}
               <pre className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
                 {planLogs !== "" ? truncateLogForDisplay(planLogs) : planRawLogMessage}
               </pre>
@@ -2282,8 +1735,13 @@ export function RunDetail({
                 <div className="flex items-center gap-3">
                   <ChevronRight className="size-4 text-muted-foreground/70 transition-transform group-open:rotate-90" aria-hidden="true" />
                   <PhaseIcon status={applyStatus} />
-                  <h3 id="apply-heading" className="font-semibold capitalize text-foreground">
-                    Apply {canApply ? "needs confirmation" : applyStatus.replace(/_/g, " ")}
+                  <h3 id="apply-heading" className="font-semibold text-foreground">
+                    Apply
+                    {/* The heading describes the phase; whether the run wants
+                        something from you is the decision panel's job to say,
+                        once. It used to be claimed here as well, and the two
+                        could disagree by a refresh. */}
+                    <span className="ml-2 font-normal text-muted-foreground">{formatPhaseState(applyStatus)}</span>
                   </h3>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-4">
@@ -2326,15 +1784,10 @@ export function RunDetail({
               </div>
             </summary>
 
-            {applyDisabledReasons.length > 0 && (
-              <div className="border-b border-border bg-muted px-5 py-3">
-                <p className="text-sm font-medium text-foreground/85">Why is Apply disabled?</p>
-                <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-                  {applyDisabledReasons.map((reason: string): React.JSX.Element => (
-                    <li key={reason}>{reason}</li>
-                  ))}
-                </ul>
-              </div>
+            {applyWaitingReason !== null && (
+              <p className="border-b border-border bg-muted/50 px-5 py-3 text-sm text-muted-foreground">
+                {applyWaitingReason}
+              </p>
             )}
 
             {applyStatus !== "pending" && (
@@ -2367,6 +1820,7 @@ export function RunDetail({
                 <summary className="flex cursor-pointer items-center justify-between gap-4 px-5 py-3 pr-16 text-sm font-medium text-foreground/85 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
                   <span>Raw apply log</span>
                 </summary>
+                {truncationNotice(view.applyLog.truncated)}
                 <pre className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
                   {applyLogs !== "" ? truncateLogForDisplay(applyLogs) : applyRawLogMessage}
                 </pre>
@@ -2385,133 +1839,6 @@ export function RunDetail({
           </details>
           )}
 
-          {(canApply || canDiscard || canCancel || canForceCancel || canOverridePolicy) && (
-            <section
-              aria-labelledby="run-confirmation-heading"
-              className="mx-auto w-full max-w-2xl rounded-md border border-warning/30 bg-warning/10 px-5 py-4 shadow-sm"
-            >
-              {confirmationAction === null ? (
-                <>
-                  <h3 id="run-confirmation-heading" className="font-semibold text-warning">
-                    Please review the planned changes before continuing
-                  </h3>
-                  <div className="mt-3">
-                    <ResourceCounts
-                      additions={planCounts["resource-additions"]}
-                      changes={planCounts["resource-changes"]}
-                      destructions={planCounts["resource-destructions"]}
-                      imports={planImportCount}
-                      status={planStatus}
-                    />
-                  </div>
-                  <p className="mt-3 text-sm text-warning">
-                    Choose an action to review it, then confirm it in the next step.
-                  </p>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {canApply && (
-                      <Button
-                        className="bg-primary text-primary-foreground hover:bg-primary/90"
-                        disabled={pendingAction !== ""}
-                        onClick={(): void => { beginRunConfirmation("apply"); }}
-                      >
-                        Review &amp; apply
-                      </Button>
-                    )}
-                    {canDiscard && (
-                      <Button
-                        variant="outline"
-                        disabled={pendingAction !== ""}
-                        onClick={(): void => { beginRunConfirmation("discard"); }}
-                      >
-                        Review &amp; discard
-                      </Button>
-                    )}
-                    {canComment && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={(): void => { document.getElementById("run-comment")?.focus(); }}
-                      >
-                        Add comment
-                      </Button>
-                    )}
-                  </div>
-                </>
-              ) : (
-                <>
-                  <h3 id="run-confirmation-heading" className="font-semibold text-warning">
-                    {confirmationAction === "apply"
-                      ? "Confirm apply"
-                      : confirmationAction === "discard"
-                        ? "Confirm discard"
-                        : confirmationAction === "cancel"
-                          ? "Confirm cancel"
-                          : confirmationAction === "force-cancel"
-                            ? "Confirm force cancel"
-                            : "Confirm policy override"}
-                  </h3>
-                  <p className="mt-2 text-sm text-warning">
-                    {confirmationAction === "apply"
-                      ? "This will execute the planned changes against this workspace."
-                      : confirmationAction === "discard"
-                        ? "This will discard the plan without changing the workspace."
-                        : confirmationAction === "cancel"
-                          ? status === "applying"
-                            ? "Canceling now stops the apply mid-flight. Terraform may have already written partial state: run a refresh-only plan afterwards and check for tainted resources before re-applying."
-                            : "This will stop the run. Completed steps are kept; nothing further will execute."
-                          : confirmationAction === "force-cancel"
-                            ? "Force cancel releases the workspace lock without waiting for the process to exit. Use it only when a canceled run is stuck; a still-running process may leave partial state behind."
-                            : "This records a policy override with your comment and unblocks apply. Overrides are audited: explain why the failure is acceptable."}
-                  </p>
-                  {canComment && (
-                    <div className="mt-4">
-                      <label htmlFor="run-action-comment" className="mb-2 block text-sm font-medium text-warning">
-                        Optional comment
-                      </label>
-                      <Textarea
-                        id="run-action-comment"
-                        name="run-action-comment"
-                        autoComplete="off"
-                        spellCheck={false}
-                        rows={3}
-                        autoFocus
-                        value={actionComment}
-                        onInput={(event): void => { setActionComment(event.currentTarget.value); }}
-                        className="border-warning/50"
-                        placeholder="Add context for this decision"
-                      />
-                    </div>
-                  )}
-                  <div className="mt-4 flex flex-wrap justify-end gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={pendingAction !== ""}
-                      onClick={(): void => { setConfirmationAction(null); setActionComment(""); }}
-                    >
-                      Back
-                    </Button>
-                    <Button
-                      type="button"
-                      variant={confirmationAction === "apply" ? "default" : "destructive"}
-                      disabled={pendingAction !== ""}
-                      onClick={(): void => { void confirmRunAction(); }}
-                    >
-                      {confirmationAction === "apply"
-                        ? "Confirm & apply"
-                        : confirmationAction === "discard"
-                          ? "Confirm discard"
-                          : confirmationAction === "cancel"
-                            ? "Confirm cancel"
-                            : confirmationAction === "force-cancel"
-                              ? "Confirm force cancel"
-                              : "Confirm override"}
-                    </Button>
-                  </div>
-                </>
-              )}
-            </section>
-          )}
 
           {showCombinedEmptyActivity ? (
             <section aria-labelledby="activity-heading" className="rounded-md border border-border bg-background shadow-sm">
@@ -2744,6 +2071,7 @@ export function RunDetail({
               Close
             </Button>
           </div>
+          {truncationNotice(fullscreenLog === "plan" ? view.planLog.truncated : view.applyLog.truncated)}
           <pre className={`flex-1 overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
             {fullscreenLog === "plan"
               ? planLogs !== "" ? truncateLogForDisplay(planLogs) : planRawLogMessage

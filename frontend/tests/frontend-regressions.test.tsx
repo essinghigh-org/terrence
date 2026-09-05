@@ -18,6 +18,7 @@ import type { EventStreamHandle, SseEvent } from "../src/lib/events";
 import { inlineMarkdown } from "../src/components/MarkdownContent";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
+import { anyPhaseLog } from "./support/run-log-fixture";
 
 const originalFetch = globalThis.fetch;
 const originalClipboard = navigator.clipboard;
@@ -192,6 +193,10 @@ test("does not poll WorkspaceDetail while hidden and resumes on visibility", asy
       runRequests++;
       return json(runDocument("planning"));
     }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
+    }
     throw new Error(`Unexpected request: ${url}`);
   })) as unknown as typeof fetch;
   setDocumentHidden(true);
@@ -232,6 +237,10 @@ test("stops WorkspaceDetail polling after a terminal run but refreshes on run st
     if (url === "/api/v2/workspaces/ws-1/runs?page[size]=1") {
       runRequests++;
       return new Promise<Response>((resolve): void => { runResolvers.push(resolve); });
+    }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
   })) as unknown as typeof fetch;
@@ -314,6 +323,10 @@ test("announces run status in the RunList live region", async () => {
           },
         }],
       });
+    }
+    {
+      const phaseLogFallback = anyPhaseLog(url);
+      if (phaseLogFallback !== null) return phaseLogFallback;
     }
     throw new Error(`Unexpected request: ${url}`);
   })) as unknown as typeof fetch;
