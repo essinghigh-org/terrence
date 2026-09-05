@@ -48,6 +48,16 @@ export function trustedClientIpHeaders(): readonly string[] {
   return cachedTrustedHeaders;
 }
 
+/** Whether a socket peer is a configured trusted proxy (issue #648). */
+export function isTrustedProxyPeer(peer: string | null): boolean {
+  return trustedProxy(peer);
+}
+
+/** Socket peer address for a request, or null when unavailable (issue #648). */
+export function socketPeerAddress(request: unknown, server: unknown): string | null {
+  return peerAddress(request, server);
+}
+
 /** Read a forwarded client address only when the actual socket peer is trusted. */
 export function trustedClientIpForPeer(request: unknown, peer: string | null): string | null {
   return trustedProxy(peer) ? trustedHeaderValue(request) : null;

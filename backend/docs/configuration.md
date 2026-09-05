@@ -168,7 +168,7 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 |---|---|---|
 | `TERRENCE_OUTBOUND_ALLOW_HOSTS` | none | Extra hosts permitted to receive outbound VCS, registry, and webhook traffic beyond the built-in private-address blocks. |
 | `TERRENCE_OUTBOUND_ALLOW_CIDRS` | none | Extra CIDRs permitted the same outbound traffic. |
-| `TERRENCE_TRUSTED_PROXY_CIDRS` | none | Comma-separated CIDRs whose `X-Forwarded-For` is trusted for client-IP resolution. |
+| `TERRENCE_TRUSTED_PROXY_CIDRS` | none | Comma-separated CIDRs trusted as proxies: their `X-Forwarded-For` is used for client-IP resolution and their `X-Forwarded-Host`/`X-Forwarded-Proto` for generated links. Forwarded host headers from other peers are ignored. |
 | `TERRENCE_CSP_STRICT` | off | When `1`, serve the UI with a strict Content-Security-Policy. |
 
 ## Rate limits

@@ -21,7 +21,7 @@ Set the public URL of the instance. It is authoritative for every generated link
 PUBLIC_URL=https://terraform.example.com
 ```
 
-Without `PUBLIC_URL`, Terrence derives the base URL from `X-Forwarded-Host`/`X-Forwarded-Proto` (or `Host`) when present, falling back to the connection address. That fallback is best-effort: proxy deployments should always set `PUBLIC_URL`.
+Without `PUBLIC_URL`, Terrence derives the base URL from `Host` (or the connection address as a last resort). `X-Forwarded-Host`/`X-Forwarded-Proto` are honored only when the socket peer matches `TERRENCE_TRUSTED_PROXY_CIDRS` (or the `trusted-client-ip-cidrs` general setting). That fallback is best-effort: proxy deployments should always set `PUBLIC_URL`.
 
 Tell Terrence which proxies to trust so forwarded client addresses are honored for audit records and rate limits. The socket peer must be in one of these CIDRs before any forwarded header is read:
 
