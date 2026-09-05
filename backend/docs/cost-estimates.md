@@ -26,7 +26,7 @@ Terrence manages the Infracost binary like the Terraform binaries: it downloads 
 
 After a plan completes, the worker runs Infracost against the plan. The estimate appears on the run page with the projected monthly cost.
 
-A plan with no resource changes produces no estimate. If the Infracost binary is unavailable, the run continues without cost data. Cost estimation never blocks the apply.
+A plan with no resource changes produces no estimate. If the Infracost binary cannot be resolved or installed, the run continues without cost data and the estimate is recorded with an `unavailable` status (the run page explains that estimation is not installed in this image). Other estimation failures record an `errored` status with the tool output. Cost estimation never blocks the apply.
 
 ## Stored artifacts
 

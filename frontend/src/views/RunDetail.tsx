@@ -10,6 +10,7 @@ import {
   Clock,
   Copy,
   History,
+  Info,
   Link2,
   Maximize2,
   Play,
@@ -1581,10 +1582,14 @@ export function RunDetail({
   const costStatus = costAttributes?.status ?? "unavailable";
   const costPending = ["queued", "pending"].includes(costStatus);
   const costFailed = ["errored", "canceled"].includes(costStatus);
+  // Issue #605: an "unavailable" artifact means estimation is not installed
+  // in this image (permanent, not a transient failure). Show the section
+  // with a one-line explanation instead of hiding it like a missing estimate.
+  const costUnavailable = costStatus === "unavailable";
   const showCostEstimate = costEstimate !== null
     && costAttributes !== undefined
     && costAttributes["terrence:infracost-enabled"] !== false
-    && !["skipped", "skipped_due_to_targeting", "disabled", "unavailable"].includes(costStatus);
+    && !["skipped", "skipped_due_to_targeting", "disabled"].includes(costStatus);
   const hasSoftFailedPolicy = status === "policy_soft_failed"
     || policyChecks.some((check: PolicyCheck): boolean => check.attributes.status === "soft_failed");
   const hasHardFailedPolicy = policyChecks.some((check: PolicyCheck): boolean =>
@@ -2119,6 +2124,8 @@ export function RunDetail({
                   <Clock className="size-5 text-primary" aria-hidden="true" />
                 ) : costFailed ? (
                   <XCircle className="size-5 text-destructive" aria-hidden="true" />
+                ) : costUnavailable ? (
+                  <Info className="size-5 text-muted-foreground" aria-hidden="true" />
                 ) : (
                   <CheckCircle2 className="size-5 text-muted-foreground/70" aria-hidden="true" />
                 )}
@@ -2128,6 +2135,8 @@ export function RunDetail({
             </div>
             {costAttributes !== undefined && (
               <dl aria-label="Cost estimate details" className="grid grid-cols-2 gap-4 border-t border-border px-5 py-4 text-sm md:grid-cols-4">
+                {!costUnavailable && (
+                  <>
                 <div>
                   <dt className="text-xs text-muted-foreground">Prior monthly</dt>
                   <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["prior-monthly-cost"])}</dd>
@@ -2146,8 +2155,10 @@ export function RunDetail({
                     {costAttributes["matched-resources-count"] ?? 0} of {costAttributes["resources-count"] ?? 0}
                   </dd>
                 </div>
-                {costAttributes["error-message"] !== null && costAttributes["error-message"] !== undefined && (
-                  <div className="col-span-full text-destructive">{costAttributes["error-message"]}</div>
+                  </>
+                )}
+                {((costAttributes["error-message"] !== null && costAttributes["error-message"] !== undefined) || costUnavailable) && (
+                  <div className={costUnavailable ? "col-span-full text-muted-foreground" : "col-span-full text-destructive"}>{costAttributes["error-message"] ?? "Cost estimation is not installed in this image."}</div>
                 )}
               </dl>
             )}

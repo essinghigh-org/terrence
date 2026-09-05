@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 
 type JsonObject = Readonly<Record<string, unknown>>;
 
-export type CostEstimateStatus = "queued" | "pending" | "finished" | "errored" | "canceled" | "skipped_due_to_targeting";
+export type CostEstimateStatus = "queued" | "pending" | "finished" | "errored" | "canceled" | "skipped_due_to_targeting" | "unavailable";
 
 export type CostEstimateTimestamps = Readonly<{
   "queued-at": string | null;

@@ -56,6 +56,9 @@ async function runWorkerScriptWithFakeSandbox(
         "#!/bin/sh",
         `record_path=${JSON.stringify(recordPath)}`,
         'if [ "$1" = "--probe" ]; then echo 1; exit 0; fi',
+        // Record the runner flags too (read-only rules, cwd), not just the
+        // post-"--" command: tests assert on sandbox rule wiring.
+        'for arg in "$@"; do printf "%s\\n" "$arg" >> "$record_path"; done',
         'cwd=""',
         'while [ "$#" -gt 0 ]; do',
         '  if [ "$1" = "--" ]; then shift; break; fi',
@@ -292,4 +295,100 @@ test("records missing and failed Infracost tooling as errored estimates while ru
   expect(String(missingEstimate["error-message"])).toContain("does-not-exist");
   expect(failedEstimate["status"]).toBe("errored");
   expect(failedEstimate["error-message"]).toBe("Infracost exited with code 23: pricing unavailable");
+});
+
+test("records an unresolvable Infracost binary as unavailable while the run continues (issue #605)", async () => {
+  const result = await runWorkerScript(`
+    process.env.SIMULATED_PLAN_JSON = JSON.stringify({
+      format_version: "1.2",
+      planned_values: { root_module: { resources: [] } },
+      resource_changes: [],
+    });
+
+    const { db } = await import("./src/db/index.ts");
+    const { adminSettings, organizations, runs, workspaces } = await import("./src/db/schema.ts");
+    const { executeRun } = await import("./src/worker.ts");
+    const { readCostEstimateArtifact } = await import("./src/lib/cost-estimate.ts");
+
+    await db.insert(organizations).values({ id: "org", name: "org", costEstimationEnabled: true });
+    await db.insert(adminSettings).values({ id: "cost", values: { enabled: true }, updatedAt: Date.now() });
+    await db.insert(workspaces).values({ id: "workspace", name: "workspace", orgId: "org" });
+    await db.insert(runs).values([
+      { id: "unavailable", workspaceId: "workspace", status: "pending", planOnly: true, createdAt: Date.now() },
+    ]);
+
+    delete process.env.INFRACOST_BINARY;
+    process.env.INFRACOST_VERSION = "not-a-version";
+    await executeRun("unavailable");
+
+    const [completedRun, estimate] = await Promise.all([
+      db.query.runs.findFirst({ where: (row, { eq }) => eq(row.id, "unavailable") }),
+      readCostEstimateArtifact("unavailable"),
+    ]);
+    console.log(JSON.stringify({ status: completedRun?.status, estimate }));
+  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+
+  expect(result["status"]).toBe("planned_and_finished");
+  const estimate = result["estimate"] as Record<string, unknown>;
+  expect(estimate["status"]).toBe("unavailable");
+  expect(String(estimate["error-message"])).toContain("not installed in this image");
+});
+
+test("exposes GCP credentials to the sandbox read-only, outside the workdir (issue #605)", async () => {
+  const result = await runWorkerScriptWithFakeSandbox(`
+    const { chmod, mkdir, readFile: readFileText, writeFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const testDir = process.env.TEST_DIR;
+    const recordDir = join(testDir, "record");
+    const infracostBinary = join(testDir, "infracost");
+    await mkdir(recordDir, { recursive: true });
+    process.env.SIMULATED_PLAN_JSON = JSON.stringify({
+      format_version: "1.2",
+      planned_values: { root_module: { resources: [] } },
+      resource_changes: [],
+    });
+
+    const gcpCredentials = JSON.stringify({ type: "service_account", project_id: "demo" });
+    await writeFile(infracostBinary, [
+      "#!/bin/sh",
+      "record_dir=" + JSON.stringify(recordDir),
+      'cat "$GOOGLE_APPLICATION_CREDENTIALS" > "$record_dir/infracost-creds"',
+      'cat "$record_dir/infracost-output.json"',
+    ].join("\\n"));
+    await writeFile(join(recordDir, "infracost-output.json"), JSON.stringify({ totalMonthlyCost: "25.50" }));
+    await chmod(infracostBinary, 0o755);
+    process.env.INFRACOST_BINARY = infracostBinary;
+
+    const { db } = await import("./src/db/index.ts");
+    const { adminSettings, organizations, runs, workspaces } = await import("./src/db/schema.ts");
+    const { executeRun } = await import("./src/worker.ts");
+    const { readCostEstimateArtifact } = await import("./src/lib/cost-estimate.ts");
+    const runnerRecordPath = process.env.TERRENCE_LANDLOCK_RECORD_PATH;
+    if (runnerRecordPath === undefined) throw new Error("Missing fake Landlock runner record path");
+
+    await db.insert(organizations).values({ id: "org", name: "org", costEstimationEnabled: true });
+    await db.insert(adminSettings).values({ id: "cost", values: { enabled: true, "gcp-credentials": gcpCredentials }, updatedAt: Date.now() });
+    await db.insert(workspaces).values({ id: "workspace", name: "workspace", orgId: "org" });
+    await db.insert(runs).values([
+      { id: "gcp", workspaceId: "workspace", status: "pending", planOnly: true, createdAt: Date.now() },
+    ]);
+
+    await executeRun("gcp");
+    const estimate = await readCostEstimateArtifact("gcp");
+    console.log(JSON.stringify({
+      estimate,
+      runnerArgs: await readFileText(runnerRecordPath, "utf8"),
+      credsSeen: await readFileText(join(recordDir, "infracost-creds"), "utf8"),
+    }));
+  `, { NODE_ENV: "test", SIMULATED_RUNS: "true" });
+
+  const estimate = result["estimate"] as Record<string, unknown>;
+  expect(estimate["status"]).toBe("finished");
+  expect(estimate["proposed-monthly-cost"]).toBe("25.50");
+  // The creds file (outside the workdir) is allow-listed read-only so the
+  // sandboxed process can resolve GOOGLE_APPLICATION_CREDENTIALS.
+  expect(String(result["runnerArgs"])).toContain("--ro=");
+  expect(String(result["runnerArgs"])).toContain("gcp-credentials.json");
+  // ... and the tool actually received working credentials through the env.
+  expect(String(result["credsSeen"])).toBe(JSON.stringify({ type: "service_account", project_id: "demo" }));
 });
