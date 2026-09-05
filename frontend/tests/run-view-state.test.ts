@@ -4,8 +4,10 @@ import {
   INITIAL_RUN_VIEW_STATE,
   appendLogChunk,
   auxKindsForStatus,
+  isSettledPlanOnly,
   logPollIntervalMs,
   runViewReducer,
+  type RunAttributes,
   type RunResource,
 } from "../src/lib/run-view-state";
 
@@ -135,12 +137,33 @@ test("a phase that is writing output polls faster than one that is queued", () =
   expect(streaming).toBeLessThan(queued);
 });
 
+test("a settled plan-only run counts as inactive even though its status is not terminal", () => {
+  // A normal run at `planned` still awaits apply, so the status cannot be
+  // terminal — but a plan-only run at `planned` will never move again, and
+  // the page must not poll it every 8s plus a full refresh every 15s.
+  const planned: RunAttributes = { status: "planned", "plan-only": true };
+  expect(isSettledPlanOnly(planned)).toBe(true);
+  expect(isSettledPlanOnly({ status: "planned" })).toBe(false);
+  expect(isSettledPlanOnly({ status: "planning", "plan-only": true })).toBe(false);
+  expect(isSettledPlanOnly(undefined)).toBe(false);
+});
+
 // ── Transition fan-out ──────────────────────────────────────────────────────
 
 test("a transition refetches the phase that moved, plus the timeline", () => {
   expect(auxKindsForStatus("applying")).toEqual(["apply", "events"]);
   expect(auxKindsForStatus("planned")).toContain("plan");
   expect(auxKindsForStatus("planned")).toContain("policy");
+});
+
+test("a needs-confirmation transition refreshes the plan-derived sections", () => {
+  // The decision treats needs_confirmation as a finished plan, so the
+  // review prompt must not sit above stale plan, policy, and cost sections
+  // until the degraded refresh.
+  const kinds = auxKindsForStatus("needs_confirmation");
+  for (const kind of ["plan", "policy", "cost", "assessments", "events"] as const) {
+    expect(kinds).toContain(kind);
+  }
 });
 
 test("a terminal transition refetches everything so every section settles", () => {

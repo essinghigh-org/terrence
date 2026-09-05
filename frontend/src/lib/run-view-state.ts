@@ -189,6 +189,24 @@ export function isRunActive(status: string | null): boolean {
 }
 
 /**
+ * A plan-only run whose plan has finished will never move again, but its
+ * `planned` status is not terminal (a normal run at `planned` still awaits
+ * apply). The page must treat it as settled: no log cadence and no 15s full
+ * refreshes. Mirrors the `settled` branch of `resolveRunDecision`, which is
+ * the user-visible statement of the same fact.
+ */
+const SETTLED_PLAN_STATUSES: ReadonlySet<string> = new Set([
+  "planned",
+  "planned_and_saved",
+  "needs_confirmation",
+]);
+
+export function isSettledPlanOnly(attributes: RunAttributes | undefined): boolean {
+  if (attributes === undefined) return false;
+  return attributes["plan-only"] === true && SETTLED_PLAN_STATUSES.has(attributes.status);
+}
+
+/**
  * Statuses where a phase is actively producing log output. These get the fast
  * log-tail cadence; merely queued statuses get the slow one, because nothing
  * is being written yet and a 2s poll would be pure load.
@@ -213,6 +231,7 @@ const PLAN_PHASE_STATUSES: ReadonlySet<string> = new Set([
   "planned",
   "planned_and_saved",
   "planned_and_finished",
+  "needs_confirmation",
   "cost_estimating",
   "cost_estimated",
   "policy_checking",

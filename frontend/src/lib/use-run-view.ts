@@ -6,6 +6,7 @@ import {
   INITIAL_RUN_VIEW_STATE,
   auxKindsForStatus,
   isRunActive,
+  isSettledPlanOnly,
   logPollIntervalMs,
   resolveCreator,
   runViewReducer,
@@ -318,8 +319,12 @@ export function useRunView(runId: string): RunView {
   // number, not the status string, so the timer is not torn down and rebuilt
   // on every transition within the same activity class.
   const status = state.run?.attributes.status ?? null;
-  const pollMs = logPollIntervalMs(status);
-  const active = isRunActive(status);
+  // A settled plan-only run reports a non-terminal status but will never
+  // move again: give it no cadence and no active flag, so the page reads
+  // its logs once and then leaves it alone.
+  const settledPlanOnly = isSettledPlanOnly(state.run?.attributes);
+  const pollMs = settledPlanOnly ? null : logPollIntervalMs(status);
+  const active = !settledPlanOnly && isRunActive(status);
   const planOffsetRef = useRef(0);
   const applyOffsetRef = useRef(0);
   // Mirrored in an effect rather than during render: a render React discards

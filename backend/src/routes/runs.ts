@@ -1679,20 +1679,27 @@ export const runRoutes = new Elysia({ name: "runs" })
     (set as { status: number }).status = 202;
     return new Response(null, { status: 202 });
   })
-  .post("/api/v2/runs/:run_id/actions/override-policy", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/runs/:run_id/actions/override-policy", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (!(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "policy-override"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
     const run = authorized.run;
     if (run.status !== "policy_soft_failed") { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run must be policy_soft_failed to override" }] }; }
+    // An override is an audited exception: the justification comment is
+    // required and persisted, so the audit trail states the reason at the
+    // moment it matters (CodeRabbit review).
+    const justification = actionComment(body);
+    if (justification === "") { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Overriding a policy check requires a justification comment" }] }; }
     const updated = await db.update(runs).set({ status: "planned" }).where(and(eq(runs.id, runId), eq(runs.status, "policy_soft_failed"))).returning();
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is no longer awaiting policy override" }] }; }
+    await createRunComment({ runId, userId: user?.id ?? null, body: justification, workspaceId: authorized.workspace.id, orgId: authorized.workspace.orgId });
     await db.update(policyChecks).set({ status: "overridden" }).where(and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])));
     await auditLog("override-policy", "runs", runId, user?.id ?? null, authorized.workspace.orgId, {
       workspaceId: authorized.workspace.id,
       fromStatus: "policy_soft_failed",
       toStatus: "planned",
+      justification,
       ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
     });
     queueRunNotification(runId, "run:needs_attention", "planned");

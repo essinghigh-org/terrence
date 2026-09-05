@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
-import { anyPhaseLog } from "./support/run-log-fixture";
+import { anyPhaseLog, phaseLogResponse } from "./support/run-log-fixture";
 
 // Kanban 25.2: the fullscreen plan/apply log dialog must move focus into the
 // dialog when it opens and hand focus back to the trigger button on close
@@ -111,6 +111,12 @@ function buildFetchMock(
       });
     }
     if (url.endsWith("/cost-estimate")) return json({ data: null });
+    // The page reads the raw log protocol now, not the legacy paged
+    // collection above: serve the plan log over plan/log so the raw-log
+    // pane and the fullscreen dialog have content to show.
+    if (url.startsWith("/api/v2/runs/run-focus/plan/log")) {
+      return phaseLogResponse("PLAN_FULLSCREEN_LINE\n", url);
+    }
     if (url === "/api/v2/runs/run-focus/run-events") return json({ data: [] });
     if (url === "/api/v2/runs/run-focus/comments") return json({ data: [] });
     if (url.endsWith("/policy-checks")) return json({ data: [] });

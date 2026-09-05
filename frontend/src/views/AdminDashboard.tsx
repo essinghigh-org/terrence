@@ -16,7 +16,7 @@ import { WorkspacesAdmin } from "./admin/workspaces";
 import { RunsAdmin } from "./admin/runs";
 import { VersionsAdmin } from "./admin/versions";
 import { AuditAdmin } from "./admin/audit";
-import { AuthAdmin } from "./admin/auth";
+import { AuthAdmin, type LocalSignupMode } from "./admin/auth";
 import type { AdminSection, DataItem, SecuritySummary } from "./admin/types";
 import { isBoolean, isNumber, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
@@ -104,7 +104,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   const [workloadIdentityAction, setWorkloadIdentityAction] = useState<"rotate" | "trim" | null>(null);
   // Local authentication state
   const [localAuthEnabled, setLocalAuthEnabled] = useState(true);
-  const [localSignup, setLocalSignup] = useState("environment");
+  const [localSignup, setLocalSignup] = useState<LocalSignupMode>("environment");
   const [trustedClientIpHeaders, setTrustedClientIpHeaders] = useState("");
   const [generalLoading, setGeneralLoading] = useState(false);
   const [generalSaving, setGeneralSaving] = useState(false);

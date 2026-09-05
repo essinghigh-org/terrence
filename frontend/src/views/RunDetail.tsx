@@ -62,7 +62,7 @@ import { RunStageStrip, resolveStages } from "../components/RunStageStrip";
 import { ACTION_CONFIRMATIONS, resolveRunDecision, type RunActionKind } from "../lib/run-decision";
 import { useRunView } from "../lib/use-run-view";
 import { sectionLabel, TERMINAL_STATUSES, type PolicyCheck, type RunComment, type RunEvent } from "../lib/run-view-state";
-import { formatPhaseState, phaseTone, TONE_ACCENT } from "../lib/run-status";
+import { formatPhaseState, phaseTone, runTone, TONE_ACCENT } from "../lib/run-status";
 import { Callout } from "../components/ui/callout";
 import { Disclosure } from "../components/ui/disclosure";
 import { MetaList, MetaStrip } from "../components/ui/meta-list";
@@ -1141,9 +1141,8 @@ export function RunDetail({
     && applyStatus === "pending"
     && !applyStarted
     && !TERMINAL_STATUSES.has(status)
-    ? ["policy_checking", "policy_checked", "post_plan_running", "post_plan_completed", "queuing", "plan_queued", "planning", "pending", "fetching", "pre_plan_running"].includes(status)
-      ? "The plan and its checks have to finish before anything can be applied."
-      : null
+    && ["policy_checking", "policy_checked", "post_plan_running", "post_plan_completed", "queuing", "plan_queued", "planning", "pending", "fetching", "pre_plan_running"].includes(status)
+    ? "The plan and its checks have to finish before anything can be applied."
     : null;
 
   const stages = resolveStages(status, timestamps, {
@@ -1328,7 +1327,9 @@ export function RunDetail({
           decision={decision}
           status={status}
           canComment={canComment}
-          pending={pendingAction}
+          // The comment form shares pendingAction ("comment" while posting):
+          // the panel must not report that as run-action work.
+          pending={pendingAction === "comment" ? "" : pendingAction}
           onConfirm={handleDecisionConfirm}
         />
       </div>
@@ -1721,7 +1722,7 @@ export function RunDetail({
           <details
             aria-labelledby="apply-heading"
             className={`group overflow-hidden rounded-md border bg-background shadow-sm ${
-              ["errored", "unreachable"].includes(applyStatus) ? "border-destructive/50" : "border-border"
+              runTone(applyStatus) === "danger" ? "border-destructive/50" : "border-border"
             }`}
             open={applyIsOpen}
             onToggle={(event): void => {

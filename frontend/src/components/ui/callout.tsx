@@ -68,7 +68,7 @@ export function Callout({
   role?: "alert" | "status";
   "aria-label"?: string;
 }>): React.JSX.Element {
-  const toneIcon = ICONS[tone];
+  const ToneIcon = ICONS[tone];
   return (
     <section
       {...(role === undefined ? {} : { role })}
@@ -76,10 +76,10 @@ export function Callout({
       className={cn("rounded-lg border p-4 text-sm", TONE_CLASSES[tone], className)}
     >
       <div className="flex items-start gap-3">
-        {toneIcon({
-          className: cn("mt-0.5 size-4 shrink-0", ICON_CLASSES[tone]),
-          "aria-hidden": "true",
-        })}
+        <ToneIcon
+          className={cn("mt-0.5 size-4 shrink-0", ICON_CLASSES[tone])}
+          aria-hidden="true"
+        />
         <div className="min-w-0 flex-1">
           {title !== undefined && (
             <p className={cn("font-semibold", TITLE_CLASSES[tone])}>{title}</p>

@@ -104,7 +104,7 @@ export function phaseTone(state: string): RunTone {
 }
 
 /** Human phase label — "Running", not "running", and never a raw enum. */
-const PHASE_LABELS: Readonly<Record<string, string>> = {
+const PHASE_LABELS: Readonly<Record<PhaseState, string>> = {
   pending: "Not started",
   queued: "Queued",
   running: "Running",
@@ -115,5 +115,5 @@ const PHASE_LABELS: Readonly<Record<string, string>> = {
 };
 
 export function formatPhaseState(state: string): string {
-  return PHASE_LABELS[state] ?? state.replace(/_/g, " ");
+  return PHASE_LABELS[state as PhaseState] ?? state.replace(/_/g, " ");
 }

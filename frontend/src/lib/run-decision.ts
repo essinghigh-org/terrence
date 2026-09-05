@@ -81,6 +81,19 @@ function offer(
 }
 
 /**
+ * Permission gate with stale-data priority (CodeRabbit review): when the
+ * page cannot confirm the run is current, say to reload instead of claiming
+ * the user lacks permission — a permitted user would otherwise get the
+ * wrong recovery action.
+ */
+const STALE_BLOCKER = "This page could not confirm the run is current. Reload and try again.";
+
+function permissionBlocker(fresh: boolean, allowed: boolean, deniedReason: string): string | null {
+  if (!fresh) return STALE_BLOCKER;
+  return allowed ? null : deniedReason;
+}
+
+/**
  * Copy for the transient states between "planning" and "planned". These read
  * as progress, not as a request, so the page must not put a decision panel in
  * front of them.
@@ -128,9 +141,7 @@ function discardOffer(
     "discard",
     label,
     "secondary",
-    fresh && attributes.permissions?.["can-discard"] === true
-      ? null
-      : "You do not have permission to discard runs in this workspace.",
+    permissionBlocker(fresh, attributes.permissions?.["can-discard"] === true, "You do not have permission to discard runs in this workspace."),
   )];
 }
 
@@ -143,9 +154,7 @@ function stopOffers(attributes: RunAttributes, fresh: boolean): readonly RunActi
           "cancel",
           "Cancel run",
           "secondary",
-          fresh && permissions?.["can-cancel"] === true
-            ? null
-            : "You do not have permission to cancel runs in this workspace.",
+          permissionBlocker(fresh, permissions?.["can-cancel"] === true, "You do not have permission to cancel runs in this workspace."),
         )]
       : []),
     ...(actions?.["is-force-cancelable"] === true
@@ -153,9 +162,7 @@ function stopOffers(attributes: RunAttributes, fresh: boolean): readonly RunActi
           "force-cancel",
           "Force cancel",
           "danger",
-          fresh && permissions?.["can-force-cancel"] === true
-            ? null
-            : "Force cancel requires workspace admin permission.",
+          permissionBlocker(fresh, permissions?.["can-force-cancel"] === true, "Force cancel requires workspace admin permission."),
         )]
       : []),
   ];
@@ -246,18 +253,26 @@ export function resolveRunDecision(
 
   if (status === "policy_soft_failed" || status === "policy_override") {
     const canOverride = fresh && permissions?.["can-override-policy-check"] === true;
+    // Overrides require a recorded justification comment (enforced by the
+    // API): without comment permission the offer must stay blocked, or the
+    // panel would invite an action that can never carry its justification.
+    const canJustify = fresh && permissions?.["can-comment"] === true;
     return {
       kind: "decide",
       headline: "A policy check needs an override before this run can apply",
       detail: canOverride
-        ? "Overrides are recorded with your comment. Explain why the finding is acceptable."
+        ? (canJustify
+          ? "Overrides are recorded with your comment. Explain why the finding is acceptable."
+          : "Overrides are recorded with a justification comment, which needs comment permission on this run.")
         : "Someone with override permission has to accept the finding, or the run can be discarded.",
       offers: [
         offer(
           "override-policy",
           "Override policy check",
           "primary",
-          canOverride ? null : "You do not have permission to override policy checks.",
+          !canOverride
+            ? permissionBlocker(fresh, false, "You do not have permission to override policy checks.")
+            : (!canJustify ? "Overriding requires a written justification, and you cannot comment on this run." : null),
         ),
         ...discardOffer(attributes, fresh, "Discard run"),
       ],

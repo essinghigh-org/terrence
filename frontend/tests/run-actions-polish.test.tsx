@@ -5,7 +5,7 @@ import { RunDetail } from "../src/views/RunDetail";
 import { RunList } from "../src/views/RunList";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
-import { anyPhaseLog } from "./support/run-log-fixture";
+import { anyPhaseLog, phaseLogResponse } from "./support/run-log-fixture";
 
 const originalFetch = globalThis.fetch;
 
@@ -17,14 +17,8 @@ function json(data: JsonValue, status = 200): Response {
 }
 
 /** A whole phase log served over the byte-offset raw log protocol. */
-function rawLog(body: string): Response {
-  return new Response(body, {
-    headers: {
-      "Content-Type": "text/plain; charset=utf-8",
-      "X-Terrence-Log-Total-Bytes": String(new TextEncoder().encode(body).byteLength),
-      "X-Terrence-Log-Truncated": "false",
-    },
-  });
+function rawLog(body: string, url: string): Response {
+  return phaseLogResponse(body, url);
 }
 
 function requestUrl(input: string | URL | Request): string {
@@ -92,8 +86,8 @@ function baseMock(
     if (url === `/api/v2/runs/${runId}`) return json(run);
     if (url === `/api/v2/runs/${runId}/plan`) return json({ data: { attributes: { status: "finished" } } });
     if (url === `/api/v2/applies/apply-${runId}`) return json({ data: { attributes: { status: "pending" } } });
-    if (url.startsWith(`/api/v2/runs/${runId}/plan/log`)) return rawLog("");
-    if (url.startsWith(`/api/v2/runs/${runId}/apply/log`)) return rawLog("");
+    if (url.startsWith(`/api/v2/runs/${runId}/plan/log`)) return rawLog("", url);
+    if (url.startsWith(`/api/v2/runs/${runId}/apply/log`)) return rawLog("", url);
     if (url.endsWith("/cost-estimate")) return json({ data: null });
     return json({ data: [] });
   };
@@ -128,7 +122,7 @@ test("failed apply keeps the raw log visible beside diagnostics (issue #589)", a
       return json({ data: { attributes: { status: "errored" } } });
     }
     if (url.startsWith("/api/v2/runs/run-failed/apply/log")) {
-      return rawLog("Error: Apply failed\n\n  on main.tf line 1:\n  boom\n");
+      return rawLog("Error: Apply failed\n\n  on main.tf line 1:\n  boom\n", url);
     }
     return null;
   }, seen)) as unknown as typeof fetch;
@@ -165,7 +159,10 @@ test("actions the run cannot take at all are not rendered as dead buttons", asyn
   }), () => null, seen)) as unknown as typeof fetch;
 
   const view = renderDetail("run-quiet");
-  await waitFor((): void => { expect(view.getByText("Planning")).toBeTruthy(); });
+  // "Planning" renders in several places at once (breadcrumb, status badge,
+  // decision panel), so wait for all of them instead of a getByText that
+  // throws on multiple matches.
+  await waitFor((): void => { expect(view.getAllByText("Planning").length).toBeGreaterThan(0); });
   expect(view.queryByRole("button", { name: "Force cancel" })).toBeNull();
   // And no panel asking the user to review changes that do not exist yet.
   expect(view.queryByText(/review the planned changes/i)).toBeNull();

@@ -16,7 +16,17 @@ const request = (path: string, method = "GET", attrs?: unknown, token = adminTok
   headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/vnd.api+json" },
   ...(attrs === undefined ? {} : { body: JSON.stringify({ data: { type: "general-settings", attributes: attrs } }) }),
 }));
-const signupShown = async () => (await (await request("/ping")).json())["signup-enabled"];
+// Public discovery and registration run without credentials and follow
+// their own payload contracts (CodeRabbit review): the admin `request`
+// helper above would mask auth-gating and body-shape regressions here.
+const publicRequest = (path: string, method = "GET", body?: unknown) => app.handle(new Request(`http://terrence.test/api/v2${path}`, {
+  method,
+  headers: { "Content-Type": "application/vnd.api+json" },
+  ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+}));
+const signupShown = async () => (await (await publicRequest("/ping")).json())["signup-enabled"];
+const signupAttempt = (attrs: Record<string, unknown>) => publicRequest("/users", "POST", { data: { type: "users", attributes: attrs } });
+let persistedSignup: unknown;
 
 beforeAll(async () => {
   process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"] = "false";
@@ -28,10 +38,15 @@ beforeAll(async () => {
     { id: `signup-settings-at-${suffix}`, userId: adminId, token: hashAuthenticationToken(adminToken) },
     { id: `signup-settings-mt-${suffix}`, userId: memberId, token: hashAuthenticationToken(memberToken) },
   ]);
+  persistedSignup = ((await (await request("/admin/general-settings")).json()) as {
+    data: { attributes: Record<string, unknown> };
+  }).data.attributes["local-signup-enabled"];
 });
 afterAll(async () => {
   if (previous === undefined) delete process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"];
   else process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"] = previous;
+  // Restore the persisted preference so later suites do not inherit it.
+  await request("/admin/general-settings", "PATCH", { "local-signup-enabled": persistedSignup ?? null });
   await db.delete(apiTokens).where(inArray(apiTokens.userId, [adminId, memberId]));
   await db.delete(users).where(inArray(users.id, [adminId, memberId]));
 });
@@ -43,15 +58,15 @@ test("registration settings are admin-only and reject invalid preference values"
 
 test("saved registration preference overrides the deployment default and updates public discovery and registration together", async () => {
   expect(await signupShown()).toBe(false);
-  expect((await request("/users", "POST", {})).status).toBe(403);
+  expect((await signupAttempt({})).status).toBe(403);
   expect((await request("/admin/general-settings", "PATCH", { "local-signup-enabled": true })).status).toBe(200);
   expect(await signupShown()).toBe(true);
   // An incomplete signup is now validated, rather than rejected by the registration gate.
-  expect((await request("/users", "POST", {})).status).toBe(400);
+  expect((await signupAttempt({})).status).toBe(400);
   expect((await request("/admin/general-settings", "PATCH", { "local-signup-enabled": false })).status).toBe(200);
   process.env["TERRENCE_ENABLE_LOCAL_SIGNUP"] = "true";
   expect(await signupShown()).toBe(false);
-  expect((await request("/users", "POST", {})).status).toBe(403);
+  expect((await signupAttempt({})).status).toBe(403);
   expect((await request("/admin/general-settings", "PATCH", { "local-signup-enabled": null })).status).toBe(200);
   expect(await signupShown()).toBe(true);
 });

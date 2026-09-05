@@ -215,7 +215,7 @@ test("filters workspaces by run status and adds, updates, and removes tags", asy
   });
 
   fireEvent.click(view.getByRole("button", { name: "Manage tags for production" }));
-  await waitFor((): void => { expect(view.getByText("No direct tags.")).toBeTruthy(); });
+  await waitFor((): void => { expect(view.getByText(/No tags set on this workspace itself/)).toBeTruthy(); });
   await act(async (): Promise<void> => {
     fireEvent.input(view.getByLabelText("Key"), { target: { value: "environment" } });
     fireEvent.input(view.getByLabelText("Value"), { target: { value: "production" } });
@@ -256,7 +256,7 @@ test("filters workspaces by run status and adds, updates, and removes tags", asy
     expect(view.getByRole("heading", { name: "Remove tag?" })).toBeTruthy();
   });
   fireEvent.click(view.getByRole("button", { name: "Remove tag" }));
-  await waitFor((): void => { expect(view.getByText("No direct tags.")).toBeTruthy(); });
+  await waitFor((): void => { expect(view.getByText(/No tags set on this workspace itself/)).toBeTruthy(); });
 });
 
 test("manages team organization access, invites a member, and removes them", async () => {

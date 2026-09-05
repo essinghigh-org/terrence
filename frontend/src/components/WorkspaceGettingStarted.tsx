@@ -57,7 +57,7 @@ export function WorkspaceGettingStarted({
         </>
       )}
       <div className="flex flex-wrap items-center gap-3">
-        {usesServerCode && canQueueRun && !localExecution && <Link className={buttonVariants({ size: "sm" })} to={`${workspacePath}/runs?new-run=true`}>Start first plan</Link>}
+        {usesServerCode && canQueueRun && <Link className={buttonVariants({ size: "sm" })} to={`${workspacePath}/runs?new-run=true`}>Start first plan</Link>}
         {canReadVariable && <Link className={buttonVariants({ variant: "outline", size: "sm" })} to={`${workspacePath}/variables`}>Configure variables</Link>}
         {!hasRepository && canUpdate && <Link className="text-sm font-medium text-primary hover:underline" to={`${workspacePath}/settings/version-control`}>Connect a Git repository</Link>}
         <Link className="text-sm font-medium text-primary hover:underline" to="/app/docs/quickstart">Quick start guide</Link>

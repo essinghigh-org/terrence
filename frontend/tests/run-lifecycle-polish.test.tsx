@@ -6,7 +6,7 @@ import { RunList } from "../src/views/RunList";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
 import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
-import { anyPhaseLog, handlePhaseLogs } from "./support/run-log-fixture";
+import { anyPhaseLog, handlePhaseLogs, phaseLogResponse } from "./support/run-log-fixture";
 
 const originalFetch = globalThis.fetch;
 const originalClipboard = navigator.clipboard;
@@ -26,6 +26,27 @@ function requestUrl(input: string | URL | Request): string {
 function CurrentLocation(): React.JSX.Element {
   const location = useLocation();
   return <output aria-label="Current location">{location.pathname}{location.search}</output>;
+}
+
+/** Type into a controlled field the way React observes here (see
+ * admin-bootstrap.test.tsx): reset the value tracker, set the value, then
+ * fire input+change. Bare fireEvent.change updates the DOM but never
+ * reaches React state in this renderer. */
+function changeInput(element: HTMLElement, value: string): void {
+  const tracker = (element as { _valueTracker?: { setValue: (next: string) => void } })._valueTracker;
+  tracker?.setValue(value === "" ? "x" : "");
+  Reflect.set(element, "value", value);
+  fireEvent.input(element, { target: { value } });
+  fireEvent.change(element, { target: { value } });
+}
+
+/** Terminal fetch step shared by every mock below (CodeRabbit review): serve
+ * the empty phase-log fallback for log reads, otherwise fail loudly so a
+ * missing stub surfaces as an error instead of a hanging waitFor. */
+function phaseLogOrThrow(url: string): Response {
+  const fallback = anyPhaseLog(url);
+  if (fallback !== null) return fallback;
+  throw new Error(`Unexpected request: ${url}`);
 }
 
 afterEach((): void => {
@@ -196,11 +217,7 @@ test("separates phase logs and only renders backend-authorized run actions", asy
       });
     }
     if (url.endsWith("/policy-checks")) return json({ data: [] });
-    {
-      const phaseLogFallback = anyPhaseLog(url);
-      if (phaseLogFallback !== null) return phaseLogFallback;
-    }
-    throw new Error(`Unexpected request: ${url}`);
+    return phaseLogOrThrow(url);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
   const writeText = mock(async (text: string): Promise<void> => {
@@ -246,7 +263,9 @@ test("separates phase logs and only renders backend-authorized run actions", asy
 // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(planSection as HTMLElement).getByText(/Started/)).toBeTruthy();
 // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
-  expect(within(planSection as HTMLElement).getByText(/Finished/)).toBeTruthy();
+  // "Finished" renders twice by design: the heading status label and the
+  // completed timestamp in the phase meta row.
+  expect(within(planSection as HTMLElement).getAllByText(/Finished/)).toHaveLength(2);
 // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
   expect(within(applySection as HTMLElement).queryByText("PLAN_PHASE_ONLY")).toBeNull();
 // SAFETY: the value is an element in the test DOM; callers treat it as an HTMLElement.
@@ -293,10 +312,11 @@ test("separates phase logs and only renders backend-authorized run actions", asy
   fireEvent.click(view.getByRole("button", { name: "Apply changes" }));
   expect(view.getByRole("heading", { name: "Apply these changes?" })).toBeTruthy();
 // SAFETY: the component renders this element type for the queried role/label.
-  const actionComment = view.getByLabelText(/^Comment/) as HTMLTextAreaElement;
-  fireEvent.change(actionComment, {
-    target: { value: "Approved after reviewing the dependency graph" },
-  });
+// Scoped to the confirmation step: the comments section form below carries a
+// matching label since the UI rework.
+  const confirmSection = view.getByRole("heading", { name: "Apply these changes?" }).closest("section");
+  const actionComment = within(confirmSection as HTMLElement).getByLabelText(/^Comment/) as HTMLTextAreaElement;
+  changeInput(actionComment, "Approved after reviewing the dependency graph");
   expect(actionComment.value).toBe("Approved after reviewing the dependency graph");
   // The committal button does not share its name with the offer that opened
   // it, so the two steps are distinguishable by label alone.
@@ -323,11 +343,7 @@ test("opens a requested run dialog, sends the selected run type, and navigates t
       createBody = JSON.parse(init.body) as unknown;
       return json({ data: { id: "run-plan-only" } }, 201);
     }
-    {
-      const phaseLogFallback = anyPhaseLog(url);
-      if (phaseLogFallback !== null) return phaseLogFallback;
-    }
-    throw new Error(`Unexpected request: ${url}`);
+    return phaseLogOrThrow(url);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
@@ -395,11 +411,7 @@ test("clones an existing run's settings into the new-run dialog", async () => {
       createBody = JSON.parse(init.body) as unknown;
       return json({ data: { id: "run-cloned" } }, 201);
     }
-    {
-      const phaseLogFallback = anyPhaseLog(url);
-      if (phaseLogFallback !== null) return phaseLogFallback;
-    }
-    throw new Error(`Unexpected request: ${url}`);
+    return phaseLogOrThrow(url);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
@@ -465,11 +477,7 @@ test("closing a deep-linked new-run dialog clears the query", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     if (requestUrl(input) === "/api/v2/workspaces/ws-1/runs" || requestUrl(input) === "/api/v2/workspaces/ws-1/runs?sort=-created-at") return json({ data: [] });
-    {
-      const phaseLogFallback = anyPhaseLog(requestUrl(input));
-      if (phaseLogFallback !== null) return phaseLogFallback;
-    }
-    throw new Error(`Unexpected request: ${requestUrl(input)}`);
+    return phaseLogOrThrow(requestUrl(input));
   })) as unknown as typeof fetch;
 
   const view = render(
@@ -503,11 +511,7 @@ test("does not offer run creation without workspace permission", async () => {
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     if (requestUrl(input) === "/api/v2/workspaces/ws-readonly/runs" || requestUrl(input) === "/api/v2/workspaces/ws-readonly/runs?sort=-created-at") return json({ data: [] });
-    {
-      const phaseLogFallback = anyPhaseLog(requestUrl(input));
-      if (phaseLogFallback !== null) return phaseLogFallback;
-    }
-    throw new Error(`Unexpected request: ${requestUrl(input)}`);
+    return phaseLogOrThrow(requestUrl(input));
   })) as unknown as typeof fetch;
 
   const view = render(
@@ -560,11 +564,7 @@ test("omits stages that cannot run for a finished plan-only run", async () => {
       return json({ data: [] });
     }
     if (url.endsWith("/cost-estimate")) return json({ data: null });
-    {
-      const phaseLogFallback = anyPhaseLog(url);
-      if (phaseLogFallback !== null) return phaseLogFallback;
-    }
-    throw new Error(`Unexpected request: ${url}`);
+    return phaseLogOrThrow(url);
   })) as unknown as typeof fetch;
 
   const view = render(
@@ -640,16 +640,18 @@ test("opens failed applies and presents their diagnostics", async () => {
       return json({ resource_changes: [] });
     }
     if (url.endsWith("/cost-estimate")) return json({ data: null });
+    // The page reads the raw log protocol now, not the legacy paged
+    // collection below: serve the failing log over apply/log so the
+    // diagnostics banner has structured errors to present.
+    if (url.startsWith("/api/v2/runs/run-apply-error/apply/log")) {
+      return phaseLogResponse("Error: resource name already exists\n  on main.tf line 5\n", url);
+    }
     if (url.endsWith("/policy-checks")
       || url.endsWith("/run-events")
       || url.endsWith("/comments")) {
       return json({ data: [] });
     }
-    {
-      const phaseLogFallback = anyPhaseLog(url);
-      if (phaseLogFallback !== null) return phaseLogFallback;
-    }
-    throw new Error(`Unexpected request: ${url}`);
+    return phaseLogOrThrow(url);
   })) as unknown as typeof fetch;
 
   const view = render(
@@ -663,7 +665,9 @@ test("opens failed applies and presents their diagnostics", async () => {
     </MemoryRouter>,
   );
 
-  const applyHeading = await view.findByRole("heading", { name: "Apply errored" });
+  // Accessible name has no space: the status span is separated by margin,
+  // not whitespace ("Apply" + "Failed").
+  const applyHeading = await view.findByRole("heading", { name: "ApplyFailed" });
   // SAFETY: the heading lives inside a details element; closest() resolves it.
   const applySection = applyHeading.closest("details") as HTMLDetailsElement;
   // Apply errors surface through the same DiagnosticsBanner that warnings
@@ -729,11 +733,7 @@ test("clears stale activity immediately when navigating to another run", async (
     if (url.endsWith("/logs") || url.endsWith("/policy-checks") || url.endsWith("/comments")) {
       return json({ data: [] });
     }
-    {
-      const phaseLogFallback = anyPhaseLog(url);
-      if (phaseLogFallback !== null) return phaseLogFallback;
-    }
-    throw new Error(`Unexpected request: ${url}`);
+    return phaseLogOrThrow(url);
   })) as unknown as typeof fetch;
 
   const view = render(

@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { RunDetail } from "../src/views/RunDetail";
 import type { JsonValue } from "../src/lib/json";
@@ -43,6 +43,7 @@ function installFetchMock(
   status: string,
   onPlanLog: (offset: string | null) => void,
   planLog: () => string,
+  onApplyLog: (offset: string | null) => void = (): void => undefined,
 ): void {
   const fetchMock = mock((input: string | URL | Request): Promise<Response> => {
     const raw = typeof input === "string"
@@ -69,6 +70,7 @@ function installFetchMock(
       return Promise.resolve(logSlice(planLog(), url.searchParams.get("offset")));
     }
     if (url.pathname.endsWith("/runs/run-polling/apply/log")) {
+      onApplyLog(url.searchParams.get("offset"));
       return Promise.resolve(logSlice("", url.searchParams.get("offset")));
     }
     return Promise.resolve(json({ data: null }));
@@ -117,24 +119,30 @@ test("an active run tails its plan log forward from the last byte it holds", asy
 test("appended log output is added to what is already on screen", async () => {
   let log = "alpha\n";
   installFetchMock("planning", noteNothing, (): string => log);
-  renderDetail();
+  // NOTE: global `screen` queries stay bound to the document at import time
+  // and throw under bun+happy-dom ("a global document has to be available"),
+  // so every query here goes through the render result like the other suites.
+  const view = renderDetail();
 
   await waitFor((): void => {
-    expect(screen.getByText(/alpha/)).toBeTruthy();
+    expect(view.getByText(/alpha/)).toBeTruthy();
   }, { timeout: 10000 });
 
   log = "alpha\nomega\n";
   // Both the original and the appended text must be present: a reader that
   // replaced its buffer with each response would show only the delta.
   await waitFor((): void => {
-    const pane = screen.getByText(/omega/);
+    const pane = view.getByText(/omega/);
     expect(pane.textContent ?? "").toContain("alpha");
   }, { timeout: 15000 });
 }, 25000);
 
 test("a terminal run stops polling once it has read its logs", async () => {
   let calls = 0;
-  installFetchMock("applied", (): void => { calls += 1; }, (): string => "done\n");
+  // Both phases are counted: a terminal run that kept polling its apply log
+  // must fail here, not just one that re-reads the plan log.
+  const count = (): void => { calls += 1; };
+  installFetchMock("applied", count, (): string => "done\n", count);
   renderDetail();
 
   await waitFor((): void => {

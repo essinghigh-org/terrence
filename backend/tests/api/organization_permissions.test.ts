@@ -631,6 +631,8 @@ describe("granular organization permissions", () => {
       `/api/v2/runs/${runIds.soft}/actions/override-policy`,
       tokens.delegateOverrides,
       "POST",
+      // Overrides require a recorded justification (CodeRabbit review).
+      { data: { type: "runs", attributes: { comment: "Accepted: finding does not apply to this module." } } },
     );
     expect(overrideResponse.status).toBe(200);
     expect((await overrideResponse.json()).data.attributes.status).toBe("planned");

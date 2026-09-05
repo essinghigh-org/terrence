@@ -12,7 +12,7 @@ import { Workspaces } from "../src/views/Workspaces";
 import { VariableSets } from "../src/views/VariableSets";
 import { isRecord, isString } from "../src/lib/type-guards";
 import type { JsonObject, JsonValue } from "../src/lib/json";
-import { anyPhaseLog } from "./support/run-log-fixture";
+import { anyPhaseLog, phaseLogResponse } from "./support/run-log-fixture";
 
 const originalFetch = globalThis.fetch;
 const originalConfirm = globalThis.confirm;
@@ -1063,7 +1063,7 @@ test("displays run cost and policy check results", async () => {
   expect(view.getByText("2 of 3")).toBeTruthy();
   expect(view.getByText("Restrict regions — 1 violation: eu-west-3")).toBeTruthy();
   expect(view.getByText("polchk-regions")).toBeTruthy();
-  expect(view.getByRole("button", { name: "Override policy" })).toBeTruthy();
+  expect(view.getByRole("button", { name: "Override policy check" })).toBeTruthy();
   expect(view.queryByRole("button", { name: "Confirm & Apply" })).toBeNull();
 });
 
@@ -1184,8 +1184,10 @@ test("queues a run, displays its logs, and applies it", async () => {
       });
     }
     if (url.endsWith("/runs/run-12345678/actions/apply")) return new Response(null, { status: 202 });
-    if (url.endsWith("/runs/run-12345678/logs")) {
-      return json({ logs: [{ message: "Plan: 1 to add." }] });
+    // The page reads the raw log protocol now, not the legacy paged
+    // collection: serve the plan summary line over plan/log.
+    if (url.startsWith("/api/v2/runs/run-12345678/plan/log")) {
+      return phaseLogResponse("Plan: 1 to add.\n", url);
     }
     if (url.endsWith("/runs/run-12345678")) {
       return json({
@@ -1235,8 +1237,8 @@ test("queues a run, displays its logs, and applies it", async () => {
     </MemoryRouter>,
   );
   await waitFor((): void => { expect(detail.getByText(/Plan: 1 to add./)).toBeTruthy(); }, { timeout: 5000 });
-  fireEvent.click(detail.getByRole("button", { name: "Review & apply" }));
-  fireEvent.click(detail.getByRole("button", { name: "Confirm & apply" }));
+  fireEvent.click(detail.getByRole("button", { name: "Apply changes" }));
+  fireEvent.click(detail.getByRole("button", { name: "Yes, apply changes" }));
   await waitFor((): void => { expect(fetchMock.mock.calls.some(([url, init]): boolean =>
     getUrlString(url).endsWith("/runs/run-12345678/actions/apply") &&
     init?.method === "POST"

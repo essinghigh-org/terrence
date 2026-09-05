@@ -170,7 +170,7 @@ export function PolicySets(): React.JSX.Element {
             <HelpTooltip content="Rules checked against a plan before it can be applied. Written in Sentinel." />
           </span>
         }
-        description="Policy sets are rules checked against a plan before it can be applied \u2014 for example, refusing to create a resource without a required tag. Optional: workspaces run fine without any."
+        description="Policy sets are rules checked against a plan before it can be applied — for example, refusing to create a resource without a required tag. Optional: workspaces run fine without any."
         action={canManage ? (
           <Button onClick={(): void => { setCreateDialogOpen(true); }}>
             <Plus className="mr-1.5 size-4" /> Create policy set

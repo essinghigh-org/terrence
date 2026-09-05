@@ -23362,6 +23362,46 @@
           "500": {
             "description": "Internal Server Error"
           }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.api+json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "data"
+                ],
+                "properties": {
+                  "data": {
+                    "type": "object",
+                    "required": [
+                      "attributes"
+                    ],
+                    "properties": {
+                      "attributes": {
+                        "type": "object",
+                        "required": [
+                          "password",
+                          "password-confirmation"
+                        ],
+                        "properties": {
+                          "password": {
+                            "type": "string",
+                            "format": "password"
+                          },
+                          "password-confirmation": {
+                            "type": "string",
+                            "format": "password"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },

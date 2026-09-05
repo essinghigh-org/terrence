@@ -10,6 +10,7 @@ import {
   type RunActionOffer,
   type RunDecision,
 } from "@/lib/run-decision";
+import { TONE_ACCENT, TONE_SURFACE, type RunTone } from "@/lib/run-status";
 
 /**
  * The one place on the run page where actions live.
@@ -27,14 +28,21 @@ import {
  * clicks without the impression that something was submitted already.
  */
 
+function decisionTone(decision: RunDecision): RunTone {
+  if (decision.kind === "waiting") return "active";
+  if (decision.kind === "settled") return "neutral";
+  return "attention";
+}
+
 function ToneIcon({ decision }: Readonly<{ decision: RunDecision }>): React.JSX.Element {
+  const tone = decisionTone(decision);
   if (decision.kind === "waiting") {
-    return <Loader2 className="size-5 shrink-0 animate-spin text-primary" aria-hidden="true" />;
+    return <Loader2 className={`size-5 shrink-0 animate-spin ${TONE_ACCENT[tone]}`} aria-hidden="true" />;
   }
   if (decision.kind === "settled") {
-    return <CheckCircle2 className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />;
+    return <CheckCircle2 className={`size-5 shrink-0 ${TONE_ACCENT[tone]}`} aria-hidden="true" />;
   }
-  return <AlertTriangle className="size-5 shrink-0 text-warning" aria-hidden="true" />;
+  return <AlertTriangle className={`size-5 shrink-0 ${TONE_ACCENT[tone]}`} aria-hidden="true" />;
 }
 
 function offerButtonProps(emphasis: RunActionOffer["emphasis"]): Readonly<{
@@ -109,6 +117,12 @@ function ConfirmStep({
             onChange={(event: React.ChangeEvent<HTMLTextAreaElement>): void => {
               onCommentChange(event.target.value);
             }}
+            // Mirror onChange as onInput: synthetic test events reach only
+            // onInput in this renderer (see CreateWorkspaceModal); real
+            // browsers fire both, and the duplicate setState is a no-op.
+            onInput={(event: React.SyntheticEvent<HTMLTextAreaElement>): void => {
+              onCommentChange(event.currentTarget.value);
+            }}
             placeholder={action === "override-policy"
               ? "Why is this finding acceptable?"
               : "Add context for this decision"}
@@ -119,8 +133,8 @@ function ConfirmStep({
         <Button
           type="button"
           variant={action === "apply" ? "default" : "destructive"}
-          disabled={busy || (needsJustification && canComment)}
-          {...(needsJustification && canComment
+          disabled={busy || needsJustification}
+          {...(needsJustification
             ? { title: "Say why this finding is acceptable before overriding it." }
             : {})}
           onClick={onConfirm}
@@ -176,9 +190,7 @@ export function RunDecisionPanel({
   if (decision.kind === "settled" && silent) return null;
   if (decision.kind === "waiting" && silent && !decision.showProgress) return null;
 
-  const surface = decision.kind === "decide"
-    ? "border-warning/40 bg-warning/5"
-    : "border-border bg-muted/30";
+  const surface = TONE_SURFACE[decisionTone(decision)];
 
   if (confirming !== null) {
     return (
@@ -218,9 +230,9 @@ export function RunDecisionPanel({
                   type="button"
                   {...offerButtonProps(item.emphasis)}
                   disabled={item.blockedReason !== null || pending !== ""}
-                  // The blocker rides on the button it blocks, instead of in a
-                  // separate "Why are actions unavailable?" list that had to
-                  // restate which action each line was about.
+                  // The blocker rides on the button it blocks; the list below
+                  // repeats it as text so the reason stays reachable by
+                  // keyboard and screen readers (title alone is not).
                   title={item.blockedReason ?? undefined}
                   onClick={(): void => { setRequested(item.kind); setComment(""); }}
                 >

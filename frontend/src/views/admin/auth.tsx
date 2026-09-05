@@ -1,17 +1,26 @@
+import { useState } from "react";
 import { Select } from "../../components/ui/select";
+import { Disclosure } from "../../components/ui/disclosure";
 import { AlertCircle, } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Textarea } from "../../components/ui/textarea";
+
+/** Registration policy: follow the deployment environment, or force on/off. */
+export type LocalSignupMode = "environment" | "enabled" | "disabled";
+
+export function isLocalSignupMode(value: string): value is LocalSignupMode {
+  return value === "environment" || value === "enabled" || value === "disabled";
+}
 export function AuthAdmin(props: Readonly<{
   general: Readonly<{
     loading: boolean;
     saving: boolean;
     error: string | null;
     localAuthEnabled: boolean;
-    localSignup: string;
-    setLocalSignup: React.Dispatch<React.SetStateAction<string>>;
+    localSignup: LocalSignupMode;
+    setLocalSignup: React.Dispatch<React.SetStateAction<LocalSignupMode>>;
     setLocalAuthEnabled: React.Dispatch<React.SetStateAction<boolean>>;
     trustedClientIpHeaders: string;
     setTrustedClientIpHeaders: React.Dispatch<React.SetStateAction<string>>;
@@ -214,6 +223,14 @@ export function AuthAdmin(props: Readonly<{
       handleSave: handleSaveLdap,
     },
   } = props;
+  // Each panel's open state is separate from its enabled/error state: the
+  // old controlled `open={enabled || error !== null}` collapsed the form on
+  // every render while editing a disabled panel. Enabled panels and panels
+  // with an error still force themselves open; otherwise the reader's last
+  // toggle wins.
+  const [samlUserOpen, setSamlUserOpen] = useState(false);
+  const [oidcUserOpen, setOidcUserOpen] = useState(false);
+  const [ldapUserOpen, setLdapUserOpen] = useState(false);
   return (
     <div className="space-y-6">
       {/* LOCAL AUTHENTICATION */}
@@ -251,7 +268,7 @@ export function AuthAdmin(props: Readonly<{
               </p>
               <div className="space-y-2">
                 <label htmlFor="local-signup-enabled" className="block text-sm font-medium">New account registration</label>
-                <Select id="local-signup-enabled" name="local-signup-enabled" value={localSignup} onValueChange={setLocalSignup}>
+                <Select id="local-signup-enabled" name="local-signup-enabled" value={localSignup} onValueChange={(value: string): void => { if (isLocalSignupMode(value)) setLocalSignup(value); }}>
                   <option value="environment">Use deployment setting</option>
                   <option value="disabled">Invite only — admins create accounts</option>
                   <option value="enabled">Allow anyone to register</option>
@@ -293,10 +310,12 @@ export function AuthAdmin(props: Readonly<{
           )}
         </CardContent>
       </Card>
-      <details className="rounded-xl border bg-card" open={samlEnabled || samlError !== null}>
-        <summary className="cursor-pointer rounded-xl px-5 py-4 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          SAML single sign-on<span className="ml-2 text-xs font-normal text-muted-foreground">{samlEnabled ? "Enabled" : "Not enabled"}</span>
-        </summary>
+      <Disclosure
+        label="SAML single sign-on"
+        meta={<span className="text-xs font-normal text-muted-foreground">{samlEnabled ? "Enabled" : "Not enabled"}</span>}
+        open={samlEnabled || samlError !== null || samlUserOpen}
+        onToggle={setSamlUserOpen}
+      >
       {/* SAML SSO */}
       <Card className="border-0 border-t rounded-t-none shadow-none">
         <CardHeader variant="section">
@@ -502,11 +521,13 @@ export function AuthAdmin(props: Readonly<{
           )}
         </CardContent>
       </Card>
-      </details>
-      <details className="rounded-xl border bg-card" open={oidcEnabled || oidcError !== null}>
-        <summary className="cursor-pointer rounded-xl px-5 py-4 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          OpenID Connect sign-in<span className="ml-2 text-xs font-normal text-muted-foreground">{oidcEnabled ? "Enabled" : "Not enabled"}</span>
-        </summary>
+      </Disclosure>
+      <Disclosure
+        label="OpenID Connect sign-in"
+        meta={<span className="text-xs font-normal text-muted-foreground">{oidcEnabled ? "Enabled" : "Not enabled"}</span>}
+        open={oidcEnabled || oidcError !== null || oidcUserOpen}
+        onToggle={setOidcUserOpen}
+      >
       {/* OIDC */}
       <Card className="border-0 border-t rounded-t-none shadow-none">
         <CardHeader variant="section">
@@ -633,11 +654,13 @@ export function AuthAdmin(props: Readonly<{
           )}
         </CardContent>
       </Card>
-      </details>
-      <details className="rounded-xl border bg-card" open={ldapEnabled || ldapError !== null}>
-        <summary className="cursor-pointer rounded-xl px-5 py-4 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          LDAP directory<span className="ml-2 text-xs font-normal text-muted-foreground">{ldapEnabled ? "Enabled" : "Not enabled"}</span>
-        </summary>
+      </Disclosure>
+      <Disclosure
+        label="LDAP directory"
+        meta={<span className="text-xs font-normal text-muted-foreground">{ldapEnabled ? "Enabled" : "Not enabled"}</span>}
+        open={ldapEnabled || ldapError !== null || ldapUserOpen}
+        onToggle={setLdapUserOpen}
+      >
       {/* LDAP */}
       <Card className="border-0 border-t rounded-t-none shadow-none">
         <CardHeader variant="section">
@@ -831,7 +854,7 @@ export function AuthAdmin(props: Readonly<{
           )}
         </CardContent>
       </Card>
-      </details>
+      </Disclosure>
     </div>
   );
 };

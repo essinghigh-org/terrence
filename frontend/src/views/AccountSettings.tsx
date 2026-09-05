@@ -487,10 +487,10 @@ export function AccountSettings(): React.JSX.Element {
         <div role="alert" aria-live="polite" className="bg-destructive/10 border border-destructive/30 text-destructive px-4 py-3 rounded-md text-sm">{error}</div>
       )}
       {successMsg !== "" && (
-        <div role="status" aria-live="polite" className="bg-success/10 border border-success/30 text-success px-4 py-3 rounded-md text-sm">{successMsg}</div>
+        <div role="status" aria-live="polite" className="bg-success/10 border border-success/30 text-success-text px-4 py-3 rounded-md text-sm">{successMsg}</div>
       )}
       {mustChangePassword && (
-        <div role="status" className="bg-warning/10 border border-warning/30 text-warning px-4 py-3 rounded-md text-sm">
+        <div role="status" className="bg-warning/10 border border-warning/30 text-warning-text px-4 py-3 rounded-md text-sm">
           Change your temporary password before continuing.
         </div>
       )}

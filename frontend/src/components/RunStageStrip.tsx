@@ -54,7 +54,11 @@ const STAGE_OF_STATUS: Readonly<Record<string, typeof STAGE_ORDER[number]>> = {
   post_plan_completed: "policy",
   confirmed: "apply",
   apply_queued: "apply",
+  pre_apply_running: "apply",
+  pre_apply_completed: "apply",
   applying: "apply",
+  post_apply_running: "apply",
+  post_apply_completed: "apply",
   applied: "apply",
 };
 
@@ -97,7 +101,7 @@ export function resolveStages(
   const stageDone: Readonly<Record<typeof STAGE_ORDER[number], boolean>> = {
     queue: planReached || planDone || policyReached || applyReached,
     plan: planDone,
-    policy: applyReached || (status === "planned_and_finished") || (policyReached && planDone && applyReached),
+    policy: applyReached || (status === "planned_and_finished") || (policyReached && planDone),
     apply: applyDone,
   };
 
