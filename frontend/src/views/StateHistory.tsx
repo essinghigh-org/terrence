@@ -157,7 +157,14 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
     if (file === undefined) return;
-    const rawState = await file.text();
+    let rawState: string;
+    try {
+      rawState = await file.text();
+    } catch (error: unknown) {
+      const message = error instanceof Error && error.message !== "" ? error.message : "The file could not be read.";
+      toast.add({ title: "Could not read state file", description: message, type: "error" });
+      return;
+    }
     let serial: number | null = null;
     let lineage: string | null = null;
     try {

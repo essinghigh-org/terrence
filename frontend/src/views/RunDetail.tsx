@@ -1397,7 +1397,8 @@ export function RunDetail({
       else if (actions?.["is-discardable"] !== true) actionDisabledReasons.push({ action: "Discard", reason: "Only pending, planned, saved, soft-failed, and unreachable runs can be discarded." });
     }
     if (!canForceCancel) {
-      if (permissions?.["can-force-cancel"] !== true) actionDisabledReasons.push({ action: "Force cancel", reason: "Force cancel requires workspace admin permission." });
+      if (!fresh) actionDisabledReasons.push({ action: "Force cancel", reason: "This run is no longer current." });
+      else if (permissions?.["can-force-cancel"] !== true) actionDisabledReasons.push({ action: "Force cancel", reason: "Force cancel requires workspace admin permission." });
       else if (actions?.["is-force-cancelable"] !== true) actionDisabledReasons.push({ action: "Force cancel", reason: "Cancel the run first; force cancel is for stuck canceled runs." });
     }
   }

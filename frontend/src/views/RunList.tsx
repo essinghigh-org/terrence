@@ -691,7 +691,7 @@ export function RunList({
         open={destroyConfirmOpen}
         onOpenChange={(open): void => { setDestroyConfirmOpen(open); }}
         title="Destroy infrastructure?"
-        description="This run will plan the destruction of all managed resources in this workspace and, unless the workspace requires confirmation, apply it. Destroyed infrastructure usually cannot be recovered."
+        description="This run will plan the destruction of all managed resources in this workspace. It never applies automatically: a destroy run from this dialog always needs a separate apply confirmation. Destroyed infrastructure usually cannot be recovered."
         confirmText="Start destroy run"
         confirmVariant="destructive"
         onConfirm={(): void => {
