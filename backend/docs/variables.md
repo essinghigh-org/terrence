@@ -30,7 +30,13 @@ Changing a sensitive value marks the workspace as needing a new run. Terrence of
 
 ## Precedence
 
-When a workspace has both workspace variables and variable-set variables, workspace variables win for the same key. Variable sets are applied in order of their priority. Higher priority sets apply later and override earlier ones.
+When several sources define the same category and key, exactly one value wins, in this order:
+
+1. Non-priority variable sets (workspace, project, and organization scope).
+2. Workspace variables.
+3. Priority variable sets.
+
+Later sources override earlier ones. Within one rank, ties are won by the alphabetically-first set name (then the smallest set id). The effective-values endpoint names the winning set on every inherited row, and the workspace variables tab shows the winner as a tooltip on duplicated keys.
 
 ## Editing and deletion
 

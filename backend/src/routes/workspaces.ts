@@ -1286,10 +1286,21 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
       }
     }
     return {
-      data: page.map((entry): Record<string, unknown> =>
-        entry.source === "workspace"
-          ? workspaceVariableResource(entry.variable)
-          : variableSetVariableResource(entry.variable)),
+      data: page.map((entry): Record<string, unknown> => {
+        if (entry.source === "workspace") return workspaceVariableResource(entry.variable);
+        // Issue #627: name the winning set on inherited rows so clients can
+        // show which set won a duplicated key (additive attributes).
+        const base = variableSetVariableResource(entry.variable);
+        const baseAttributes = base["attributes"];
+        return {
+          ...base,
+          attributes: {
+            ...(typeof baseAttributes === "object" && baseAttributes !== null ? baseAttributes : {}),
+            "variable-set-id": entry.setId,
+            "variable-set-name": entry.setName,
+          },
+        };
+      }),
       ...pagination(request, number, size, totalCount),
     };
   })

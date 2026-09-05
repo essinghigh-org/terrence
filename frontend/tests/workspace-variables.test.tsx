@@ -212,3 +212,33 @@ test("attaches and detaches variable sets from the workspace", async () => {
     data: [{ type: "workspaces", id: "ws-1" }],
   });
 });
+
+test("names the winning source on duplicated keys", async () => {
+  const fetchMock = mock(async (input: string | URL | Request, _init?: RequestInit): Promise<Response> => {
+    const url = isString(input) ? input : input instanceof URL ? input.toString() : input.url;
+    const path = new URL(url, "http://terrence.local").pathname;
+    if (path === "/api/v2/workspaces/ws-1/vars") {
+      return json({ data: [workspaceVar("wv-1", "DUP", "env")] });
+    }
+    if (path === "/api/v2/workspaces/ws-1/varsets") {
+      return json({ data: [variableSet("vs-1", "alpha"), variableSet("vs-2", "beta")] });
+    }
+    if (path === "/api/v2/varsets/vs-1/relationships/vars" || path === "/api/v2/varsets/vs-2/relationships/vars") {
+      return json({ data: [setVar("sv-x", "DUP", "env")] });
+    }
+    if (path === "/api/v2/workspaces/ws-1/all-vars") {
+      // Workspace value wins over both non-priority sets: no set name.
+      return json({ data: [{ id: "wv-1", attributes: { key: "DUP", category: "env" } }] });
+    }
+    throw new Error("Unexpected request: " + url);
+  });
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+
+  const view = render(<WorkspaceVariables workspaceId="ws-1" orgName="essighigh" canUpdate />);
+  await waitFor((): void => { expect(view.getAllByText("DUP").length).toBe(3); });
+
+  const titles = [...view.container.querySelectorAll("td[title]")].map((el): string | null => el.getAttribute("title"));
+  // The workspace row wins; both set rows name the workspace as winner.
+  expect(titles).toContain("Effective value for DUP (wins for this workspace)");
+  expect(titles.filter((title): boolean => title === "Overridden by the workspace value for this workspace")).toHaveLength(2);
+});
