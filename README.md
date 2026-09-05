@@ -1,8 +1,16 @@
-<h1 align="center">Terrence</h1>
+<p align="center">
+  <img src="frontend/public/brand/terrence-welcome.svg" width="240" height="210" alt="Terrence, a blue infrastructure companion with bracket-shaped ears, waving hello.">
+</p>
+
+<h1 align="center">
+  <img src="frontend/public/favicon.svg" width="36" height="36" alt="">
+  Terrence
+</h1>
 
 <p align="center">
-  <strong>A self-hosted Terraform and OpenTofu run platform.</strong><br/>
-  Manage infrastructure plans, applies, state, and policies from your own server.
+  <strong>Big plans. Steady hands.</strong><br/>
+  A self-hosted Terraform and OpenTofu run platform.<br/>
+  Manage plans, applies, state, and policies on infrastructure you control.
 </p>
 
 <p align="center">
@@ -11,7 +19,12 @@
   <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/essinghigh-org/terrence/ci.yml?branch=master&style=flat-square">
 </p>
 
-Terrence is an open-source self-hosted platform for collaborative Terraform and OpenTofu workflows. Keep state and execution data on infrastructure you control.
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="backend/docs/">Documentation</a> ·
+  <a href="#development">Development</a> ·
+  <a href="#meet-terrence">Meet Terrence</a>
+</p>
 
 ## Features
 
@@ -89,6 +102,18 @@ Full documentation is available in [`backend/docs/`](backend/docs/) or inside a 
 Terrence supports the official `hashicorp/tfe` Terraform provider and the Terraform/OpenTofu remote workflows it implements. The provider surface is tracked against an explicit released provider version and continuously exercised by end-to-end tests.
 
 General Terraform Enterprise or HCP Terraform API and feature parity is not a goal. An endpoint documented by TFE is not automatically part of Terrence.
+
+## Meet Terrence
+
+Our infrastructure companion has bracket-shaped ears, a blue coat, and a few tools for the job. You'll meet Terrence on the sign-in page, in introductory guides, and when a workspace needs a next step.
+
+<p align="center">
+  <img src="frontend/public/brand/terrence-healthy.svg" width="144" height="126" alt="Terrence holding a green check mark.">
+  <img src="frontend/public/brand/terrence-maintenance.svg" width="144" height="126" alt="Terrence wearing a hard hat and carrying a wrench.">
+  <img src="frontend/public/brand/terrence-guide.svg" width="144" height="126" alt="Terrence reading a guide.">
+</p>
+
+The [seven SVG poses](frontend/public/brand/) share one character and palette. The [brand guide](frontend/src/components/brand/README.md) covers illustration placement, typography, spacing, and regenerating the assets. If you're contributing to the UI, reuse the shared character and controls to keep Terrence consistent.
 
 ## License
 
