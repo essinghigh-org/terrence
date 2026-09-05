@@ -417,7 +417,7 @@ export function WorkspaceVcs({
                     />
                   </Field>
                   <Field data-disabled={!canUpdate}>
-                    <FieldLabel htmlFor="vcs-working-directory">Terraform working directory</FieldLabel>
+                    <FieldLabel htmlFor="vcs-working-directory">{workspace.attributes["iac-binary"] === "tofu" ? "OpenTofu" : "Terraform"} working directory</FieldLabel>
                     <Input
                       id="vcs-working-directory"
                       name="vcs-working-directory"

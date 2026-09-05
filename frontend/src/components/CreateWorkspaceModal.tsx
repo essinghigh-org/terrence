@@ -51,7 +51,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
   const [name, setName] = useState("");
   const [projectId, setProjectId] = useState("");
   const [autoApply, setAutoApply] = useState(false);
-  const [iacBinary, setIacBinary] = useState(defaultIacBinary ?? "tofu");
+  const [iacBinary, setIacBinary] = useState(defaultIacBinary ?? "terraform");
   const [terraformVersion, setTerraformVersion] = useState(defaultTerraformVersion ?? "latest");
   const [executionMode, setExecutionMode] = useState("remote");
   const [availableVersions, setAvailableVersions] = useState<string[]>([]);
@@ -211,7 +211,7 @@ export function CreateWorkspaceModal(props: Readonly<CreateWorkspaceModalProps>)
       setProjectId("");
       setAutoApply(false);
       setExecutionMode("remote");
-      setIacBinary(defaultIacBinary ?? "tofu");
+      setIacBinary(defaultIacBinary ?? "terraform");
       setTerraformVersion(defaultTerraformVersion ?? "latest");
       setVcsIdentifier("");
       setVcsConnectionValue("");

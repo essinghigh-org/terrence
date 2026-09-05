@@ -34,6 +34,8 @@ export type ItemAttrs = {
 
   "iac-binary"?: string;
 
+  "default-iac-binary"?: string;
+
   "default-terraform-version"?: string;
 
   "auto-apply"?: boolean;
