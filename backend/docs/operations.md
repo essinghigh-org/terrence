@@ -85,11 +85,21 @@ The doctor script checks the instance health from the host:
 bun backend/scripts/doctor.ts
 ```
 
+Inside the container image (`backend/scripts` ships in the runtime image),
+run it with `docker exec`:
+
+```bash
+docker exec <container> bun /app/backend/scripts/doctor.ts --fail
+```
+
+`--fail` exits non-zero when any check fails, for monitoring wrappers;
+without it doctor only reports and always exits 0.
+
 Checks cover:
 
 - Kernel and sandbox support.
 - Storage writability.
-- SQLite integrity.
+- Database reachability (SQLite integrity via `quick_check`; PostgreSQL via TCP handshake) plus whether the admin bootstrap completed (ADMIN_PASSWORD is consumed at first boot, so its absence after boot is normal).
 - DNS resolution.
 - VCS and certificate authority reachability.
 - Configuration presence.

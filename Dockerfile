@@ -105,6 +105,9 @@ COPY backend/index.ts ./backend/
 COPY backend/openapi.json ./backend/
 COPY backend/src ./backend/src
 COPY backend/docs ./backend/docs
+# Operational scripts (doctor, tfectl) so containerized installs can run the
+# documented diagnostics entry point without a source checkout (issue #593).
+COPY backend/scripts ./backend/scripts
 
 # landlock-runner is compiled to a static glibc binary in the builder stage.
 COPY --from=builder /app/backend/bin/landlock-runner ./backend/bin/landlock-runner
