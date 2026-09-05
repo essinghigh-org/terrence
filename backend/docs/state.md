@@ -20,6 +20,8 @@ Every successful apply produces a state version. Each version records:
 
 State versions are immutable. The current version is the one Terraform uses for the next run.
 
+Deferred uploads (create a pending version, then `PUT .../upload`) are claimed per version before the body transfers: a concurrent upload gets 409, and the finalize is an atomic conditional update with the output index rebuilt in the same transaction. `PUT .../json-upload` is likewise single-shot; `PUT .../json-outputs-upload` is single-shot on pending versions only and is rejected once set or finalized.
+
 ## State downloads
 
 Download the current state or any historical version. The download endpoint issues a signed URL with a limited lifetime (`SIGNED_URL_TTL_SECONDS`).
