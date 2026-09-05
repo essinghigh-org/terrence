@@ -888,6 +888,9 @@ export async function applyPgMigrations(): Promise<void> {
     // Sensitive-variable at-rest encryption (todo 167-169, see sqlite boot path).
     await pg.unsafe("ALTER TABLE workspace_variables ADD COLUMN IF NOT EXISTS value_encrypted text");
     await pg.unsafe("ALTER TABLE variable_set_variables ADD COLUMN IF NOT EXISTS value_encrypted text");
+    // Policy-set parameter encryption (issue #577, CodeRabbit P1-sweep
+    // review): same idempotent repair so sparse-journal installs converge.
+    await pg.unsafe("ALTER TABLE policy_set_parameters ADD COLUMN IF NOT EXISTS value_encrypted text");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS configuration_versions_workspace_created_idx ON configuration_versions (workspace_id, created_at)");
     await pg.unsafe("CREATE INDEX IF NOT EXISTS workspaces_org_idx ON workspaces (org_id)");
     // Agent heartbeat sweep (recoverStaleAgentJobs) filters on lastPingAt/status

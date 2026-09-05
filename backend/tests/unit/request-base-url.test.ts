@@ -29,9 +29,9 @@ describe("request base URL resolution (#576)", () => {
     );
   });
 
-  it("falls back to the connection address with no headers", () => {
+  it("falls back to the connection origin with no headers", () => {
     if (publicUrlSet) return;
-    expect(requestBaseUrl(req("http://terrence:3000/x"))).toBe("http://terrence:3000/x");
+    expect(requestBaseUrl(req("http://terrence:3000/x"))).toBe("http://terrence:3000");
   });
 
   it("rejects header-injection garbage", () => {
@@ -39,10 +39,10 @@ describe("request base URL resolution (#576)", () => {
     expect(requestBaseUrl(req("http://terrence:3000/x", {
       "x-forwarded-host": "evil.example.com\r\nX-Injected: 1",
       "x-forwarded-proto": "https",
-    }))).toBe("http://terrence:3000/x");
+    }))).toBe("http://terrence:3000");
     expect(requestBaseUrl(req("http://terrence:3000/x", {
       host: "terraform.example.com",
       "x-forwarded-proto": "gopher",
-    }))).toBe("http://terrence:3000/x");
+    }))).toBe("http://terrence:3000");
   });
 });

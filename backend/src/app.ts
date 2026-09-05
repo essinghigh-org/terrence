@@ -502,8 +502,12 @@ export const app = new Elysia()
     // Allow-list, not prefix match (issue #570): a forced password change
     // must gate every authenticated surface, including /mcp and /scim/,
     // with only the account-read and password-change endpoints exempt.
+    // Logout and session refresh carry no data access, so they stay open:
+    // a flagged user can abandon the session or keep the change-password
+    // flow alive across an access-token expiry (CodeRabbit P1-sweep review).
     const path = new URL(request.url).pathname;
     if (path === "/api/v2/account/details" || path === "/api/v2/account/password") return;
+    if (path === "/api/v2/users/logout" || path === "/api/v2/users/refresh") return;
     (set as { status: number }).status = 403;
     return {
       errors: [{

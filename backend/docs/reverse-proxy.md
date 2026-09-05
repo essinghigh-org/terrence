@@ -61,6 +61,10 @@ server {
         proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # State uploads reach 100 MiB: raise the 1 MB default body cap.
+        client_max_body_size 120m;
+        # Runs stream over long-lived connections: do not cut idle reads.
+        proxy_read_timeout 1h;
     }
 }
 

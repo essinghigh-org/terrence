@@ -7,8 +7,8 @@ import { hashPassword } from "../../src/lib/password-hashing";
 import { eq } from "drizzle-orm";
 
 // Issue #570: a forced password change gates every authenticated surface
-// (allow-list: only account-read and password-change are exempt), including
-// /mcp, and lifts once the password is changed.
+// (allow-list: account-read, password-change, logout, and session refresh
+// are exempt), including /mcp, and lifts once the password is changed.
 describe("forced password change gates all surfaces (#570)", () => {
   const suffix = crypto.randomUUID().replace(/-/g, "").slice(0, 10);
   const userId = `usr-pwflag-${suffix}`;
@@ -61,6 +61,11 @@ describe("forced password change gates all surfaces (#570)", () => {
     expect(await passwordTitle(res)).toBe("Password Change Required");
   });
 
+  it("leaves logout and session refresh open during the gate", async () => {
+    expect((await request("/api/v2/users/logout", "POST")).status).not.toBe(403);
+    expect((await request("/api/v2/users/refresh", "POST")).status).not.toBe(403);
+  });
+
   it("lifts the gate once the password is changed", async () => {
     const changeRes = await request("/api/v2/account/password", "PATCH", {
       data: {
@@ -74,7 +79,7 @@ describe("forced password change gates all surfaces (#570)", () => {
     });
     expect(changeRes.status).toBe(200);
     const retry = await request("/api/v2/organizations");
-    expect(retry.status).not.toBe(403);
+    expect(retry.status).toBe(200);
     expect(await passwordTitle(retry)).not.toBe("Password Change Required");
   });
 });

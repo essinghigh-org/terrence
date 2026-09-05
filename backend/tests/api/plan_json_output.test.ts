@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
 import { apiTokens, runs, teams, teamWorkspaces, workspaces } from "../../src/db/schema";
@@ -165,11 +165,15 @@ describe("plan JSON output availability semantics", () => {
     });
 
     afterAll(async () => {
+      // Scope teardown to this suite's three teams (CodeRabbit P1-sweep
+      // review): sibling suites share seed.orgId, so filtering by org or
+      // workspace would delete their fixtures.
+      const suiteTeamIds = [readTeamId, noStateTeamId, adminTeamId];
       await db.delete(apiTokens).where(eq(apiTokens.teamId, readTeamId)).catch((): void => {});
       await db.delete(apiTokens).where(eq(apiTokens.teamId, noStateTeamId)).catch((): void => {});
       await db.delete(apiTokens).where(eq(apiTokens.teamId, adminTeamId)).catch((): void => {});
-      await db.delete(teamWorkspaces).where(eq(teamWorkspaces.workspaceId, workspaceId)).catch((): void => {});
-      await db.delete(teams).where(eq(teams.orgId, seed.orgId)).catch((): void => {});
+      await db.delete(teamWorkspaces).where(inArray(teamWorkspaces.teamId, suiteTeamIds)).catch((): void => {});
+      await db.delete(teams).where(inArray(teams.id, suiteTeamIds)).catch((): void => {});
     });
 
     it("serves raw plan JSON to read teams (read includes state-read)", async () => {

@@ -1447,7 +1447,14 @@ function proxyBaseUrl(request: HeaderCarrier): string | null {
 
 export function requestBaseUrl(request: HeaderCarrier): string {
   if (PUBLIC_URL !== null) return PUBLIC_URL.toString();
-  return proxyBaseUrl(request) ?? request.url;
+  // The connection-address fallback is a base URL, so return the origin
+  // only: a request-specific pathname must never leak into generated links
+  // (CodeRabbit P1-sweep review). Absolute-path callers are unaffected.
+  try {
+    return proxyBaseUrl(request) ?? new URL(request.url).origin;
+  } catch {
+    return request.url;
+  }
 }
 
 export function signedApiURL(request: RequestWithUrl, path: string, method = "GET", ttlSeconds?: number): string {

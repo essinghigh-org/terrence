@@ -1410,11 +1410,17 @@ export const policyRoutes = new Elysia({ name: "policies" })
     // value is authoritative, otherwise the stored value is kept
     // (decrypting an encrypted one), so rotations persist and metadata-only
     // updates leave the secret untouched.
-    const sensitive = typeof attrs["sensitive"] === "boolean" ? attrs["sensitive"] : (param.sensitive ?? false);
+    let sensitive = typeof attrs["sensitive"] === "boolean" ? attrs["sensitive"] : (param.sensitive ?? false);
     const suppliedValue = typeof attrs["value"] === "string" ? attrs["value"] : null;
+    // Mirror the workspace-variable PATCH guard (CodeRabbit P1-sweep review):
+    // a sensitive parameter cannot be downgraded to plaintext without
+    // supplying the value, otherwise flipping the flag alone would decrypt
+    // the stored secret into a readable column.
+    if ((param.sensitive ?? false) && !sensitive && attrs["value"] === undefined) sensitive = true;
     if (suppliedValue !== null || typeof attrs["sensitive"] === "boolean") {
-      // Decrypt whenever the stored row is sensitive so unsetting the flag
-      // reveals the value instead of wiping it.
+      // The downgrade guard above guarantees sensitive is still true here
+      // unless a replacement value was supplied, so decrypting the stored
+      // row can only re-encrypt, never expose.
       const effectiveValue = suppliedValue ?? (sensitive || param.sensitive === true ? await variableValueForRead(param) : param.value);
       const stored = await variableValueForWrite(sensitive, effectiveValue);
       updates.value = stored.value;
