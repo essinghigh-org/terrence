@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   BinaryDownloadError,
+  availableVersions,
   closestKnownVersion,
   fetchBinaryArchive,
   isRetryableBinaryDownloadError,
+  preflightBinaryAvailability,
   resolveBinaryDownloadRetries,
   resolveBinaryDownloadTimeoutMs,
 } from "../../src/binaryManager";
@@ -102,6 +104,49 @@ describe("isRetryableBinaryDownloadError", (): void => {
   });
 });
 
+describe("preflightBinaryAvailability", (): void => {
+  // Seed the shared discovery cache with a stable-only list that also covers
+  // every version other suites pin, so file execution order cannot matter.
+  const KNOWN_TERRAFORM = [
+    "1.2.3",
+    "1.5.7",
+    "1.6.0",
+    "1.8.0",
+    "1.8.5",
+    "1.9.0",
+    "1.9.3",
+    "1.9.5",
+    "1.10.0",
+    "1.12.1",
+    "1.15.0",
+  ];
+
+  async function seedKnownVersions(): Promise<void> {
+    globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://releases.hashicorp.com/terraform/index.json") {
+        const versions: Record<string, Record<string, never>> = {};
+        for (const version of KNOWN_TERRAFORM) versions[version] = {};
+        return new Response(JSON.stringify({ versions }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return originalFetch(input);
+    }) as unknown as typeof fetch;
+    await availableVersions("terraform");
+  }
+
+  test("defers prerelease pins to run-time resolution", async (): Promise<void> => {
+    await seedKnownVersions();
+    // Discovery only tracks stable releases; a published prerelease must not
+    // 422 even though it is absent from the known list.
+    expect(await preflightBinaryAvailability("terraform", "1.9.0-rc.1")).toEqual({ ok: true });
+    // Sanity: the seeded list is affirmative, so unknown stable still fails.
+    const miss = await preflightBinaryAvailability("terraform", "9.9.9");
+    expect(miss.ok).toBe(false);
+  });
+});
+
 describe("fetchBinaryArchive", (): void => {
   test("returns the body on success", async (): Promise<void> => {
     globalThis.fetch = (async (): Promise<Response> => new Response("archive-bytes")) as unknown as typeof fetch;
@@ -178,5 +223,36 @@ describe("fetchBinaryArchive", (): void => {
     );
     expect(failure).toBeInstanceOf(BinaryDownloadError);
     expect((failure as BinaryDownloadError).retryable).toBe(true);
+  });
+
+  test("a body-stream failure after headers is retryable", async (): Promise<void> => {
+    const failingBody = new ReadableStream({
+      start(controller): void {
+        controller.error(new Error("connection reset mid-body"));
+      },
+    });
+    globalThis.fetch = (async (): Promise<Response> =>
+      new Response(failingBody, { status: 200 })) as unknown as typeof fetch;
+    const failure = await fetchBinaryArchive("https://example.invalid/pkg.zip", 5000).then(
+      (): null => null,
+      (err: unknown): unknown => err,
+    );
+    expect(failure).toBeInstanceOf(BinaryDownloadError);
+    expect((failure as BinaryDownloadError).retryable).toBe(true);
+    expect((failure as Error).message).toContain("body read failed");
+  });
+
+  test("chunked bodies merge without a content-length", async (): Promise<void> => {
+    const chunkedBody = new ReadableStream({
+      start(controller): void {
+        controller.enqueue(new TextEncoder().encode("archive-"));
+        controller.enqueue(new TextEncoder().encode("bytes"));
+        controller.close();
+      },
+    });
+    globalThis.fetch = (async (): Promise<Response> =>
+      new Response(chunkedBody, { status: 200 })) as unknown as typeof fetch;
+    const buffer = await fetchBinaryArchive("https://example.invalid/pkg.zip", 5000);
+    expect(new TextDecoder().decode(buffer)).toBe("archive-bytes");
   });
 });

@@ -485,6 +485,50 @@ export function isRetryableBinaryDownloadError(error: unknown): boolean {
 
 const MAX_BINARY_SIZE = 100 * 1024 * 1024;
 
+/** Read a response body with a running byte cap so a lying content-length or
+ * an unbounded chunked response cannot allocate past the limit before the
+ * size check runs. Stream failures become retryable download errors. */
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
+async function readBoundedBody(res: Response): Promise<ArrayBuffer> {
+  const reader = res.body?.getReader();
+  if (reader === undefined) {
+    const arrayBuffer = await res.arrayBuffer().catch((err: unknown): never => {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new BinaryDownloadError(`Binary download body read failed: ${message}`, true);
+    });
+    if (arrayBuffer.byteLength > MAX_BINARY_SIZE) {
+      throw new BinaryDownloadError(`Binary package too large: ${arrayBuffer.byteLength} bytes exceeds ${MAX_BINARY_SIZE} limit`, false);
+    }
+    return arrayBuffer;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_BINARY_SIZE) {
+        throw new BinaryDownloadError(`Binary package too large: response exceeds ${MAX_BINARY_SIZE} limit`, false);
+      }
+      chunks.push(value);
+    }
+  } catch (err: unknown) {
+    if (err instanceof BinaryDownloadError) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    throw new BinaryDownloadError(`Binary download body read failed: ${message}`, true);
+  } finally {
+    reader.releaseLock();
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged.buffer;
+}
+
 /** Fetch one binary archive with a bounded timeout. Throws
  * BinaryDownloadError: retryable for timeouts, network failures, and
  * 429/5xx; fail-fast for 404/4xx and oversize archives. */
@@ -519,10 +563,7 @@ export async function fetchBinaryArchive(downloadUrl: string, timeoutMs: number)
       throw new BinaryDownloadError(`Binary package too large: ${parsed} bytes exceeds ${MAX_BINARY_SIZE} limit`, false);
     }
   }
-  const arrayBuffer = await res.arrayBuffer();
-  if (arrayBuffer.byteLength > MAX_BINARY_SIZE) {
-    throw new BinaryDownloadError(`Binary package too large: ${arrayBuffer.byteLength} bytes exceeds ${MAX_BINARY_SIZE} limit`, false);
-  }
+  const arrayBuffer = await readBoundedBody(res);
   return arrayBuffer;
 }
 
@@ -587,6 +628,10 @@ export async function preflightBinaryAvailability(
   }
   const exact = /^v?([0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.]+)?)$/.exec(raw.trim())?.[1];
   if (exact === undefined) return { ok: true };
+  // Release discovery only tracks stable versions, so a prerelease pin can
+  // never be confirmed from the known list; defer it to run-time resolution
+  // (unchanged behavior) rather than 422ing a published prerelease.
+  if (exact.includes("-")) return { ok: true };
   if (await exists(join(BINARY_BASE_DIR, tool, exact, tool))) return { ok: true };
   if ((await systemBinaryFallback(tool, exact)) !== null) return { ok: true };
   const known = knownAvailableVersions(tool);
