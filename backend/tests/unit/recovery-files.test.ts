@@ -91,6 +91,48 @@ describe("captureInterruptedApplyState (#579)", () => {
     expect(await readFile(recoveryMarkerPathFor(storageDir, "run-partial"), "utf8")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
+  it("rejects invalid UTF-8 sources instead of capturing replacement bytes", async () => {
+    await isolateStorage();
+    const workRoot = join(storageDir, "work");
+    await mkdir(workRoot, { recursive: true });
+    await writeFile(join(workRoot, "terraform.tfstate"), Buffer.from([0xff, 0xfe, 0x00, 0x61]));
+    let threw = false;
+    try {
+      await captureInterruptedApplyState(storageDir, "run-bin", workRoot);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+    let copyExists = true;
+    try {
+      await readdir(join(storageDir, "recovery", "run-bin"));
+    } catch {
+      copyExists = false;
+    }
+    expect(copyExists).toBe(false);
+  });
+
+  it("a failed retry keeps the previous complete copy readable", async () => {
+    await isolateStorage();
+    const workRoot = join(storageDir, "work");
+    await mkdir(workRoot, { recursive: true });
+    await writeFile(join(workRoot, "terraform.tfstate"), STATE_JSON);
+    expect(await captureInterruptedApplyState(storageDir, "run-retry", workRoot)).toBe(true);
+    // Second capture sees new bytes it cannot preserve: it must throw and
+    // leave the previous complete copy (state + marker) untouched.
+    await writeFile(join(workRoot, "terraform.tfstate"), Buffer.from([0xff, 0xfe]));
+    let threw = false;
+    try {
+      await captureInterruptedApplyState(storageDir, "run-retry", workRoot);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+    const stored = await readFile(recoveryStatePathFor(storageDir, "run-retry"), "utf8");
+    expect(decodeStatePayload(stored)).toBe(STATE_JSON);
+    expect(await readFile(recoveryMarkerPathFor(storageDir, "run-retry"), "utf8")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
   it("returns false and writes nothing when no state file exists", async () => {
     await isolateStorage();
     const workRoot = join(storageDir, "work");

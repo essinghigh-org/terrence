@@ -1,5 +1,5 @@
 import { chmod, mkdir, open, readdir, readFile, rename, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { decodeStatePayload, decryptStatePayload, encryptStatePayload, parseTerraformStatePayload } from "./validation";
 import { log } from "./log";
@@ -48,6 +48,10 @@ function stagingPathFor(dir: string, name: string): string {
   return join(dir, `${STAGING_PREFIX}${name}-${process.pid}-${crypto.randomUUID().slice(0, 8)}`);
 }
 
+function isErrno(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === code;
+}
+
 async function fsyncDirectory(dir: string): Promise<void> {
   const handle = await open(dir, "r");
   try {
@@ -55,6 +59,46 @@ async function fsyncDirectory(dir: string): Promise<void> {
   } finally {
     await handle.close();
   }
+}
+
+/** Recursively create `dir` (mode 0700: this module only manages the
+ * recovery area) and fsync every created level's parent, so a power loss
+ * cannot drop a newly created recovery directory entry. A plain recursive
+ * mkdir plus a leaf-only fsync leaves exactly that window on first capture.
+ */
+async function mkdirDurable(dir: string): Promise<void> {
+  const missing: string[] = [];
+  let cur = dir;
+  for (;;) {
+    missing.unshift(cur);
+    try {
+      await mkdir(cur, { mode: 0o700 });
+      break;
+    } catch (error: unknown) {
+      if (isErrno(error, "EEXIST")) break;
+      if (!isErrno(error, "ENOENT")) throw error;
+      const parent = dirname(cur);
+      if (parent === cur) throw error;
+      cur = parent;
+    }
+  }
+  // missing[0] exists (pre-existing, or just created with an existing
+  // parent); create downward, fsyncing each parent.
+  const top = missing[0];
+  if (top === undefined) throw new Error(`Cannot create recovery directory ${dir}: path resolution failed`);
+  let parent = top;
+  for (const child of missing.slice(1)) {
+    try {
+      await mkdir(child, { mode: 0o700 });
+    } catch (error: unknown) {
+      if (!isErrno(error, "EEXIST")) throw error;
+    }
+    await fsyncDirectory(parent);
+    parent = child;
+  }
+  const topParent = dirname(top);
+  if (topParent !== top) await fsyncDirectory(topParent);
+  await fsyncDirectory(dir);
 }
 
 /** Durably publish `data` as `dir/name`: temp sibling, file fsync, atomic
@@ -67,7 +111,7 @@ export async function writeFileDurable(
   data: string,
   mode: number,
 ): Promise<void> {
-  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await mkdirDurable(dir);
   const staging = stagingPathFor(dir, name);
   try {
     const handle = await open(staging, "w", mode);
@@ -107,13 +151,38 @@ export async function captureInterruptedApplyState(
   if (source === null) return false;
 
   const recoveryDir = recoveryDirFor(storageDir, runId);
-  await mkdir(recoveryDir, { recursive: true, mode: 0o700 });
+  const markerPath = recoveryMarkerPathFor(storageDir, runId);
+  await mkdirDurable(recoveryDir);
   let markerWritten = false;
+  let stateReplaced = false;
+  let previousMarker: string | null = null;
   try {
-    const payload = await readFile(source, "utf8");
+    // A retry can run after a crash that landed between a previous
+    // capture's marker write and the run status change: drop any stale
+    // marker first so a replacement state is never mistaken for complete
+    // before it passes read-back verification below.
+    try {
+      previousMarker = await readFile(markerPath, "utf8");
+    } catch {
+      previousMarker = null;
+    }
+    if (previousMarker !== null) {
+      await rm(markerPath, { force: true });
+      await fsyncDirectory(recoveryDir);
+    }
+    // Raw bytes on purpose: utf8 decoding replaces split multibyte
+    // sequences, which would let a corrupted copy pass verification. If
+    // the source is not valid UTF-8 the encryption layer cannot preserve
+    // it, so reject here (throwing preserves the work directory).
+    const raw = await readFile(source);
+    const payload = raw.toString("utf8");
+    if (!Buffer.from(payload, "utf8").equals(raw)) {
+      throw new Error("source state file is not valid UTF-8; leaving the work directory for manual recovery");
+    }
     const encrypted = await encryptStatePayload(payload);
     if (encrypted === null) throw new Error("state encryption produced no output");
     await writeFileDurable(recoveryDir, RECOVERY_STATE_FILENAME, encrypted, 0o600);
+    stateReplaced = true;
     // Verify the published copy before it becomes anyone's only record: a
     // truncated or bit-rotted write must fail here, while the source still
     // exists, and never surface later as a 404 on read. Decrypt-only on
@@ -128,8 +197,20 @@ export async function captureInterruptedApplyState(
     markerWritten = true;
     return true;
   } catch (error: unknown) {
+    if (!stateReplaced && previousMarker !== null) {
+      // The published state is still the previous complete copy; restore
+      // its marker so the retry failure does not orphan a good copy.
+      try {
+        await writeFileDurable(recoveryDir, RECOVERY_MARKER_FILENAME, previousMarker, 0o600);
+        markerWritten = true;
+      } catch {
+        // Fall through to removal below.
+      }
+    }
     // Never leave a markerless partial behind: without the marker the copy
     // is unreadable by design, so an incomplete capture is just garbage.
+    // (When the replacement itself was published but unverifiable, the
+    // source work directory is preserved by the caller, so nothing is lost.)
     if (!markerWritten) await rm(recoveryDir, { recursive: true, force: true });
     throw error;
   }

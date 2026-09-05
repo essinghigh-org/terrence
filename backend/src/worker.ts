@@ -264,6 +264,10 @@ export async function cleanupSavedPlan(runId: string): Promise<void> {
 }
 
 export async function cleanupRunWorkDir(runId: string): Promise<void> {
+  // Issue #579: never automatically remove a work directory that is the only
+  // remaining recovery source. This guards every path at once: the run
+  // finally below, late scheduled sweeps, and the cancel/discard endpoints.
+  if (isRunWorkDirPreserved(runId)) return;
   if (runSandbox !== null) await removeSandboxWorkDir(runId);
   else await rm(runWorkDir(runId), { recursive: true, force: true });
 }
@@ -275,6 +279,22 @@ export function scheduleRunWorkDirCleanup(runId: string, delayMs = 6_000): void 
     });
   }, delayMs);
   timer.unref?.();
+}
+
+// Issue #579: run IDs whose recovery capture failed after finding state.
+// The work directory is then the only remaining source and must be spared by
+// every automatic cleanup (the apply finally and the run finally below, plus
+// any late scheduled sweep) so it survives for manual recovery. Entries are
+// deliberately never removed: they are small, rare, and "leave it alone"
+// must outlive any later automatic pass within this process.
+const runsWithPreservedWorkDir = new Set<string>();
+
+function preserveRunWorkDirForRecovery(runId: string): void {
+  runsWithPreservedWorkDir.add(runId);
+}
+
+function isRunWorkDirPreserved(runId: string): boolean {
+  return runsWithPreservedWorkDir.has(runId);
 }
 
 function savedPlanFile(runId: string): string {
@@ -2423,7 +2443,10 @@ async function executeRunImpl(runId: string): Promise<void> {
     try {
       // Saved plans live under storage/saved-plans; never retain the execution
       // directory, which contains tfvars, state, provider caches, and tokens.
-      await cleanupRunWorkDir(runId);
+      // Exception (issue #579): a failed recovery capture leaves the work
+      // directory as the only source, so spare it for manual recovery. The
+      // apply phase already logged the preservation note.
+      if (!isRunWorkDirPreserved(runId)) await cleanupRunWorkDir(runId);
     } catch (error: unknown) {
       logBestEffortFailure("Run workdir cleanup failed after planning", { runId }, error);
       scheduleRunWorkDirCleanup(runId);
@@ -2603,6 +2626,11 @@ async function executeApplyImpl(runId: string): Promise<void> {
   let applySuccess = false;
   let applyStarted = false;
   let applyCanceled = false;
+  // Issue #579: when a recovery capture fails after finding state, the
+  // work directory is the only remaining source and must be preserved for
+  // manual recovery instead of deleted by the failed-apply cleanup below.
+  let recoveryCaptureFailed = false;
+  let recoveryPreservationLogged = false;
 
   try {
     const executionDir = workspaceExecutionDirectory(workDir, workspace.workingDirectory);
@@ -2962,6 +2990,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
         applyCanceled = true;
         const captured = await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId)).catch((captureError: unknown): boolean => {
           log.error("Could not capture state after canceled apply", { runId, error: captureError });
+          recoveryCaptureFailed = true;
           return false;
         });
         await writeLog(
@@ -2969,8 +2998,11 @@ async function executeApplyImpl(runId: string): Promise<void> {
           "apply",
           captured
             ? "[terrence] Apply was canceled; encrypted recovery state was captured before cleanup. Fetch it from GET /api/v2/runs/:run_id/recovery-state before TERRENCE_RECOVERY_RETENTION_MS expires it (default 7 days)."
-            : "[terrence] Apply was canceled; no local state file was available to capture.",
+            : recoveryCaptureFailed
+              ? `[terrence] Apply was canceled; recovery copy failed, so the run work directory was preserved at ${runWorkDir(runId)} for manual recovery.`
+              : "[terrence] Apply was canceled; no local state file was available to capture.",
         );
+        if (recoveryCaptureFailed) recoveryPreservationLogged = true;
         return;
       }
       if (applyExit !== 0) {
@@ -2984,6 +3016,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
           try {
             await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId));
           } catch (captureError: unknown) {
+            recoveryCaptureFailed = true;
             log.error("Could not capture state after partial apply persistence failure", { runId, error: captureError });
           }
         }
@@ -2996,6 +3029,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
         try {
           await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId));
         } catch (captureError: unknown) {
+          recoveryCaptureFailed = true;
           log.error("Could not capture state after apply state persistence failure", { runId, error: captureError });
         }
         throw saveError;
@@ -3065,6 +3099,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
       applyCanceled = true;
       if (applyStarted) {
         await captureInterruptedApplyState(storageDir, runId, runWorkDir(runId)).catch((captureError: unknown): void => {
+          recoveryCaptureFailed = true;
           log.error("Could not capture state after canceled apply", { runId, error: captureError });
         });
       }
@@ -3099,12 +3134,19 @@ async function executeApplyImpl(runId: string): Promise<void> {
       if (applyStarted && !applyCanceled) {
         await writeLog(runId, "apply", `[terrence] Apply failed; partial state was journaled before cleaning the execution directory.`);
       }
-      try {
-        if (runSandbox !== null) await removeSandboxWorkDir(runId);
-        else await rm(workDir, { recursive: true, force: true });
-      } catch (error: unknown) {
-        logBestEffortFailure("Run workdir cleanup failed after failed apply", { runId }, error);
-        scheduleRunWorkDirCleanup(runId);
+      if (recoveryCaptureFailed) {
+        preserveRunWorkDirForRecovery(runId);
+        if (!recoveryPreservationLogged) {
+          await writeLog(runId, "apply", `[terrence] Recovery copy failed; the run work directory was preserved at ${workDir} for manual recovery.`);
+        }
+      } else {
+        try {
+          if (runSandbox !== null) await removeSandboxWorkDir(runId);
+          else await rm(workDir, { recursive: true, force: true });
+        } catch (error: unknown) {
+          logBestEffortFailure("Run workdir cleanup failed after failed apply", { runId }, error);
+          scheduleRunWorkDirCleanup(runId);
+        }
       }
     }
   }
