@@ -15,7 +15,7 @@ Terrence starts without any user accounts. Set the `ADMIN_PASSWORD` environment 
 
 The administrator username defaults to `admin`. You can change it with `ADMIN_USERNAME`. The account email is set with `ADMIN_EMAIL`.
 
-The bootstrap runs exactly once. Later restarts do not create or reset accounts.
+The bootstrap runs exactly once. Later restarts do not create or reset accounts. If the solo administrator password is lost, see [Configuration](configuration) for the one-shot `TERRENCE_ADMIN_PASSWORD_RESET` recovery.
 
 Local registration is disabled by default. To allow anyone to register, set `TERRENCE_ENABLE_LOCAL_SIGNUP=true`. Registrations never become site administrators.
 
@@ -33,7 +33,7 @@ Terraform stores the token in `~/.terraform.d/credentials.tfrc.json`. The CLI us
 
 ## Step 3: Create an organization
 
-Create an organization in the web interface, or with the API:
+Bootstrap already created an organization named `default` and made the administrator its owner. Use it, or create more organizations in the web interface or with the API. `ADMIN_ORGANIZATION` overrides the bootstrap organization name.
 
 ```bash
 curl -X POST https://terraform.example.com/api/v2/organizations \

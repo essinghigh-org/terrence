@@ -311,4 +311,75 @@ describe("initial administrator bootstrap", () => {
     `, "unused-admin-password", { IACT_TOKEN: "initial-admin-token", IACT_QUERY_TOKEN_ENABLED: "1" });
     expect(optInResult).toEqual({ queryForm: 200, users: 1 });
   });
+
+  it("resets a solo admin password with TERRENCE_ADMIN_PASSWORD_RESET=1 (issue #631)", async () => {
+    const result = await runProbe(`
+      const { bootstrapInitialAdmin, resetAdminPassword, assertStorageWritable } = await import("./src/lib/bootstrap.ts");
+      const { db } = await import("./src/db/index.ts");
+      const { app } = await import("./src/app.ts");
+      const { join } = await import("node:path");
+      const login = (password) => app.handle(new Request("http://localhost/api/v2/users/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.api+json" },
+        body: JSON.stringify({ data: { attributes: { username: "admin", password } } }),
+      })).then((r) => r.status);
+
+      const bootstrapped = await bootstrapInitialAdmin();
+      const beforeReset = await login("original-admin-password");
+      process.env.TERRENCE_ADMIN_PASSWORD_RESET = "1";
+      process.env.ADMIN_PASSWORD = "recovery-admin-password";
+      const reset = await resetAdminPassword();
+      const oldLogin = await login("original-admin-password");
+      const newLogin = await login("recovery-admin-password");
+      const stored = (await db.query.users.findMany())[0];
+      delete process.env.TERRENCE_ADMIN_PASSWORD_RESET;
+      process.env.ADMIN_PASSWORD = "another-password";
+      const withoutFlag = await resetAdminPassword();
+
+      // Same recovery configuration after a restart must not reset again.
+      process.env.TERRENCE_ADMIN_PASSWORD_RESET = "1";
+      process.env.ADMIN_PASSWORD = "recovery-admin-password";
+      const replay = await resetAdminPassword();
+      const { existsSync } = await import("node:fs");
+      const markerConsumed = existsSync(join(process.env.STORAGE_DIR ?? "", ".admin-password-reset-consumed"));
+
+      assertStorageWritable();
+      const { writeFileSync } = await import("node:fs");
+      const filePath = join(process.env.STORAGE_DIR ?? "", "probe-file");
+      writeFileSync(filePath, "x");
+      let storageError = "";
+      try {
+        assertStorageWritable(filePath);
+      } catch (error) {
+        storageError = error instanceof Error ? error.message : String(error);
+      }
+
+      console.log(JSON.stringify({
+        bootstrapped,
+        beforeReset,
+        reset,
+        oldLogin,
+        newLogin,
+        mustChangePassword: stored?.mustChangePassword ?? null,
+        withoutFlag,
+        replay,
+        markerConsumed,
+        storageErrorHasFix: storageError.includes("chown -R") && storageError.includes("STORAGE_DIR is not writable"),
+      }));
+      process.exit(0);
+    `, "original-admin-password");
+
+    expect(result).toEqual({
+      bootstrapped: "created",
+      beforeReset: 200,
+      reset: "reset",
+      oldLogin: 401,
+      newLogin: 200,
+      mustChangePassword: true,
+      withoutFlag: "disabled",
+      replay: "disabled",
+      markerConsumed: true,
+      storageErrorHasFix: true,
+    });
+  });
 });

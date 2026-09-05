@@ -44,15 +44,30 @@ The administration database section includes a migration wizard. The wizard move
 
 The wizard handles the schema and the data. Storage artifacts must move separately.
 
+## Boot configuration file
+
+The wizard switches the database backend from inside the UI, but a container cannot permanently change an environment variable. The wizard therefore writes `storage/terrence.json`:
+
+```json
+{
+  "database": {
+    "driver": "postgres",
+    "urlSecret": "database-url"
+  }
+}
+```
+
+Precedence (highest wins):
+
+1. `DATABASE_URL` environment variable (never written back to the file). Setting it silently overrides the wizard: after migrating via the wizard, exporting `DATABASE_URL` for SQLite reverts the instance to SQLite on next boot.
+2. The boot configuration file.
+3. Default: SQLite at `<storage>/terrence.db`.
+
+`urlSecret` names an encrypted blob under `storage/secrets/`; the file never carries the URL in plaintext. A plaintext `url` key is also accepted for deployments that manage the URL out of band. Back up `terrence.json` with the storage directory, and restore it alongside the encryption key and salt: without the matching key, the secret cannot be decrypted.
+
 ## Export format
 
-The export is a JSON document with:
-
-- The schema version.
-- Tables and rows.
-- Foreign key references.
-
-Imports are idempotent. A re-import after a failure does not duplicate rows.
+The Postgres-to-SQLite export is a background job (see [Operations](operations) for the endpoint list). The export artifact is a SQLite database file built with the source schema and copied rows, verified against the source snapshot (row counts, invariants, sample hashes) before the job completes. There is no import endpoint: feed the file to the migration wizard, which restores from it. The export does not include storage artifacts; move those separately.
 
 ## Integrity
 
@@ -97,6 +112,9 @@ Adding an index to a hot path is a schema change and goes through the migration 
 
 ## API surface
 
-- `POST /api/v2/admin/database/export`
-- `POST /api/v2/admin/database/import`
-- `GET /api/v2/admin/database/status`
+- `POST /api/v2/admin/db-export/test-connection`
+- `POST /api/v2/admin/db-export`
+- `GET /api/v2/admin/db-export/jobs/:job_id`
+- `GET /api/v2/admin/db-export`
+- `GET /api/v2/admin/db-export/files/:file_name`
+- `DELETE /api/v2/admin/db-export/files/:file_name`
