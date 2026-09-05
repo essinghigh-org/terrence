@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 // Preserve the compact formats exposed by these APIs. A UUID slice includes
 // fixed version bits; random bytes give every suffix character full entropy.
 const COMPACT_PREFIXES = new Set([
-  "ws", "prj", "varset", "hyokcv", "sa", "stc", "st", "sst",
+  "ws", "prj", "var", "varset", "hyokcv", "sa", "stc", "st", "sst",
   "sds", "saj", "sdg", "sdr",
 ]);
 

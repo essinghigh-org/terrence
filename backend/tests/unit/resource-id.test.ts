@@ -5,7 +5,7 @@ test("compact resource IDs keep their public lengths without truncating UUID ver
   const uuid = spyOn(crypto, "randomUUID");
   try {
     expect(newResourceId("run")).toMatch(/^run-[a-f0-9]{14}$/);
-    for (const prefix of ["ws", "prj", "varset", "hyokcv", "sa", "stc", "st", "sst", "sds", "saj", "sdg", "sdr"]) {
+    for (const prefix of ["ws", "prj", "var", "varset", "hyokcv", "sa", "stc", "st", "sst", "sds", "saj", "sdg", "sdr"]) {
       expect(newResourceId(prefix)).toMatch(new RegExp(`^${prefix}-[a-f0-9]{16}$`));
     }
     expect(uuid).not.toHaveBeenCalled();
@@ -15,7 +15,7 @@ test("compact resource IDs keep their public lengths without truncating UUID ver
 });
 
 test("configuration versions and UUID resources retain the whole UUID", () => {
-  for (const prefix of ["cv", "user", "org", "orgmem", "tm", "var", "rc", "mod", "rt"]) {
+  for (const prefix of ["cv", "user", "org", "orgmem", "tm", "rc", "mod", "rt"]) {
     expect(newResourceId(prefix)).toMatch(new RegExp(`^${prefix}-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$`));
   }
 });

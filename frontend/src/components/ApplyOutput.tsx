@@ -382,7 +382,7 @@ export function ApplyOutput({
         const op = operationForResource(resource);
         return op !== "no-op" && op !== "read";
       });
-    const applyFinished = applyStatus === "applied" || status === "applied";
+    const applyFinished = applyStatus === "finished" || status === "applied";
     const applyFailed = ["errored", "failed", "unreachable"].includes(applyStatus);
     const execMap = parseApplyLogsToExecMap(applyLogs, changedResources, applyFinished, applyFailed);
     const importCount = changedResources.filter((resource): boolean => resource.change.importing !== undefined).length;
@@ -473,7 +473,7 @@ export function ApplyOutput({
         <div className="flex items-center gap-2">
           <FileCode className="size-4 text-muted-foreground/70" />
           <span className="text-xs font-medium text-foreground/85">Apply output</span>
-          {applyStatus === "applying" && (
+          {applyStatus === "running" && (
             <Badge variant="outline" className="gap-1 rounded border-primary/40 bg-primary/10 text-2xs text-primary animate-pulse">
               <Spinner className="size-3 text-primary" />
               Apply in progress
