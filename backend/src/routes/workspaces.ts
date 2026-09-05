@@ -207,7 +207,7 @@ async function resourcePermissions(
 }
 
 function isUniqueConstraintError(err: unknown): boolean {
-  return err !== null && typeof err === "object" && (("message" in err && typeof err.message === "string" && err.message.includes("UNIQUE")) || ("code" in err && err.code === "SQLITE_CONSTRAINT_UNIQUE"));
+  return err !== null && typeof err === "object" && (("message" in err && typeof err.message === "string" && (err.message.includes("UNIQUE") || err.message.includes("duplicate key value violates unique constraint"))) || ("code" in err && (err.code === "SQLITE_CONSTRAINT_UNIQUE" || err.code === "23505")));
 }
 
 /** Audit finding 9: single-workspace GETs must honor include=current_run
@@ -1316,7 +1316,12 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     const description = typeof attributes["description"] === "string" ? attributes["description"] : null;
     // Sensitive values are encrypted at rest (todo 167/168).
     const stored = await variableValueForWrite(sensitive, value);
-    await db.insert(workspaceVariables).values({ id: varId, workspaceId, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description });
+    try {
+      await db.insert(workspaceVariables).values({ id: varId, workspaceId, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description });
+    } catch (error: unknown) {
+      if (isUniqueConstraintError(error)) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Variable key already exists in this workspace" }] }; }
+      throw error;
+    }
     (set as { status: number }).status = 201;
     return { data: workspaceVariableResource({ id: varId, workspaceId, key, value: stored.value, valueEncrypted: stored.valueEncrypted, category, sensitive, hcl, description }) };
   })

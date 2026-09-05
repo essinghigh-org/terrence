@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
-import { runs, workspaces, configurationVersions } from "../../src/db/schema";
+import { apiTokens, runs, workspaces, configurationVersions } from "../../src/db/schema";
 import {
   cleanupSeed,
   expectCollection,
@@ -19,6 +20,8 @@ import {
 describe("remote-workflow runs contract", () => {
   const seed = seedOrg("run");
   const headers = jsonHeaders(seed.token);
+  const orgToken = `org-token-${seed.suffix}`;
+  const orgHeaders = jsonHeaders(orgToken);
   const workspaceId = `workspace-${seed.suffix}`;
   const includedRunId = `run-included-${seed.suffix}`;
   const configurationVersionId = `cv-${seed.suffix}`;
@@ -27,6 +30,11 @@ describe("remote-workflow runs contract", () => {
   beforeAll(async () => {
     await persistSeed(seed);
     await db.insert(workspaces).values({ id: workspaceId, name: `runs-${seed.suffix}`, orgId: seed.orgId });
+    await db.insert(apiTokens).values({
+      id: `token-org-${seed.suffix}`,
+      token: createHash("sha256").update(orgToken).digest("hex"),
+      orgId: seed.orgId,
+    });
     await db.insert(configurationVersions).values({
       id: configurationVersionId,
       workspaceId,
@@ -50,6 +58,7 @@ describe("remote-workflow runs contract", () => {
   afterAll(async () => {
     await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
     await db.delete(configurationVersions).where(eq(configurationVersions.id, configurationVersionId));
+    await db.delete(apiTokens).where(eq(apiTokens.id, `token-org-${seed.suffix}`));
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
     await cleanupSeed(seed);
   });
@@ -111,6 +120,43 @@ describe("remote-workflow runs contract", () => {
       data: { id: seed.userId, type: "users" },
     });
     expectSelfLink(resource, "/api/v2/runs/");
+  });
+
+  it("rejects organization-token run creation with an actionable 403 (issue #606)", async () => {
+    const response = await request(`/api/v2/workspaces/${workspaceId}/runs`, {
+      method: "POST",
+      headers: orgHeaders,
+      body: JSON.stringify({ data: { type: "runs", attributes: { message: "org token run" } } }),
+    });
+    expect(response.status).toBe(403);
+    const body = (await response.json()) as { errors: { detail?: string }[] };
+    expect(body.errors[0]?.detail).toBe("Organization tokens cannot create runs. Use a team token or user token.");
+  });
+
+  it("lists exactly the runs the discard action accepts (issue #616)", async () => {
+    // includedRunId is planned (discardable); runId is pending (discardable).
+    // The filter source of truth is the same exported set the action enforces,
+    // so listed discardables never 409 and real discardables are always listed.
+    const { DISCARDABLE_RUN_STATUSES } = await import("../../src/lib/utils");
+    expect([...DISCARDABLE_RUN_STATUSES].sort()).toEqual(
+      ["pending", "planned", "planned_and_saved", "policy_soft_failed", "unreachable"].sort(),
+    );
+    const filtered = await request(
+      `/api/v2/workspaces/${workspaceId}/runs?filter[status_group]=discardable&page[size]=50`,
+      { headers },
+    );
+    expect(filtered.status).toBe(200);
+    const listed = (await filtered.json()) as { data: { id: string }[] };
+    const ids = listed.data.map((run) => run.id);
+    expect(ids).toContain(includedRunId);
+    expect(ids).toContain(runId);
+    for (const id of ids) {
+      const discard = await request(`/api/v2/runs/${id}/actions/discard`, { method: "POST", headers });
+      expect(discard.status).not.toBe(409);
+      // Restore the discarded state for the remaining tests.
+      await db.update(runs).set({ status: "pending" }).where(eq(runs.id, id));
+    }
+    await db.update(runs).set({ status: "planned" }).where(eq(runs.id, includedRunId));
   });
 
   it("shows a run", async () => {

@@ -1713,14 +1713,12 @@ export const WORKSPACE_BLOCKING_RUN_STATUSES = [
   "post_plan_running", "post_plan_completed", "policy_soft_failed",
   "confirmed", "apply_queued", "applying",
 ];
-const DISCARDABLE_RUN_STATUSES = [
+export const DISCARDABLE_RUN_STATUSES = [
+  "pending",
   "planned",
   "planned_and_saved",
-  "cost_estimated",
-  "policy_checked",
-  "policy_override",
-  "post_plan_running",
-  "post_plan_completed",
+  "policy_soft_failed",
+  "unreachable",
 ];
 
 type WorkspaceDeletionArtifact = Readonly<{
