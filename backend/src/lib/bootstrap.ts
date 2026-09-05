@@ -1,5 +1,7 @@
 import { count, eq } from "drizzle-orm";
-import { accessSync, constants as fsConstants, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { db } from "../db";
 import { storageDir } from "../db/driver";
 import { organizationMemberships, organizations, samlSettings, users } from "../db/schema";
@@ -112,15 +114,44 @@ export async function resetAdminPassword(): Promise<"reset" | "disabled"> {
   if (password === undefined || password === "") return "disabled";
   const username = (process.env["ADMIN_USERNAME"] ?? "admin").trim();
   if (username === "") return "disabled";
+  // One-shot across restarts (review): deleting ADMIN_PASSWORD only clears
+  // the current process, so a persistent service config would reset the
+  // password on every boot. The consumed marker makes a repeated identical
+  // configuration a no-op until the operator removes the variables.
+  const marker = createHash("sha256").update(`${username}:${password}`).digest("hex");
+  if (readResetMarker() === marker) {
+    console.log("[terrence] ADMIN_PASSWORD_RESET already consumed for this configuration; remove TERRENCE_ADMIN_PASSWORD_RESET and ADMIN_PASSWORD to re-arm recovery.");
+    return "disabled";
+  }
   validateBootstrapPassword(password, username);
   const target = await db.query.users.findFirst({ where: eq(users.username, username) });
   if (target === undefined || target.isSiteAdmin !== true) return "disabled";
   await db.update(users)
     .set({ passwordHash: await hashPassword(password), mustChangePassword: true })
     .where(eq(users.id, target.id));
+  writeResetMarker(marker);
   delete process.env["ADMIN_PASSWORD"];
   await auditLog("update", "users", target.id, target.id, null, { username, source: "ADMIN_PASSWORD_RESET" });
   return "reset";
+}
+
+function resetMarkerPath(): string {
+  return join(storageDir, ".admin-password-reset-consumed");
+}
+
+function readResetMarker(): string | null {
+  try {
+    return readFileSync(resetMarkerPath(), "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function writeResetMarker(marker: string): void {
+  const path = resetMarkerPath();
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${marker}\n`, { mode: 0o600 });
+  renameSync(tmp, path);
 }
 
 /**
@@ -130,10 +161,16 @@ export async function resetAdminPassword(): Promise<"reset" | "disabled"> {
  * the process identity, and the exact host command that fixes it.
  */
 export function assertStorageWritable(dir: string = storageDir): void {
+  // Probe with a real write, not an access() preflight: access checks race
+  // with the actual use and under-report on some platforms. The probe file
+  // is removed immediately; only its failure escapes.
+  const probe = join(dir, `.writability-probe-${process.pid}`);
   try {
     mkdirSync(dir, { recursive: true });
-    accessSync(dir, fsConstants.W_OK);
+    writeFileSync(probe, "ok", { mode: 0o600 });
+    rmSync(probe);
   } catch {
+    try { rmSync(probe, { force: true }); } catch { /* best effort */ }
     const uid = typeof process.getuid === "function" ? process.getuid() : null;
     const gid = typeof process.getgid === "function" ? process.getgid() : null;
     const owner = uid !== null && gid !== null ? `${uid}:${gid}` : "<uid>:<gid>";

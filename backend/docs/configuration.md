@@ -50,7 +50,7 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `ADMIN_USERNAME` | `admin` | Username of the bootstrapped administrator. |
 | `ADMIN_EMAIL` | none | Email of the bootstrapped administrator. |
 | `ADMIN_ORGANIZATION` | `default` | Organization created for the administrator at bootstrap. |
-| `TERRENCE_ADMIN_PASSWORD_RESET` | off | One-shot solo-admin recovery: with `ADMIN_PASSWORD` set, reset the named site-admin account at boot and force a password change at next login. Anything else leaves the instance untouched. |
+| `TERRENCE_ADMIN_PASSWORD_RESET` | off | One-shot solo-admin recovery: with `ADMIN_PASSWORD` set, reset the named site-admin account at boot and force a password change at next login. One-shot per distinct password (a consumed marker in storage blocks replays); remove both variables after recovery. Anything else leaves the instance untouched. |
 | `TERRENCE_ENABLE_LOCAL_SIGNUP` | off | Allow registration through the API. Registrations never become site admins. |
 | `TERRENCE_PASSWORD_MIN_LENGTH` | policy | Minimum password length. |
 | `CLI_TOKEN_TTL_MS` | default | Lifetime of CLI-issued tokens. |

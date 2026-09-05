@@ -317,6 +317,7 @@ describe("initial administrator bootstrap", () => {
       const { bootstrapInitialAdmin, resetAdminPassword, assertStorageWritable } = await import("./src/lib/bootstrap.ts");
       const { db } = await import("./src/db/index.ts");
       const { app } = await import("./src/app.ts");
+      const { join } = await import("node:path");
       const login = (password) => app.handle(new Request("http://localhost/api/v2/users/login", {
         method: "POST",
         headers: { "Content-Type": "application/vnd.api+json" },
@@ -335,9 +336,15 @@ describe("initial administrator bootstrap", () => {
       process.env.ADMIN_PASSWORD = "another-password";
       const withoutFlag = await resetAdminPassword();
 
+      // Same recovery configuration after a restart must not reset again.
+      process.env.TERRENCE_ADMIN_PASSWORD_RESET = "1";
+      process.env.ADMIN_PASSWORD = "recovery-admin-password";
+      const replay = await resetAdminPassword();
+      const { existsSync } = await import("node:fs");
+      const markerConsumed = existsSync(join(process.env.STORAGE_DIR ?? "", ".admin-password-reset-consumed"));
+
       assertStorageWritable();
       const { writeFileSync } = await import("node:fs");
-      const { join } = await import("node:path");
       const filePath = join(process.env.STORAGE_DIR ?? "", "probe-file");
       writeFileSync(filePath, "x");
       let storageError = "";
@@ -355,6 +362,8 @@ describe("initial administrator bootstrap", () => {
         newLogin,
         mustChangePassword: stored?.mustChangePassword ?? null,
         withoutFlag,
+        replay,
+        markerConsumed,
         storageErrorHasFix: storageError.includes("chown -R") && storageError.includes("STORAGE_DIR is not writable"),
       }));
       process.exit(0);
@@ -368,6 +377,8 @@ describe("initial administrator bootstrap", () => {
       newLogin: 200,
       mustChangePassword: true,
       withoutFlag: "disabled",
+      replay: "disabled",
+      markerConsumed: true,
       storageErrorHasFix: true,
     });
   });

@@ -67,13 +67,7 @@ Precedence (highest wins):
 
 ## Export format
 
-The Postgres-to-SQLite export is a background job (see [Operations](operations) for the endpoint list). The export file is a JSON document with:
-
-- The schema version.
-- Tables and rows.
-- Foreign key references.
-
-There is no import endpoint: the export feeds the migration wizard, which restores into the target itself. The export does not include storage artifacts; move those separately.
+The Postgres-to-SQLite export is a background job (see [Operations](operations) for the endpoint list). The export artifact is a SQLite database file built with the source schema and copied rows, verified against the source snapshot (row counts, invariants, sample hashes) before the job completes. There is no import endpoint: feed the file to the migration wizard, which restores from it. The export does not include storage artifacts; move those separately.
 
 ## Integrity
 

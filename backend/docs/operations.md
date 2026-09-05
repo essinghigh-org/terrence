@@ -29,7 +29,7 @@ On SIGTERM, the instance:
 4. Checkpoints the database.
 5. Exits.
 
-A failed WAL checkpoint exits non-zero so supervisors can react. Set a container stop grace period longer than the drain grace, so SIGTERM has time to finish. The shipped `docker-compose.yml` sets `stop_grace_period: 30s` for this reason; bare `docker run` needs `--stop-timeout 30`.
+A failed WAL checkpoint exits non-zero so supervisors can react. Budget the full shutdown: about 2s for the draining write, up to 5s stopping HTTP, up to `TERRENCE_DRAIN_GRACE_MS` (default 6s, max 25s) draining workers, then the WAL checkpoint. Require an explicit 30s stop timeout so the checkpoint always fits: the shipped `docker-compose.yml` sets `stop_grace_period: 30s`; bare `docker run` needs `--stop-timeout 30`.
 
 ## Storage layout
 

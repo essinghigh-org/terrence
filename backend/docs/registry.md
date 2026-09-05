@@ -48,7 +48,11 @@ Module versions follow semantic versioning. Version status is tracked per versio
 
 ### Deleting versions
 
-Deletion is immediate and permanent: the version row and its archive file are removed. There is no yank state, and runs pinned to a deleted version fail when they fetch it. Prefer publishing a new version over deleting a bad one; delete only to remove something that must never be fetched (for example leaked secrets), then tell consumers to move.
+Deletion is immediate and permanent: the version row and its archive file are removed. Runs pinned to a deleted version fail when they fetch it.
+
+Prefer revocation over deletion. `POST /api/v2/registry-module-versions/:version_id/actions/revoke` marks the version revoked and deprecated; fetches then 404 while the row and archive stay, and `.../actions/revert-revocation` restores it (staying deprecated). Deleting a whole module (`DELETE /api/v2/registry-modules/:module_id` or the by-name route) removes the module row plus every version row and archive.
+
+Prefer publishing a new version over deleting a bad one; delete only to remove something that must never be fetched (for example leaked secrets), then tell consumers to move.
 
 ### Provider-managed no-code resource
 
