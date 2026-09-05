@@ -1,3 +1,4 @@
+import { Terrence } from "../components/brand/Terrence";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowRight, Building2, Plus, Search } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -213,7 +214,7 @@ export function Dashboard(): React.JSX.Element {
             ) : visibleOrganizations.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={3} className="h-28 text-center text-muted-foreground">
-                  <Building2 aria-hidden="true" className="mx-auto mb-2 size-5" />
+                  {organizations.length === 0 ? <Terrence pose="empty" animated className="mx-auto mb-2 w-40" /> : <Building2 aria-hidden="true" className="mx-auto mb-2 size-5" />}
                   <p className="font-medium text-foreground">
                     {organizations.length === 0 ? "No organizations yet" : "No organizations found"}
                   </p>

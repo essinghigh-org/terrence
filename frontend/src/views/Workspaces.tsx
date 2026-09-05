@@ -734,6 +734,7 @@ export function Workspaces(): React.JSX.Element {
                 <TableCell colSpan={tableColumnCount} className="py-4 text-center text-muted-foreground">
                   <EmptyState
                     compact
+                    illustration={hasFilters ? undefined : "empty"}
                     title={hasFilters ? "No workspaces match the current filters" : "No workspaces yet"}
                     description={hasFilters
                       ? "Clear or adjust the filters to see more workspaces."

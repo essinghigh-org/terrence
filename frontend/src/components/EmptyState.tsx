@@ -1,3 +1,4 @@
+import { Terrence, type TerrencePose } from "./brand/Terrence";
 import { Link } from "react-router-dom";
 
 import { Button } from "./ui/button";
@@ -15,6 +16,7 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "
  * the app had two unrelated empty-state treatments.
  */
 export function EmptyState(props: Readonly<{
+  illustration?: TerrencePose | undefined;
   title: string;
   description?: string;
   actionLabel?: string;
@@ -23,11 +25,12 @@ export function EmptyState(props: Readonly<{
   compact?: boolean;
   headingLevel?: "h2" | "h3" | "h4";
 }>): React.JSX.Element {
-  const { title, description, actionLabel, onAction, docsHref, compact, headingLevel = "h2" } = props;
+  const { illustration, title, description, actionLabel, onAction, docsHref, compact, headingLevel = "h2" } = props;
   const hasAction = actionLabel !== undefined && onAction !== undefined;
   const footerVisible = hasAction || docsHref !== undefined;
   return (
     <Empty className={compact === true ? "p-6" : "p-12"}>
+      {illustration !== undefined && <Terrence pose={illustration} className={compact === true ? "w-32" : "w-44"} />}
       <EmptyHeader>
         {/* EmptyTitle is a div; render a real heading inside it so empty
             states still land in the document outline. */}

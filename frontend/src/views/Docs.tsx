@@ -1,3 +1,4 @@
+import { Terrence } from "../components/brand/Terrence";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, ArrowRight } from "lucide-react";
@@ -96,6 +97,12 @@ export function Docs(): React.JSX.Element {
         <div className="flex justify-center py-16"><Spinner className="size-6" /></div>
       ) : (
         <>
+          {selectedSlug === index[0]?.slug && (
+            <aside className="flex items-center gap-4 rounded-lg border bg-accent/30 px-5 py-3">
+              <Terrence pose="guide" className="w-24 shrink-0" />
+              <div><h2 className="font-heading font-semibold">A good place to start</h2><p className="mt-1 text-sm text-muted-foreground">Get to know Terrence, then connect your first workspace. Follow the guides in the sidebar at your own pace.</p></div>
+            </aside>
+          )}
           {/* A typographic measure, not a competing page width: prose stops
               being readable much past ~80 characters a line. */}
           <div

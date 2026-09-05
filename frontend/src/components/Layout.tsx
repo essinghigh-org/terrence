@@ -1,3 +1,4 @@
+import { TerrenceLogo } from "./brand/Terrence";
 import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } from "react";
 import {
   Link,
@@ -1176,7 +1177,7 @@ export function Layout({
               aria-label="Home"
                 className="flex shrink-0 items-center justify-center rounded outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-topbar-foreground"
             >
-              <img src="/favicon.svg" alt="" aria-hidden="true" className="size-7" />
+              <TerrenceLogo />
             </Link>
 
             <div aria-hidden="true" className="hidden h-5 w-px bg-topbar-foreground/20 sm:block" />

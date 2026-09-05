@@ -1,3 +1,4 @@
+import { Terrence } from "./brand/Terrence";
 /* eslint-disable @typescript-eslint/naming-convention -- Terraform plan JSON fields are snake_case. */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -1279,13 +1280,14 @@ export function PlanOutput({
       </div>
 
       {filteredResources.length === 0 ? (
-        <p className="px-5 py-6 text-center text-sm text-muted-foreground">
-          {changedResources.length === 0
+        <div className="px-5 py-6 text-center text-sm text-muted-foreground">
+          {changedResources.length === 0 && driftResources.length === 0 && actionInvocations.length === 0 && outputs.length === 0 && planStatus === "finished" && <Terrence pose="healthy" className="mx-auto mb-3 w-32" />}
+          <p>{changedResources.length === 0
             ? actionInvocations.length === 0
               ? "This plan has no resource changes."
               : `This plan has no resource changes, but it will invoke ${actionInvocations.length} action${actionInvocations.length === 1 ? "" : "s"}.`
-            : "No resources match these filters."}
-        </p>
+            : "No resources match these filters."}</p>
+        </div>
       ) : (
         <div aria-label={`Resource list, ${filteredResources.length} items`}>
           {filteredResources.map((resource): React.JSX.Element => (

@@ -1,6 +1,6 @@
 import { Link, useLocation } from "react-router-dom";
 import { buttonVariants } from "../components/ui/button";
-import { FileQuestion } from "lucide-react";
+import { Terrence } from "../components/brand/Terrence";
 import { cn } from "../lib/utils";
 
 /**
@@ -14,7 +14,8 @@ export function NotFound(): React.JSX.Element {
 
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center px-4 text-center">
-      <FileQuestion className="size-10 text-muted-foreground" aria-hidden="true" />
+      <Terrence pose="lost" className="w-56" />
+      <p className="mt-3 font-mono text-sm tracking-widest text-muted-foreground">404 / UNCHARTED TERRITORY</p>
       <h1 className="mt-4 text-3xl font-bold tracking-tight text-foreground">Page not found</h1>
       <p className="mt-2 max-w-md text-sm text-muted-foreground">
         <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{location.pathname}</code>{" "}
