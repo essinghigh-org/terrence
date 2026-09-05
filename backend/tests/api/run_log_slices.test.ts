@@ -33,7 +33,7 @@ describe("run log slices", () => {
       headers: { Authorization: `Bearer ${auth}`, ...headers },
     }));
 
-  const rowText = (i: number): string => `row-${i}-héllo-✓-${"x".repeat(i % 17)}`;
+  const rowText = (i: number): string => i % 9 === 0 ? "" : `row-${i}-héllo-✓-${"x".repeat(i % 17)}`;
 
   beforeAll(async () => {
     await db.insert(users).values({ id: userId, username: userId, passwordHash: "unused" });
@@ -69,6 +69,9 @@ describe("run log slices", () => {
 
   it("serves byte-exact windows of the joined stream", async () => {
     const reference = Buffer.from(Array.from({ length: 120 }, (_, i) => rowText(i)).join("\n"), "utf8");
+    const sep = reference.indexOf(10, 5);
+    const sep2 = reference.indexOf(10, sep + 1);
+    const splitChar = reference.indexOf(Buffer.from("é", "utf8"));
     const probes: readonly (readonly [number, number])[] = [
       [0, Number.POSITIVE_INFINITY],
       [0, 0],
@@ -77,6 +80,17 @@ describe("run log slices", () => {
       [3, 7],
       [5, 64],
       [8, 9],
+      // Ranges starting, ending, and landing exactly on separators.
+      [sep - 1, 1],
+      [sep - 1, 2],
+      [sep, 3],
+      [sep + 1, 3],
+      [sep2 - 2, 2],
+      [sep2 - 1, 4],
+      // Ranges splitting a multibyte character stay byte-exact.
+      [splitChar, 5],
+      [splitChar + 1, 5],
+      [splitChar - 1, 2],
       [reference.length - 1, 10],
       [reference.length, 10],
       [reference.length + 100, 10],
@@ -86,7 +100,8 @@ describe("run log slices", () => {
     for (const [offset, limit] of probes) {
       const slice = await readRunLogSlice(runId, "apply", offset, limit);
       const end = Number.isFinite(limit) ? Math.min(offset + limit, reference.length) : reference.length;
-      expect(slice.text).toBe(offset >= reference.length ? "" : reference.subarray(offset, Math.max(offset, end)).toString("utf8"));
+      const expected = offset >= reference.length ? Buffer.alloc(0) : reference.subarray(offset, Math.max(offset, end));
+      expect(Buffer.from(slice.bytes)).toEqual(expected);
       expect(slice.totalBytes).toBe(reference.length);
       expect(slice.totalCount).toBe(120);
       expect(slice.truncated).toBe(false);
@@ -112,7 +127,7 @@ describe("run log slices", () => {
     const full = await readRunLogSlice(bigRunId, "apply", 0, Number.POSITIVE_INFINITY);
     expect(full.totalCount).toBe(total);
     expect(full.truncated).toBe(false);
-    expect(full.text).toBe(Array.from({ length: total }, (_, i) => `line-${i}`).join("\n"));
+    expect(Buffer.from(full.bytes).toString("utf8")).toBe(Array.from({ length: total }, (_, i) => `line-${i}`).join("\n"));
 
     expect(await archiveRunLogs(bigRunId)).toBe(true);
     await db.delete(logs).where(eq(logs.runId, bigRunId));
@@ -120,7 +135,7 @@ describe("run log slices", () => {
     const archived = await readRunLogSlice(bigRunId, "apply", 0, Number.POSITIVE_INFINITY);
     expect(archived.truncated).toBe(true);
     expect(archived.totalCount).toBe(total);
-    expect(archived.text).toBe(Array.from({ length: 10000 }, (_, i) => `line-${i}`).join("\n"));
+    expect(Buffer.from(archived.bytes).toString("utf8")).toBe(Array.from({ length: 10000 }, (_, i) => `line-${i}`).join("\n"));
 
     const archivedPage = await readRunLogsPage(bigRunId, { number: 1, size: 20 });
     expect(archivedPage.totalCount).toBe(total);
@@ -136,10 +151,10 @@ describe("run log slices", () => {
 
     const window = await request(`/api/v2/runs/${runId}/apply/log?offset=2&limit=3`);
     expect(window.status).toBe(200);
-    expect(await window.text()).toBe(Buffer.from(
+    expect(Buffer.from(await window.arrayBuffer())).toEqual(Buffer.from(
       Array.from({ length: 120 }, (_, i) => rowText(i)).join("\n"),
       "utf8",
-    ).subarray(2, 5).toString("utf8"));
+    ).subarray(2, 5));
 
     const paged = await request(`/api/v2/runs/${runId}/logs?page[number]=1&page[size]=20`);
     expect(paged.status).toBe(200);

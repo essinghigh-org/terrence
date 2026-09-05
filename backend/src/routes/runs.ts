@@ -135,7 +135,7 @@ async function rawRunLogResponse(
   set.headers["Content-Disposition"] = `attachment; filename="${rawRunLogFilename(runId, phase)}"`;
   set.headers["X-Terrence-Log-Total-Bytes"] = String(slice.totalBytes);
   set.headers["X-Terrence-Log-Truncated"] = slice.truncated ? "true" : "false";
-  return Buffer.from(slice.text, "utf8");
+  return slice.bytes;
 }
 
 function originForConfiguration(

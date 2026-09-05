@@ -159,8 +159,8 @@ export function parseLogSliceParams(request: Readonly<{ url: string }>): Readonl
 }
 
 export type RunLogSlice = Readonly<{
-  /** Exact bytes of the joined "<row>\\n<row>…" stream in [offset, offset+limit). */
-  text: string;
+  /** Exact bytes of the joined "<row>\n<row>…" stream in [offset, offset+limit). Kept as bytes (never decoded) so windows that split a multibyte character stay byte-exact for polling clients that stitch ranges. */
+  bytes: Uint8Array;
   /** Total bytes of the whole stream (all rows joined). */
   totalBytes: number;
   /** True row count behind the stream. */
@@ -209,14 +209,16 @@ function locateLogWindow(
     cursor = end;
   }
   if (rowIndex >= sizes.length || endBytes <= offsetBytes) return null;
-  // Collect the ids covering the window; bounded by it.
+  // Collect the ids covering the window; bounded by it. Only separators
+  // between fetched rows count: the byte before the first row is either
+  // outside the window or emitted as the prefix, never fetched.
   const ids: string[] = [];
   let covered = rowStart;
   for (let i = rowIndex; i < sizes.length && covered < endBytes; i++) {
     const size = sizes[i];
     if (size === undefined) break;
     ids.push(size.id);
-    covered += (i > 0 ? 1 : 0) + size.length;
+    covered += (i > rowIndex ? 1 : 0) + size.length;
   }
   return { rowStart, ids };
 }
@@ -237,36 +239,44 @@ export async function readRunLogSlice(
 ): Promise<RunLogSlice> {
   const where = and(eq(logs.runId, runId), eq(logs.phase, phase));
   // One snapshot of (id, byte length) in stream order. Fetching by id below
-  // (instead of LIMIT/OFFSET) keeps the window pinned even if retention
-  // deletes head rows or the tail grows between the two queries.
-  const sizes = await db.select({ id: logs.id, length: outputByteLength }).from(logs).where(where)
-    .orderBy(asc(logs.createdAt), asc(logs.id));
-  if (sizes.length === 0) return readArchivedLogSlice(runId, phase, offsetBytes, limitBytes);
+  // (instead of LIMIT/OFFSET) keeps the window pinned even if the tail grows
+  // between the two queries. If retention deletes a selected row in between,
+  // retry once from a fresh snapshot; the second miss falls back to an
+  // approximate window rather than failing a log tail.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const sizes = await db.select({ id: logs.id, length: outputByteLength }).from(logs).where(where)
+      .orderBy(asc(logs.createdAt), asc(logs.id));
+    if (sizes.length === 0) return readArchivedLogSlice(runId, phase, offsetBytes, limitBytes);
 
-  const totalBytes = logStreamTotalBytes(sizes);
-  const endBytes = Number.isFinite(limitBytes) ? offsetBytes + limitBytes : totalBytes;
-  const window = locateLogWindow(sizes, offsetBytes, endBytes);
-  if (window === null) {
-    return { text: "", totalBytes, totalCount: sizes.length, truncated: false };
+    const totalBytes = logStreamTotalBytes(sizes);
+    const endBytes = Number.isFinite(limitBytes) ? offsetBytes + limitBytes : totalBytes;
+    const window = locateLogWindow(sizes, offsetBytes, endBytes);
+    if (window === null) {
+      return { bytes: new Uint8Array(0), totalBytes, totalCount: sizes.length, truncated: false };
+    }
+    const rows = await db.select({ id: logs.id, outputText: logs.outputText }).from(logs)
+      .where(and(where, inArray(logs.id, [...window.ids])));
+    const textById = new Map(rows.map((row): readonly [string, string] => [row.id, row.outputText]));
+    if (attempt === 0 && window.ids.some((id): boolean => !textById.has(id))) continue;
+    const joined = Buffer.from(window.ids.map((id): string => textById.get(id) ?? "").join("\n"), "utf8");
+    // Bytes in [offsetBytes, rowStart) are the single separator before the
+    // first fetched row (empty unless the offset lands exactly on it).
+    const prefix = offsetBytes < window.rowStart ? SEPARATOR_BYTE : EMPTY_BYTES;
+    const from = Math.max(0, offsetBytes - window.rowStart);
+    const take = Math.max(0, endBytes - Math.max(offsetBytes, window.rowStart));
+    const body = joined.subarray(from, from + take);
+    return {
+      bytes: prefix.length === 0 ? body : Buffer.concat([prefix, body]),
+      totalBytes,
+      totalCount: sizes.length,
+      truncated: false,
+    };
   }
-  const rows = await db.select({ id: logs.id, outputText: logs.outputText }).from(logs)
-    .where(and(where, inArray(logs.id, [...window.ids])));
-  const textById = new Map(rows.map((row): readonly [string, string] => [row.id, row.outputText]));
-  // A row deleted between the queries (retention) reads back as "": the
-  // window is then approximate, but positions never corrupt.
-  const joined = Buffer.from(window.ids.map((id): string => textById.get(id) ?? "").join("\n"), "utf8");
-  // Bytes in [offsetBytes, rowStart) are the single separator before the
-  // first fetched row (empty unless the offset lands exactly on it).
-  const prefix = offsetBytes < window.rowStart ? "\n" : "";
-  const from = Math.max(0, offsetBytes - window.rowStart);
-  const take = Math.max(0, endBytes - Math.max(offsetBytes, window.rowStart));
-  return {
-    text: prefix + joined.subarray(from, from + take).toString("utf8"),
-    totalBytes,
-    totalCount: sizes.length,
-    truncated: false,
-  };
+  throw new Error("Unreachable: slice retry loop always returns");
 }
+
+const SEPARATOR_BYTE = new Uint8Array([10]);
+const EMPTY_BYTES = new Uint8Array(0);
 
 async function readArchivedLogSlice(
   runId: string,
@@ -280,7 +290,7 @@ async function readArchivedLogSlice(
   const bytes = Buffer.from(text, "utf8");
   const end = Number.isFinite(limitBytes) ? Math.min(offsetBytes + limitBytes, bytes.length) : bytes.length;
   return {
-    text: offsetBytes >= bytes.length ? "" : bytes.subarray(offsetBytes, Math.max(offsetBytes, end)).toString("utf8"),
+    bytes: offsetBytes >= bytes.length ? new Uint8Array(0) : bytes.subarray(offsetBytes, Math.max(offsetBytes, end)),
     totalBytes: bytes.length,
     totalCount: archived.totalCount,
     truncated: archived.truncated,
