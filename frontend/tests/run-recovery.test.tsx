@@ -6,9 +6,9 @@ import { isString } from "../src/lib/type-guards";
 import type { JsonValue } from "../src/lib/json";
 
 const originalFetch = globalThis.fetch;
-const originalCreateObjectURL = URL.createObjectURL;
-const originalRevokeObjectURL = URL.revokeObjectURL;
-const originalAnchorClick = HTMLAnchorElement.prototype.click;
+const originalCreateObjectURL = URL.createObjectURL.bind(URL);
+const originalRevokeObjectURL = URL.revokeObjectURL.bind(URL);
+const anchorClickDescriptor = Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype, "click");
 
 function json(data: JsonValue, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -94,7 +94,9 @@ afterEach((): void => {
   globalThis.fetch = originalFetch;
   URL.createObjectURL = originalCreateObjectURL;
   URL.revokeObjectURL = originalRevokeObjectURL;
-  HTMLAnchorElement.prototype.click = originalAnchorClick;
+  if (anchorClickDescriptor !== undefined) {
+    Object.defineProperty(HTMLAnchorElement.prototype, "click", anchorClickDescriptor);
+  }
 });
 
 // Issue #580: the run page must surface an interrupted-apply recovery copy
@@ -148,9 +150,9 @@ test("recover explains the workspace lock requirement on conflict", async () => 
 test("download fetches the recovery copy", async () => {
   const seen: string[] = [];
   URL.createObjectURL = mock((): string => "blob:recovery") as unknown as typeof URL.createObjectURL;
-  URL.revokeObjectURL = mock((): void => {}) as unknown as typeof URL.revokeObjectURL;
+  URL.revokeObjectURL = mock((): boolean => true) as unknown as typeof URL.revokeObjectURL;
   // jsdom cannot navigate: swallow the programmatic download click.
-  HTMLAnchorElement.prototype.click = mock((): void => {}) as unknown as typeof HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = mock((): boolean => true) as unknown as typeof HTMLAnchorElement.prototype.click;
   installFetch("run-rec", runFixture("run-rec", { "has-recovery-state": true }), (url) => {
     if (url === "/api/v2/runs/run-rec/recovery-state") {
       return new Response(JSON.stringify({ version: 4, serial: 7 }), {
