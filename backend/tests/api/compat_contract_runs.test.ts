@@ -390,6 +390,41 @@ describe("remote-workflow runs contract", () => {
     }
   });
 
+  it("acknowledges inert module callback from tfc-agent/cli with 201 (COMP-14)", async () => {
+    const { mintRunToken } = await import("../../src/lib/run-token");
+    const token = await mintRunToken(runId, workspaceId, seed.orgId);
+    const runTokenHeaders = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/vnd.api+json",
+    };
+
+    // Correct run token receives 201 and empty modules object
+    const res = await request(`/api/v2/runs/${runId}/modules`, {
+      method: "POST",
+      headers: runTokenHeaders,
+      body: JSON.stringify({ modules: [{ source: "registry.terraform.io/hashicorp/aws" }] }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { data: { modules: unknown[] } };
+    expect(body.data.modules).toEqual([]);
+
+    // Mismatched run ID returns 404
+    const mismatched = await request(`/api/v2/runs/run-other/modules`, {
+      method: "POST",
+      headers: runTokenHeaders,
+      body: JSON.stringify({ modules: [] }),
+    });
+    expect(mismatched.status).toBe(404);
+
+    // Missing/invalid token returns 404
+    const unauth = await request(`/api/v2/runs/${runId}/modules`, {
+      method: "POST",
+      headers: jsonHeaders("invalid-token"),
+      body: JSON.stringify({ modules: [] }),
+    });
+    expect(unauth.status).toBe(404);
+  });
+
   it("discards and then destroys a run", async () => {
     const discard = await request(`/api/v2/runs/${runId}/actions/discard`, {
       method: "POST",

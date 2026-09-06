@@ -48,6 +48,13 @@ PROVIDER-only resources such as HYOK, no-code module definitions, token TTL poli
 
 The manifest's `route_ownership` map covers every route module registered by `backend/src/app.ts`. A provider-only owner means the route remains for provider interoperability but must not acquire a normal-product UI by implication. New routes must be justified by one of the four supported classes; copying an HCP Terraform or Terraform Enterprise endpoint solely for parity is not sufficient.
 
+## Accepted-but-inert compatibility surfaces
+
+Certain callbacks and surfaces exist solely because client protocols require an acknowledgment or schema presence, rather than altering backend execution:
+
+- **Module artifacts callback (`POST /api/v2/runs/:run_id/modules`):** Sent by the Terraform CLI and `tfc-agent` during execution. Terrence acknowledges the payload with HTTP 201 (`{ data: { modules: [] } }`) to prevent client execution failure, while intentionally discarding the metadata rather than duplicating repository state.
+- **Headless provider resources (`provider-sets`, `hyok`, `token-ttl`, `admin-registry-sharing`):** Retained solely to allow `hashicorp/tfe` configuration to apply without errors when migrating existing workspace definitions.
+
 ## State representation
 
 Managed state versions require plaintext Terraform/OpenTofu v4 state. Client-encrypted OpenTofu state is rejected, independently of Terrence storage encryption and provider-compatible HYOK resources. Existing encrypted bytes and completed recovery captures remain downloadable for manual recovery; structured inspection and promotion are unavailable. See [State: client encryption and recovery](state#client-encrypted-opentofu-state).
