@@ -82,11 +82,19 @@ describe("the reference format API v2 - Data Retention & Garbage Collection", ()
       statePayload: null,
       createdAt: Date.now(),
     });
+    // Issue #703: a pending reservation is an upload handle, not history. It
+    // stays out of listings but remains reachable through the direct show
+    // endpoint until it finalizes or is discarded.
     const pendingListRes = await app.handle(new Request(`http://localhost/api/v2/workspaces/${workspaceId}/state-versions`, {
       headers: jsonHeaders(userToken),
     }));
     expect(pendingListRes.status).toBe(200);
-    const pendingResource = (await pendingListRes.json()).data.find((item: { id: string }) => item.id === pendingId);
+    expect((await pendingListRes.json()).data.find((item: { id: string }) => item.id === pendingId)).toBeUndefined();
+    const pendingShowRes = await app.handle(new Request(`http://localhost/api/v2/state-versions/${pendingId}`, {
+      headers: jsonHeaders(userToken),
+    }));
+    expect(pendingShowRes.status).toBe(200);
+    const pendingResource = (await pendingShowRes.json()).data;
     expect(pendingResource.attributes.md5).toBeNull();
     expect(pendingResource.attributes.size).toBeNull();
 
