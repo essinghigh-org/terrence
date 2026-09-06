@@ -117,6 +117,8 @@ export function resetAuditRequest(): void {
 }
 
 const SECRET_KEY = /(?:^|[-_])(authorization|bearer|password|passwd|secret|raw[-_]?token|access[-_]?token|refresh[-_]?token|credential|private[-_]?key|raw[-_]?state|state[-_]?payload|plan[-_]?json|encrypted[-_]?value)(?:$|[-_])/i;
+const RAW_PAYLOAD_KEYS = new Set(["body", "comment", "payload", "plan", "raw", "state"]);
+const BEARER_VALUE = /\bBearer\s+[^\s,;]+/gi;
 const URL_SECRET_QUERY = /^(?:token|access[_-]?token|refresh[_-]?token|authorization|signature|sig|secret|key|password)$/i;
 const MAX_DETAIL_DEPTH = 8;
 const MAX_DETAIL_ENTRIES = 96;
@@ -138,9 +140,10 @@ function safeUrlString(value: string): string {
     parsed.pathname = parsed.pathname
       .replace(/(\/log\/)[^/]+/gi, "$1[REDACTED]")
       .replace(/(\/token[s]?\/)[^/]+/gi, "$1[REDACTED]");
-    return parsed.toString().slice(0, MAX_DETAIL_STRING);
+    return parsed.toString().replace(BEARER_VALUE, "Bearer [REDACTED]").slice(0, MAX_DETAIL_STRING);
   } catch {
-    return value.length > MAX_DETAIL_STRING ? `${value.slice(0, MAX_DETAIL_STRING)}…` : value;
+    const redacted = value.replace(BEARER_VALUE, "Bearer [REDACTED]");
+    return redacted.length > MAX_DETAIL_STRING ? `${redacted.slice(0, MAX_DETAIL_STRING)}…` : redacted;
   }
 }
 
@@ -148,12 +151,13 @@ function safeUrlString(value: string): string {
  * security boundary for credentials, state, plan payloads, or signed URLs. */
 export function sanitizeAuditValue(value: unknown, depth = 0, key = ""): unknown {
   const normalizedKey = key.replace(/([a-z])([A-Z])/g, "$1-$2");
-  if (SECRET_KEY.test(normalizedKey)) return "[REDACTED]";
+  if (SECRET_KEY.test(normalizedKey) || RAW_PAYLOAD_KEYS.has(normalizedKey.toLowerCase())) return "[REDACTED]";
   if (value === null || typeof value === "boolean" || typeof value === "number") return value;
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (/^https?:\/\//i.test(trimmed)) return safeUrlString(trimmed);
-    return value.length > MAX_DETAIL_STRING ? `${value.slice(0, MAX_DETAIL_STRING)}…` : value;
+    const redacted = value.replace(BEARER_VALUE, "Bearer [REDACTED]");
+    return redacted.length > MAX_DETAIL_STRING ? `${redacted.slice(0, MAX_DETAIL_STRING)}…` : redacted;
   }
   if (depth >= MAX_DETAIL_DEPTH) return "[REDACTED: depth limit]";
   if (Array.isArray(value)) return value.slice(0, MAX_DETAIL_ENTRIES).map((item): unknown => sanitizeAuditValue(item, depth + 1, key));
@@ -200,6 +204,8 @@ export function buildAuditDetails(input: Readonly<{
     ?? (source["result"] === "denied" ? "denied" : source["result"] === "failure" ? "failure" : "success");
   const immutable = input.immutable ?? IMMUTABLE_ACTIONS.has(input.action);
   const safeSource = sanitizeAuditValue(source) as Record<string, unknown>;
+  const effectiveUserId = input.effectiveUserId
+    ?? (typeof safeSource["effectiveUserId"] === "string" ? safeSource["effectiveUserId"] : context?.userId ?? input.userId);
   return {
     ...safeSource,
     schemaVersion: 1,
@@ -213,7 +219,7 @@ export function buildAuditDetails(input: Readonly<{
     effectiveScope: context?.effectiveScope ?? { kind: "system" },
     actor: {
       userId: input.userId,
-      effectiveUserId: input.effectiveUserId ?? context?.userId ?? input.userId,
+      effectiveUserId,
       credentialClass: context?.credentialClass ?? "system-token",
       effectiveScope: context?.effectiveScope ?? { kind: "system" },
     },

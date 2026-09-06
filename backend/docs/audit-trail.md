@@ -59,6 +59,11 @@ impersonation events are marked `immutable: true`; there is no update API for
 audit rows, and the domain transaction writes the required event together
 with the state change where atomicity is required.
 
+Comment deletion is one explicit invariant: the comment row and its immutable
+delete event commit in the same transaction, so a successful deletion cannot
+return without an audit record. Denied deletion attempts record one bounded
+reason and never include the comment body.
+
 Secrets are removed while the event is constructed. Recursive values are
 bounded, credential-like keys are replaced with `[REDACTED]`, and signed or
 bearer URLs have their query/path credential removed before insertion. Audit

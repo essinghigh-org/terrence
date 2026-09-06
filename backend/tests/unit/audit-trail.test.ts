@@ -59,6 +59,30 @@ describe("audit event envelope", () => {
     expect(event["rawToken"]).toBe("[REDACTED]");
     expect(String(event["callback"])).toContain("token=%5BREDACTED%5D");
     expect(String(event["callback"])).not.toContain("secret");
+    expect(event["actor"]).toMatchObject({ effectiveUserId: "user-1" });
+  });
+
+  test("preserves an impersonated effective actor without retaining raw payloads", () => {
+    beginAuditRequest("corr-impersonation", "POST", "/api/v2/admin/users/u-2/actions/impersonate");
+    setAuditPrincipal({ userId: "admin-1", tokenId: "token-1", authenticated: true });
+    const event = buildAuditDetails({
+      action: "impersonate",
+      resourceType: "users",
+      resourceId: "u-2",
+      orgId: null,
+      userId: "admin-1",
+      details: {
+        effectiveUserId: "u-2",
+        state: { secret: "raw-state" },
+        payload: "raw-plan-json",
+        note: "Authorization: Bearer bearer-material",
+      },
+    });
+
+    expect(event["actor"]).toMatchObject({ userId: "admin-1", effectiveUserId: "u-2" });
+    expect(event["state"]).toBe("[REDACTED]");
+    expect(event["payload"]).toBe("[REDACTED]");
+    expect(event["note"]).toBe("Authorization: Bearer [REDACTED]");
   });
 
   test("makes denied high-risk events immutable and bounds recursive input", () => {

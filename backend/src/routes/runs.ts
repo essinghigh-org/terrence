@@ -2208,13 +2208,26 @@ export const runRoutes = new Elysia({ name: "runs" })
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden", detail: "Only the comment author or a workspace administrator can delete it." }] };
     }
-    await db.delete(runComments).where(eq(runComments.id, commentId));
-    await auditLog("delete", "run-comments", commentId, user?.id ?? null, authorized.workspace.orgId, {
-      runId: c.runId,
-      workspaceId: authorized.workspace.id,
-      bodyBytes: Buffer.byteLength(c.body, "utf8"),
-      deletedByAuthor: isAuthor,
+    const deleted = await db.transaction(async (transaction): Promise<boolean> => {
+      const tx = transaction as unknown as typeof db;
+      const removed = await tx.delete(runComments).where(eq(runComments.id, commentId)).returning({ id: runComments.id });
+      if (removed.length === 0) return false;
+      await tx.insert(auditLogs).values(auditLogValues({
+        action: "delete",
+        resourceType: "run-comments",
+        resourceId: commentId,
+        userId: user?.id ?? null,
+        orgId: authorized.workspace.orgId,
+        details: {
+          runId: c.runId,
+          workspaceId: authorized.workspace.id,
+          bodyBytes: Buffer.byteLength(c.body, "utf8"),
+          deletedByAuthor: isAuthor,
+        },
+      }) as typeof auditLogs.$inferInsert);
+      return true;
     });
+    if (!deleted) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     (set as { status: number }).status = 204;
     return new Response(null, { status: 204 });
   })

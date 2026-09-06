@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../../src/db";
-import { apiTokens, logs, runComments, runs, stateVersions, teams, teamWorkspaces, workspaces } from "../../src/db/schema";
+import { apiTokens, auditLogs, logs, runComments, runs, stateVersions, teams, teamWorkspaces, workspaces } from "../../src/db/schema";
 import { readPlanJsonArtifact, writePlanJsonArtifact } from "../../src/lib/plan-json";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { cleanupSeed, jsonHeaders, persistExecutionSeed, persistSeed, request, seedOrg } from "./compat_contract_helpers";
@@ -60,7 +60,16 @@ test("run-read cannot create comments or delete another author's comment", async
   const id = (await created.json()).data.id;
   expect((await request(`/api/v2/comments/${id}`, { method: "DELETE", headers: jsonHeaders(token) })).status).toBe(403);
   expect(await db.query.runComments.findFirst({ where: eq(runComments.id, id) })).toBeDefined();
+  const denied = await db.query.auditLogs.findFirst({
+    where: and(eq(auditLogs.action, "delete"), eq(auditLogs.resourceType, "run-comments"), eq(auditLogs.resourceId, id), isNull(auditLogs.userId)),
+  });
+  expect(denied?.details).toMatchObject({ result: "denied", immutable: true, reason: "requires-author-or-administrator", runId });
   expect((await request(`/api/v2/comments/${id}`, { method: "DELETE", headers: jsonHeaders(seed.token) })).status).toBe(204);
+  const deleted = await db.query.auditLogs.findFirst({
+    where: and(eq(auditLogs.action, "delete"), eq(auditLogs.resourceType, "run-comments"), eq(auditLogs.resourceId, id), eq(auditLogs.userId, seed.userId)),
+  });
+  expect(deleted?.details).toMatchObject({ result: "success", immutable: true, runId, workspaceId });
+  expect(JSON.stringify(deleted?.details)).not.toContain("Review note");
 });
 
 test("run deletion revalidates status and preserves logs and artifacts on database failure", async () => {
