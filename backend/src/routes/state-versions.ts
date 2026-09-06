@@ -19,7 +19,6 @@ import { insertStateOutputIndex, replaceStateOutputIndex } from "../lib/state-ou
 import { persistUploadBody } from "../lib/upload-body";
 import { storageDir } from "../db/driver";
 import { auditLogValues } from "../lib/audit-trail";
-<<<<<<< HEAD
 import { authorizedStateAccess } from "../lib/authorized-resources";
 import { pageRequest, pagination } from "../lib/pagination";
 import { commitStateVersion } from "../lib/commands/state-version";
