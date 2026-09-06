@@ -2,8 +2,8 @@ import { log } from "../lib/log";
 import { normalizeRunVariables, runVariablesForWrite } from "../lib/run-variables";
 import { newResourceId } from "../lib/resource-id";
 import { createHash } from "node:crypto";
-import { exists, readFile } from "node:fs/promises";
-import { isClientEncryptedState, parseTerraformStatePayload, statePayloadError } from "../lib/validation";
+import { exists } from "node:fs/promises";
+import { statePayloadError } from "../lib/validation";
 import { join } from "node:path";
 import { Elysia } from "elysia";
 import { db } from "../db";
@@ -48,6 +48,7 @@ import { findAuthorizedWorkspace, findAuthorizedRun } from "../lib/authorized-re
 import { workspaceRunHistoryWhere, organizationRunHistoryWhere, FINAL_RUN_STATUSES, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, DISCARDABLE_RUN_STATUSES } from "../lib/run-history";
 import type { WorkspacePermission } from "../lib/authorization";
 import type { DeepReadonly } from "../lib/types";
+import { inspectRecoveryCopy } from "../lib/recovery-files";
 
 type SetObj = { status?: number | string; headers: Record<string, string | number> };
 
@@ -1296,16 +1297,24 @@ export const runRoutes = new Elysia({ name: "runs" })
       : lockedReason !== undefined && lockedReason !== null && lockedReason !== ""
         ? lockedReason
         : "Locked manually";
-    // Issue #580: run-page Recover action signal. A verified recovery copy
+    // Issue #580/#761: run-page recovery signal. A verified recovery copy
     // (capture completion marker present) may be the only record of the
     // infrastructure state after an interrupted apply.
     detailAttributes["has-recovery-state"] = await exists(join(storageDir, "recovery", runId, ".recovered"));
     if (detailAttributes["has-recovery-state"] === true) {
-      const recoveryPayload = await readFile(join(storageDir, "recovery", runId, "terraform.tfstate"), "utf8").catch((): null => null);
-      const parsedRecovery = parseTerraformStatePayload(recoveryPayload);
-      detailAttributes["recovery-state-format-supported"] = parsedRecovery !== null;
-      detailAttributes["recovery-state-representation"] = isClientEncryptedState(recoveryPayload) ? "opentofu-encrypted" : parsedRecovery === null ? "invalid" : "terraform-v4";
-      detailAttributes["recovery-state-unavailable-reason"] = parsedRecovery === null ? statePayloadError(recoveryPayload) : null;
+      const recovery = await inspectRecoveryCopy(storageDir, runId);
+      const parsedRecovery = recovery.status === "candidate" || recovery.status === "promoted";
+      detailAttributes["recovery-state-format-supported"] = parsedRecovery;
+      detailAttributes["recovery-state-representation"] = recovery.status === "opaque"
+        ? "opentofu-encrypted"
+        : parsedRecovery ? "terraform-v4" : "invalid";
+      detailAttributes["recovery-state-unavailable-reason"] = parsedRecovery
+        ? null
+        : recovery.status === "opaque"
+          ? "Client-encrypted OpenTofu state requires its original client keys and cannot be promoted."
+          : recovery.status === "incomplete"
+            ? "The recovery capture is incomplete and cannot be promoted."
+            : statePayloadError(null);
     }
     const includes = requestedRunIncludes(request);
     const included = await includedRunResources([authorized.run], request, includes);

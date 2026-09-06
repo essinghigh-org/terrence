@@ -51,7 +51,7 @@ import {
   TableRow,
 } from "../components/ui/table";
 import { toast } from "../components/ui/toast";
-import { ApiError, fetchApi, fetchApiBlob, streamExplain, type ExplainKind, type ReasoningEffort } from "../lib/api";
+import { ApiError, fetchApi, streamExplain, type ExplainKind, type ReasoningEffort } from "../lib/api";
 import { CAPABILITY_PLAN_EXPLAINER, useCapability } from "../lib/capabilities";
 import { useUnsavedChangesWarning } from "../lib/use-unsaved-changes";
 import { isBigInt, isBoolean, isNumber, isObjectLike, isString } from "../lib/type-guards";
@@ -59,12 +59,12 @@ import { formatRunSource, formatRunStatus, isVcsRunSource } from "../lib/run-lab
 import { StatusBadge } from "../components/ui/status-badge";
 import { RunLogOutput } from "../components/RunLogOutput";
 import { RunDecisionPanel } from "../components/RunDecisionPanel";
+import { RecoveryWorkbench } from "../components/RecoveryWorkbench";
 import { RunStageStrip, resolveStages } from "../components/RunStageStrip";
 import { ACTION_CONFIRMATIONS, resolveRunDecision, type RunActionKind } from "../lib/run-decision";
 import { useRunView } from "../lib/use-run-view";
 import { sectionLabel, TERMINAL_STATUSES, type PolicyCheck, type RunComment, type RunEvent } from "../lib/run-view-state";
 import { formatPhaseState, phaseTone, resolvePhaseStatus, resolveRunDisplay, TONE_ACCENT } from "../lib/run-status";
-import { Callout } from "../components/ui/callout";
 import { Disclosure } from "../components/ui/disclosure";
 import { MetaList } from "../components/ui/meta-list";
 import type { JsonObject } from "@/lib/json";
@@ -443,8 +443,6 @@ export function RunDetail({
   const [rerunPending, setRerunPending] = useState(false);
   const [rerunError, setRerunError] = useState("");
   const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
-  const [recoveryPending, setRecoveryPending] = useState(false);
-  const [recoveryError, setRecoveryError] = useState("");
   const [fullscreenLog, setFullscreenLog] = useState<"plan" | "apply" | null>(null);
   // Focus management for the fullscreen log dialog: remember
   // whichever control opened it so focus can return there after close.
@@ -688,47 +686,6 @@ export function RunDetail({
       setPendingAction("");
     }
   }, [runId, markActionSent, markActionSettled, refreshAll]);
-
-  // Issue #580: interrupted-apply recovery copy actions. The copy may be the
-  // only record of the infrastructure state: download it for inspection or
-  // promote it into a new finalized state version (which consumes the copy).
-  async function downloadRecoveryState(): Promise<void> {
-    setRecoveryPending(true);
-    setRecoveryError("");
-    try {
-      const blob = await fetchApiBlob(`/api/v2/runs/${runId}/recovery-state`);
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `recovery-${runId}.tfstate.json`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
-    } catch (error: unknown) {
-      setRecoveryError(error instanceof Error ? error.message : "Could not download the recovery copy.");
-    } finally {
-      setRecoveryPending(false);
-    }
-  }
-
-  async function recoverState(): Promise<void> {
-    setRecoveryPending(true);
-    setRecoveryError("");
-    try {
-      await fetchApi(`/api/v2/runs/${runId}/actions/recover-state`, { method: "POST" });
-      toast.add({ title: "Recovery state promoted to a new state version", type: "success" });
-      refreshAll();
-    } catch (error: unknown) {
-      if (error instanceof ApiError && error.status === 409) {
-        setRecoveryError("The workspace must be locked by you before recovering state. Lock it on the workspace page, then try again.");
-      } else {
-        setRecoveryError(error instanceof Error ? error.message : "Could not recover the state copy.");
-      }
-    } finally {
-      setRecoveryPending(false);
-    }
-  }
 
   const handleDecisionConfirm = useCallback((action: RunActionKind, comment: string): void => {
     void performRunAction(action, ACTION_CONFIRMATIONS[action].successTitle, comment);
@@ -1365,48 +1322,12 @@ export function RunDetail({
       <RunStageStrip stages={stages} className="mb-5" />
 
       {attributes["has-recovery-state"] === true && (
-        <Callout
-          tone="warning"
-          aria-label="Interrupted-apply recovery"
-          title="Recovery state available"
-          className="mb-5"
-          actions={
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={recoveryPending}
-                onClick={(): void => { void downloadRecoveryState(); }}
-              >
-                {recoveryPending ? "Working…" : "Download recovery state"}
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                disabled={recoveryPending || attributes["recovery-state-format-supported"] === false}
-                onClick={(): void => { void recoverState(); }}
-              >
-                {recoveryPending ? "Working…" : "Recover into new state version"}
-              </Button>
-            </>
-          }
-        >
-          <p>
-            This run was interrupted during apply. The captured state may be the only record of
-            your infrastructure: download it for inspection, or recover it into a new state
-            version. Recovering consumes the copy; unrecovered copies are kept, never pruned.
-          </p>
-          <p className="mt-2 text-xs">
-            Recovering requires state-write permission and the workspace lock held by you.
-          </p>
-          {attributes["recovery-state-format-supported"] === false && (
-            <p className="mt-2 text-xs">{String(attributes["recovery-state-unavailable-reason"] ?? "This recovery format cannot be promoted. Download it for manual recovery.")}</p>
-          )}
-          {recoveryError !== "" && (
-            <p role="alert" className="mt-2 text-xs font-medium text-destructive">{recoveryError}</p>
-          )}
-        </Callout>
+        <RecoveryWorkbench
+          runId={runId}
+          formatSupported={attributes["recovery-state-format-supported"] !== false}
+          onRecoveryComplete={refreshAll}
+          onFreshPlan={(): void => { void performRerun("current"); }}
+        />
       )}
 
       <div className="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]">

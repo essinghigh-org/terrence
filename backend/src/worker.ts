@@ -56,6 +56,8 @@ import { isStorageDegraded, isDiskFullError, markStorageDegraded } from "./lib/s
 import { workspaceExecutionDirectory } from "./workspace";
 import {
   captureInterruptedApplyState,
+  RECOVERY_PROMOTION_LOCK_FILENAME,
+  RECOVERY_PROMOTED_FILENAME,
   sweepIncompleteRecoveryCopies,
 } from "./lib/recovery-files";
 import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
@@ -5101,10 +5103,32 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
         }
       }));
   };
-  // Issue #580: recovery copies are consumed by a successful recover-state
-  // action (which deletes them) and are otherwise never time-pruned: a
-  // remaining copy may be the only record of the infrastructure state, and
-  // must not age out while the operator is away. Only saved plans expire.
+  // Issue #761: keep every unpromoted capture until an operator can inspect
+  // it. A successful promotion retains the bytes and manifest as audit
+  // evidence for the configured recovery retention window, then removes the
+  // whole capture during a later startup sweep. An in-progress
+  // promotion is never pruned.
+  const recoveryRoot = join(storageDir, "recovery");
+  const recoveryEntries = await readCleanupEntries(recoveryRoot, "Could not scan recovery cleanup directory");
+  if (recoveryEntries !== null) {
+    await Promise.all(recoveryEntries
+      .filter((entry): boolean => entry.isDirectory())
+      .map(async (entry): Promise<void> => {
+        const path = join(recoveryRoot, entry.name);
+        const promoted = join(path, RECOVERY_PROMOTED_FILENAME);
+        const promoting = join(path, RECOVERY_PROMOTION_LOCK_FILENAME);
+        try {
+          const [promotedStat, promotingStat] = await Promise.all([
+            stat(promoted).catch((): null => null),
+            stat(promoting).catch((): null => null),
+          ]);
+          if (promotedStat === null || promotingStat !== null || promotedStat.mtimeMs >= cutoff) return;
+          await rm(path, { recursive: true, force: true });
+        } catch (error: unknown) {
+          if (!isMissingFileError(error)) logBestEffortFailure("Could not prune promoted recovery evidence", { path }, error);
+        }
+      }));
+  }
   await pruneSavedPlans();
 }
 

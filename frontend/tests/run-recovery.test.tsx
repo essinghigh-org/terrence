@@ -53,6 +53,33 @@ function runFixture(runId: string, extraAttributes: Record<string, JsonValue> = 
   };
 }
 
+function recoveryReviewFixture(): JsonValue {
+  return {
+    data: {
+      id: "run-rec",
+      type: "recovery-reviews",
+      attributes: {
+        capture: { status: "candidate", "marker-present": true, "manifest-present": true },
+        "candidate-state": { serial: 7, lineage: "lineage", digest: "a".repeat(64), size: 128, terraformVersion: "1.9.3", representation: "terraform-v4" },
+        "last-committed-state": { serial: 6, lineage: "lineage", digest: "b".repeat(64), size: 120, terraformVersion: "1.9.3", representation: "terraform-v4" },
+        checks: [
+          { id: "capture-complete", status: "pass", detail: "The durable capture marker is present." },
+          { id: "candidate-parse", status: "pass", detail: "The captured state is a supported Terraform state document." },
+          { id: "digest", status: "pass", detail: "The captured bytes match their recorded SHA-256 digest." },
+          { id: "lineage", status: "pass", detail: "The candidate lineage matches the latest committed state." },
+          { id: "serial", status: "pass", detail: "The candidate serial is compatible with the current history." },
+          { id: "owner-terminated", status: "pass", detail: "Execution owners are stopped." },
+          { id: "workspace-lock", status: "pass", detail: "The workspace lock is held by this caller." },
+          { id: "state-write", status: "pass", detail: "The caller has state-write permission." },
+        ],
+        "execution-owner": { terminated: true },
+        promotion: { allowed: true, "already-promoted": false, blockers: [] },
+        "relevant-logs": [],
+      },
+    },
+  };
+}
+
 function installFetch(
   runId: string,
   run: JsonValue,
@@ -67,6 +94,7 @@ function installFetch(
     const handled = extra(url, init);
     if (handled !== null) return handled;
     if (url === `/api/v2/runs/${runId}`) return json(run);
+    if (url === `/api/v2/runs/${runId}/recovery`) return json(recoveryReviewFixture());
     if (url === `/api/v2/runs/${runId}/plan`) return json({ data: { attributes: { status: "finished" } } });
     if (url === `/api/v2/applies/apply-${runId}`) return json({ data: { attributes: { status: "errored" } } });
     if (url === `/api/v2/runs/${runId}/logs`) return json({ data: [] });
