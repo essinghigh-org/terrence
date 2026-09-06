@@ -48,6 +48,21 @@ export function WorkspaceGettingStarted({
   const hostname = window.location.host;
   const configuration = `terraform {\n  backend "remote" {\n    hostname     = ${JSON.stringify(hostname)}\n    organization = ${JSON.stringify(orgName)}\n    workspaces {\n      name = ${JSON.stringify(workspaceName)}\n    }\n  }\n}`;
   const usesServerCode = !localExecution && (hasRepository || source === "local");
+  const readiness = [
+    {
+      label: localExecution ? "Local execution is configured" : hasRepository ? "Repository is connected" : "Configuration connection is still needed",
+      ready: localExecution || hasRepository || source === "local",
+    },
+    {
+      label: canReadVariable ? "Variable access is available" : "Variable access requires permission",
+      ready: canReadVariable,
+    },
+    {
+      label: canQueueRun ? "Plan permission is available" : "Plan permission requires an administrator",
+      ready: canQueueRun,
+    },
+  ] as const;
+  const readinessComplete = readiness.every((step): boolean => step.ready);
 
   const runPreflight = (): void => {
     setPreflightLoading(true);
@@ -80,6 +95,24 @@ export function WorkspaceGettingStarted({
             : "Connect your existing configuration to this workspace. Your CLI uploads the code; Terrence keeps the state and run history together."}
         </p>
       </div>
+      <section aria-labelledby="workspace-readiness-heading" className="rounded-md border border-border bg-muted/20 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h4 id="workspace-readiness-heading" className="text-sm font-semibold">Workspace readiness</h4>
+          <span className={readinessComplete ? "text-xs font-medium text-success" : "text-xs font-medium text-warning-text"}>
+            {readinessComplete ? "Ready for a plan" : "Setup required"}
+          </span>
+        </div>
+        <ul className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+          {readiness.map((step): React.JSX.Element => (
+            <li key={step.label} className="flex items-start gap-1.5">
+              {step.ready
+                ? <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden="true" />
+                : <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-warning-text" aria-hidden="true" />}
+              <span>{step.label}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
       {!usesServerCode && (
         <>
           <div className="space-y-2">

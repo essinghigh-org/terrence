@@ -1005,6 +1005,7 @@ export function WorkspaceDetail({
             orgName={orgName ?? ""}
             workspaceName={workspace.attributes.name}
             canUpload={canWriteStateVersions}
+            canRollback={canWriteStateVersions}
           />
         )}
         {activeSection === "variables" && canReadVariable && (

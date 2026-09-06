@@ -1,7 +1,7 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 
-import { TokenScopeDialog } from "../src/components/TokenScopeDialog";
+import { summarizeTokenScopes, TokenScopeDialog } from "../src/components/TokenScopeDialog";
 import { isString } from "../src/lib/type-guards";
 import type { JsonObject, JsonValue } from "../src/lib/json";
 
@@ -338,4 +338,24 @@ test("supports permission presets (Read-only, All, Clear) and search filtering",
   expect(scopes.permissions["workspaces:write"]).toBeUndefined();
   expect(scopes.permissions["runs:read"]).toBe(true);
   expect(scopes.permissions["runs:apply"]).toBeUndefined();
+});
+
+test("plan preset keeps its explicit grants in the visible and stored summaries", async () => {
+  const { postedBody, fetchMock } = mockApi();
+  globalThis.fetch = (fetchMock) as unknown as typeof fetch;
+  const dialog = await openFineGrainedDialog();
+  await waitFor((): void => {
+    expect((within(dialog).getByLabelText("Organization") as HTMLSelectElement).options.length).toBe(1);
+  });
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Select plan automation permissions" }));
+  const summary = within(dialog).getByTestId("token-scope-summary");
+  expect(summary.textContent).toContain("actions: runs:plan, runs:read, state:read, variables:read, workspaces:read");
+  expect(summary.textContent).toContain("expiry: account policy");
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create token" }));
+  await waitFor((): void => { expect(postedBody()).not.toBeNull(); });
+  const scopes = postedBody()!.data.attributes["scopes"];
+  expect(summary.textContent).toContain(summarizeTokenScopes(scopes));
+  expect(summarizeTokenScopes(scopes, null)).toContain("expires: never");
 });

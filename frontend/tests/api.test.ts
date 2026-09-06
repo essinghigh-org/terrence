@@ -412,6 +412,27 @@ test("fetchApi surfaces field-level 422 details on ApiError", async () => {
   }
 });
 
+test("normalizes stable error codes and request references for UI diagnostics", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (): Promise<Response> => new Response(
+    JSON.stringify({ errors: [{ status: "409", code: "STATE_SERIAL_CONFLICT", detail: "State changed before promotion" }] }),
+    {
+      status: 409,
+      headers: { "Content-Type": "application/vnd.api+json", "X-Request-Id": "req-state-123" },
+    },
+  )) as unknown as typeof fetch;
+  try {
+    let failure: unknown;
+    try { await fetchApi("/state-versions/sv-1/actions/rollback", { method: "POST" }); } catch (error: unknown) { failure = error; }
+    expect(failure).toBeInstanceOf(ApiError);
+    expect((failure as ApiError).code).toBe("STATE_SERIAL_CONFLICT");
+    expect((failure as ApiError).requestId).toBe("req-state-123");
+    expect((failure as ApiError).status).toBe(409);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("workspace 404 refresh recovery never replays mutations", async () => {
   const originalFetch = globalThis.fetch;
   try {

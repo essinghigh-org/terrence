@@ -139,6 +139,57 @@ test("uploads a Terraform state file and adds the new state version", async () =
   expect(view.getByRole("button", { name: "Upload state" })).toBeTruthy();
 });
 
+test("rollback explains provenance and promotes an older state as a new version", async () => {
+  const calls: { url: string; method: string }[] = [];
+  const original = {
+    id: "sv-old",
+    attributes: {
+      serial: 4,
+      lineage: "lineage-1",
+      "created-at": "2026-08-01T10:00:00.000Z",
+      "summary-status": "ready",
+      status: "finalized",
+    },
+    relationships: { run: { data: { id: "run-old", type: "runs" } } },
+  };
+  const promoted = {
+    id: "sv-promoted",
+    attributes: {
+      serial: 5,
+      lineage: "lineage-1",
+      "created-at": "2026-09-01T10:00:00.000Z",
+      "summary-status": "ready",
+      status: "finalized",
+    },
+  };
+  globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = requestUrl(input);
+    calls.push({ url, method: init?.method ?? "GET" });
+    if (url === "/api/v2/workspaces/ws-1/state-versions") {
+      return json({ data: [original], meta: { pagination: { "next-page": null } } });
+    }
+    if (url === "/api/v2/state-versions/sv-old/actions/rollback" && init?.method === "POST") {
+      return json({ data: promoted }, 201);
+    }
+    throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
+  })) as unknown as typeof fetch;
+
+  const view = render(<MemoryRouter><StateHistory workspaceId="ws-1" canRollback /></MemoryRouter>);
+  await waitFor((): void => { expect(view.getByText("sv-old")).toBeTruthy(); });
+  fireEvent.click(view.getByRole("button", { name: "Rollback as new current" }));
+
+  const dialog = await view.findByRole("dialog");
+  expect(dialog.textContent).toContain("Lineage: lineage-1");
+  expect(dialog.textContent).toContain("Source run: run-old");
+  expect(dialog.textContent).toContain("does not change cloud resources");
+  expect(dialog.textContent).toContain("locked by you");
+  fireEvent.click(within(dialog).getByLabelText(/I understand that promotion changes/));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Rollback as new current" }));
+
+  await waitFor((): void => { expect(view.getByText("sv-promoted")).toBeTruthy(); });
+  expect(calls).toContainEqual({ url: "/api/v2/state-versions/sv-old/actions/rollback", method: "POST" });
+});
+
 test("unreadable state files error without opening the confirm dialog", async () => {
   const seen: string[] = [];
   globalThis.fetch = (mock(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {

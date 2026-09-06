@@ -15,7 +15,7 @@ import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { toast } from "../components/ui/toast";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
 import { QrCodeImage } from "../components/QrCodeImage";
-import { TokenScopeDialog } from "../components/TokenScopeDialog";
+import { summarizeTokenScopes, TokenScopeDialog } from "../components/TokenScopeDialog";
 import { DEFAULT_THEME_ID, getTheme, applyTheme, THEMES } from "../lib/theme";
 import { setDisplayTimezone } from "../lib/display-timezone";
 import { setDisplayTimeFormat } from "../lib/display-time-format";
@@ -923,6 +923,9 @@ export function AccountSettings(): React.JSX.Element {
               <code className="block bg-background/80 border border-border/60 px-3 py-2 rounded text-xs font-mono break-all select-all text-foreground">
                 {createdTokenSecret}
               </code>
+              <p className="text-xs text-muted-foreground">
+                This secret is shown once. Use the token table below to review last use or revoke it later.
+              </p>
             </div>
           )}
 
@@ -938,6 +941,7 @@ export function AccountSettings(): React.JSX.Element {
                   <TableHead>Description</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead>Last Used</TableHead>
+                  <TableHead>Expires</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -945,12 +949,19 @@ export function AccountSettings(): React.JSX.Element {
                 {tokens.map((token): React.JSX.Element => (
                   <TableRow key={token.id}>
                     <TableCell className="font-medium">
-                      {isString(token.attributes["description"]) && token.attributes["description"].trim() !== ""
-                        ? token.attributes["description"]
-                        : "No description"}
-                      {token.attributes["scopes"] !== null && token.attributes["scopes"] !== undefined && (
-                        <Badge variant="outline" className="ml-2 align-middle">fine-grained</Badge>
-                      )}
+                      <div>
+                        <span>
+                          {isString(token.attributes["description"]) && token.attributes["description"].trim() !== ""
+                            ? token.attributes["description"]
+                            : "No description"}
+                          {token.attributes["scopes"] !== null && token.attributes["scopes"] !== undefined && (
+                            <Badge variant="outline" className="ml-2 align-middle">fine-grained</Badge>
+                          )}
+                        </span>
+                        <p className="mt-1 max-w-xl break-words text-xs font-normal text-muted-foreground">
+                          {summarizeTokenScopes(token.attributes["scopes"], token.attributes["expired-at"])}
+                        </p>
+                      </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {isString(token.attributes["created-at"])
@@ -962,11 +973,17 @@ export function AccountSettings(): React.JSX.Element {
                         ? formatSessionDate(token.attributes["last-used-at"])
                         : "Never"}
                     </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {isString(token.attributes["expired-at"])
+                        ? formatSessionDate(token.attributes["expired-at"])
+                        : "Never"}
+                    </TableCell>
                     <TableCell className="text-right">
                       <Button
                         variant="destructive"
                         size="sm"
                         aria-label={`Delete token ${token.id}`}
+                        title="Revoke token"
                         disabled={deletingTokenId === token.id}
                         onClick={(): void => {
                           const isTestEnv = window?.navigator.userAgent.includes("jsdom") ?? false;

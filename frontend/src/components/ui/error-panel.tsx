@@ -1,6 +1,12 @@
-import type { JSX } from "react";
-import { AlertTriangle, RotateCw } from "lucide-react";
+import { useState, type JSX } from "react";
+import { AlertTriangle, Check, Copy, RotateCw } from "lucide-react";
+import { ApiError } from "../../lib/api";
+import { copyTextToClipboard } from "../../lib/utils";
 import { Button } from "./button";
+
+const SAFE_DIAGNOSTIC_KEYS = new Set([
+  "screen", "workspaceId", "projectId", "organizationId", "runId", "resourceId", "endpoint", "operation", "phase",
+]);
 
 /**
  * Consistent, retryable error panel for failed reads (kanban 14.12).
@@ -12,16 +18,48 @@ import { Button } from "./button";
 export function ErrorPanel({
   title = "Something went wrong",
   message,
+  error,
+  code,
+  reference,
+  diagnosticContext,
   onRetry,
   retryLabel = "Retry",
   className,
 }: Readonly<{
   title?: string;
   message?: string | undefined;
+  /** Preserve structured API error metadata when the caller has it. */
+  error?: unknown;
+  /** Override the stable code derived from an ApiError. */
+  code?: string | undefined;
+  /** Override the request/correlation reference derived from an ApiError. */
+  reference?: string | undefined;
+  /** Safe, non-secret context to include in copied diagnostics. */
+  diagnosticContext?: Readonly<Record<string, string | number | boolean>> | undefined;
   onRetry?: (() => void) | undefined;
   retryLabel?: string;
   className?: string | undefined;
 }>): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const apiError = error instanceof ApiError ? error : null;
+  const displayMessage = message ?? (error instanceof Error ? error.message : undefined);
+  const stableCode = code ?? apiError?.code ?? "UI_UNEXPECTED_ERROR";
+  const requestReference = reference ?? apiError?.requestId ?? undefined;
+  const diagnosticDetails = [
+    `code=${stableCode}`,
+    ...(apiError === null ? [] : [`status=${String(apiError.status)}`]),
+    ...(requestReference === undefined || requestReference.trim() === "" ? [] : [`reference=${requestReference}`]),
+    ...Object.entries(diagnosticContext ?? {})
+      .filter(([key]): boolean => SAFE_DIAGNOSTIC_KEYS.has(key))
+      .map(([key, value]): string => `${key}=${String(value)}`),
+  ].join("\n");
+
+  const copyDiagnostics = (): void => {
+    void copyTextToClipboard(diagnosticDetails).then((didCopy): void => {
+      if (didCopy) setCopied(true);
+    });
+  };
+
   return (
     <div
       role="alert"
@@ -31,23 +69,41 @@ export function ErrorPanel({
         <AlertTriangle data-icon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
         <div className="min-w-0">
           <p className="font-medium text-destructive">{title}</p>
-          {message !== undefined && message !== "" && (
-            <p className="mt-0.5 text-sm text-destructive/90">{message}</p>
+          {displayMessage !== undefined && displayMessage !== "" && (
+            <p className="mt-0.5 text-sm text-destructive/90">{displayMessage}</p>
           )}
+          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-xs text-destructive/80">
+            <span data-testid="error-code">Code: {stableCode}</span>
+            {requestReference !== undefined && requestReference.trim() !== "" && (
+              <span data-testid="error-reference">Reference: {requestReference}</span>
+            )}
+          </div>
         </div>
       </div>
-      {onRetry !== undefined && (
+      <div className="flex flex-wrap gap-2">
+        {onRetry !== undefined && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onRetry}
+            className="gap-1.5 text-destructive"
+          >
+            <RotateCw data-icon="inline-start" className="size-3.5" />
+            {retryLabel}
+          </Button>
+        )}
         <Button
           type="button"
-          variant="outline"
+          variant="ghost"
           size="sm"
-          onClick={onRetry}
-          className="gap-1.5 text-destructive"
+          onClick={copyDiagnostics}
+          className="gap-1.5 text-destructive hover:text-destructive"
         >
-          <RotateCw data-icon="inline-start" className="size-3.5" />
-          {retryLabel}
+          {copied ? <Check data-icon="inline-start" className="size-3.5" /> : <Copy data-icon="inline-start" className="size-3.5" />}
+          {copied ? "Copied diagnostics" : "Copy diagnostic details"}
         </Button>
-      )}
+      </div>
     </div>
   );
 }

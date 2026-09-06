@@ -32,3 +32,18 @@ test("local execution keeps CLI instructions even when a repository is attached"
   expect(view.getByText("Plans execute on your computer. Terrence stores the state.")).toBeTruthy();
   expect(view.queryByRole("link", { name: "Start first plan" })).toBeNull();
 });
+
+test("readiness checklist distinguishes setup work from a workspace ready to plan", () => {
+  const view = render(<MemoryRouter><WorkspaceGettingStarted {...defaults} /></MemoryRouter>);
+  expect(view.getByRole("heading", { name: "Workspace readiness" })).toBeTruthy();
+  expect(view.getByText("Setup required")).toBeTruthy();
+  expect(view.getByText("Configuration connection is still needed")).toBeTruthy();
+
+  view.rerender(
+    <MemoryRouter>
+      <WorkspaceGettingStarted {...defaults} hasRepository />
+    </MemoryRouter>,
+  );
+  expect(view.getByText("Ready for a plan")).toBeTruthy();
+  expect(view.getByText("Repository is connected")).toBeTruthy();
+});

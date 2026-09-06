@@ -73,14 +73,29 @@ type ReadonlyRequestInit = Readonly<{
 export class ApiError extends Error {
   public readonly status: number;
 
+  /** Stable server/client error identifier for support and automation. */
+  public readonly code: string;
+
+  /** Correlation identifier returned by the API, when available. */
+  public readonly requestId: string | null;
+
   /** Field-level 422 details, keyed as `{ "data.attributes.<field>": msg }`. */
   public readonly fieldErrors: Readonly<Record<string, string>>;
 
-  public constructor(status: number, message: string, fieldErrors: Readonly<Record<string, string>> = {}, public readonly retryAfter: string | null = null) {
+  public constructor(
+    status: number,
+    message: string,
+    fieldErrors: Readonly<Record<string, string>> = {},
+    public readonly retryAfter: string | null = null,
+    code = `HTTP_${status}`,
+    requestId: string | null = null,
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.fieldErrors = fieldErrors;
+    this.code = code.trim() === "" ? `HTTP_${status}` : code;
+    this.requestId = requestId === null || requestId.trim() === "" ? null : requestId;
   }
 }
 
@@ -307,11 +322,17 @@ async function requestApi(endpoint: string, options: ReadonlyRequestInit = {}): 
     const rawTitle = firstErr?.["title"];
     const detail = isString(rawDetail) ? rawDetail : null;
     const title = isString(rawTitle) ? rawTitle : null;
+    const rawCode = firstErr?.["code"];
+    const code = isString(rawCode) && rawCode.trim() !== "" ? rawCode.trim() : `HTTP_${response.status}`;
+    const requestId = response.headers.get("X-Request-Id")
+      ?? response.headers.get("X-Correlation-Id");
     throw new ApiError(
       response.status,
       detail ?? title ?? `API request failed (${response.status})`,
       extractFieldErrors(errors),
       response.headers.get("Retry-After"),
+      code,
+      requestId,
     );
   }
 
@@ -338,13 +359,17 @@ export async function fetchAllApiPages<T>(
   options: Readonly<{
     maxPages?: number;
     maxRecords?: number;
+    /** Override transient 429/503 retries for views with an explicit Retry action. */
+    retryAttempts?: number;
     onProgress?: (records: number) => void;
   }> = {},
 ): Promise<T[]> {
   const maxPages = options.maxPages ?? MAX_PAGINATED_PAGES;
   const maxRecords = options.maxRecords ?? MAX_PAGINATED_RECORDS;
+  const retryAttempts = options.retryAttempts ?? 3;
   if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > MAX_PAGINATED_PAGES
-    || !Number.isSafeInteger(maxRecords) || maxRecords < 1 || maxRecords > MAX_PAGINATED_RECORDS) {
+    || !Number.isSafeInteger(maxRecords) || maxRecords < 1 || maxRecords > MAX_PAGINATED_RECORDS
+    || !Number.isSafeInteger(retryAttempts) || retryAttempts < 0 || retryAttempts > 3) {
     throw new Error("Invalid pagination budget.");
   }
   const data: T[] = [];
@@ -365,7 +390,7 @@ export async function fetchAllApiPages<T>(
         response = await fetchApi(pageEndpoint, signal === undefined ? {} : { signal });
         break;
       } catch (error: unknown) {
-        if (!(error instanceof ApiError) || ![429, 503].includes(error.status) || retries++ >= 3) throw error;
+        if (!(error instanceof ApiError) || ![429, 503].includes(error.status) || retries++ >= retryAttempts) throw error;
         const value = error.retryAfter;
         const delay = value === null ? 1000 : /^\d+$/.test(value)
           ? Number(value) * 1000 : Math.max(0, Date.parse(value) - Date.now());

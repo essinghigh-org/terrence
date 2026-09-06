@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { ErrorPanel } from "../src/components/ui/error-panel";
+import { ApiError } from "../src/lib/api";
 
 afterEach((): void => {
   cleanup();
@@ -26,4 +27,16 @@ test("fires the retry handler when provided", () => {
   expect(view.getByText("Could not load runs")).toBeTruthy();
   fireEvent.click(view.getByRole("button", { name: "Retry" }));
   expect(retried).toBe(1);
+});
+
+test("shows a stable code and request reference for actionable diagnostics", () => {
+  const view = render(
+    <ErrorPanel
+      title="Could not promote state"
+      error={new ApiError(409, "State changed before promotion", {}, null, "STATE_SERIAL_CONFLICT", "req-state-123")}
+    />,
+  );
+  expect(view.getByTestId("error-code").textContent).toContain("STATE_SERIAL_CONFLICT");
+  expect(view.getByTestId("error-reference").textContent).toContain("req-state-123");
+  expect(view.getByRole("button", { name: "Copy diagnostic details" })).toBeTruthy();
 });
