@@ -698,6 +698,12 @@ function buildRunCoreAttributes(run: RunParam, operation: string, normalizedSour
     "allow-config-generation": run.allowConfigGeneration,
     "generated-configuration": run.generatedConfiguration === true,
     "execution-mode": run.executionMode,
+    // Agent compatibility is recorded at claim time so a run can be
+    // diagnosed independently of the current pool's agent inventory.
+    "agent-version": run.agentVersion ?? null,
+    "agent-protocol-version": run.agentProtocolVersion ?? null,
+    "agent-capabilities": run.agentCapabilities ?? null,
+    "agent-execution-policy": run.agentExecutionPolicy ?? null,
     source: normalizedSource,
     status: run.status,
     "status-timestamps": statusTimestamps,

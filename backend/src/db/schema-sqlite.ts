@@ -541,6 +541,12 @@ export const runs = sqliteTable("runs", {
   allowConfigGeneration: integer("allow_config_generation", { mode: "boolean" }).notNull().default(false),
   generatedConfiguration: integer("generated_configuration", { mode: "boolean" }).notNull().default(false),
   executionMode: text("execution_mode").notNull().default("remote"),
+  // Filled when an agent claims a run. These values describe the exact
+  // compatibility contract used by the current run generation.
+  agentVersion: text("agent_version"),
+  agentProtocolVersion: text("agent_protocol_version"),
+  agentCapabilities: text("agent_capabilities", { mode: "json" }).$type<string[]>(),
+  agentExecutionPolicy: text("agent_execution_policy", { mode: "json" }).$type<Record<string, unknown>>(),
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<Record<string, string>>(),
   statusMetadataSchemaVersion: integer("status_metadata_schema_version").notNull().default(0),
   planResourceAdditions: integer("plan_resource_additions"),
@@ -911,6 +917,9 @@ export const stackAgentJobs = sqliteTable("stack_agent_jobs", {
   phase: text("phase").notNull(),
   iacBinary: text("iac_binary").notNull().default("terraform"),
   status: text("status").notNull().default("queued"),
+  // Incremented for every claim generation so a reconnecting agent cannot
+  // finalize a newer claim with a stale completion.
+  fencingToken: integer("fencing_token").notNull().default(0),
   result: text("result", { mode: "json" }).$type<Record<string, unknown>>(),
   resultSchemaVersion: integer("result_schema_version").notNull().default(0),
   errorMessage: text("error_message"),
@@ -1623,6 +1632,16 @@ export const agents = sqliteTable("agents", {
   status: text("status").notNull().default("idle"), // 'idle', 'busy', 'exited', 'errored', 'unknown'
   ipAddress: text("ip_address"),
   version: text("version"),
+  // Agent software version and protocol version are separate compatibility
+  // coordinates. The protocol defaults preserve pre-negotiation agents.
+  protocolVersion: text("protocol_version").notNull().default("1"),
+  capabilities: text("capabilities", { mode: "json" }).$type<string[]>().notNull().default([
+    "operation.plan", "operation.apply", "operation.policy", "operation.assessment", "operation.stack",
+    "operation.source-bundle", "operation.test", "artifact.configuration", "artifact.filesystem",
+    "artifact.log", "artifact.plan-json", "artifact.state-json", "artifact.atomic-upload",
+    "lease.heartbeat", "lease.fencing", "cancellation", "state.publication",
+  ]),
+  artifactFormats: text("artifact_formats", { mode: "json" }).$type<string[]>().notNull().default(["tar.gz", "json", "text"]),
   architecture: text("architecture"),
   iacBinaries: text("iac_binaries", { mode: "json" }).$type<string[]>().notNull().default(["terraform"]),
   accept: text("accept").notNull().default("plan,apply,policy,assessment,stack_prepare,stack_plan,stack_apply,source_bundle,stack_aggregate_outputs,test"),

@@ -414,6 +414,13 @@
       "when": 1788708999309,
       "tag": "0058_silly_old_lace",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1788709611559,
+      "tag": "0059_panoramic_otto_octavius",
+      "breakpoints": true
     }
   ]
 }

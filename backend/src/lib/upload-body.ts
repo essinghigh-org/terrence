@@ -1,4 +1,4 @@
-import { open, writeFile } from "node:fs/promises";
+import { open, rename, rm, writeFile } from "node:fs/promises";
 
 function directUploadBytes(body: unknown): Uint8Array | null {
   if (body instanceof ArrayBuffer) return new Uint8Array(body);
@@ -45,19 +45,41 @@ async function writeUploadStream(
     }
   }
   if (failure !== undefined) throw failure;
+  if (total === 0) throw new Error("empty");
   return total;
 }
 
 /** Persist an upload without retaining a second in-memory copy. */
-export async function persistUploadBody(body: unknown, request: Request, path: string, limit: number): Promise<number> {
-  const direct = directUploadBytes(body);
-  if (direct !== null) {
-    if (direct.byteLength > limit) throw new Error("too-large");
-    await writeFile(path, direct, { mode: 0o600 });
-    return direct.byteLength;
+export async function persistUploadBody(
+  body: unknown,
+  request: Request,
+  path: string,
+  limit: number,
+  canPublish?: () => Promise<boolean>,
+): Promise<number> {
+  // A disconnected agent must never leave a truncated artifact at the final
+  // path. Every upload is written to a private temporary file and published
+  // with one rename after the body has been consumed.
+  const temporary = `${path}.${crypto.randomUUID()}.tmp`;
+  try {
+    const direct = directUploadBytes(body);
+    if (direct !== null) {
+      if (direct.byteLength > limit) throw new Error("too-large");
+      if (direct.byteLength === 0) throw new Error("empty");
+      await writeFile(temporary, direct, { mode: 0o600, flag: "wx" });
+      if (canPublish !== undefined && !await canPublish()) throw new Error("stale-agent-lease");
+      await rename(temporary, path);
+      return direct.byteLength;
+    }
+    const stream = body instanceof Blob ? body.stream() : request.body;
+    const reader = stream?.getReader();
+    if (reader === undefined) throw new Error("empty");
+    const size = await writeUploadStream(reader, temporary, limit);
+    if (canPublish !== undefined && !await canPublish()) throw new Error("stale-agent-lease");
+    await rename(temporary, path);
+    return size;
+  } catch (error: unknown) {
+    await rm(temporary, { force: true }).catch((): void => { /* best effort */ });
+    throw error;
   }
-  const stream = body instanceof Blob ? body.stream() : request.body;
-  const reader = stream?.getReader();
-  if (reader === undefined) throw new Error("empty");
-  return writeUploadStream(reader, path, limit);
 }

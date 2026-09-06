@@ -42,6 +42,14 @@ import { validSignedApiURL } from "../lib/utils";
 import { assertSafeTarArchive } from "../lib/archive";
 import { resolveExternalUrl } from "../lib/url-safety";
 import { isAgentPoolTokenActive } from "../lib/agent-token";
+import {
+  AGENT_PROTOCOL_VERSION,
+  AgentProtocolNegotiationError,
+  agentProtocolDescription,
+  negotiateAgentProtocol,
+  parseAgentProtocolOffer,
+  serializeAgentCapabilities,
+} from "../lib/agent-protocol";
 
 const MAX_AGENT_BODY_BYTES = 16 * 1024 * 1024;
 // The public listener's native request cap is 100 MiB. Keep the endpoint's
@@ -83,7 +91,11 @@ async function releaseAgentClaim(claimed: ClaimedAgentJob): Promise<void> {
     const timestamps: Record<string, string> = current.statusTimestamps !== null && typeof current.statusTimestamps === "object"
       ? { ...(current.statusTimestamps), [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() }
       : { [`${queuedStatus.replace(/_/g, "-")}-at`]: new Date().toISOString() };
-    const updatedRuns = await t.update(runs).set({ status: queuedStatus, statusTimestamps: timestamps }).where(and(
+    const updatedRuns = await t.update(runs).set({
+      agentId: null,
+      status: queuedStatus,
+      statusTimestamps: timestamps,
+    }).where(and(
       eq(runs.id, run.id),
       eq(runs.status, current.status),
     )).returning({ id: runs.id });
@@ -104,6 +116,32 @@ type AgentCtx = Readonly<{
   request: Request;
   set: { status?: number | string; headers?: Record<string, string | number> };
 }>;
+
+function protocolHeaders(
+  set: { headers?: Record<string, string | number> },
+  capabilities: readonly string[],
+): void {
+  set.headers ??= {};
+  set.headers["tfc-agent-protocol-version"] = AGENT_PROTOCOL_VERSION;
+  set.headers["tfc-agent-capabilities"] = serializeAgentCapabilities(capabilities);
+}
+
+function protocolNegotiationError(
+  set: { status?: number },
+  error: AgentProtocolNegotiationError,
+): Record<string, unknown> {
+  set.status = error.status;
+  return {
+    errors: [{
+      status: String(error.status),
+      title: "Agent protocol negotiation failed",
+      code: error.code,
+      detail: error.message,
+      supported_versions: error.versions.length === 0 ? undefined : error.versions,
+      unsupported_capabilities: error.capabilities.length === 0 ? undefined : error.capabilities,
+    }],
+  };
+}
 
 async function rawBody(ctx: AgentCtx): Promise<Buffer> {
   const body = ctx.body;
@@ -190,7 +228,14 @@ function requestedFencingToken(ctx: AgentCtx): number | undefined {
 
 function fencingConflict(set: { status?: number }): Record<string, unknown> {
   set.status = 409;
-  return { errors: [{ status: "409", title: "Conflict", detail: "Agent job fencing token is missing or stale" }] };
+  return {
+    errors: [{
+      status: "409",
+      title: "Conflict",
+      code: "stale-agent-lease",
+      detail: "Completion rejected because the agent lease is stale, already finalized, or belongs to another run generation; newer artifacts are retained.",
+    }],
+  };
 }
 
 async function activeStackJobForStatus(agentId: string, phase?: string): Promise<typeof stackAgentJobs.$inferSelect | undefined> {
@@ -207,6 +252,7 @@ async function activeStackJobForStatus(agentId: string, phase?: string): Promise
 async function stackAgentPayload(details: ClaimedStackAgentJob, baseUrl: string): Promise<Record<string, unknown>> {
   const { job, stack, deploymentRun, step, configuration } = details;
   const path = `/api/agent/stack-jobs/${job.id}`;
+  const configurationUrl = `${baseUrl}${path}/configuration?fencing_token=${String(job.fencingToken)}`;
   const organization = await db.query.organizations.findFirst({ where: eq(organizations.id, stack.orgId) });
   const data = {
     organization_name: organization?.name ?? stack.orgId,
@@ -214,17 +260,19 @@ async function stackAgentPayload(details: ClaimedStackAgentJob, baseUrl: string)
     deployment_run_id: deploymentRun.id,
     deployment_step_id: step.id,
     stack_job_id: job.id,
+    fencing_token: job.fencingToken,
     run_id: deploymentRun.id,
     operation: job.phase,
     iac_binary: job.iacBinary,
-    configuration_version_url: `${baseUrl}${path}/configuration`,
+    configuration_version_url: configurationUrl,
   };
   const container = {
     current_operation: job.phase,
-    source_bundle_download_url: `${baseUrl}${path}/configuration`,
+    source_bundle_download_url: configurationUrl,
     stack_id: stack.id,
     deployment_run_id: deploymentRun.id,
     deployment_step_id: step.id,
+    fencing_token: job.fencingToken,
   };
   return { type: job.phase, job_id: job.id, data, [job.phase]: container, configuration: { id: configuration.id } };
 }
@@ -383,9 +431,19 @@ async function jsonBody(ctx: AgentCtx): Promise<Record<string, unknown> | undefi
 export const agentApiRoutes = new Elysia({ name: "agent-api" })
   .use(authPlugin)
 
+  // This is the stable product contract. It is intentionally independent of
+  // the installed agent binary version and safe to inspect before registering.
+  .get("/api/agent/protocol", (ctx: AgentCtx): unknown => {
+    const set = ctx.set as { headers?: Record<string, string | number> };
+    const description = agentProtocolDescription();
+    const capabilities = Array.isArray(description["capabilities"]) ? description["capabilities"] as string[] : [];
+    protocolHeaders(set, capabilities);
+    return description;
+  })
+
   // --- Registration ---------------------------------------------------------
   .post("/api/agent/register", async (ctx: AgentCtx): Promise<unknown> => {
-    const set = ctx.set as { status?: number };
+    const set = ctx.set as { status?: number; headers?: Record<string, string | number> };
     const token = bearerToken(ctx.request.headers.get("authorization"));
     if (token === undefined) {
       set.status = 401;
@@ -401,6 +459,14 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       set.status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
+    let negotiation: ReturnType<typeof negotiateAgentProtocol>;
+    try {
+      negotiation = negotiateAgentProtocol(parseAgentProtocolOffer(body, ctx.request.headers));
+    } catch (error: unknown) {
+      if (error instanceof AgentProtocolNegotiationError) return protocolNegotiationError(set, error);
+      throw error;
+    }
+    protocolHeaders(set, negotiation.capabilities);
     const name = typeof body["name"] === "string" && body["name"] !== "" ? body["name"] : "agent";
     const arch = typeof body["arch"] === "string" ? body["arch"] : null;
     if (arch !== null && !AGENT_ARCHITECTURES.has(arch)) {
@@ -441,7 +507,10 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       agentId = existing.id;
       await db.update(agents).set({
         architecture: arch,
-        version,
+        version: version ?? existing.version,
+        protocolVersion: negotiation.version,
+        capabilities: [...negotiation.capabilities],
+        artifactFormats: [...negotiation.artifactFormats],
         iacBinaries,
         accept,
         requestForwarding,
@@ -457,6 +526,9 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
         name,
         architecture: arch,
         version,
+        protocolVersion: negotiation.version,
+        capabilities: [...negotiation.capabilities],
+        artifactFormats: [...negotiation.artifactFormats],
         iacBinaries,
         accept,
         requestForwarding,
@@ -466,7 +538,16 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       });
     }
     await db.update(agentPoolTokens).set({ lastUsedAt: now }).where(eq(agentPoolTokens.id, pool.tokenId));
-    return { id: agentId, agent_pool_id: pool.poolId };
+    return {
+      id: agentId,
+      agent_pool_id: pool.poolId,
+      protocol_version: negotiation.version,
+      capabilities: negotiation.capabilities,
+      unsupported_capabilities: negotiation.unsupportedCapabilities,
+      artifact_formats: negotiation.artifactFormats,
+      unsupported_artifact_formats: negotiation.unsupportedArtifactFormats,
+      legacy: negotiation.legacy,
+    };
   })
 
   // --- Status + completion --------------------------------------------------
@@ -477,6 +558,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
+    protocolHeaders(set, agent.capabilities);
     const body = await jsonBodyValue(ctx);
     if (body === undefined) {
       set.status = 422;
@@ -507,7 +589,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
               eq(agentJobs.phase, phase),
               eq(agentJobs.agentId, agent.id),
               eq(agentJobs.fencingToken, fencingToken),
-              eq(agentJobs.status, "claimed"),
+              inArray(agentJobs.status, ["claimed", "canceled"]),
             ),
           });
       if (job !== undefined && fencingToken !== undefined) {
@@ -559,6 +641,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
                 eq(stackAgentJobs.phase, phase),
                 eq(stackAgentJobs.agentId, agent.id),
                 eq(stackAgentJobs.status, "claimed"),
+                ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
               ),
             })
           : await db.query.stackAgentJobs.findFirst({
@@ -567,6 +650,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
                 eq(stackAgentJobs.phase, phase),
                 eq(stackAgentJobs.agentId, agent.id),
                 eq(stackAgentJobs.status, "claimed"),
+                ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
               ),
             });
         if (stackJob !== undefined) {
@@ -585,7 +669,7 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
               result[key] = value;
             }
           }
-          const completed = await completeStackAgentJob(agent.id, stackJob.id, { status: jobStatus === "finished" ? "completed" : "errored", errorMessage: typeof jobPayload["error"] === "string" ? jobPayload["error"] : null, result });
+          const completed = await completeStackAgentJob(agent.id, stackJob.id, { status: jobStatus === "finished" ? "completed" : "errored", errorMessage: typeof jobPayload["error"] === "string" ? jobPayload["error"] : null, result }, fencingToken);
           if (completed === undefined) return fencingConflict(set);
         } else {
           return fencingConflict(set);
@@ -595,6 +679,9 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
     } else {
       const agentStatus = status === "busy" ? "busy" : status === "exited" ? "exited" : "idle";
       await db.update(agents).set({ status: agentStatus, lastPingAt: now }).where(eq(agents.id, agent.id));
+      const fencingToken = parseAgentFencingToken(
+        jobData?.["fencing_token"] ?? ctx.request.headers.get("tfc-agent-fencing-token"),
+      );
       const explicitStackJobId = jobData !== null && typeof jobData["stack_job_id"] === "string" ? jobData["stack_job_id"] : null;
       const stackPhase = operation === "apply" || operation === "plan" ? operation : undefined;
       const stackJob = explicitStackJobId === null
@@ -604,9 +691,10 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
               eq(stackAgentJobs.id, explicitStackJobId),
               eq(stackAgentJobs.agentId, agent.id),
               eq(stackAgentJobs.status, "claimed"),
+              ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
             ),
           });
-      if (stackJob !== undefined) await heartbeatStackAgentJob(agent.id, stackJob.id);
+      if (stackJob !== undefined) await heartbeatStackAgentJob(agent.id, stackJob.id, fencingToken);
     }
 
     const messageIndex = ctx.request.headers.get("tfc-agent-message-index");
@@ -767,12 +855,13 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
 
   // --- Job claim ------------------------------------------------------------
   .get("/api/agent/jobs", async (ctx: AgentCtx): Promise<unknown> => {
-    const set = ctx.set as { status?: number };
+    const set = ctx.set as { status?: number; headers?: Record<string, string | number> };
     const agent = await agentFromRequest(ctx);
     if (agent === undefined) {
       set.status = 401;
       return { errors: [{ status: "401", title: "Unauthorized" }] };
     }
+    protocolHeaders(set, agent.capabilities);
     // The registered accept list is authoritative: the agent declared its
     // workload set when it registered (validated against AGENT_WORKLOAD_TYPES
     // then persisted). The tfc-agent-accept header may only narrow that set
@@ -848,7 +937,8 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
   .get("/api/agent/stack-jobs/:job_id/configuration", async (ctx: AgentCtx): Promise<unknown> => {
     const set = ctx.set as { status?: number; headers?: Record<string, string | number> };
     const agent = await agentFromRequest(ctx);
-    const claimed = agent === undefined ? undefined : await findClaimedStackAgentJob(agent.id, ctx.params["job_id"] ?? "");
+    const fencingToken = requestedFencingToken(ctx);
+    const claimed = agent === undefined ? undefined : await findClaimedStackAgentJob(agent.id, ctx.params["job_id"] ?? "", fencingToken);
     const runArchivePath = typeof (claimed?.deploymentRun.payload ?? {})["archivePath"] === "string" ? (claimed?.deploymentRun.payload ?? {})["archivePath"] as string : null;
     const configurationArchivePath = typeof (claimed?.configuration.payload ?? {})["archivePath"] === "string" ? (claimed?.configuration.payload ?? {})["archivePath"] as string : null;
     const archivePath = runArchivePath ?? configurationArchivePath;
@@ -917,10 +1007,15 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
     const path = agentFilesystemPath(details.job.runId);
     try {
       await mkdir(dirname(path), { recursive: true });
-      const size = await persistUploadBody(ctx.body, ctx.request, path, MAX_AGENT_FILESYSTEM_BYTES);
-      if (size === 0) throw new Error("empty");
+      await persistUploadBody(
+        ctx.body,
+        ctx.request,
+        path,
+        MAX_AGENT_FILESYSTEM_BYTES,
+        async (): Promise<boolean> => await findClaimedAgentJob(details.job.agentId ?? "", details.job.id, details.job.fencingToken) !== undefined,
+      );
     } catch (error: unknown) {
-      await rm(path, { force: true });
+      if (error instanceof Error && error.message === "stale-agent-lease") return fencingConflict(set);
       const tooLarge = error instanceof Error && error.message === "too-large";
       set.status = tooLarge ? 422 : 400;
       return { errors: [{ status: String(set.status), title: tooLarge ? "Unprocessable Entity" : "Bad Request" }] };
@@ -947,7 +1042,16 @@ export const agentApiRoutes = new Elysia({ name: "agent-api" })
       set.status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity" }] };
     }
-    await writePlanJsonArtifact(details.job.runId, planJson);
+    try {
+      await writePlanJsonArtifact(
+        details.job.runId,
+        planJson,
+        async (): Promise<boolean> => await findClaimedAgentJob(details.job.agentId ?? "", details.job.id, details.job.fencingToken) !== undefined,
+      );
+    } catch (error: unknown) {
+      if (error instanceof Error && error.message === "stale-agent-lease") return fencingConflict(set);
+      throw error;
+    }
     return {};
   })
 
@@ -1034,6 +1138,8 @@ async function storeSideArtifact(ctx: AgentCtx, kind: string, ext: string): Prom
   const temporary = `${path}.${crypto.randomUUID()}.tmp`;
   try {
     await writeFile(temporary, raw, { mode: 0o600, flag: "wx" });
+    const stillClaimed = await findClaimedAgentJob(details.job.agentId ?? "", details.job.id, details.job.fencingToken);
+    if (stillClaimed === undefined) return fencingConflict(set);
     await rename(temporary, path);
   } finally {
     await rm(temporary, { force: true });

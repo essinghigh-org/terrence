@@ -34,6 +34,7 @@ import { encryptStatePayload } from "./validation";
 import { variableValueForRead } from "./variable-crypto";
 import { isAgentPoolTokenActive } from "./agent-token";
 import { canTransitionRunStatus, isTerminalRunStatus } from "./run-status";
+import { agentSupportsPhase, effectiveAgentExecutionPolicy, LEGACY_AGENT_CAPABILITIES } from "./agent-protocol";
 
 export const MAX_AGENT_RESULT_BYTES = 64 * 1024;
 export const MAX_AGENT_RESULT_DEPTH = 8;
@@ -671,11 +672,13 @@ function resolveAgentBinaries(agent: Agent): readonly string[] {
 }
 
 async function findCandidateJob(agent: Agent, acceptedPhases: readonly string[], agentBinaries: readonly string[], skippedIds: ReadonlySet<string>): Promise<AgentJobRow | undefined> {
+  const compatiblePhases = acceptedPhases.filter((phase): boolean => agentSupportsPhase(agent, phase));
+  if (compatiblePhases.length === 0) return undefined;
   return db.query.agentJobs.findFirst({
     where: and(
       eq(agentJobs.agentPoolId, agent.agentPoolId),
       eq(agentJobs.status, "queued"),
-      inArray(agentJobs.phase, [...acceptedPhases]),
+      inArray(agentJobs.phase, [...compatiblePhases]),
       inArray(agentJobs.iacBinary, agentBinaries),
       ...(skippedIds.size > 0 ? [notInArray(agentJobs.id, [...skippedIds])] : []),
     ),
@@ -718,7 +721,17 @@ async function tryLockWorkspaceForApply(candidate: AgentJobRow, run: AgentRunRow
 }
 
 async function tryAssociateRun(candidate: AgentJobRow, run: AgentRunRow, agent: Agent, expectedRunStatus: string, nextRunStatus: string): Promise<{ id: string } | null> {
-  const associated = await db.update(runs).set({ agentPoolId: agent.agentPoolId, agentId: agent.id, status: nextRunStatus, statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus) }).where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus))).returning({ id: runs.id });
+  const capabilities = agent.capabilities ?? LEGACY_AGENT_CAPABILITIES;
+  const associated = await db.update(runs).set({
+    agentPoolId: agent.agentPoolId,
+    agentId: agent.id,
+    agentVersion: agent.version,
+    agentProtocolVersion: agent.protocolVersion,
+    agentCapabilities: [...capabilities],
+    agentExecutionPolicy: effectiveAgentExecutionPolicy(agent, candidate.phase, candidate.iacBinary),
+    status: nextRunStatus,
+    statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus),
+  }).where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus))).returning({ id: runs.id });
   if (associated.length > 0) return associated[0] as { id: string };
   if (candidate.phase === "apply") {
     await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(eq(workspaces.id, run.workspaceId), eq(workspaces.locked, true), eq(workspaces.lockOwnerType, "agent-run"), eq(workspaces.lockOwnerId, run.id)));

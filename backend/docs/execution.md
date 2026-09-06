@@ -57,12 +57,49 @@ Agent-mode workspaces reference an agent pool. Pool scoping restricts which proj
 
 An agent declares which IaC binaries it can execute at registration (`iac-binaries`: `tofu`, `terraform`, or both). Agents that omit the attribute default to `["terraform"]`, which matches `tfc-agent`. The server resolves each run's binary from the workspace (`iac-binary`, unset means `terraform` for agent execution) and only offers a job to agents that declared the matching binary. A workspace set to `tofu` waits for an agent that declared `tofu`; a plain `tfc-agent` can never claim it.
 
+### Agent protocol compatibility
+
+The agent protocol is a separately versioned product. The agent software
+version (`Tfc-Agent-Version`) describes the binary; `Tfc-Agent-Protocol-Version`
+describes the wire contract. The discovery endpoint is
+`GET /api/agent/protocol`, and registration negotiates the same contract with
+`Tfc-Agent-Protocol-Version`, `Tfc-Agent-Capabilities`, and
+`Tfc-Agent-Required-Capabilities` (the registration body accepts the matching
+`protocol_version`, `capabilities`, and `required_capabilities` fields).
+
+The current protocol version is `1`. Unknown optional capabilities are reported
+in `unsupported_capabilities` and ignored, so a newer agent can reconnect to an
+older server. An unknown required capability fails registration with `422`; a
+registration that offers only unsupported protocol versions fails with `406`.
+Agents that omit protocol metadata use the legacy v1 capability set and remain
+compatible with the original agent API.
+
+The server only offers a job when the negotiated capabilities cover its
+operation and artifact contract. Plan and apply jobs require explicit
+operation, configuration, log, lease-fencing, and heartbeat capabilities;
+apply additionally requires cancellation and state publication. Artifact
+uploads are written to a temporary private file and atomically published only
+while the same fencing token still owns the lease.
+
+The run record captures the claimed agent's software version, negotiated
+protocol version, capability set, and effective execution policy. This is the
+compatibility evidence for that run generation and remains available after the
+agent disconnects.
+
 ### Agent lifecycle
 
 - The agent polls for jobs and claims one at a time.
 - The agent heartbeats while working.
 - A job without a heartbeat past `AGENT_HEARTBEAT_TIMEOUT_MS` is recovered: the job returns to the queue and the run returns to `plan_queued` or `apply_queued`.
-- An apply interrupted by an agent loss is never replayed automatically.
+- Each claim increments a fencing token. Completion, log, state, and artifact
+  publication must present that token, including the final state publication.
+  A stale or duplicate completion returns `409` with `code:
+  stale-agent-lease`; it does not remove an artifact published by a newer run
+  generation.
+- An apply interrupted by an agent loss is never replayed automatically. A
+  canceled run keeps its workspace lock until the agent acknowledges the
+  cancellation or its lease expires, after which the stale-job sweep releases
+  the lock.
 
 ### Agent liveness
 
