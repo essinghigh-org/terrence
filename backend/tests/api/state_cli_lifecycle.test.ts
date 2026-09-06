@@ -255,6 +255,9 @@ for (const engine of ["terraform", "tofu"] as const) {
       expect(applied.stateLineage).toBe(lineage);
       expect(applied.serial).toBeGreaterThan(await latestSerial());
       const reserved = await expectSuccessResponse(await reserve(applied.serial, { lineage }), 201, "state-versions");
+      const priorCurrent = await expectSuccessResponse(
+        await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, { headers }), 200, "state-versions",
+      );
       const liveHeaders = { ...headers, "Content-Type": "application/json" };
       const encoder = new TextEncoder();
       const dying = new ReadableStream<Uint8Array>({
@@ -283,12 +286,27 @@ for (const engine of ["terraform", "tofu"] as const) {
       }
       expect(threw || status !== 200).toBe(true);
       expect((await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, reserved.id) }))?.status).toBe("pending");
-      const retry = await fetch(`${liveBase}/api/v2/state-versions/${reserved.id}/upload`, {
-        method: "PUT",
-        headers: liveHeaders,
-        body: applied.raw,
-      });
-      expect(retry.status).toBe(200);
+      const currentAfterCrash = await expectSuccessResponse(
+        await request(`/api/v2/workspaces/${workspaceId}/current-state-version`, { headers }), 200, "state-versions",
+      );
+      expect(currentAfterCrash.id).toBe(priorCurrent.id);
+      // The crashed PUT releases its server-side upload claim as its handler
+      // unwinds, but a client that tore down the socket cannot know cleanup
+      // finished; retry boundedly so a transient in-progress 409 resolves.
+      let retryStatus = 0;
+      for (let attempt = 0; attempt < 5 && retryStatus !== 200; attempt += 1) {
+        if (attempt > 0) await Bun.sleep(200);
+        const retry = await fetch(`${liveBase}/api/v2/state-versions/${reserved.id}/upload`, {
+          method: "PUT",
+          headers: liveHeaders,
+          body: applied.raw,
+        });
+        retryStatus = retry.status;
+        await retry.text().catch((): string => {
+          return "";
+        });
+      }
+      expect(retryStatus).toBe(200);
       const row = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, reserved.id) });
       expect(row?.status).toBe("finalized");
       expect(row?.uploadSha256).toBe(createHash("sha256").update(applied.raw).digest("hex"));

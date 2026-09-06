@@ -85,7 +85,7 @@ Unlock and the next authorized state creation remove obsolete, uncommitted reser
 
 ## CLI state integrity checks
 
-Run `bun test tests/api/state_cli_integrity.test.ts tests/api/state_serial_safety.test.ts` from `backend`. The standard SQLite and PostgreSQL CI suites include these tests. Both Terraform and OpenTofu inspect downloaded state after inline upload, deferred upload, rollback and recovery, then compute a local plan with refresh disabled. The fixture uses the built-in `terraform_data` resource and synthetic outputs; no apply or cloud provider is needed. Installed binaries are used when available, with the existing binary manager as fallback.
+Run `bun test tests/api/state_cli_integrity.test.ts tests/api/state_cli_lifecycle.test.ts tests/api/state_serial_safety.test.ts` from `backend`. The standard SQLite and PostgreSQL CI suites include these tests. Both Terraform and OpenTofu inspect downloaded state after inline upload, deferred upload, rollback and recovery, then compute a local plan with refresh disabled. The fixture uses the built-in `terraform_data` resource and synthetic outputs; no apply or cloud provider is needed. Installed binaries are used when available, with the existing binary manager as fallback.
 
 Checks compare serial, lineage, download checksum, indexed outputs and sensitivity, and verify that a stale API write cannot replace recovered state. This test covers API writes followed by local CLI reads and planning. The [pinned CLI matrix](cli-compatibility-results) separately covers basic remote-backend writes.
 
