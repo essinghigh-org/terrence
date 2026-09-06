@@ -1,7 +1,9 @@
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db";
-import { runExplanations } from "../db/schema";
-import { readPlanJsonArtifact, sanitizePlanJson } from "./plan-json";
+import { runExplanations, auditLogs } from "../db/schema";
+import { readPlanJsonArtifact, sanitizePlanJson, PUBLIC_PLAN_VERSION } from "./plan-json";
+import { collectExplainSecrets, redactKnownSecrets } from "./explain-secrets";
+import { auditLog, strictAuditEnabled } from "./utils";
 import { readRunLogs } from "./run-logs";
 import { log } from "./log";
 
@@ -27,8 +29,17 @@ export const EXPLAIN_MAX_PROMPT_CHARS = 100_000;
 export const EXPLAIN_APPLY_LOG_TAIL_CHARS = 40_000;
 export const EXPLAIN_TIMEOUT_MS = 60_000;
 
+/** Test seam (issue #687): bound the upstream idle deadline without waiting
+ * a minute. Values must be a positive safe integer of milliseconds. */
+export function explainTimeoutMs(): number {
+  const override = Number(process.env["TERRENCE_EXPLAIN_TIMEOUT_MS"] ?? "");
+  return Number.isSafeInteger(override) && override > 0 ? override : EXPLAIN_TIMEOUT_MS;
+}
+
 export type ExplainSource = Readonly<{
   prompt: string;
+  secrets: readonly string[];
+  redactedInputSecrets: number;
 }>;
 
 export function configuredReasoningEffort(value: unknown): ReasoningEffort | null {
@@ -47,31 +58,123 @@ export type StoredExplanation = Readonly<{
 /**
  * Build the prompt for a run kind. Returns undefined
  * when the run has no artifact to explain (callers map that to 409).
+ *
+ * Issue #687: prompts carry only minimized material. Plan input goes
+ * through the SEC-01 public projection; both prompts are additionally
+ * scrubbed by value against the run's known secrets, because repository
+ * strings and flat logs can echo values no structural redactor can see.
+ * The returned secrets stay in memory for scrubbing the model response.
  */
 export async function buildExplainSource(runId: string, kind: ExplainKind): Promise<ExplainSource | undefined> {
+  const secrets = await collectExplainSecrets(runId);
   if (kind === "plan") {
     const planJson = await readPlanJsonArtifact(runId);
     if (planJson === undefined) return undefined;
     const serialized = JSON.stringify(sanitizePlanJson(planJson));
-    const truncated = serialized.length > EXPLAIN_MAX_PROMPT_CHARS
-      ? `${serialized.slice(0, EXPLAIN_MAX_PROMPT_CHARS)}\n... (truncated)`
-      : serialized;
+    // Redact before truncating (issue #687): a secret spanning the cut
+    // would otherwise leave an unredacted fragment in the prompt.
+    const redactedBody = redactKnownSecrets(serialized, secrets);
+    const truncated = redactedBody.text.length > EXPLAIN_MAX_PROMPT_CHARS
+      ? `${redactedBody.text.slice(0, EXPLAIN_MAX_PROMPT_CHARS)}\n... (truncated)`
+      : redactedBody.text;
     const prompt = `Explain the following Terraform plan in plain language for a reviewer. Provide a brief overview of what will be added, changed, or destroyed, and flag anything risky. Use concise bullets where helpful; do not reproduce the full plan or your internal reasoning.\n\n${truncated}`;
-    return { prompt };
+    const scrubbedPrompt = redactKnownSecrets(prompt, secrets);
+    return { prompt: scrubbedPrompt.text, secrets, redactedInputSecrets: redactedBody.hits + scrubbedPrompt.hits };
   }
   const logEntries = await readRunLogs(runId, "apply");
   if (logEntries.length === 0) return undefined;
   const fullLog = logEntries.map((entry) => entry.outputText).join("\n");
-  const tail = fullLog.length > EXPLAIN_APPLY_LOG_TAIL_CHARS
-    ? `... (earlier output omitted)\n${fullLog.slice(-EXPLAIN_APPLY_LOG_TAIL_CHARS)}`
-    : fullLog;
+  const redactedLog = redactKnownSecrets(fullLog, secrets);
+  const tail = redactedLog.text.length > EXPLAIN_APPLY_LOG_TAIL_CHARS
+    ? `... (earlier output omitted)\n${redactedLog.text.slice(-EXPLAIN_APPLY_LOG_TAIL_CHARS)}`
+    : redactedLog.text;
   const prompt = `A Terraform apply failed. Provide a brief overview of what went wrong, quote the key error, and give 2–3 recommended troubleshooting steps. Focus on practical next actions; do not reproduce the full log or your internal reasoning.\n\n${tail}`;
-  return { prompt };
+  const scrubbedPrompt = redactKnownSecrets(prompt, secrets);
+  return { prompt: scrubbedPrompt.text, secrets, redactedInputSecrets: redactedLog.hits + scrubbedPrompt.hits };
+}
+
+/**
+ * Scrub a model completion against the run's known secrets before it is
+ * cached or served (issue #687, defense in depth). Returns the scrubbed
+ * text and the replacement count; callers report only the count.
+ */
+export function scrubExplanationContent(content: string, secrets: readonly string[]): Readonly<{ content: string; scrubbed: number }> {
+  const result = redactKnownSecrets(content, secrets);
+  return { content: result.text, scrubbed: result.hits };
+}
+
+export type PersistExplainerOutput = Readonly<{
+  runId: string;
+  kind: ExplainKind;
+  model: string;
+  settings: Readonly<Record<string, unknown>>;
+  userId: string | null;
+  orgId: string | null;
+  content: string;
+  redactedInputSecrets: number;
+  scrubbedOutputSecrets: number;
+}>;
+
+/**
+ * Persist a scrubbed generation and audit the egress (issue #687). Warns
+ * (counts only) when the model repeated known secrets. The audit records
+ * which configured endpoint received which run; hostname only, never
+ * credentials, and prompts, completions, and secret values are never
+ * logged or audited.
+ */
+export async function persistExplainerOutput(output: PersistExplainerOutput): Promise<void> {
+  if (output.scrubbedOutputSecrets > 0) {
+    log.warn("Plan explainer response repeated known secrets; scrubbed before serving", { runId: output.runId, kind: output.kind });
+  }
+  const baseUrl = output.settings["base-url"];
+  let endpoint: string;
+  try {
+    endpoint = typeof baseUrl === "string" ? new URL(baseUrl).hostname : "unparseable";
+  } catch {
+    endpoint = "unparseable";
+  }
+  const details = {
+    kind: output.kind,
+    model: output.model,
+    endpoint,
+    redactedInputSecrets: output.redactedInputSecrets,
+    scrubbedOutputSecrets: output.scrubbedOutputSecrets,
+  };
+  if (strictAuditEnabled()) {
+    // Fail closed: the explanation row and its audit row commit atomically,
+    // so a degraded audit store rejects persistence instead of leaving a
+    // retained explanation without its egress record. Outside strict mode
+    // the audit stays best-effort so storage pressure never breaks reads.
+    await db.transaction(async (tx) => {
+      await tx.delete(runExplanations).where(and(eq(runExplanations.runId, output.runId), eq(runExplanations.kind, output.kind)));
+      await tx.insert(runExplanations).values({
+        id: explanationCacheKey(output.runId, output.kind),
+        runId: output.runId,
+        kind: output.kind,
+        model: output.model,
+        content: output.content,
+        cacheKey: explanationCacheKey(output.runId, output.kind),
+      });
+      await tx.insert(auditLogs).values({
+        id: crypto.randomUUID(),
+        orgId: output.orgId,
+        userId: output.userId,
+        action: "request",
+        resourceType: "plan-explanation",
+        resourceId: output.runId,
+        details,
+        createdAt: Date.now(),
+      });
+    });
+    return;
+  }
+  await saveExplanation(output.runId, output.kind, output.model, output.content);
+  await auditLog("request", "plan-explanation", output.runId, output.userId, output.orgId, details);
 }
 
 /** Stable storage key for the one plan or apply-error answer belonging to a run. */
 export function explanationCacheKey(runId: string, kind: ExplainKind): string {
-  return `${runId}-${kind === "plan" ? "plan-public-v1" : "apply-error"}`;
+  return `${runId}-${kind === "plan" ? `plan-public-v${PUBLIC_PLAN_VERSION}` : "apply-error"}`;
 }
 
 /**
@@ -317,10 +420,11 @@ export async function fetchUpstream<T>(
 ): Promise<T> {
   const controller = new AbortController();
   const abortWithTimeout = (): void => { controller.abort(new Error("request timed out")); };
-  let deadline = setTimeout(abortWithTimeout, EXPLAIN_TIMEOUT_MS);
+  const timeoutMs = explainTimeoutMs();
+  let deadline = setTimeout(abortWithTimeout, timeoutMs);
   const tick = (): void => {
     clearTimeout(deadline);
-    deadline = setTimeout(abortWithTimeout, EXPLAIN_TIMEOUT_MS);
+    deadline = setTimeout(abortWithTimeout, timeoutMs);
   };
   const onExternalAbort = (): void => { controller.abort(); };
   signal?.addEventListener("abort", onExternalAbort, { once: true });

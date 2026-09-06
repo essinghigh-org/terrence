@@ -58,7 +58,7 @@ Application encryption varies by artifact; filesystem permissions and gzip compr
 | Configuration archives | `cv/`, `configuration_versions/`; uploaded or fetched source | Plaintext archives; source may contain secrets | Configuration-version retention/deletion |
 | Recovery state | `recovery/`; interrupted-apply snapshot | Encrypted captured state; temporary execution files can be plaintext | Successful recovery removes its capture directory |
 | Generated configuration | Execution work directories; generated HCL and private variable files | Plaintext private files | Execution-directory cleanup |
-| AI explanations | Database `run_explanations`; generated text | Plaintext; old cache entries may contain previously disclosed values | Regeneration/run deletion; assess old backups separately |
+| AI explanations | Database `run_explanations`; generated text | Plaintext; prompts carry the SEC-01 plan projection (or the apply tail) scrubbed by value against sensitive variables/outputs, responses are scrubbed the same way, and each generation writes an audit row with endpoint host plus redaction counts (never secrets). Cache entries generated before this minimization may contain previously disclosed values | Regeneration/run deletion; assess old backups separately |
 
 The directory must persist across container restarts. Mount it as a volume. At boot Terrence fails fast when the directory is not writable and logs the exact `chown` fix with path and UID.
 
