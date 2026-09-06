@@ -44,6 +44,8 @@ jobs:
         # The backend package script serializes Bun workers because the test
         # suite shares its Elysia app and SQLite connection across files.
         run: cd backend && bun run test
+      - name: Prove critical guard tests detect mutations
+        run: bun backend/scripts/check-guard-mutations.ts
 
   backend-postgres:
     name: Backend (Postgres)

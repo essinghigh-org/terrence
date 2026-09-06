@@ -4,7 +4,7 @@ import { db } from "../../src/db";
 import { apiTokens, logs, runComments, runs, stateVersions, teams, teamWorkspaces, workspaces } from "../../src/db/schema";
 import { readPlanJsonArtifact, writePlanJsonArtifact } from "../../src/lib/plan-json";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
-import { cleanupSeed, jsonHeaders, persistSeed, request, seedOrg } from "./compat_contract_helpers";
+import { cleanupSeed, jsonHeaders, persistExecutionSeed, persistSeed, request, seedOrg } from "./compat_contract_helpers";
 
 const seed = seedOrg("state-capability");
 const workspaceId = `ws-${seed.suffix}`;
@@ -15,9 +15,8 @@ const token = `team-token-${seed.suffix}`;
 
 beforeAll(async () => {
   await persistSeed(seed);
-  await db.insert(workspaces).values({ id: workspaceId, orgId: seed.orgId, name: "capability" });
-  await db.insert(runs).values({ id: runId, workspaceId, createdAt: Date.now(), status: "errored", statusTimestamps: { "input-state-version-id": stateId } });
-  await db.insert(stateVersions).values({ id: stateId, workspaceId, runId, serial: 1, statePayload: '{"version":4,"serial":1,"lineage":"test"}' });
+  await persistExecutionSeed({ orgId: seed.orgId, workspaceId, workspaceName: "capability", runId, status: "errored", stateId, serial: 1,
+    statePayload: '{"version":4,"serial":1,"lineage":"test"}', statusTimestamps: { "input-state-version-id": stateId } });
   await db.insert(teams).values({ id: teamId, orgId: seed.orgId, name: "restricted" });
   await db.insert(teamWorkspaces).values({ id: `tw-${seed.suffix}`, teamId, workspaceId, access: "custom", permissions: { runs: "read", "state-versions": "none" } });
   await db.insert(apiTokens).values({ id: `tok-${seed.suffix}`, token: hashAuthenticationToken(token), teamId });
@@ -118,9 +117,15 @@ test("run deletion waits for a local execution before it has spawned a CLI", asy
 });
 
 test("run deletion rejects every non-final status and preserves its tracking record", async () => {
-  const { RUN_STATUSES } = await import("../../src/lib/run-status");
-  const { FINAL_RUN_STATUSES } = await import("../../src/lib/utils");
-  for (const status of RUN_STATUSES.filter((status) => !FINAL_RUN_STATUSES.includes(status))) {
+  // Independently specified active/waiting states: changing production's
+  // final-state list must not change what this test expects to preserve.
+  const activeStates = [
+    "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
+    "queuing", "plan_queued", "planning", "planned", "cost_estimating", "cost_estimated",
+    "policy_checking", "policy_override", "policy_soft_failed", "policy_checked",
+    "post_plan_running", "post_plan_completed", "planned_and_saved", "confirmed", "apply_queued", "applying",
+  ];
+  for (const status of activeStates) {
     await db.update(runs).set({ status }).where(eq(runs.id, runId));
     expect((await request(`/api/v2/runs/${runId}`, { method: "DELETE", headers: jsonHeaders(seed.token) })).status).toBe(409);
     expect((await db.query.runs.findFirst({ where: eq(runs.id, runId) }))?.status).toBe(status);
