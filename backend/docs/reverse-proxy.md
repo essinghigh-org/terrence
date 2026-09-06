@@ -77,6 +77,18 @@ server {
 
 As with Caddy, keep `PUBLIC_URL` set to the public origin and list the nginx host in `TERRENCE_TRUSTED_PROXY_CIDRS` when it is not localhost.
 
+## Root-host deployment requirement
+
+Terrence requires deployment at the root of a domain or subdomain (e.g. `https://terraform.example.com`). Subpath deployment (e.g. `https://example.com/terrence/`) is deliberately not supported: Terraform/OpenTofu CLI service discovery protocols (`/.well-known/terraform.json`) and standard OAuth callback specifications expect root-level resolution.
+
+## Private certificate authorities (Internal CAs)
+
+When terminating TLS with an internal or organizational certificate authority:
+
+1. Ensure client machines have the organizational root CA installed in their local system trust store.
+2. For Terraform and OpenTofu CLI runs on machines where the CLI uses its own trust store, configure `SSL_CERT_FILE=/path/to/ca-bundle.crt` or `CURL_CA_BUNDLE=/path/to/ca-bundle.crt`.
+3. For containerized or agent executions, mount the CA bundle into `/etc/ssl/certs/` to prevent certificate verification errors during CLI init or discovery.
+
 ## Verifying
 
 1. Open `https://terraform.example.com` and sign in.
