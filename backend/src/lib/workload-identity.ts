@@ -48,6 +48,24 @@ export type IssuedIdentityToken = Readonly<{
   expiresAt: number;
 }>;
 
+/**
+ * Inspect declared workload-identity inputs without reading their values.
+ * This is intentionally a pure control-plane check: provider authentication
+ * itself belongs to the worker, agent, or client execution context.
+ */
+export type WorkloadIdentityConfiguration = Readonly<{
+  configured: boolean;
+  providers: readonly string[];
+}>;
+
+export function inspectWorkspaceIdentityConfiguration(keys: readonly string[]): WorkloadIdentityConfiguration {
+  const providers = [...new Set(keys.flatMap((key): string[] => {
+    const match = /^TFC_([A-Z]+)_PROVIDER_AUTH(?:_|$)/.exec(key);
+    return match?.[1] === undefined ? [] : [match[1].toLowerCase()];
+  }))].sort();
+  return { configured: providers.length > 0 || keys.some((key): boolean => key.startsWith("TFC_OIDC_")), providers };
+}
+
 export function workloadIdentityIssuer(): string {
   const configured = process.env["PUBLIC_URL"];
   try {

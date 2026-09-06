@@ -4,7 +4,9 @@ import { db } from "../db";
 import { durableJobs } from "../db/schema";
 import {
   findAuthorizedRun,
+  findAuthorizedWorkspace,
 } from "../lib/utils";
+import { assessWorkspacePreflight, preflightResource } from "../lib/workspace-preflight";
 import { getSettings, resolvePlanExplainerSettings } from "../lib/settings";
 import {
   EXPLAIN_KINDS,
@@ -47,9 +49,52 @@ function explainAuditContext(user: Readonly<{ readonly id: string }> | null | un
   return { userId: user?.id ?? null, orgId: orgId ?? null };
 }
 
+function preflightBodyProbes(body: unknown): Readonly<{ probes?: readonly string[]; invalid: boolean }> {
+  if (body === undefined || body === null) return { invalid: false };
+  if (typeof body !== "object" || Array.isArray(body)) return { invalid: true };
+  const data = (body as Record<string, unknown>)["data"];
+  if (data === undefined) return { invalid: false };
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return { invalid: true };
+  const attributes = (data as Record<string, unknown>)["attributes"];
+  if (attributes === undefined) return { invalid: false };
+  if (typeof attributes !== "object" || attributes === null || Array.isArray(attributes)) return { invalid: true };
+  const raw = (attributes as Record<string, unknown>)["probes"];
+  if (raw === undefined) return { invalid: false };
+  if (!Array.isArray(raw) || raw.length > 8 || raw.some((probe): boolean => typeof probe !== "string" || !["connectivity", "identity"].includes(probe))) return { invalid: true };
+  return { probes: raw as string[], invalid: false };
+}
+
+function preflightError(set: SetObj, status: number, detail: string): Readonly<{ errors: readonly [{ status: string; title: string; detail: string }] }> {
+  (set as { status: number }).status = status;
+  return { errors: [{ status: String(status), title: status === 422 ? "Unprocessable Entity" : "Not Found", detail }] };
+}
+
 export const operationsRoutes = new Elysia({ name: "operations" })
   .use(authPlugin)
-  // --- AI run explainer ---------------------------------------------------
+    // Workspace-scoped run readiness. These endpoints inspect only bounded,
+    // persisted control-plane state. Optional probes are represented as
+    // deferred checks so the eventual worker/agent/client context remains the
+    // authority and the control plane never follows an arbitrary URL.
+    .get("/api/v2/workspaces/:workspace_id/preflight", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspace = await findAuthorizedWorkspace(params["workspace_id"] ?? "", user?.id, orgId ?? null, teamId ?? null, "read");
+      if (workspace === undefined) return notFound(set);
+      return preflightResource(await assessWorkspacePreflight(workspace));
+    })
+    .post("/api/v2/workspaces/:workspace_id/preflight", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspace = await findAuthorizedWorkspace(params["workspace_id"] ?? "", user?.id, orgId ?? null, teamId ?? null, "read");
+      if (workspace === undefined) return notFound(set);
+      const parsed = preflightBodyProbes(body);
+      if (parsed.invalid) return preflightError(set, 422, "Preflight probes must be connectivity or identity.");
+      return preflightResource(await assessWorkspacePreflight(workspace, parsed.probes === undefined ? {} : { probes: parsed.probes }));
+    })
+    .post("/api/v2/workspaces/:workspace_id/actions/preflight", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspace = await findAuthorizedWorkspace(params["workspace_id"] ?? "", user?.id, orgId ?? null, teamId ?? null, "read");
+      if (workspace === undefined) return notFound(set);
+      const parsed = preflightBodyProbes(body);
+      if (parsed.invalid) return preflightError(set, 422, "Preflight probes must be connectivity or identity.");
+      return preflightResource(await assessWorkspacePreflight(workspace, parsed.probes === undefined ? {} : { probes: parsed.probes }));
+    })
+    // --- AI run explainer ---------------------------------------------------
     // Read-only convenience: feeds the sanitized stored plan JSON (or a failed
     // apply log) to a user-configured OpenAI-compatible endpoint and returns the
     // plain-language explanation. Explanations are cached per (run, kind) so

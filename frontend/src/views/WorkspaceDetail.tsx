@@ -854,6 +854,7 @@ export function WorkspaceDetail({
                         </>
                       ) : (
                         <WorkspaceGettingStarted
+                          workspaceId={workspace.id}
                           orgName={orgName ?? ""}
                           workspaceName={workspace.attributes.name}
                           engine={workspace.attributes["iac-binary"] ?? "terraform"}

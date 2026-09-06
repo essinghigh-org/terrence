@@ -1,12 +1,35 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Copy } from "lucide-react";
+import { CheckCircle2, CircleAlert, Copy, LoaderCircle } from "lucide-react";
 import { Button, buttonVariants } from "./ui/button";
 import { toast } from "./ui/toast";
 import { copyTextToClipboard } from "../lib/utils";
+import { fetchApi } from "../lib/api";
+
+type PreflightCheck = Readonly<{
+  id?: unknown;
+  status?: unknown;
+  required?: unknown;
+  advisory?: unknown;
+  detail?: unknown;
+  fix?: unknown;
+}>;
+
+type PreflightResponse = Readonly<{
+  data?: Readonly<{
+    attributes?: Readonly<{
+      status?: unknown;
+      "can-run-anyway"?: unknown;
+      checks?: unknown;
+    }>;
+  }>;
+}>;
+type PreflightData = NonNullable<PreflightResponse["data"]>;
 
 export function WorkspaceGettingStarted({
-  orgName, workspaceName, engine, source, hasRepository, localExecution, canQueueRun, canUpdate, canReadVariable,
+  workspaceId, orgName, workspaceName, engine, source, hasRepository, localExecution, canQueueRun, canUpdate, canReadVariable,
 }: Readonly<{
+  workspaceId?: string;
   orgName: string;
   workspaceName: string;
   engine: string;
@@ -17,11 +40,34 @@ export function WorkspaceGettingStarted({
   canUpdate: boolean;
   canReadVariable: boolean;
 }>): React.JSX.Element {
+  const [preflight, setPreflight] = useState<PreflightData | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
+  const [preflightError, setPreflightError] = useState<string | null>(null);
   const workspacePath = `/app/${encodeURIComponent(orgName)}/workspaces/${encodeURIComponent(workspaceName)}`;
   const cli = engine === "tofu" ? "tofu" : "terraform";
   const hostname = window.location.host;
   const configuration = `terraform {\n  backend "remote" {\n    hostname     = ${JSON.stringify(hostname)}\n    organization = ${JSON.stringify(orgName)}\n    workspaces {\n      name = ${JSON.stringify(workspaceName)}\n    }\n  }\n}`;
   const usesServerCode = !localExecution && (hasRepository || source === "local");
+
+  const runPreflight = (): void => {
+    setPreflightLoading(true);
+    setPreflightError(null);
+    void fetchApi<PreflightResponse>(`/workspaces/${encodeURIComponent(workspaceId ?? "")}/actions/preflight`, {
+      method: "POST",
+      body: JSON.stringify({ data: { type: "preflight-assessments", attributes: {} } }),
+    }).then((response): void => {
+      setPreflight(response.data ?? null);
+    }).catch((error: unknown): void => {
+      setPreflightError(error instanceof Error ? error.message : "Could not check run readiness.");
+    }).finally((): void => {
+      setPreflightLoading(false);
+    });
+  };
+
+  const checks = Array.isArray(preflight?.attributes?.checks)
+    ? (preflight.attributes.checks as PreflightCheck[])
+    : [];
+  const preflightStatus = typeof preflight?.attributes?.status === "string" ? preflight.attributes.status : "unknown";
 
   return (
     <div className="space-y-5">
@@ -61,6 +107,43 @@ export function WorkspaceGettingStarted({
         {canReadVariable && <Link className={buttonVariants({ variant: "outline", size: "sm" })} to={`${workspacePath}/variables`}>Configure variables</Link>}
         {!hasRepository && canUpdate && <Link className="text-sm font-medium text-primary hover:underline" to={`${workspacePath}/settings/version-control`}>Connect a Git repository</Link>}
         <Link className="text-sm font-medium text-primary hover:underline" to="/app/docs/quickstart">Quick start guide</Link>
+      </div>
+      <div className="rounded-md border border-border bg-muted/20 p-4" aria-live="polite">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium">Check run readiness</p>
+            <p className="mt-1 text-xs text-muted-foreground">Check configuration, inputs, engine, execution capacity, and storage before the first plan.</p>
+          </div>
+          <Button size="sm" variant="outline" onClick={runPreflight} disabled={preflightLoading} aria-busy={preflightLoading}>
+            {preflightLoading ? <LoaderCircle className="mr-2 size-4 animate-spin" aria-hidden="true" /> : null}
+            {preflightLoading ? "Checking…" : "Run preflight"}
+          </Button>
+        </div>
+        {preflightError !== null && <p className="mt-3 text-sm text-destructive">{preflightError}</p>}
+        {preflight !== null && (
+          <div className="mt-4 space-y-3">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              {preflightStatus === "ready"
+                ? <CheckCircle2 className="size-4 text-success" aria-hidden="true" />
+                : <CircleAlert className="size-4 text-warning" aria-hidden="true" />}
+              <span>{preflightStatus === "ready" ? "Ready for a run" : `Run status: ${preflightStatus}`}</span>
+            </div>
+            {checks.map((item, index): React.JSX.Element => {
+              const detail = typeof item.detail === "string" ? item.detail : "No detail was returned.";
+              const id = typeof item.id === "string" ? item.id : `check-${index}`;
+              const status = typeof item.status === "string" ? item.status : "unknown";
+              return (
+                <div key={`${id}-${index}`} className="flex items-start justify-between gap-3 text-xs">
+                  <span className="font-medium text-foreground">{id}</span>
+                  <span className="text-right text-muted-foreground"><span className="font-medium text-foreground">{status}</span> — {detail}</span>
+                </div>
+              );
+            })}
+            {preflight.attributes?.["can-run-anyway"] === true && preflightStatus === "unknown" && usesServerCode && canQueueRun && (
+              <Link className={buttonVariants({ variant: "outline", size: "sm" })} to={`${workspacePath}/runs?new-run=true`}>Run anyway</Link>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

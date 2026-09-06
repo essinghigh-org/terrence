@@ -9,6 +9,22 @@ import { storageDegradedReason } from "./storage-health";
 import { queueRunNotification } from "./notifications";
 import { log } from "./log";
 
+// Workspace run readiness is exported from the operations library as part of
+// the public operations surface; the implementation lives in its own module
+// so route loading does not entangle the existing apply gates.
+export {
+  assessWorkspacePreflight,
+  clearWorkspacePreflightCacheForTests,
+  preflightResource,
+} from "./workspace-preflight";
+export type {
+  PreflightAssessmentStatus,
+  PreflightCheckStatus,
+  WorkspacePreflightAssessment,
+  WorkspacePreflightCheck,
+  WorkspacePreflightOptions,
+} from "./workspace-preflight";
+
 // --- Maintenance windows (kanban 21.6) -------------------------------
 // Global site setting `maintenance-windows`:
 //   { enabled: boolean, windows: [{ days: number[] (0=Sun..6=Sat),
