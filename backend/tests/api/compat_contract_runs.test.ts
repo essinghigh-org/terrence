@@ -122,6 +122,49 @@ describe("remote-workflow runs contract", () => {
     expectSelfLink(resource, "/api/v2/runs/");
   });
 
+  it("exposes an immutable redacted provenance capsule", async () => {
+    const first = await request(`/api/v2/runs/${runId}/provenance`, { headers });
+    expect(first.status).toBe(200);
+    const firstBody = await first.json() as { data: { attributes: { manifest: Record<string, unknown>; sha256: string } } };
+    expect(firstBody.data.attributes.manifest).toMatchObject({
+      runId,
+      schemaVersion: 1,
+      configuration: { versionId: configurationVersionId, commitSha: "abc123", branch: "main" },
+    });
+    expect(firstBody.data.attributes.sha256).toMatch(/^[a-f0-9]{64}$/);
+    await db.update(configurationVersions).set({ ingressAttributes: { commitSha: "changed-after-run", branch: "rewritten" } }).where(eq(configurationVersions.id, configurationVersionId));
+    const second = await request(`/api/v2/runs/${runId}/provenance`, { headers });
+    expect((await second.json() as typeof firstBody).data.attributes.manifest).toEqual(firstBody.data.attributes.manifest);
+    const download = await request(`/api/v2/runs/${runId}/provenance/download`, { headers });
+    expect(download.status).toBe(200);
+    expect(download.headers.get("content-disposition")).toContain("provenance.json");
+    expect(await download.text()).not.toContain("executionMaterial");
+    await db.update(configurationVersions).set({ ingressAttributes: { commitSha: "abc123", branch: "main", senderUsername: "contract-user" } }).where(eq(configurationVersions.id, configurationVersionId));
+  });
+
+  it("reruns from current settings or the captured execution material", async () => {
+    await db.update(configurationVersions).set({ ingressAttributes: { commitSha: "new-after-run", branch: "feature" } }).where(eq(configurationVersions.id, configurationVersionId));
+    const current = await request(`/api/v2/runs/${runId}/actions/rerun`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ mode: "current" }),
+    });
+    expect(current.status).toBe(201);
+    const currentBody = await current.json() as { data: { id: string; attributes: { rerun: { mode: string; sourceRunId: string; changedSinceSource: string[] } } } };
+    expect(currentBody.data.attributes.rerun).toMatchObject({ mode: "current", sourceRunId: runId });
+    expect(currentBody.data.attributes.rerun.changedSinceSource).toContain("configuration");
+
+    const original = await request(`/api/v2/runs/${runId}/actions/rerun`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ mode: "original" }),
+    });
+    expect(original.status).toBe(201);
+    const originalBody = await original.json() as { data: { attributes: { rerun: { mode: string; sourceRunId: string } } } };
+    expect(originalBody.data.attributes.rerun).toMatchObject({ mode: "original", sourceRunId: runId });
+    await db.update(configurationVersions).set({ ingressAttributes: { commitSha: "abc123", branch: "main", senderUsername: "contract-user" } }).where(eq(configurationVersions.id, configurationVersionId));
+  });
+
   it("rejects organization-token run creation with an actionable 403 (issue #606)", async () => {
     const response = await request(`/api/v2/workspaces/${workspaceId}/runs`, {
       method: "POST",

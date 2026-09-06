@@ -125,6 +125,18 @@ const APPLY_DURATION_END_KEYS = [
   "force-canceled-at",
 ] as const;
 
+type RunProvenanceManifest = Readonly<{
+  schemaVersion: number;
+  runId: string;
+  configuration: Readonly<{ versionId: string | null; digest: string; source: string | null; commitSha: string | null; branch: string | null }>;
+  engine: Readonly<{ binary: string; version: string | null; digest: string | null }>;
+  workspace: Readonly<{ workingDirectory: string | null; executionMode: string }>;
+  inputState: Readonly<{ id: string | null; digest: string | null }>;
+  variables: readonly Readonly<{ key: string; category: string; source: string; sensitive: boolean }>[];
+  sandbox: Readonly<{ required: boolean; networkPolicy: string; executor: string }>;
+  rerun?: Readonly<{ mode: "original" | "current"; sourceRunId: string; changedSinceSource: readonly string[] }>;
+}>;
+
 function firstTimestampMilliseconds(
   timestamps: Readonly<Record<string, string>>,
   keys: readonly string[],
@@ -439,6 +451,7 @@ export function RunDetail({
   const applyLogs = view.applyLog.text;
   const [rerunPending, setRerunPending] = useState(false);
   const [rerunError, setRerunError] = useState("");
+  const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
   const [recoveryPending, setRecoveryPending] = useState(false);
   const [recoveryError, setRecoveryError] = useState("");
   const [fullscreenLog, setFullscreenLog] = useState<"plan" | "apply" | null>(null);
@@ -484,6 +497,23 @@ export function RunDetail({
   const [explainerReasoningEffort, setExplainerReasoningEffort] = useState<ReasoningEffort | null>(null);
   const [explainerModel, setExplainerModel] = useState("");
   const [explainError, setExplainError] = useState("");
+  const [provenanceManifest, setProvenanceManifest] = useState<RunProvenanceManifest | null>(null);
+  const [provenanceError, setProvenanceError] = useState("");
+  useEffect((): (() => void) => {
+    const controller = new AbortController();
+    setProvenanceManifest(null);
+    setProvenanceError("");
+    fetchApi(`/api/v2/runs/${encodeURIComponent(runId)}/provenance`, { signal: controller.signal })
+      .then((payload: unknown): void => {
+        if (controller.signal.aborted) return;
+        const data = (payload as { data?: { attributes?: { manifest?: unknown } } }).data?.attributes?.manifest;
+        if (data !== null && typeof data === "object" && !Array.isArray(data)) setProvenanceManifest(data as RunProvenanceManifest);
+      })
+      .catch((error: unknown): void => {
+        if (!controller.signal.aborted) setProvenanceError(error instanceof Error ? error.message : String(error));
+      });
+    return (): void => { controller.abort(); };
+  }, [runId]);
   const explainerAbortRef = useRef<AbortController | null>(null);
   // Abort any in-flight explanation when the view unmounts (e.g. the user
   // navigates away mid-stream).
@@ -951,19 +981,14 @@ export function RunDetail({
         ? "Rerun is unavailable for destroy runs."
         : "The workspace is locked.";
 
-  const performRerun = async (): Promise<void> => {
+  const performRerun = async (mode: "original" | "current"): Promise<void> => {
     if (workspaceId === "" || rerunPending) return;
     setRerunPending(true);
     setRerunError("");
     try {
-      const body = await fetchApi("/api/v2/runs", {
+      const body = await fetchApi(`/api/v2/runs/${encodeURIComponent(runId)}/actions/rerun`, {
         method: "POST",
-        body: JSON.stringify({
-          data: {
-            attributes: { message: `Re-run of ${runId}` },
-            relationships: { workspace: { data: { type: "workspaces", id: workspaceId } } },
-          },
-        }),
+        body: JSON.stringify({ mode }),
       });
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const newRunId = (body as { data?: { id?: string } }).data?.id;
@@ -976,6 +1001,7 @@ export function RunDetail({
       setRerunError(err instanceof Error ? err.message : String(err));
     } finally {
       setRerunPending(false);
+      setRerunDialogOpen(false);
     }
   };
 
@@ -1271,7 +1297,7 @@ export function RunDetail({
               className="gap-1.5"
               disabled={!canRerun || rerunPending || pendingAction !== ""}
               title={rerunBlockedReason ?? undefined}
-              onClick={(): void => { void performRerun(); }}
+              onClick={(): void => { setRerunDialogOpen(true); }}
             >
               <RotateCcw className="size-3.5" aria-hidden="true" />
               {rerunPending ? "Queuing…" : "Re-run"}
@@ -1289,6 +1315,25 @@ export function RunDetail({
               the ones here were missing. */}
           </div>
       </header>
+
+      <Dialog open={rerunDialogOpen} onOpenChange={setRerunDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Choose rerun inputs</DialogTitle>
+            <DialogDescription>
+              A rerun creates a new run. Choose the immutable inputs captured for this run, or the workspace settings currently configured.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+            <Button type="button" variant="outline" disabled={rerunPending} onClick={(): void => { void performRerun("original"); }}>
+              Original inputs
+            </Button>
+            <Button type="button" disabled={rerunPending} onClick={(): void => { void performRerun("current"); }}>
+              Current settings
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <RunStageStrip stages={stages} className="mb-5" />
 
@@ -1725,6 +1770,41 @@ export function RunDetail({
 
       </div>
       <aside aria-label="Run context" className="min-w-0 space-y-5">
+      {provenanceManifest !== null && (
+        <section aria-labelledby="run-provenance-heading" className="overflow-hidden rounded-lg border border-border bg-card">
+          <div className="flex items-center justify-between border-b border-border px-5 py-4">
+            <h2 id="run-provenance-heading" className="text-sm font-semibold">Executed with</h2>
+            <a
+              className="text-xs text-primary underline underline-offset-2 hover:no-underline"
+              href={`/api/v2/runs/${encodeURIComponent(runId)}/provenance/download`}
+              download
+            >
+              Download manifest
+            </a>
+          </div>
+          <dl className="grid gap-3 px-5 py-4 text-xs">
+            <div><dt className="text-muted-foreground">Engine</dt><dd className="mt-0.5 font-medium">{provenanceManifest.engine.binary}{provenanceManifest.engine.version === null ? "" : ` ${provenanceManifest.engine.version}`}</dd></div>
+            <div><dt className="text-muted-foreground">Configuration</dt><dd className="mt-0.5 break-all font-mono">{provenanceManifest.configuration.digest.slice(0, 16)}…</dd></div>
+            <div><dt className="text-muted-foreground">Input state</dt><dd className="mt-0.5">{provenanceManifest.inputState.id === null ? "None recorded" : provenanceManifest.inputState.id}</dd></div>
+            <div><dt className="text-muted-foreground">Variables</dt><dd className="mt-0.5">{provenanceManifest.variables.length} sources captured; sensitive values redacted</dd></div>
+            <div><dt className="text-muted-foreground">Sandbox</dt><dd className="mt-0.5">{provenanceManifest.sandbox.required ? "Required" : "Disabled"} · {provenanceManifest.sandbox.networkPolicy} network</dd></div>
+            {provenanceManifest.rerun !== undefined && (
+              <div>
+                <dt className="text-muted-foreground">Rerun inputs</dt>
+                <dd className="mt-0.5">
+                  {provenanceManifest.rerun.mode === "original" ? "Original captured inputs" : "Current workspace settings"}
+                  {provenanceManifest.rerun.changedSinceSource.length === 0
+                    ? " · no recorded differences"
+                    : ` · changed: ${provenanceManifest.rerun.changedSinceSource.join(", ")}`}
+                </dd>
+              </div>
+            )}
+          </dl>
+        </section>
+      )}
+      {provenanceError !== "" && (
+        <p role="status" className="rounded-lg border border-border bg-card px-5 py-3 text-xs text-muted-foreground">Executed-with details unavailable: {provenanceError}</p>
+      )}
       <section aria-labelledby="run-details-heading" className="overflow-hidden rounded-lg border border-border bg-card">
         <h2 id="run-details-heading" className="border-b border-border px-5 py-4 text-sm font-semibold">Run details</h2>
         <MetaList

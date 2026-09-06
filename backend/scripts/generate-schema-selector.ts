@@ -44,7 +44,7 @@ lines.push("// only feeds the STORAGE_DIR default and driver detection, so cwd i
 lines.push("const moduleDir = typeof import.meta?.dir === \"string\" && import.meta.dir !== \"\"");
 lines.push("  ? import.meta.dir");
 lines.push("  : process.cwd();");
-lines.push("const storageDir = resolve(process.env.STORAGE_DIR ?? join(moduleDir, \"../../storage\"));");
+lines.push("const storageDir = resolve(process.env[\"STORAGE_DIR\"] ?? join(moduleDir, \"../../storage\"));");
 lines.push("const activeDriver = resolveDatabaseConfig(process.env, storageDir).driver;");
 lines.push("// Built lazily: constructing the pg mirror walks every sqlite table object,");
 lines.push("// which is wasted work on the sqlite path and can throw on exotic schema");

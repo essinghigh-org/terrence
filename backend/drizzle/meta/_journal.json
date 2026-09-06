@@ -414,6 +414,13 @@
       "when": 1788694902761,
       "tag": "0058_state_summary",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "6",
+      "when": 1788705033113,
+      "tag": "0059_shiny_vulcan",
+      "breakpoints": true
     }
   ]
 }

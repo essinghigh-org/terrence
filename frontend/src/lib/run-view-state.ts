@@ -55,6 +55,7 @@ export type RunAttributes = Readonly<{
   "triggered-by-avatar-url"?: string | null;
   "workspace-locked"?: boolean;
   "workspace-locked-reason"?: string | null;
+  provenance?: Readonly<{ "schema-version": number; sha256: string; "manifest-url": string }> | null;
 }>;
 
 export type RunResource = Readonly<{

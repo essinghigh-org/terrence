@@ -386,6 +386,20 @@
       "when": 1788694902977,
       "tag": "0054_state_summary",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1788705033800,
+      "tag": "0055_confused_wraith",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1788705708724,
+      "tag": "0056_slow_romulus",
+      "breakpoints": true
     }
   ]
 }

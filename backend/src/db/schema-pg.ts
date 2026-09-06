@@ -1256,6 +1256,18 @@ export const runExplanations = pgTable("run_explanations", {
     index("run_explanations_run_kind_idx").on(table.runId, table.kind),
   ]);
 
+export const runProvenanceCapsules = pgTable("run_provenance_capsules", {
+    id: text("id").notNull().primaryKey(),
+    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    schemaVersion: bigint("schema_version", { mode: "number" }).notNull().default(1),
+    publicManifest: jsonb("public_manifest").notNull(),
+    manifestSha256: text("manifest_sha256").notNull(),
+    executionMaterial: text("execution_material").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.runProvenanceCapsules.createdAt.defaultFn!()),
+}, (table) => [
+    uniqueIndex("run_provenance_capsules_run_idx").on(table.runId),
+  ]);
+
 export const runTaskResults = pgTable("run_task_results", {
     id: text("id").notNull().primaryKey(),
     runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),

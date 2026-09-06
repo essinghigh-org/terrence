@@ -101,10 +101,6 @@ export const auditLogs: typeof sqliteSchema.auditLogs = pgTables === null
   ? sqliteSchema.auditLogs
   : (pgTables[dbNameOf(sqliteSchema.auditLogs)] as unknown as typeof sqliteSchema.auditLogs);
 
-export const explorerBulkActionRecords: typeof sqliteSchema.explorerBulkActionRecords = pgTables === null
-  ? sqliteSchema.explorerBulkActionRecords
-  : (pgTables[dbNameOf(sqliteSchema.explorerBulkActionRecords)] as unknown as typeof sqliteSchema.explorerBulkActionRecords);
-
 export const cidrRangeListAgentPools: typeof sqliteSchema.cidrRangeListAgentPools = pgTables === null
   ? sqliteSchema.cidrRangeListAgentPools
   : (pgTables[dbNameOf(sqliteSchema.cidrRangeListAgentPools)] as unknown as typeof sqliteSchema.cidrRangeListAgentPools);
@@ -136,6 +132,10 @@ export const durableJobs: typeof sqliteSchema.durableJobs = pgTables === null
 export const emailVerificationTokens: typeof sqliteSchema.emailVerificationTokens = pgTables === null
   ? sqliteSchema.emailVerificationTokens
   : (pgTables[dbNameOf(sqliteSchema.emailVerificationTokens)] as unknown as typeof sqliteSchema.emailVerificationTokens);
+
+export const explorerBulkActionRecords: typeof sqliteSchema.explorerBulkActionRecords = pgTables === null
+  ? sqliteSchema.explorerBulkActionRecords
+  : (pgTables[dbNameOf(sqliteSchema.explorerBulkActionRecords)] as unknown as typeof sqliteSchema.explorerBulkActionRecords);
 
 export const explorerCatalogItems: typeof sqliteSchema.explorerCatalogItems = pgTables === null
   ? sqliteSchema.explorerCatalogItems
@@ -400,6 +400,10 @@ export const runComments: typeof sqliteSchema.runComments = pgTables === null
 export const runExplanations: typeof sqliteSchema.runExplanations = pgTables === null
   ? sqliteSchema.runExplanations
   : (pgTables[dbNameOf(sqliteSchema.runExplanations)] as unknown as typeof sqliteSchema.runExplanations);
+
+export const runProvenanceCapsules: typeof sqliteSchema.runProvenanceCapsules = pgTables === null
+  ? sqliteSchema.runProvenanceCapsules
+  : (pgTables[dbNameOf(sqliteSchema.runProvenanceCapsules)] as unknown as typeof sqliteSchema.runProvenanceCapsules);
 
 export const runTaskResults: typeof sqliteSchema.runTaskResults = pgTables === null
   ? sqliteSchema.runTaskResults

@@ -1,5 +1,5 @@
 import { log } from "../lib/log";
-import { runVariablesForWrite } from "../lib/run-variables";
+import { normalizeRunVariables, runVariablesForWrite } from "../lib/run-variables";
 import { newResourceId } from "../lib/resource-id";
 import { createHash } from "node:crypto";
 import { exists, readFile } from "node:fs/promises";
@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { storageDir } from "../db/driver";
-import { agentJobs, agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, policyEvaluations, taskStages, runComments, auditLogs, users, organizations, notificationConfigurations, notificationConfigurationWorkspaceExclusions } from "../db/schema";
+import { agentJobs, agentPools, runs, runProvenanceCapsules, workspaces, configurationVersions, logs, stateVersions, policyChecks, policyEvaluations, taskStages, runComments, auditLogs, users, organizations, notificationConfigurations, notificationConfigurationWorkspaceExclusions } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt, sql } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource, taskStageResource, type RunRelationshipLinkage } from "../lib/response";
 import { tfPolicyEvaluationResource, tfStageTypesForEvaluations } from "./policy-evaluations";
@@ -36,8 +36,19 @@ import { runExecutionDurationMilliseconds } from "../lib/run-duration";
 import { newRunId } from "../lib/run-id";
 import { RUN_NOTIFICATION_TRIGGERS } from "../lib/constants";
 import { auditLogValues } from "../lib/audit-trail";
+import { decryptSecret } from "../lib/secrets";
+import { effectiveWorkspaceVariables } from "../lib/effective-variables";
+import { buildRunProvenanceCapsule, canonicalJson, sha256Hex } from "../lib/run-provenance";
 
 type SetObj = { status?: number | string; headers: Record<string, string | number> };
+
+function provenanceDiff(
+  before: Readonly<Record<string, unknown>>,
+  after: Readonly<Record<string, unknown>>,
+): readonly string[] {
+  return ["configuration", "engine", "workspace", "inputState", "variables", "policy", "runTasks", "executionTarget", "sandbox"]
+    .filter((key): boolean => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
+}
 
 // Statuses whose timestamps contain a terminal plan/apply marker that can be
 // measured as "run duration". Speculative runs (plan_only) finish at
@@ -880,6 +891,52 @@ export async function createRun(
   const nowIso = new Date(createdAt).toISOString();
   const finalMsg = message !== "" ? message : (configurationVersion?.source === "tfe-cli" ? "Triggered via CLI" : "Triggered via UI");
   const origin = originForConfiguration(configurationVersion);
+  const [effectiveVariables, inputState] = await Promise.all([
+    effectiveWorkspaceVariables(workspace.id, workspace.orgId, workspace.projectId ?? null),
+    db.query.stateVersions.findFirst({
+      where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized")),
+      orderBy: [desc(stateVersions.serial)],
+      columns: { id: true, uploadSha256: true },
+    }),
+  ]);
+  const provenance = await buildRunProvenanceCapsule({
+    runId: id,
+    createdAt,
+    configurationVersionId: cvId ?? null,
+    configurationSource: configurationVersion?.source ?? null,
+    configurationIngress: configurationVersion?.ingressAttributes ?? null,
+    configurationDigest: sha256Hex(canonicalJson({
+      id: configurationVersion?.id ?? null,
+      status: configurationVersion?.status ?? null,
+      ingressAttributes: configurationVersion?.ingressAttributes ?? null,
+      createdAt: configurationVersion?.createdAt ?? null,
+    })),
+    engine: effectiveTool ?? "terraform",
+    engineVersion: effectiveVersion ?? null,
+    workspaceId: workspace.id,
+    workingDirectory: workspace.workingDirectory,
+    executionMode: workspace.executionMode,
+    agentPoolId: workspace.agentPoolId,
+    inputStateId: inputState?.id ?? null,
+    inputStateDigest: inputState?.uploadSha256 ?? null,
+    runVariables: runVariables ?? [],
+    effectiveVariables: effectiveVariables.map((entry) => ({
+      source: entry.source,
+      key: entry.variable.key,
+      category: entry.variable.category,
+      sensitive: entry.variable.sensitive,
+      ...(entry.source === "varset" ? { variableSetId: entry.setId } : {}),
+    })),
+    effectiveExecutionVariables: effectiveVariables.map((entry) => ({
+      key: entry.variable.key,
+      value: entry.variable.value,
+      category: entry.variable.category ?? "terraform",
+      sensitive: entry.variable.sensitive === true,
+      ...(entry.variable.valueEncrypted === null || entry.variable.valueEncrypted === undefined
+        ? {}
+        : { valueEncrypted: entry.variable.valueEncrypted }),
+    })),
+  });
   // The lock was validated above, but that check and the insert below are
   // separate statements; re-validate inside the insert transaction so a
   // concurrent workspace lock can never slip a queued run past the 422.
@@ -890,6 +947,15 @@ export async function createRun(
     });
     if (fresh?.locked === true) return { lockedReason: fresh.lockedReason ?? null };
     await tx.insert(runs).values({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, createdBy: user?.id ?? null, appliedAt: null, createdAt });
+    await tx.insert(runProvenanceCapsules).values({
+      id: newResourceId("rpc"),
+      runId: id,
+      schemaVersion: provenance.publicManifest.schemaVersion,
+      publicManifest: provenance.publicManifest,
+      manifestSha256: provenance.manifestSha256,
+      executionMaterial: provenance.executionMaterial,
+      createdAt,
+    });
     return null;
   });
   if (lockConflict !== null) {
@@ -915,6 +981,11 @@ export async function createRun(
   const createdRun = { id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: user?.id ?? null, appliedAt: null, scheduledAt: null, softDeletedAt: null, createdAt };
   const createdLinkage = await linkageForRuns([createdRun]);
   const createdResource = runResource(createdRun, canApply, false, origin, undefined, undefined, createdLinkage.get(id));
+  (createdResource["attributes"] as Record<string, unknown>)["provenance"] = {
+    "schema-version": provenance.publicManifest.schemaVersion,
+    sha256: provenance.manifestSha256,
+    "manifest-url": `/api/v2/runs/${id}/provenance`,
+  };
   if (autoApplySuppressed) {
     (createdResource["attributes"] as Record<string, unknown>)["auto-apply-warning"] =
       "Auto-apply is enabled on this workspace, but you do not have apply permission, so this run was created with auto-apply off and will wait for confirmation.";
@@ -1229,7 +1300,120 @@ export const runRoutes = new Elysia({ name: "runs" })
     }
     const includes = requestedRunIncludes(request);
     const included = await includedRunResources([authorized.run], request, includes);
+    const provenance = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
+    detailAttributes["provenance"] = provenance === undefined
+      ? null
+      : {
+          "schema-version": provenance.schemaVersion,
+          sha256: provenance.manifestSha256,
+          "manifest-url": `/api/v2/runs/${runId}/provenance`,
+        };
     return { data, ...(included.length > 0 ? { included } : {}) };
+  })
+  .get("/api/v2/runs/:run_id/provenance", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const runId = params["run_id"] ?? "";
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const capsule = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
+    if (capsule === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return {
+      data: {
+        id: capsule.id,
+        type: "run-provenance",
+        attributes: {
+          "schema-version": capsule.schemaVersion,
+          sha256: capsule.manifestSha256,
+          manifest: capsule.publicManifest,
+          "download-url": `/api/v2/runs/${runId}/provenance/download`,
+        },
+        relationships: { run: { data: { id: runId, type: "runs" } } },
+      },
+    };
+  })
+  .get("/api/v2/runs/:run_id/provenance/download", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Response | Record<string, unknown>> => {
+    const runId = params["run_id"] ?? "";
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const capsule = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
+    if (capsule === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return new Response(`${JSON.stringify(capsule.publicManifest, null, 2)}\n`, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Disposition": `attachment; filename="terrence-run-${runId}-provenance.json"`,
+        "Cache-Control": "no-store",
+        "X-Content-SHA256": capsule.manifestSha256,
+      },
+    });
+  })
+  .post("/api/v2/runs/:run_id/actions/rerun", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const runId = params["run_id"] ?? "";
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "plan");
+    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+    const mode = payload["mode"] === "original" ? "original" : payload["mode"] === "current" || payload["mode"] === undefined ? "current" : null;
+    if (mode === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "mode must be original or current" }] };
+    }
+    const capsule = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
+    if (capsule === undefined) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "This run has no provenance capsule to rerun" }] };
+    }
+    const manifest = capsule.publicManifest as Readonly<Record<string, unknown>>;
+    const configuration = manifest["configuration"] as Readonly<Record<string, unknown>> | undefined;
+    const engine = manifest["engine"] as Readonly<Record<string, unknown>> | undefined;
+    const attributes: Record<string, unknown> = { message: `Re-run of ${runId}` };
+    let configurationId: string | undefined;
+    if (mode === "original") {
+      configurationId = typeof configuration?.["versionId"] === "string" ? configuration["versionId"] : undefined;
+      if (configurationId === undefined) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "The original configuration version is no longer available" }] };
+      }
+      try {
+        const material = JSON.parse(await decryptSecret(capsule.executionMaterial)) as { effectiveVariables?: unknown; variables?: unknown };
+        const originalVariables = normalizeRunVariables(material.effectiveVariables ?? material.variables ?? []);
+        attributes["variables"] = originalVariables;
+        if (typeof engine?.["version"] === "string") attributes["terraform-version"] = engine["version"];
+      } catch {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Original encrypted execution material is unavailable" }] };
+      }
+    }
+    const created = await createRun(authorized.workspace.id, attributes, configurationId, user, null, teamId ?? null, set);
+    if (!("data" in created)) return created;
+    const createdData = created["data"];
+    if (createdData === null || typeof createdData !== "object") return created;
+    const createdDataRecord = createdData as Record<string, unknown>;
+    const newRunId = typeof createdDataRecord["id"] === "string" ? createdDataRecord["id"] : null;
+    const afterCapsule = newRunId === null
+      ? undefined
+      : await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, newRunId) });
+    const createdAttributes = createdDataRecord["attributes"];
+    if (createdAttributes !== null && typeof createdAttributes === "object" && afterCapsule !== undefined) {
+      const changedSinceSource = provenanceDiff(manifest, afterCapsule.publicManifest);
+      const rerunManifest = {
+        ...afterCapsule.publicManifest,
+        rerun: { mode, sourceRunId: runId, changedSinceSource },
+      };
+      const rerunSha256 = sha256Hex(canonicalJson(rerunManifest));
+      await db.update(runProvenanceCapsules).set({
+        publicManifest: rerunManifest,
+        manifestSha256: rerunSha256,
+      }).where(eq(runProvenanceCapsules.id, afterCapsule.id));
+      const createdProvenance = (createdAttributes as Record<string, unknown>)["provenance"];
+      if (createdProvenance !== null && typeof createdProvenance === "object") {
+        (createdProvenance as Record<string, unknown>)["sha256"] = rerunSha256;
+      }
+      (createdAttributes as Record<string, unknown>)["rerun"] = {
+        mode,
+        sourceRunId: runId,
+        changedSinceSource,
+      };
+    }
+    return created;
   })
   .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";

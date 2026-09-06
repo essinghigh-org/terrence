@@ -552,6 +552,21 @@ export const runs = sqliteTable("runs", {
   index("runs_configuration_version_idx").on(table.configurationVersionId),
 ]);
 
+/** Immutable snapshot of the inputs and execution policy selected for a run.
+ * The public manifest is safe to expose to an authorized reader; execution
+ * material is encrypted at rest and is never serialized by a run resource. */
+export const runProvenanceCapsules = sqliteTable("run_provenance_capsules", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  schemaVersion: integer("schema_version").notNull().default(1),
+  publicManifest: text("public_manifest", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+  manifestSha256: text("manifest_sha256").notNull(),
+  executionMaterial: text("execution_material").notNull(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("run_provenance_capsules_run_idx").on(table.runId),
+]);
+
 // Ephemeral per-run credentials (the reference format run-token model). Minted when the worker
 // executes a run, stored hashed, revoked on terminal state. Grants ONLY
 // registry reads for the run's organization and state access for the run's
