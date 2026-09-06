@@ -224,7 +224,7 @@ function formatMonthlyCost(value: string | undefined, currency = "USD", timeBasi
     currency: normalizedCurrency,
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(amount)} / ${normalizedBasis}`;
+  }).format(amount)} / ${normalizedBasis === "monthly" ? "month" : normalizedBasis}`;
 }
 
 function policyResultText(result: unknown): string {
