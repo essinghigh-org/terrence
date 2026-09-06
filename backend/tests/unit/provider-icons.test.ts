@@ -10,6 +10,7 @@ import {
   clearProviderIconCache,
   normalizeProvider,
   primeProviderIconCache,
+  providerIconFallbackSvg,
   providerIconPath,
   resolveProviderIconUrl,
 } from "../../src/lib/provider-icons";
@@ -303,6 +304,35 @@ test("serves cached artwork through the provider-icon image route", async () => 
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toBe("image/svg+xml");
   expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+});
+
+test("serves a deterministic fallback while registry discovery runs in the background", async () => {
+  const originalFetch = globalThis.fetch;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let requests = 0;
+  globalThis.fetch = (async (): Promise<Response> => {
+    requests++;
+    await gate;
+    return new Response(null, { status: 404 });
+  }) as unknown as typeof fetch;
+  try {
+    const expected = providerIconFallbackSvg("acme/widgets");
+    if (expected === null) throw new Error("Expected a provider fallback fixture");
+    const response = await app.handle(new Request(
+      "http://terrence.test/api/v2/provider-icons/registry.terraform.io/acme/widgets",
+    ));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("image/svg+xml");
+    expect(response.headers.get("etag")).toBe(expected.etag);
+    expect(await response.text()).toBe(expected.body);
+    await Bun.sleep(0);
+    expect(requests).toBe(1);
+  } finally {
+    release();
+    await Bun.sleep(0);
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("a distinct-source flood stays bounded, deduplicates canonical names, and preserves cached icons", async () => {

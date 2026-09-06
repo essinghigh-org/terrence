@@ -2,11 +2,11 @@ import { Elysia } from "elysia";
 import { authPlugin } from "../auth";
 import { avatarHandler } from "./avatars";
 import {
-  batchResolveProviderIconUrls,
-  providerIconPath,
+  batchResolveProviderIconPaths,
+  cachedProviderIconUrl,
+  providerIconFallbackSvg,
   normalizeProvider,
-  providerIconVersion,
-  resolveProviderIconUrl,
+  scheduleProviderIconDiscovery,
 } from "../lib/provider-icons";
 import { DEFAULT_PROVIDER_REGISTRY_HOST, parseProviderSource } from "../lib/provider-source";
 
@@ -27,6 +27,23 @@ function providerIconNotFound(set: SetContext): Record<string, unknown> {
   return { errors: [{ status: "404", title: "Not Found" }] };
 }
 
+function providerIconFallback(providerName: string, set: SetContext): Response | Record<string, unknown> {
+  const fallback = providerIconFallbackSvg(providerName);
+  if (fallback === null) return providerIconNotFound(set);
+  const headers = new Headers({
+    "Cache-Control": "private, no-cache",
+    "Content-Security-Policy": "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'none'; style-src 'none'; sandbox",
+    "Content-Type": "image/svg+xml; charset=utf-8",
+    "ETag": fallback.etag,
+  });
+  set.status = 200;
+  set.headers["Cache-Control"] = "private, no-cache";
+  set.headers["Content-Security-Policy"] = headers.get("Content-Security-Policy") ?? "";
+  set.headers["Content-Type"] = "image/svg+xml; charset=utf-8";
+  set.headers["ETag"] = fallback.etag;
+  return new Response(fallback.body, { headers });
+}
+
 async function serveProviderIconImage(
   providerName: string,
   request: Request,
@@ -35,13 +52,16 @@ async function serveProviderIconImage(
   const source = parseProviderSource(providerName);
   if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return providerIconNotFound(set);
 
-  // The lookup service records the upstream logo in the hardened avatar
-  // cache. Serve the resulting bytes through this provider-specific route so
-  // the browser never needs to know that the cache implementation is shared.
-  const avatarUrl = await resolveProviderIconUrl(source.source);
+  // Serve a known avatar without waiting for a registry lookup. A cache miss
+  // gets a deterministic same-origin SVG while metadata discovery proceeds in
+  // the background, so a slow registry cannot block the image response.
+  const avatarUrl = cachedProviderIconUrl(source.source);
   const avatarMatch = avatarUrl === null ? null : /^\/api\/v2\/avatars\/([0-9a-f]{64})$/.exec(avatarUrl);
   const avatarKey = avatarMatch?.[1];
-  if (avatarKey === undefined) return providerIconNotFound(set);
+  if (avatarKey === undefined) {
+    scheduleProviderIconDiscovery(source.source);
+    return providerIconFallback(source.source, set);
+  }
   return avatarHandler({
     params: { key: avatarKey },
     request,
@@ -91,7 +111,7 @@ export const providerIconRoutes = new Elysia()
       canonicalNames.push(canonical);
     }
 
-    const mapping = await batchResolveProviderIconUrls(canonicalNames);
+    const mapping = batchResolveProviderIconPaths(canonicalNames);
     const data = canonicalNames.map((key): Record<string, unknown> => {
       const resolved = (mapping as Record<string, string | null>)[key] ?? null;
       return {
@@ -99,9 +119,7 @@ export const providerIconRoutes = new Elysia()
         type: "provider-icons",
         attributes: {
           "provider-name": key,
-          "icon-url": resolved === null
-            ? null
-            : providerIconPath(key, providerIconVersion(resolved)),
+          "icon-url": resolved,
         },
       };
     });

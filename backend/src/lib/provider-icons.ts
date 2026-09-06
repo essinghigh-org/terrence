@@ -14,6 +14,7 @@
 // API (4s timeout, 24h memo) -> exact provider's absolute logo URL ->
 // AvatarService cache. The provider-icon image handler delegates to that cache
 // without changing the public route identity.
+import { createHash } from "node:crypto";
 import { discover } from "./discovery-queue";
 import { readTextWithLimit } from "./body-limit";
 import { AvatarService } from "./avatars";
@@ -33,6 +34,10 @@ type CacheEntry = Readonly<{ url: string | null; expiresAt: number }>;
 const cache = new Map<string, CacheEntry>();
 const negativeCache = new Map<string, CacheEntry>();
 const inflightByKey = new Map<string, Promise<string | null>>();
+function providerCacheKey(source: ProviderSource): string {
+  return `${source.hostname}/${source.namespace}/${source.name}`;
+}
+
 function setCache(key: string, url: string | null, ttlMs: number): void {
   const target = url === null ? negativeCache : cache;
   if (target.size >= MAX_CACHE_ENTRIES && !target.has(key)) {
@@ -59,6 +64,59 @@ export function providerIconPath(providerName: string | null | undefined, versio
   if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
   const path = `/api/v2/provider-icons/${encodeURIComponent(source.hostname)}/${encodeURIComponent(source.namespace)}/${encodeURIComponent(source.name)}`;
   return typeof version === "string" && /^[0-9a-f]{64}$/.test(version) ? `${path}?v=${version}` : path;
+}
+
+function readProviderCache(key: string): CacheEntry | undefined {
+  const hit = cache.get(key) ?? negativeCache.get(key);
+  if (hit === undefined) return undefined;
+  if (Date.now() < hit.expiresAt) return hit;
+  cache.delete(key);
+  negativeCache.delete(key);
+  return undefined;
+}
+
+/** Return a positive cache hit without admitting new network work. */
+export function cachedProviderIconUrl(providerName: string | null | undefined): string | null {
+  const source = parseProviderSource(providerName);
+  if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
+  const hit = readProviderCache(providerCacheKey(source));
+  return hit?.url ?? null;
+}
+
+/** Start optional discovery and deliberately do not make the caller wait. */
+export function scheduleProviderIconDiscovery(providerName: string | null | undefined): void {
+  const source = parseProviderSource(providerName);
+  if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return;
+  const key = providerCacheKey(source);
+  if (readProviderCache(key) !== undefined || inflightByKey.has(key)) return;
+  void resolveProviderIconUrl(source.source).catch((): null => null);
+}
+
+/**
+ * Resolve the browser-facing path synchronously. A positive cache hit gets a
+ * content version; a miss gets a stable provider route while discovery runs
+ * in the background. The route serves a deterministic SVG until metadata is
+ * available, so a registry outage never blocks a response.
+ */
+export function providerIconResponsePath(providerName: string | null | undefined): string | null {
+  const source = parseProviderSource(providerName);
+  if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
+  const key = providerCacheKey(source);
+  const hit = readProviderCache(key);
+  if (hit?.url !== undefined && hit.url !== null) return providerIconPath(source.source, providerIconVersion(hit.url));
+  scheduleProviderIconDiscovery(source.source);
+  return providerIconPath(source.source);
+}
+
+/** Build a safe, stable placeholder for an icon that is still discovering. */
+export function providerIconFallbackSvg(providerName: string | null | undefined): Readonly<{ body: string; etag: string }> | null {
+  const source = parseProviderSource(providerName);
+  if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
+  const digest = createHash("sha256").update(providerCacheKey(source)).digest("hex");
+  const initials = `${source.namespace.slice(0, 1)}${source.name.slice(0, 1)}`.toUpperCase();
+  const hue = Number.parseInt(digest.slice(0, 6), 16) % 360;
+  const body = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="${initials} provider"><rect width="32" height="32" rx="6" fill="hsl(${hue} 45% 42%)"/><text x="16" y="17" dominant-baseline="middle" text-anchor="middle" fill="white" font-family="sans-serif" font-size="11" font-weight="700">${initials}</text></svg>`;
+  return { body, etag: `"provider-fallback-${digest}"` };
 }
 
 function absoluteLogoUrl(logoUrl: string): string | null {
@@ -198,7 +256,7 @@ async function fetchLogoUrl(source: ProviderSource, signal: Readonly<AbortSignal
 export async function resolveProviderIconUrl(providerName: string | null | undefined): Promise<string | null> {
   const source = parseProviderSource(providerName);
   if (source === null || source.hostname !== DEFAULT_PROVIDER_REGISTRY_HOST) return null;
-  const key = `${source.hostname}/${source.namespace}/${source.name}`;
+  const key = providerCacheKey(source);
   const now = Date.now();
   const hit = cache.get(key) ?? negativeCache.get(key);
   if (hit !== undefined && now < hit.expiresAt) {
@@ -231,6 +289,12 @@ export async function batchResolveProviderIconUrls(providerNames: readonly strin
   return Object.fromEntries(entries);
 }
 
+/** Return stable provider paths and schedule misses without awaiting them. */
+export function batchResolveProviderIconPaths(providerNames: readonly string[]): Readonly<Record<string, string | null>> {
+  const unique = [...new Set(providerNames.map((p): string | null => normalizeProvider(p)).filter((p): p is string => p !== null))];
+  return Object.fromEntries(unique.map((key): [string, string | null] => [key, providerIconResponsePath(key)]));
+}
+
 // Test-only helpers
 /** @public Intentional surface: benchmark/test hook or cross-module API. */
 export function clearProviderIconCache(): void {
@@ -243,5 +307,5 @@ export function clearProviderIconCache(): void {
 export function primeProviderIconCache(key: string, url: string | null): void {
   const source = parseProviderSource(key);
   if (source === null) return;
-  setCache(`${source.hostname}/${source.namespace}/${source.name}`, url, CACHE_TTL_MS);
+  setCache(providerCacheKey(source), url, url === null ? NEGATIVE_TTL_MS : CACHE_TTL_MS);
 }
