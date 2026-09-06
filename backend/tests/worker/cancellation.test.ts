@@ -304,7 +304,7 @@ test("deleting the run record mid-execution stops the subprocess without publish
   expect(result.subprocessDead).toBe(true);
   expect(result.applied).toBe(false);
   expect(result.rowGone).toBe(true);
-  expect(result.errorMessage ?? "").not.toContain("Illegal run status transition");
+  expect(result.errorMessage).toBeNull();
 }, { timeout: 30000 });
 
 test("failed recovery capture preserves the work directory (issue #579)", async () => {
