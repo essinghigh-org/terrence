@@ -75,6 +75,18 @@ export async function archiveRunLogs(runId: string): Promise<boolean> {
     if (sizes.some((row): boolean => row.length > MAX_ROW_BYTES) || sizes.reduce((total, row): number => total + row.length, 0) > MAX_ARCHIVE_BYTES) {
       throw new Error("Run log archive exceeds 64 MiB or a row exceeds 1 MiB; live logs retained");
     }
+    // One round trip for the payload: per-chunk re-reads turn a 10k-row
+    // archival into hundreds of sequential queries (multi-second on
+    // Postgres). The sizes snapshot above still guards against concurrent
+    // mutation — every fetched row must match it exactly. Same window as
+    // the sizes query (newest-first, capped, then reversed): an
+    // oldest-first fetch would grab a different slice of an over-cap run.
+    const allRows = (await db.select().from(logs)
+      .where(eq(logs.runId, runId)).orderBy(desc(logs.createdAt), desc(logs.id)).limit(MAX_RUN_LOGS_PER_RUN)).reverse();
+    if (allRows.length !== sizes.length || allRows.some((row, i): boolean => row.id !== sizes[i]?.id
+      || row.phase !== sizes[i]?.phase || Buffer.byteLength(row.outputText) !== sizes[i]?.length)) {
+      throw new Error("Run logs changed during archival; live logs retained");
+    }
     let temporary: string | null = null;
     try {
       await mkdir(storageDirectory, { recursive: true, mode: 0o700 });
@@ -93,14 +105,9 @@ export async function archiveRunLogs(runId: string): Promise<boolean> {
             end++;
           }
           const rows = sizes.slice(start, end);
+          // allRows is verified 1:1 against sizes above, so the same window applies.
+          const payload = allRows.slice(start, start + rows.length);
           start = end;
-          const payload = await db.select().from(logs)
-            .where(and(eq(logs.runId, runId), inArray(logs.id, rows.map((row): string => row.id))))
-            .orderBy(asc(logs.createdAt), asc(logs.id)).limit(MAX_RUN_LOGS_PER_RUN);
-          if (payload.length !== rows.length || payload.some((row, i): boolean => row.id !== rows[i]?.id
-            || row.phase !== rows[i]?.phase || Buffer.byteLength(row.outputText) !== rows[i]?.length)) {
-            throw new Error("Run logs changed during archival; live logs retained");
-          }
           const bytes = await compress(JSON.stringify(payload));
           await file.writeFile(bytes);
           chunks.push({ offset, length: bytes.length, rows });
