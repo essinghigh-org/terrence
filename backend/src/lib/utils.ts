@@ -2252,7 +2252,10 @@ function collectExpiredRunIds(retainedRuns: GcCollections["workspaceRuns"], rete
 async function archiveAndDeleteExpiredRuns(expiredRunIds: readonly string[], now: number): Promise<{ logsDeletedCount: number; logsArchived: number }> {
   if (expiredRunIds.length === 0) return { logsDeletedCount: 0, logsArchived: 0 };
   const expiredLogs = await db.query.logs.findMany({ where: inArray(logs.runId, expiredRunIds), columns: { id: true } });
-  const logsArchived = (await Promise.all(expiredRunIds.map(archiveRunLogs))).filter(Boolean).length;
+  let logsArchived = 0;
+  for (const runId of expiredRunIds) {
+    if (await archiveRunLogs(runId)) logsArchived++;
+  }
   await db.delete(logs).where(inArray(logs.runId, expiredRunIds));
   await db.update(runs).set({ softDeletedAt: now, logToken: null }).where(inArray(runs.id, expiredRunIds));
   return { logsDeletedCount: expiredLogs.length, logsArchived };

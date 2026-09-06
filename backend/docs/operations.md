@@ -52,7 +52,7 @@ Application encryption varies by artifact; filesystem permissions and gzip compr
 | Workspace and variable-set secrets | Database variable rows | Sensitive values encrypted; non-sensitive values plaintext | Variable deletion and database backup retention |
 | Run-specific variables | Run row JSON; may contain credentials | New sensitive inputs use authenticated encryption in the JSON record; older records require the backfill below. Non-sensitive inputs remain plaintext | Run deletion and database backup retention |
 | Live run logs | Database log rows; CLI and provider output | Plaintext | Run retention archives logs before deleting live rows |
-| Archived logs | `run-logs/*.json.gz` | Plaintext gzip, files created with mode `0600` | Run retention/deletion |
+| Archived logs | `run-logs/*.json.gz` | Plaintext indexed gzip chunks (legacy gzip JSON also readable), mode `0600` | Run retention/deletion |
 | Raw and agent plan JSON | `plan-json/`; input, resource and output values | Plaintext, files created with mode `0600` | Run retention/deletion; public responses are projected separately |
 | Saved binary plans | `saved-plans/`; may embed input values and prior state | Plaintext private files | Saved-plan cleanup; include retained plans in backups |
 | Configuration archives | `cv/`, `configuration_versions/`; uploaded or fetched source | Plaintext archives; source may contain secrets | Configuration-version retention/deletion |
@@ -157,3 +157,28 @@ Plan/apply resource reads return fresh, signed log URLs. Each signature binds th
 Removing a user's/team's access prevents new links immediately. Existing bearer links remain usable until their stated expiry (up to 48 hours by default), unless explicitly revoked. For immediate revocation, a workspace administrator sends `POST /api/v2/runs/:run_id/actions/revoke-log-links`. This invalidates both phases' existing links, records an audit event, and allows authorized readers to obtain replacements. It also interrupts existing CLI readers. Run retention disables capabilities when soft-deleting the run; authorized archive reads continue through the authenticated log endpoint.
 
 Previously issued unsigned log URLs stop working after this upgrade. Fetch a fresh plan/apply resource to obtain the new format. No short-lived automatic renewal is claimed for legacy CLI streams.
+
+
+### Archived log bounds
+
+New run-log archives use independently compressed JSON chunks, followed by a bounded JSON index and an eight-byte footer (little-endian index length plus `TRL2`). The existing `.json.gz` filename remains unchanged; the complete file is an indexed container, not a single gzip document. Use the authenticated log APIs to read it. Earlier gzip JSON envelopes and bare arrays remain readable, with a 64 MiB decompression limit; their older format still requires full-document parsing.
+
+Retention preserves the most recent 10,000 rows, with the original row count and truncation marker. New archives permit at most 64 MiB of output text, 1 MiB per row, and a 4 MiB index. A chunk contains at most 32 rows and normally at most 256 KiB of output text (a larger single row forms its own chunk). Writes compress asynchronously; page and byte-range reads only decompress intersecting chunks. Metadata and decoded logs are not cached indefinitely. There is one active archive operation and room for 31 waiting operations per process. An overflowing queue fails explicitly; retention processes runs sequentially rather than filling it.
+
+Temporary files are published with one atomic rename after all chunks and the index are written. A size-limit or I/O failure leaves live logs available. Disk-full failures also latch storage degradation. Failed replacement writes leave the prior archive intact and remove their temporary file.
+
+The opt-in load check creates two runs with 2,000 rows and approximately 16 MiB of output each. It prepares one archive, then concurrently queues four writes for the live run, eight reads from the archived run, and 40 authenticated run-status requests. Run it from `backend` with an empty binary cache so startup integrity verification does not distort the archive measurement:
+
+```sh
+TERRENCE_BINARY_CACHE_DIR=/tmp/empty-archive-benchmark-cache LOG_ARCHIVE_LOAD=1 bun test tests/api/run_log_archive_load.test.ts
+```
+
+A local SQLite comparison against `ad656f99` measured:
+
+| Metric | Previous whole-document archive | Indexed chunks |
+| --- | ---: | ---: |
+| Kernel peak RSS, including fixture and application startup | 842 MB | 293 MB |
+| Run-status p95, 40 requests | 355 ms | 52 ms |
+| Maximum event-loop delay | 358 ms | 50 ms |
+
+These are workload observations, not latency guarantees. Peak RSS comes from the operating system rather than an event-loop timer, which misses allocations while synchronous work blocks it. The functional archive check additionally verifies UTF-8 byte windows, legacy formats, bounded admission, selective chunk reads, and a disk-full failure after the first temporary chunk has been written.
