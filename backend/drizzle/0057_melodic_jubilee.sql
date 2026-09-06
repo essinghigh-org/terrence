@@ -1,0 +1,1 @@
+ALTER TABLE `state_versions` ADD `upload_sha256` text;
