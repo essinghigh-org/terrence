@@ -22,7 +22,7 @@ import {
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { invalidateSettingsCache } from "../../src/lib/settings";
 import { deletePlanJsonArtifact, writePlanJsonArtifact, sanitizePlanJson, type PlanJson } from "../../src/lib/plan-json";
-import { buildExplainSource, EXPLAIN_MAX_PROMPT_CHARS } from "../../src/lib/run-explanations";
+import { buildExplainSource, persistExplainerOutput, EXPLAIN_MAX_PROMPT_CHARS } from "../../src/lib/run-explanations";
 import { variableValueForWrite } from "../../src/lib/variable-crypto";
 import { encryptStatePayload } from "../../src/lib/validation";
 
@@ -433,6 +433,31 @@ describe("explainer secret egress (SEC-04)", () => {
       await deletePlanJsonArtifact(boundaryRunId).catch((): void => {
         return;
       });
+    }
+  });
+
+  it("persists explanation and audit atomically under strict audit", async () => {
+    const previous = process.env["AUDIT_STRICT"];
+    process.env["AUDIT_STRICT"] = "1";
+    try {
+      await persistExplainerOutput({
+        runId: boundaryRunId,
+        kind: "apply",
+        model: "strict-test",
+        settings: {},
+        userId,
+        orgId,
+        content: "strict mode explanation",
+        redactedInputSecrets: 0,
+        scrubbedOutputSecrets: 0,
+      });
+      const stored = await db.query.runExplanations.findFirst({ where: eq(runExplanations.runId, boundaryRunId) });
+      expect(stored?.content).toBe("strict mode explanation");
+      const audit = await db.query.auditLogs.findFirst({ where: eq(auditLogs.resourceId, boundaryRunId) });
+      expect(audit?.resourceType).toBe("plan-explanation");
+    } finally {
+      if (previous === undefined) delete process.env["AUDIT_STRICT"];
+      else process.env["AUDIT_STRICT"] = previous;
     }
   });
 });

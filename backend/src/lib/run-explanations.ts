@@ -1,9 +1,9 @@
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db";
-import { runExplanations } from "../db/schema";
+import { runExplanations, auditLogs } from "../db/schema";
 import { readPlanJsonArtifact, sanitizePlanJson, PUBLIC_PLAN_VERSION } from "./plan-json";
 import { collectExplainSecrets, redactKnownSecrets } from "./explain-secrets";
-import { auditLog } from "./utils";
+import { auditLog, strictAuditEnabled } from "./utils";
 import { readRunLogs } from "./run-logs";
 import { log } from "./log";
 
@@ -126,7 +126,6 @@ export async function persistExplainerOutput(output: PersistExplainerOutput): Pr
   if (output.scrubbedOutputSecrets > 0) {
     log.warn("Plan explainer response repeated known secrets; scrubbed before serving", { runId: output.runId, kind: output.kind });
   }
-  await saveExplanation(output.runId, output.kind, output.model, output.content);
   const baseUrl = output.settings["base-url"];
   let endpoint: string;
   try {
@@ -134,13 +133,43 @@ export async function persistExplainerOutput(output: PersistExplainerOutput): Pr
   } catch {
     endpoint = "unparseable";
   }
-  await auditLog("request", "plan-explanation", output.runId, output.userId, output.orgId, {
+  const details = {
     kind: output.kind,
     model: output.model,
     endpoint,
     redactedInputSecrets: output.redactedInputSecrets,
     scrubbedOutputSecrets: output.scrubbedOutputSecrets,
-  });
+  };
+  if (strictAuditEnabled()) {
+    // Fail closed: the explanation row and its audit row commit atomically,
+    // so a degraded audit store rejects persistence instead of leaving a
+    // retained explanation without its egress record. Outside strict mode
+    // the audit stays best-effort so storage pressure never breaks reads.
+    await db.transaction(async (tx) => {
+      await tx.delete(runExplanations).where(and(eq(runExplanations.runId, output.runId), eq(runExplanations.kind, output.kind)));
+      await tx.insert(runExplanations).values({
+        id: explanationCacheKey(output.runId, output.kind),
+        runId: output.runId,
+        kind: output.kind,
+        model: output.model,
+        content: output.content,
+        cacheKey: explanationCacheKey(output.runId, output.kind),
+      });
+      await tx.insert(auditLogs).values({
+        id: crypto.randomUUID(),
+        orgId: output.orgId,
+        userId: output.userId,
+        action: "request",
+        resourceType: "plan-explanation",
+        resourceId: output.runId,
+        details,
+        createdAt: Date.now(),
+      });
+    });
+    return;
+  }
+  await saveExplanation(output.runId, output.kind, output.model, output.content);
+  await auditLog("request", "plan-explanation", output.runId, output.userId, output.orgId, details);
 }
 
 /** Stable storage key for the one plan or apply-error answer belonging to a run. */
