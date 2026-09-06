@@ -19,3 +19,27 @@ export function resolveReturnTarget(returnTo: unknown): string {
   if (/[\r\n]/.test(returnTo) || returnTo.includes("/../")) return "/app";
   return returnTo;
 }
+
+/**
+ * Login URL preserving the current location across an authentication
+ * round-trip (issue #738). Only same-origin /app destinations are carried;
+ * everything else (including the login page itself) uses the plain login
+ * so expiry can never manufacture an open redirect or a login loop.
+ */
+export function loginPathWithReturnTo(
+  pathname: string,
+  search: string,
+  hash: string,
+  extraParams?: Readonly<Record<string, string>>,
+): string {
+  const target = `${pathname}${search}${hash}`;
+  if (pathname === "/app" || pathname.startsWith("/app/")) {
+    const params = new URLSearchParams();
+    params.set("returnTo", target);
+    if (extraParams !== undefined) {
+      for (const [key, value] of Object.entries(extraParams)) params.set(key, value);
+    }
+    return `/login?${params.toString()}`;
+  }
+  return "/login";
+}

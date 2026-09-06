@@ -2,10 +2,10 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
-import { ProtectedRoute } from "../src/App";
+import { AuthSessionManager, ProtectedRoute } from "../src/App";
 import { Toaster } from "../src/components/ui/toast";
-import { expireAuthSession } from "../src/lib/api";
-import { resolveReturnTarget } from "../src/lib/return-to";
+import { AUTH_EXPIRED_EVENT, expireAuthSession } from "../src/lib/api";
+import { loginPathWithReturnTo, resolveReturnTarget } from "../src/lib/return-to";
 import { Login } from "../src/views/Login";
 import { Register } from "../src/views/Register";
 import { isRecord, isString } from "../src/lib/type-guards";
@@ -233,4 +233,52 @@ test("registration restores the preserved destination through the shared validat
 
   await waitFor((): void => { expect(view.getByText("ACCOUNT")).toBeTruthy(); });
   expect(view.queryByText("HOME")).toBeNull();
+});
+
+test("the login-path helper preserves /app destinations and drops the rest (issue #738)", () => {
+  expect(loginPathWithReturnTo("/app/workspaces/ws-1/runs/run-1", "?tab=logs", "")).toBe(
+    "/login?returnTo=%2Fapp%2Fworkspaces%2Fws-1%2Fruns%2Frun-1%3Ftab%3Dlogs",
+  );
+  expect(loginPathWithReturnTo("/app", "", "#section")).toBe("/login?returnTo=%2Fapp%23section");
+  expect(loginPathWithReturnTo("/login", "", "")).toBe("/login");
+  expect(loginPathWithReturnTo("/register", "", "")).toBe("/login");
+  expect(
+    loginPathWithReturnTo("/app/account", "", "", { "email-verified": "1" }),
+  ).toBe("/login?returnTo=%2Fapp%2Faccount&email-verified=1");
+});
+
+test("session expiry preserves the viewed run through the sign-in round-trip (issue #738)", async () => {
+  render(
+    <MemoryRouter initialEntries={["/app/workspaces/ws-1/runs/run-1?tab=logs"]}>
+      <Routes>
+        <Route path="/app/*" element={<AuthSessionManager />} />
+        <Route path="/login" element={<LocationCapture />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await act(async (): Promise<void> => {
+    window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+  });
+
+  expect(capturedPathname).toBe("/login");
+  expect(new URLSearchParams(capturedSearch).get("returnTo")).toBe("/app/workspaces/ws-1/runs/run-1?tab=logs");
+});
+
+test("session expiry outside the app lands on the plain login (issue #738)", async () => {
+  render(
+    <MemoryRouter initialEntries={["/login"]}>
+      <Routes>
+        <Route path="/login" element={<><AuthSessionManager /><LocationCapture /></>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  await act(async (): Promise<void> => {
+    window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+  });
+
+  // Already on /login with no destination: no returnTo, so no login loop.
+  expect(capturedPathname).toBe("/login");
+  expect(capturedSearch).toBe("");
 });
