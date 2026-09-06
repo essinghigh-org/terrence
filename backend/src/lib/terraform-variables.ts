@@ -282,7 +282,3 @@ export async function scanTerraformModuleVariablesWithDiagnostics(directory: str
   const sorted = [...variables.values()].sort((left, right): number => left.name.localeCompare(right.name));
   return { variables: sorted, skipped: parsed.flatMap((entry) => entry.skipped) };
 }
-
-export async function scanTerraformModuleVariables(directory: string): Promise<readonly TerraformVariableMetadata[]> {
-  return (await scanTerraformModuleVariablesWithDiagnostics(directory)).variables;
-}
