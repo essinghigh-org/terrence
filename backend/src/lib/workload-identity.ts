@@ -66,6 +66,7 @@ export function inspectWorkspaceIdentityConfiguration(keys: readonly string[]): 
   return { configured: providers.length > 0 || keys.some((key): boolean => key.startsWith("TFC_OIDC_")), providers };
 }
 
+/**
  * A short-lived identity used by the credential doctor.  Doctor tokens are
  * deliberately not attached to a run: they are sent only to the selected
  * worker/agent for one read-only provider probe and expire within minutes.
