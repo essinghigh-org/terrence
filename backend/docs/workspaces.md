@@ -108,3 +108,15 @@ A local SQLite comparison on 2026-09-06 against `e6365cfa` measured:
 | Rendered rows | 10,000 | 50 |
 
 These are single-run local measurements, not latency guarantees. Request time includes authorization, database work and serialization, rather than isolated SQL execution. Both builds explicitly selected production React; the baseline build otherwise bundled development React. Both completed measurements used `RATE_LIMIT_MAX=10000`: with the default rate limit the baseline's eager traversal failed before rendering, while the bounded list also passed at the default limit. Functional query tests run against SQLite and PostgreSQL.
+
+### Database query baseline
+
+The backend query benchmark uses a 60,000-row `runs` table spread across 200 workspaces and 30 iterations per query. On 2026-09-06, local SQLite medians and p95 latencies were:
+
+| Query | No index median / p95 | With the three benchmark indexes median / p95 |
+| --- | ---: | ---: |
+| Pending worker queue | 1.44 / 2.88 ms | 0.01 / 0.02 ms |
+| Workspace run list | 1.27 / 1.48 ms | 0.04 / 0.04 ms |
+| Confirmed scheduled runs | 0.05 / 0.06 ms | 0.02 / 0.02 ms |
+
+Run `bun run backend/bench/db-queries.ts` to refresh this fixture. The Explorer export and index budgets default to one and two concurrent operations respectively; saturation, queue depth, cancellation, query latency and SQLite busy/locked writes are exposed through `/metrics`.

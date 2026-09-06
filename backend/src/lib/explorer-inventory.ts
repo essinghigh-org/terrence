@@ -128,9 +128,9 @@ async function loadExplorerWorkspaceData(workspaceId: string): Promise<ExplorerW
   const [organization, project, state, run, assessment, tags, noCode] = await Promise.all([
     db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) }),
     workspace.projectId === null ? Promise.resolve(undefined) : db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) }),
-    db.query.stateVersions.findFirst({ where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)), orderBy: [desc(stateVersions.serial)] }),
-    db.query.runs.findFirst({ where: eq(runs.workspaceId, workspace.id), orderBy: [desc(runs.createdAt)] }),
-    db.query.assessmentResults.findFirst({ where: eq(assessmentResults.workspaceId, workspace.id), orderBy: [desc(assessmentResults.createdAt)] }),
+    db.query.stateVersions.findFirst({ where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)), orderBy: [desc(stateVersions.serial), desc(stateVersions.id)] }),
+    db.query.runs.findFirst({ where: eq(runs.workspaceId, workspace.id), orderBy: [desc(runs.createdAt), desc(runs.id)] }),
+    db.query.assessmentResults.findFirst({ where: eq(assessmentResults.workspaceId, workspace.id), orderBy: [desc(assessmentResults.createdAt), desc(assessmentResults.id)] }),
     db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspace.id), columns: { key: true } }),
     db.query.noCodeWorkspaceConfigurations.findFirst({ where: eq(noCodeWorkspaceConfigurations.workspaceId, workspace.id) }),
   ]);

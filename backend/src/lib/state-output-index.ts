@@ -5,6 +5,8 @@ import { stateOutputIndex, stateVersions } from "../db/schema";
 import { buildStateSummary } from "./state-summary";
 import { parseStatePayload } from "./validation";
 
+export const STATE_OUTPUT_INDEX_BATCH_SIZE = 200;
+
 export function stateOutputIndexRows(
   stateVersionId: string,
   workspaceId: string,
@@ -39,7 +41,11 @@ export async function insertStateOutputIndex(
   }).where(eq(stateVersions.id, stateVersionId));
   const rows = stateOutputIndexRows(stateVersionId, workspaceId, jsonState, statePayload);
   if (rows.length === 0) return;
-  await (tx as typeof db).insert(stateOutputIndex).values(rows).onConflictDoNothing();
+  for (let offset = 0; offset < rows.length; offset += STATE_OUTPUT_INDEX_BATCH_SIZE) {
+    await (tx as typeof db).insert(stateOutputIndex)
+      .values(rows.slice(offset, offset + STATE_OUTPUT_INDEX_BATCH_SIZE))
+      .onConflictDoNothing();
+  }
 }
 
 /** Rebuild the output index for an existing version (issue #578). Upload

@@ -4,6 +4,8 @@ import {
   recordSlowQuery,
   poolMetrics,
   slowQueriesSnapshot,
+  withDbQueryBudget,
+  DbQueryBudgetCancelledError,
   _resetPoolMetrics,
   type SlowQuery,
 } from "../../src/lib/db-pool-metrics";
@@ -86,5 +88,31 @@ describe("Bun.SQL Drizzle wrapper & metrics instrumentation", () => {
     const slow = slowQueriesSnapshot();
     expect(slow.length).toBeGreaterThanOrEqual(1);
     expect(slow.some((q: SlowQuery) => q.fingerprint.includes("heavy_table"))).toBe(true);
+  });
+
+  it("keeps export work bounded and removes an aborted waiter", async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => { finish = resolve; });
+    const running = withDbQueryBudget("export", async (): Promise<void> => gate);
+    await Promise.resolve();
+
+    const controller = new AbortController();
+    const waiting = withDbQueryBudget("export", async (): Promise<void> => undefined, { signal: controller.signal });
+    controller.abort();
+    let cancellation: unknown;
+    try {
+      await waiting;
+    } catch (error: unknown) {
+      cancellation = error;
+    }
+    expect(cancellation).toBeInstanceOf(DbQueryBudgetCancelledError);
+    finish();
+    await running;
+
+    const metrics = poolMetrics("sqlite", 1).queryBudgets.export;
+    expect(metrics.active).toBe(0);
+    expect(metrics.queued).toBe(0);
+    expect(metrics.cancelled).toBe(1);
+    expect(metrics.completed).toBe(1);
   });
 });

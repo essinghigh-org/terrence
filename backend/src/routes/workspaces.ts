@@ -1019,7 +1019,7 @@ export const workspaceRoutes = new Elysia({ name: "workspaces" })
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const latestRun = await db.query.runs.findFirst({
       where: eq(runs.workspaceId, workspaceId),
-      orderBy: [desc(runs.createdAt)],
+      orderBy: [desc(runs.createdAt), asc(runs.id)],
     });
     const configurationVersionId = latestRun?.configurationVersionId;
     if (latestRun === undefined || configurationVersionId === null || configurationVersionId === undefined) {

@@ -14,7 +14,7 @@ import { join } from 'path';
 import * as schema from './schema';
 import { envFlag } from '../lib/env';
 import { databaseUrl, isPostgres, storageDir } from './driver';
-import { poolMetrics, poolQueryEnd, poolQueryStart, poolTransactionEnd, poolTransactionStart, recordSlowQuery } from '../lib/db-pool-metrics';
+import { poolMetrics, poolQueryEnd, poolQueryStart, poolTransactionEnd, poolTransactionStart, recordSlowQuery, recordSqliteWriteContention } from '../lib/db-pool-metrics';
 import { AGENT_POOL_TOKEN_DEFAULT_TTL_MS } from '../lib/agent-token';
 
 // Deliberately synchronous: a top-level await here made this module a TLA
@@ -104,7 +104,14 @@ function gateSqlitePreparedQuery<T extends object>(query: T): T {
       const value = Reflect.get(target, property, receiver);
       if (typeof value !== "function" || !gatedSqliteQueryMethods.has(String(property))) return value;
       return (...args: unknown[]): unknown => {
-        const execute = (): unknown => Reflect.apply(value, target, args);
+        const execute = (): unknown => {
+          try {
+            return Reflect.apply(value, target, args);
+          } catch (error: unknown) {
+            recordSqliteWriteContention(error);
+            throw error;
+          }
+        };
         const completion = sqliteTransactionCompletion;
         if (completion === null) return execute();
         if (sqliteTransactionContext.getStore() !== undefined) {
@@ -374,6 +381,7 @@ if (!isPostgres) {
         client.run('COMMIT');
         return result;
       } catch (err) {
+        recordSqliteWriteContention(err);
         if (began) client.run('ROLLBACK');
         throw err;
       } finally {

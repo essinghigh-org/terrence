@@ -159,9 +159,19 @@ configuration always wins over environment values.
 | `TERRENCE_SYSLOG_FORMAT` | `rfc5424` | Syslog message shape: `rfc5424` structured data or bare `json` object per message (one per UDP datagram, newline-delimited over TCP). |
 | `TERRENCE_QUERY_LOG` | off | Log every database query. |
 | `TERRENCE_QUERY_COUNT` | off | Count database queries for diagnostics. |
+| `TERRENCE_DB_EXPORT_QUERY_CONCURRENCY` | `1` | Maximum concurrent high-cardinality export database operations. |
+| `TERRENCE_DB_EXPORT_QUERY_QUEUE` | `8` | Maximum queued export operations before the API returns temporary unavailability. |
+| `TERRENCE_DB_INDEX_QUERY_CONCURRENCY` | `2` | Maximum concurrent explorer/index database operations. |
+| `TERRENCE_DB_INDEX_QUERY_QUEUE` | `32` | Maximum queued explorer/index operations before the API returns temporary unavailability. |
+| `TERRENCE_DB_QUERY_BUDGET_WAIT_MS` | `30000` | Maximum time queued work waits for a database budget slot. |
 | `MIGRATION_CHECKPOINT_RETRIES` | default | Retry count for migration checkpoints. |
 | `MIGRATION_DRAIN_TIMEOUT_MS` | default | Drain timeout for the migration wizard. |
 | `TERRENCE_DB_SLOW_QUERY_MS` | `1000` | Threshold for slow database query logging. |
+| `TERRENCE_DB_EXPORT_QUERY_CONCURRENCY` | `1` | Maximum concurrent high-cardinality export database operations. |
+| `TERRENCE_DB_EXPORT_QUERY_QUEUE` | `8` | Maximum queued export operations before the API returns temporary unavailability. |
+| `TERRENCE_DB_INDEX_QUERY_CONCURRENCY` | `2` | Maximum concurrent explorer/index database operations. |
+| `TERRENCE_DB_INDEX_QUERY_QUEUE` | `32` | Maximum queued explorer/index operations before the API returns temporary unavailability. |
+| `TERRENCE_DB_QUERY_BUDGET_WAIT_MS` | `30000` | Maximum time queued work waits for a database budget slot. |
 
 ## Operations and clustering
 

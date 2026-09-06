@@ -29,6 +29,177 @@ let pendingTransactions = 0;
 let totalQueries = 0;
 let totalTransactions = 0;
 let queriesExhausted = 0;
+let sqliteWriteContention = 0;
+
+export function recordSqliteWriteContention(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/SQLITE_BUSY|SQLITE_LOCKED|database is locked|database table is locked/i.test(message)) sqliteWriteContention += 1;
+}
+
+export type DbQueryBudgetKind = "export" | "index";
+
+export class DbQueryBudgetRejectedError extends Error {
+  public readonly kind: DbQueryBudgetKind;
+  constructor(kind: DbQueryBudgetKind) {
+    super(`Database ${kind} query budget is saturated`);
+    this.name = "DbQueryBudgetRejectedError";
+    this.kind = kind;
+  }
+}
+
+export class DbQueryBudgetCancelledError extends Error {
+  public readonly kind: DbQueryBudgetKind;
+  constructor(kind: DbQueryBudgetKind) {
+    super(`Database ${kind} query budget wait was cancelled`);
+    this.name = "DbQueryBudgetCancelledError";
+    this.kind = kind;
+  }
+}
+
+type MutableBudgetWaiter = {
+  kind: DbQueryBudgetKind;
+  resolve: (release: () => void) => void;
+  reject: (error: unknown) => void;
+  signal?: AbortSignal | undefined;
+  timer?: ReturnType<typeof setTimeout> | undefined;
+  onAbort?: (() => void) | undefined;
+};
+
+type BudgetState = {
+  readonly kind: DbQueryBudgetKind;
+  readonly concurrency: number;
+  readonly queueLimit: number;
+  active: number;
+  queued: MutableBudgetWaiter[];
+  admitted: number;
+  rejected: number;
+  cancelled: number;
+  completed: number;
+};
+
+const budgetStates: Record<DbQueryBudgetKind, BudgetState> = {
+  export: {
+    kind: "export",
+    concurrency: integerSetting("TERRENCE_DB_EXPORT_QUERY_CONCURRENCY"),
+    queueLimit: integerSetting("TERRENCE_DB_EXPORT_QUERY_QUEUE"),
+    active: 0,
+    queued: [],
+    admitted: 0,
+    rejected: 0,
+    cancelled: 0,
+    completed: 0,
+  },
+  index: {
+    kind: "index",
+    concurrency: integerSetting("TERRENCE_DB_INDEX_QUERY_CONCURRENCY"),
+    queueLimit: integerSetting("TERRENCE_DB_INDEX_QUERY_QUEUE"),
+    active: 0,
+    queued: [],
+    admitted: 0,
+    rejected: 0,
+    cancelled: 0,
+    completed: 0,
+  },
+};
+
+export type DbQueryBudgetMetrics = Readonly<{
+  kind: DbQueryBudgetKind;
+  active: number;
+  queued: number;
+  concurrency: number;
+  queueLimit: number;
+  admitted: number;
+  rejected: number;
+  cancelled: number;
+  completed: number;
+}>;
+
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- waiter owns cancellation handles whose methods are intentionally invoked here.
+function clearWaiter(waiter: MutableBudgetWaiter): void {
+  if (waiter.timer !== undefined) clearTimeout(waiter.timer);
+  if (waiter.signal !== undefined && waiter.onAbort !== undefined) waiter.signal.removeEventListener("abort", waiter.onAbort);
+}
+
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- releasing a slot mutates the shared budget counters.
+function releaseBudget(state: BudgetState): () => void {
+  let released = false;
+  return (): void => {
+    if (released) return;
+    released = true;
+    state.active = Math.max(0, state.active - 1);
+    state.completed += 1;
+    const waiter = state.queued.shift();
+    if (waiter === undefined) return;
+    clearWaiter(waiter);
+    state.active += 1;
+    state.admitted += 1;
+    waiter.resolve(releaseBudget(state));
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- AbortSignal is a platform cancellation handle.
+async function acquireDbQueryBudget(kind: DbQueryBudgetKind, signal?: AbortSignal, waitMs = integerSetting("TERRENCE_DB_QUERY_BUDGET_WAIT_MS")): Promise<() => void> {
+  const state = budgetStates[kind];
+  if (signal?.aborted === true) {
+    state.cancelled += 1;
+    return Promise.reject(new DbQueryBudgetCancelledError(kind));
+  }
+  if (state.active < state.concurrency) {
+    state.active += 1;
+    state.admitted += 1;
+    return Promise.resolve(releaseBudget(state));
+  }
+  if (state.queued.length >= state.queueLimit) {
+    state.rejected += 1;
+    return Promise.reject(new DbQueryBudgetRejectedError(kind));
+  }
+  return new Promise<() => void>((resolve, reject) => {
+    const waiter: MutableBudgetWaiter = { kind, resolve, reject, signal };
+    // eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types -- Error is only forwarded to the promise rejection.
+    const cancel = (error: Error): void => {
+      const index = state.queued.indexOf(waiter);
+      if (index < 0) return;
+      state.queued.splice(index, 1);
+      clearWaiter(waiter);
+      state.cancelled += 1;
+      reject(error);
+    };
+    waiter.onAbort = (): void => { cancel(new DbQueryBudgetCancelledError(kind)); };
+    if (signal !== undefined) signal.addEventListener("abort", waiter.onAbort, { once: true });
+    if (waitMs > 0) waiter.timer = setTimeout((): void => { cancel(new DbQueryBudgetCancelledError(kind)); }, waitMs);
+    state.queued.push(waiter);
+  });
+}
+
+export type DbQueryBudgetOptions = Readonly<{ signal?: AbortSignal | undefined; waitMs?: number | undefined }>;
+
+/** Run an index/export query under a bounded admission budget. The callback
+ * starts only after a slot is admitted, so queued work cannot consume DB
+ * connections while waiting. A request abort or wait deadline removes queued
+ * work and records the cancellation for operators. */
+export async function withDbQueryBudget<T>(
+  kind: DbQueryBudgetKind,
+  callback: () => T | Promise<T>,
+  options: DbQueryBudgetOptions = {},
+): Promise<T> {
+  const release = await acquireDbQueryBudget(kind, options.signal, options.waitMs);
+  try {
+    return await callback();
+  } finally {
+    release();
+  }
+}
+
+export function dbQueryBudgetMetrics(): Readonly<Record<DbQueryBudgetKind, DbQueryBudgetMetrics>> {
+  return {
+    export: { ...budgetStates.export, queued: budgetStates.export.queued.length },
+    index: { ...budgetStates.index, queued: budgetStates.index.queued.length },
+  };
+}
+
+export function isDbQueryBudgetError(error: unknown): error is DbQueryBudgetRejectedError | DbQueryBudgetCancelledError {
+  return error instanceof DbQueryBudgetRejectedError || error instanceof DbQueryBudgetCancelledError;
+}
 
 /** Called on query start: increments pending and total. Returns start timestamp. */
 export function poolQueryStart(maxConnections = 1): number {
@@ -85,6 +256,8 @@ export type DbPoolMetrics = Readonly<{
   p95Ms: number | null;
   maxMs: number | null;
   sampleCount: number;
+  sqliteWriteContention: number;
+  queryBudgets: Readonly<Record<DbQueryBudgetKind, DbQueryBudgetMetrics>>;
 }>;
 
 export function poolMetrics(driver: "sqlite" | "postgres", maxConnections: number): DbPoolMetrics {
@@ -103,6 +276,8 @@ export function poolMetrics(driver: "sqlite" | "postgres", maxConnections: numbe
     p95Ms: percentile(all, 95),
     maxMs: all.length > 0 ? Math.max(...all) : null,
     sampleCount: samples.length,
+    sqliteWriteContention,
+    queryBudgets: dbQueryBudgetMetrics(),
   };
 }
 
@@ -116,6 +291,19 @@ export function _resetPoolMetrics(): void {
   queriesExhausted = 0;
   samples.length = 0;
   slowQueries.length = 0;
+  sqliteWriteContention = 0;
+  for (const state of Object.values(budgetStates)) {
+    for (const waiter of state.queued) {
+      clearWaiter(waiter);
+      waiter.reject(new DbQueryBudgetCancelledError(state.kind));
+    }
+    state.queued.length = 0;
+    state.active = 0;
+    state.admitted = 0;
+    state.rejected = 0;
+    state.cancelled = 0;
+    state.completed = 0;
+  }
 }
 
 // ---------------------------------------------------------------------------

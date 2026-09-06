@@ -323,12 +323,26 @@ function prometheusLines(collection: MetricsCollection): string[] {
         "# HELP terrence_database_pool_exhausted_total Queries that arrived while another was pending (contention signal).",
         "# TYPE terrence_database_pool_exhausted_total counter",
         `terrence_database_pool_exhausted_total ${p.queriesExhausted}`,
+        "# HELP terrence_database_sqlite_write_contention_total SQLite write transactions rejected or delayed by a busy/locked database.",
+        "# TYPE terrence_database_sqlite_write_contention_total counter",
+        `terrence_database_sqlite_write_contention_total ${p.sqliteWriteContention}`,
         "# HELP terrence_database_query_duration_ms Observed query/transaction latency (recent window).",
         "# TYPE terrence_database_query_duration_ms gauge",
         `terrence_database_query_duration_ms{quantile="0.5"} ${p.p50Ms ?? 0}`,
         `terrence_database_query_duration_ms{quantile="0.95"} ${p.p95Ms ?? 0}`,
         `terrence_database_query_duration_ms{quantile="max"} ${p.maxMs ?? 0}`,
       );
+      for (const budget of Object.values(p.queryBudgets)) {
+        lines.push(
+          `terrence_database_query_budget_active{kind="${budget.kind}"} ${budget.active}`,
+          `terrence_database_query_budget_queued{kind="${budget.kind}"} ${budget.queued}`,
+          `terrence_database_query_budget_concurrency{kind="${budget.kind}"} ${budget.concurrency}`,
+          `terrence_database_query_budget_queue_limit{kind="${budget.kind}"} ${budget.queueLimit}`,
+          `terrence_database_query_budget_rejected_total{kind="${budget.kind}"} ${budget.rejected}`,
+          `terrence_database_query_budget_cancelled_total{kind="${budget.kind}"} ${budget.cancelled}`,
+          `terrence_database_query_budget_completed_total{kind="${budget.kind}"} ${budget.completed}`,
+        );
+      }
       const fps = (instance.database as unknown as { slowFingerprints?: Readonly<Record<string, number>> }).slowFingerprints ?? {};
       const fpLines = Object.entries(fps).slice(0, 10).map(([fp, count]): string =>
         `terrence_database_slow_fingerprint_total{fingerprint="${prometheusLabel(fp)}"} ${count}`,
