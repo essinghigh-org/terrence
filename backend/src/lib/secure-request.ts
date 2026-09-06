@@ -1,6 +1,7 @@
 import { trustedForwardedProtocol } from "./client-ip";
+import { createOperationContext, type OperationContext } from "./operation-context";
 
-type RequestInfo = Readonly<{ url: string }>;
+type RequestInfo = Readonly<{ url: string; signal?: Readonly<AbortSignal> }>;
 
 // PUBLIC_URL is the source of truth when a proxy terminates TLS. It is parsed
 // once so malformed configuration cannot turn into a per-request exception.
@@ -23,4 +24,20 @@ export function secureRequest(request: RequestInfo | undefined, server?: unknown
   } catch {
     return false;
   }
+}
+
+/**
+ * Give request-owned work a child signal that also carries an optional
+ * operation-specific deadline. A disconnect never aborts shared background
+ * work by itself; callers use this only while the request owns the operation.
+ */
+export function requestOperationContext(
+  request: RequestInfo | undefined,
+  deadlineMs?: number,
+): OperationContext {
+  return createOperationContext({
+    ...(request?.signal === undefined ? {} : { signal: request.signal }),
+    ...(deadlineMs === undefined ? {} : { deadlineMs }),
+    parentReason: "client-disconnect",
+  });
 }

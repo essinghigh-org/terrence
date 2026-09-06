@@ -285,13 +285,34 @@ export async function cleanupRunWorkDir(runId: string): Promise<void> {
   else await rm(runWorkDir(runId), { recursive: true, force: true });
 }
 
+const scheduledRunWorkDirCleanups = new Map<string, ReturnType<typeof setTimeout>>();
+
 export function scheduleRunWorkDirCleanup(runId: string, delayMs = 6_000): void {
+  // Apply/run finalizers can discover the same failed cleanup independently.
+  // Keep one retry per run so repeated stop signals cannot create a timer
+  // pile-up or race two removals against recovery preservation.
+  if (scheduledRunWorkDirCleanups.has(runId)) return;
   const timer = setTimeout((): void => {
+    scheduledRunWorkDirCleanups.delete(runId);
     void cleanupRunWorkDir(runId).catch((error: unknown): void => {
       logBestEffortFailure("Scheduled run workdir cleanup failed", { runId }, error);
     });
   }, delayMs);
   timer.unref?.();
+  scheduledRunWorkDirCleanups.set(runId, timer);
+}
+
+/** Test-only visibility for idempotent cleanup scheduling. */
+export function runWorkDirCleanupTimerCountForTests(runId: string): number {
+  return scheduledRunWorkDirCleanups.has(runId) ? 1 : 0;
+}
+
+/** Test-only cleanup for scheduled workdir retries. */
+export function clearRunWorkDirCleanupTimersForTests(): void {
+  for (const [runId, timer] of scheduledRunWorkDirCleanups.entries()) {
+    clearTimeout(timer);
+    scheduledRunWorkDirCleanups.delete(runId);
+  }
 }
 
 // Issue #579: run IDs whose recovery capture failed after finding state.

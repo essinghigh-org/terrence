@@ -425,7 +425,7 @@ export async function fetchUpstream<T>(
     clearTimeout(deadline);
     deadline = setTimeout(abortWithTimeout, timeoutMs);
   };
-  const onExternalAbort = (): void => { controller.abort(); };
+  const onExternalAbort = (): void => { controller.abort(signal?.reason); };
   signal?.addEventListener("abort", onExternalAbort, { once: true });
   try {
     let upstream: Readonly<Response>;

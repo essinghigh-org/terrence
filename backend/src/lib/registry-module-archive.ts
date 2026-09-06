@@ -24,7 +24,9 @@ function safeRelativePath(value: string): boolean {
 }
 
 async function tarOutput(args: readonly string[]): Promise<string> {
-  const { stdout } = await runBoundedProcess(["tar", ...args]);
+  // Packaging is a separate archive operation; it gets its own budget rather
+  // than inheriting a generic subprocess timeout.
+  const { stdout } = await runBoundedProcess(["tar", ...args], { timeoutMs: 120_000 });
   return stdout;
 }
 

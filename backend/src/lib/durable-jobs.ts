@@ -19,6 +19,7 @@ import {
   type ResourceBudgetState,
 } from "./resource-budgets";
 import { PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION, parsePersistedJobPayload } from "./validation";
+import { createOperationContext } from "./operation-context";
 
 export type DurableJobKind = "module-test" | "stack-configuration" | "stack-deployment" | "explorer-inventory" | "explorer-catalog" | "plan-explanation" | "vcs-webhook";
 export type DurableJob = Readonly<typeof durableJobs.$inferSelect>;
@@ -362,13 +363,13 @@ async function finishDurableJob(job: DurableJob, status: "succeeded" | "failed" 
 }
 
 async function runJob(job: DurableJob, handler: DurableJobHandler): Promise<void> {
-  const cancellation = new AbortController();
+  const operation = createOperationContext();
   let heartbeatFailures = 0;
   const heartbeatTimer = setInterval((): void => {
     void heartbeatDurableJob(job).then((ok): void => {
       if (!ok) {
         heartbeatFailures += 1;
-        cancellation.abort(new Error("Durable job lease was lost"));
+        operation.cancel("lease-lost", new Error("Durable job lease was lost"));
       }
       else heartbeatFailures = 0;
       if (heartbeatFailures >= 3) {
@@ -383,18 +384,38 @@ async function runJob(job: DurableJob, handler: DurableJobHandler): Promise<void
   }, LEASE_MS / 3);
   try {
     await handler(job, {
-      signal: cancellation.signal,
+      signal: operation.signal,
       heartbeat: async (): Promise<boolean> => {
         const owned = await heartbeatDurableJob(job);
-        if (!owned) cancellation.abort(new Error("Durable job lease was lost"));
+        if (!owned) operation.cancel("lease-lost", new Error("Durable job lease was lost"));
         return owned;
       },
       canceled: async (): Promise<boolean> => {
         const stopped = await isDurableJobStopped(job);
-        if (stopped) cancellation.abort(new Error("Durable job was canceled or ownership expired"));
+        if (stopped) {
+          const row = await db.query.durableJobs.findFirst({ where: eq(durableJobs.id, job.id), columns: { status: true, lockToken: true } });
+          operation.cancel(
+            row?.status === "canceled" ? "user-cancel" : "lease-lost",
+            new Error("Durable job was canceled or ownership expired"),
+          );
+        }
         return stopped;
       },
     });
+    // A handler is cooperative, but a legacy handler may return after its
+    // signal was raised. Never publish success after a lease/cancel race;
+    // the fenced transition below either leaves a canceled row untouched or
+    // makes a still-owned lease eligible for retry.
+    if (operation.signal.aborted) {
+      const stopped = await isDurableJobStopped(job).catch((): boolean => true);
+      if (!stopped) {
+        const reason = operation.signal.reason instanceof Error
+          ? operation.signal.reason.message
+          : "Durable job operation was canceled";
+        await finishDurableJob(job, job.attempts >= DURABLE_MAX_ATTEMPTS ? "failed" : "queued", reason);
+      }
+      return;
+    }
     await finishDurableJob(job, "succeeded");
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
@@ -405,6 +426,7 @@ async function runJob(job: DurableJob, handler: DurableJobHandler): Promise<void
     log.error("Durable job failed", { jobId: job.id, kind: job.kind, attempts: job.attempts, error: message });
   } finally {
     clearInterval(heartbeatTimer);
+    operation.dispose();
   }
 }
 

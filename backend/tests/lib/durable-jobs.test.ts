@@ -30,6 +30,7 @@ describe("durable job leases", () => {
     expect(first.id).toBe(second.id);
 
     expect(await cancelDurableJob(first.id)).toBe(true);
+    expect(await cancelDurableJob(first.id)).toBe(false);
     const replacement = await enqueueDurableJob(kind, { workspaceId: dedupeKey, refreshed: true }, { dedupeKey });
     expect(replacement.id).toBe(first.id);
     expect(replacement.status).toBe("queued");

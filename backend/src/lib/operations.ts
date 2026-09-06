@@ -9,6 +9,19 @@ import { storageDegradedReason } from "./storage-health";
 import { queueRunNotification } from "./notifications";
 import { log } from "./log";
 
+// Shared cancellation/deadline primitives are exported from the operations
+// surface so routes and workers classify stop causes consistently without
+// coupling to any persistence implementation.
+export {
+  createOperationContext,
+  OperationCanceledError,
+} from "./operation-context";
+export type {
+  OperationCancellationReason,
+  OperationContext,
+  OperationContextOptions,
+} from "./operation-context";
+
 // Workspace run readiness is exported from the operations library as part of
 // the public operations surface; the implementation lives in its own module
 // so route loading does not entangle the existing apply gates.

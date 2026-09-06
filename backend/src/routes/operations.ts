@@ -27,6 +27,7 @@ import {
 import { authPlugin } from "../auth";
 import { log } from "../lib/log";
 import { DurableJobBudgetError, enqueueDurableJob } from "../lib/durable-jobs";
+import { requestOperationContext } from "../lib/secure-request";
 
 type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
@@ -389,7 +390,11 @@ export const operationsRoutes = new Elysia({ name: "operations" })
         // lib types omit it anyway. Fall back to the request signal, which is
         // always a real AbortSignal and covers client disconnects.
         const controllerSignal = (controller as ReadableStreamDefaultController<Uint8Array> & { readonly signal?: AbortSignal }).signal;
-        const clientSignal = controllerSignal ?? request.signal;
+        const requestOperation = requestOperationContext({
+          url: request.url,
+          signal: controllerSignal ?? request.signal,
+        });
+        const clientSignal = requestOperation.signal;
         send(controller, "meta", { kind, model, "reasoning-effort": reasoningEffort });
         try {
           await fetchUpstream(settings, source.prompt, true, clientSignal, async (upstream, tick) => {
@@ -474,6 +479,8 @@ export const operationsRoutes = new Elysia({ name: "operations" })
           if (!clientSignal.aborted) {
             send(controller, "error", { message: error instanceof Error ? error.message : String(error) });
           }
+        } finally {
+          requestOperation.dispose();
         }
         controller.close();
       },
