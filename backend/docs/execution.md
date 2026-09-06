@@ -25,6 +25,19 @@ The worker claims pending runs and executes them with Terraform or OpenTofu. Exe
 
 Remote runs cannot reach the server's storage or other workspaces. The sandbox enforces this. See the sandbox section below.
 
+### Remote CLI command semantics
+
+Remote execution through the Terraform or OpenTofu CLI (`cloud` or `remote` backend blocks) maps commands to Terrence run operations:
+
+| Command | Supported | Notes |
+|---|---|---|
+| `terraform init` | Yes | Service discovery (`/.well-known/terraform.json`) and backend state initialization. |
+| `terraform plan` | Yes | Creates a remote speculative plan (or queueable run) with detailed exit codes. |
+| `terraform apply` | Yes | Executes plan, streams logs, and prompts interactively for apply approval. |
+| `terraform apply <plan-file>` | No (CLI constraint) | Upstream remote backends do not support applying saved local binary plans remotely. Apply directly through the CLI or approve via UI/API. |
+| `terraform plan -refresh-only` | Yes | Executes a remote refresh-only plan. |
+| `terraform destroy` | Yes | Schedules a remote destroy run within the workspace. |
+
 ## Local execution
 
 In local mode, the CLI executes the apply on the user's machine. The server provides state and registry access. The sandbox does not apply to the CLI's machine.
