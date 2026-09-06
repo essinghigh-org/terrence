@@ -15,6 +15,7 @@ import {
   isRefreshableSession,
 } from "./lib/api";
 import { Layout } from "./components/Layout";
+import { loginPathWithReturnTo } from "./lib/return-to";
 import { markLegacyUrlRedirect } from "./components/LegacyUrlNotice";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { RunSandboxGate } from "./components/RunSandboxGate";
@@ -138,27 +139,22 @@ export function ProtectedRoute({ children }: Readonly<{ readonly children?: Reac
   if (token === null || token === "") {
     // Carry the intended destination through the sign-in round-trip so deep
     // links (and redirects like email verification) survive authentication.
-    // Only /app paths are forwarded; everything else uses the plain login.
     // Verification outcome flags ride along at the top level too, because
     // Login reads its own query string, not the encoded returnTo.
-    const target = `${location.pathname}${location.search}${location.hash}`;
-    if (location.pathname === "/app" || location.pathname.startsWith("/app/")) {
-      const params = new URLSearchParams();
-      params.set("returnTo", target);
-      const incoming = new URLSearchParams(location.search);
-      for (const key of ["email-verified", "email-verification"]) {
-        const value = incoming.get(key);
-        if (value !== null) params.set(key, value);
-      }
-      return <Navigate replace to={`/login?${params.toString()}`} />;
+    const incoming = new URLSearchParams(location.search);
+    const extra: Record<string, string> = {};
+    for (const key of ["email-verified", "email-verification"]) {
+      const value = incoming.get(key);
+      if (value !== null) extra[key] = value;
     }
-    return <Navigate to="/login" replace />;
+    return <Navigate replace to={loginPathWithReturnTo(location.pathname, location.search, location.hash, extra)} />;
   }
   return <>{children}</>;
 }
 
-function AuthSessionManager(): null {
+export function AuthSessionManager(): null {
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect((): (() => void) => {
     let expiryTimer: number | undefined;
@@ -171,7 +167,12 @@ function AuthSessionManager(): null {
           type: "warning",
         });
       }
-      void navigate("/login", { replace: true });
+      // Preserve the expired-from destination (issue #738) so re-sign-in
+      // returns to the run, registry version or settings form in view.
+      // Only /app destinations are carried; the helper falls back to the
+      // plain login for anything else. Restoration is a GET navigation, so
+      // a prior write is never replayed.
+      void navigate(loginPathWithReturnTo(location.pathname, location.search, location.hash), { replace: true });
     };
 
     const scheduleExpiry = (): void => {
@@ -203,7 +204,7 @@ function AuthSessionManager(): null {
       window.removeEventListener(AUTH_EXPIRED_EVENT, notifyAndSignIn);
       window.removeEventListener(AUTH_CHANGED_EVENT, scheduleExpiry);
     };
-  }, [navigate]);
+  }, [navigate, location]);
 
   return null;
 }
