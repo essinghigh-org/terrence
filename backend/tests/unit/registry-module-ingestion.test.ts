@@ -123,7 +123,7 @@ describe("registry module ingestion", () => {
     const links = join(directory, "links.tar.gz");
     const linkTar = Bun.spawn(["tar", "-czf", links, "-C", source, "linked.tf"]);
     expect(await linkTar.exited).toBe(0);
-    await expectRejection(async (): Promise<void> => { await validateModuleArchive(links); }, "regular files and directories");
+    await expectRejection(async (): Promise<void> => { await validateModuleArchive(links); }, "forbidden link");
 
     const tooLargeUpload = join(directory, "too-large-upload.tar.gz");
     const uploadFile = await open(tooLargeUpload, "w");

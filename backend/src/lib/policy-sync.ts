@@ -7,7 +7,7 @@ import { db } from "../db";
 import { policies, policySetVersions } from "../db/schema";
 import type { policySets } from "../db/schema";
 import type { DeepReadonly } from "./utils";
-import { assertArchiveExpandedSize, assertArchiveLogicalSize, assertArchiveMemberCount } from "./archive";
+import { extractSafeTarArchive } from "./archive";
 
 
 export type PolicyVcsProvider = "github" | "gitlab" | "bitbucket";
@@ -72,59 +72,8 @@ export function matchesPolicySetWebhook(
   });
 }
 
-// Streams are consumed but the subprocess handle itself is not mutated.
-// eslint-disable-next-line @typescript-eslint/prefer-readonly-parameter-types
-async function processOutput(process: Readonly<{
-  exited: Promise<number>;
-  stderr: Readonly<ReadableStream<Uint8Array>>;
-  stdout: Readonly<ReadableStream<Uint8Array>>;
-}>): Promise<Readonly<{ code: number; stderr: string; stdout: string }>> {
-  const [code, stderr, stdout] = await Promise.all([
-    process.exited,
-    new Response(process.stderr).text(),
-    new Response(process.stdout).text(),
-  ]);
-  return { code, stderr, stdout };
-}
-
 async function extractArchive(archivePath: string, destination: string): Promise<void> {
-  await assertArchiveExpandedSize(archivePath);
-  const verbose = await processOutput(Bun.spawn(
-    ["tar", "-tvzf", archivePath],
-    { stdout: "pipe", stderr: "pipe" },
-  ));
-  const verboseError = verbose.stderr.trim();
-  if (verbose.code !== 0) throw new Error(`Policy archive is invalid: ${verboseError === "" ? "tar listing failed" : verboseError}`);
-  const verboseLines = verbose.stdout.split("\n").map((entry): string => entry.trim()).filter(Boolean);
-  assertArchiveMemberCount(verboseLines);
-  for (const line of verboseLines) {
-    if (["l", "h", "c", "b", "p", "s"].includes(line.charAt(0)) || line.includes(" -> ") || line.includes(" link to ")) {
-      throw new Error("Policy archive contains a link or special file");
-    }
-  }
-
-  const listing = await processOutput(Bun.spawn(
-    ["tar", "-tzf", archivePath],
-    { stdout: "pipe", stderr: "pipe" },
-  ));
-  const listingError = listing.stderr.trim();
-  if (listing.code !== 0) throw new Error(`Policy archive is invalid: ${listingError === "" ? "tar listing failed" : listingError}`);
-  const members = listing.stdout.split("\n").map((entry): string => entry.trim()).filter(Boolean);
-  assertArchiveMemberCount(members);
-  for (const member of members) {
-    const normalized = member.replaceAll("\\", "/");
-    if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized) || normalized.split("/").includes("..")) {
-      throw new Error("Policy archive contains an unsafe path");
-    }
-  }
-  await assertArchiveLogicalSize(archivePath);
-
-  const extraction = await processOutput(Bun.spawn(
-    ["tar", "-x", "-o", "-z", "-f", archivePath, "-C", destination],
-    { stdout: "pipe", stderr: "pipe" },
-  ));
-  const extractionError = extraction.stderr.trim();
-  if (extraction.code !== 0) throw new Error(`Policy archive extraction failed: ${extractionError === "" ? "tar failed" : extractionError}`);
+  await extractSafeTarArchive(archivePath, destination);
 }
 
 async function repositoryRoot(extracted: string): Promise<string> {

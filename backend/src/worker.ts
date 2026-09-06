@@ -90,11 +90,7 @@ import { log, safeJsonStringify } from "./lib/log";
 export type { ExecutionPhase } from "./worker/phases";
 export { executorBackendFromEnv, type ExecutorBackend, EXECUTOR_BACKENDS } from "./worker/executor-policy";
 import {
-  assertArchiveExpandedSize,
-  assertArchiveLogicalSize,
-  assertArchiveMemberCount,
-  tarMemberIsForbiddenSpecial,
-  tarMemberPathUnsafe,
+  extractSafeTarArchive,
 } from "./lib/archive";
 export { tarMemberIsForbiddenSpecial, tarMemberPathUnsafe } from "./lib/archive";
 import { startDurableJobWorker } from "./lib/durable-jobs";
@@ -1557,62 +1553,6 @@ async function extractTarArchive(
     workingDirectory: workingDirectory ?? null,
   };
   try {
-    await assertArchiveExpandedSize(archivePath);
-    const verboseProc = spawn(["tar", "-tvzf", archivePath]);
-    const verboseText = await new Response(verboseProc.stdout).text();
-    const verboseExitCode = await verboseProc.exited;
-    if (verboseExitCode !== 0) {
-      log.error("Configuration archive member inspection failed", {
-        ...diagnosticContext,
-        exitCode: verboseExitCode,
-      });
-      return false;
-    }
-
-    const verboseLines = verboseText.split("\n").map((s: string): string => s.trim()).filter((s: string): boolean => s !== "");
-    assertArchiveMemberCount(verboseLines);
-    for (const line of verboseLines) {
-      if (tarMemberIsForbiddenSpecial(line.charAt(0))) {
-        log.error("Security error: archive contains forbidden link/special member", {
-          ...diagnosticContext,
-          member: line,
-        });
-        return false;
-      }
-      if (line.includes(" -> ") || line.includes(" link to ")) {
-        log.error("Security error: archive contains link member", {
-          ...diagnosticContext,
-          member: line,
-        });
-        return false;
-      }
-    }
-
-    const listProc = spawn(["tar", "-tzf", archivePath]);
-    const membersText = await new Response(listProc.stdout).text();
-    const exitCode = await listProc.exited;
-    if (exitCode !== 0) {
-      log.error("Configuration archive path inspection failed", {
-        ...diagnosticContext,
-        exitCode,
-      });
-      return false;
-    }
-
-    const members = membersText.split("\n").map((s: string): string => s.trim()).filter((s: string): boolean => s !== "");
-    assertArchiveMemberCount(members);
-    for (const m of members) {
-      if (tarMemberPathUnsafe(m)) {
-        log.error("Security error: archive contains dangerous path", {
-          ...diagnosticContext,
-          member: m,
-          path: m,
-        });
-        return false;
-      }
-    }
-    await assertArchiveLogicalSize(archivePath);
-
     // Uploaded archives can contain client-side execution artifacts (a stale
     // `tfplan` bookmark from `terraform plan -out=tfplan`, local state, or a
     // provider cache). Those must never shadow the server-managed files that
@@ -1629,16 +1569,8 @@ async function extractTarArchive(
       "*/.terraform",
       ".terraform/*",
       "*/.terraform/*",
-    ].flatMap((pattern): string[] => ["--exclude", pattern]);
-    const extractProc = spawn(["tar", "-x", "-o", "-z", "-f", archivePath, "-C", destDir, ...executionArtifactExcludes]);
-    const extractExitCode = await extractProc.exited;
-    if (extractExitCode !== 0) {
-      log.error("Configuration archive extraction process failed", {
-        ...diagnosticContext,
-        exitCode: extractExitCode,
-      });
-      return false;
-    }
+    ];
+    await extractSafeTarArchive(archivePath, destDir, {}, executionArtifactExcludes);
     await unnestArchiveDirectory(destDir, workingDirectory);
     return true;
   } catch (error: unknown) {
