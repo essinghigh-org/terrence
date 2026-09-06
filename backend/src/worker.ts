@@ -777,6 +777,14 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
       where: eq(runs.id, runId),
       columns: { statusTimestamps: true, status: true, workspaceId: true },
     });
+    if (existing === undefined) {
+      // The run record was deleted mid-execution (issue #693): there is no
+      // state left to publish to. Stand down quietly instead of throwing a
+      // compare-and-set error that escapes as an unhandled rejection and
+      // crashes the worker.
+      log.warn(`Run ${runId} no longer exists; skipping status update to ${status}`, { runId, status });
+      return;
+    }
     workspaceId = existing?.workspaceId ?? null;
     const existingTimestamps = typeof existing?.statusTimestamps === "object" && existing.statusTimestamps !== null
       ? existing.statusTimestamps
