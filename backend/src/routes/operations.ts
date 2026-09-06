@@ -26,7 +26,7 @@ import {
 } from "../lib/run-explanations";
 import { authPlugin } from "../auth";
 import { log } from "../lib/log";
-import { enqueueDurableJob } from "../lib/durable-jobs";
+import { DurableJobBudgetError, enqueueDurableJob } from "../lib/durable-jobs";
 
 type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
@@ -199,7 +199,32 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       // Background the non-streaming generation: enqueue a durable job and
       // return 202 so a tab close does not abort the LLM call. Concurrent
       // requests for the same (run, kind) dedupe to the same job.
-      const job = await enqueueDurableJob("plan-explanation", { runId, kind }, { dedupeKey });
+      let job;
+      try {
+        job = await enqueueDurableJob(
+          "plan-explanation",
+          { runId, kind, organizationId: orgId, jobClass: "explanation", estimatedBytes: 1 * 1024 * 1024 },
+          {
+            dedupeKey,
+            budget: { organizationId: orgId, jobClass: "explanation", estimatedBytes: 1 * 1024 * 1024 },
+          },
+        );
+      } catch (error: unknown) {
+        if (!(error instanceof DurableJobBudgetError)) throw error;
+        (set as { status: number }).status = error.status;
+        if (error.status === 429 && error.admission.retryAfterMs !== null) {
+          (set.headers as Record<string, string | number>)["Retry-After"] = Math.ceil(error.admission.retryAfterMs / 1_000);
+        }
+        return {
+          errors: [{
+            status: String(error.status),
+            title: error.status === 413 ? "Payload Too Large" : "Too Many Requests",
+            detail: error.status === 413
+              ? "The plan explanation estimate exceeds the configured artifact byte budget."
+              : "Plan explanation capacity is temporarily full; retry after the queue drains.",
+          }],
+        };
+      }
       if (job.status === "succeeded") {
         // Rare: a terminal job was recycled in the same call; fall through
         // to serve the cached explanation if present.

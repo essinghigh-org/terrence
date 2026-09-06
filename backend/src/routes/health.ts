@@ -141,6 +141,22 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
       failed: collection.instance.webhookQueue.failed,
       oldest_pending_seconds: collection.instance.webhookQueue.oldestPendingSeconds,
     };
+    metrics["terrence_resource_budgets"] = {
+      limits: {
+        global_concurrency: collection.instance.resourceBudgets.limits.globalConcurrency,
+        global_queue: collection.instance.resourceBudgets.limits.globalQueue,
+        organization_concurrency: collection.instance.resourceBudgets.limits.organizationConcurrency,
+        organization_queue: collection.instance.resourceBudgets.limits.organizationQueue,
+        artifact_bytes: collection.instance.resourceBudgets.limits.artifactBytes,
+        reserved_critical_slots: collection.instance.resourceBudgets.limits.reservedCriticalSlots,
+      },
+      queued: collection.instance.resourceBudgets.queued,
+      running: collection.instance.resourceBudgets.running,
+      queued_bytes: collection.instance.resourceBudgets.queuedBytes,
+      running_bytes: collection.instance.resourceBudgets.runningBytes,
+      queued_by_class: collection.instance.resourceBudgets.queuedByClass,
+      running_by_class: collection.instance.resourceBudgets.runningByClass,
+    };
   }
   if (collection.process !== null) {
     const { snapshot, history } = collection.process;
@@ -266,6 +282,28 @@ function prometheusLines(collection: MetricsCollection): string[] {
       "# HELP terrence_webhook_oldest_pending_seconds Age of the oldest delivery not yet processed.",
       "# TYPE terrence_webhook_oldest_pending_seconds gauge",
       `terrence_webhook_oldest_pending_seconds ${instance.webhookQueue.oldestPendingSeconds}`,
+      "# HELP terrence_resource_budget_queued Durable jobs waiting for capacity, by class.",
+      "# TYPE terrence_resource_budget_queued gauge",
+      ...Object.entries(instance.resourceBudgets.queuedByClass).map(([jobClass, value]): string =>
+        `terrence_resource_budget_queued{class="${prometheusLabel(jobClass)}"} ${value}`,
+      ),
+      "# HELP terrence_resource_budget_running Durable jobs consuming capacity, by class.",
+      "# TYPE terrence_resource_budget_running gauge",
+      ...Object.entries(instance.resourceBudgets.runningByClass).map(([jobClass, value]): string =>
+        `terrence_resource_budget_running{class="${prometheusLabel(jobClass)}"} ${value}`,
+      ),
+      "# HELP terrence_resource_budget_queue_limit Configured aggregate durable queue limit.",
+      "# TYPE terrence_resource_budget_queue_limit gauge",
+      `terrence_resource_budget_queue_limit ${instance.resourceBudgets.limits.globalQueue}`,
+      "# HELP terrence_resource_budget_concurrency_limit Configured aggregate durable concurrency limit.",
+      "# TYPE terrence_resource_budget_concurrency_limit gauge",
+      `terrence_resource_budget_concurrency_limit ${instance.resourceBudgets.limits.globalConcurrency}`,
+      "# HELP terrence_resource_budget_artifact_bytes_limit Configured aggregate in-flight artifact byte limit.",
+      "# TYPE terrence_resource_budget_artifact_bytes_limit gauge",
+      `terrence_resource_budget_artifact_bytes_limit ${instance.resourceBudgets.limits.artifactBytes}`,
+      "# HELP terrence_resource_budget_running_bytes In-flight estimated artifact bytes.",
+      "# TYPE terrence_resource_budget_running_bytes gauge",
+      `terrence_resource_budget_running_bytes ${instance.resourceBudgets.runningBytes}`,
     );
     // Backend-specific samples are omitted when the value is unavailable
     // (postgres has no sqlite page cache/freelist) rather than emitting 0.

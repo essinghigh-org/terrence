@@ -172,6 +172,40 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `TERRENCE_TRUSTED_PROXY_CIDRS` | none | Comma-separated CIDRs trusted as proxies: their `X-Forwarded-For` is used for client-IP resolution and their `X-Forwarded-Host`/`X-Forwarded-Proto` for generated links. Forwarded host headers from other peers are ignored. |
 | `TERRENCE_CSP_STRICT` | off | When `1`, serve the UI with a strict Content-Security-Policy. |
 | `TERRENCE_EXPLAIN_TIMEOUT_MS` | `60000` | Idle deadline in milliseconds for one AI explainer upstream exchange. Lower values abort slow models sooner. |
+| `TERRENCE_RESOURCE_BUDGETS_JSON` | unset | Optional JSON resource budget policy for durable work. Set `global` (`concurrency`, `queue`, `artifactBytes`, `reservedCriticalSlots`), `organization` defaults, `classes`, and exact `organizations` overrides. Unset uses the single-user defaults. |
+
+The resource budget JSON is intentionally one bounded deployment setting so it
+can be reviewed as part of the instance configuration. For example:
+
+```json
+{
+  "global": {
+    "concurrency": 8,
+    "queue": 2000,
+    "artifactBytes": 536870912,
+    "reservedCriticalSlots": 2
+  },
+  "organization": { "concurrency": 4, "queue": 250 },
+  "classes": {
+    "explanation": { "concurrency": 1, "queue": 50 },
+    "export": { "concurrency": 1, "queue": 50 }
+  },
+  "organizations": {
+    "org-production": { "concurrency": 8, "artifactBytes": 1073741824 }
+  }
+}
+```
+
+Jobs carrying budget metadata are admitted with explicit `429` retry guidance
+when a global, organization, or class queue limit is reached; an estimate that
+cannot fit the configured byte cap returns `413`. Claiming applies the same
+policy to every durable job, with fair sharing across organizations and
+classes. `critical`,
+`cancellation`, `health`, and `state-critical` classes retain the configured
+reserved slots, so explanation, export, and background floods cannot consume
+the capacity needed to recover the service. Invalid JSON or out-of-range
+values fail closed when the worker reads the policy; no existing work is
+discarded.
 
 ## Rate limits
 

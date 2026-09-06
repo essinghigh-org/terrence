@@ -6,6 +6,18 @@ import { workerQueueDraining } from "../worker";
 import { durableJobs } from "../db/schema";
 import { log } from "./log";
 import { jitteredPollDelay } from "./poll-jitter";
+import {
+  assessResourceBudget,
+  parseResourceBudgetConfig,
+  resourceBudgetJobFromDurable,
+  resourceBudgetSnapshot,
+  selectResourceBudgetJob,
+  type ResourceBudgetAdmission,
+  type ResourceBudgetJob,
+  type ResourceBudgetSnapshot,
+  type ResourceJobClass,
+  type ResourceBudgetState,
+} from "./resource-budgets";
 
 export type DurableJobKind = "module-test" | "stack-configuration" | "stack-deployment" | "explorer-inventory" | "explorer-catalog" | "plan-explanation" | "vcs-webhook";
 export type DurableJob = Readonly<typeof durableJobs.$inferSelect>;
@@ -15,10 +27,17 @@ export type DurableJobContext = Readonly<{
   signal: Readonly<AbortSignal>;
 }>;
 export type DurableJobHandler = (job: DurableJob, context: DurableJobContext) => Promise<void>;
+export type DurableJobBudgetOptions = Readonly<{
+  organizationId?: string | null;
+  jobClass?: ResourceJobClass;
+  estimatedBytes?: number;
+}>;
+
 type EnqueueDurableJobOptions = Readonly<{
   dedupeKey?: string;
   runAfter?: number;
   rescheduleRunning?: boolean;
+  budget?: DurableJobBudgetOptions;
 }>;
 
 const LEASE_MS = 30_000;
@@ -28,16 +47,96 @@ export const DURABLE_MAX_ATTEMPTS = 3;
 let workerRunning = false;
 const NO_EXISTING_DURABLE_JOB = Symbol("no-existing-durable-job");
 
+/** A queue admission failure is explicit and carries a retry hint. */
+export class DurableJobBudgetError extends Error {
+  public readonly admission: ResourceBudgetAdmission;
+  public readonly status: 413 | 429;
+
+  constructor(admission: ResourceBudgetAdmission) {
+    super(admission.reason === "artifact-bytes-limit"
+      ? "Durable job artifact estimate exceeds the configured byte budget"
+      : `Durable job queue capacity is temporarily unavailable (${admission.reason ?? "capacity"})`);
+    this.name = "DurableJobBudgetError";
+    this.admission = admission;
+    this.status = admission.reason === "artifact-bytes-limit" ? 413 : 429;
+  }
+}
+
+function payloadWithBudgetMetadata(
+  payload: Readonly<Record<string, unknown>>,
+  budget: DurableJobBudgetOptions | undefined,
+): Record<string, unknown> {
+  if (budget === undefined) return { ...payload };
+  return {
+    ...payload,
+    ...(budget.organizationId === undefined ? {} : { organizationId: budget.organizationId }),
+    ...(budget.jobClass === undefined ? {} : { jobClass: budget.jobClass }),
+    ...(budget.estimatedBytes === undefined ? {} : { estimatedBytes: budget.estimatedBytes }),
+  };
+}
+
+function preserveBudgetMetadata(
+  existing: Readonly<Record<string, unknown>>,
+  payload: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const merged = { ...payload };
+  for (const key of ["organizationId", "jobClass", "estimatedBytes"] as const) {
+    if (!(key in merged) && key in existing) merged[key] = existing[key];
+  }
+  return merged;
+}
+
+async function durableJobBudgetState(excludeJobId?: string): Promise<ResourceBudgetState> {
+  const [queuedRows, runningRows] = await Promise.all([
+    db.query.durableJobs.findMany({
+      where: eq(durableJobs.status, "queued"),
+      columns: { id: true, kind: true, payload: true, runAfter: true, createdAt: true },
+    }),
+    db.query.durableJobs.findMany({
+      where: eq(durableJobs.status, "running"),
+      columns: { id: true, kind: true, payload: true, runAfter: true, createdAt: true },
+    }),
+  ]);
+  return {
+    queued: queuedRows.filter((row): boolean => row.id !== excludeJobId).map(resourceBudgetJobFromDurable),
+    running: runningRows.filter((row): boolean => row.id !== excludeJobId).map(resourceBudgetJobFromDurable),
+  };
+}
+
+async function assertDurableJobBudget(row: ResourceBudgetJob, excludeJobId?: string): Promise<void> {
+  const admission = assessResourceBudget(parseResourceBudgetConfig(), await durableJobBudgetState(excludeJobId), row);
+  if (!admission.accepted) throw new DurableJobBudgetError(admission);
+}
+
+function resourceBudgetJobFromInsert(
+  row: Readonly<{ id: string; kind: string; payload: Record<string, unknown>; runAfter: number; createdAt: number }>,
+): ResourceBudgetJob {
+  return resourceBudgetJobFromDurable(row);
+}
+
 async function requeueExistingDurableJob(
   existing: DurableJob,
   payload: Readonly<Record<string, unknown>>,
   options: EnqueueDurableJobOptions,
   runAfter: number,
 ): Promise<DurableJob> {
+  const requeuedPayload = preserveBudgetMetadata(existing.payload, payload);
+  // A requeue changes the row's payload and scheduling state. Check before
+  // changing it; otherwise a deduped retry could bypass the same limits
+  // enforced for a fresh row (or double-count a running row).
+  if (options.budget !== undefined) {
+    await assertDurableJobBudget(resourceBudgetJobFromInsert({
+      id: existing.id,
+      kind: existing.kind,
+      payload: requeuedPayload,
+      runAfter,
+      createdAt: existing.createdAt,
+    }), existing.id);
+  }
   const now = Date.now();
   const requeued = await db.update(durableJobs).set({
     status: "queued",
-    payload,
+    payload: requeuedPayload,
     attempts: 0,
     runAfter,
     lockedBy: null,
@@ -78,7 +177,8 @@ export async function enqueueDurableJob(
   payload: Record<string, unknown>,
   options: EnqueueDurableJobOptions = {},
 ): Promise<DurableJob> {
-  const existing = await enqueueExistingDurableJob(kind, payload, options);
+  const durablePayload = payloadWithBudgetMetadata(payload, options.budget);
+  const existing = await enqueueExistingDurableJob(kind, durablePayload, options);
   if (existing !== NO_EXISTING_DURABLE_JOB) return existing;
   const now = Date.now();
   const row: typeof durableJobs.$inferInsert = {
@@ -86,7 +186,7 @@ export async function enqueueDurableJob(
     kind,
     dedupeKey: options.dedupeKey ?? null,
     status: "queued",
-    payload,
+    payload: durablePayload,
     attempts: 0,
     runAfter: options.runAfter ?? now,
     lockedBy: null,
@@ -97,6 +197,15 @@ export async function enqueueDurableJob(
     createdAt: now,
     updatedAt: now,
   };
+  if (options.budget !== undefined) {
+    await assertDurableJobBudget(resourceBudgetJobFromInsert({
+      id: row.id,
+      kind: row.kind,
+      payload: durablePayload,
+      runAfter: row.runAfter ?? now,
+      createdAt: row.createdAt ?? now,
+    }));
+  }
   try {
     await db.insert(durableJobs).values(row);
     return row as DurableJob;
@@ -132,14 +241,34 @@ export async function claimDurableJob(
 ): Promise<DurableJob | undefined> {
   if (kinds.length === 0) return undefined;
   await requeueExpiredJobs(now);
-  const candidate = await db.query.durableJobs.findFirst({
-    where: and(
-      inArray(durableJobs.kind, [...kinds]),
-      eq(durableJobs.status, "queued"),
-      lte(durableJobs.runAfter, now),
-    ),
-    orderBy: [asc(durableJobs.runAfter), asc(durableJobs.createdAt)],
-  });
+  // Read a bounded candidate window and apply the same policy used by
+  // admission. The limit prevents a noisy queue from turning every poll into
+  // an unbounded JSON scan; the row-level update below remains the fencing
+  // authority when another worker wins the race.
+  const [candidateRows, runningRows] = await Promise.all([
+    db.query.durableJobs.findMany({
+      where: and(
+        inArray(durableJobs.kind, [...kinds]),
+        eq(durableJobs.status, "queued"),
+        lte(durableJobs.runAfter, now),
+      ),
+      orderBy: [asc(durableJobs.runAfter), asc(durableJobs.createdAt)],
+      limit: 256,
+    }),
+    db.query.durableJobs.findMany({
+      where: eq(durableJobs.status, "running"),
+      columns: { id: true, kind: true, payload: true, runAfter: true, createdAt: true },
+    }),
+  ]);
+  const selected = selectResourceBudgetJob(
+    parseResourceBudgetConfig(),
+    {
+      queued: candidateRows.map(resourceBudgetJobFromDurable),
+      running: runningRows.map(resourceBudgetJobFromDurable),
+    },
+    now,
+  );
+  const candidate = selected === undefined ? undefined : candidateRows.find((row): boolean => row.id === selected.id);
   if (candidate === undefined) return undefined;
   const lockToken = crypto.randomUUID();
   const updated = await db.update(durableJobs).set({
@@ -157,6 +286,11 @@ export async function claimDurableJob(
     lte(durableJobs.runAfter, now),
   )).returning();
   return updated[0];
+}
+
+/** Aggregate queue diagnostics for site-admin metrics and the admin API. */
+export async function collectDurableJobBudgetSnapshot(): Promise<ResourceBudgetSnapshot> {
+  return resourceBudgetSnapshot(parseResourceBudgetConfig(), await durableJobBudgetState());
 }
 
 export async function heartbeatDurableJob(job: DurableJob, now = Date.now()): Promise<boolean> {

@@ -114,6 +114,7 @@ import { providerIconRoutes } from "./routes/provider-icons";
 import { actionsRoutes } from "./routes/actions";
 import { registryComponentsRoutes } from "./routes/registry-components";
 import { availableVersions } from "./binaryManager";
+import { DurableJobBudgetError } from "./lib/durable-jobs";
 
 // Store request metadata without polluting the set object
 const requestMeta = new WeakMap<Request, { startTime: number; method: string; path: string; correlationId: string }>();
@@ -253,6 +254,12 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
   const constraint = databaseConstraint(error);
   if (constraint !== null) mutableSet.status = 409;
   if (error instanceof SettingsValidationError) mutableSet.status = error.status;
+  if (error instanceof DurableJobBudgetError) {
+    mutableSet.status = error.status;
+    if (error.status === 429 && error.admission.retryAfterMs !== null) {
+      mutableSet.headers["Retry-After"] = Math.ceil(error.admission.retryAfterMs / 1_000);
+    }
+  }
   // Elysia wraps onParse failures in its own ParseError; the original is
   // preserved as `cause` (elysia/dist/error.js ParseError).
   const bodyTooLarge = error instanceof BodyTooLargeError ? error
@@ -273,6 +280,15 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
   }
   if (error instanceof SettingsValidationError) {
     return { errors: [{ status: String(error.status), title: error.status === 422 ? "Unprocessable Entity" : "Service Unavailable", detail: error.message }] };
+  }
+  if (error instanceof DurableJobBudgetError) {
+    return {
+      errors: [{
+        status: String(error.status),
+        title: error.status === 413 ? "Payload Too Large" : "Too Many Requests",
+        detail: error.message,
+      }],
+    };
   }
   if (constraint !== null) {
     mutableSet.headers["Content-Type"] = "application/vnd.api+json";

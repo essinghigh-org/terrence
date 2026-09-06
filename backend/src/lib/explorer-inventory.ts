@@ -419,11 +419,19 @@ async function backfillExplorerInventory(orgId: string, context: DurableJobConte
 export async function enqueueExplorerInventory(workspaceId: string): Promise<void> {
   const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId), columns: { orgId: true } });
   if (workspace === undefined) return;
-  await enqueueDurableJob("explorer-inventory", { workspaceId }, { dedupeKey: workspaceId });
+  await enqueueDurableJob(
+    "explorer-inventory",
+    { workspaceId, organizationId: workspace.orgId, jobClass: "background", estimatedBytes: 4 * 1024 * 1024 },
+    { dedupeKey: workspaceId, budget: { organizationId: workspace.orgId, jobClass: "background", estimatedBytes: 4 * 1024 * 1024 } },
+  );
 }
 
 export async function enqueueExplorerCatalog(orgId: string): Promise<void> {
-  await enqueueDurableJob("explorer-catalog", { orgId }, { dedupeKey: `catalog:${orgId}` });
+  await enqueueDurableJob(
+    "explorer-catalog",
+    { orgId, organizationId: orgId, jobClass: "background", estimatedBytes: 8 * 1024 * 1024 },
+    { dedupeKey: `catalog:${orgId}`, budget: { organizationId: orgId, jobClass: "background", estimatedBytes: 8 * 1024 * 1024 } },
+  );
 }
 
 export function scheduleExplorerCatalog(orgId: string): void {
@@ -455,7 +463,11 @@ export async function runExplorerCatalogJob(job: Job, context: DurableJobContext
 
 async function rebuildOrQueueExplorerCatalog(orgId: string, workspaceTotal: number): Promise<void> {
   if (workspaceTotal <= 1000) await rebuildExplorerCatalog(orgId);
-  else await enqueueDurableJob("explorer-catalog", { orgId }, { dedupeKey: `catalog:${orgId}` });
+  else await enqueueDurableJob(
+    "explorer-catalog",
+    { orgId, organizationId: orgId, jobClass: "background", estimatedBytes: 8 * 1024 * 1024 },
+    { dedupeKey: `catalog:${orgId}`, budget: { organizationId: orgId, jobClass: "background", estimatedBytes: 8 * 1024 * 1024 } },
+  );
 }
 
 export async function ensureExplorerInventory(orgId: string): Promise<void> {
@@ -483,5 +495,9 @@ export async function ensureExplorerInventory(orgId: string): Promise<void> {
   }
   // ponytail: large first-read backfills are durable and keyset-paged; the
   // separate dedupe key keeps repeated reads from multiplying work.
-  await enqueueDurableJob("explorer-catalog", { orgId, backfill: true }, { dedupeKey: `catalog-backfill:${orgId}` });
+  await enqueueDurableJob(
+    "explorer-catalog",
+    { orgId, organizationId: orgId, jobClass: "background", estimatedBytes: 16 * 1024 * 1024, backfill: true },
+    { dedupeKey: `catalog-backfill:${orgId}`, budget: { organizationId: orgId, jobClass: "background", estimatedBytes: 16 * 1024 * 1024 } },
+  );
 }

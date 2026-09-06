@@ -2452,7 +2452,11 @@ export const registryRoutes = new Elysia({ name: "registry" })
       updatedAt: now,
     };
     await db.insert(moduleTestRuns).values(runValues);
-    await enqueueDurableJob("module-test", { runId: id }, { dedupeKey: id });
+    await enqueueDurableJob(
+      "module-test",
+      { runId: id, organizationId: mod.orgId, jobClass: "plan", estimatedBytes: 16 * 1024 * 1024 },
+      { dedupeKey: id },
+    );
     const created = await db.query.moduleTestRuns.findFirst({ where: eq(moduleTestRuns.id, id) });
     if (created === undefined) throw new Error("Created module test run could not be loaded");
     (set as { status: number }).status = 201;

@@ -98,6 +98,13 @@ describe("Admin Operations API contract", () => {
   });
 
   it("lists site admin resources and active runs", async () => {
+    const budgets = await request("/api/v2/admin/resource-budgets");
+    expect(budgets.status).toBe(200);
+    const budgetsBody = await budgets.json() as { data: { type: string; attributes: { snapshot: { queued: number; running: number } } } };
+    expect(budgetsBody.data.type).toBe("resource-budgets");
+    expect(typeof budgetsBody.data.attributes.snapshot.queued).toBe("number");
+    expect(JSON.stringify(budgetsBody)).not.toContain(orgId);
+
     // 1. Admin Users list
     const getUsersRes = await request("/api/v2/admin/users");
     expect(getUsersRes.status).toBe(200);
