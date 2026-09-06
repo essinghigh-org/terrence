@@ -278,6 +278,9 @@ Environment for the helper scripts under `backend/scripts` and `frontend/scripts
 | `COVERAGE_THRESHOLD` | `60` | Coverage floor for `coverage-report --fail`. |
 | `BACKEND_URL` | `http://127.0.0.1:3000` | Backend proxied by the frontend dev server. |
 | `TERRENCE_E2E_SEED` | `eng21` | Stable fixture seed used by the named operational CLI profiles. |
+| `TERRENCE_E2E_RESULTS_DIR` | temporary | Redacted result directory for operational profile artifacts. |
+| `TERRENCE_E2E_SECURITY_PROFILE` | `default` | Named security profile for operational profile runs. |
+| `TERRENCE_E2E_TIER` | `small` | Fixture size tier for operational profile runs. |
 
 ## Dependency update policy
 
