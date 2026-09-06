@@ -27,8 +27,8 @@ export function compareVariableSets(
   // UTF-8 byte ordering matches Unicode code-point ordering, unlike localeCompare
   // or UTF-16 string comparison for supplementary characters.
   return rank(left) - rank(right)
-    || Buffer.compare(Buffer.from(right.name), Buffer.from(left.name))
-    || Buffer.compare(Buffer.from(right.id), Buffer.from(left.id));
+    || compareCodePoints(right.name, left.name)
+    || compareCodePoints(right.id, left.id);
 }
 
 /**
