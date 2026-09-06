@@ -35,6 +35,7 @@ import { scheduleExplorerInventory } from "../lib/explorer-inventory";
 import { runExecutionDurationMilliseconds } from "../lib/run-duration";
 import { newRunId } from "../lib/run-id";
 import { RUN_NOTIFICATION_TRIGGERS } from "../lib/constants";
+import { auditLogValues } from "../lib/audit-trail";
 
 type SetObj = { status?: number | string; headers: Record<string, string | number> };
 
@@ -384,6 +385,11 @@ async function createRunComment(input: Readonly<{
   const id = newResourceId("rc");
   const createdAt = Date.now();
   await db.insert(runComments).values({ id, runId: input.runId, userId: input.userId, body: input.body, createdAt });
+  await auditLog("create", "run-comments", id, input.userId, input.orgId, {
+    runId: input.runId,
+    workspaceId: input.workspaceId,
+    bodyBytes: Buffer.byteLength(input.body, "utf8"),
+  });
   publish("comment.created", {
     "run-id": input.runId,
     "workspace-id": input.workspaceId,
@@ -670,9 +676,13 @@ function safeRunEventDetails(event: AuditItem): Readonly<Record<string, string>>
   if (details === null || typeof details !== "object" || Array.isArray(details)) return {};
   const source = details as Readonly<Record<string, unknown>>;
   return Object.fromEntries(
-    ["fromStatus", "toStatus", "workspaceId", "status", "source", "triggerReason", "actorUsername", "actorAvatarUrl", "actorProviderId"].flatMap((key): readonly [string, string][] =>
-      typeof source[key] === "string" ? [[key, source[key]]] : [],
-    ),
+    [
+      "fromStatus", "toStatus", "workspaceId", "status", "source", "triggerReason", "actorUsername", "actorAvatarUrl", "actorProviderId",
+      "schemaVersion", "result", "requestId", "correlationId", "credentialClass", "effectiveUserId", "impersonatorUserId", "immutable",
+    ].flatMap((key): readonly [string, string][] => {
+      const value = source[key];
+      return typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? [[key, String(value)]] : [];
+    }),
   );
 }
 
@@ -1752,8 +1762,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       if (rows.length === 0) return rows;
       await t.insert(runComments).values({ id: commentId, runId, userId: actorId, body: justification, createdAt: now });
       await t.update(policyChecks).set({ status: "overridden" }).where(and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])));
-      await t.insert(auditLogs).values({
-        id: crypto.randomUUID(),
+      await t.insert(auditLogs).values(auditLogValues({
         orgId: workspace.orgId,
         userId: actorId,
         action: "override-policy",
@@ -1764,10 +1773,11 @@ export const runRoutes = new Elysia({ name: "runs" })
           fromStatus: "policy_soft_failed",
           toStatus: "planned",
           justification,
+          justificationBytes: Buffer.byteLength(justification, "utf8"),
           ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
         },
         createdAt: now,
-      });
+      }) as typeof auditLogs.$inferInsert);
       return rows;
     });
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is no longer awaiting policy override" }] }; }
@@ -1931,13 +1941,24 @@ export const runRoutes = new Elysia({ name: "runs" })
     const c = await db.query.runComments.findFirst({ where: eq(runComments.id, commentId) });
     if (c === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const authorized = await findAuthorizedRun(c.runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (authorized === undefined) {
+      await auditLog("delete", "run-comments", commentId, user?.id ?? null, null, { runId: c.runId, reason: "not-authorized" }, { result: "denied", immutable: true });
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     const isAuthor = c.userId !== null && c.userId === user?.id && orgId === null && teamId === null;
     if (!isAuthor && !(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) {
+      await auditLog("delete", "run-comments", commentId, user?.id ?? null, authorized.workspace.orgId, { runId: c.runId, reason: "requires-author-or-administrator" }, { result: "denied", immutable: true });
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden", detail: "Only the comment author or a workspace administrator can delete it." }] };
     }
     await db.delete(runComments).where(eq(runComments.id, commentId));
+    await auditLog("delete", "run-comments", commentId, user?.id ?? null, authorized.workspace.orgId, {
+      runId: c.runId,
+      workspaceId: authorized.workspace.id,
+      bodyBytes: Buffer.byteLength(c.body, "utf8"),
+      deletedByAuthor: isAuthor,
+    });
     (set as { status: number }).status = 204;
     return new Response(null, { status: 204 });
   })

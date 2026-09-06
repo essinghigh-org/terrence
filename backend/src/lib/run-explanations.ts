@@ -5,6 +5,7 @@ import { runExplanations, auditLogs } from "../db/schema";
 import { readPlanJsonArtifact, sanitizePlanJson, PUBLIC_PLAN_VERSION } from "./plan-json";
 import { collectExplainSecrets, redactKnownSecrets } from "./explain-secrets";
 import { auditLog, strictAuditEnabled } from "./utils";
+import { auditLogValues } from "./audit-trail";
 import { readRunLogs } from "./run-logs";
 import { log } from "./log";
 
@@ -155,16 +156,14 @@ export async function persistExplainerOutput(output: PersistExplainerOutput): Pr
         content: output.content,
         cacheKey: explanationCacheKey(output.runId, output.kind),
       });
-      await tx.insert(auditLogs).values({
-        id: crypto.randomUUID(),
+      await tx.insert(auditLogs).values(auditLogValues({
         orgId: output.orgId,
         userId: output.userId,
         action: "request",
         resourceType: "plan-explanation",
         resourceId: output.runId,
         details,
-        createdAt: Date.now(),
-      });
+      }) as typeof auditLogs.$inferInsert);
     });
     return;
   }

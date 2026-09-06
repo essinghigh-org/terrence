@@ -30,6 +30,7 @@ import { outboundAllowlistAllows, privateHostReason } from "./url-safety";
 import { archiveRunLogs, deleteRunLogArchive } from "./run-logs";
 import { deletePlanJsonArtifact } from "./plan-json";
 import { currentSiteAdmin, currentTokenScopes, requestCacheGet, requestCacheSet } from "./request-scope";
+import { currentAuditContext } from "./audit-trail";
 import { withDbLock } from "./db-lock";
 import {
   scopeGrants,
@@ -38,6 +39,7 @@ import {
   type WorkspacePermissionGrant,
   type TokenScopes,
 } from "./token-scopes";
+import { auditLogValues, type AuditResult } from "./audit-trail";
 
 export { validateVersion, decodeStatePayload, parseStatePayload };
 
@@ -114,18 +116,20 @@ export async function auditLog(
   userId: string | null,
   orgId: string | null,
   details?: Readonly<Record<string, unknown>>,
+  options?: Readonly<{ result?: AuditResult; immutable?: boolean; effectiveUserId?: string | null }>,
 ): Promise<void> {
   try {
-    await db.insert(auditLogs).values({
-      id: crypto.randomUUID(),
-      orgId,
-      userId,
+    await db.insert(auditLogs).values(auditLogValues({
       action,
       resourceType,
       resourceId,
-      details: details !== undefined ? { ...details } : null,
-      createdAt: Date.now(),
-    });
+      userId,
+      orgId,
+      ...(details === undefined ? {} : { details }),
+      ...(options?.result === undefined ? {} : { result: options.result }),
+      ...(options?.immutable === undefined ? {} : { immutable: options.immutable }),
+      ...(options?.effectiveUserId === undefined ? {} : { effectiveUserId: options.effectiveUserId }),
+    }) as typeof auditLogs.$inferInsert);
     } catch (error: unknown) {
       if (isDiskFullError(error)) markStorageDegraded("audit log writes are failing (disk full)");
       recordFailure("auditWrites");
@@ -2068,6 +2072,12 @@ export async function promoteIntermediateStateVersion(workspaceId: string): Prom
   });
   if (snapshot === undefined) return null;
   await db.update(stateVersions).set({ intermediate: false }).where(eq(stateVersions.id, snapshot.id));
+  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId), columns: { orgId: true } });
+  await auditLog("promote", "state-version", snapshot.id, currentAuditContext()?.userId ?? null, workspace?.orgId ?? null, {
+    workspaceId,
+    before: { intermediate: true },
+    after: { intermediate: false },
+  }, { immutable: true });
   return snapshot.id;
 }
 

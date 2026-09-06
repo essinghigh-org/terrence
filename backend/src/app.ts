@@ -17,6 +17,7 @@ import { applyLoggingSettings, log } from "./lib/log";
 import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
 import { strongDocumentEtag } from "./lib/utils";
 import { setRequestTokenScopes, setRequestSiteAdmin, currentTokenScopes } from "./lib/request-scope";
+import { beginAuditRequest, resetAuditRequest, setAuditPrincipal } from "./lib/audit-trail";
 import { applySecurityHeaders, HSTS_VALUE, shouldSendHsts, staticCacheControl, staticMimeFor } from "./lib/security-headers";
 import openapiJson from "../openapi.json" with { type: "json" };
 import { requestFinished, requestStarted } from "./lib/process-metrics";
@@ -267,6 +268,7 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
           : typeof mutableSet.status === "number" ? mutableSet.status : 500;
     requestFinished(status);
     requestMeta.delete(request as unknown as Request);
+    resetAuditRequest();
   }
   if (error instanceof SettingsValidationError) {
     return { errors: [{ status: String(error.status), title: error.status === 422 ? "Unprocessable Entity" : "Service Unavailable", detail: error.message }] };
@@ -484,7 +486,16 @@ const RATE_LIMIT_ERROR_RESPONSE = new Response(
 
 export const app = new Elysia()
   .use(authPlugin)
-  .onBeforeHandle(({ request, token, user, set }: { readonly request: Request; readonly token: { readonly scopes?: string | null } | null; readonly user: { readonly id: string; readonly isSiteAdmin: boolean | null } | null; readonly set: unknown }): Record<string, unknown> | undefined => {
+  .onBeforeHandle(({ request, token, user, orgId, teamId, run, systemToken, set }: {
+    readonly request: Request;
+    readonly token: { readonly id?: string; readonly scopes?: string | null } | null;
+    readonly user: { readonly id: string; readonly isSiteAdmin: boolean | null } | null;
+    readonly orgId?: string | null;
+    readonly teamId?: string | null;
+    readonly run?: { readonly runId: string } | null;
+    readonly systemToken?: { readonly id: string } | null;
+    readonly set: unknown;
+  }): Record<string, unknown> | undefined => {
     // Publish fine-grained token scopes into request-scoped storage BEFORE
     // handlers run, so permission helpers enforce them automatically. Legacy
     // tokens (scopes null/absent) resolve to null = full permissions.
@@ -505,6 +516,18 @@ export const app = new Elysia()
     // The auth derive already read the full user row; hand its site-admin flag
     // to permission helpers so they skip a duplicate users read.
     setRequestSiteAdmin(user?.id ?? null, user?.isSiteAdmin === true);
+    setAuditPrincipal({
+      userId: user?.id ?? null,
+      tokenId: token?.id ?? null,
+      orgId: orgId ?? null,
+      teamId: teamId ?? null,
+      runId: run?.runId ?? null,
+      systemTokenId: systemToken?.id ?? null,
+      scopes: currentTokenScopes(),
+      authenticated: token !== null && token !== undefined || user !== null && user !== undefined
+        || orgId !== null && orgId !== undefined || teamId !== null && teamId !== undefined
+        || run !== null && run !== undefined || systemToken !== null && systemToken !== undefined,
+    });
     const pathname = new URL(request.url).pathname;
     const siteAdminPath = pathname === "/api/v2/admin"
       || pathname.startsWith("/api/v2/admin/")
@@ -645,6 +668,7 @@ export const app = new Elysia()
     const suppliedId = request.headers.get("x-request-id") ?? request.headers.get("x-correlation-id");
     const correlationId = suppliedId !== null && CORRELATION_ID_PATTERN.test(suppliedId) ? suppliedId : crypto.randomUUID();
     requestMeta.set(request as unknown as Request, { startTime: Date.now(), method, path: pathname, correlationId });
+    beginAuditRequest(correlationId, method, pathname);
     // Issue #648: remember the socket peer so generated links only honor
     // X-Forwarded-Host/Proto from a configured trusted proxy.
     recordRequestPeer(request as unknown as object, socketPeerAddress(request, server));
@@ -662,6 +686,7 @@ export const app = new Elysia()
         // never reach onAfterHandle. Idempotent if it does (meta is gone).
         requestFinished(413);
         requestMeta.delete(request as unknown as Request);
+        resetAuditRequest();
         (set as { status: number }).status = 413;
         return {
           errors: [{
@@ -725,6 +750,7 @@ export const app = new Elysia()
       // Idempotent bookkeeping: the WeakMap entry is consumed here so an
       // error path (onError) can never double-count the same request.
       requestMeta.delete(request as unknown as Request);
+      resetAuditRequest();
       if (path.startsWith("/api/")) {
         // Canonical log line (loggingsucks.com wide-event pattern): one
         // context-rich record per request instead of scattered statements.

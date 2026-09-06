@@ -380,11 +380,16 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     return updated === undefined ? { data: adminUserResource(target) } : { data: adminUserResource(updated) };
   })
   .post("/api/v2/admin/users/:user_id/actions/impersonate", async ({ params, user, set }: ParamCtx): Promise<unknown> => {
-    if (user?.isSiteAdmin !== true) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (user?.isSiteAdmin !== true) {
+      await auditLog("impersonate", "users", params["user_id"] ?? null, user?.id ?? null, null, { reason: "requires-site-admin" }, { result: "denied", immutable: true });
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     const userId = params["user_id"] ?? "";
     const target = await db.query.users.findFirst({ where: eq(users.id, userId) });
     if (target === undefined || target.deletedAt !== null) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     if (target.id === user.id || target.isSiteAdmin === true) {
+      await auditLog("impersonate", "users", target.id, user.id, null, { reason: "protected-administrator" }, { result: "denied", immutable: true });
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "This user cannot be impersonated" }] };
     }
@@ -405,6 +410,7 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
     await auditLog("impersonate", "users", target.id, user.id, null, {
       targetUserId: target.id,
       impersonatorUserId: user.id,
+      effectiveUserId: target.id,
       impersonationTokenId,
     });
     return { data: { type: "authentication-tokens", attributes: { token: rawToken, "expires-at": new Date(expiresAt).toISOString(), "user-id": target.id } } };
@@ -416,15 +422,21 @@ export const usersRoutes = new Elysia({ name: "admin-users" })
         ? await db.query.apiTokens.findFirst({ where: eq(apiTokens.id, tokenId) })
         : undefined;
       if (impersonationToken === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+      const impersonatorName = /^Impersonation by (.+)$/.exec(impersonationToken.description ?? "")?.[1];
+      const impersonator = impersonatorName === undefined
+        ? undefined
+        : await db.query.users.findFirst({ where: eq(users.username, impersonatorName), columns: { id: true } });
       await db.delete(apiTokens).where(eq(apiTokens.id, impersonationToken.id));
       await auditLog("unimpersonate", "users", impersonationToken.userId, impersonationToken.userId, null, {
         targetUserId: impersonationToken.userId,
+        impersonatorUserId: impersonator?.id ?? null,
+        effectiveUserId: impersonationToken.userId,
         impersonationTokenId: impersonationToken.id,
-        impersonationDescription: impersonationToken.description,
-      });
+      }, { effectiveUserId: impersonationToken.userId });
       (set as { status: number }).status = 204;
       return {};
     }
+    await auditLog("unimpersonate", "users", user?.id ?? null, user?.id ?? null, null, { reason: "not-an-impersonation-session" }, { result: "denied", immutable: true });
     (set as { status: number }).status = 400;
     return { errors: [{ status: "400", title: "Bad Request", detail: "The current session is not an impersonation session" }] };
   });

@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { exists, mkdir, readFile, rm } from "node:fs/promises";
 import { db } from "../db";
-import { stateOutputIndex, stateVersions, workspaces, runs, organizationMemberships, teams, type users } from "../db/schema";
+import { auditLogs, stateOutputIndex, stateVersions, workspaces, runs, organizationMemberships, teams, type users } from "../db/schema";
 import { eq, and, desc, count, inArray, ne, or, isNull, sql } from "drizzle-orm";
 import { stateVersionResource, stateOutputResources, stateVersionSummaryResource } from "../lib/response";
 import { encryptStatePayload, isClientEncryptedState, parseTerraformStatePayload, statePayloadError, statePayloadWithSerial } from "../lib/validation";
@@ -29,6 +29,7 @@ import { scheduleExplorerInventory } from "../lib/explorer-inventory";
 import { insertStateOutputIndex, replaceStateOutputIndex } from "../lib/state-output-index";
 import { persistUploadBody } from "../lib/upload-body";
 import { storageDir } from "../db/driver";
+import { auditLogValues } from "../lib/audit-trail";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -995,6 +996,22 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
           createdAt: Date.now(),
         });
         await insertStateOutputIndex(t, id, workspace.id, promoted, promoted);
+        await t.insert(auditLogs).values(auditLogValues({
+          action: "recover-state",
+          resourceType: "state-version",
+          resourceId: id,
+          orgId: workspace.orgId,
+          userId: user?.id ?? null,
+          details: {
+            runId,
+            workspaceId: workspace.id,
+            serial,
+            previousSerial: current?.serial ?? null,
+            before: { recoveryCapture: true },
+            after: { status: "finalized", intermediate: false, serial },
+          },
+          immutable: true,
+        }) as typeof auditLogs.$inferInsert);
         return id;
       }));
     } catch (error) {
@@ -1153,6 +1170,21 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
           createdAt: Date.now(),
         });
         await insertStateOutputIndex(t, id, workspaceId, jsonState, statePayload);
+        await t.insert(auditLogs).values(auditLogValues({
+          action: "create",
+          resourceType: "state-version",
+          resourceId: id,
+          orgId: ws.orgId,
+          userId: user?.id ?? null,
+          details: {
+            workspaceId,
+            runId,
+            serial,
+            status: statePayload === null ? "pending" : "finalized",
+            intermediate,
+            stateBytes: statePayload === null ? 0 : Buffer.byteLength(statePayload, "utf8"),
+          },
+        }) as typeof auditLogs.$inferInsert);
       }));
     } catch (error: unknown) {
       if (error instanceof StateSerialConflictError || isUniqueConstraintError(error)) {
@@ -1260,6 +1292,21 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
           createdAt: Date.now(),
         });
         await insertStateOutputIndex(t, id, workspaceId, rawState, rawState);
+        await t.insert(auditLogs).values(auditLogValues({
+          action: "promote",
+          resourceType: "state-version",
+          resourceId: id,
+          orgId: ws.orgId,
+          userId: user?.id ?? null,
+          details: {
+            workspaceId,
+            runId: run?.runId ?? null,
+            serial,
+            stateBytes: Buffer.byteLength(rawState, "utf8"),
+            after: { status: "finalized", intermediate: false, serial },
+          },
+          immutable: true,
+        }) as typeof auditLogs.$inferInsert);
         return id;
       }));
     } catch (error: unknown) {

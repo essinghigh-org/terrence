@@ -13,6 +13,7 @@ import {
 } from "../db/schema";
 import { and, asc, count, countDistinct, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { authPlugin } from "../auth";
+import { auditLogValues } from "../lib/audit-trail";
 import { checkOrganizationPermission, pageRequest, pagination } from "../lib/utils";
 import { queueExplorerBulkActionNotification } from "../lib/notifications";
 import { ensureExplorerInventory } from "../lib/explorer-inventory";
@@ -776,8 +777,7 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
       explorerBulkActionRecordValues(workspaceId, subject, message, user?.id ?? null, now));
     await db.transaction(async (tx): Promise<void> => {
       await tx.insert(explorerBulkActionRecords).values(records);
-      await tx.insert(auditLogs).values(records.map((record) => ({
-        id: crypto.randomUUID(),
+      await tx.insert(auditLogs).values(records.map((record) => auditLogValues({
         orgId: organization.id,
         userId: user?.id ?? null,
         action: "create",
@@ -788,7 +788,7 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
           toStatus: "pending",
         },
         createdAt: now,
-      })));
+      }) as typeof auditLogs.$inferInsert));
     });
     // Notifications reread the committed Explorer bulk-action rows. Dispatching only
     // after commit prevents a failed transaction from producing a notification

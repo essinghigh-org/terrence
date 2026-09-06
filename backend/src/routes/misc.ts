@@ -5,7 +5,7 @@ import { envFlag } from "../lib/env";
 import { db } from "../db";
 import { runTriggers, auditLogs, githubWebhookDeliveries, workspaces, workspaceVariables, users, organizationMemberships, teams } from "../db/schema";
 import { eq, and, asc, count, desc, inArray, or, sql, type SQL } from "drizzle-orm";
-import { checkOrgPermission, findAuthorizedRun, findAuthorizedWorkspace, pageRequest, pagination, workspaceIdsForPermission } from "../lib/utils";
+import { auditLog, checkOrgPermission, findAuthorizedRun, findAuthorizedWorkspace, pageRequest, pagination, workspaceIdsForPermission } from "../lib/utils";
 import { scopeCoversOrg, scopeGrants } from "../lib/token-scopes";
 import { currentTokenScopes } from "../lib/request-scope";
 import { workspaceVariableResource } from "../lib/response";
@@ -24,6 +24,7 @@ import {
 import { authPlugin } from "../auth";
 import { log } from "../lib/log";
 import { cachedOrgByName } from "../lib/cached-lookups";
+import { setAuditPrincipal } from "../lib/audit-trail";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -466,8 +467,12 @@ export const miscRoutes = new Elysia({ name: "misc" })
     if (action !== "confirm") {
       return webhookUnprocessable(set, "Invalid action; expected \"confirm\"");
     }
+    // The HMAC is the actor for this path; do not leave the event looking like
+    // an anonymous browser request merely because the webhook has no bearer.
+    setAuditPrincipal({ userId: null, credentialClass: "system-token", authenticated: true });
     const outcome = await confirmRunForApply(runId, { isWebhookApproval: true });
     if (!outcome.ok) {
+      await auditLog("apply", "runs", runId, null, null, { source: "approval-webhook", reason: outcome.reason ?? "apply could not be started" }, { result: "denied", immutable: true });
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: outcome.reason ?? "Apply could not be started" }] };
     }
