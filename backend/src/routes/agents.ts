@@ -416,7 +416,7 @@ async function agentPoolResource(
   const orgName = orgNameOverride !== undefined
     ? orgNameOverride
     : await organizationName(pool.orgId);
-  const [agentList, workspaceList, allowedWorkspaceList, allowedProjectList, excludedWorkspaceList] = await Promise.all([
+  const [agentList, workspaceList, allowedWorkspaceList, allowedProjectList, excludedWorkspaceList, queuedJobList, claimedJobList] = await Promise.all([
     db.query.agents.findMany({ where: eq(agents.agentPoolId, pool.id) }),
     db.query.workspaces.findMany({ where: eq(workspaces.agentPoolId, pool.id) }),
     db.query.agentPoolAllowedWorkspaces.findMany({
@@ -428,6 +428,8 @@ async function agentPoolResource(
     db.query.agentPoolExcludedWorkspaces.findMany({
       where: eq(agentPoolExcludedWorkspaces.agentPoolId, pool.id),
     }),
+    db.query.agentJobs.findMany({ where: and(eq(agentJobs.agentPoolId, pool.id), eq(agentJobs.status, "queued")), columns: { id: true } }),
+    db.query.agentJobs.findMany({ where: and(eq(agentJobs.agentPoolId, pool.id), eq(agentJobs.status, "claimed")), columns: { id: true } }),
   ]);
   return {
     id: pool.id,
@@ -437,6 +439,8 @@ async function agentPoolResource(
       "created-at": new Date(pool.createdAt).toISOString(),
       "organization-scoped": pool.organizationScoped,
       "agent-count": agentList.length,
+      "queued-job-count": queuedJobList.length,
+      "claimed-job-count": claimedJobList.length,
     },
     relationships: {
       // go-tfe unmarshals AgentPool.Organization from this relationship (the

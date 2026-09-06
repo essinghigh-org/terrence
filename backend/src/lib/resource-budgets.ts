@@ -88,6 +88,25 @@ export type ResourceBudgetSnapshot = Readonly<{
   runningByClass: Readonly<Record<ResourceJobClass, number>>;
 }>;
 
+export type ResourceBudgetInspection = Readonly<{
+  eligible: boolean;
+  reasonCode:
+    | "ready"
+    | "scheduled"
+    | "global-concurrency"
+    | "organization-concurrency"
+    | "class-concurrency"
+    | "global-artifact-bytes"
+    | "organization-artifact-bytes"
+    | "reserved-capacity"
+    | "fairness"
+    | "no-eligible-candidate";
+  reason: string;
+  queuePosition: number | null;
+  positionQualified: boolean;
+  competingJobClass: ResourceJobClass | null;
+}>;
+
 type BudgetInput = Readonly<{
   concurrency?: unknown;
   queue?: unknown;
@@ -413,6 +432,67 @@ export function selectResourceBudgetJob(
     return compareJobs(left, right);
   });
   return candidates[0];
+}
+
+/** Explain the same claim decision returned by selectResourceBudgetJob. */
+export function explainResourceBudgetJob(
+  config: ResourceBudgetConfig,
+  state: ResourceBudgetState,
+  request: ResourceBudgetJob,
+  now = Date.now(),
+): ResourceBudgetInspection {
+  const ordered = [...state.queued].sort(compareJobs);
+  const index = ordered.findIndex((job): boolean => job.id === request.id);
+  const queuePosition = index >= 0
+    ? index + 1
+    : ordered.filter((job): boolean => compareJobs(job, request) <= 0).length + 1;
+  const position = Number.isSafeInteger(queuePosition) ? queuePosition : null;
+  const runningByClass = EMPTY_COUNTS();
+  const runningByOrganization = new Map<string | null, number>();
+  const runningBytesByOrganization = new Map<string | null, number>();
+  let runningBytes = 0;
+  for (const job of state.running) {
+    runningByClass[job.jobClass] += 1;
+    runningByOrganization.set(job.organizationId, (runningByOrganization.get(job.organizationId) ?? 0) + 1);
+    runningBytesByOrganization.set(job.organizationId, (runningBytesByOrganization.get(job.organizationId) ?? 0) + job.estimatedBytes);
+    runningBytes += job.estimatedBytes;
+  }
+  const organization = organizationBudget(config, request.organizationId);
+  const regularConcurrency = Math.max(0, config.global.concurrency - config.global.reservedCriticalSlots);
+  const ordinaryRunning = state.running.filter((job): boolean => !isProtected(job.jobClass)).length;
+  const selected = selectResourceBudgetJob(config, state, now);
+  const blocked = (
+    reasonCode: ResourceBudgetInspection["reasonCode"],
+    reason: string,
+    competingJobClass: ResourceJobClass | null = null,
+  ): ResourceBudgetInspection => ({
+    eligible: false,
+    reasonCode,
+    reason,
+    queuePosition: position,
+    positionQualified: position !== null,
+    competingJobClass,
+  });
+
+  if (request.runAfter > now) return blocked("scheduled", "The job is scheduled for a later time.");
+  if (state.running.length >= config.global.concurrency) return blocked("global-concurrency", "Global durable-job concurrency is full.");
+  if ((runningByOrganization.get(request.organizationId) ?? 0) >= organization.concurrency) return blocked("organization-concurrency", "The organization durable-job concurrency limit is full.");
+  if (runningByClass[request.jobClass] >= config.classes[request.jobClass].concurrency) return blocked("class-concurrency", "The durable-job class concurrency limit is full.");
+  if (runningBytes + request.estimatedBytes > config.global.artifactBytes) return blocked("global-artifact-bytes", "The global durable-job artifact-byte budget is full.");
+  if ((runningBytesByOrganization.get(request.organizationId) ?? 0) + request.estimatedBytes > organization.artifactBytes) return blocked("organization-artifact-bytes", "The organization durable-job artifact-byte budget is full.");
+  if (!isProtected(request.jobClass) && ordinaryRunning >= regularConcurrency) return blocked("reserved-capacity", "Reserved capacity is held for protected durable-job classes.");
+  if (selected?.id === request.id) {
+    return {
+      eligible: true,
+      reasonCode: "ready",
+      reason: "The job is the next candidate under the current capacity and fairness policy.",
+      queuePosition: position,
+      positionQualified: position !== null,
+      competingJobClass: null,
+    };
+  }
+  if (selected !== undefined) return blocked("fairness", "Another eligible job wins the current fairness comparison; the ordering can change as jobs run or finish.", selected.jobClass);
+  return blocked("no-eligible-candidate", "No durable job is eligible under the current capacity policy.");
 }
 
 export function resourceBudgetSnapshot(config: ResourceBudgetConfig, state: ResourceBudgetState): ResourceBudgetSnapshot {

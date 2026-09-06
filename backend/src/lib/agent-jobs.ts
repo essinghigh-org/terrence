@@ -125,6 +125,20 @@ export function configuredHeartbeatTimeoutMs(): number {
   return integerSetting("AGENT_HEARTBEAT_TIMEOUT_MS");
 }
 
+/**
+ * Claim eligibility shared by the agent poller and queue diagnostics. An
+ * authenticated poll refreshes lastPingAt before the claim path reaches this
+ * check, so a live worker remains eligible even when its recorded status is
+ * busy from a previous claim that has already completed.
+ */
+export function isAgentLiveForClaim(
+  agent: Readonly<{ status: string; lastPingAt: number | null }>,
+  now = Date.now(),
+): boolean {
+  if (["unknown", "exited", "errored", "draining"].includes(agent.status)) return false;
+  return agent.lastPingAt !== null && now - agent.lastPingAt <= configuredHeartbeatTimeoutMs();
+}
+
 /** Persist-at-most interval derived from the sweep timeout: always stays
  * below the timeout so a heartbeating agent can never be swept as stale. */
 function effectivePingWriteIntervalMs(): number {
@@ -744,6 +758,7 @@ export async function claimAgentJob(
   agent: Agent,
   acceptedPhases: readonly string[] = ["plan", "apply"],
 ): Promise<ClaimedAgentJob | undefined> {
+  if (!isAgentLiveForClaim(agent)) return undefined;
   const existingClaim = await findExistingClaim(agent);
   if (existingClaim !== undefined) return existingClaim;
   if (acceptedPhases.length === 0) return undefined;

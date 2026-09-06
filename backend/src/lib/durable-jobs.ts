@@ -8,6 +8,7 @@ import { log } from "./log";
 import { jitteredPollDelay } from "./poll-jitter";
 import {
   assessResourceBudget,
+  explainResourceBudgetJob,
   parseResourceBudgetConfig,
   resourceBudgetJobFromDurable,
   resourceBudgetSnapshot,
@@ -297,6 +298,64 @@ export async function claimDurableJob(
 /** Aggregate queue diagnostics for site-admin metrics and the admin API. */
 export async function collectDurableJobBudgetSnapshot(): Promise<ResourceBudgetSnapshot> {
   return resourceBudgetSnapshot(parseResourceBudgetConfig(), await durableJobBudgetState());
+}
+
+/**
+ * Bounded operator view of the durable queue. The explanation is generated
+ * from the same selector used by claimDurableJob; payload contents are never
+ * returned because durable payloads may contain workspace or integration
+ * material that is irrelevant to queue diagnosis.
+ */
+export async function collectDurableJobQueueInspector(
+  limit = 200,
+  now = Date.now(),
+): Promise<Record<string, unknown>> {
+  const boundedLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+  const [queuedRows, runningRows] = await Promise.all([
+    db.query.durableJobs.findMany({
+      where: eq(durableJobs.status, "queued"),
+      orderBy: [asc(durableJobs.runAfter), asc(durableJobs.createdAt), asc(durableJobs.id)],
+      limit: boundedLimit + 1,
+      columns: { id: true, kind: true, payload: true, runAfter: true, createdAt: true },
+    }),
+    db.query.durableJobs.findMany({
+      where: eq(durableJobs.status, "running"),
+      columns: { id: true, kind: true, payload: true, runAfter: true, createdAt: true },
+    }),
+  ]);
+  const config = parseResourceBudgetConfig();
+  const state: ResourceBudgetState = {
+    queued: queuedRows.map(resourceBudgetJobFromDurable),
+    running: runningRows.map(resourceBudgetJobFromDurable),
+  };
+  const visibleRows = queuedRows.slice(0, boundedLimit);
+  return {
+    "snapshot-at": new Date(now).toISOString(),
+    total: queuedRows.length,
+    truncated: queuedRows.length > boundedLimit,
+    jobs: visibleRows.map((row): Record<string, unknown> => {
+      const job = resourceBudgetJobFromDurable(row);
+      const inspection = explainResourceBudgetJob(config, state, job, now);
+      return {
+        id: job.id,
+        kind: row.kind,
+        status: "queued",
+        "job-class": job.jobClass,
+        "organization-id": job.organizationId,
+        "estimated-bytes": job.estimatedBytes,
+        "run-after": new Date(job.runAfter).toISOString(),
+        "created-at": new Date(job.createdAt).toISOString(),
+        eligibility: {
+          state: inspection.eligible ? "ready" : "waiting",
+          "reason-code": inspection.reasonCode,
+          reason: inspection.reason,
+          position: inspection.queuePosition,
+          "position-qualified": inspection.positionQualified,
+          "competing-job-class": inspection.competingJobClass,
+        },
+      };
+    }),
+  };
 }
 
 export async function heartbeatDurableJob(job: DurableJob, now = Date.now()): Promise<boolean> {

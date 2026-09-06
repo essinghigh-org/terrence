@@ -32,6 +32,8 @@ type AgentPool = {
     organization: string;
 
     "agent-count"?: number;
+    "queued-job-count"?: number;
+    "claimed-job-count"?: number;
     "organization-scoped"?: boolean;
   };
   relationships?: {
@@ -417,6 +419,11 @@ export function AgentPools(): React.JSX.Element {
                             {summary.usable === 0 ? "No eligible workers; runs will wait." : `${summary.idle} idle · ${summary.busy} busy`}
                             {summary.stale > 0 ? ` · ${summary.stale} heartbeat stale` : ""}
                           </p>
+                          {(pool.attributes["queued-job-count"] ?? 0) > 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              {pool.attributes["queued-job-count"]} queued job{pool.attributes["queued-job-count"] === 1 ? "" : "s"} · {pool.attributes["claimed-job-count"] ?? 0} claimed
+                            </p>
+                          )}
                         </div>
                       )}
                     </TableCell>
