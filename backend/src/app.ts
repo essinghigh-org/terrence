@@ -113,6 +113,7 @@ import { credentialDoctorRoutes } from "./routes/credential-doctor";
 import { providerIconRoutes } from "./routes/provider-icons";
 import { actionsRoutes } from "./routes/actions";
 import { registryComponentsRoutes } from "./routes/registry-components";
+import { platformRoutes } from "./routes/platform";
 import { availableVersions } from "./binaryManager";
 import { DurableJobBudgetError } from "./lib/durable-jobs";
 
@@ -1078,7 +1079,8 @@ export const app = new Elysia()
   .use(policyEvaluationRoutes)
   .use(docsRoutes)
   .use(actionsRoutes)
-  .use(registryComponentsRoutes);
+  .use(registryComponentsRoutes)
+  .use(platformRoutes);
 
 // The System API has its own listener in production; privileged diagnostics
 // are deliberately not mounted on the public application listener.
