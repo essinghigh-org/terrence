@@ -104,7 +104,7 @@ test("renders workspace variables and attached variable sets as separate section
 
   const view = render(<WorkspaceVariables workspaceId="ws-1" orgName="essighigh" canUpdate />);
   await waitFor((): void => { expect(view.getByText("LOCAL_KEY")).toBeTruthy(); });
-  await waitFor((): void => { expect(view.getByText("github-provider")).toBeTruthy(); });
+  await waitFor((): void => { expect(view.getAllByText("github-provider").length).toBeGreaterThan(0); });
   await waitFor((): void => { expect(view.getByText("GITHUB_TOKEN")).toBeTruthy(); });
 
   // Inherited variables are read-only: exactly one Edit/Delete pair exists, for the
@@ -187,7 +187,7 @@ test("attaches and detaches variable sets from the workspace", async () => {
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
 
   const view = render(<WorkspaceVariables workspaceId="ws-1" orgName="essighigh" canUpdate />);
-  await waitFor((): void => { expect(view.getByText("github-provider")).toBeTruthy(); });
+  await waitFor((): void => { expect(view.getAllByText("github-provider").length).toBeGreaterThan(0); });
 
   // Attach flow: the dialog lists unattached organization sets.
   fireEvent.click(view.getByRole("button", { name: "Attach variable set" }));
@@ -241,4 +241,10 @@ test("names the winning source on duplicated keys", async () => {
   // The workspace row wins; both set rows name the workspace as winner.
   expect(titles).toContain("Effective value for DUP (wins for this workspace)");
   expect(titles.filter((title): boolean => title === "Overridden by the workspace value for this workspace")).toHaveLength(2);
+
+  fireEvent.click(view.getAllByRole("button", { name: "Show precedence for DUP" })[0]!);
+  expect(view.getByText("Why is this value being used?")).toBeTruthy();
+  expect(view.getByText(/Candidates are ordered from lower to higher precedence/)).toBeTruthy();
+  expect(view.getAllByText("alpha").length).toBeGreaterThan(0);
+  expect(view.getAllByText("beta").length).toBeGreaterThan(0);
 });

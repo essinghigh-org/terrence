@@ -329,15 +329,11 @@ function PhaseMeta({
   status,
   timestamps,
   logUrl,
-  logWrap,
-  onToggleLogWrap,
 }: Readonly<{
   phase: "plan" | "apply";
   status: string;
   timestamps: Readonly<Record<string, string>>;
   logUrl: string | null | undefined;
-  logWrap: boolean;
-  onToggleLogWrap: () => void;
 }>): React.JSX.Element {
   const started = timestamps[phase === "plan" ? "planning-at" : "applying-at"];
   const completed = status === "running" ? undefined : (phase === "plan"
@@ -367,30 +363,7 @@ function PhaseMeta({
       {completed !== undefined && (
         <span>{completedLabel} <time dateTime={completed} title={formatDateTime(completed)}>{formatRelativeTime(completed)}</time>{phaseDurationLabel !== null && phaseDurationLabel !== "Unavailable" && (<span title="Phase duration"> · {phaseDurationLabel}</span>)}</span>
       )}
-      {hasLogUrl && (
-        <>
-          <button
-            type="button"
-            onClick={(event: React.MouseEvent<HTMLButtonElement>): void => {
-              event.preventDefault();
-              event.stopPropagation();
-              onToggleLogWrap();
-            }}
-            aria-pressed={logWrap}
-            className="rounded-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Wrap {logWrap ? "on" : "off"}
-          </button>
-          <a
-            href={safeHttpUrl(logUrl) ?? undefined}
-            download
-            onClick={(event: React.MouseEvent<HTMLAnchorElement>): void => { event.stopPropagation(); }}
-            className="font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Download raw log
-          </a>
-        </>
-      )}
+      {hasLogUrl && <span>Raw log available</span>}
     </div>
   );
 }
@@ -1082,20 +1055,6 @@ export function RunDetail({
     ? "No raw apply log was captured for this run."
     : "Apply output is not available yet.";
 
-  /**
-   * A log the server can no longer serve in full — a run that outran the
-   * per-run retention cap. The server has always reported this; nothing in
-   * the UI read it, so the pane silently presented a partial log as if it
-   * were the whole thing.
-   */
-  const truncationNotice = (truncated: boolean): React.JSX.Element | null => truncated
-    ? (
-      <p className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning-text">
-        This log is longer than the retention limit, so the earliest output is no longer stored.
-        What follows is the end of the log.
-      </p>
-    )
-    : null;
   const summaryCounts = applyStatus === "finished" ? applyCounts : planCounts;
   const summaryImportCount = applyStatus === "finished"
     ? applyCounts?.["resource-imports"] ?? planImportCount
@@ -1497,8 +1456,6 @@ export function RunDetail({
                     status={planStatus}
                     timestamps={{ ...timestamps, ...plan?.attributes["status-timestamps"] }}
                     logUrl={plan?.attributes["log-read-url"]}
-                    logWrap={logWrap}
-                    onToggleLogWrap={() => { setLogWrap((wrap) => !wrap); }}
                   />
                   {applyStatus === "finished" && (
                     <ResourceCounts
@@ -1534,10 +1491,20 @@ export function RunDetail({
               onSummaryChange={handlePlanSummaryChange}
             />
 
-            <div className="relative border-t border-border">
+            <div id="plan-log-viewer" className="relative border-t border-border">
               <RunLogDisclosure key={`plan-${runId}`} label="Raw plan log" status={planStatus}>
-              {truncationNotice(view.planLog.truncated)}
-              <RunLogOutput active={planStatus === "running"} className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
+              <RunLogOutput
+                active={planStatus === "running"}
+                phase="plan"
+                truncated={view.planLog.truncated}
+                wrap={logWrap}
+                onToggleWrap={() => { setLogWrap((wrap) => !wrap); }}
+                logUrl={plan?.attributes["log-read-url"]}
+                onPhaseChange={(next): void => {
+                  document.getElementById(`${next}-log-viewer`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+                className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}
+              >
                 {planLogs !== "" ? truncateLogForDisplay(planLogs) : planRawLogMessage}
               </RunLogOutput>
               </RunLogDisclosure>
@@ -1755,8 +1722,6 @@ export function RunDetail({
                     status={applyStatus}
                     timestamps={{ ...timestamps, ...apply?.attributes["status-timestamps"] }}
                     logUrl={apply?.attributes["log-read-url"]}
-                    logWrap={logWrap}
-                    onToggleLogWrap={() => { setLogWrap((wrap) => !wrap); }}
                   />
                   {applyStatus !== "finished" && (
                     <ResourceCounts
@@ -1802,10 +1767,20 @@ export function RunDetail({
               />
             )}
 
-            <div className="relative">
+            <div id="apply-log-viewer" className="relative">
                 <RunLogDisclosure key={`apply-${runId}`} label="Raw apply log" status={applyStatus}>
-                {truncationNotice(view.applyLog.truncated)}
-                <RunLogOutput active={applyStatus === "running"} className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
+                <RunLogOutput
+                  active={applyStatus === "running"}
+                  phase="apply"
+                  truncated={view.applyLog.truncated}
+                  wrap={logWrap}
+                  onToggleWrap={() => { setLogWrap((wrap) => !wrap); }}
+                  logUrl={apply?.attributes["log-read-url"]}
+                  onPhaseChange={(next): void => {
+                    document.getElementById(`${next}-log-viewer`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }}
+                  className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}
+                >
                   {applyLogs !== "" ? truncateLogForDisplay(applyLogs) : applyRawLogMessage}
                 </RunLogOutput>
                 </RunLogDisclosure>
@@ -2188,8 +2163,16 @@ export function RunDetail({
               Close
             </Button>
           </div>
-          {truncationNotice(fullscreenLog === "plan" ? view.planLog.truncated : view.applyLog.truncated)}
-          <RunLogOutput key={fullscreenLog} active={(fullscreenLog === "plan" ? planStatus : applyStatus) === "running"} className={`flex-1 overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
+          <RunLogOutput
+            key={fullscreenLog}
+            active={(fullscreenLog === "plan" ? planStatus : applyStatus) === "running"}
+            phase={fullscreenLog}
+            truncated={fullscreenLog === "plan" ? view.planLog.truncated : view.applyLog.truncated}
+            wrap={logWrap}
+            onToggleWrap={() => { setLogWrap((wrap) => !wrap); }}
+            logUrl={fullscreenLog === "plan" ? plan?.attributes["log-read-url"] : apply?.attributes["log-read-url"]}
+            className={`flex-1 overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}
+          >
             {fullscreenLog === "plan"
               ? planLogs !== "" ? truncateLogForDisplay(planLogs) : planRawLogMessage
               : applyLogs !== "" ? truncateLogForDisplay(applyLogs) : applyRawLogMessage}
