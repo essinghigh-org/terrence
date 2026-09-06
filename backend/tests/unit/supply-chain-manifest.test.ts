@@ -41,4 +41,14 @@ describe("dependency supply-chain manifest", () => {
     expect(sbom).toContain('"spdxVersion":"SPDX-2.3"');
     expect(sbom).toContain('"algorithm":"SHA512"');
   });
+
+  it("refuses SBOM entries for names outside the npm package grammar", (): void => {
+    const manifest = manifestFor("1.2.3");
+    for (const name of ["../escape", "@scope/pkg/../../x", "pkg;curl evil", "name with spaces"]) {
+      const poisoned = { ...manifest, packages: [{ ...manifest.packages[0]!, name }] };
+      expect((): unknown => createSpdxSbom(poisoned)).toThrow("invalid npm package name");
+    }
+    const scoped = { ...manifest, packages: [{ ...manifest.packages[0]!, name: "@scope/pkg" }] };
+    expect(JSON.stringify(createSpdxSbom(scoped))).toContain("pkg:npm/%40scope/pkg@1.2.3");
+  });
 });

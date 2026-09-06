@@ -270,6 +270,12 @@ function spdxId(entry: Readonly<JsonRecord>): string {
 
 export function createSpdxSbom(manifest: DependencyManifest): JsonRecord {
   const packages = manifest.packages.map((entry): JsonRecord => {
+    // Lockfile-sourced names flow into the purl, the tarball URL and the
+    // SPDX record: allowlist the npm package-name grammar up front so no
+    // downstream interpolation can carry path traversal or URL metacharacters.
+    if (!/^(?:@[a-z0-9~][a-z0-9~._-]*\/)?[a-z0-9~][a-z0-9~._-]*$/.test(entry.name)) {
+      throw new Error(`Refusing to emit SBOM entry for invalid npm package name: ${entry.name}`);
+    }
     const checksum = integrityToHex(entry.integrity);
     return {
       SPDXID: spdxPackageId(entry),

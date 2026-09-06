@@ -277,8 +277,13 @@ function awsAuthorization(
 
 function xmlValue(body: string, name: string): string | undefined {
   const value = new RegExp(`<${name}>([^<]{1,4096})</${name}>`).exec(body)?.[1];
+  if (value === undefined) return undefined;
   const entities: Readonly<Record<string, string>> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
-  return value?.replace(/&(amp|lt|gt|quot|apos);/g, (match: string, entity: string): string => entities[entity] ?? match);
+  const decoded = value.replace(/&(amp|lt|gt|quot|apos);/g, (match: string, entity: string): string => entities[entity] ?? match);
+  // Single-pass decode only: a value that still carries an entity reference
+  // was double-encoded (e.g. &amp;lt;) and is rejected rather than decoded
+  // a second time into active markup.
+  return /&(?:amp|lt|gt|quot|apos|#[0-9]+|#x[0-9a-fA-F]+);/.test(decoded) ? undefined : decoded;
 }
 
 async function awsAccess(
