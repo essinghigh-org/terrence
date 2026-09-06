@@ -1123,9 +1123,15 @@ setTimeout((): void => {
       log.warn("Failed to load Site Admin logging settings", { error: String(error) });
     });
   };
-  refreshLoggingSettings();
-  const loggingRefreshTimer = setInterval(refreshLoggingSettings, 1_000);
-  (loggingRefreshTimer as unknown as { unref?: () => void }).unref?.();
+  // The refresh mutates the process-global logging configuration, so it
+  // must not run in test processes: a refresh landing mid-test re-applies
+  // persisted/environment defaults over the settings under test (flaky
+  // syslog-format assertions). Production never sets the flag.
+  if (!envFlag("TERRENCE_DISABLE_WORKER")) {
+    refreshLoggingSettings();
+    const loggingRefreshTimer = setInterval(refreshLoggingSettings, 1_000);
+    (loggingRefreshTimer as unknown as { unref?: () => void }).unref?.();
+  }
   import("./worker").then(({ startWorkerQueue }: { startWorkerQueue: () => void }): void => {
     startWorkerQueue();
     log.info("Worker queue started");
