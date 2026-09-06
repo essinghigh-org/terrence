@@ -3,7 +3,7 @@ import { writeFile, mkdir, rm, symlink, mkdtemp } from "fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { RunSandbox, probeLandlockAbi } from "../../src/lib/sandbox";
+import { RunSandbox, probeLandlockAbi, runNetPolicy, validateRunSandboxConfig } from "../../src/lib/sandbox";
 import { ensureBinary } from "../../src/binaryManager";
 
 const abi = probeLandlockAbi();
@@ -443,5 +443,67 @@ except Exception as e:
     // self-describing probe — it confirms the probe surface is callable
     // without crashing, and the return type is a number.
     expect(typeof probeLandlockAbi()).toBe("number");
+  });
+
+  it("rejects misspelled network policies instead of mapping them to allow (SEC-10)", (): void => {
+    const previous = process.env["TERRENCE_RUN_NET_POLICY"];
+    try {
+      process.env["TERRENCE_RUN_NET_POLICY"] = "deny";
+      expect(runNetPolicy()).toBe("deny");
+      process.env["TERRENCE_RUN_NET_POLICY"] = " DENY ";
+      expect(runNetPolicy()).toBe("deny");
+      delete process.env["TERRENCE_RUN_NET_POLICY"];
+      expect(runNetPolicy()).toBe("allow");
+      process.env["TERRENCE_RUN_NET_POLICY"] = "denny";
+      expect((): void => {
+        validateRunSandboxConfig();
+      }).toThrow("TERRENCE_RUN_NET_POLICY must be allow or deny");
+      process.env["TERRENCE_RUN_NET_POLICY"] = "false";
+      expect((): void => {
+        runNetPolicy();
+      }).toThrow("TERRENCE_RUN_NET_POLICY must be allow or deny");
+    } finally {
+      if (previous === undefined) delete process.env["TERRENCE_RUN_NET_POLICY"];
+      else process.env["TERRENCE_RUN_NET_POLICY"] = previous;
+    }
+  });
+
+  it("denies TCP bind/connect but leaves UDP bind working under deny (SEC-10 TCP-only scope)", async (): Promise<void> => {
+    if (!usable || abi < 4) {
+      console.warn(`Skipping: needs Landlock ABI >= 4 (host ABI ${abi})`);
+      return;
+    }
+    const previous = process.env["TERRENCE_RUN_NET_POLICY"];
+    process.env["TERRENCE_RUN_NET_POLICY"] = "deny";
+    const sandbox = new RunSandbox();
+    const workDir = await mkdtemp(join(tmpdir(), "terrence-sb-"));
+    await mkdir(join(workDir, "tmp"), { recursive: true });
+    try {
+      const script = join(workDir, "probe.sh");
+      await writeFile(
+        script,
+        "#!/bin/sh\npython3 -c \"import socket; "
+        + "t=socket.socket(); t.settimeout(2); "
+        + "try:\n t.bind(('127.0.0.1', 0)); print('TCP_BIND_OK')\n"
+        + "except OSError as e:\n print(f'TCP_BIND_ERR_{e.errno}'); "
+        + "u=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); "
+        + "try:\n u.bind(('127.0.0.1', 0)); print('UDP_BIND_OK')\n"
+        + "except OSError as e:\n print(f'UDP_BIND_ERR_{e.errno}'); "
+        + "m=socket.socket(); m.settimeout(2); "
+        + "print(f\"META_RC_{m.connect_ex(('169.254.169.254', 80))}\")\"\n",
+        { mode: 0o755 },
+      );
+      const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });
+      const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
+      expect(exitCode).toBe(0);
+      const out = stdout.trim().split("\n").map((line): string => line.trim());
+      expect(out).toContain("TCP_BIND_ERR_13");
+      expect(out).toContain("UDP_BIND_OK");
+      expect(out).toContain("META_RC_13");
+    } finally {
+      if (previous === undefined) delete process.env["TERRENCE_RUN_NET_POLICY"];
+      else process.env["TERRENCE_RUN_NET_POLICY"] = previous;
+      await rm(workDir, { recursive: true, force: true });
+    }
   });
 });

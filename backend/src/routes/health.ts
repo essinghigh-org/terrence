@@ -2,7 +2,7 @@ import { localSignupEnabled } from "../lib/settings";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { authPlugin } from "../auth";
-import { probeLandlockAbi, runSandboxRequired } from "../lib/sandbox";
+import { probeLandlockAbi, runNetPolicy, runSandboxRequired } from "../lib/sandbox";
 import { envEnabled } from "../lib/env";
 import { log } from "../lib/log";
 import { ssoSettingsSnapshot } from "../lib/sso";
@@ -474,10 +474,19 @@ async function readinessResponse(
     sandboxMinAbi !== null
       ? hostAbi < sandboxMinAbi ? "ERROR" : "OK"
       : runSandboxRequired() && hostAbi < 1 ? "ERROR" : "OK";
+  // SEC-10: never advertise a healthy sandbox when the requested TCP network
+  // denial cannot be installed (Landlock ABI < 4), and never crash readiness
+  // on a misspelled policy (startup validation rejects it; belt and braces).
+  let netPolicyStatus: "OK" | "ERROR" = "OK";
+  try {
+    if (runNetPolicy() === "deny" && hostAbi < 4) netPolicyStatus = "ERROR";
+  } catch {
+    netPolicyStatus = "ERROR";
+  }
   const maintenance = maintenanceSnapshot();
   const draining = maintenance.active || ["draining", "maintenance"].includes((process.env["TERRENCE_NODE_STATUS"] ?? "").toLowerCase());
   const status =
-    database === "ERROR" || disk === "ERROR" || sandboxAbiStatus === "ERROR"
+    database === "ERROR" || disk === "ERROR" || sandboxAbiStatus === "ERROR" || netPolicyStatus === "ERROR"
       ? "ERROR"
       : draining
         ? "DRAINING"
@@ -495,6 +504,7 @@ async function readinessResponse(
       { check: "redis", status: "OK" },
       { check: "task-worker", status: worker },
       { check: "run-sandbox", status: sandboxAbiStatus },
+      { check: "run-network-policy", status: netPolicyStatus },
       { check: "vault", status: "OK" },
     ],
   };
@@ -758,6 +768,8 @@ export const healthRoutes = new Elysia({ name: "health" })
           abi: number;
           reason: string | null;
           "extra-rw-allowed": boolean;
+          "net-policy": "allow" | "deny" | "invalid";
+          "net-scope": "tcp-bind-connect" | null;
           docs: string;
         };
       };
@@ -776,6 +788,16 @@ export const healthRoutes = new Elysia({ name: "health" })
         : "Landlock is not available on this kernel (needs Linux >= 5.13 with CONFIG_SECURITY_LANDLOCK)";
     }
     const extraRwAllowed = envEnabled(process.env["TERRENCE_SANDBOX_EXTRA_RW_ALLOWED"]);
+    // SEC-10: expose the effective run network policy and its enforcement
+    // scope. `deny` restricts TCP bind/connect only (Landlock ABI >= 4);
+    // UDP, DNS and other families are unaffected. Never throw here: an
+    // invalid value is rejected at startup, but meta must stay servable.
+    let netPolicy: "allow" | "deny" | "invalid" = "invalid";
+    try {
+      netPolicy = runNetPolicy();
+    } catch {
+      netPolicy = "invalid";
+    }
     return {
       data: {
         id: "meta",
@@ -787,6 +809,8 @@ export const healthRoutes = new Elysia({ name: "health" })
             abi,
             reason,
             "extra-rw-allowed": extraRwAllowed,
+            "net-policy": netPolicy,
+            "net-scope": netPolicy === "deny" ? "tcp-bind-connect" : null,
             docs: "https://docs.kernel.org/userspace-api/landlock.html",
           },
         },

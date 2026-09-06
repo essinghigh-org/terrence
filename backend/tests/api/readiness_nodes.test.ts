@@ -69,6 +69,10 @@ describe("Readiness & Nodes API (the reference format Parity)", () => {
     const json = await res.json();
     expect(json.status).toBe("OK");
     expect(Array.isArray(json.checks)).toBe(true);
+    // SEC-10: the effective run network policy is a first-class check, so a
+    // requested TCP denial that cannot be installed never reads as healthy.
+    const netCheck = (json.checks as { check: string; status: string }[]).find((c) => c.check === "run-network-policy");
+    expect(netCheck?.status).toBe("OK");
   });
 
   afterAll(async () => {

@@ -144,6 +144,12 @@ export function SecurityOverview(props: Readonly<{
                 {securitySummary.sandboxAvailable ? "Available" : "Unavailable"}
               </span>
             </div>
+            <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+              <span>Run network policy</span>
+              <span className={securitySummary.sandboxNetPolicy === "invalid" ? "font-medium text-destructive" : securitySummary.sandboxNetPolicy === "deny" ? "font-medium text-success" : "text-muted-foreground"}>
+                {securitySummary.sandboxNetPolicy === "deny" ? "Deny (TCP bind/connect only)" : securitySummary.sandboxNetPolicy === "invalid" ? "Invalid" : "Allow"}
+              </span>
+            </div>
             {securitySummary.sandboxReason !== null && (
               <p className="text-xs text-muted-foreground">{securitySummary.sandboxReason}</p>
             )}
