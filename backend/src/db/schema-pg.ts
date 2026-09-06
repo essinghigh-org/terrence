@@ -883,6 +883,21 @@ export const organizations = pgTable("organizations", {
     requireHardIsolation: boolean("require_hard_isolation").notNull().default(false),
 });
 
+export const outboxEvents = pgTable("outbox_events", {
+    id: text("id").notNull().primaryKey(),
+    topic: text("topic").notNull(),
+    payload: jsonb("payload").notNull().default({}),
+    status: text("status").notNull().default("pending"),
+    attempts: bigint("attempts", { mode: "number" }).notNull().default(0),
+    lastError: text("last_error"),
+    deliveredAt: bigint("delivered_at", { mode: "number" }),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.outboxEvents.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.outboxEvents.updatedAt.defaultFn!()),
+}, (table) => [
+    index("outbox_events_status_updated_idx").on(table.status, table.updatedAt),
+    index("outbox_events_topic_status_idx").on(table.topic, table.status),
+  ]);
+
 export const planExports = pgTable("plan_exports", {
     id: text("id").notNull().primaryKey(),
     planId: text("plan_id").notNull(),

@@ -22,7 +22,7 @@ import {
 import { PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION, parsePersistedJobPayload } from "./validation";
 import { createOperationContext } from "./operation-context";
 
-export type DurableJobKind = "module-test" | "stack-configuration" | "stack-deployment" | "explorer-inventory" | "explorer-catalog" | "plan-explanation" | "vcs-webhook";
+export type DurableJobKind = "module-test" | "stack-configuration" | "stack-deployment" | "explorer-inventory" | "explorer-catalog" | "plan-explanation" | "vcs-webhook" | "outbox-delivery";
 export type DurableJob = Readonly<typeof durableJobs.$inferSelect>;
 export type DurableJobContext = Readonly<{
   heartbeat: () => Promise<boolean>;

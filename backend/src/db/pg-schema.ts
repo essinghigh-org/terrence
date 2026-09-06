@@ -84,6 +84,7 @@ export const organizationMembershipRoles = pg[dbNameOf(sqliteSchema.organization
 export const organizationMemberships = pg[dbNameOf(sqliteSchema.organizationMemberships)];
 export const organizationRoles = pg[dbNameOf(sqliteSchema.organizationRoles)];
 export const organizations = pg[dbNameOf(sqliteSchema.organizations)];
+export const outboxEvents = pg[dbNameOf(sqliteSchema.outboxEvents)];
 export const planExports = pg[dbNameOf(sqliteSchema.planExports)];
 export const policies = pg[dbNameOf(sqliteSchema.policies)];
 export const policyChecks = pg[dbNameOf(sqliteSchema.policyChecks)];

@@ -23,6 +23,11 @@ import { decryptSecret } from "./secrets";
 import { resetSharedDeliveryStateForTests as resetSharedStateImpl, sharedBreakerRecordFailure, sharedBreakerRecordSuccess, sharedDedupRecord, sharedDedupSuppressed } from "./notification-state";
 import { getSettings } from "./settings";
 import { isSmtpEncryption, sendEmail } from "./smtp";
+import {
+  enqueueOutboxEvent,
+  enqueueOutboxEventTx,
+  RUN_NOTIFICATION_OUTBOX_TOPIC,
+} from "./outbox";
 
 type NotificationConfiguration = DeepReadonly<
   Omit<typeof notificationConfigurations.$inferSelect, "triggers">
@@ -54,6 +59,13 @@ export type NotificationDelivery = Readonly<{
   successful: boolean;
   url: string;
   attempts: number;
+}>;
+
+export type RunNotificationDeliveryOptions = Readonly<{
+  /** Stable id propagated to the destination as `event_id`. */
+  eventId?: string;
+  /** Durable retries must attempt the destination again after a failure. */
+  skipDedup?: boolean;
 }>;
 
 /** Header names whose values must never be persisted with notification
@@ -843,6 +855,7 @@ export async function deliverRunNotifications(
   runId: string,
   trigger: string,
   statusOverride?: string,
+  options: RunNotificationDeliveryOptions = {},
 ): Promise<NotificationDelivery[]> {
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
   if (run === undefined) return [];
@@ -892,19 +905,20 @@ export async function deliverRunNotifications(
   const runStatus = statusOverride ?? run.status;
 
   const dedupKey = `${run.id}:${trigger}:${runStatus}`;
-  if (await deliveryDeduplicated("run", dedupKey)) {
+  if (options.skipDedup !== true && await deliveryDeduplicated("run", dedupKey)) {
     return [];
   }
   // Only record the logical emission when there is at least one matching
   // destination and a delivery will actually be attempted, so a config-less
   // or breaker-closed run does not consume the dedup window.
-  if (matching.length > 0) {
+  if (matching.length > 0 && options.skipDedup !== true) {
     await deliveryDedupRecord("run", dedupKey);
   }
 
   return Promise.all(matching.map(async (configuration: NotificationConfiguration): Promise<NotificationDelivery> =>
     postNotification(configuration, {
       payload_version: 1,
+      ...(options.eventId === undefined ? {} : { event_id: options.eventId }),
       notification_configuration_id: configuration.id,
       run_url: runUrl,
       run_id: run.id,
@@ -924,8 +938,45 @@ export async function deliverRunNotifications(
     })));
 }
 
+function runNotificationEventId(runId: string, trigger: string, status: string): string {
+  return ["run", runId, trigger, status].map(encodeURIComponent).join(":");
+}
+
+/**
+ * Persist a run notification in the caller's transaction. The event id is
+ * derived from the logical transition, so repeated enqueue attempts are safe.
+ */
+export async function enqueueRunNotificationOutboxTx(
+  database: DeepReadonly<typeof db>,
+  runId: string,
+  trigger: string,
+  status: string,
+): Promise<void> {
+  await enqueueOutboxEventTx(database, {
+    id: runNotificationEventId(runId, trigger, status),
+    topic: RUN_NOTIFICATION_OUTBOX_TOPIC,
+    payload: { runId, trigger, status },
+  });
+}
+
+/** Persist a run notification outside a larger domain transaction. */
+export async function enqueueRunNotificationOutbox(
+  runId: string,
+  trigger: string,
+  statusOverride?: string,
+): Promise<void> {
+  const run = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { status: true } });
+  if (run === undefined) return;
+  const status = statusOverride ?? run.status;
+  await enqueueOutboxEvent({
+    id: runNotificationEventId(runId, trigger, status),
+    topic: RUN_NOTIFICATION_OUTBOX_TOPIC,
+    payload: { runId, trigger, status },
+  });
+}
+
 export function queueRunNotification(runId: string, trigger: string, status?: string): void {
-  void deliverRunNotifications(runId, trigger, status).catch((error: unknown): void => {
+  void enqueueRunNotificationOutbox(runId, trigger, status).catch((error: unknown): void => {
     console.error(`[terrence] Failed to deliver ${trigger} notification for run ${runId}:`, error);
   });
 }

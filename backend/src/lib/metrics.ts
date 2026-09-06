@@ -39,6 +39,7 @@ import { processHistory, processSnapshot, type ProcessSnapshot, type SampleWindo
 import { collectWebhookQueueMetrics, type WebhookQueueMetrics } from "./webhook-jobs";
 import { collectDurableJobBudgetSnapshot } from "./durable-jobs";
 import type { ResourceBudgetSnapshot } from "./resource-budgets";
+import { collectOutboxMetrics, type OutboxMetrics } from "./outbox";
 
 export type AgentPoolMetrics = Readonly<{
   id: string;
@@ -83,6 +84,8 @@ export type MetricsCollection = Readonly<{
     }>;
     /** VCS webhook delivery queue state (todo 192-194). */
     webhookQueue: WebhookQueueMetrics;
+    /** Transactional outbox delivery state. */
+    outboxQueue: OutboxMetrics;
     /** Durable queue budgets; aggregate only, with no organization IDs. */
     resourceBudgets: ResourceBudgetSnapshot;
   }> | null;
@@ -183,7 +186,7 @@ async function collectPoolMetrics(
 
 /** Instance-wide metrics (legacy tokens only). */
 export async function collectInstanceMetrics(): Promise<NonNullable<MetricsCollection["instance"]>> {
-  const [userCount, organizationCount, workspaceCount, runCount, runsByStatus, database, webhookQueue, resourceBudgets] = await Promise.all([
+  const [userCount, organizationCount, workspaceCount, runCount, runsByStatus, database, webhookQueue, outboxQueue, resourceBudgets] = await Promise.all([
     db.select({ value: count() }).from(users),
     db.select({ value: count() }).from(organizations),
     db.select({ value: count() }).from(workspaces),
@@ -191,6 +194,7 @@ export async function collectInstanceMetrics(): Promise<NonNullable<MetricsColle
     db.select({ status: runs.status, value: count() }).from(runs).groupBy(runs.status),
     Promise.resolve(databaseMetrics()),
     collectWebhookQueueMetrics(),
+    collectOutboxMetrics(),
     collectDurableJobBudgetSnapshot(),
   ]);
   return {
@@ -210,6 +214,7 @@ export async function collectInstanceMetrics(): Promise<NonNullable<MetricsColle
       slowFingerprints: slowQueryFingerprints(),
     },
     webhookQueue,
+    outboxQueue,
     resourceBudgets,
   };
 }

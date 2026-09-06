@@ -60,7 +60,7 @@ import {
   RECOVERY_PROMOTED_FILENAME,
   sweepIncompleteRecoveryCopies,
 } from "./lib/recovery-files";
-import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
+import { enqueueRunNotificationOutboxTx, queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
 import { canTransitionRunStatus, isTerminalRunStatus } from "./lib/run-status";
 import { FINAL_RUN_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, apiURL, signedApiURL, decodeStatePayload } from "./lib/utils";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./lib/url-safety";
@@ -102,6 +102,7 @@ import {
 } from "./lib/archive";
 export { tarMemberIsForbiddenSpecial, tarMemberPathUnsafe } from "./lib/archive";
 import { startDurableJobWorker } from "./lib/durable-jobs";
+import { handleOutboxDeliveryJob, repairOutboxJobs } from "./lib/outbox";
 import { handleVcsWebhookJob } from "./lib/webhook-jobs";
 import { runModuleTestJob } from "./lib/module-test-worker";
 import { runStackConfigurationJob, runStackDeploymentJob } from "./lib/stack-worker";
@@ -801,47 +802,6 @@ type RunStatusExtra = Readonly<Partial<Pick<
 async function updateRunStatus(runId: string, status: string, extra?: RunStatusExtra): Promise<void> {
   const now = new Date().toISOString();
   const statusKey = status.replace(/_/g, "-") + "-at";
-  let workspaceId: string | null = null;
-  try {
-    const existing = await db.query.runs.findFirst({
-      where: eq(runs.id, runId),
-      columns: { statusTimestamps: true, statusMetadataSchemaVersion: true, status: true, workspaceId: true },
-    });
-    if (existing === undefined) {
-      // The run record was deleted mid-execution (issue #693): there is no
-      // state left to publish to. Stand down quietly instead of throwing a
-      // compare-and-set error that escapes as an unhandled rejection and
-      // crashes the worker.
-      log.warn(`Run ${runId} no longer exists; skipping status update to ${status}`, { runId, status });
-      return;
-    }
-    workspaceId = existing?.workspaceId ?? null;
-    const existingTimestamps = parsePersistedStatusMetadata(
-      existing.statusTimestamps,
-      existing.statusMetadataSchemaVersion,
-      runId,
-    ) ?? {};
-    // State machine guard: illegal writes are rejected, not merely logged.
-    // Otherwise a canceled worker can overwrite the terminal cancellation with
-    // "applied" after the operator action has already returned.
-    const currentStatus = existing?.status;
-    if (currentStatus !== undefined && currentStatus !== status && !canTransitionRunStatus(currentStatus, status)) {
-      throw new Error(`Illegal run status transition for ${runId}: ${currentStatus} -> ${status}`);
-    }
-    const timestamps = { ...existingTimestamps, [statusKey]: now };
-    const updated = await db.update(runs)
-      .set({ status, statusTimestamps: timestamps, statusMetadataSchemaVersion: 1, ...(extra ?? {}) })
-      .where(and(eq(runs.id, runId), eq(runs.status, currentStatus ?? status)))
-      .returning({ id: runs.id });
-    if (updated.length === 0) {
-      // A concurrent cancel/force-cancel won the race after the read above.
-      // Do not publish or notify a transition that was not persisted.
-      throw new Error(`Run ${runId} status transition to ${status} lost its compare-and-set race`);
-    }
-  } catch (err: unknown) {
-    log.error(`Failed to update run ${runId} status to ${status}`, { error: err instanceof Error ? err.message : String(err) });
-    throw err;
-  }
   const trigger = status === "planning"
     ? "run:planning"
     : status === "applying"
@@ -853,7 +813,53 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
           : status === "policy_soft_failed" || status === "planned_and_saved"
             ? "run:needs_attention"
             : undefined;
-  if (trigger !== undefined) queueRunNotification(runId, trigger, status);
+  let workspaceId: string | null = null;
+  try {
+    const committed = await db.transaction(async (transaction): Promise<boolean> => {
+      const tx = transaction as unknown as typeof db;
+      const existing = await tx.query.runs.findFirst({
+        where: eq(runs.id, runId),
+        columns: { statusTimestamps: true, statusMetadataSchemaVersion: true, status: true, workspaceId: true },
+      });
+      if (existing === undefined) return false;
+      workspaceId = existing.workspaceId;
+      const existingTimestamps = parsePersistedStatusMetadata(
+        existing.statusTimestamps,
+        existing.statusMetadataSchemaVersion,
+        runId,
+      ) ?? {};
+      // State machine guard: illegal writes are rejected, not merely logged.
+      // Otherwise a canceled worker can overwrite the terminal cancellation with
+      // "applied" after the operator action has already returned.
+      const currentStatus = existing.status;
+      if (currentStatus !== status && !canTransitionRunStatus(currentStatus, status)) {
+        throw new Error(`Illegal run status transition for ${runId}: ${currentStatus} -> ${status}`);
+      }
+      const timestamps = { ...existingTimestamps, [statusKey]: now };
+      const updated = await tx.update(runs)
+        .set({ status, statusTimestamps: timestamps, statusMetadataSchemaVersion: 1, ...(extra ?? {}) })
+        .where(and(eq(runs.id, runId), eq(runs.status, currentStatus)))
+        .returning({ id: runs.id });
+      if (updated.length === 0) {
+        // A concurrent cancel/force-cancel won the race after the read above.
+        // Do not publish or notify a transition that was not persisted.
+        throw new Error(`Run ${runId} status transition to ${status} lost its compare-and-set race`);
+      }
+      if (trigger !== undefined) await enqueueRunNotificationOutboxTx(tx, runId, trigger, status);
+      return true;
+    });
+    if (!committed) {
+      // The run record was deleted mid-execution (issue #693): there is no
+      // state left to publish to. Stand down quietly instead of throwing a
+      // compare-and-set error that escapes as an unhandled rejection and
+      // crashes the worker.
+      log.warn(`Run ${runId} no longer exists; skipping status update to ${status}`, { runId, status });
+      return;
+    }
+  } catch (err: unknown) {
+    log.error(`Failed to update run ${runId} status to ${status}`, { error: err instanceof Error ? err.message : String(err) });
+    throw err;
+  }
   void reportRunVcsStatus(runId, status);
   // Publish the transition on the in-process bus so authenticated SSE
   // clients (10.20) can refresh without polling. The org lookup is one
@@ -5379,6 +5385,12 @@ export function startWorkerQueue(): void {
   if (envFlag("TERRENCE_DISABLE_WORKER")) return;
   if (isWorkerLoopRunning) return;
   isWorkerLoopRunning = true;
+  // A previous release or an operator action can leave a committed outbox
+  // row without its companion durable job. Repair those boundedly before the
+  // normal lease poll starts; a current transaction always writes both rows.
+  void repairOutboxJobs().catch((error: unknown): void => {
+    log.error("Outbox repair failed", { error: String(error) });
+  });
   startDurableJobWorker({
     "module-test": runModuleTestJob,
     "stack-configuration": runStackConfigurationJob,
@@ -5387,6 +5399,7 @@ export function startWorkerQueue(): void {
     "explorer-catalog": runExplorerCatalogJob,
     "plan-explanation": runPlanExplanationJob,
     "vcs-webhook": handleVcsWebhookJob,
+    "outbox-delivery": handleOutboxDeliveryJob,
   });
 
   const arm = (cycle: () => Promise<void>, interval: number): void => {

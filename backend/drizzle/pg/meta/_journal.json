@@ -421,6 +421,13 @@
       "when": 1788709611559,
       "tag": "0059_panoramic_otto_octavius",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1788710968017,
+      "tag": "0060_chilly_gargoyle",
+      "breakpoints": true
     }
   ]
 }

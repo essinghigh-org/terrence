@@ -141,6 +141,13 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
       failed: collection.instance.webhookQueue.failed,
       oldest_pending_seconds: collection.instance.webhookQueue.oldestPendingSeconds,
     };
+    metrics["terrence_outbox_queue"] = {
+      pending: collection.instance.outboxQueue.pending,
+      processing: collection.instance.outboxQueue.processing,
+      delivered: collection.instance.outboxQueue.delivered,
+      dead_letter: collection.instance.outboxQueue.deadLetter,
+      oldest_pending_seconds: collection.instance.outboxQueue.oldestPendingSeconds,
+    };
     metrics["terrence_resource_budgets"] = {
       limits: {
         global_concurrency: collection.instance.resourceBudgets.limits.globalConcurrency,
@@ -300,6 +307,15 @@ function prometheusLines(collection: MetricsCollection): string[] {
       "# HELP terrence_webhook_oldest_pending_seconds Age of the oldest delivery not yet processed.",
       "# TYPE terrence_webhook_oldest_pending_seconds gauge",
       `terrence_webhook_oldest_pending_seconds ${instance.webhookQueue.oldestPendingSeconds}`,
+      "# HELP terrence_outbox_queue_depth Transactional outbox events by state.",
+      "# TYPE terrence_outbox_queue_depth gauge",
+      `terrence_outbox_queue_depth{state="pending"} ${instance.outboxQueue.pending}`,
+      `terrence_outbox_queue_depth{state="processing"} ${instance.outboxQueue.processing}`,
+      `terrence_outbox_queue_depth{state="delivered"} ${instance.outboxQueue.delivered}`,
+      `terrence_outbox_queue_depth{state="dead_letter"} ${instance.outboxQueue.deadLetter}`,
+      "# HELP terrence_outbox_oldest_pending_seconds Age of the oldest pending outbox event.",
+      "# TYPE terrence_outbox_oldest_pending_seconds gauge",
+      `terrence_outbox_oldest_pending_seconds ${instance.outboxQueue.oldestPendingSeconds}`,
       "# HELP terrence_resource_budget_queued Durable jobs waiting for capacity, by class.",
       "# TYPE terrence_resource_budget_queued gauge",
       ...Object.entries(instance.resourceBudgets.queuedByClass).map(([jobClass, value]): string =>

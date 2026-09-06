@@ -268,6 +268,7 @@ export function resourceJobClassForDurableKind(kind: string): ResourceJobClass {
     case "stack-configuration":
     case "module-test": return "plan";
     case "vcs-webhook": return "critical";
+    case "outbox-delivery": return "critical";
     case "explorer-inventory":
     case "explorer-catalog": return "background";
     default: return "background";

@@ -974,6 +974,27 @@ export const durableJobs = sqliteTable("durable_jobs", {
   index("durable_jobs_lease_idx").on(table.status, table.leaseExpiresAt),
 ]);
 
+/**
+ * Transactional records for side effects that must survive the process which
+ * committed the domain change. The matching durable job carries the lease and
+ * retry lifecycle; this row is the stable event identity and operator-facing
+ * delivery result.
+ */
+export const outboxEvents = sqliteTable("outbox_events", {
+  id: text("id").primaryKey(),
+  topic: text("topic").notNull(),
+  payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
+  status: text("status").notNull().default("pending"),
+  attempts: integer("attempts").notNull().default(0),
+  lastError: text("last_error"),
+  deliveredAt: integer("delivered_at"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  index("outbox_events_status_updated_idx").on(table.status, table.updatedAt),
+  index("outbox_events_topic_status_idx").on(table.topic, table.status),
+]);
+
 /** RSA workload-identity signing keys. Private material is encrypted with
  * the installation secret before it reaches the database. */
 export const workloadIdentityKeys = sqliteTable("workload_identity_keys", {

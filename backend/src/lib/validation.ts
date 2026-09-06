@@ -273,6 +273,9 @@ export function parsePersistedJobPayload(
       known["deliveryId"] = deliveryId;
       break;
     }
+    case "outbox-delivery":
+      known["eventId"] = requiredString("eventId");
+      break;
     default:
       persistedFailure(context, "field", `unsupported durable job kind ${kind}`);
   }
