@@ -128,4 +128,87 @@ describe("JSON:API pagination", () => {
       last: expect.stringContaining("page%5Bnumber%5D=2"),
     });
   });
+
+  it("complete multi-page traversal returns each authorized resource exactly once without duplicates", async () => {
+    // Collect all pages for workspaces with page[size]=1
+    const collectedWorkspaceIds: string[] = [];
+    let pageNum = 1;
+    let hasNext = true;
+
+    while (hasNext) {
+      const res = await request(
+        `/api/v2/organizations/${orgName}/workspaces?page[number]=${pageNum}&page[size]=1`,
+      );
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      for (const item of json.data) {
+        collectedWorkspaceIds.push(item.id);
+      }
+      hasNext = json.meta.pagination["next-page"] !== null;
+      pageNum += 1;
+    }
+
+    expect(collectedWorkspaceIds).toHaveLength(2);
+    expect(new Set(collectedWorkspaceIds).size).toBe(2);
+    expect(collectedWorkspaceIds.sort()).toEqual([...workspaceIds].sort());
+    expect(collectedWorkspaceIds).not.toContain(privateWorkspaceId);
+  });
+
+  it("included relationships never bypass authorization or cross tenant boundaries", async () => {
+    const res = await request(
+      `/api/v2/organizations/${orgName}/runs?include=workspace&page[size]=10`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    // Data must only contain authorized runs
+    const returnedRunIds = body.data.map((r: any) => r.id);
+    expect(returnedRunIds).not.toContain(privateRunId);
+
+    // Included resources must only belong to the authorized organization
+    if (Array.isArray(body.included)) {
+      const includedWorkspaceIds = body.included
+        .filter((item: any) => item.type === "workspaces")
+        .map((item: any) => item.id);
+      expect(includedWorkspaceIds).not.toContain(privateWorkspaceId);
+      for (const wsId of includedWorkspaceIds) {
+        expect(workspaceIds).toContain(wsId);
+      }
+    }
+  });
+
+  it("pagination metadata stays consistent with query filters", async () => {
+    // Filter matching a single workspace "alpha"
+    const res = await request(
+      `/api/v2/organizations/${orgName}/workspaces?q=alpha&page[number]=1&page[size]=10`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].attributes.name).toBe("alpha");
+    expect(body.meta.pagination).toEqual({
+      "current-page": 1,
+      "page-size": 10,
+      "prev-page": null,
+      "next-page": null,
+      "total-pages": 1,
+      "total-count": 1,
+    });
+
+    // Filter matching nothing
+    const noMatchRes = await request(
+      `/api/v2/organizations/${orgName}/workspaces?q=nonexistent-query-string&page[number]=1&page[size]=10`,
+    );
+    expect(noMatchRes.status).toBe(200);
+    const noMatchBody = await noMatchRes.json();
+    expect(noMatchBody.data).toHaveLength(0);
+    expect(noMatchBody.meta.pagination).toEqual({
+      "current-page": 1,
+      "page-size": 10,
+      "prev-page": null,
+      "next-page": null,
+      "total-pages": 1,
+      "total-count": 0,
+    });
+  });
 });
