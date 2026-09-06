@@ -1,5 +1,6 @@
 import { isNumber, isRecord, isString } from "../lib/type-guards";
 import type { JsonObject, JsonValue } from "@/lib/json";
+import { clearActiveUserIdentity } from "./storage-identity";
 const API_BASE_URL = "/api/v2";
 export const AUTH_CHANGED_EVENT = "terrence:auth-changed";
 export const AUTH_EXPIRED_EVENT = "terrence:auth-expired";
@@ -757,6 +758,7 @@ export async function prepareAuthToken(): Promise<string | null> {
 
 function removeAuthToken(): void {
   clearAuthMemory();
+  clearActiveUserIdentity();
   storageRemove(SESSION_EXPIRED_KEY);
   window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT));
 }

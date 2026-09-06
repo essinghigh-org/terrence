@@ -81,6 +81,7 @@ import { fetchAllApiPages, fetchApi, logoutAuthSession } from "../lib/api";
 import { applyTheme, applyThemeIfUnchanged, getThemeRevision } from "../lib/theme";
 import { usePageTitle } from "../lib/usePageTitle";
 import { setLastOrganization } from "../lib/lastOrganization";
+import { registerOrganizationScope, setActiveUserId } from "../lib/storage-identity";
 import { getPinnedWorkspaces, getRecentWorkspaces, recordWorkspaceVisit, subscribeWorkspaceShortcuts } from "../lib/workspace-shortcuts";
 import { cn } from "../lib/utils";
 import { CapabilitiesProvider, DEFAULT_CAPABILITIES, type Capabilities } from "../lib/capabilities";
@@ -205,7 +206,7 @@ export function Layout({
     const themeRevision = getThemeRevision();
     void Promise.allSettled([
       fetchApi("/api/v2/account/details", { signal: controller.signal }),
-      fetchAllApiPages<{ attributes: { name: string } }>(
+      fetchAllApiPages<{ id: string; attributes: { name: string } }>(
         "/organizations?page[size]=100",
         controller.signal,
       ),
@@ -213,8 +214,9 @@ export function Layout({
       if (controller.signal.aborted) return;
       if (accountResult.status === "fulfilled") {
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-        const attributes = (accountResult.value as {
+        const accountData = (accountResult.value as {
           data?: {
+            id?: string;
             attributes?: {
               "is-site-admin"?: boolean;
               "must-change-password"?: boolean;
@@ -223,7 +225,12 @@ export function Layout({
               theme?: string;
             };
           };
-        }).data?.attributes;
+        }).data;
+        const attributes = accountData?.attributes;
+        const userIdentifier = accountData?.id ?? attributes?.username;
+        if (typeof userIdentifier === "string" && userIdentifier !== "") {
+          setActiveUserId(userIdentifier);
+        }
         setSiteAdmin(attributes?.["is-site-admin"] === true);
         setMustChangePassword(attributes?.["must-change-password"] === true);
         setAccountName(attributes?.username ?? "");
@@ -231,6 +238,11 @@ export function Layout({
         if (isString(attributes?.theme)) applyThemeIfUnchanged(attributes.theme, themeRevision);
       }
       if (organizationsResult.status === "fulfilled") {
+        for (const organization of organizationsResult.value) {
+          if (organization.id && organization.attributes?.name) {
+            registerOrganizationScope(organization.id, organization.attributes.name);
+          }
+        }
         setOrganizationNames(
           organizationsResult.value.map((organization): string => organization.attributes.name),
         );

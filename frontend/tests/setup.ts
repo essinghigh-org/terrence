@@ -1,5 +1,6 @@
 import { afterEach, mock } from "bun:test";
 import { orgPermissionsCache } from "../src/hooks/useOrganizationPermissions";
+import { clearActiveUserIdentity } from "../src/lib/storage-identity";
 import { cleanup, configure } from "@testing-library/react";
 import { JSDOM } from "jsdom";
 
@@ -227,6 +228,8 @@ afterEach((): void => {
   // bun:test mock API without per-file bookkeeping.
   mock.restore();
   customLocation = undefined;
+  clearActiveUserIdentity();
+  if (sessionStorage !== undefined) sessionStorage.clear();
   if (localStorage !== undefined) localStorage.clear();
   orgPermissionsCache.clear();
 });
