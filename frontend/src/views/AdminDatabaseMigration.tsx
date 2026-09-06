@@ -20,7 +20,7 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { cn } from "../lib/utils";
+import { cn, formatDateTime } from "../lib/utils";
 import { Callout } from "@/components/ui/callout";
 
 type StepStatus = "pending" | "running" | "passed" | "failed" | "skipped";
@@ -123,6 +123,80 @@ function phaseLabel(phase: string): string {
   }
 }
 
+type TimelineStatus = "complete" | "active" | "pending" | "failed";
+
+const MIGRATION_TIMELINE = [
+  { key: "preflight", label: "Preflight", description: "Check the target connection, version, permissions, and emptiness.", steps: ["compatibility"] },
+  { key: "quiescence", label: "Write quiescence", description: "Pause new runs and drain active work before copying data.", steps: ["maintenance", "drain"] },
+  { key: "transfer", label: "Transfer", description: "Checkpoint SQLite, create the target schema, and copy records.", steps: ["checkpoint", "schema", "copy"] },
+  { key: "consistency", label: "Consistency checks", description: "Compare counts, digests, references, and the migration journal.", steps: ["verify"] },
+  { key: "cutover", label: "Cutover", description: "Write the boot configuration only after verification succeeds.", steps: [] },
+  { key: "post-cutover", label: "Post-cutover validation", description: "Restart, confirm the target identity, and keep the SQLite rollback image.", steps: [] },
+] as const;
+
+function timelineStatus(
+  timelineIndex: number,
+  phase: string,
+  steps: readonly WizardStep[],
+): TimelineStatus {
+  const stepKeys = MIGRATION_TIMELINE[timelineIndex]?.steps ?? [];
+  const matchingSteps = steps.filter((step): boolean => (stepKeys as readonly string[]).includes(step.key));
+  if (matchingSteps.some((step): boolean => step.status === "failed")) return "failed";
+  if (matchingSteps.length > 0 && matchingSteps.every((step): boolean => step.status === "passed" || step.status === "skipped")) return "complete";
+  if (timelineIndex === 4 && phase === "switched") return "complete";
+  if (timelineIndex === 5 && phase === "switched") return "active";
+  if (timelineIndex === 4 && phase === "ready_to_switch") return "active";
+  if (timelineIndex === 0 && phase !== "idle") return matchingSteps.some((step): boolean => step.status === "running") ? "active" : "complete";
+  if (timelineIndex === 1 && phase === "draining") return "active";
+  if (timelineIndex === 2 && phase === "copying") return "active";
+  if (timelineIndex === 3 && phase === "verifying") return "active";
+  if (["failed", "aborted", "interrupted"].includes(phase) && timelineIndex <= 3) return "failed";
+  return "pending";
+}
+
+function recoveryGuidance(phase: string, hasSqliteSource: boolean): Readonly<{ tone: "info" | "success" | "warning" | "danger"; title: string; body: string }> {
+  if (phase === "ready_to_switch") {
+    return {
+      tone: "success",
+      title: "Verified and reversible",
+      body: "The target matches the source checks. SQLite remains the rollback image until you switch the boot configuration; review the report before proceeding.",
+    };
+  }
+  if (phase === "switched") {
+    return {
+      tone: "warning",
+      title: "Restart is the next checkpoint",
+      body: "The boot configuration points at PostgreSQL, but the process must restart before it uses the target. After new writes land there, rollback requires reconciliation with the SQLite image.",
+    };
+  }
+  if (["failed", "aborted", "interrupted"].includes(phase)) {
+    return {
+      tone: "danger",
+      title: "Recovery requires operator review",
+      body: "SQLite remains authoritative until cutover. Inspect the failed step and its recovery detail; do not assume rollback is safe after any target writes without reconciliation.",
+    };
+  }
+  if (phase !== "idle") {
+    return {
+      tone: "warning",
+      title: "Migration is in progress",
+      body: "New runs are paused after write quiescence. The durable checkpoint remains visible after a refresh, and the source SQLite database is unchanged until cutover.",
+    };
+  }
+  if (!hasSqliteSource) {
+    return {
+      tone: "info",
+      title: "PostgreSQL is active",
+      body: "This instance has no SQLite source database to migrate. The PostgreSQL backend is already authoritative.",
+    };
+  }
+  return {
+    tone: "info",
+    title: "SQLite is a supported source",
+    body: "The source stays intact while you test the target and review compatibility. Nothing is written until you confirm the start action.",
+  };
+}
+
 function Section({
   defaultOpen,
   title,
@@ -216,6 +290,8 @@ export function AdminDatabaseMigration(): React.JSX.Element {
   const phase = wizard?.phase ?? "idle";
   const active = status?.running === true || ACTIVE_PHASES.has(phase);
   const terminalFailed = phase === "failed" || phase === "aborted" || phase === "interrupted";
+  const hasSqliteSource = status !== null && status["source-database"] !== null;
+  const guidance = recoveryGuidance(phase, hasSqliteSource);
 
   return (
     <PageShell variant="form">
@@ -229,9 +305,10 @@ export function AdminDatabaseMigration(): React.JSX.Element {
       />
 
       {error !== null && (
-        <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <div role="alert" className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
-          <div>{error}</div>
+          <div className="min-w-0 flex-1"><span className="font-semibold">Migration action failed.</span>{" "}{error}</div>
+          <Button type="button" size="sm" variant="outline" onClick={(): void => { void load(); }}>Try again</Button>
         </div>
       )}
 
@@ -250,6 +327,65 @@ export function AdminDatabaseMigration(): React.JSX.Element {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="grid gap-3 rounded-lg border bg-muted/20 p-3 text-sm sm:grid-cols-2">
+              <Field
+                label="Current source"
+                children={
+                  status["source-database"] === null
+                    ? "PostgreSQL backend"
+                    : <><span className="font-medium">SQLite</span><span className="ml-2 font-mono text-xs text-muted-foreground">{status["source-database"].path}</span></>
+                }
+              />
+              <Field
+                label="Target identity"
+                children={wizard?.targetMasked !== undefined && wizard.targetMasked !== "" ? <span className="font-mono text-xs">{wizard.targetMasked}</span> : "No target selected"}
+              />
+              <Field
+                label="Authoritative source"
+                children={status["source-database"] === null
+                  ? "PostgreSQL backend"
+                  : phase === "switched" ? "PostgreSQL after restart; SQLite rollback image retained" : "SQLite until cutover"}
+              />
+              <Field
+                label="Persisted checkpoint"
+                children={wizard?.updatedAt !== undefined ? <time dateTime={wizard.updatedAt}>{formatDateTime(wizard.updatedAt, "Unknown")}</time> : "No migration checkpoint"}
+              />
+            </div>
+
+            <Callout tone={guidance.tone} title={guidance.title} role={phase === "failed" || phase === "aborted" || phase === "interrupted" ? "alert" : "status"}>
+              {guidance.body}
+            </Callout>
+
+            <ol aria-label="Migration phases" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {MIGRATION_TIMELINE.map((item, index): React.JSX.Element => {
+                const state = timelineStatus(index, phase, wizard?.steps ?? []);
+                return (
+                  <li key={item.key} className={cn(
+                    "rounded-lg border p-3",
+                    state === "complete" && "border-success/30 bg-success/5",
+                    state === "active" && "border-primary/30 bg-primary/5",
+                    state === "failed" && "border-destructive/30 bg-destructive/5",
+                    state === "pending" && "bg-muted/20",
+                  )}>
+                    <div className="flex items-center gap-2 text-sm font-semibold">
+                      <span className={cn(
+                        "flex size-6 items-center justify-center rounded-full border text-xs",
+                        state === "complete" && "border-success/40 text-success",
+                        state === "active" && "border-primary/40 text-primary",
+                        state === "failed" && "border-destructive/40 text-destructive",
+                        state === "pending" && "border-border text-muted-foreground",
+                      )} aria-hidden="true">
+                        {state === "complete" ? <Check className="size-3.5" /> : state === "failed" ? <X className="size-3.5" /> : index + 1}
+                      </span>
+                      <span>{item.label}</span>
+                      {state === "active" && <Spinner className="size-3.5" />}
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">{item.description}</p>
+                  </li>
+                );
+              })}
+            </ol>
+
             {active && wizard?.steps.some((step): boolean => step.key === "maintenance" && step.status === "passed") === true && <div className="flex items-center gap-4 rounded-lg border bg-muted/30 p-4"><Terrence pose="maintenance" detail="small" className="w-28" /><div><h2 className="font-heading font-semibold">Maintenance mode</h2><p className="mt-1 text-sm text-muted-foreground">New runs are paused while the database migration is in progress.</p></div></div>}
             <div className="flex flex-wrap items-center gap-3">
               <span
@@ -367,7 +503,8 @@ export function AdminDatabaseMigration(): React.JSX.Element {
                 )}
                 <div className="flex flex-wrap items-center gap-2 pt-1">
                   <Button
-                    disabled={status["environment-database-url"] !== null}
+                    aria-describedby={status["environment-database-url"] !== null ? "migration-switch-reason" : undefined}
+                    disabled={status["environment-database-url"] !== null || busy !== null}
                     onClick={(): void => { void runAction("switch", "POST"); }}
                   >
                     <ArrowRight className="size-4" aria-hidden />
@@ -376,6 +513,11 @@ export function AdminDatabaseMigration(): React.JSX.Element {
                   <Button variant="outline" onClick={(): void => { void runAction("cancel", "POST"); }}>
                     Cancel
                   </Button>
+                  {status["environment-database-url"] !== null && (
+                    <p id="migration-switch-reason" className="basis-full text-xs text-muted-foreground">
+                      Switch is unavailable while DATABASE_URL is set. Remove or empty that environment value before cutover.
+                    </p>
+                  )}
                 </div>
               </div>
             )}
@@ -387,12 +529,16 @@ export function AdminDatabaseMigration(): React.JSX.Element {
                   the SQLite database remains as the rollback image.
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button onClick={(): void => { void runAction("restart", "POST"); }}>
+                  <Button
+                    aria-describedby={status["restart-disabled"] ? "migration-restart-reason" : undefined}
+                    disabled={status["restart-disabled"] || busy !== null}
+                    onClick={(): void => { void runAction("restart", "POST"); }}
+                  >
                     <Power className="size-4" aria-hidden />
                     Restart process
                   </Button>
                   {status["restart-disabled"] && (
-                    <span className="text-xs text-muted-foreground">
+                    <span id="migration-restart-reason" className="text-xs text-muted-foreground">
                       Restart is suppressed in this environment; restart the process manually.
                     </span>
                   )}
@@ -411,7 +557,7 @@ export function AdminDatabaseMigration(): React.JSX.Element {
         </Card>
       )}
 
-      {!active && (phase === "idle" || phase === "failed" || phase === "aborted" || phase === "interrupted") && (
+      {hasSqliteSource && !active && (phase === "idle" || phase === "failed" || phase === "aborted" || phase === "interrupted") && (
         <Card>
           <CardHeader variant="danger">
             <CardTitle className="flex items-center gap-2 text-base">
@@ -505,7 +651,7 @@ export function AdminDatabaseMigration(): React.JSX.Element {
 
             {!confirmStart ? (
               <Button
-                disabled={url.trim() === "" || busy !== null || status?.running === true}
+                disabled={url.trim() === "" || busy !== null || status.running}
                 onClick={(): void => { setConfirmStart(true); }}
               >
                 Start migration
