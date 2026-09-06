@@ -305,7 +305,11 @@ async function synchronizeRegistryModuleOnce(
 function scheduleRemainingRegistryModuleSync(mod: RegistryModule): void {
   setTimeout((): void => {
     void synchronizeRegistryModule(mod).catch((error: unknown): void => {
-      console.error(`[terrence] Registry module continuation failed for ${mod.id}:`, error instanceof Error ? error.message : error);
+      // Log forging guard (CodeQL log-injection): rejection reasons can
+      // carry attacker-influenced newlines via malicious registry content;
+      // strip CR/LF before logging so one event stays one log line.
+      const reason = (error instanceof Error ? error.message : String(error)).replace(/\n|\r/g, "");
+      console.error(`[terrence] Registry module continuation failed for ${mod.id}:`, reason);
     });
   }, 0);
 }
