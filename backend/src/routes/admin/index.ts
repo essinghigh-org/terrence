@@ -11,6 +11,7 @@ import { settingsmoreRoutes } from "./settings-more";
 import { systemRoutes } from "./system";
 import { dbExportRoutes } from "./db-export";
 import { dbMigrationRoutes } from "./db-migration";
+import { backupRoutes } from "./backups";
 import { systemApiTokenAdminRoutes } from "./system-api-tokens";
 import { resourceBudgetRoutes } from "./resource-budgets";
 import { authPlugin } from "../../auth";
@@ -40,4 +41,5 @@ export const adminRoutes = new Elysia({ name: "admin" })
   .use(dbExportRoutes)
   .use(dbMigrationRoutes)
   .use(resourceBudgetRoutes)
+  .use(backupRoutes)
   .use(systemApiTokenAdminRoutes)

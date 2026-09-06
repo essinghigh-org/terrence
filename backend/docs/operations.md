@@ -93,6 +93,19 @@ Terrence does not automatically encrypt or retain operator backups, and it does 
 
 For PostgreSQL, use the database's own backup tooling; combine a `pg_dump`/`pg_basebackup` window with a storage snapshot taken at the same logical point. Downgrades are not supported: migrations are forward-only, so a backup taken before an upgrade is the only way back.
 
+### Backup verification and restore rehearsal
+
+Site administrators can create and verify backup evidence from the administrative API. These operations never replace the active database or storage volume:
+
+- `POST /api/v2/admin/backups/manifests` creates `terrence-backup-manifest.json`. With no path it describes the active database read snapshot and storage files. Pass `backup-path` (and, when needed, `database-path` and `storage-path`) to describe a stopped SQLite copy or archive instead.
+- `POST /api/v2/admin/backups/integrity-checks` (also `/backups/verify`) is read-only. It checks the manifest checksum, SQLite `quick_check`, schema digest, every recorded table count, storage-file SHA-256 values, referenced archives, key fingerprints, and selected decryptable records. It reports failures for missing files, changed artifacts, wrong keys, and incompatible schema before any restore decision.
+- `POST /api/v2/admin/backups/restore-rehearsals` extracts or copies the backup into a private temporary directory, repeats the checks, applies the bundled SQLite migrations to a disposable database copy, and runs a harmless `tofu version` or `terraform version` workflow when a CLI is available. Poll `GET /api/v2/admin/backups/restore-rehearsals/:rehearsal_id` for the result.
+- `GET /api/v2/admin/backups/status` reports `last-verified-restore-at`. This is the last successful rehearsal time; it is deliberately separate from a backup's creation timestamp.
+
+The manifest records only key presence and SHA-256 fingerprints. It never contains key values, and key export remains an explicit operator decision. Do not place `.encryption-key`, `.encryption-salt`, or password material in support bundles. For SQLite, stop the instance or enter a write-quiesced window before copying the database and storage directory; the API does not claim that a live copy is restorable merely because a manifest was generated. For PostgreSQL, provision an isolated database from `pg_dump`/`pg_basebackup` and run the database-specific restore checks before cutover.
+
+The rehearsal endpoint has no corresponding restore endpoint. Replacing a live volume requires a separately reviewed shutdown, fencing/reconciliation, key-retention, and confirmation plan after the rehearsal passes.
+
 ## Interrupted-apply recovery
 
 When an apply is canceled or the process dies mid-apply, the worker captures the local `terraform.tfstate` (if present) encrypted into `recovery/<run-id>/`. Fetch it before it expires:

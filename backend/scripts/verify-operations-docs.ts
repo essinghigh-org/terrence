@@ -49,7 +49,7 @@ async function main(): Promise<void> {
   const operations = await readFile(join(root, "backend/docs/operations.md"), "utf8");
   const upgrading = await readFile(join(root, "backend/docs/upgrading.md"), "utf8");
   const quickstart = await readFile(join(root, "backend/docs/quickstart.md"), "utf8");
-  assertRunbookText(operations, ["tar --create", "sha256sum --check", "doctor.ts --json", "verify-operations-docs.ts"], "operations.md");
+  assertRunbookText(operations, ["tar --create", "sha256sum --check", "doctor.ts --json", "verify-operations-docs.ts", "terrence-backup-manifest.json", "restore-rehearsals", "last-verified-restore-at"], "operations.md");
   assertRunbookText(upgrading, ["vX.Y.Z@sha256", "upgrade-invariants.test.ts", "forward-only"], "upgrading.md");
   assertRunbookText(quickstart, ["terraform login", "terraform init", "terraform plan"], "quickstart.md");
   if (operations.includes("There is no backup manifest, hashing, encryption, restore test")) {
