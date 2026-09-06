@@ -125,7 +125,7 @@ test("keeps workspaces visible when project metadata cannot be loaded", async ()
   );
 
   await view.findByText("production");
-  expect(view.getByText("Projects could not be refreshed. Workspace results are still available.")).toBeTruthy();
+  await view.findByText("Projects could not be refreshed. Workspace results are still available.");
   expect(view.queryByText(/Workspace data is unavailable/)).toBeNull();
 });
 
