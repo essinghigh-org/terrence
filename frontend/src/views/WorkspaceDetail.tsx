@@ -902,7 +902,6 @@ export function WorkspaceDetail({
                           workspaceId={workspace.id}
                           orgName={orgName ?? ""}
                           workspaceName={workspace.attributes.name}
-                          workspaceId={workspace.id}
                           engine={workspace.attributes["iac-binary"] ?? "terraform"}
                           source={workspace.attributes.source}
                           executionMode={workspace.attributes["execution-mode"]}
