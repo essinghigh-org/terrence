@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db";
-import { apiTokens, auditLogs, logs, runs, teams, teamWorkspaces, workspaces } from "../../src/db/schema";
+import { apiTokens, auditLogs, logs, organizationMemberships, runs, teams, teamWorkspaces, users, workspaces } from "../../src/db/schema";
 import { archiveRunLogs, deleteRunLogArchive } from "../../src/lib/run-logs";
 import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { cleanupSeed, expectSuccessResponse, jsonHeaders, persistSeed, request, seedOrg } from "./compat_contract_helpers";
@@ -91,7 +91,9 @@ test("only an administrator can revoke; removed readers cannot renew; rotation i
   for (const headers of [{}, reader]) expect((await request(revoke, { method: "POST", headers })).status).toBe(404);
   await db.delete(teamWorkspaces).where(eq(teamWorkspaces.teamId, teamId));
   expect((await request(`/api/v2/plans/plan-${runId}`, { headers: reader })).status).toBe(404);
-  // Deliberate bearer contract: membership removal alone does not revoke an already issued link.
+  // Deliberate bearer contract: losing team-workspace access alone does not
+  // revoke an already issued link (organization membership removal does —
+  // see the next test).
   expect((await request(plan)).status).toBe(200);
   expect((await request(revoke, { method: "POST", headers: owner })).status).toBe(204);
   expect((await request(plan)).status).toBe(404);
@@ -99,6 +101,65 @@ test("only an administrator can revoke; removed readers cannot renew; rotation i
   expect((await request(await link("plan"))).status).toBe(200);
   expect((await request(await link("apply"))).status).toBe(200);
   expect(await db.query.auditLogs.findFirst({ where: eq(auditLogs.resourceId, runId) })).toBeDefined();
+});
+
+test("removing an organization membership immediately invalidates issued links (issue #699)", async () => {
+  const targetRunId = `rot-${seed.suffix}`;
+  await db.insert(runs).values({ id: targetRunId, workspaceId, status: "applying", logToken: crypto.randomUUID(), createdAt: Date.now() });
+  await db.insert(logs).values({ id: crypto.randomUUID(), runId: targetRunId, phase: "plan", outputText: canary, createdAt: Date.now() });
+  try {
+    const leaverId = `leaver-${seed.suffix}`;
+    const leaverMemId = `leaver-mem-${seed.suffix}`;
+    await db.insert(users).values({ id: leaverId, username: `leaver-${seed.suffix}`, passwordHash: "unused" });
+    await db.insert(organizationMemberships).values({ id: leaverMemId, userId: leaverId, orgId: seed.orgId, role: "member" });
+
+    const resource = await expectSuccessResponse(await request(`/api/v2/plans/plan-${targetRunId}`, { headers: owner }), 200, "plans");
+    const before = resource.attributes["log-read-url"] as string;
+    expect((await request(before)).status).toBe(200);
+
+    const removed = await request(`/api/v2/organization-memberships/${leaverMemId}`, { method: "DELETE", headers: owner });
+    expect(removed.status).toBe(204);
+    // The removed member's captured link dies with the rotation, while the
+    // remaining owner fetches a fresh working link (active polling survives).
+    expect((await request(before)).status).toBe(404);
+    const fresh = await expectSuccessResponse(await request(`/api/v2/plans/plan-${targetRunId}`, { headers: owner }), 200, "plans");
+    expect((await request(fresh.attributes["log-read-url"] as string)).status).toBe(200);
+  } finally {
+    await db.delete(logs).where(eq(logs.runId, targetRunId));
+    await db.delete(runs).where(eq(runs.id, targetRunId));
+    await db.delete(organizationMemberships).where(eq(organizationMemberships.userId, `leaver-${seed.suffix}`));
+    await db.delete(users).where(eq(users.id, `leaver-${seed.suffix}`));
+  }
+});
+
+test("demoting a membership from active also invalidates issued links (issue #699)", async () => {
+  const targetRunId = `dem-${seed.suffix}`;
+  await db.insert(runs).values({ id: targetRunId, workspaceId, status: "applying", logToken: crypto.randomUUID(), createdAt: Date.now() });
+  await db.insert(logs).values({ id: crypto.randomUUID(), runId: targetRunId, phase: "plan", outputText: canary, createdAt: Date.now() });
+  try {
+    const demoteeId = `demotee-${seed.suffix}`;
+    const demoteeMemId = `demotee-mem-${seed.suffix}`;
+    await db.insert(users).values({ id: demoteeId, username: `demotee-${seed.suffix}`, passwordHash: "unused" });
+    await db.insert(organizationMemberships).values({ id: demoteeMemId, userId: demoteeId, orgId: seed.orgId, role: "member" });
+
+    const resource = await expectSuccessResponse(await request(`/api/v2/plans/plan-${targetRunId}`, { headers: owner }), 200, "plans");
+    const before = resource.attributes["log-read-url"] as string;
+    expect((await request(before)).status).toBe(200);
+
+    const demoted = await request(`/api/v2/organization-memberships/${demoteeMemId}`, {
+      method: "PATCH",
+      headers: owner,
+      body: JSON.stringify({ data: { type: "organization-memberships", attributes: { status: "invited" } } }),
+    });
+    expect(demoted.status).toBe(200);
+    expect((await request(before)).status).toBe(404);
+    expect((await request((await expectSuccessResponse(await request(`/api/v2/plans/plan-${targetRunId}`, { headers: owner }), 200, "plans")).attributes["log-read-url"] as string)).status).toBe(200);
+  } finally {
+    await db.delete(logs).where(eq(logs.runId, targetRunId));
+    await db.delete(runs).where(eq(runs.id, targetRunId));
+    await db.delete(organizationMemberships).where(eq(organizationMemberships.userId, `demotee-${seed.suffix}`));
+    await db.delete(users).where(eq(users.id, `demotee-${seed.suffix}`));
+  }
 });
 
 test("retained archives remain readable until revocation; soft-deleted runs cannot issue or use capabilities", async () => {

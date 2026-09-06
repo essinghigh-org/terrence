@@ -39,6 +39,25 @@ Each run receives its own short-lived token:
 
 Runs never see user credentials.
 
+## Run log links
+
+Plan/apply log URLs are bearer capabilities: an HMAC over run, phase, the
+run's log token, and an expiry (default 48 hours, configurable up to 7 days
+via `LOG_CAPABILITY_TTL_SECONDS`). They carry `no-store` / `no-referrer`
+policies and never embed the log token itself.
+
+- Links stop working at expiry, on explicit per-run revocation
+  (`POST /api/v2/runs/:id/actions/revoke-log-links`), and when the run is
+  soft-deleted (soft-deleted runs can neither issue nor honor links).
+- Removing an organization membership (or demoting it from active)
+  immediately rotates every live run-log token in the organization, so
+  previously issued links stop working at once. Authorized clients fetch
+  fresh links from the plan/apply responses to keep polling.
+- Losing team-level access without losing the organization membership does
+  not rotate links; those links stay valid until their short expiry.
+- There is no short-window automatic renewal: a client holding only an
+  expired link must re-authenticate through an authorized response.
+
 ## Webhook verification
 
 Inbound webhooks verify signatures against the raw request body:

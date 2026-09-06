@@ -16,6 +16,7 @@ import {
   teamMemberships,
 } from "../db/schema";
 import { parseTokenScopes, type TokenScopes } from "../lib/token-scopes";
+import { rotateOrgRunLogTokens } from "../lib/run-token";
 import { currentTokenScopes } from "../lib/request-scope";
 import { eq, and, asc, desc, count, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { userResource, orgMembershipResource, tokenResource } from "../lib/response";
@@ -609,6 +610,10 @@ export const userRoutes = new Elysia({ name: "users" })
     // Immediate SSE revocation: close the user's event streams so their
     // permission snapshot cannot linger for the one-hour reconnect cap.
     publish("authz.changed", { "user-id": mem.userId, "org-id": mem.orgId });
+    // Immediate log-link revocation (issue #699): outstanding run-log
+    // capabilities are bearer tokens, so removing the membership must
+    // invalidate them instead of letting them live until expiry.
+    await rotateOrgRunLogTokens(mem.orgId);
     (set as { status: number }).status = 204;
     return {};
   })
@@ -653,6 +658,7 @@ export const userRoutes = new Elysia({ name: "users" })
 
     let blockedLastOwner = false;
     let changed = false;
+    let lostActiveAccess = false;
     let lockedMem: typeof mem | undefined = undefined;
     await withDbLock(`organization-membership:${mem.orgId}`, async (): Promise<void> => {
       const current = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
@@ -674,6 +680,7 @@ export const userRoutes = new Elysia({ name: "users" })
       if (Object.keys(lockedUpdates).length > 0) {
         await db.update(organizationMemberships).set(lockedUpdates).where(eq(organizationMemberships.id, memId));
         changed = true;
+        if (current.status === "active" && lockedUpdates.status === "invited") lostActiveAccess = true;
       }
     });
     if (blockedLastOwner) {
@@ -691,6 +698,11 @@ export const userRoutes = new Elysia({ name: "users" })
     await auditLog("update", "organization-memberships", memId, user?.id ?? null, mem.orgId, { userId: mem.userId, ...updates });
     // Status/role changes alter permissions immediately; revoke stale streams.
     publish("authz.changed", { "user-id": mem.userId, "org-id": mem.orgId });
+    // Losing active status removes org access like a removal does (issue
+    // #699): outstanding run-log capabilities must not outlive it.
+    if (lostActiveAccess) {
+      await rotateOrgRunLogTokens(mem.orgId);
+    }
     const updated = await db.query.organizationMemberships.findFirst({ where: eq(organizationMemberships.id, memId) });
     if (updated === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const targetUser = await db.query.users.findFirst({ where: eq(users.id, updated.userId) });
