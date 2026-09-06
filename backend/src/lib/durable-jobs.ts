@@ -2,7 +2,6 @@ import { newResourceId } from "./resource-id";
 import { and, asc, eq, inArray, lt, lte } from "drizzle-orm";
 import { envFlag } from "./env";
 import { db } from "../db";
-import { workerQueueDraining } from "../worker";
 import { durableJobs } from "../db/schema";
 import { log } from "./log";
 import { jitteredPollDelay } from "./poll-jitter";
@@ -501,6 +500,10 @@ export function startDurableJobWorker(
     timer.unref?.();
   };
   const poll = async (): Promise<void> => {
+    // Load the worker module only when the durable worker is actually enabled.
+    // Keeping this edge lazy avoids importing the execution sandbox while
+    // standalone helpers (including agent authentication) use this module.
+    const { workerQueueDraining } = await import("../worker");
     if (workerQueueDraining()) {
       schedulePoll();
       return;
