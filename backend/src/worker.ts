@@ -1,7 +1,7 @@
 import { normalizeRunVariables } from "./lib/run-variables";
 export { normalizeRunVariables } from "./lib/run-variables";
 import { terraformVariableLine } from "./lib/tfvars";
-import { compareVariableSets } from "./lib/variable-set-precedence";
+import { compareCodePoints, compareVariableSets } from "./lib/variable-set-precedence";
 import { newResourceId } from "./lib/resource-id";
 import { envEnabled } from "./lib/env";
 import { db } from "./db";
@@ -1467,7 +1467,7 @@ export async function executionVariables(
   const setOrder = new Map(activeSets.map((set, index): [string, number] => [set.id, index]));
   const orderedSetVars = [...setVars].sort((left, right): number =>
     (setOrder.get(left.variableSetId) ?? Number.MAX_SAFE_INTEGER) - (setOrder.get(right.variableSetId) ?? Number.MAX_SAFE_INTEGER)
-    || left.id.localeCompare(right.id));
+    || compareCodePoints(left.id, right.id));
 
   const effective = new Map<string, ExecutionVariable>();
 
