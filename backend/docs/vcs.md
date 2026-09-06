@@ -19,10 +19,13 @@ Terrence supports these providers:
 
 ## GitHub App setup
 
-The GitHub App is the recommended path for GitHub:
+GitHub App configuration is site-wide and is managed from the site administrator's GitHub App page. Terrence offers three modes:
 
-1. Create a GitHub App in the GitHub organization settings.
-2. Configure the app in Terrence:
+1. **Create automatically (recommended).** Terrence opens GitHub's App Manifest flow with the homepage, setup callback, webhook URL, events, and required permissions already filled in. GitHub returns the App credentials to Terrence over the callback; the private key, webhook secret, and client secret are encrypted before they are persisted. The administrator then installs the new App on each required GitHub owner. Secrets are never shown in the browser.
+2. **Use an existing GitHub App.** Supply the App ID, slug, private key, webhook secret, and optional Enterprise URLs in the site-admin form. Terrence calls `GET /app` before saving anything and rejects a key that does not belong to the claimed App.
+3. **Environment configuration.** Kubernetes, Helm, and secret-manager deployments can continue to set the variables below. A complete environment configuration is validated against `GET /app` and imported once into encrypted storage at startup. Database configuration takes precedence after that import.
+
+For an environment import, the four required values are:
 
 | Environment variable | Purpose |
 |---|---|
@@ -33,8 +36,11 @@ The GitHub App is the recommended path for GitHub:
 | `GITHUB_APP_HTTP_URL` | The GitHub HTTP URL. Defaults to `https://github.com`. |
 | `GITHUB_APP_API_URL` | The GitHub API URL. Defaults to `https://api.github.com`. |
 
-3. Register the webhook URL in the GitHub App: `PUBLIC_URL/api/webhooks/github`.
-4. Install the app on the organizations that need workspaces.
+The environment import is marked `legacy_environment_import`. Disconnecting the App removes the stored key and webhook secret, preserves workspace and repository configuration, and records that bootstrap was consumed. A restart with the same environment variables does not silently restore it; a site administrator must use the explicit environment recovery action. Invalid or revoked credentials are shown as connection-invalid and do not mint installation tokens.
+
+The manifest replacement flow keeps the current App active until the replacement has passed JWT authentication, installation verification, repository enumeration, and permission checks. Existing installation records are remapped by GitHub owner name after every required owner has installed the replacement. Abandoning the manifest flow or missing an owner leaves the current App and workspace configuration untouched.
+
+The GitHub App registration link in the site-admin page opens GitHub's settings. Terrence does not delete the registration because GitHub deletion uninstalls it everywhere. Removing an installation from Terrence and uninstalling that installation through GitHub are separate actions; uninstall never deletes the site-wide registration.
 
 The VCS settings page lists the app installations. A workspace connects by choosing a repository from the installation.
 

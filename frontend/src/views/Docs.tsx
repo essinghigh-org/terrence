@@ -105,7 +105,7 @@ export function Docs(): React.JSX.Element {
         <>
           {selectedSlug === index[0]?.slug && (
             <aside className="flex items-center gap-4 rounded-lg border bg-accent/30 px-5 py-3">
-              <Terrence pose="guide" className="w-24 shrink-0" />
+              <Terrence pose="guide" detail="small" className="w-24 shrink-0" />
               <div><h2 className="font-heading font-semibold">A good place to start</h2><p className="mt-1 text-sm text-muted-foreground">Get to know Terrence, then connect your first workspace. Follow the guides in the sidebar at your own pace.</p></div>
             </aside>
           )}

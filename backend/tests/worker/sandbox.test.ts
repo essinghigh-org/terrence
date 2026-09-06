@@ -447,6 +447,8 @@ except Exception as e:
 
   it("rejects misspelled network policies instead of mapping them to allow (SEC-10)", (): void => {
     const previous = process.env["TERRENCE_RUN_NET_POLICY"];
+    const previousSandbox = process.env["TERRENCE_RUN_SANDBOX"];
+    process.env["TERRENCE_RUN_SANDBOX"] = "true";
     try {
       process.env["TERRENCE_RUN_NET_POLICY"] = "deny";
       expect(runNetPolicy()).toBe("deny");
@@ -463,6 +465,8 @@ except Exception as e:
         runNetPolicy();
       }).toThrow("TERRENCE_RUN_NET_POLICY must be allow or deny");
     } finally {
+      if (previousSandbox === undefined) delete process.env["TERRENCE_RUN_SANDBOX"];
+      else process.env["TERRENCE_RUN_SANDBOX"] = previousSandbox;
       if (previous === undefined) delete process.env["TERRENCE_RUN_NET_POLICY"];
       else process.env["TERRENCE_RUN_NET_POLICY"] = previous;
     }
@@ -482,15 +486,27 @@ except Exception as e:
       const script = join(workDir, "probe.sh");
       await writeFile(
         script,
-        "#!/bin/sh\npython3 -c \"import socket; "
-        + "t=socket.socket(); t.settimeout(2); "
-        + "try:\n t.bind(('127.0.0.1', 0)); print('TCP_BIND_OK')\n"
-        + "except OSError as e:\n print(f'TCP_BIND_ERR_{e.errno}'); "
-        + "u=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); "
-        + "try:\n u.bind(('127.0.0.1', 0)); print('UDP_BIND_OK')\n"
-        + "except OSError as e:\n print(f'UDP_BIND_ERR_{e.errno}'); "
-        + "m=socket.socket(); m.settimeout(2); "
-        + "print(f\"META_RC_{m.connect_ex(('169.254.169.254', 80))}\")\"\n",
+        `#!/bin/sh
+python3 - <<'PYTHON'
+import socket
+t = socket.socket()
+t.settimeout(2)
+try:
+    t.bind(('127.0.0.1', 0))
+    print('TCP_BIND_OK')
+except OSError as e:
+    print(f'TCP_BIND_ERR_{e.errno}')
+u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+try:
+    u.bind(('127.0.0.1', 0))
+    print('UDP_BIND_OK')
+except OSError as e:
+    print(f'UDP_BIND_ERR_{e.errno}')
+m = socket.socket()
+m.settimeout(2)
+print(f"META_RC_{m.connect_ex(('169.254.169.254', 80))}")
+PYTHON
+`,
         { mode: 0o755 },
       );
       const proc = sandbox.spawn(["/bin/sh", script], { cwd: workDir, env: {} });

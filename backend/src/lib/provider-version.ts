@@ -1,3 +1,4 @@
+import { integerSetting } from "./runtime-config";
 import { join, resolve } from "node:path";
 import {
   isVersionCacheFresh,
@@ -15,8 +16,7 @@ const STORAGE_DIR = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, 
 const CACHE_FILE = join(STORAGE_DIR, "version-cache.json");
 
 function resolveTtl(): number {
-  const configured = Number(process.env["TERRENCE_VERSION_CACHE_TTL_MS"]);
-  return Number.isFinite(configured) && configured > 0 ? configured : 24 * 60 * 60 * 1000;
+  return integerSetting("TERRENCE_VERSION_CACHE_TTL_MS");
 }
 
 /** Raw GitHub lookup of the latest stable hashicorp/tfe release tag.

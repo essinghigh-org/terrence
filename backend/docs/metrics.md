@@ -38,6 +38,7 @@ Format:
 | `terrence_storage_degraded` | Storage degradation flag |
 | `terrence_worker` | Poll counts, per-poller stats |
 | `terrence_process_history` | Ring buffer of samples |
+| `terrence_resource_budgets` | Aggregate durable queue usage and configured capacity, without organization identities |
 
 ## Worker metrics
 
@@ -58,6 +59,17 @@ The pollers are:
 | `enqueueDueAssessments` | 60 s | Discover and claim assessments |
 
 Zero errors and `last_ok: true` across all pollers means a healthy worker.
+
+Resource budget metrics are available to instance-wide metrics credentials:
+`terrence_resource_budget_queued` and `terrence_resource_budget_running` are
+class gauges; `terrence_resource_budget_queue_limit`,
+`terrence_resource_budget_concurrency_limit`,
+`terrence_resource_budget_artifact_bytes_limit`, and
+`terrence_resource_budget_running_bytes` show the active limits and byte
+pressure. Site administrators can inspect the same aggregate view at
+`GET /api/v2/admin/resource-budgets`. The response deliberately omits
+organization IDs and per-organization usage so one tenant cannot learn about
+another tenant's load.
 
 ## Process history
 

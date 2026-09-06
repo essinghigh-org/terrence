@@ -1,3 +1,4 @@
+import { networkSetting } from "./runtime-config";
 /**
  * URL host safety classification (SSRF hardening).
  *
@@ -57,7 +58,6 @@ function isPrivateV4(n: number): boolean {
 }
 
 /** True when an IPv4 host is inside a CIDR (e.g. "10.0.0.0/24"). */
-/** @lintignore Intentional surface: outbound allowlist CIDR policy. */
 export function isIPv4InCidr(host: string, cidr: string): boolean {
   const [base, prefix, ...extra] = cidr.split("/");
   const bits = prefix === undefined ? 32 : /^(?:[0-9]|[12][0-9]|3[0-2])$/.test(prefix) ? Number(prefix) : -1;
@@ -74,11 +74,8 @@ type OutboundAllowlist = Readonly<{ hosts: readonly string[]; cidrs: readonly st
 
 function readOutboundAllowlist(): OutboundAllowlist {
   return {
-    hosts: (process.env["TERRENCE_OUTBOUND_ALLOW_HOSTS"] ?? "")
-      .split(",").map((value): string => value.trim().toLowerCase().replace(/\.$/, "")).filter(Boolean),
-    // CIDR entries are deliberately IPv4-only; IPv6 private destinations fail closed.
-    cidrs: (process.env["TERRENCE_OUTBOUND_ALLOW_CIDRS"] ?? "")
-      .split(",").map((value): string => value.trim()).filter(Boolean),
+    hosts: networkSetting("TERRENCE_OUTBOUND_ALLOW_HOSTS"),
+    cidrs: networkSetting("TERRENCE_OUTBOUND_ALLOW_CIDRS"),
   };
 }
 
@@ -326,6 +323,7 @@ export type ExternalRequestInit = Readonly<{
   body?: string;
   timeoutMs: number;
   maxResponseBytes?: number;
+  signal?: Readonly<AbortSignal>;
 }>;
 
 export type ExternalUrlTransportForTests = (target: ResolvedExternalUrl, init: ExternalRequestInit) => Promise<Response>;
@@ -365,7 +363,7 @@ function pinnedRequestOptions(target: ResolvedExternalUrl, init: ExternalRequest
       // Defense-in-depth with the resolveExternalUrl userinfo rejection:
       // credentials must arrive as explicit headers, not URL components.
       auth: undefined,
-      signal: AbortSignal.timeout(init.timeoutMs),
+      signal: AbortSignal.any([AbortSignal.timeout(init.timeoutMs), ...(init.signal === undefined ? [] : [init.signal])]),
     },
   };
 }

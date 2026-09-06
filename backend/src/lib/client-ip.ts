@@ -1,3 +1,4 @@
+import { networkSetting } from "./runtime-config";
 // Client-IP resolution that honors a configurable, priority-ordered list of
 // trusted proxy headers (e.g. ["CF-Connecting-IP", "X-Forwarded-For"]).
 //
@@ -35,7 +36,7 @@ export async function refreshTrustedClientIpHeaders(): Promise<void> {
       : [];
     cachedTrustedProxyCidrs = settingsCidrs.length > 0
       ? settingsCidrs
-      : (process.env["TERRENCE_TRUSTED_PROXY_CIDRS"] ?? "").split(",").map((cidr): string => cidr.trim()).filter(Boolean);
+      : [...networkSetting("TERRENCE_TRUSTED_PROXY_CIDRS")];
   } catch {
     cachedTrustedHeaders = [];
     cachedTrustedProxyCidrs = [];

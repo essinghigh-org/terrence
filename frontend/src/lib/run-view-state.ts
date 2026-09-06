@@ -32,6 +32,7 @@ export type RunAttributes = Readonly<{
     "median-duration-seconds"?: number | null;
     "is-slow"?: boolean;
   }> | null;
+  "execution-mode"?: string | null;
   "has-changes"?: boolean;
   "has-recovery-state"?: boolean;
   "recovery-state-format-supported"?: boolean;
@@ -41,6 +42,7 @@ export type RunAttributes = Readonly<{
   operation?: string;
   permissions?: RunPermissions;
   "plan-only"?: boolean;
+  "position-in-queue"?: number | null;
   "refresh-only"?: boolean;
   "resource-additions"?: number;
   "resource-changes"?: number;
@@ -49,12 +51,14 @@ export type RunAttributes = Readonly<{
   source?: string;
   status: string;
   "status-timestamps"?: Readonly<Record<string, string>> | null;
+  "scheduled-at"?: string | null;
   "terraform-version"?: string | null;
   "trigger-reason"?: string;
   "triggered-by"?: string | null;
   "triggered-by-avatar-url"?: string | null;
   "workspace-locked"?: boolean;
   "workspace-locked-reason"?: string | null;
+  provenance?: Readonly<{ "schema-version": number; sha256: string; "manifest-url": string }> | null;
 }>;
 
 export type RunResource = Readonly<{
@@ -117,6 +121,33 @@ export type CostEstimate = Readonly<{
     "unmatched-resources-count"?: number;
     "error-message"?: string | null;
     "terrence:infracost-enabled"?: boolean;
+    provenance?: Readonly<{
+      tool?: string | null;
+      version?: string | null;
+      "pricing-date"?: string | null;
+      currency?: string | null;
+      "time-basis"?: string | null;
+      "supported-resources"?: number;
+      assumptions?: readonly string[];
+    }>;
+    comparison?: Readonly<{
+      baseline?: Readonly<{
+        source?: string | null;
+        "monthly-cost"?: string | null;
+        currency?: string | null;
+        comparable?: boolean;
+        reason?: string | null;
+      }>;
+      warnings?: readonly string[];
+      "resource-changes"?: readonly Readonly<{
+        address?: string;
+        module?: string | null;
+        action?: string;
+        "prior-monthly-cost"?: string | null;
+        "proposed-monthly-cost"?: string | null;
+        "delta-monthly-cost"?: string | null;
+      }>[];
+    }>;
   }>;
 }>;
 

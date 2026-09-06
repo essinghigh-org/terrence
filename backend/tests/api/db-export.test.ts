@@ -17,12 +17,12 @@ import { apiTokens, users } from "../../src/db/schema";
 import { storageDir } from "../../src/db/driver";
 import { defaultOutputName, sanitizeOutputName } from "../../src/lib/db-export";
 import { makeTestDbName } from "../setup";
-const isPostgresEnv = !!process.env["PG_ADMIN_URL"] || (process.env["DATABASE_URL"]?.includes("postgres") ?? false);
+const isPostgresEnv = process.env["PG_TEST_ADMIN_URL"] !== undefined || process.env["PG_ADMIN_URL"] !== undefined || (process.env["DATABASE_URL"]?.startsWith("postgres") ?? false);
 
 
 process.env["TERRENCE_DISABLE_RESTART"] ??= "1";
 
-const PG_ADMIN_URL = process.env["PG_TEST_ADMIN_URL"] ?? "postgres://terrence:terrence@127.0.0.1:5432/terrence_test";
+const PG_ADMIN_URL = process.env["PG_TEST_ADMIN_URL"] ?? process.env["PG_ADMIN_URL"] ?? (process.env["DATABASE_URL"]?.startsWith("postgres") === true ? process.env["DATABASE_URL"] : undefined) ?? "postgres://terrence:terrence@127.0.0.1:5432/terrence_test";
 
 let adminToken = "";
 let adminId = "";
@@ -89,6 +89,7 @@ let postgresAvailable = false;
 beforeAll(async (): Promise<void> => {
   await seedAdmin();
 
+  if (!isPostgresEnv) return;
   try {
     // Fresh PostgreSQL source database with the real migration set applied.
     const { SQL } = await import("bun");
@@ -188,6 +189,7 @@ beforeAll(async (): Promise<void> => {
     }
     postgresAvailable = true;
   } catch (error: unknown) {
+    if (isPostgresEnv) throw new Error("Required PostgreSQL migration fixture failed to initialize", { cause: error });
     postgresAvailable = false;
   }
 });

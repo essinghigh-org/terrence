@@ -128,9 +128,9 @@ async function loadExplorerWorkspaceData(workspaceId: string): Promise<ExplorerW
   const [organization, project, state, run, assessment, tags, noCode] = await Promise.all([
     db.query.organizations.findFirst({ where: eq(organizations.id, workspace.orgId) }),
     workspace.projectId === null ? Promise.resolve(undefined) : db.query.projects.findFirst({ where: eq(projects.id, workspace.projectId) }),
-    db.query.stateVersions.findFirst({ where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)), orderBy: [desc(stateVersions.serial)] }),
-    db.query.runs.findFirst({ where: eq(runs.workspaceId, workspace.id), orderBy: [desc(runs.createdAt)] }),
-    db.query.assessmentResults.findFirst({ where: eq(assessmentResults.workspaceId, workspace.id), orderBy: [desc(assessmentResults.createdAt)] }),
+    db.query.stateVersions.findFirst({ where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)), orderBy: [desc(stateVersions.serial), desc(stateVersions.id)] }),
+    db.query.runs.findFirst({ where: eq(runs.workspaceId, workspace.id), orderBy: [desc(runs.createdAt), desc(runs.id)] }),
+    db.query.assessmentResults.findFirst({ where: eq(assessmentResults.workspaceId, workspace.id), orderBy: [desc(assessmentResults.createdAt), desc(assessmentResults.id)] }),
     db.query.workspaceTags.findMany({ where: eq(workspaceTags.workspaceId, workspace.id), columns: { key: true } }),
     db.query.noCodeWorkspaceConfigurations.findFirst({ where: eq(noCodeWorkspaceConfigurations.workspaceId, workspace.id) }),
   ]);
@@ -419,11 +419,19 @@ async function backfillExplorerInventory(orgId: string, context: DurableJobConte
 export async function enqueueExplorerInventory(workspaceId: string): Promise<void> {
   const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId), columns: { orgId: true } });
   if (workspace === undefined) return;
-  await enqueueDurableJob("explorer-inventory", { workspaceId }, { dedupeKey: workspaceId });
+  await enqueueDurableJob(
+    "explorer-inventory",
+    { workspaceId, organizationId: workspace.orgId, jobClass: "background", estimatedBytes: 4 * 1024 * 1024 },
+    { dedupeKey: workspaceId, budget: { organizationId: workspace.orgId, jobClass: "background", estimatedBytes: 4 * 1024 * 1024 } },
+  );
 }
 
 export async function enqueueExplorerCatalog(orgId: string): Promise<void> {
-  await enqueueDurableJob("explorer-catalog", { orgId }, { dedupeKey: `catalog:${orgId}` });
+  await enqueueDurableJob(
+    "explorer-catalog",
+    { orgId, organizationId: orgId, jobClass: "background", estimatedBytes: 8 * 1024 * 1024 },
+    { dedupeKey: `catalog:${orgId}`, budget: { organizationId: orgId, jobClass: "background", estimatedBytes: 8 * 1024 * 1024 } },
+  );
 }
 
 export function scheduleExplorerCatalog(orgId: string): void {
@@ -455,7 +463,11 @@ export async function runExplorerCatalogJob(job: Job, context: DurableJobContext
 
 async function rebuildOrQueueExplorerCatalog(orgId: string, workspaceTotal: number): Promise<void> {
   if (workspaceTotal <= 1000) await rebuildExplorerCatalog(orgId);
-  else await enqueueDurableJob("explorer-catalog", { orgId }, { dedupeKey: `catalog:${orgId}` });
+  else await enqueueDurableJob(
+    "explorer-catalog",
+    { orgId, organizationId: orgId, jobClass: "background", estimatedBytes: 8 * 1024 * 1024 },
+    { dedupeKey: `catalog:${orgId}`, budget: { organizationId: orgId, jobClass: "background", estimatedBytes: 8 * 1024 * 1024 } },
+  );
 }
 
 export async function ensureExplorerInventory(orgId: string): Promise<void> {
@@ -483,5 +495,9 @@ export async function ensureExplorerInventory(orgId: string): Promise<void> {
   }
   // ponytail: large first-read backfills are durable and keyset-paged; the
   // separate dedupe key keeps repeated reads from multiplying work.
-  await enqueueDurableJob("explorer-catalog", { orgId, backfill: true }, { dedupeKey: `catalog-backfill:${orgId}` });
+  await enqueueDurableJob(
+    "explorer-catalog",
+    { orgId, organizationId: orgId, jobClass: "background", estimatedBytes: 16 * 1024 * 1024, backfill: true },
+    { dedupeKey: `catalog-backfill:${orgId}`, budget: { organizationId: orgId, jobClass: "background", estimatedBytes: 16 * 1024 * 1024 } },
+  );
 }

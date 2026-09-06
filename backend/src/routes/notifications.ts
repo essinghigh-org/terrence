@@ -208,7 +208,7 @@ async function subscriptionFor(configuration: NcItem): Promise<Subscription | un
   return undefined;
 }
 
-async function authorizedConfiguration(
+export async function authorizedConfiguration(
   id: string,
   userId: string | undefined,
   tokenOrgId: string | null | undefined,

@@ -142,13 +142,18 @@ async function streamFileToPrivatePath(sourcePath: string, destinationPath: stri
   }
 }
 
-export async function writePlanJsonArtifact(runId: string, planJson: PlanJson): Promise<void> {
+export async function writePlanJsonArtifact(
+  runId: string,
+  planJson: PlanJson,
+  canPublish?: () => Promise<boolean>,
+): Promise<void> {
   let temporary: string | null = null;
   try {
     await mkdir(planJsonDirectory, { recursive: true, mode: 0o700 });
     const target = artifactPath(runId);
     temporary = `${target}.${crypto.randomUUID()}.tmp`;
     await writeFile(temporary, JSON.stringify(planJson), { mode: 0o600 });
+    if (canPublish !== undefined && !await canPublish()) throw new Error("stale-agent-lease");
     await rename(temporary, target);
     temporary = null;
   } catch (error: unknown) {

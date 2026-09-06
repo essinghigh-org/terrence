@@ -145,7 +145,7 @@ describe("state upload reservation lifecycle", () => {
     // The client dies here: no PUT ever arrives for the reservation.
     expect((await request(`/api/v2/workspaces/${workspaceId}/actions/unlock`, { method: "POST", headers })).status).toBe(200);
     expect((await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, { method: "POST", headers })).status).toBe(200);
-    const tombstone = await db.query.auditLogs.findFirst({ where: eq(auditLogs.resourceId, abandoned.id) });
+    const tombstone = await db.query.auditLogs.findFirst({ where: eq(auditLogs.resourceId, abandoned.id), orderBy: [desc(auditLogs.createdAt), desc(auditLogs.id)] });
     expect(tombstone?.details).toMatchObject({ workspaceId, serial: 5, reason: "lock-changed" });
 
     const retry = await expectSuccessResponse(await reserve(workspaceId, 5), 201, "state-versions");

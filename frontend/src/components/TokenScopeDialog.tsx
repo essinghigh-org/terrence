@@ -14,7 +14,7 @@ import {
   DialogTitle,
 } from "../components/ui/dialog";
 import { toast } from "../components/ui/toast";
-import { isString } from "../lib/type-guards";
+import { isBoolean, isRecord, isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
 import {
   Boxes,
@@ -165,6 +165,78 @@ const PERMISSION_GROUPS: readonly {
     ],
   },
 ];
+
+/**
+ * Presets are deliberately explicit. Adding a new backend grant must not
+ * silently widen an existing preset; the owner of the preset has to choose
+ * that grant and update its summary/tests.
+ */
+const READ_ONLY_PRESET_KEYS = [
+  "workspaces:read", "runs:read", "run-tasks:read", "variables:read", "state:read",
+  "projects:read", "varsets:read", "settings:read", "policies:read", "vcs:read",
+  "agent-pools:read", "registry:read", "teams:read", "members:read", "audit-logs:read",
+] as const;
+const PLAN_PRESET_KEYS = [
+  "workspaces:read", "runs:read", "runs:plan", "variables:read", "state:read",
+] as const;
+const APPLY_PRESET_KEYS = [
+  "workspaces:read", "runs:read", "runs:plan", "runs:apply", "variables:read", "state:write",
+] as const;
+
+type TokenPreset = Readonly<{
+  id: "read-only" | "plan" | "apply";
+  label: string;
+  description: string;
+  grants: readonly string[];
+}>;
+
+const TOKEN_PRESETS: readonly TokenPreset[] = [
+  {
+    id: "read-only",
+    label: "Read-only inspection",
+    description: "Inspect workspaces, runs, variables, state, and organization metadata.",
+    grants: READ_ONLY_PRESET_KEYS,
+  },
+  {
+    id: "plan",
+    label: "Plan automation",
+    description: "Read the inputs and queue plans without applying infrastructure changes.",
+    grants: PLAN_PRESET_KEYS,
+  },
+  {
+    id: "apply",
+    label: "Apply automation",
+    description: "Queue and apply plans, with state write access for the apply workflow.",
+    grants: APPLY_PRESET_KEYS,
+  },
+];
+
+function summarizeTokenExpiry(value: unknown): string {
+  if (value === null) return "expires: never";
+  if (!isString(value) || value.trim() === "") return "expiry: account policy";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "expiry: unknown" : `expires: ${parsed.toISOString()}`;
+}
+
+/** Render a scope payload using the same stored values sent to the API. */
+export function summarizeTokenScopes(value: unknown, expiresAt?: unknown): string {
+  const expiryLabel = summarizeTokenExpiry(expiresAt);
+  if (!isRecord(value)) return `Legacy token · full access to all organizations and resources · ${expiryLabel}`;
+  const orgs = value["orgs"];
+  const projects = value["projects"];
+  const workspaces = value["workspaces"];
+  const permissions = value["permissions"];
+  const orgLabel = Array.isArray(orgs) && orgs.length > 0 ? `${orgs.length} organization${orgs.length === 1 ? "" : "s"}` : "no organizations";
+  const projectLabel = Array.isArray(projects) && projects.length > 0 ? `${projects.length} selected project${projects.length === 1 ? "" : "s"}` : "all projects";
+  const workspaceLabel = Array.isArray(workspaces) && workspaces.length > 0 ? `${workspaces.length} selected workspace${workspaces.length === 1 ? "" : "s"}` : "all workspaces";
+  const grants = isRecord(permissions)
+    ? Object.entries(permissions).filter(([, granted]): boolean => isBoolean(granted) && granted).map(([key]): string => key).sort()
+    : [];
+  const grantLabel = grants.length === 0 ? "none" : grants.join(", ");
+  const tags = value["tags"];
+  const tagLabel = isRecord(tags) && Array.isArray(tags["rules"]) && tags["rules"].length > 0 ? "tag filters included" : "no tag filters";
+  return `${orgLabel} · ${projectLabel} · ${workspaceLabel} · actions: ${grantLabel} · ${tagLabel} · ${expiryLabel}`;
+}
 
 /** A single key=value tag filter. */
 type TagFilterNode = Readonly<{ kind: "filter"; id: string; key: string; value: string }>;
@@ -337,23 +409,17 @@ export function TokenScopeDialog({
     });
   };
 
+  const grantPreset = (preset: TokenPreset): void => {
+    const next: Record<string, boolean> = {};
+    for (const key of preset.grants) next[key] = true;
+    setGranted(next);
+  };
+
   const grantAll = (): void => {
     const next: Record<string, boolean> = {};
     for (const group of PERMISSION_GROUPS) {
       for (const grant of group.grants) {
         next[grant.key] = true;
-      }
-    }
-    setGranted(next);
-  };
-
-  const grantReadOnly = (): void => {
-    const next: Record<string, boolean> = {};
-    for (const group of PERMISSION_GROUPS) {
-      for (const grant of group.grants) {
-        if (grant.key.endsWith(":read")) {
-          next[grant.key] = true;
-        }
       }
     }
     setGranted(next);
@@ -535,6 +601,17 @@ export function TokenScopeDialog({
     (): number => Object.values(granted).filter(Boolean).length,
     [granted],
   );
+
+  const currentScopeSummary = useMemo((): string => {
+    if (!fineGrained) return summarizeTokenScopes(null);
+    return summarizeTokenScopes({
+      orgs: orgId === "" ? [] : [orgId],
+      projects: selectedProjects.size > 0 ? [...selectedProjects] : null,
+      workspaces: selectedWorkspaces.size > 0 ? [...selectedWorkspaces] : null,
+      tags: serializeTags(tagTree),
+      permissions: Object.fromEntries(Object.entries(granted).filter(([, value]): boolean => value)),
+    });
+  }, [fineGrained, granted, orgId, selectedProjects, selectedWorkspaces, tagTree]);
 
   const rootPath: readonly number[] = [];
   const renderRuleRow = (node: TagRuleNode, path: readonly number[]): React.JSX.Element => {
@@ -719,8 +796,45 @@ export function TokenScopeDialog({
             </div>
           </label>
 
+          {!fineGrained && (
+            <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning-text">
+              This legacy token has full access to every organization and resource available to your account. Choose a fine-grained token for a narrower task.
+            </div>
+          )}
+
           {fineGrained && (
             <div className="space-y-5 rounded-lg border border-border/80 bg-background/50 p-4">
+              <div className="space-y-3 rounded-md border border-primary/30 bg-primary/5 p-3" data-testid="token-scope-summary" aria-live="polite">
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Access summary</p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    This summary is generated from the scope that will be stored with the token. A new permission will not be added to a preset automatically.
+                  </p>
+                </div>
+                <p className="break-words font-mono text-xs leading-relaxed text-foreground">{currentScopeSummary}</p>
+              </div>
+
+              <div className="space-y-2 rounded-md border border-border bg-card p-3">
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Start from a task</p>
+                  <p className="mt-0.5 text-2xs text-muted-foreground">Presets are explicit permission lists. Review the summary before creating the token.</p>
+                </div>
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                  {TOKEN_PRESETS.map((preset): React.JSX.Element => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      aria-label={preset.id === "read-only" ? "Select read-only permissions" : `Select ${preset.id} automation permissions`}
+                      onClick={(): void => { grantPreset(preset); }}
+                      className="rounded-md border border-border bg-background px-2.5 py-2 text-left transition-colors hover:border-primary/50 hover:bg-primary/5"
+                    >
+                      <span className="block text-xs font-semibold text-foreground">{preset.label}</span>
+                      <span className="mt-0.5 block text-2xs leading-4 text-muted-foreground">{preset.description}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* Organization */}
               <div className="space-y-1.5">
                 <label htmlFor="token-org" className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
@@ -924,16 +1038,6 @@ export function TokenScopeDialog({
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      aria-label="Select read-only permissions"
-                      onClick={grantReadOnly}
-                      className="h-6 text-2xs font-medium"
-                    >
-                      Read-only
-                    </Button>
                     <Button
                       type="button"
                       variant="outline"

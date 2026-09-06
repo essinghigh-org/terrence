@@ -469,7 +469,7 @@ export function WorkspaceHealth({
           )}
           {!assessmentsLoading && !assessmentError && assessments[0] === undefined && (
             <div className="flex flex-col items-center gap-4 py-6 text-center sm:flex-row sm:text-left">
-              <Terrence pose="guide" className="w-32" />
+              <Terrence pose="guide" detail="small" className="w-32" />
               <div><h3 className="font-heading font-semibold">No health assessment has run yet.</h3><p className="mt-1 max-w-md text-sm text-muted-foreground">Health assessments check for infrastructure drift and validation failures. Configure the schedule below to get started.</p></div>
             </div>
           )}
@@ -481,7 +481,7 @@ export function WorkspaceHealth({
               <div className="space-y-5">
               {attrs.status === "completed" && attrs.drifted === false && attrs["all-checks-succeeded"] === true && checksFailed === 0 && (attrs["checks-unknown"] ?? 0) === 0 && !attrs["error-msg"] && (
                 <div className="flex items-center gap-4 rounded-lg border border-success/20 bg-success/5 px-4 py-2">
-                  <Terrence pose="healthy" className="w-28" />
+                  <Terrence pose="healthy" detail="small" className="w-28" />
                   <div><h3 className="font-heading text-lg font-semibold">Everything healthy</h3><p className="mt-1 text-sm text-muted-foreground">The latest assessment found no drift or failing checks.</p></div>
                 </div>
               )}

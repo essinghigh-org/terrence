@@ -85,6 +85,10 @@ export const agents: typeof sqliteSchema.agents = pgTables === null
   ? sqliteSchema.agents
   : (pgTables[dbNameOf(sqliteSchema.agents)] as unknown as typeof sqliteSchema.agents);
 
+export const apiIdempotencyKeys: typeof sqliteSchema.apiIdempotencyKeys = pgTables === null
+  ? sqliteSchema.apiIdempotencyKeys
+  : (pgTables[dbNameOf(sqliteSchema.apiIdempotencyKeys)] as unknown as typeof sqliteSchema.apiIdempotencyKeys);
+
 export const apiTokens: typeof sqliteSchema.apiTokens = pgTables === null
   ? sqliteSchema.apiTokens
   : (pgTables[dbNameOf(sqliteSchema.apiTokens)] as unknown as typeof sqliteSchema.apiTokens);
@@ -100,10 +104,6 @@ export const assessmentResults: typeof sqliteSchema.assessmentResults = pgTables
 export const auditLogs: typeof sqliteSchema.auditLogs = pgTables === null
   ? sqliteSchema.auditLogs
   : (pgTables[dbNameOf(sqliteSchema.auditLogs)] as unknown as typeof sqliteSchema.auditLogs);
-
-export const explorerBulkActionRecords: typeof sqliteSchema.explorerBulkActionRecords = pgTables === null
-  ? sqliteSchema.explorerBulkActionRecords
-  : (pgTables[dbNameOf(sqliteSchema.explorerBulkActionRecords)] as unknown as typeof sqliteSchema.explorerBulkActionRecords);
 
 export const cidrRangeListAgentPools: typeof sqliteSchema.cidrRangeListAgentPools = pgTables === null
   ? sqliteSchema.cidrRangeListAgentPools
@@ -133,9 +133,17 @@ export const durableJobs: typeof sqliteSchema.durableJobs = pgTables === null
   ? sqliteSchema.durableJobs
   : (pgTables[dbNameOf(sqliteSchema.durableJobs)] as unknown as typeof sqliteSchema.durableJobs);
 
+export const outboxEvents: typeof sqliteSchema.outboxEvents = pgTables === null
+  ? sqliteSchema.outboxEvents
+  : (pgTables[dbNameOf(sqliteSchema.outboxEvents)] as unknown as typeof sqliteSchema.outboxEvents);
+
 export const emailVerificationTokens: typeof sqliteSchema.emailVerificationTokens = pgTables === null
   ? sqliteSchema.emailVerificationTokens
   : (pgTables[dbNameOf(sqliteSchema.emailVerificationTokens)] as unknown as typeof sqliteSchema.emailVerificationTokens);
+
+export const explorerBulkActionRecords: typeof sqliteSchema.explorerBulkActionRecords = pgTables === null
+  ? sqliteSchema.explorerBulkActionRecords
+  : (pgTables[dbNameOf(sqliteSchema.explorerBulkActionRecords)] as unknown as typeof sqliteSchema.explorerBulkActionRecords);
 
 export const explorerCatalogItems: typeof sqliteSchema.explorerCatalogItems = pgTables === null
   ? sqliteSchema.explorerCatalogItems
@@ -400,6 +408,10 @@ export const runComments: typeof sqliteSchema.runComments = pgTables === null
 export const runExplanations: typeof sqliteSchema.runExplanations = pgTables === null
   ? sqliteSchema.runExplanations
   : (pgTables[dbNameOf(sqliteSchema.runExplanations)] as unknown as typeof sqliteSchema.runExplanations);
+
+export const runProvenanceCapsules: typeof sqliteSchema.runProvenanceCapsules = pgTables === null
+  ? sqliteSchema.runProvenanceCapsules
+  : (pgTables[dbNameOf(sqliteSchema.runProvenanceCapsules)] as unknown as typeof sqliteSchema.runProvenanceCapsules);
 
 export const runTaskResults: typeof sqliteSchema.runTaskResults = pgTables === null
   ? sqliteSchema.runTaskResults

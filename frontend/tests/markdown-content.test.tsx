@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { render } from "@testing-library/react";
-import { MarkdownContent } from "../src/components/MarkdownContent";
+import { MARKDOWN_PARSER_LIMITS, MarkdownContent, MarkdownParseError, parseMarkdown } from "../src/components/MarkdownContent";
 
 test("renders tables from pipe-delimited markdown", () => {
   const view = render(
@@ -71,4 +71,43 @@ test("renders malformed and streamed table prefixes without hanging", () => {
     view.rerender(<MarkdownContent markdown={document.slice(0, end)} />);
   }
   expect(view.container.querySelector("table")).not.toBeNull();
+});
+
+test("every deterministic truncated prefix parses or returns a typed failure", () => {
+  const source = "# heading\n\n```hcl\nvariable \\\"x\\\" {\n  type = string\n}\n```\n\n- item";
+  for (let end = 0; end <= source.length; end += 1) {
+    expect(() => parseMarkdown(source.slice(0, end))).not.toThrow();
+  }
+  expect(() => parseMarkdown("x".repeat(MARKDOWN_PARSER_LIMITS.maxSourceCharacters + 1)))
+    .toThrow(MarkdownParseError);
+  const manyBlocks = Array.from({ length: MARKDOWN_PARSER_LIMITS.maxBlocks + 1 }, () => "x").join("\n\n");
+  expect(() => parseMarkdown(manyBlocks)).toThrow(MarkdownParseError);
+  const view = render(<MarkdownContent markdown={"x".repeat(MARKDOWN_PARSER_LIMITS.maxSourceCharacters + 1)} />);
+  expect(view.getByText("This document is too large to display.")).toBeDefined();
+});
+
+test("seeded markdown prefixes preserve parser progress and output bounds", () => {
+  const seeds = [
+    "# heading\n\n```hcl\nvariable \"x\" {\n  type = string\n}\n```\n\n- item",
+    "| name | value |\n|---|---|\n| one | **two** |\n> quote\n",
+  ];
+  let randomState = 0x753;
+  const random = (): number => {
+    randomState = (randomState + 0x6d2b79f5) >>> 0;
+    let t = randomState;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const cases = Number.parseInt(process.env["TERRENCE_PROPERTY_CASES"] ?? "256", 10);
+  const count = Number.isSafeInteger(cases) && cases > 0 && cases <= 10_000 ? cases : 256;
+  const started = performance.now();
+  for (const seed of seeds) {
+    for (let index = 0; index < count; index += 1) {
+      const prefix = seed.slice(0, Math.floor(random() * (seed.length + 1)));
+      const blocks = parseMarkdown(prefix);
+      expect(blocks.length).toBeLessThanOrEqual(MARKDOWN_PARSER_LIMITS.maxBlocks);
+    }
+  }
+  expect(performance.now() - started).toBeLessThan(15_000);
 });

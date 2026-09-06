@@ -18,6 +18,7 @@ const result = await Bun.build({
   target: "browser",
   publicPath: "/",
   minify: !isDev,
+  define: { "process.env.NODE_ENV": JSON.stringify(isDev ? "development" : "production") },
   splitting: true,
   plugins: [tailwind],
   metafile: true,

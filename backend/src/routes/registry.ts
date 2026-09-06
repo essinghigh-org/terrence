@@ -1,3 +1,4 @@
+import { integrationSetting } from "../lib/runtime-config";
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { db } from "../db";
@@ -1374,7 +1375,7 @@ export const registryRoutes = new Elysia({ name: "registry" })
       connectionAvailable = await db.query.githubAppInstallations.findFirst({
         where: and(eq(githubAppInstallations.id, githubAppInstallationId), eq(githubAppInstallations.orgId, org.id)),
       }) !== undefined;
-      repositoryBaseUrl = process.env["GITHUB_APP_HTTP_URL"] ?? "https://github.com";
+      repositoryBaseUrl = integrationSetting("GITHUB_APP_HTTP_URL") ?? "https://github.com";
     } else {
       const token = await db.query.oauthTokens.findFirst({ where: eq(oauthTokens.id, oauthTokenId as string) });
       const client = token === undefined ? undefined : await db.query.oauthClients.findFirst({
@@ -2451,7 +2452,11 @@ export const registryRoutes = new Elysia({ name: "registry" })
       updatedAt: now,
     };
     await db.insert(moduleTestRuns).values(runValues);
-    await enqueueDurableJob("module-test", { runId: id }, { dedupeKey: id });
+    await enqueueDurableJob(
+      "module-test",
+      { runId: id, organizationId: mod.orgId, jobClass: "plan", estimatedBytes: 16 * 1024 * 1024 },
+      { dedupeKey: id },
+    );
     const created = await db.query.moduleTestRuns.findFirst({ where: eq(moduleTestRuns.id, id) });
     if (created === undefined) throw new Error("Created module test run could not be loaded");
     (set as { status: number }).status = 201;

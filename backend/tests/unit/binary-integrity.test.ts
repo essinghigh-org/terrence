@@ -1,7 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "fs/promises";
+import { mkdtemp, rm, writeFile, open } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
+import { createHash } from "node:crypto";
+import { sha256File } from "../../src/lib/file-hash";
 
 import {
   type BinaryIntegrity,
@@ -121,4 +123,20 @@ test("revalidateInstalledBinaries removes tampered installs and keeps intact one
   expect(await Bun.file(join(goodDir, "tofu")).exists()).toBe(true);
   expect(await Bun.file(join(legacyDir, "tofu")).exists()).toBe(true);
   expect(await Bun.file(join(badDir, "terraform")).exists()).toBe(false);
+});
+
+test("streamed binary hashes cover chunk boundaries and reject missing files", async (): Promise<void> => {
+  const path = join(await tempDir(), "large-binary");
+  const file = await open(path, "w");
+  const expected = createHash("sha256");
+  try {
+    for (let i = 0; i < 100; i++) {
+      const chunk = Buffer.alloc(17001, i);
+      await file.writeFile(chunk);
+      expected.update(chunk);
+    }
+  } finally { await file.close(); }
+  expect(await sha256File(path)).toBe(expected.digest("hex"));
+  await rm(path);
+  expect(await verifyBinaryIntegrity(path, { tool: "tofu", version: "1.9.3", binarySha256: "0".repeat(64) })).toBe(false);
 });

@@ -487,6 +487,9 @@ export const configurationVersions = sqliteTable("configuration_versions", {
   source: text("source").default("tfe-api"),
   ingressAttributes: text("ingress_attributes", { mode: "json" }).$type<{ commitSha?: string; commitUrl?: string; commitMessage?: string; branch?: string; tag?: string; pullRequestNumber?: number; senderUsername?: string; senderAvatarUrl?: string; senderProviderId?: string; cloneUrl?: string; compareUrl?: string }>(),
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<{ uploadedAt?: string; archivedAt?: string }>(),
+  // 0 is the un-enveloped representation used by the oldest supported
+  // databases. New writes use version 1 and are adapted explicitly on read.
+  statusMetadataSchemaVersion: integer("status_metadata_schema_version").notNull().default(0),
   // Upload-claim lease (todo 278): atomically claims a pending
   // configuration-version before accepting an archive PUT, so two
   // simultaneous signed PUTs cannot race. Claim expires so a crashed
@@ -519,7 +522,17 @@ export const runs = sqliteTable("runs", {
   targetAddrs: text("target_addrs", { mode: "json" }).$type<string[]>(),
   replaceAddrs: text("replace_addrs", { mode: "json" }).$type<string[]>(),
   invokeActionAddrs: text("invoke_action_addrs", { mode: "json" }).$type<string[]>(),
-  variables: text("variables", { mode: "json" }).$type<{ key: string; value: string }[]>(),
+  variables: text("variables", { mode: "json" }).$type<{
+    key: string;
+    value: string;
+    category?: "terraform" | "env";
+    sensitive?: boolean;
+    valueEncrypted?: string;
+    extensions?: Record<string, unknown>;
+  }[]>(),
+  // Run input JSON predates the versioned persisted-data contract. Keep the
+  // raw columns for export compatibility while recording the adapter version.
+  inputSchemaVersion: integer("input_schema_version").notNull().default(0),
   logToken: text("log_token").$defaultFn(() => crypto.randomUUID()),
   terraformVersion: text("terraform_version"),
   debuggingMode: integer("debugging_mode", { mode: "boolean" }).notNull().default(false),
@@ -528,7 +541,14 @@ export const runs = sqliteTable("runs", {
   allowConfigGeneration: integer("allow_config_generation", { mode: "boolean" }).notNull().default(false),
   generatedConfiguration: integer("generated_configuration", { mode: "boolean" }).notNull().default(false),
   executionMode: text("execution_mode").notNull().default("remote"),
+  // Filled when an agent claims a run. These values describe the exact
+  // compatibility contract used by the current run generation.
+  agentVersion: text("agent_version"),
+  agentProtocolVersion: text("agent_protocol_version"),
+  agentCapabilities: text("agent_capabilities", { mode: "json" }).$type<string[]>(),
+  agentExecutionPolicy: text("agent_execution_policy", { mode: "json" }).$type<Record<string, unknown>>(),
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<Record<string, string>>(),
+  statusMetadataSchemaVersion: integer("status_metadata_schema_version").notNull().default(0),
   planResourceAdditions: integer("plan_resource_additions"),
   planResourceChanges: integer("plan_resource_changes"),
   planResourceDestructions: integer("plan_resource_destructions"),
@@ -550,6 +570,21 @@ export const runs = sqliteTable("runs", {
   index("runs_status_created_idx").on(table.status, table.createdAt),
   index("runs_status_scheduled_idx").on(table.status, table.scheduledAt),
   index("runs_configuration_version_idx").on(table.configurationVersionId),
+]);
+
+/** Immutable snapshot of the inputs and execution policy selected for a run.
+ * The public manifest is safe to expose to an authorized reader; execution
+ * material is encrypted at rest and is never serialized by a run resource. */
+export const runProvenanceCapsules = sqliteTable("run_provenance_capsules", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  schemaVersion: integer("schema_version").notNull().default(1),
+  publicManifest: text("public_manifest", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+  manifestSha256: text("manifest_sha256").notNull(),
+  executionMaterial: text("execution_material").notNull(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  uniqueIndex("run_provenance_capsules_run_idx").on(table.runId),
 ]);
 
 // Ephemeral per-run credentials (the reference format run-token model). Minted when the worker
@@ -585,6 +620,7 @@ export const assessmentResults = sqliteTable("assessment_results", {
   checksUnknown: integer("checks_unknown").notNull().default(0),
   jsonOutput: text("json_output", { mode: "json" }).$type<Record<string, unknown>>(),
   jsonSchema: text("json_schema", { mode: "json" }).$type<Record<string, unknown>>(),
+  artifactSchemaVersion: integer("artifact_schema_version").notNull().default(0),
   logOutput: text("log_output"),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
   completedAt: integer("completed_at"),
@@ -712,6 +748,7 @@ export const stateVersions = sqliteTable("state_versions", {
   uploadExpiresAt: integer("upload_expires_at"),
   uploadLock: text("upload_lock"),
   uploadSha256: text("upload_sha256"),
+  stateSummary: text("state_summary"),
   statePayload: text("state_payload"),
   status: text("status").default("finalized"),
   jsonState: text("json_state"),
@@ -855,6 +892,7 @@ export const stackRecords = sqliteTable("stack_records", {
   name: text("name"),
   status: text("status").notNull().default("pending"),
   payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
+  payloadSchemaVersion: integer("payload_schema_version").notNull().default(0),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
   updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
@@ -879,7 +917,11 @@ export const stackAgentJobs = sqliteTable("stack_agent_jobs", {
   phase: text("phase").notNull(),
   iacBinary: text("iac_binary").notNull().default("terraform"),
   status: text("status").notNull().default("queued"),
+  // Incremented for every claim generation so a reconnecting agent cannot
+  // finalize a newer claim with a stale completion.
+  fencingToken: integer("fencing_token").notNull().default(0),
   result: text("result", { mode: "json" }).$type<Record<string, unknown>>(),
+  resultSchemaVersion: integer("result_schema_version").notNull().default(0),
   errorMessage: text("error_message"),
   claimedAt: integer("claimed_at"),
   completedAt: integer("completed_at"),
@@ -916,6 +958,7 @@ export const durableJobs = sqliteTable("durable_jobs", {
   dedupeKey: text("dedupe_key"),
   status: text("status").notNull().default("queued"),
   payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
+  payloadSchemaVersion: integer("payload_schema_version").notNull().default(0),
   attempts: integer("attempts").notNull().default(0),
   runAfter: integer("run_after").notNull().$defaultFn(() => Date.now()),
   lockedBy: text("locked_by"),
@@ -929,6 +972,27 @@ export const durableJobs = sqliteTable("durable_jobs", {
   index("durable_jobs_kind_status_run_after_idx").on(table.kind, table.status, table.runAfter),
   uniqueIndex("durable_jobs_kind_dedupe_idx").on(table.kind, table.dedupeKey),
   index("durable_jobs_lease_idx").on(table.status, table.leaseExpiresAt),
+]);
+
+/**
+ * Transactional records for side effects that must survive the process which
+ * committed the domain change. The matching durable job carries the lease and
+ * retry lifecycle; this row is the stable event identity and operator-facing
+ * delivery result.
+ */
+export const outboxEvents = sqliteTable("outbox_events", {
+  id: text("id").primaryKey(),
+  topic: text("topic").notNull(),
+  payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
+  status: text("status").notNull().default("pending"),
+  attempts: integer("attempts").notNull().default(0),
+  lastError: text("last_error"),
+  deliveredAt: integer("delivered_at"),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  updatedAt: integer("updated_at").notNull().$defaultFn(() => Date.now()),
+}, (table) => [
+  index("outbox_events_status_updated_idx").on(table.status, table.updatedAt),
+  index("outbox_events_topic_status_idx").on(table.topic, table.status),
 ]);
 
 /** RSA workload-identity signing keys. Private material is encrypted with
@@ -1167,6 +1231,7 @@ export const policySetVersions = sqliteTable("policy_set_versions", {
   source: text("source").notNull().default("tfe-api"),
   status: text("status").notNull().default("pending"),
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<{ uploadedAt?: string; readyAt?: string; erroredAt?: string }>().notNull().default({}),
+  statusMetadataSchemaVersion: integer("status_metadata_schema_version").notNull().default(0),
   ingressAttributes: text("ingress_attributes", { mode: "json" }).$type<{ provider?: string; repository?: string; commitSha?: string; branch?: string; tag?: string; manifest?: string; policyCount?: number }>(),
   error: text("error"),
   archivePath: text("archive_path"),
@@ -1588,6 +1653,16 @@ export const agents = sqliteTable("agents", {
   status: text("status").notNull().default("idle"), // 'idle', 'busy', 'exited', 'errored', 'unknown'
   ipAddress: text("ip_address"),
   version: text("version"),
+  // Agent software version and protocol version are separate compatibility
+  // coordinates. The protocol defaults preserve pre-negotiation agents.
+  protocolVersion: text("protocol_version").notNull().default("1"),
+  capabilities: text("capabilities", { mode: "json" }).$type<string[]>().notNull().default([
+    "operation.plan", "operation.apply", "operation.policy", "operation.assessment", "operation.stack",
+    "operation.source-bundle", "operation.test", "artifact.configuration", "artifact.filesystem",
+    "artifact.log", "artifact.plan-json", "artifact.state-json", "artifact.atomic-upload",
+    "lease.heartbeat", "lease.fencing", "cancellation", "state.publication",
+  ]),
+  artifactFormats: text("artifact_formats", { mode: "json" }).$type<string[]>().notNull().default(["tar.gz", "json", "text"]),
   architecture: text("architecture"),
   iacBinaries: text("iac_binaries", { mode: "json" }).$type<string[]>().notNull().default(["terraform"]),
   accept: text("accept").notNull().default("plan,apply,policy,assessment,stack_prepare,stack_plan,stack_apply,source_bundle,stack_aggregate_outputs,test"),
@@ -1675,6 +1750,7 @@ export const taskStages = sqliteTable("task_stages", {
   stage: text("stage").notNull(), // 'pre_plan', 'post_plan', 'pre_apply', 'post_apply'
   status: text("status").notNull().default("pending"), // 'pending', 'running', 'passed', 'failed', 'awaiting_override', 'errored', 'canceled', 'unreachable'
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<Record<string, string>>(),
+  statusMetadataSchemaVersion: integer("status_metadata_schema_version").notNull().default(0),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   index("task_stages_run_idx").on(table.runId),
@@ -1702,6 +1778,7 @@ export const policyEvaluations = sqliteTable("policy_evaluations", {
   policyToolVersion: text("policy_tool_version").default("0.44.0"),
   resultCount: text("result_count", { mode: "json" }).$type<Record<string, number>>(),
   statusTimestamps: text("status_timestamps", { mode: "json" }).$type<Record<string, string>>(),
+  statusMetadataSchemaVersion: integer("status_metadata_schema_version").notNull().default(0),
   createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
 }, (table) => [
   index("policy_evaluations_run_idx").on(table.runId),
@@ -1735,6 +1812,30 @@ export const auditLogs = sqliteTable("audit_logs", {
   index("audit_logs_created_at_idx").on(table.createdAt),
   index("audit_logs_org_created_at_idx").on(table.orgId, table.createdAt),
   index("audit_logs_resource_idx").on(table.resourceType, table.resourceId, table.createdAt, table.id),
+]);
+
+// Remote clients can lose a response after a write commits. Keep the
+// idempotency contract in the database so a replay is safe across process
+// restarts and control-plane handoffs. The scope includes the logical
+// resource being created; the caller and canonical request hash are checked
+// before returning a stored response.
+export const apiIdempotencyKeys = sqliteTable("api_idempotency_keys", {
+  id: text("id").primaryKey(),
+  scope: text("scope").notNull(),
+  key: text("key").notNull(),
+  principal: text("principal").notNull(),
+  requestHash: text("request_hash").notNull(),
+  resourceType: text("resource_type").notNull(),
+  resourceId: text("resource_id"),
+  status: text("status").notNull().default("pending"),
+  responseStatus: integer("response_status"),
+  responseBody: text("response_body", { mode: "json" }).$type<Record<string, unknown>>(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  expiresAt: integer("expires_at").notNull(),
+  completedAt: integer("completed_at"),
+}, (table) => [
+  uniqueIndex("api_idempotency_scope_key_idx").on(table.scope, table.key),
+  index("api_idempotency_expires_idx").on(table.expiresAt),
 ]);
 
 export const runTriggers = sqliteTable("run_triggers", {

@@ -33,7 +33,7 @@ test("reads JSON, text, and empty API responses", async () => {
   expect(await readResponseBody(new Response("plain text"))).toBe("plain text");
 });
 
-test("collects paginated API data and stops on a repeated page", async () => {
+test("rejects repeated pages instead of silently returning incomplete data", async () => {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
 // SAFETY: the mock's handling mirrors the backend contract for this test.
@@ -46,10 +46,7 @@ test("collects paginated API data and stops on a repeated page", async () => {
   }) as typeof fetch;
 
   try {
-    expect(await fetchAllApiPages<{ id: string }>("/workspaces/ws-1/runs")).toEqual([
-      { id: "run-1" },
-      { id: "run-2" },
-    ]);
+    expect(await fetchAllApiPages<{ id: string }>("/workspaces/ws-1/runs").catch((error: unknown): unknown => error)).toMatchObject({ message: expect.stringContaining("repeated a page") });
     expect(calls).toHaveLength(2);
   } finally {
     globalThis.fetch = originalFetch;
@@ -68,8 +65,7 @@ test("fetchAllApiPages respects MAX_PAGINATED_PAGES budget and halts safely", as
   }) as unknown as typeof fetch;
 
   try {
-    const results = await fetchAllApiPages<{ id: string }>("/items");
-    expect(results).toHaveLength(MAX_PAGINATED_PAGES);
+    expect(await fetchAllApiPages<{ id: string }>("/items").catch((error: unknown): unknown => error)).toMatchObject({ message: expect.stringContaining("exceeds 100 pages") });
     expect(pageCounter).toBe(MAX_PAGINATED_PAGES + 1);
   } finally {
     globalThis.fetch = originalFetch;
@@ -416,6 +412,27 @@ test("fetchApi surfaces field-level 422 details on ApiError", async () => {
   }
 });
 
+test("normalizes stable error codes and request references for UI diagnostics", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (): Promise<Response> => new Response(
+    JSON.stringify({ errors: [{ status: "409", code: "STATE_SERIAL_CONFLICT", detail: "State changed before promotion" }] }),
+    {
+      status: 409,
+      headers: { "Content-Type": "application/vnd.api+json", "X-Request-Id": "req-state-123" },
+    },
+  )) as unknown as typeof fetch;
+  try {
+    let failure: unknown;
+    try { await fetchApi("/state-versions/sv-1/actions/rollback", { method: "POST" }); } catch (error: unknown) { failure = error; }
+    expect(failure).toBeInstanceOf(ApiError);
+    expect((failure as ApiError).code).toBe("STATE_SERIAL_CONFLICT");
+    expect((failure as ApiError).requestId).toBe("req-state-123");
+    expect((failure as ApiError).status).toBe(409);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("workspace 404 refresh recovery never replays mutations", async () => {
   const originalFetch = globalThis.fetch;
   try {
@@ -456,6 +473,63 @@ test("raw downloads preserve JSON bytes and use the authenticated API error path
     expect((failure as Error).message).toBe("State download is unavailable");
   } finally {
     setAuthToken("");
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("explicit traversal enforces its record budget and stops after cancellation or an authorization failure", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  const controller = new AbortController();
+  try {
+    globalThis.fetch = (async () => {
+      calls++;
+      return Response.json({ data: [{ id: "a" }, { id: "b" }], meta: { pagination: { "next-page": 2 } } });
+    }) as unknown as typeof fetch;
+    expect(await fetchAllApiPages("/items", undefined, { maxRecords: 1 }).catch((error: unknown): unknown => error)).toMatchObject({ message: expect.stringContaining("exceeds 1 records") });
+    expect(calls).toBe(1);
+    expect(await fetchAllApiPages("/items", controller.signal, { onProgress: () => { controller.abort(); } }).catch((error: unknown): unknown => error)).toBeInstanceOf(Error);
+    expect(calls).toBe(2);
+    const seen: number[] = [];
+    globalThis.fetch = (async () => {
+      calls++;
+      return calls === 3
+        ? Response.json({ data: [{ id: "a" }], meta: { pagination: { "next-page": 2 } } })
+        : Response.json({ errors: [{ detail: "Permission revoked" }] }, { status: 403 });
+    }) as unknown as typeof fetch;
+    expect(await fetchAllApiPages("/items", undefined, { onProgress: (count) => { seen.push(count); } }).catch((error: unknown): unknown => error)).toMatchObject({ message: expect.stringContaining("Permission revoked") });
+    expect(calls).toBe(4);
+    expect(seen).toEqual([1]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("explicit traversal retries throttled pages without duplication and bounds maintenance retries", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  try {
+    globalThis.fetch = (async (): Promise<Response> => {
+      calls++;
+      return calls === 1
+        ? new Response("{}", { status: 429, headers: { "Retry-After": "0" } })
+        : Response.json({ data: [{ id: "one" }] });
+    }) as unknown as typeof fetch;
+    expect(await fetchAllApiPages("/workspaces")).toEqual([{ id: "one" }]);
+    expect(calls).toBe(2);
+    calls = 0;
+    globalThis.fetch = (async (): Promise<Response> => {
+      calls++;
+      return new Response("{}", { status: 503, headers: { "Retry-After": "0" } });
+    }) as unknown as typeof fetch;
+    expect(await fetchAllApiPages("/workspaces").catch((error: unknown): unknown => error)).toBeInstanceOf(ApiError);
+    expect(calls).toBe(4);
+    calls = 0;
+    globalThis.fetch = (async (): Promise<Response> => {
+      calls++;
+      return new Response("{}", { status: 429, headers: { "Retry-After": "120" } });
+    }) as unknown as typeof fetch;
+    expect(await fetchAllApiPages("/workspaces").catch((error: unknown): unknown => error)).toBeInstanceOf(ApiError);
+    expect(calls).toBe(1);
+  } finally {
     globalThis.fetch = originalFetch;
   }
 });

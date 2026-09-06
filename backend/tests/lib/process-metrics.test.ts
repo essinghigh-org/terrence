@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   processHistory,
   processSnapshot,
+  recordRequestLatency,
+  resetJourneyMetricsForTests,
   requestFinished,
   requestStarted,
   sampleProcess,
@@ -83,6 +85,45 @@ describe("snapshot", () => {
     expect(snapshot.userCpuSeconds).toBeGreaterThanOrEqual(0);
     expect(snapshot.systemCpuSeconds).toBeGreaterThanOrEqual(0);
     expect(snapshot.at).toBeGreaterThan(0);
+  });
+});
+
+describe("bounded journey latency", () => {
+  test("uses fixed journey labels instead of resource identifiers", () => {
+    resetJourneyMetricsForTests();
+    recordRequestLatency("/api/v2/organizations/acme/workspaces", 12);
+    recordRequestLatency("/api/v2/runs/run-secret/plan", 20);
+    recordRequestLatency("/api/v2/runs/run-secret/plan/log/log-secret", 21);
+    recordRequestLatency("/api/v2/workspaces/ws-secret/state-versions", 30);
+    recordRequestLatency("/api/v2/runs/run-secret/actions/queue", 31);
+    recordRequestLatency("/api/v2/workspaces/ws-secret/resources/aws_instance.foo", 40);
+
+    const journeys = processSnapshot().journeys;
+    expect(Object.keys(journeys).sort()).toEqual([
+      "log-retrieval",
+      "other",
+      "plan-interaction",
+      "queue-start",
+      "state-listing",
+      "workspace-list",
+    ]);
+    expect(journeys["workspace-list"].p95Ms).toBe(12);
+    expect(journeys["plan-interaction"].p95Ms).toBe(20);
+    expect(journeys["log-retrieval"].p95Ms).toBe(21);
+    expect(journeys["state-listing"].p95Ms).toBe(30);
+    expect(journeys["queue-start"].p95Ms).toBe(31);
+    expect(journeys.other.p95Ms).toBe(40);
+  });
+});
+
+describe("event-loop delay", () => {
+  test("reports samples only while the sampler is running", async () => {
+    expect(processSnapshot().eventLoopDelay.sampleCount).toBe(0);
+    startProcessSampler(10, 4);
+    await Bun.sleep(70);
+    expect(processSnapshot().eventLoopDelay.sampleCount).toBeGreaterThan(0);
+    stopProcessSampler();
+    expect(processSnapshot().eventLoopDelay.sampleCount).toBe(0);
   });
 });
 

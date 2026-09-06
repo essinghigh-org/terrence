@@ -1,3 +1,4 @@
+import { deploymentSecret } from "./runtime-config";
 import { createHmac, randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -45,7 +46,7 @@ function readTokenHashSecret(path: string): string {
  * replica; single-node installs get a 256-bit secret persisted in STORAGE_DIR.
  */
 function tokenHashSecret(): string {
-  const configured = process.env["TERRENCE_TOKEN_HASH_SECRET"]?.trim();
+  const configured = deploymentSecret("TERRENCE_TOKEN_HASH_SECRET")?.trim();
   if (configured !== undefined && configured !== "") {
     if (Buffer.byteLength(configured, "utf8") < TOKEN_HASH_SECRET_BYTES) {
       throw new Error(`TERRENCE_TOKEN_HASH_SECRET must be at least ${TOKEN_HASH_SECRET_BYTES} bytes`);

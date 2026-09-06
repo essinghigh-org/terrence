@@ -663,7 +663,7 @@ test("toggles dense table density and persists the preference", async () => {
   };
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
-    if (url.startsWith("/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100")) return json({ data: [workspace] });
+    if (url.startsWith("/api/v2/organizations/acme/workspaces?")) return json({ data: [workspace] });
     if (url === "/api/v2/organizations/acme/projects?page%5Bsize%5D=100") return json({ data: [] });
     if (url === "/api/v2/organizations/acme/runs?page%5Bsize%5D=100") return json({ data: [] });
     if (url === "/api/v2/organizations/acme") {
@@ -705,7 +705,7 @@ test("replaces an empty workspace table with a permission-aware getting-started 
   );
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
-    if (url.startsWith("/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100")) return json({ data: [] });
+    if (url.startsWith("/api/v2/organizations/acme/workspaces?")) return json({ data: [] });
     if (url.startsWith("/api/v2/organizations/acme/projects?")) return json({ data: [] });
     if (url.endsWith("/api/v2/organizations/acme")) {
       return json({ data: { attributes: { name: "acme", permissions: {} } } });
@@ -736,7 +736,7 @@ test("pins a workspace (star) and sorts it to the top", async () => {
   ];
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
-    if (url.startsWith("/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100")) return json({ data: workspaces });
+    if (url.startsWith("/api/v2/organizations/acme/workspaces?")) return json({ data: workspaces });
     if (url === "/api/v2/organizations/acme/projects?page%5Bsize%5D=100") return json({ data: [] });
     if (url === "/api/v2/organizations/acme/runs?page%5Bsize%5D=100") return json({ data: [] });
     if (url === "/api/v2/organizations/acme") {
@@ -788,7 +788,7 @@ test("shows recent workspace shortcuts in the org sidebar", async () => {
       return json({ data: { attributes: { username: "tester", "is-site-admin": false } } });
     }
     if (url === "/api/v2/organizations?page[size]=100") return json({ data: [{ id: "org-acme", attributes: { name: "acme" } }] });
-    if (url.startsWith("/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100")) return json({ data: [] });
+    if (url.startsWith("/api/v2/organizations/acme/workspaces?")) return json({ data: [] });
     throw new Error(`Unexpected request: ${url}`);
   });
   globalThis.fetch = (fetchMock) as unknown as typeof fetch;
@@ -817,7 +817,7 @@ test("saves, applies, and deletes a named workspace view", async () => {
   ];
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
-    if (url.startsWith("/api/v2/organizations/acme/workspaces?page%5Bsize%5D=100")) return json({ data: workspaces });
+    if (url.startsWith("/api/v2/organizations/acme/workspaces?")) return json({ data: workspaces });
     if (url === "/api/v2/organizations/acme/projects?page%5Bsize%5D=100") return json({ data: [] });
     if (url === "/api/v2/organizations/acme/runs?page%5Bsize%5D=100") return json({ data: [] });
     if (url === "/api/v2/organizations/acme") {
@@ -892,7 +892,7 @@ test("column chooser hides and restores table columns with persistence", async (
   };
   const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
-    if (url.includes("/workspaces?page%5Bsize%5D=100")) return json({ data: [workspace] });
+    if (url.includes("/workspaces?")) return json({ data: [workspace] });
     if (url.includes("/projects?")) return json({ data: [] });
     if (url.includes("/runs?")) return json({ data: [] });
     if (url.endsWith("/api/v2/organizations/acme")) {

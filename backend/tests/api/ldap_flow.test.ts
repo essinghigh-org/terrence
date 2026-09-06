@@ -302,7 +302,7 @@ describe("LDAP authentication", () => {
     await setLdapSettings(true, { "bind-dn": SERVICE_DN, "bind-password": null });
     try {
       const response = await login(ldapUsername, VALID_USER_PASSWORD, true);
-      expect(response.status).toBe(401);
+      expect(response.status).toBe(503);
     } finally {
       await setLdapSettings(true);
       await setLocalAuth(true);

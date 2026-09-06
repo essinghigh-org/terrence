@@ -30,7 +30,11 @@ A plan with no resource changes produces no estimate. If the Infracost binary ca
 
 ## Stored artifacts
 
-The run stores the estimate timestamps and the parsed cost output. The web interface renders the cost summary.
+The run stores the estimate timestamps and the parsed cost output. Each finished estimate also retains the Infracost tool version, pricing date when reported, currency, time basis, supported-resource count, and bounded assumptions list. The web interface renders this provenance beside the summary so a reviewer can tell which pricing context produced it.
+
+When Infracost supplies a past breakdown, Terrence records it as the comparison baseline and emits bounded resource-level deltas (including the project/module name and resource address). A baseline is comparable only when both sides use the same currency and monthly time basis. Missing prices remain unsupported and are called out as warnings; they are never silently treated as zero. If no baseline is present, the prior value is shown as zero for compatibility only and the UI labels the comparison unavailable.
+
+These values are estimates, not billing guarantees. Resource increases link back to the run's plan review, and unsupported or usage-dependent pricing remains visible as a caveat. Only the documented plan JSON contract is written to the external estimator; credentials are kept outside the run work directory and are removed after the estimate completes.
 
 ## API surface
 

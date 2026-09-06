@@ -1,20 +1,20 @@
 import { log } from "../lib/log";
-import { runVariablesForWrite } from "../lib/run-variables";
+import { normalizeRunVariables, runVariablesForWrite } from "../lib/run-variables";
 import { newResourceId } from "../lib/resource-id";
 import { createHash } from "node:crypto";
-import { exists, readFile } from "node:fs/promises";
-import { isClientEncryptedState, parseTerraformStatePayload, statePayloadError } from "../lib/validation";
+import { exists } from "node:fs/promises";
+import { statePayloadError } from "../lib/validation";
 import { join } from "node:path";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { storageDir } from "../db/driver";
-import { agentJobs, agentPools, runs, workspaces, configurationVersions, logs, stateVersions, policyChecks, policyEvaluations, taskStages, runComments, auditLogs, users, organizations, notificationConfigurations, notificationConfigurationWorkspaceExclusions } from "../db/schema";
+import { agentJobs, agentPools, runs, runProvenanceCapsules, workspaces, configurationVersions, logs, stateVersions, policyChecks, policyEvaluations, taskStages, runComments, auditLogs, users, organizations, notificationConfigurations, notificationConfigurationWorkspaceExclusions } from "../db/schema";
 import { eq, and, desc, asc, count, inArray, ne, isNull, lt, or, gt, sql } from "drizzle-orm";
 import { runResource, planResource, applyResource, userResource, taskStageResource, type RunRelationshipLinkage } from "../lib/response";
 import { tfPolicyEvaluationResource, tfStageTypesForEvaluations } from "./policy-evaluations";
 import { configurationVersionResource, configurationVersionIngressResource } from "./configuration-versions";
 import { costEstimateResource } from "./misc";
-import { validateVersion, checkOrgPermission, checkWorkspacePermission, findAuthorizedWorkspace, findAuthorizedRun, findLogCapability, runLogURL, pageRequest, pagination, cursorPagination, workspaceIdsForPermission, workspaceRunHistoryWhere, organizationRunHistoryWhere, signedApiURL, FINAL_RUN_STATUSES, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, DISCARDABLE_RUN_STATUSES, auditLog, type WorkspacePermission , type DeepReadonly, type RequestWithUrl } from "../lib/utils";
+import { validateVersion, auditLog } from "../lib/utils";
 import { createConfigurationVersionFromVcs } from "../lib/webhooks";
 import { deleteRunLogArchive, parseLogSliceParams, readRunLogSlice, readRunLogsPage } from "../lib/run-logs";
 import { deletePlanJsonArtifact, readPlanJsonArtifact, readPlanJsonSideArtifact, sanitizePlanJson } from "../lib/plan-json";
@@ -35,8 +35,31 @@ import { scheduleExplorerInventory } from "../lib/explorer-inventory";
 import { runExecutionDurationMilliseconds } from "../lib/run-duration";
 import { newRunId } from "../lib/run-id";
 import { RUN_NOTIFICATION_TRIGGERS } from "../lib/constants";
+import { auditLogValues } from "../lib/audit-trail";
+import { decryptSecret } from "../lib/secrets";
+import { effectiveWorkspaceVariables } from "../lib/effective-variables";
+import { buildRunProvenanceCapsule, canonicalJson, sha256Hex } from "../lib/run-provenance";
+import { issueRunLogCapability, findLogCapability, signedApiURL } from "../lib/capabilities";
+import { authorizedRunCapability, authorizedStateAccess } from "../lib/authorized-resources";
+import { pageRequest, pagination, cursorPagination } from "../lib/pagination";
+import type { RequestWithUrl } from "../lib/types";
+import { checkOrgPermission, checkWorkspacePermission, workspaceIdsForPermission } from "../lib/authorization";
+import { findAuthorizedWorkspace, findAuthorizedRun } from "../lib/authorized-resources";
+import { workspaceRunHistoryWhere, organizationRunHistoryWhere, FINAL_RUN_STATUSES, CAPACITY_PENDING_STATUSES, CAPACITY_RUNNING_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, DISCARDABLE_RUN_STATUSES } from "../lib/run-history";
+import type { WorkspacePermission } from "../lib/authorization";
+import type { DeepReadonly } from "../lib/types";
+import { inspectRecoveryCopy } from "../lib/recovery-files";
+import { abandonIdempotency, beginIdempotency, completeIdempotency, idempotencyContext, idempotencyError, idempotencyPrincipal, type IdempotencyContext } from "../lib/idempotency";
 
 type SetObj = { status?: number | string; headers: Record<string, string | number> };
+
+function provenanceDiff(
+  before: Readonly<Record<string, unknown>>,
+  after: Readonly<Record<string, unknown>>,
+): readonly string[] {
+  return ["configuration", "engine", "workspace", "inputState", "variables", "policy", "runTasks", "executionTarget", "sandbox"]
+    .filter((key): boolean => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
+}
 
 // Statuses whose timestamps contain a terminal plan/apply marker that can be
 // measured as "run duration". Speculative runs (plan_only) finish at
@@ -364,6 +387,10 @@ function validateRunInputs(
       || Buffer.byteLength(value, "utf8") > MAX_RUN_VARIABLE_VALUE_BYTES
       || RUN_CONTROL_CHARS.test(value)
     ) return invalidRunInput(set, "variables contains an invalid variable value");
+    const category = variable["category"];
+    if (category !== undefined && category !== "terraform" && category !== "env") return invalidRunInput(set, "variables contains an invalid category");
+    const sensitive = variable["sensitive"];
+    if (sensitive !== undefined && typeof sensitive !== "boolean") return invalidRunInput(set, "variables contains an invalid sensitivity flag");
   }
   return null;
 }
@@ -384,6 +411,11 @@ async function createRunComment(input: Readonly<{
   const id = newResourceId("rc");
   const createdAt = Date.now();
   await db.insert(runComments).values({ id, runId: input.runId, userId: input.userId, body: input.body, createdAt });
+  await auditLog("create", "run-comments", id, input.userId, input.orgId, {
+    runId: input.runId,
+    workspaceId: input.workspaceId,
+    bodyBytes: Buffer.byteLength(input.body, "utf8"),
+  });
   publish("comment.created", {
     "run-id": input.runId,
     "workspace-id": input.workspaceId,
@@ -511,8 +543,8 @@ async function includedRunResources(
       ? includedTFPolicyEvaluationsForRuns(runList)
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
-  const plans = includes.has("plan") ? runList.map((run): Record<string, unknown> => planResource(run, request)) : [];
-  const applies = includes.has("apply") ? runList.map((run): Record<string, unknown> => applyResource(run, request)) : [];
+  const plans = includes.has("plan") ? runList.map((run): Record<string, unknown> => planResource(run, request, authorizedRunCapability(run, "run-read"))) : [];
+  const applies = includes.has("apply") ? runList.map((run): Record<string, unknown> => applyResource(run, request, authorizedRunCapability(run, "run-read"))) : [];
   const workspacesIncluded = includes.has("workspace")
     ? runList.flatMap((run): Record<string, unknown>[] => {
       const workspace = workspaceList.find((candidate): boolean => candidate.id === run.workspaceId);
@@ -670,9 +702,13 @@ function safeRunEventDetails(event: AuditItem): Readonly<Record<string, string>>
   if (details === null || typeof details !== "object" || Array.isArray(details)) return {};
   const source = details as Readonly<Record<string, unknown>>;
   return Object.fromEntries(
-    ["fromStatus", "toStatus", "workspaceId", "status", "source", "triggerReason", "actorUsername", "actorAvatarUrl", "actorProviderId"].flatMap((key): readonly [string, string][] =>
-      typeof source[key] === "string" ? [[key, source[key]]] : [],
-    ),
+    [
+      "fromStatus", "toStatus", "workspaceId", "status", "source", "triggerReason", "actorUsername", "actorAvatarUrl", "actorProviderId",
+      "schemaVersion", "result", "requestId", "correlationId", "credentialClass", "effectiveUserId", "impersonatorUserId", "immutable",
+    ].flatMap((key): readonly [string, string][] => {
+      const value = source[key];
+      return typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? [[key, String(value)]] : [];
+    }),
   );
 }
 
@@ -706,6 +742,7 @@ export async function createRun(
   orgId: string | null | undefined,
   teamId: string | null | undefined,
   set: SetObj,
+  idempotency: IdempotencyContext | null = null,
 ): Promise<Record<string, unknown> | { errors: { status: string; title: string; detail?: string }[] }> {
   const message = typeof attributes["message"] === "string" ? attributes["message"] : "";
   const requestedOperation = typeof attributes["operation"] === "string" ? attributes["operation"] : undefined;
@@ -771,7 +808,15 @@ export async function createRun(
   if (workspace === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
   if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot create runs. Use a team token or user token." }] }; }
   if (!(await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "plan"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+  const idempotencyBegin = await beginIdempotency(
+    idempotency,
+    "runs",
+    set as unknown as { status?: number | string; headers: Record<string, string | number> },
+  );
+  if (idempotencyBegin.kind === "replay") return idempotencyBegin.body;
+  if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
   if (workspace.locked === true) {
+    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(workspace.lockedReason) }] };
   }
@@ -779,15 +824,21 @@ export async function createRun(
   // plans and applies on the operator machine and the server only stores
   // state. This matches the reference behavior for local workspaces.
   if (workspace.executionMode === "local") {
+    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote runs cannot be created for workspaces with local execution mode" }] };
   }
   if (isDestroy && workspace.allowDestroyPlan === false) {
+    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Destroy plans are disabled for this workspace" }] };
   }
   const canApply = await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "apply");
-  if (!canApply && (requestedAutoApply === true || allowEmptyApply || operation === "action_only")) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+  if (!canApply && (requestedAutoApply === true || allowEmptyApply || operation === "action_only")) {
+    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+    (set as { status: number }).status = 403;
+    return { errors: [{ status: "403", title: "Forbidden" }] };
+  }
   const autoApply = operation === "action_only" ? canApply : canApply && (requestedAutoApply ?? workspace.autoApply === true);
   // Issue #601: inheriting the workspace default while lacking apply rights
   // silently drops auto-apply (explicit requests already 403 above). Flag it
@@ -796,14 +847,27 @@ export async function createRun(
   let configurationVersion: typeof configurationVersions.$inferSelect | undefined;
   if (cvId !== undefined) {
     configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
-    if (configurationVersion === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version was not found" }] }; }
-    if (configurationVersion?.workspaceId !== workspaceId) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version does not belong to workspace" }] }; }
+    if (configurationVersion === undefined) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version was not found" }] };
+    }
+    if (configurationVersion?.workspaceId !== workspaceId) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version does not belong to workspace" }] };
+    }
     const pendingVcs = configurationVersion.status === "pending" && ["github", "gitlab", "bitbucket"].includes(configurationVersion.source ?? "");
-    if (configurationVersion.status !== "uploaded" && !pendingVcs) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Configuration version is not ready for a run" }] }; }
+    if (configurationVersion.status !== "uploaded" && !pendingVcs) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Configuration version is not ready for a run" }] };
+    }
   } else if (workspace.vcsRepo?.identifier !== undefined) {
     // Auto-create a configuration version from VCS for manual runs
     const result = await createConfigurationVersionFromVcs(workspace);
     if (typeof result === "object" && "error" in result) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: result.error }] };
     }
@@ -828,6 +892,7 @@ export async function createRun(
   // except for VCS-backed workspaces (handled above) and local-path
   // workspaces whose source lives on disk.
   if (cvId === undefined && workspace.vcsRepo?.identifier === undefined && workspace.source !== "local") {
+    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No configuration version is available for this workspace. Upload a configuration version or connect a VCS repository first." }] };
   }
@@ -858,6 +923,7 @@ export async function createRun(
   if (typeof effectiveVersion === "string") {
     const preflight = await preflightBinaryAvailability(effectiveTool, effectiveVersion);
     if (!preflight.ok) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: preflight.detail }] };
     }
@@ -870,6 +936,52 @@ export async function createRun(
   const nowIso = new Date(createdAt).toISOString();
   const finalMsg = message !== "" ? message : (configurationVersion?.source === "tfe-cli" ? "Triggered via CLI" : "Triggered via UI");
   const origin = originForConfiguration(configurationVersion);
+  const [effectiveVariables, inputState] = await Promise.all([
+    effectiveWorkspaceVariables(workspace.id, workspace.orgId, workspace.projectId ?? null),
+    db.query.stateVersions.findFirst({
+      where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized")),
+      orderBy: [desc(stateVersions.serial)],
+      columns: { id: true, uploadSha256: true },
+    }),
+  ]);
+  const provenance = await buildRunProvenanceCapsule({
+    runId: id,
+    createdAt,
+    configurationVersionId: cvId ?? null,
+    configurationSource: configurationVersion?.source ?? null,
+    configurationIngress: configurationVersion?.ingressAttributes ?? null,
+    configurationDigest: sha256Hex(canonicalJson({
+      id: configurationVersion?.id ?? null,
+      status: configurationVersion?.status ?? null,
+      ingressAttributes: configurationVersion?.ingressAttributes ?? null,
+      createdAt: configurationVersion?.createdAt ?? null,
+    })),
+    engine: effectiveTool ?? "terraform",
+    engineVersion: effectiveVersion ?? null,
+    workspaceId: workspace.id,
+    workingDirectory: workspace.workingDirectory,
+    executionMode: workspace.executionMode,
+    agentPoolId: workspace.agentPoolId,
+    inputStateId: inputState?.id ?? null,
+    inputStateDigest: inputState?.uploadSha256 ?? null,
+    runVariables: runVariables ?? [],
+    effectiveVariables: effectiveVariables.map((entry) => ({
+      source: entry.source,
+      key: entry.variable.key,
+      category: entry.variable.category,
+      sensitive: entry.variable.sensitive,
+      ...(entry.source === "varset" ? { variableSetId: entry.setId } : {}),
+    })),
+    effectiveExecutionVariables: effectiveVariables.map((entry) => ({
+      key: entry.variable.key,
+      value: entry.variable.value,
+      category: entry.variable.category ?? "terraform",
+      sensitive: entry.variable.sensitive === true,
+      ...(entry.variable.valueEncrypted === null || entry.variable.valueEncrypted === undefined
+        ? {}
+        : { valueEncrypted: entry.variable.valueEncrypted }),
+    })),
+  });
   // The lock was validated above, but that check and the insert below are
   // separate statements; re-validate inside the insert transaction so a
   // concurrent workspace lock can never slip a queued run past the 422.
@@ -879,10 +991,20 @@ export async function createRun(
       columns: { locked: true, lockedReason: true },
     });
     if (fresh?.locked === true) return { lockedReason: fresh.lockedReason ?? null };
-    await tx.insert(runs).values({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, createdBy: user?.id ?? null, appliedAt: null, createdAt });
+    await tx.insert(runs).values({ id, workspaceId, configurationVersionId: cvId ?? null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, inputSchemaVersion: 1, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, statusMetadataSchemaVersion: 1, createdBy: user?.id ?? null, appliedAt: null, createdAt });
+    await tx.insert(runProvenanceCapsules).values({
+      id: newResourceId("rpc"),
+      runId: id,
+      schemaVersion: provenance.publicManifest.schemaVersion,
+      publicManifest: provenance.publicManifest,
+      manifestSha256: provenance.manifestSha256,
+      executionMaterial: provenance.executionMaterial,
+      createdAt,
+    });
     return null;
   });
   if (lockConflict !== null) {
+    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(lockConflict.lockedReason) }] };
   }
@@ -902,14 +1024,21 @@ export async function createRun(
     at: nowIso,
   });
   scheduleExplorerInventory(workspaceId);
-  const createdRun = { id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: user?.id ?? null, appliedAt: null, scheduledAt: null, softDeletedAt: null, createdAt };
+  const createdRun = { id, workspaceId, configurationVersionId: cvId ?? null, agentPoolId: null, agentId: null, agentVersion: null, agentProtocolVersion: null, agentCapabilities: null, agentExecutionPolicy: null, message: finalMsg, status: "pending", operation, generatedConfiguration, executionMode: workspace.executionMode, isDestroy, autoApply, planOnly, refresh, refreshOnly, invokeActionAddrs, targetAddrs, replaceAddrs, variables: runVariables, inputSchemaVersion: 1, logToken, terraformVersion: terraformVersion ?? null, debuggingMode, allowEmptyApply, savePlan, allowConfigGeneration, statusTimestamps: { "pending-at": nowIso }, statusMetadataSchemaVersion: 1, planResourceAdditions: null, planResourceChanges: null, planResourceDestructions: null, planResourceImports: null, applyResourceAdditions: null, applyResourceChanges: null, applyResourceDestructions: null, applyResourceImports: null, createdBy: user?.id ?? null, appliedAt: null, scheduledAt: null, softDeletedAt: null, createdAt };
   const createdLinkage = await linkageForRuns([createdRun]);
   const createdResource = runResource(createdRun, canApply, false, origin, undefined, undefined, createdLinkage.get(id));
+  (createdResource["attributes"] as Record<string, unknown>)["provenance"] = {
+    "schema-version": provenance.publicManifest.schemaVersion,
+    sha256: provenance.manifestSha256,
+    "manifest-url": `/api/v2/runs/${id}/provenance`,
+  };
   if (autoApplySuppressed) {
     (createdResource["attributes"] as Record<string, unknown>)["auto-apply-warning"] =
       "Auto-apply is enabled on this workspace, but you do not have apply permission, so this run was created with auto-apply off and will wait for confirmation.";
   }
-  return { data: createdResource };
+  const responseBody = { data: createdResource };
+  if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, id);
+  return responseBody;
 }
 
 /**
@@ -1159,7 +1288,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       .reduce((sum, row): number => sum + row.total, 0);
     return { data: { id: organization.name, type: "organization-capacity", attributes: { pending: totalFor(CAPACITY_PENDING_STATUSES), running: totalFor(CAPACITY_RUNNING_STATUSES) } } };
   })
-  .post("/api/v2/workspaces/:workspace_id/runs", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/workspaces/:workspace_id/runs", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const wsId = params["workspace_id"] ?? "";
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload["data"] as Record<string, unknown> | undefined;
@@ -1168,9 +1297,17 @@ export const runRoutes = new Elysia({ name: "runs" })
     const cvRel = typeof rels["configuration-version"] === "object" && rels["configuration-version"] !== null ? (rels["configuration-version"] as Record<string, unknown>) : {};
     const cvData = typeof cvRel["data"] === "object" && cvRel["data"] !== null ? (cvRel["data"] as Record<string, unknown>) : {};
     const cvId = typeof cvData["id"] === "string" ? cvData["id"] : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
-    return createRun(wsId, attributes, cvId, user, orgId, teamId, set);
+    const idempotency = idempotencyContext(
+      request,
+      `runs:workspace:${wsId}`,
+      idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
+      payload,
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotency === "invalid") return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
+    return createRun(wsId, attributes, cvId, user, orgId, teamId, set, idempotency);
   })
-  .post("/api/v2/runs", async ({ body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/runs", async ({ body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
@@ -1181,7 +1318,15 @@ export const runRoutes = new Elysia({ name: "runs" })
     const cvData = typeof cvRel["data"] === "object" && cvRel["data"] !== null ? (cvRel["data"] as Record<string, unknown>) : {};
     const workspaceId = typeof wsData["id"] === "string" ? wsData["id"] : "";
     const cvId = typeof cvData["id"] === "string" ? cvData["id"] : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
-    return createRun(workspaceId, attributes, cvId, user, orgId, teamId, set);
+    const idempotency = idempotencyContext(
+      request,
+      `runs:generic:${workspaceId}`,
+      idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
+      payload,
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotency === "invalid") return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
+    return createRun(workspaceId, attributes, cvId, user, orgId, teamId, set, idempotency);
   })
   .get("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
@@ -1206,20 +1351,141 @@ export const runRoutes = new Elysia({ name: "runs" })
       : lockedReason !== undefined && lockedReason !== null && lockedReason !== ""
         ? lockedReason
         : "Locked manually";
-    // Issue #580: run-page Recover action signal. A verified recovery copy
+    // Issue #580/#761: run-page recovery signal. A verified recovery copy
     // (capture completion marker present) may be the only record of the
     // infrastructure state after an interrupted apply.
     detailAttributes["has-recovery-state"] = await exists(join(storageDir, "recovery", runId, ".recovered"));
     if (detailAttributes["has-recovery-state"] === true) {
-      const recoveryPayload = await readFile(join(storageDir, "recovery", runId, "terraform.tfstate"), "utf8").catch((): null => null);
-      const parsedRecovery = parseTerraformStatePayload(recoveryPayload);
-      detailAttributes["recovery-state-format-supported"] = parsedRecovery !== null;
-      detailAttributes["recovery-state-representation"] = isClientEncryptedState(recoveryPayload) ? "opentofu-encrypted" : parsedRecovery === null ? "invalid" : "terraform-v4";
-      detailAttributes["recovery-state-unavailable-reason"] = parsedRecovery === null ? statePayloadError(recoveryPayload) : null;
+      const recovery = await inspectRecoveryCopy(storageDir, runId);
+      const parsedRecovery = recovery.status === "candidate" || recovery.status === "promoted";
+      detailAttributes["recovery-state-format-supported"] = parsedRecovery;
+      detailAttributes["recovery-state-representation"] = recovery.status === "opaque"
+        ? "opentofu-encrypted"
+        : parsedRecovery ? "terraform-v4" : "invalid";
+      detailAttributes["recovery-state-unavailable-reason"] = parsedRecovery
+        ? null
+        : recovery.status === "opaque"
+          ? "Client-encrypted OpenTofu state requires its original client keys and cannot be promoted."
+          : recovery.status === "incomplete"
+            ? "The recovery capture is incomplete and cannot be promoted."
+            : statePayloadError(null);
     }
     const includes = requestedRunIncludes(request);
     const included = await includedRunResources([authorized.run], request, includes);
+    const provenance = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
+    detailAttributes["provenance"] = provenance === undefined
+      ? null
+      : {
+          "schema-version": provenance.schemaVersion,
+          sha256: provenance.manifestSha256,
+          "manifest-url": `/api/v2/runs/${runId}/provenance`,
+        };
     return { data, ...(included.length > 0 ? { included } : {}) };
+  })
+  .get("/api/v2/runs/:run_id/provenance", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const runId = params["run_id"] ?? "";
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const capsule = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
+    if (capsule === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return {
+      data: {
+        id: capsule.id,
+        type: "run-provenance",
+        attributes: {
+          "schema-version": capsule.schemaVersion,
+          sha256: capsule.manifestSha256,
+          manifest: capsule.publicManifest,
+          "download-url": `/api/v2/runs/${runId}/provenance/download`,
+        },
+        relationships: { run: { data: { id: runId, type: "runs" } } },
+      },
+    };
+  })
+  .get("/api/v2/runs/:run_id/provenance/download", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<Response | Record<string, unknown>> => {
+    const runId = params["run_id"] ?? "";
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
+    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const capsule = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
+    if (capsule === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    return new Response(`${JSON.stringify(capsule.publicManifest, null, 2)}\n`, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Disposition": `attachment; filename="terrence-run-${runId}-provenance.json"`,
+        "Cache-Control": "no-store",
+        "X-Content-SHA256": capsule.manifestSha256,
+      },
+    });
+  })
+  .post("/api/v2/runs/:run_id/actions/rerun", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const runId = params["run_id"] ?? "";
+    const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null, "plan");
+    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+    const mode = payload["mode"] === "original" ? "original" : payload["mode"] === "current" || payload["mode"] === undefined ? "current" : null;
+    if (mode === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "mode must be original or current" }] };
+    }
+    const capsule = await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, runId) });
+    if (capsule === undefined) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "This run has no provenance capsule to rerun" }] };
+    }
+    const manifest = capsule.publicManifest as Readonly<Record<string, unknown>>;
+    const configuration = manifest["configuration"] as Readonly<Record<string, unknown>> | undefined;
+    const engine = manifest["engine"] as Readonly<Record<string, unknown>> | undefined;
+    const attributes: Record<string, unknown> = { message: `Re-run of ${runId}` };
+    let configurationId: string | undefined;
+    if (mode === "original") {
+      configurationId = typeof configuration?.["versionId"] === "string" ? configuration["versionId"] : undefined;
+      if (configurationId === undefined) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "The original configuration version is no longer available" }] };
+      }
+      try {
+        const material = JSON.parse(await decryptSecret(capsule.executionMaterial)) as { effectiveVariables?: unknown; variables?: unknown };
+        const originalVariables = normalizeRunVariables(material.effectiveVariables ?? material.variables ?? []);
+        attributes["variables"] = originalVariables;
+        if (typeof engine?.["version"] === "string") attributes["terraform-version"] = engine["version"];
+      } catch {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "Original encrypted execution material is unavailable" }] };
+      }
+    }
+    const created = await createRun(authorized.workspace.id, attributes, configurationId, user, null, teamId ?? null, set);
+    if (!("data" in created)) return created;
+    const createdData = created["data"];
+    if (createdData === null || typeof createdData !== "object") return created;
+    const createdDataRecord = createdData as Record<string, unknown>;
+    const newRunId = typeof createdDataRecord["id"] === "string" ? createdDataRecord["id"] : null;
+    const afterCapsule = newRunId === null
+      ? undefined
+      : await db.query.runProvenanceCapsules.findFirst({ where: eq(runProvenanceCapsules.runId, newRunId) });
+    const createdAttributes = createdDataRecord["attributes"];
+    if (createdAttributes !== null && typeof createdAttributes === "object" && afterCapsule !== undefined) {
+      const changedSinceSource = provenanceDiff(manifest, afterCapsule.publicManifest);
+      const rerunManifest = {
+        ...afterCapsule.publicManifest,
+        rerun: { mode, sourceRunId: runId, changedSinceSource },
+      };
+      const rerunSha256 = sha256Hex(canonicalJson(rerunManifest));
+      await db.update(runProvenanceCapsules).set({
+        publicManifest: rerunManifest,
+        manifestSha256: rerunSha256,
+      }).where(eq(runProvenanceCapsules.id, afterCapsule.id));
+      const createdProvenance = (createdAttributes as Record<string, unknown>)["provenance"];
+      if (createdProvenance !== null && typeof createdProvenance === "object") {
+        (createdProvenance as Record<string, unknown>)["sha256"] = rerunSha256;
+      }
+      (createdAttributes as Record<string, unknown>)["rerun"] = {
+        mode,
+        sourceRunId: runId,
+        changedSinceSource,
+      };
+    }
+    return created;
   })
   .delete("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
@@ -1271,21 +1537,21 @@ export const runRoutes = new Elysia({ name: "runs" })
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: planResource(authorized.run, request) };
+    return { data: planResource(authorized.run, request, authorizedRunCapability(authorized.run, "run-read")) };
   })
   .get("/api/v2/plans/:plan_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const rawPlanId = params["plan_id"] ?? "";
     const runId = rawPlanId.replace(/^plan-/, "");
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: planResource(authorized.run, request) };
+    return { data: planResource(authorized.run, request, authorizedRunCapability(authorized.run, "run-read")) };
   })
   .get("/api/v2/applies/:apply_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const rawApplyId = params["apply_id"] ?? "";
     const runId = rawApplyId.replace(/^apply-/, "");
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: applyResource(authorized.run, request) };
+    return { data: applyResource(authorized.run, request, authorizedRunCapability(authorized.run, "run-read")) };
   })
   .get("/api/v2/applies/:apply_id/errored-state", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = (params["apply_id"] ?? "").replace(/^apply-/, "");
@@ -1409,7 +1675,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     });
     if (currentSV === undefined) return { data: null };
     const { stateVersionResource } = await import("../lib/response");
-    return { data: stateVersionResource(currentSV, request) };
+    return { data: stateVersionResource(currentSV, request, false, undefined, authorizedStateAccess(authorized.workspace.id, "state-read")) };
   })
   .post("/api/v2/runs/:run_id/actions/revoke-log-links", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
@@ -1461,7 +1727,7 @@ export const runRoutes = new Elysia({ name: "runs" })
     const runId = params["run_id"] ?? "";
     const authorized = await findAuthorizedRun(runId, user?.id, orgId ?? null, teamId ?? null);
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
-    return { data: { id: `apply-${runId}`, type: "applies", attributes: { "log-read-url": runLogURL(authorized.run, "apply", request) } } };
+    return { data: { id: `apply-${runId}`, type: "applies", attributes: { "log-read-url": issueRunLogCapability(authorizedRunCapability(authorized.run, "run-read"), "apply", request) } } };
   })
   .post("/api/v2/runs/:run_id/actions/apply", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
@@ -1752,8 +2018,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       if (rows.length === 0) return rows;
       await t.insert(runComments).values({ id: commentId, runId, userId: actorId, body: justification, createdAt: now });
       await t.update(policyChecks).set({ status: "overridden" }).where(and(eq(policyChecks.runId, runId), inArray(policyChecks.status, ["soft_failed", "failed"])));
-      await t.insert(auditLogs).values({
-        id: crypto.randomUUID(),
+      await t.insert(auditLogs).values(auditLogValues({
         orgId: workspace.orgId,
         userId: actorId,
         action: "override-policy",
@@ -1764,10 +2029,11 @@ export const runRoutes = new Elysia({ name: "runs" })
           fromStatus: "policy_soft_failed",
           toStatus: "planned",
           justification,
+          justificationBytes: Buffer.byteLength(justification, "utf8"),
           ...(teamId !== null && teamId !== undefined ? { teamId } : {}),
         },
         createdAt: now,
-      });
+      }) as typeof auditLogs.$inferInsert);
       return rows;
     });
     if (updated.length === 0) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Run is no longer awaiting policy override" }] }; }
@@ -1931,13 +2197,37 @@ export const runRoutes = new Elysia({ name: "runs" })
     const c = await db.query.runComments.findFirst({ where: eq(runComments.id, commentId) });
     if (c === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const authorized = await findAuthorizedRun(c.runId, user?.id, orgId ?? null, teamId ?? null);
-    if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (authorized === undefined) {
+      await auditLog("delete", "run-comments", commentId, user?.id ?? null, null, { runId: c.runId, reason: "not-authorized" }, { result: "denied", immutable: true });
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     const isAuthor = c.userId !== null && c.userId === user?.id && orgId === null && teamId === null;
     if (!isAuthor && !(await checkWorkspacePermission(authorized.workspace, user?.id, orgId ?? null, teamId ?? null, "admin"))) {
+      await auditLog("delete", "run-comments", commentId, user?.id ?? null, authorized.workspace.orgId, { runId: c.runId, reason: "requires-author-or-administrator" }, { result: "denied", immutable: true });
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden", detail: "Only the comment author or a workspace administrator can delete it." }] };
     }
-    await db.delete(runComments).where(eq(runComments.id, commentId));
+    const deleted = await db.transaction(async (transaction): Promise<boolean> => {
+      const tx = transaction as unknown as typeof db;
+      const removed = await tx.delete(runComments).where(eq(runComments.id, commentId)).returning({ id: runComments.id });
+      if (removed.length === 0) return false;
+      await tx.insert(auditLogs).values(auditLogValues({
+        action: "delete",
+        resourceType: "run-comments",
+        resourceId: commentId,
+        userId: user?.id ?? null,
+        orgId: authorized.workspace.orgId,
+        details: {
+          runId: c.runId,
+          workspaceId: authorized.workspace.id,
+          bodyBytes: Buffer.byteLength(c.body, "utf8"),
+          deletedByAuthor: isAuthor,
+        },
+      }) as typeof auditLogs.$inferInsert);
+      return true;
+    });
+    if (!deleted) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     (set as { status: number }).status = 204;
     return new Response(null, { status: 204 });
   })

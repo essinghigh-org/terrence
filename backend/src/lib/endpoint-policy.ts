@@ -229,6 +229,7 @@ export const ENDPOINT_POLICIES: readonly EndpointPolicy[] = [
       if (/^\/api\/v2\/state-versions\/[^/]+\/(download|json-download)$/.test(path)) return "/api/v2/state-versions/*/download";
       if (/^\/api\/v2\/state-version-outputs\/[^/]+$/.test(path)) return "/api/v2/state-version-outputs/*";
       if (/^\/api\/v2\/plans\/[^/]+\/json-output$/.test(path)) return "/api/v2/plans/*/json-output";
+      if (/^\/api\/v2\/runs\/[^/]+\/recovery-state$/.test(path)) return "/api/v2/runs/*/recovery-state";
       return undefined;
     },
   },

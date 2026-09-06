@@ -1,0 +1,34 @@
+[
+  {
+    "name": "stale-owner-after-handoff",
+    "owner": "worker-a",
+    "events": [
+      { "kind": "reserve", "id": "sv-1", "serial": 1, "owner": "worker-a" },
+      { "kind": "commit", "id": "sv-1", "serial": 1, "owner": "worker-a" },
+      { "kind": "handoff", "owner": "worker-b" },
+      { "kind": "publish", "id": "sv-1", "serial": 1, "owner": "worker-a" },
+      { "kind": "delete", "id": "run-1", "owner": "worker-b" }
+    ]
+  },
+  {
+    "name": "duplicate-and-reordered-serials",
+    "owner": "worker-a",
+    "events": [
+      { "kind": "reserve", "id": "sv-2", "serial": 2, "owner": "worker-a" },
+      { "kind": "commit", "id": "sv-2", "serial": 2, "owner": "worker-a" },
+      { "kind": "commit", "id": "sv-2", "serial": 2, "owner": "worker-a" },
+      { "kind": "reserve", "id": "sv-1", "serial": 1, "owner": "worker-a" },
+      { "kind": "publish", "id": "sv-2", "serial": 2, "owner": "worker-a" }
+    ]
+  },
+  {
+    "name": "active-execution-delete",
+    "owner": "worker-a",
+    "events": [
+      { "kind": "execution", "id": "run-2", "active": true, "owner": "worker-a" },
+      { "kind": "delete", "id": "run-2", "owner": "worker-a" },
+      { "kind": "execution", "id": "run-2", "active": false, "owner": "worker-a" },
+      { "kind": "delete", "id": "run-2", "owner": "worker-a" }
+    ]
+  }
+]

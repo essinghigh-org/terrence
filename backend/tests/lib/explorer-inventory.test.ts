@@ -130,7 +130,7 @@ describe("Explorer inventory batch loading", () => {
     try {
       await runExplorerCatalogJob(
         { payload: { orgId, backfill: true } } as unknown as Parameters<typeof runExplorerCatalogJob>[0],
-        { canceled: async (): Promise<boolean> => false, heartbeat: async (): Promise<boolean> => true },
+        { signal: new AbortController().signal, canceled: async (): Promise<boolean> => false, heartbeat: async (): Promise<boolean> => true },
       );
       singleItemCalls = [
         workspaceFindFirst.mock.calls.length,

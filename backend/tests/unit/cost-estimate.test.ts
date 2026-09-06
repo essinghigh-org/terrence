@@ -161,4 +161,80 @@ describe("parseInfracostOutput", () => {
     expect(result["resources-count"]).toBe(1);
     expect(result["matched-resources-count"]).toBe(1);
   });
+
+  it("retains provenance, warns about unsupported resources, and explains resource deltas", () => {
+    const result = parseInfracostOutput(
+      {
+        version: "0.2",
+        currency: "USD",
+        pricingDate: "2026-09-01",
+        totalMonthlyCost: "140",
+        pastTotalMonthlyCost: "100",
+        projects: [{
+          name: "production",
+          pastBreakdown: { resources: [
+            { name: "aws_instance.web", monthlyCost: "100", resourceType: "aws_instance" },
+            { name: "aws_db.legacy", monthlyCost: "20", resourceType: "aws_db_instance" },
+          ] },
+          breakdown: { resources: [
+            { name: "aws_instance.web", monthlyCost: "140", resourceType: "aws_instance" },
+            { name: "aws_db.legacy", monthlyCost: null, resourceType: "aws_db_instance" },
+          ] },
+          diff: { resources: [{ name: "aws_instance.web", action: "modify", monthlyCost: "40" }] },
+        }],
+        summary: { totalDetectedResources: 2, totalSupportedResources: 1, totalUnsupportedResources: 1 },
+      },
+      timestamps,
+    );
+    expect(result.provenance).toEqual({
+      tool: "infracost",
+      version: "0.2",
+      "pricing-date": "2026-09-01",
+      currency: "USD",
+      "time-basis": "monthly",
+      "supported-resources": 1,
+      assumptions: [],
+    });
+    expect(result.comparison?.baseline).toEqual({
+      source: "infracost-past-breakdown",
+      "monthly-cost": "100",
+      currency: "USD",
+      comparable: true,
+      reason: null,
+    });
+    expect(result.comparison?.warnings).toContain("1 resource has no supported price; totals exclude those resources.");
+    expect(result.comparison?.["resource-changes"]).toEqual([
+      {
+        address: "aws_instance.web",
+        module: "production",
+        action: "changed",
+        "prior-monthly-cost": "100",
+        "proposed-monthly-cost": "140",
+        "delta-monthly-cost": "40",
+      },
+      {
+        address: "aws_db.legacy",
+        module: "production",
+        action: "unsupported",
+        "prior-monthly-cost": "20",
+        "proposed-monthly-cost": null,
+        "delta-monthly-cost": null,
+      },
+    ]);
+  });
+
+  it("marks currency and time-basis changes incomparable", () => {
+    const result = parseInfracostOutput({
+      totalMonthlyCost: "30",
+      pastTotalMonthlyCost: "20",
+      currency: "GBP",
+      pastCurrency: "USD",
+      timeBasis: "annual",
+      projects: [],
+      summary: {},
+    }, timestamps);
+    expect(result.comparison?.baseline.comparable).toBe(false);
+    expect(result.comparison?.baseline.reason).toContain("Currency differs");
+    expect(result.comparison?.warnings).toContain("The estimate and baseline use different currencies.");
+  });
 });

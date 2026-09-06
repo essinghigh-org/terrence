@@ -25,8 +25,9 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
-import { fetchAllApiPages, fetchApi } from "../lib/api";
+import { fetchApi } from "../lib/api";
 import { copyTextToClipboard } from "../lib/utils";
+import { isRecord, isString } from "../lib/type-guards";
 import { getRecentWorkspaces, subscribeWorkspaceShortcuts } from "../lib/workspace-shortcuts";
 
 type CommandItemType = {
@@ -37,6 +38,31 @@ type CommandItemType = {
   subtitle?: string | undefined;
   perform: () => void;
 };
+
+type NamedResource = Readonly<{ name: string }>;
+
+function namedResources(value: unknown): NamedResource[] {
+  if (!isRecord(value) || !Array.isArray(value["data"])) return [];
+  return value["data"].flatMap((resource: unknown): NamedResource[] => {
+    if (!isRecord(resource) || !isRecord(resource["attributes"])) return [];
+    const name = resource["attributes"]["name"];
+    return isString(name) && name !== "" ? [{ name }] : [];
+  });
+}
+
+function docsFromResponse(value: unknown): { slug: string; title: string; category: string }[] {
+  if (!isRecord(value) || !Array.isArray(value["data"])) return [];
+  return value["data"].flatMap((record: unknown): { slug: string; title: string; category: string }[] => {
+    if (!isRecord(record) || !isRecord(record["attributes"])) return [];
+    const attributes = record["attributes"];
+    const slug = attributes["slug"];
+    const title = attributes["title"];
+    const category = attributes["category"];
+    return isString(slug) && isString(title) && isString(category)
+      ? [{ slug, title, category }]
+      : [];
+  });
+}
 
 export function CommandPalette({
   open,
@@ -64,6 +90,8 @@ export function CommandPalette({
   const [orgs, setOrgs] = useState<{ name: string }[]>([]);
   const [workspaces, setWorkspaces] = useState<{ name: string }[]>([]);
   const [docs, setDocs] = useState<{ slug: string; title: string; category: string }[]>([]);
+  const [remoteSearchLoading, setRemoteSearchLoading] = useState(false);
+  const [remoteSearchError, setRemoteSearchError] = useState(false);
   const [, setRecentRevision] = useState(0);
   // 14.18: keep the Recent list live while the palette is open (a visit made
   // elsewhere in the sidebar bumps the revision through the shortcut bus).
@@ -78,48 +106,77 @@ export function CommandPalette({
     if (!open) return;
     setSearch("");
     setHighlightedIndex(0);
+    setOrgs([]);
+    setWorkspaces([]);
+    setRemoteSearchError(false);
     const controller = new AbortController();
 
-    void fetchAllApiPages<{ attributes: { name: string } }>(
-      "/organizations?page[size]=100",
-      controller.signal,
-    ).then((result) => {
+    // Keep the empty palette cheap. Remote results are queried below once the
+    // operator has typed a meaningful search term; this bounded preview is
+    // only for the initial organization context and recent-result filtering.
+    void fetchApi("/organizations?page[size]=20", { signal: controller.signal }).then((result) => {
       if (!controller.signal.aborted) {
-        setOrgs(result.map((o) => ({ name: o.attributes.name })));
+        setOrgs(namedResources(result));
       }
     }).catch(() => {});
 
     if (currentOrgName !== undefined && currentOrgName !== "") {
-      void fetchAllApiPages<{ attributes: { name: string } }>(
-        `/organizations/${encodeURIComponent(currentOrgName)}/workspaces?page[size]=100`,
-        controller.signal,
+      void fetchApi(
+        `/organizations/${encodeURIComponent(currentOrgName)}/workspaces?page[size]=20`,
+        { signal: controller.signal },
       ).then((result) => {
         if (!controller.signal.aborted) {
-          setWorkspaces(result.map((w) => ({ name: w.attributes.name })));
+          setWorkspaces(namedResources(result));
         }
       }).catch(() => {});
     }
 
     // Bundled documentation index: every doc page is reachable from the
     // palette so cmd+k works as the product-wide search surface.
-    void fetchApi<{ data?: unknown }>("/docs", { signal: controller.signal })
+    void fetchApi("/docs", { signal: controller.signal })
       .then((result) => {
-        if (controller.signal.aborted) return;
-        const records = (result as { data?: unknown }).data;
-        if (!Array.isArray(records)) return;
-        setDocs(records.flatMap((record): { slug: string; title: string; category: string }[] => {
-          const attributes = (record as { attributes?: unknown }).attributes;
-          if (typeof attributes !== "object" || attributes === null) return [];
-          const entry = attributes as { slug?: unknown; title?: unknown; category?: unknown };
-          if (typeof entry.slug !== "string" || typeof entry.title !== "string" || typeof entry.category !== "string") return [];
-          return [{ slug: entry.slug, title: entry.title, category: entry.category }];
-        }));
+        if (!controller.signal.aborted) setDocs(docsFromResponse(result));
       }).catch(() => {});
 
     return () => {
       controller.abort();
     };
   }, [open, currentOrgName]);
+
+  useEffect((): (() => void) | undefined => {
+    if (!open) return undefined;
+    const query = search.trim();
+    if (query.length < 2) {
+      setRemoteSearchLoading(false);
+      setRemoteSearchError(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const params = new URLSearchParams({ "page[size]": "20" });
+    params.set("q", query);
+    const requests: Promise<unknown>[] = [fetchApi(`/organizations?${params.toString()}`, { signal: controller.signal })];
+    if (currentOrgName !== undefined && currentOrgName !== "") {
+      const workspaceParams = new URLSearchParams({ "page[size]": "20", "search[name]": query });
+      requests.push(fetchApi(
+        `/organizations/${encodeURIComponent(currentOrgName)}/workspaces?${workspaceParams.toString()}`,
+        { signal: controller.signal },
+      ));
+    }
+    setRemoteSearchLoading(true);
+    setRemoteSearchError(false);
+    void Promise.allSettled(requests).then((results): void => {
+      if (controller.signal.aborted) return;
+      const orgResult = results[0];
+      const workspaceResult = results[1];
+      const failed = results.some((result): boolean => result.status === "rejected");
+      if (orgResult?.status === "fulfilled") setOrgs(namedResources(orgResult.value));
+      if (workspaceResult?.status === "fulfilled") setWorkspaces(namedResources(workspaceResult.value));
+      setRemoteSearchError(failed);
+      setRemoteSearchLoading(false);
+    });
+    return (): void => { controller.abort(); };
+  }, [currentOrgName, open, search]);
 
   const items: CommandItemType[] = [
     {
@@ -473,6 +530,16 @@ export function CommandPalette({
           aria-label="Command results"
           className="max-h-[350px] overflow-y-auto p-2"
         >
+          {remoteSearchLoading && (
+            <div role="status" aria-live="polite" className="px-3 py-2 text-xs text-muted-foreground">
+              Searching authorized organizations and workspaces…
+            </div>
+          )}
+          {remoteSearchError && (
+            <div role="alert" className="mx-1 mb-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+              Remote search is unavailable. Local navigation commands remain available.
+            </div>
+          )}
           {filtered.length === 0 ? (
             <div className="py-8 text-center text-sm text-muted-foreground">
               No matching commands or resources found.

@@ -73,15 +73,45 @@ type ReadonlyRequestInit = Readonly<{
 export class ApiError extends Error {
   public readonly status: number;
 
+  /** Stable server/client error identifier for support and automation. */
+  public readonly code: string;
+
+  /** Correlation identifier returned by the API, when available. */
+  public readonly requestId: string | null;
+
   /** Field-level 422 details, keyed as `{ "data.attributes.<field>": msg }`. */
   public readonly fieldErrors: Readonly<Record<string, string>>;
 
-  public constructor(status: number, message: string, fieldErrors: Readonly<Record<string, string>> = {}) {
+  public constructor(
+    status: number,
+    message: string,
+    fieldErrors: Readonly<Record<string, string>> = {},
+    public readonly retryAfter: string | null = null,
+    code = `HTTP_${status}`,
+    requestId: string | null = null,
+    public readonly idempotencyReplayed = false,
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.fieldErrors = fieldErrors;
+    this.code = code.trim() === "" ? `HTTP_${status}` : code;
+    this.requestId = requestId === null || requestId.trim() === "" ? null : requestId;
   }
+}
+
+/** The server asks clients to retry these responses only for read traversals or
+ * when the caller supplied an Idempotency-Key for a write. */
+export function isRetryableApiError(error: unknown): error is ApiError {
+  return error instanceof ApiError && (error.status === 429 || error.status === 503);
+}
+
+/** Convert a Retry-After header to a bounded delay, preserving HTTP-date support. */
+export function retryAfterDelayMilliseconds(value: string | null, now = Date.now()): number | null {
+  if (value === null) return 1_000;
+  if (/^\d+$/.test(value)) return Number(value) * 1_000;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? Math.max(0, parsed - now) : null;
 }
 
 /**
@@ -307,10 +337,18 @@ async function requestApi(endpoint: string, options: ReadonlyRequestInit = {}): 
     const rawTitle = firstErr?.["title"];
     const detail = isString(rawDetail) ? rawDetail : null;
     const title = isString(rawTitle) ? rawTitle : null;
+    const rawCode = firstErr?.["code"];
+    const code = isString(rawCode) && rawCode.trim() !== "" ? rawCode.trim() : `HTTP_${response.status}`;
+    const requestId = response.headers.get("X-Request-Id")
+      ?? response.headers.get("X-Correlation-Id");
     throw new ApiError(
       response.status,
       detail ?? title ?? `API request failed (${response.status})`,
       extractFieldErrors(errors),
+      response.headers.get("Retry-After"),
+      code,
+      requestId,
+      response.headers.get("Idempotency-Replayed") === "true",
     );
   }
 
@@ -328,35 +366,71 @@ export async function fetchApiBlob(endpoint: string, options: ReadonlyRequestIni
 }
 
 export const MAX_PAGINATED_PAGES = 100;
+export const MAX_PAGINATED_RECORDS = 10_000;
 
-export async function fetchAllApiPages<T>(endpoint: string, signal?: Readonly<AbortSignal>): Promise<T[]> {
+/** Explicit traversal only: ordinary list views should request a single page. */
+export async function fetchAllApiPages<T>(
+  endpoint: string,
+  signal?: Readonly<AbortSignal>,
+  options: Readonly<{
+    maxPages?: number;
+    maxRecords?: number;
+    /** Override transient 429/503 retries for views with an explicit Retry action. */
+    retryAttempts?: number;
+    onProgress?: (records: number) => void;
+  }> = {},
+): Promise<T[]> {
+  const maxPages = options.maxPages ?? MAX_PAGINATED_PAGES;
+  const maxRecords = options.maxRecords ?? MAX_PAGINATED_RECORDS;
+  const retryAttempts = options.retryAttempts ?? 3;
+  if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > MAX_PAGINATED_PAGES
+    || !Number.isSafeInteger(maxRecords) || maxRecords < 1 || maxRecords > MAX_PAGINATED_RECORDS
+    || !Number.isSafeInteger(retryAttempts) || retryAttempts < 0 || retryAttempts > 3) {
+    throw new Error("Invalid pagination budget.");
+  }
   const data: T[] = [];
   const visited = new Set<string>();
-  let pageEndpoint: string | null = endpoint;
-
-  while (pageEndpoint !== null && !visited.has(pageEndpoint) && visited.size < MAX_PAGINATED_PAGES) {
+  let pageEndpoint = endpoint;
+  for (;;) {
+    signal?.throwIfAborted();
+    if (visited.has(pageEndpoint)) throw new Error("The server repeated a page; the result is incomplete.");
+    if (visited.size >= maxPages) throw new Error(`The result exceeds ${maxPages} pages. Narrow the query and try again.`);
     visited.add(pageEndpoint);
-    // SAFETY: list endpoints return the JSON:API collection envelope; the
-    // data array and pagination meta fields are checked below.
-    const response = await fetchApi<{
+    let retries = 0;
+    let response: {
       data?: T[];
       meta?: { pagination?: JsonObject };
-    }>(
-      pageEndpoint,
-      signal === undefined ? {} : { signal },
-    );
-    if (Array.isArray(response.data)) data.push(...response.data);
-
-    const nextPage = response.meta?.pagination?.["next-page"];
-    if (!isNumber(nextPage) || !Number.isSafeInteger(nextPage) || nextPage < 1) {
-      pageEndpoint = null;
-      continue;
+    };
+    for (;;) {
+      try {
+        response = await fetchApi(pageEndpoint, { method: "GET", ...(signal === undefined ? {} : { signal }) });
+        break;
+      } catch (error: unknown) {
+        if (!isRetryableApiError(error) || retries++ >= retryAttempts) throw error;
+        const delay = retryAfterDelayMilliseconds(error.retryAfter);
+        // Long maintenance windows need a later user retry, not an export held in memory.
+        if (delay === null || !Number.isFinite(delay) || delay > 30_000) throw error;
+        signal?.throwIfAborted();
+        await new Promise<void>((resolve, reject): void => {
+          const abort = (): void => { clearTimeout(timer); reject(new DOMException("Export cancelled", "AbortError")); };
+          const timer = setTimeout((): void => { signal?.removeEventListener("abort", abort); resolve(); }, delay);
+          signal?.addEventListener("abort", abort, { once: true });
+        });
+        signal?.throwIfAborted();
+      }
     }
+    signal?.throwIfAborted();
+    if (!Array.isArray(response.data)) throw new Error("The server returned an invalid collection.");
+    if (data.length + response.data.length > maxRecords) throw new Error(`The result exceeds ${maxRecords} records. Narrow the query and try again.`);
+    data.push(...response.data);
+    options.onProgress?.(data.length);
+    const nextPage = response.meta?.pagination?.["next-page"];
+    if (nextPage === undefined || nextPage === null) break;
+    if (!isNumber(nextPage) || !Number.isSafeInteger(nextPage) || nextPage < 1) throw new Error("The server returned invalid pagination metadata.");
     const nextUrl: URL = new globalThis.URL(pageEndpoint, "http://terrence.local");
     nextUrl.searchParams.set("page[number]", String(nextPage));
     pageEndpoint = `${nextUrl.pathname}${nextUrl.search}`;
   }
-
   return data;
 }
 
@@ -512,6 +586,10 @@ export async function streamExplain(
       response.status,
       detail ?? title ?? `API request failed (${response.status})`,
       extractFieldErrors(errors),
+      response.headers.get("Retry-After"),
+      undefined,
+      response.headers.get("X-Request-Id") ?? response.headers.get("X-Correlation-Id"),
+      response.headers.get("Idempotency-Replayed") === "true",
     );
   }
 

@@ -75,7 +75,20 @@ Post a fixture event without enabling anything with the verify action (`POST /ap
 
 ## Delivery
 
-Notifications are queued and delivered asynchronously. A failed delivery logs the error and increments the failure metric. The notification page shows recent deliveries.
+Run lifecycle notifications use a transactional outbox. The run status change,
+the outbox record, and its durable delivery job commit together, so a process
+restart after the status commit can resume the notification. Delivery leases
+are reclaimed after a crash, retries are bounded to three attempts, and a
+permanently failing event is retained with `dead_letter` status and its last
+error. A stable `event_id` is included in each destination payload so receivers
+can make replayed requests idempotent. One dead-lettered event does not prevent
+other durable jobs from running.
+
+The authenticated SSE stream remains a best-effort UI hint. `run.status`,
+`plan.output.ready`, and `comment.created` are published in memory; clients
+must reconnect and refetch the resource when a stream is interrupted. The
+notification outbox and the existing VCS webhook durable jobs are operational
+obligations and remain recoverable from the database.
 
 ## API surface
 

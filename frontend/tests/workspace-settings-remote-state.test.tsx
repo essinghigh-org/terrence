@@ -52,7 +52,7 @@ test("loads every workspace page and replaces specific remote-state consumers", 
     }
     if (
       url.startsWith("/api/v2/organizations/acme/workspaces?")
-      && init?.method === undefined
+      && (init?.method === undefined || init?.method === "GET")
     ) {
       const page = new URL(url, "http://terrence.local").searchParams.get("page[number]");
       if (page === "2") {
@@ -83,7 +83,7 @@ test("loads every workspace page and replaces specific remote-state consumers", 
     }
     if (
       url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
-      && init?.method === undefined
+      && (init?.method === undefined || init?.method === "GET")
     ) {
       return json({ data: [{ id: "ws-staging", type: "workspaces" }] });
     }
@@ -190,13 +190,13 @@ test("reconciles general settings before reporting a remote-state replacement fa
     const url = getUrl(input);
     if (
       url.startsWith("/api/v2/organizations/acme/workspaces?")
-      && init?.method === undefined
+      && (init?.method === undefined || init?.method === "GET")
     ) {
       return json({ data: [workspace] });
     }
     if (
       url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
-      && init?.method === undefined
+      && (init?.method === undefined || init?.method === "GET")
     ) {
       return json({ data: [] });
     }
@@ -273,13 +273,13 @@ test("keeps general settings usable when remote-state consumers fail to load", a
     }
     if (
       url.startsWith("/api/v2/organizations/acme/workspaces?")
-      && init?.method === undefined
+      && (init?.method === undefined || init?.method === "GET")
     ) {
       return workspaceList.promise;
     }
     if (
       url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
-      && init?.method === undefined
+      && (init?.method === undefined || init?.method === "GET")
     ) {
       return json({ data: [{ id: "ws-existing", type: "workspaces" }] });
     }
@@ -358,18 +358,18 @@ test("configures a workspace-specific agent pool override", async () => {
     init?: RequestInit,
   ): Promise<Response> => {
     const url = getUrl(input);
-    if (url === "/api/v2/projects/prj-1" && init?.method === undefined) {
+    if (url === "/api/v2/projects/prj-1" && (init?.method === undefined || init?.method === "GET")) {
       return json({ data: { attributes: { "default-execution-mode": "agent" } } });
     }
-    if (url === "/api/v2/organizations/acme/agent-pools" && init?.method === undefined) {
+    if (url === "/api/v2/organizations/acme/agent-pools" && (init?.method === undefined || init?.method === "GET")) {
       return json({ data: [{ id: "apool-workspace", attributes: { name: "Workspace pool" } }] });
     }
-    if (url.startsWith("/api/v2/organizations/acme/workspaces?") && init?.method === undefined) {
+    if (url.startsWith("/api/v2/organizations/acme/workspaces?") && (init?.method === undefined || init?.method === "GET")) {
       return json({ data: [] });
     }
     if (
       url === "/api/v2/workspaces/ws-production/relationships/remote-state-consumers"
-      && init?.method === undefined
+      && (init?.method === undefined || init?.method === "GET")
     ) {
       return json({ data: [] });
     }
@@ -417,7 +417,7 @@ test("configures a workspace-specific agent pool override", async () => {
   const form = view.getByRole("button", { name: "Save settings" }).closest("form");
   expect(form).not.toBeNull();
   // SAFETY: the form is present because the preceding role query found its submit button.
-  fireEvent.submit(form as HTMLFormElement);
+  fireEvent.submit(form!);
 
   await waitFor((): void => { expect(workspaceBody).toBeDefined(); });
   if (workspaceBody === undefined) throw new Error("Expected a serialized workspace PATCH body");

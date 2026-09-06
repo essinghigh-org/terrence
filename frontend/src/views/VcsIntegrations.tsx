@@ -9,8 +9,9 @@ import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from ".
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
 import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
-import { CheckCircle, ExternalLink, GitBranch, Plus, Trash2 } from "lucide-react";
+import { CheckCircle, ExternalLink, GitBranch, Plus, Trash2, Unplug } from "lucide-react";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
+import { EmptyState } from "../components/EmptyState";
 import { PageHeader, PageShell } from "../components/PageHeader";
 import { isString } from "../lib/type-guards";
 
@@ -112,6 +113,8 @@ export function VcsIntegrations({
   const [startingGitHubSetup, setStartingGitHubSetup] = useState(false);
   const [installationToDelete, setInstallationToDelete] = useState<GitHubAppInstallation | null>(null);
   const [deletingInstallation, setDeletingInstallation] = useState(false);
+  const [installationToUninstall, setInstallationToUninstall] = useState<GitHubAppInstallation | null>(null);
+  const [uninstallingInstallation, setUninstallingInstallation] = useState(false);
   const [access, setAccess] = useState<Readonly<{ orgName: string; status: VcsAccess }> | null>(null);
   const loadRequest = useRef<AbortController | null>(null);
   const currentOrgName = orgName ?? "";
@@ -237,6 +240,8 @@ export function VcsIntegrations({
     setStartingGitHubSetup(false);
     setInstallationToDelete(null);
     setDeletingInstallation(false);
+    setInstallationToUninstall(null);
+    setUninstallingInstallation(false);
     setCreating(false);
     setName("");
     setServiceProvider("github");
@@ -313,6 +318,28 @@ export function VcsIntegrations({
       if (currentOrgNameRef.current === actionOrgName) {
         setDeletingInstallation(false);
         setInstallationToDelete(null);
+      }
+    }
+  };
+
+  const handleUninstallInstallation = async (installation: GitHubAppInstallation): Promise<void> => {
+    if (!canManageVcsSettings) return;
+    const actionOrgName = currentOrgName;
+    setUninstallingInstallation(true);
+    setError("");
+    try {
+      await fetchApi(`/organizations/${encodeURIComponent(actionOrgName)}/github-app/installations/${encodeURIComponent(installation.id)}/actions/uninstall`, { method: "POST" });
+      if (currentOrgNameRef.current === actionOrgName) {
+        setGhApps((previous): GitHubAppInstallation[] => previous.filter((candidate): boolean => candidate.id !== installation.id));
+      }
+    } catch (caught: unknown) {
+      if (currentOrgNameRef.current === actionOrgName) {
+        setError(caught instanceof Error ? caught.message : "Failed to uninstall the GitHub App installation");
+      }
+    } finally {
+      if (currentOrgNameRef.current === actionOrgName) {
+        setUninstallingInstallation(false);
+        setInstallationToUninstall(null);
       }
     }
   };
@@ -413,8 +440,13 @@ export function VcsIntegrations({
 
       {accessStatus === "denied" && (
         <Card>
-          <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            You do not have permission to manage VCS settings for this organization.
+          <CardContent className="py-6">
+            <EmptyState
+              compact
+              illustration="blocked"
+              title="Ask an organization administrator for access"
+              description="You do not have permission to manage VCS settings for this organization."
+            />
           </CardContent>
         </Card>
       )}
@@ -502,14 +534,24 @@ export function VcsIntegrations({
                         </TableCell>
                         <TableCell>
                           <div className="flex justify-end">
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              onClick={(): void => { setInstallationToDelete(app); }}
-                            >
-                              <Trash2 data-icon="inline-start" />
-                              Remove
-                            </Button>
+                            <div className="flex flex-wrap justify-end gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={(): void => { setInstallationToUninstall(app); }}
+                              >
+                                <Unplug data-icon="inline-start" />
+                                Uninstall
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={(): void => { setInstallationToDelete(app); }}
+                              >
+                                <Trash2 data-icon="inline-start" />
+                                Remove
+                              </Button>
+                            </div>
                           </div>
                         </TableCell>
                       </TableRow>
@@ -773,6 +815,25 @@ export function VcsIntegrations({
         loading={deletingInstallation}
         onConfirm={async (): Promise<void> => {
           if (installationToDelete !== null) await handleDeleteInstallation(installationToDelete);
+        }}
+      />
+
+      <ConfirmDialog
+        open={installationToUninstall !== null}
+        onOpenChange={(open): void => { if (!open && !uninstallingInstallation) setInstallationToUninstall(null); }}
+        title="Uninstall GitHub App installation"
+        description={
+          <>
+            This calls GitHub to uninstall <strong className="text-foreground">{installationToUninstall?.attributes.name}</strong>, then removes that installation from Terrence. The site-wide App registration and other installations remain in place.
+          </>
+        }
+        confirmText="Uninstall installation"
+        confirmVariant="destructive"
+        requireText={installationToUninstall?.attributes.name}
+        requireTextLabel={installationToUninstall === null ? undefined : `Type ${installationToUninstall.attributes.name} to confirm the GitHub uninstall.`}
+        loading={uninstallingInstallation}
+        onConfirm={async (): Promise<void> => {
+          if (installationToUninstall !== null) await handleUninstallInstallation(installationToUninstall);
         }}
       />
 

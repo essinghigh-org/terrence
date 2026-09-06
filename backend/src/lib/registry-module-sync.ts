@@ -13,7 +13,8 @@ import {
 } from "../db/schema";
 import { decryptSecret } from "./secrets";
 import { fetchVcsUrl, fetchVcsUrlStream, getGitHubAppAccessToken } from "./webhooks";
-import { githubAppApiBase, normalizeGithubApiBase } from "./github-api";
+import { normalizeGithubApiBase } from "./github-api";
+import { getGitHubAppRuntimeConfiguration } from "./github-app-config";
 import { ingestModuleArchive } from "./registry-module-archive";
 import { inspectRegistryModule, type RegistryModuleMetadata } from "./registry-module-metadata";
 import { isModuleVersion, sortModuleVersionsDescending } from "./registry-version";
@@ -44,7 +45,7 @@ async function credentialsFor(mod: RegistryModule): Promise<Credentials> {
     if (installation === undefined) throw new Error("The selected VCS connection is unavailable");
     const token = await getGitHubAppAccessToken(installation.installationId);
     if (token === null) throw new Error("The selected VCS connection could not authenticate");
-    const apiUrl = githubAppApiBase(true);
+    const apiUrl = (await getGitHubAppRuntimeConfiguration())?.apiUrl;
     if (apiUrl === undefined) throw new Error("The VCS connection API URL is invalid");
     return { apiUrl, token };
   }
@@ -304,7 +305,11 @@ async function synchronizeRegistryModuleOnce(
 function scheduleRemainingRegistryModuleSync(mod: RegistryModule): void {
   setTimeout((): void => {
     void synchronizeRegistryModule(mod).catch((error: unknown): void => {
-      console.error(`[terrence] Registry module continuation failed for ${mod.id}:`, error instanceof Error ? error.message : error);
+      // Log forging guard (CodeQL log-injection): rejection reasons can
+      // carry attacker-influenced newlines via malicious registry content;
+      // strip CR/LF before logging so one event stays one log line.
+      const reason = (error instanceof Error ? error.message : String(error)).replace(/\n|\r/g, "");
+      console.error(`[terrence] Registry module continuation failed for ${mod.id}:`, reason);
     });
   }, 0);
 }

@@ -20,6 +20,7 @@ export type CapturedProcessOutput = Readonly<{
 }>;
 
 export type ProcessOutputPart = string | Readonly<{ path: string }>;
+export type ProcessOutputOptions = Readonly<{ signal?: Readonly<AbortSignal> }>;
 
 function safePrefix(prefix: string): string {
   const normalized = prefix.replace(/[^A-Za-z0-9_.-]+/g, "_").replace(/^\.+/, "");
@@ -30,7 +31,7 @@ function normalizedCaptureError(reason: unknown): Error {
   return reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : "Process output capture failed");
 }
 
-async function captureStream(stream: ProcessStream, path: string): Promise<CapturedProcessStream> {
+async function captureStream(stream: ProcessStream, path: string, signal?: Readonly<AbortSignal>): Promise<CapturedProcessStream> {
   const writer = Bun.file(path).writer();
   const reader = stream?.getReader();
   const decoder = new TextDecoder();
@@ -49,9 +50,13 @@ async function captureStream(stream: ProcessStream, path: string): Promise<Captu
     if (text.length > remaining) truncated = true;
   };
 
+  const onAbort = (): void => { void reader?.cancel(signal?.reason).catch(() => { /* stream is already closed */ }); };
+  signal?.addEventListener("abort", onAbort, { once: true });
   try {
+    signal?.throwIfAborted();
     if (reader !== undefined) {
       while (true) {
+        signal?.throwIfAborted();
         const next = await reader.read();
         if (next.done) break;
         await writer.write(next.value);
@@ -60,6 +65,7 @@ async function captureStream(stream: ProcessStream, path: string): Promise<Captu
       }
       appendPreview(decoder.decode());
     }
+    signal?.throwIfAborted();
     await writer.end();
     await chmod(path, 0o600);
     return { path, bytes, preview, truncated };
@@ -69,6 +75,7 @@ async function captureStream(stream: ProcessStream, path: string): Promise<Captu
     throw error;
   } finally {
     reader?.releaseLock();
+    signal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -78,14 +85,15 @@ export async function captureProcessOutput(
   stderr: ProcessStream,
   outputDirectory: string,
   prefix: string,
+  options: ProcessOutputOptions = {},
 ): Promise<CapturedProcessOutput> {
   await mkdir(outputDirectory, { recursive: true, mode: 0o700 });
   const base = `${safePrefix(prefix)}-${randomUUID()}`;
   const stdoutPath = join(outputDirectory, `${base}.stdout`);
   const stderrPath = join(outputDirectory, `${base}.stderr`);
   const [stdoutResult, stderrResult] = await Promise.allSettled([
-    captureStream(stdout, stdoutPath),
-    captureStream(stderr, stderrPath),
+    captureStream(stdout, stdoutPath, options.signal),
+    captureStream(stderr, stderrPath, options.signal),
   ]);
   if (stdoutResult.status === "rejected" || stderrResult.status === "rejected") {
     await Promise.allSettled([

@@ -66,6 +66,10 @@ RUN backend/bin/build-landlock-runner.sh
 FROM cgr.dev/chainguard/wolfi-base@sha256:e624c5d5e42382ce7165ddafcbbf8e6769a24cbd02ea6114b880b05ae5ba2a8d
 ARG BUILD_VERSION=0.0.0
 ARG BUILD_SHA=unknown
+LABEL org.opencontainers.image.title="Terrence" \
+      org.opencontainers.image.version="${BUILD_VERSION}" \
+      org.opencontainers.image.revision="${BUILD_SHA}" \
+      org.opencontainers.image.source="https://github.com/essinghigh-org/terrence"
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000 \

@@ -12,6 +12,7 @@ import { join, resolve } from "node:path";
 import { cachedOrgByName } from "../lib/cached-lookups";
 import { variableValueForRead, variableValueForWrite } from "../lib/variable-crypto";
 import { vcsRepoResource } from "../lib/vcs-repo";
+import { parsePersistedStatusMetadata } from "../lib/validation";
 
 const POLICY_ARCHIVE_DIR = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"), "policy-set-versions");
 
@@ -251,6 +252,7 @@ function normalizePoliciesPath(input: unknown): Readonly<{ value: string | null 
 
 function policySetVersionResource(version: PolicySetVersionItem, request: Readonly<{ readonly url: string }>): Record<string, unknown> {
   const uploadPath = `/api/v2/policy-set-versions/${version.id}/upload`;
+  const statusTimestamps = parsePersistedStatusMetadata(version.statusTimestamps, version.statusMetadataSchemaVersion, version.id, false) ?? {};
   return {
     id: version.id,
     type: "policy-set-versions",
@@ -258,9 +260,9 @@ function policySetVersionResource(version: PolicySetVersionItem, request: Readon
       source: version.source,
       status: version.status,
       "status-timestamps": {
-        "uploaded-at": version.statusTimestamps.uploadedAt ?? null,
-        "ready-at": version.statusTimestamps.readyAt ?? null,
-        "errored-at": version.statusTimestamps.erroredAt ?? null,
+        "uploaded-at": statusTimestamps["uploadedAt"] ?? null,
+        "ready-at": statusTimestamps["readyAt"] ?? null,
+        "errored-at": statusTimestamps["erroredAt"] ?? null,
       },
       "ingress-attributes": version.ingressAttributes,
       error: version.error,
@@ -831,6 +833,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
       source: "tfe-api",
       status: "pending",
       statusTimestamps: {},
+      statusMetadataSchemaVersion: 1,
       ingressAttributes: null,
       error: null,
       archivePath: null,
@@ -895,6 +898,7 @@ export const policyRoutes = new Elysia({ name: "policies" })
     await db.update(policySetVersions).set({
       status: "ready",
       statusTimestamps: { uploadedAt: readyAt, readyAt },
+      statusMetadataSchemaVersion: 1,
       archivePath,
       updatedAt: Date.now(),
     }).where(eq(policySetVersions.id, versionId));

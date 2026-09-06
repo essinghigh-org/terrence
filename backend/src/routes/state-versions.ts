@@ -2,33 +2,35 @@ import { discardStateReservation, fenceStateWorkspace, pruneStateReservations, s
 import { Elysia } from "elysia";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { exists, mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { db } from "../db";
-import { stateOutputIndex, stateVersions, workspaces, runs, organizationMemberships, teams, type users } from "../db/schema";
-import { eq, and, desc, count, inArray, ne, or, isNull } from "drizzle-orm";
-import { stateVersionResource, stateOutputResources } from "../lib/response";
+import { agentJobs, auditLogs, logs, stateOutputIndex, stateVersions, workspaces, runs, organizationMemberships, teams, type users } from "../db/schema";
+import { eq, and, desc, count, inArray, ne, or, isNull, sql } from "drizzle-orm";
+import { stateVersionResource, stateOutputResources, stateVersionSummaryResource } from "../lib/response";
 import { encryptStatePayload, isClientEncryptedState, parseTerraformStatePayload, statePayloadError, statePayloadWithSerial } from "../lib/validation";
-import {
-  checkWorkspacePermission,
-  checkRunStateAccess,
-  findAuthorizedWorkspace,
-  findRemoteStateReadableWorkspace,
-  pageRequest,
-  pagination,
-  decodeStatePayload,
-  parseStatePayload,
-  validSignedApiURL,
-  auditLog,
-  workspaceIdsForPermission,
-  lockPrincipal,
-  ownsWorkspaceLock,
-} from "../lib/utils";
+import { checkWorkspacePermission, checkRunStateAccess, workspaceIdsForPermission } from "../lib/authorization";
+import { findAuthorizedWorkspace, findRemoteStateReadableWorkspace } from "../lib/authorized-resources";
+import { decodeStatePayload, parseStatePayload, auditLog, lockPrincipal, ownsWorkspaceLock } from "../lib/utils";
+import { validSignedApiURL } from "../lib/capabilities";
 import { isUniqueConstraintError } from "../lib/validation";
 import { authPlugin } from "../auth";
 import { scheduleExplorerInventory } from "../lib/explorer-inventory";
 import { insertStateOutputIndex, replaceStateOutputIndex } from "../lib/state-output-index";
 import { persistUploadBody } from "../lib/upload-body";
 import { storageDir } from "../db/driver";
+import { auditLogValues } from "../lib/audit-trail";
+import { authorizedStateAccess } from "../lib/authorized-resources";
+import { pageRequest, pagination } from "../lib/pagination";
+import { commitStateVersion } from "../lib/commands/state-version";
+import {
+  acquireRecoveryPromotionLock,
+  inspectRecoveryCopy,
+  markRecoveryPromoted,
+  releaseRecoveryPromotionLock,
+  type RecoveryCopyInspection,
+} from "../lib/recovery-files";
+import { commitStateVersionAtSerialTx, nextStateSerialTx } from "../lib/state-commit";
+import { abandonIdempotency, beginIdempotency, completeIdempotency, idempotencyContext, idempotencyError, idempotencyPrincipal } from "../lib/idempotency";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -42,6 +44,22 @@ type ParamCtx = Readonly<{
   request: Request;
   set: SetObj;
 }>;
+
+/**
+ * State-write callers may be write-only team principals. Keep the serializer
+ * honest by carrying both capabilities only when the read decision was also
+ * made for this exact workspace.
+ */
+async function stateResponseAccess(
+  workspace: Readonly<typeof workspaces.$inferSelect>,
+  userId: string | undefined,
+  orgId: string | null,
+  teamId: string | null,
+): Promise<ReturnType<typeof authorizedStateAccess>> {
+  const capabilities: ("state-read" | "state-write")[] = ["state-write"];
+  if (await checkWorkspacePermission(workspace, userId, orgId, teamId, "state-read")) capabilities.push("state-read");
+  return authorizedStateAccess(workspace.id, capabilities);
+}
 
 const MAX_IMPORTED_STATE_BYTES = 100 * 1024 * 1024;
 export const MAX_LEGACY_STATE_OUTPUT_CANDIDATES = 100;
@@ -106,6 +124,19 @@ async function requestBodyText(
   }
 }
 
+async function replayStateVersion(
+  resourceId: string | null,
+  workspaceId: string,
+  request: Readonly<{ url: string }>,
+  fallback: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (resourceId === null) return fallback;
+  const state = await db.query.stateVersions.findFirst({
+    where: and(eq(stateVersions.id, resourceId), eq(stateVersions.workspaceId, workspaceId)),
+  });
+  return state === undefined ? fallback : { data: stateVersionResource(state, request) };
+}
+
 function stateLineageError(
   previousState: Readonly<{ statePayload: string | null }> | undefined,
   incomingState: Readonly<Record<string, unknown>>,
@@ -128,15 +159,189 @@ function stateLineageError(
     : "State lineage does not match the workspace history";
 }
 
-function recoveryStatePath(runId: string): string {
-  return join(storageDir, "recovery", runId, "terraform.tfstate");
+type RecoveryReviewCheck = Readonly<{
+  id: string;
+  status: "pass" | "fail" | "blocked" | "unknown";
+  detail: string;
+}>;
+
+type RecoveryStateMetadata = Readonly<{
+  id: string;
+  serial: number | null;
+  lineage: string | null;
+  digest: string | null;
+  size: number | null;
+  terraformVersion: string | null;
+  representation: "terraform-v4" | "opentofu-encrypted" | "invalid" | "unavailable";
+}>;
+
+const RECOVERY_ACTIVE_RUN_STATUSES = new Set([
+  "pending", "fetching", "fetching_completed", "pre_plan_running", "pre_plan_completed",
+  "queuing", "plan_queued", "planning", "cost_estimating", "cost_estimated",
+  "policy_checking", "policy_override", "policy_checked", "post_plan_running",
+  "post_plan_completed", "confirmed", "apply_queued", "applying",
+]);
+
+function stateMetadata(state: Readonly<{ id: string; statePayload: string | null; serial: number; terraformVersion: string | null }>): RecoveryStateMetadata {
+  if (typeof state.statePayload !== "string" || state.statePayload === "") {
+    return { id: state.id, serial: state.serial, lineage: null, digest: null, size: null, terraformVersion: state.terraformVersion, representation: "unavailable" };
+  }
+  try {
+    const payload = decodeStatePayload(state.statePayload);
+    const parsed = parseTerraformStatePayload(payload);
+    return {
+      id: state.id,
+      serial: parsed?.["serial"] !== undefined && Number.isSafeInteger(parsed["serial"]) ? parsed["serial"] as number : state.serial,
+      lineage: typeof parsed?.["lineage"] === "string" && parsed["lineage"] !== "" && parsed["lineage"].length <= 256 ? parsed["lineage"] : null,
+      digest: createHash("sha256").update(payload).digest("hex"),
+      size: Buffer.byteLength(payload),
+      terraformVersion: typeof parsed?.["terraform_version"] === "string" && parsed["terraform_version"].length <= 256 ? parsed["terraform_version"] : state.terraformVersion,
+      representation: parsed === null
+        ? isClientEncryptedState(payload) ? "opentofu-encrypted" : "invalid"
+        : "terraform-v4",
+    };
+  } catch {
+    return { id: state.id, serial: state.serial, lineage: null, digest: null, size: null, terraformVersion: state.terraformVersion, representation: "invalid" };
+  }
 }
 
-/** Issue #579: only a capture that wrote its completion marker is a
- * verified copy. A markerless state file is an unverified partial from a
- * capture that died mid-write and must read as absent. */
-async function recoveryCaptureComplete(runId: string): Promise<boolean> {
-  return exists(join(storageDir, "recovery", runId, ".recovered"));
+function redactRecoveryLog(text: string): string {
+  const bounded = text.length > 4096 ? text.slice(-4096) : text;
+  return bounded.replace(/(authorization|bearer|token|password|secret|private[_-]?key)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]");
+}
+
+function recoveryCandidateMetadata(capture: RecoveryCopyInspection): RecoveryStateMetadata | null {
+  if (capture.status === "missing" || capture.status === "incomplete") return null;
+  return {
+    id: capture.evidence?.promotedStateVersionId ?? "recovery-candidate",
+    serial: capture.serial,
+    lineage: capture.lineage,
+    digest: capture.digest,
+    size: capture.size,
+    terraformVersion: capture.terraformVersion,
+    representation: capture.status === "opaque" ? "opentofu-encrypted" : capture.status === "candidate" || capture.status === "promoted" ? "terraform-v4" : "invalid",
+  };
+}
+
+async function activeRecoveryOwner(runId: string, runStatus: string): Promise<Readonly<{
+  runActive: boolean;
+  localProcessActive: boolean;
+  agentJobs: readonly Readonly<{ id: string; phase: string; status: string; agentId: string | null; claimedAt: number | null }>[];
+}>> {
+  const jobs = await db.query.agentJobs.findMany({
+    where: and(eq(agentJobs.runId, runId), inArray(agentJobs.status, ["queued", "claimed"])),
+    columns: { id: true, phase: true, status: true, agentId: true, claimedAt: true },
+  });
+  let localProcessActive = false;
+  try {
+    const worker = await import("../worker");
+    localProcessActive = worker.hasActiveRunExecution(runId);
+  } catch {
+    // The worker may be intentionally absent in a read-only API process. The
+    // durable run status and agent-job rows remain authoritative then.
+  }
+  return {
+    runActive: RECOVERY_ACTIVE_RUN_STATUSES.has(runStatus),
+    localProcessActive,
+    agentJobs: jobs,
+  };
+}
+
+async function recoveryReviewFor(
+  run: Readonly<typeof runs.$inferSelect>,
+  workspace: Readonly<typeof workspaces.$inferSelect>,
+  user: Readonly<typeof users.$inferSelect> | null | undefined,
+  orgId: string | null,
+  teamId: string | null,
+): Promise<Record<string, unknown>> {
+  const canWritePromise = orgId === null
+    ? checkWorkspacePermission(workspace, user?.id, orgId, teamId, "state-write")
+    : Promise.resolve(false);
+  const [capture, latest, owner, recentLogs, canWrite] = await Promise.all([
+    inspectRecoveryCopy(storageDir, run.id),
+    db.query.stateVersions.findFirst({
+      where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
+      orderBy: [desc(stateVersions.serial)],
+      columns: { id: true, statePayload: true, serial: true, terraformVersion: true },
+    }),
+    activeRecoveryOwner(run.id, run.status),
+    db.query.logs.findMany({
+      where: eq(logs.runId, run.id),
+      orderBy: [desc(logs.createdAt), desc(logs.id)],
+      limit: 12,
+      columns: { id: true, phase: true, outputText: true, createdAt: true },
+    }),
+    canWritePromise,
+  ]);
+  const committed = latest === undefined ? null : stateMetadata(latest);
+  const candidate = recoveryCandidateMetadata(capture);
+  const checks: RecoveryReviewCheck[] = [];
+  const markerPass = capture.status !== "missing" && capture.status !== "incomplete" && capture.marker !== null;
+  checks.push({ id: "capture-complete", status: markerPass ? "pass" : "fail", detail: markerPass ? "The durable capture marker is present." : "The capture marker is missing or invalid; this copy is not a verified candidate." });
+  const candidatePass = capture.status === "candidate" || capture.status === "promoted";
+  checks.push({ id: "candidate-parse", status: candidatePass ? "pass" : capture.status === "opaque" ? "blocked" : "fail", detail: candidatePass ? "The captured state is a supported Terraform state document." : capture.status === "opaque" ? "The captured state is client-encrypted and needs its original client keys." : "The captured state cannot be parsed as a supported Terraform state document." });
+  const digestPass = candidate?.digest !== null && candidate?.digest !== undefined && (capture.evidence === null || (capture.evidence.digest === candidate.digest && capture.evidence.size === candidate.size));
+  checks.push({ id: "digest", status: digestPass ? "pass" : "fail", detail: digestPass ? "The captured bytes match their recorded SHA-256 digest." : "The captured bytes do not match the recorded SHA-256 digest." });
+  const lineagePass = candidate?.lineage !== null && (committed === null || committed.lineage === null || candidate?.lineage === committed.lineage);
+  checks.push({ id: "lineage", status: candidate?.lineage === null ? "unknown" : lineagePass ? "pass" : "fail", detail: candidate?.lineage === null ? "The candidate has no lineage value to compare." : lineagePass ? "The candidate lineage matches the latest committed state." : "The candidate lineage differs from the latest committed state." });
+  const sameDigest = candidate?.digest !== null && candidate?.digest !== undefined && candidate.digest === committed?.digest;
+  const candidateSerial = candidate?.serial;
+  const committedSerial = committed?.serial;
+  const stale = committedSerial !== null && committedSerial !== undefined && candidateSerial !== null && candidateSerial !== undefined
+    && candidateSerial < committedSerial && !sameDigest;
+  const serialConflict = committedSerial !== null && committedSerial !== undefined && candidateSerial !== null && candidateSerial !== undefined
+    && candidateSerial === committedSerial && !sameDigest;
+  checks.push({ id: "serial", status: candidate?.serial === null || candidate?.serial === undefined ? "unknown" : stale || serialConflict ? "fail" : "pass", detail: stale ? "The candidate serial is behind a different committed state and is stale." : serialConflict ? "The candidate shares a serial with a different committed digest." : "The candidate serial is compatible with the current history." });
+  const ownerClear = !owner.runActive && !owner.localProcessActive && owner.agentJobs.length === 0;
+  checks.push({ id: "owner-terminated", status: ownerClear ? "pass" : "blocked", detail: ownerClear ? "The run and its local/agent execution owners are stopped." : "Execution is still owned by the run or an agent; stop it or reconcile ownership before promotion." });
+  const lockOwned = ownsWorkspaceLock(workspace, lockPrincipal(user?.id, orgId, teamId));
+  checks.push({ id: "workspace-lock", status: lockOwned ? "pass" : "blocked", detail: lockOwned ? "The workspace lock is held by this caller." : "The workspace must be locked by this caller before promotion." });
+  checks.push({ id: "state-write", status: canWrite ? "pass" : "blocked", detail: canWrite ? "The caller has state-write permission." : "The caller does not have state-write permission for this workspace." });
+  const blockers = checks.filter((check): boolean => check.status === "fail" || check.status === "blocked").map((check): string => check.detail);
+  const alreadyPromoted = capture.status === "promoted" && capture.evidence?.promotedStateVersionId !== undefined;
+  const promotionAllowed = alreadyPromoted || (blockers.length === 0 && candidatePass);
+  const timestamps = run.statusTimestamps ?? {};
+  return {
+    "run": {
+      id: run.id,
+      status: run.status,
+      operation: run.operation,
+      "applying-at": timestamps["applying-at"] ?? null,
+      "terminal-at": timestamps[`${run.status.replace(/_/g, "-")}-at`] ?? null,
+      "agent-id": run.agentId,
+      "agent-pool-id": run.agentPoolId,
+    },
+    "capture": {
+      status: capture.status,
+      "marker-present": capture.marker !== null,
+      "captured-at": capture.capturedAt,
+      "manifest-present": capture.evidence !== null,
+      "promoted-state-version-id": capture.evidence?.promotedStateVersionId ?? null,
+    },
+    "candidate-state": candidate,
+    "last-committed-state": committed,
+    "checks": checks,
+    "execution-owner": {
+      "run-active": owner.runActive,
+      "local-process-active": owner.localProcessActive,
+      "agent-jobs": owner.agentJobs,
+      "terminated": ownerClear,
+    },
+    "relevant-logs": [...recentLogs].reverse().map((entry): Record<string, unknown> => ({
+      id: entry.id,
+      phase: entry.phase,
+      "created-at": new Date(entry.createdAt).toISOString(),
+      excerpt: redactRecoveryLog(entry.outputText),
+      truncated: entry.outputText.length > 4096,
+    })),
+    promotion: {
+      allowed: promotionAllowed,
+      "already-promoted": alreadyPromoted,
+      blockers,
+      "evidence-retention": "The captured bytes and promotion manifest are retained until the configured recovery retention sweep removes promoted evidence.",
+    },
+    "secret-warning": "State downloads and log excerpts may contain sensitive values. Back up them only in an approved secure location.",
+  };
 }
 
 export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
@@ -191,14 +396,19 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const where = and(...conditions);
     const { number, size } = pageRequest(request);
     const [versions, countRows] = await Promise.all([
-      db.query.stateVersions.findMany({ where, orderBy: [desc(stateVersions.serial), desc(stateVersions.createdAt)], limit: size, offset: (number - 1) * size }),
+      db.query.stateVersions.findMany({ where,
+        columns: { statePayload: false, jsonState: false, jsonStateOutputs: false },
+        extras: {
+          hasRawState: sql<boolean>`${stateVersions.statePayload} IS NOT NULL AND ${stateVersions.statePayload} <> ''`.mapWith(Boolean).as("has_raw_state"),
+          hasJsonState: sql<boolean>`${stateVersions.jsonState} IS NOT NULL AND ${stateVersions.jsonState} <> ''`.mapWith(Boolean).as("has_json_state"),
+        }, orderBy: [desc(stateVersions.serial), desc(stateVersions.createdAt)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(stateVersions).where(where),
     ]);
     const runIds = [...new Set(versions.map((version): string | null => version.runId).filter((id): id is string => id !== null))];
     const runRows = runIds.length === 0 ? [] : await db.query.runs.findMany({ where: inArray(runs.id, runIds), columns: { id: true, status: true, message: true } });
     const runMap = new Map(runRows.map((run): [string, { status: string; message: string | null }] => [run.id, { status: run.status, message: run.message }]));
     return {
-      data: versions.map((version): Record<string, unknown> => stateVersionResource(version, request, false, version.runId === null ? null : runMap.get(version.runId) ?? null)),
+      data: versions.map((version): Record<string, unknown> => stateVersionSummaryResource(version, request, version.runId === null ? null : runMap.get(version.runId) ?? null, authorizedStateAccess(version.workspaceId, "state-read"))),
       ...pagination(request, number, size, countRows[0]?.total ?? 0),
     };
   })
@@ -213,7 +423,12 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     // upload reservations (NULL statuses predate the default and stay listed).
     const where = and(eq(stateVersions.workspaceId, workspaceId), or(isNull(stateVersions.status), ne(stateVersions.status, "pending")));
     const [versions, countRows] = await Promise.all([
-      db.query.stateVersions.findMany({ where, orderBy: [desc(stateVersions.serial)], limit: size, offset: (number - 1) * size }),
+      db.query.stateVersions.findMany({ where,
+        columns: { statePayload: false, jsonState: false, jsonStateOutputs: false },
+        extras: {
+          hasRawState: sql<boolean>`${stateVersions.statePayload} IS NOT NULL AND ${stateVersions.statePayload} <> ''`.mapWith(Boolean).as("has_raw_state"),
+          hasJsonState: sql<boolean>`${stateVersions.jsonState} IS NOT NULL AND ${stateVersions.jsonState} <> ''`.mapWith(Boolean).as("has_json_state"),
+        }, orderBy: [desc(stateVersions.serial)], limit: size, offset: (number - 1) * size }),
       db.select({ total: count() }).from(stateVersions).where(where),
     ]);
     const totalCount = countRows[0]?.total ?? 0;
@@ -230,8 +445,8 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       }
     }
     return {
-      data: versions.map((sv: Readonly<typeof stateVersions.$inferSelect>): Record<string, unknown> =>
-        stateVersionResource(sv, request, false, sv.runId !== null ? (runMap.get(sv.runId) ?? null) : null),
+      data: versions.map((sv): Record<string, unknown> =>
+        stateVersionSummaryResource(sv, request, sv.runId !== null ? (runMap.get(sv.runId) ?? null) : null, authorizedStateAccess(sv.workspaceId, "state-read")),
       ),
       ...pagination(request, number, size, totalCount),
     };
@@ -260,7 +475,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const runData = sv.runId !== null
       ? await db.query.runs.findFirst({ where: eq(runs.id, sv.runId), columns: { status: true, message: true } })
       : null;
-    return { data: stateVersionResource(sv, request, true, runData ?? null) };
+    return { data: stateVersionResource(sv, request, true, runData ?? null, authorizedStateAccess(resolvedWs.id, "state-read")) };
   })
   .get("/api/v2/workspaces/:workspace_id/current-state-version-outputs", async ({ params, user, orgId, teamId, run, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
@@ -294,6 +509,16 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot roll back state" }] }; }
     if (!ownsWorkspaceLock(workspace, lockPrincipal(user?.id, orgId, teamId))) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before rollback" }] }; }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+    const idempotency = idempotencyContext(
+      request,
+      `state-rollback:${workspaceId}`,
+      idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
+      payload,
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotency === "invalid") {
+      return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
+    }
     const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
     const relationships = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
     const rollback = relationships["rollback-state-version"];
@@ -308,6 +533,13 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(sourcePayload) }] };
     }
+    const idempotencyBegin = await beginIdempotency(
+      idempotency,
+      "state-rollback",
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotencyBegin.kind === "replay") return replayStateVersion(idempotencyBegin.resourceId, workspaceId, request, idempotencyBegin.body);
+    if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
     const id = crypto.randomUUID();
     try {
       await withStateSerialRetry(async () => db.transaction(async (tx): Promise<void> => {
@@ -339,14 +571,21 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       }));
     } catch (error) {
       if (!(error instanceof StateSerialConflictError) && !isUniqueConstraintError(error)) throw error;
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock or state changed before promotion" }] };
     }
     scheduleExplorerInventory(workspaceId);
     const created = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, id) });
-    if (created === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    if (created === undefined) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+      (set as { status: number }).status = 500;
+      return { errors: [{ status: "500", title: "Internal Server Error" }] };
+    }
     (set as { status: number }).status = 201;
-    return { data: stateVersionResource(created, request) };
+     const responseBody = { data: stateVersionResource(created, request, false, undefined, await stateResponseAccess(workspace, user?.id, orgId, teamId)) };
+     if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, id);
+     return responseBody;
   })
   .get("/api/v2/state-versions/:state_version_id", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
@@ -361,7 +600,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     const runData = sv.runId !== null
       ? await db.query.runs.findFirst({ where: eq(runs.id, sv.runId), columns: { status: true, message: true } })
       : null;
-    return { data: stateVersionResource(sv, request, true, runData ?? null) };
+    return { data: stateVersionResource(sv, request, true, runData ?? null, authorizedStateAccess(ws?.id ?? sv.workspaceId, "state-read")) };
   })
   .get("/api/v2/state-versions/:state_version_id/state-version-outputs", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     if ((user === undefined || user === null) && orgId === null && teamId === null && run === null) {
@@ -540,106 +779,38 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (ws === undefined || (!validSignedApiURL(request, path, "PUT") && !(await checkWorkspacePermission(ws, user?.id, orgId, teamId, "state-write")))) {
       (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] };
     }
-    // A lost success response must not force a client to reserve another serial.
-    // Authenticate first, then accept only exactly the committed bytes; this
-    // branch never republishes outputs or changes the current state. Identity
-    // is the persisted SHA-256 recorded at finalize time (issue #690); rows
-    // finalized before that column existed fall back to hashing the stored
-    // payload, which is byte-identical to what finalize compared.
-    if (sv.status === "finalized" && typeof sv.statePayload === "string" && sv.statePayload !== "") {
-      const retry = await requestBodyText(body, request);
-      if (!retry.ok) {
-        (set as { status: number }).status = retry.reason === "too-large" ? 413 : 400;
-        return { errors: [{ status: String(set.status), title: "Invalid state upload body" }] };
-      }
-      const committedSha256 = sv.uploadSha256
-        ?? createHash("sha256").update(decodeStatePayload(sv.statePayload)).digest("hex");
-      if (createHash("sha256").update(retry.text).digest("hex") === committedSha256) {
-        // Converge rows finalized before the digest column existed.
-        if (sv.uploadSha256 === null) {
-          await db.update(stateVersions).set({ uploadSha256: committedSha256 }).where(eq(stateVersions.id, stateVersionId));
-        }
-        (set as { status: number }).status = 200;
-        return {};
-      }
-    }
-    if (sv.status !== "pending" || (typeof sv.statePayload === "string" && sv.statePayload !== "")) {
-      (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State content was already uploaded" }] };
-    }
     // Issue #578: claim before the network-bound body transfer so two
-    // simultaneous PUTs do not both stream bodies; the conditional finalize
-    // below is the atomic backstop.
-    if (sv.status === "pending" && stateReservationObsolete(sv, ws)) {
-      (set as { status: number }).status = 409;
-      return { errors: [{ status: "409", title: "Conflict", detail: "State upload reservation expired or its workspace lock changed" }] };
-    }
+    // simultaneous PUTs do not both stream bodies. The domain command below
+    // remains the cross-process atomic backstop.
     if (!tryAcquireStateUpload(stateVersionId)) {
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "An upload for this state version is already in progress" }] };
     }
     try {
       const rawStateResult = await requestBodyText(body, request);
       if (!rawStateResult.ok) {
-        (set as { status: number }).status = rawStateResult.reason === "too-large" ? 413 : 400;
-        return { errors: [{ status: String(rawStateResult.reason === "too-large" ? 413 : 400), title: rawStateResult.reason === "too-large" ? "Payload Too Large" : "Bad Request" }] };
+        const status = rawStateResult.reason === "too-large" ? 413 : 400;
+        (set as { status: number }).status = status;
+        const title = sv.status === "finalized" && typeof sv.statePayload === "string" && sv.statePayload !== ""
+          ? "Invalid state upload body"
+          : status === 413 ? "Payload Too Large" : "Bad Request";
+        return { errors: [{ status: String(status), title }] };
       }
       const rawState = rawStateResult.text;
-      if (rawState === "" || parseStatePayload(rawState) === null) {
-        (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(rawState) }] };
+      const committed = await commitStateVersion({ stateVersionId, rawState });
+      if (committed.kind === "not-found") {
+        (set as { status: number }).status = 404;
+        return { errors: [{ status: "404", title: "Not Found" }] };
       }
-      const parsedTerraformState = parseTerraformStatePayload(rawState);
-      if (parsedTerraformState === null) {
-        (set as { status: number }).status = 400;
-        return { errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(rawState) }] };
+      if (committed.kind === "invalid") {
+        const status = committed.reason === "state-payload" ? 400 : 422;
+        (set as { status: number }).status = status;
+        return { errors: [{ status: String(status), title: status === 400 ? "Bad Request" : "Unprocessable Entity", detail: committed.detail }] };
       }
-      if (parsedTerraformState["serial"] !== sv.serial) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial does not match the state reservation" }] };
+      if (committed.kind === "conflict") {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: committed.detail }] };
       }
-      if ((sv.expectedLineage !== null && parsedTerraformState["lineage"] !== sv.expectedLineage)
-        || (sv.expectedMd5 !== null && sv.expectedMd5 !== createHash("md5").update(rawState).digest("base64")
-          && sv.expectedMd5.toLowerCase() !== createHash("md5").update(rawState).digest("hex"))) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "State bytes do not match the reserved checksum or lineage" }] };
-      }
-      const latestState = await db.query.stateVersions.findFirst({
-        where: and(eq(stateVersions.workspaceId, sv.workspaceId), eq(stateVersions.status, "finalized")),
-        orderBy: [desc(stateVersions.serial)],
-        columns: { statePayload: true },
-      });
-      const lineageError = stateLineageError(latestState, parsedTerraformState);
-      if (lineageError !== null) {
-        (set as { status: number }).status = 422;
-        return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lineageError }] };
-      }
-      const encrypted = await encryptStatePayload(rawState);
-      const decodedJsonState = sv.jsonState === null ? null : decodeStatePayload(sv.jsonState);
-      // Atomic conditional finalize: exactly one concurrent PUT can move the
-      // version out of pending. The output index is rebuilt in the same
-      // transaction so it can never mix output names across writers.
-      const finalized = await db.transaction(async (tx): Promise<boolean> => {
-        if (!(await fenceStateWorkspace(tx, ws)) || stateReservationObsolete(sv, ws)) return false;
-        const current = await tx.query.stateVersions.findFirst({
-          where: and(eq(stateVersions.workspaceId, sv.workspaceId), eq(stateVersions.status, "finalized")),
-          orderBy: [desc(stateVersions.serial)],
-        });
-        if (current !== undefined && (current.serial >= sv.serial || stateLineageError(current, parsedTerraformState) !== null)) return false;
-        const won = await tx.update(stateVersions).set({
-          statePayload: encrypted,
-          status: "finalized",
-          uploadSha256: createHash("sha256").update(rawState).digest("hex"),
-        }).where(and(
-          eq(stateVersions.id, stateVersionId),
-          eq(stateVersions.status, "pending"),
-          or(isNull(stateVersions.statePayload), eq(stateVersions.statePayload, "")),
-        )).returning({ id: stateVersions.id });
-        if (won.length === 0) return false;
-        await replaceStateOutputIndex(tx, stateVersionId, sv.workspaceId, decodedJsonState, rawState);
-        return true;
-      });
-      if (!finalized) {
-        (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State content was already uploaded" }] };
-      }
-      scheduleExplorerInventory(sv.workspaceId);
+      if (committed.kind === "committed") scheduleExplorerInventory(sv.workspaceId);
       (set as { status: number }).status = 200;
       return {};
     } finally {
@@ -768,6 +939,16 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot roll back state" }] }; }
     if (!ownsWorkspaceLock(ws, lockPrincipal(user?.id, orgId, teamId))) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before rollback" }] }; }
+    const idempotency = idempotencyContext(
+      request,
+      `state-action-rollback:${stateVersionId}`,
+      idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
+      {},
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotency === "invalid") {
+      return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
+    }
     if (sv.statePayload === null || sv.status !== "finalized") {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State version cannot be rolled back" }] };
     }
@@ -777,6 +958,13 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(sourcePayload) }] };
     }
+    const idempotencyBegin = await beginIdempotency(
+      idempotency,
+      "state-action-rollback",
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotencyBegin.kind === "replay") return replayStateVersion(idempotencyBegin.resourceId, sv.workspaceId, request, idempotencyBegin.body);
+    if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
     const newId = crypto.randomUUID();
     try {
       await withStateSerialRetry(async () => db.transaction(async (tx): Promise<void> => {
@@ -811,14 +999,21 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       }));
     } catch (error) {
       if (!(error instanceof StateSerialConflictError) && !isUniqueConstraintError(error)) throw error;
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock or state changed before promotion" }] };
     }
     scheduleExplorerInventory(sv.workspaceId);
     const newSv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, newId) });
-    if (newSv === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    if (newSv === undefined) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+      (set as { status: number }).status = 500;
+      return { errors: [{ status: "500", title: "Internal Server Error" }] };
+    }
     (set as { status: number }).status = 201;
-    return { data: stateVersionResource(newSv, request) };
+     const responseBody = { data: stateVersionResource(newSv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
+     if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, newId);
+     return responseBody;
   })
   .post("/api/v2/state-versions/:state_version_id/actions/soft_delete_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
@@ -842,7 +1037,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     const softDeletedAt = Date.now();
     await db.update(stateVersions).set({ status: "backing_data_soft_deleted", softDeletedAt }).where(eq(stateVersions.id, sv.id));
-    return { data: stateVersionResource({ ...sv, status: "backing_data_soft_deleted", softDeletedAt }, request) };
+    return { data: stateVersionResource({ ...sv, status: "backing_data_soft_deleted", softDeletedAt }, request, false, undefined, authorizedStateAccess(ws.id, "admin")) };
   })
   .post("/api/v2/state-versions/:state_version_id/actions/restore_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
@@ -857,7 +1052,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     await db.update(stateVersions).set({ status: "finalized", softDeletedAt: null }).where(eq(stateVersions.id, sv.id));
     scheduleExplorerInventory(sv.workspaceId);
-    return { data: stateVersionResource({ ...sv, status: "finalized", softDeletedAt: null }, request) };
+    return { data: stateVersionResource({ ...sv, status: "finalized", softDeletedAt: null }, request, false, undefined, authorizedStateAccess(ws.id, "admin")) };
   })
   .post("/api/v2/state-versions/:state_version_id/actions/permanently_delete_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
@@ -889,7 +1084,55 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         statePayload: null,
         jsonState: null,
         jsonStateOutputs: null,
-      }, request),
+      }, request, false, undefined, authorizedStateAccess(ws.id, "admin")),
+    };
+  })
+  .get("/api/v2/runs/:run_id/recovery", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const runId = params["run_id"] ?? "";
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+    const workspace = run === undefined ? undefined : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "admin");
+    if (run === undefined || workspace === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const review = await recoveryReviewFor(run, workspace, user, orgId, teamId);
+    await auditLog("read", "run", runId, user?.id ?? null, workspace.orgId, { endpoint: "recovery-workbench", candidateStatus: review["capture"] && typeof review["capture"] === "object" ? (review["capture"] as Record<string, unknown>)["status"] : null });
+    return {
+      data: {
+        id: runId,
+        type: "recovery-reviews",
+        attributes: review,
+        relationships: {
+          run: { data: { id: runId, type: "runs" } },
+          candidate: { data: { id: "recovery-candidate", type: "state-versions" } },
+        },
+        links: { self: `/api/v2/runs/${runId}/recovery` },
+      },
+    };
+  })
+  // Alias kept for clients that name the surface after the UI rather than the
+  // run resource. Both paths return exactly the same bounded review.
+  .get("/api/v2/runs/:run_id/recovery-workbench", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+    const runId = params["run_id"] ?? "";
+    const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
+    const workspace = run === undefined ? undefined : await findAuthorizedWorkspace(run.workspaceId, user?.id, orgId, teamId, "admin");
+    if (run === undefined || workspace === undefined) {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    const review = await recoveryReviewFor(run, workspace, user, orgId, teamId);
+    await auditLog("read", "run", runId, user?.id ?? null, workspace.orgId, { endpoint: "recovery-workbench", candidateStatus: review["capture"] && typeof review["capture"] === "object" ? (review["capture"] as Record<string, unknown>)["status"] : null });
+    return {
+      data: {
+        id: runId,
+        type: "recovery-reviews",
+        attributes: review,
+        relationships: {
+          run: { data: { id: runId, type: "runs" } },
+          candidate: { data: { id: "recovery-candidate", type: "state-versions" } },
+        },
+        links: { self: `/api/v2/runs/${runId}/recovery-workbench` },
+      },
     };
   })
   .get("/api/v2/runs/:run_id/recovery-state", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
@@ -902,9 +1145,10 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     let payload: string;
     try {
-      if (!(await recoveryCaptureComplete(runId))) throw new Error("recovery capture incomplete");
-      payload = decodeStatePayload(await readFile(recoveryStatePath(runId), "utf8"));
-      if (parseTerraformStatePayload(payload) === null && !isClientEncryptedState(payload)) throw new Error("invalid recovery state");
+      const capture = await inspectRecoveryCopy(storageDir, runId, true);
+      if (capture.status !== "candidate" && capture.status !== "opaque" && capture.status !== "promoted") throw new Error("recovery capture incomplete");
+      if (capture.payload === undefined) throw new Error("recovery payload unavailable");
+      payload = capture.payload;
     } catch {
       (set as { status: number }).status = 404;
       return { errors: [{ status: "404", title: "Not Found" }] };
@@ -927,80 +1171,172 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 403;
       return { errors: [{ status: "403", title: "Forbidden" }] };
     }
+    const initialCapture = await inspectRecoveryCopy(storageDir, runId, true);
+    if (initialCapture.status === "promoted" && initialCapture.evidence?.promotedStateVersionId !== undefined) {
+      const existing = await db.query.stateVersions.findFirst({
+        where: and(eq(stateVersions.id, initialCapture.evidence.promotedStateVersionId), eq(stateVersions.workspaceId, workspace.id)),
+      });
+      if (existing !== undefined) {
+        (set as { status: number }).status = 200;
+        return { data: stateVersionResource(existing, request), meta: { idempotent: true, evidenceRetained: true } };
+      }
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Recovery evidence says it was promoted, but the committed state version is unavailable" }] };
+    }
+    if (initialCapture.status === "incomplete" || initialCapture.status === "missing") {
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
+    if (initialCapture.status === "opaque") {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unsupported state representation", detail: statePayloadError(initialCapture.payload ?? null) }] };
+    }
+    if (initialCapture.status !== "candidate" || initialCapture.payload === undefined) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(initialCapture.payload ?? null) }] };
+    }
+    const parsed = parseTerraformStatePayload(initialCapture.payload);
+    if (parsed === null) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(initialCapture.payload) }] };
+    }
+    const review = await recoveryReviewFor(run, workspace, user, orgId, teamId);
+    const owner = review["execution-owner"] as Readonly<{ terminated?: unknown }> | undefined;
+    if (owner?.terminated !== true) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "The run or its execution owner is still active; stop it or reconcile ownership before recovering state" }] };
+    }
+    const reviewChecks = Array.isArray(review["checks"]) ? review["checks"] as RecoveryReviewCheck[] : [];
+    const failedReview = reviewChecks.find((check): boolean => check.status === "fail");
+    if (failedReview !== undefined) {
+      (set as { status: number }).status = failedReview.id === "lineage" || failedReview.id === "candidate-parse" || failedReview.id === "digest" ? 422 : 409;
+      return { errors: [{ status: String((set as { status?: number }).status), title: "Recovery precondition failed", detail: failedReview.detail }] };
+    }
     if (!ownsWorkspaceLock(workspace, lockPrincipal(user?.id, orgId, teamId))) {
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before recovering state" }] };
     }
-    let rawState: string;
-    let parsed: ReturnType<typeof parseTerraformStatePayload>;
+    if (!(await acquireRecoveryPromotionLock(storageDir, runId))) {
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Another recovery promotion is already in progress" }] };
+    }
+    let stateVersionId: string | null = null;
+    let committedSerial: number | null = null;
+    let idempotent = false;
     try {
-      if (!(await recoveryCaptureComplete(runId))) throw new Error("recovery capture incomplete");
-      rawState = decodeStatePayload(await readFile(recoveryStatePath(runId), "utf8"));
-      parsed = parseTerraformStatePayload(rawState);
-    } catch {
-      (set as { status: number }).status = 404;
-      return { errors: [{ status: "404", title: "Not Found" }] };
-    }
-    if (parsed === null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(rawState) }] };
-    }
-    const latest = await db.query.stateVersions.findFirst({
-      where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized")),
-      orderBy: [desc(stateVersions.serial)],
-      columns: { serial: true, statePayload: true },
-    });
-    const lineageError = stateLineageError(latest, parsed);
-    if (lineageError !== null) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lineageError }] };
-    }
-    let stateVersionId: string;
-    try {
-      stateVersionId = await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<string> => {
-        const t = tx as typeof db;
-        if (!(await fenceStateWorkspace(t, workspace))) throw new StateSerialConflictError();
-        await pruneStateReservations(t, workspace);
+      const latestCapture = await inspectRecoveryCopy(storageDir, runId, true);
+      if (latestCapture.status === "promoted" && latestCapture.evidence?.promotedStateVersionId !== undefined) {
+        const existing = await db.query.stateVersions.findFirst({
+          where: and(eq(stateVersions.id, latestCapture.evidence.promotedStateVersionId), eq(stateVersions.workspaceId, workspace.id)),
+        });
+        if (existing === undefined) {
+          (set as { status: number }).status = 409;
+          return { errors: [{ status: "409", title: "Conflict", detail: "Recovery evidence says it was promoted, but the committed state version is unavailable" }] };
+        }
+        stateVersionId = existing.id;
+        committedSerial = existing.serial;
+        idempotent = true;
+      } else if (latestCapture.status !== "candidate" || latestCapture.payload === undefined) {
+        (set as { status: number }).status = 409;
+        return { errors: [{ status: "409", title: "Conflict", detail: "The recovery copy changed while it was being reviewed" }] };
+      } else {
+        const rawState = latestCapture.payload;
+        const latestParsed = parseTerraformStatePayload(rawState);
+        if (latestParsed === null) {
+          (set as { status: number }).status = 422;
+          return { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(rawState) }] };
+        }
+        stateVersionId = await withStateSerialRetry(async () => db.transaction(async (tx: unknown): Promise<string> => {
+          const t = tx as typeof db;
+          if (!(await fenceStateWorkspace(t, workspace))) throw new StateSerialConflictError();
+          await pruneStateReservations(t, workspace);
         const current = await t.query.stateVersions.findFirst({
-          where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized")),
+          where: and(eq(stateVersions.workspaceId, workspace.id), eq(stateVersions.status, "finalized"), eq(stateVersions.intermediate, false)),
           orderBy: [desc(stateVersions.serial)],
         });
-        const serial = (current?.serial ?? 0) + 1;
-        if (!Number.isSafeInteger(serial)) throw new StateSerialConflictError();
-        const promoted = statePayloadWithSerial(rawState, serial);
-        const id = crypto.randomUUID();
-        await t.insert(stateVersions).values({
-          id,
-          workspaceId: workspace.id,
-          serial,
-          runId,
-          uploadSha256: createHash("sha256").update(promoted).digest("hex"),
-          statePayload: await encryptStatePayload(promoted),
-          jsonState: await encryptStatePayload(promoted),
-          jsonStateOutputs: await encryptStatePayload(parsed["outputs"] === undefined ? null : JSON.stringify(parsed["outputs"])),
-          createdBy: run.createdBy,
-          status: "finalized",
-          terraformVersion: typeof parsed["terraform_version"] === "string" ? parsed["terraform_version"] : null,
-          intermediate: false,
-          createdAt: Date.now(),
-        });
-        await insertStateOutputIndex(t, id, workspace.id, promoted, promoted);
-        return id;
-      }));
+        const currentLineageError = stateLineageError(current, latestParsed);
+        if (currentLineageError !== null) throw new StateSerialConflictError();
+        const candidateSerial = latestParsed["serial"];
+        const candidateDigest = createHash("sha256").update(rawState).digest("hex");
+        let currentDigest: string | null = null;
+        if (current?.statePayload !== null && current?.statePayload !== undefined && current.statePayload !== "") {
+          try {
+            currentDigest = createHash("sha256").update(decodeStatePayload(current.statePayload)).digest("hex");
+          } catch {
+            throw new StateSerialConflictError();
+          }
+        }
+        if (typeof candidateSerial !== "number" || !Number.isSafeInteger(candidateSerial)
+          || (current !== undefined && (candidateSerial < current.serial
+            || (candidateSerial === current.serial && currentDigest !== candidateDigest)))) {
+          throw new StateSerialConflictError();
+        }
+        const serial = await nextStateSerialTx(t, workspace.id);
+          const promoted = statePayloadWithSerial(rawState, serial);
+          const id = crypto.randomUUID();
+          await commitStateVersionAtSerialTx(t, {
+            id,
+            workspaceId: workspace.id,
+            serial,
+            runId,
+            uploadSha256: createHash("sha256").update(promoted).digest("hex"),
+            statePayload: await encryptStatePayload(promoted),
+            jsonState: await encryptStatePayload(promoted),
+            jsonStateOutputs: await encryptStatePayload(latestParsed["outputs"] === undefined ? null : JSON.stringify(latestParsed["outputs"])),
+            createdBy: run.createdBy,
+            status: "finalized",
+            terraformVersion: typeof latestParsed["terraform_version"] === "string" ? latestParsed["terraform_version"] : null,
+            intermediate: false,
+            createdAt: Date.now(),
+          }, promoted, promoted);
+          await t.insert(auditLogs).values(auditLogValues({
+            action: "recover-state",
+            resourceType: "state-version",
+            resourceId: id,
+            orgId: workspace.orgId,
+            userId: user?.id ?? null,
+            details: {
+              runId,
+              workspaceId: workspace.id,
+              serial,
+              previousSerial: current?.serial ?? null,
+              before: { recoveryCapture: true },
+              after: { status: "finalized", intermediate: false, serial },
+            },
+            immutable: true,
+          }) as typeof auditLogs.$inferInsert);
+          committedSerial = serial;
+          return id;
+        }));
+      }
+      if (stateVersionId !== null && committedSerial !== null) {
+        // Keep the filesystem lock until the manifest is durable. This
+        // closes the commit-to-marker window where a concurrent retry could
+        // create a second state version from the same capture.
+        await markRecoveryPromoted(storageDir, runId, stateVersionId, committedSerial);
+      }
     } catch (error) {
       if (!(error instanceof StateSerialConflictError) && !isUniqueConstraintError(error)) throw error;
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock or state changed before promotion" }] };
+    } finally {
+      await releaseRecoveryPromotionLock(storageDir, runId);
     }
-    await rm(join(storageDir, "recovery", runId), { recursive: true, force: true });
+    if (stateVersionId === null || committedSerial === null) {
+      (set as { status: number }).status = 500;
+      return { errors: [{ status: "500", title: "Internal Server Error" }] };
+    }
     const stateVersion = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
     if (stateVersion === undefined) {
       (set as { status: number }).status = 500;
       return { errors: [{ status: "500", title: "Internal Server Error" }] };
     }
     scheduleExplorerInventory(workspace.id);
-    (set as { status: number }).status = 201;
-    return { data: stateVersionResource(stateVersion, request) };
+    (set as { status: number }).status = idempotent ? 200 : 201;
+    return {
+      data: stateVersionResource(stateVersion, request, false, undefined, authorizedStateAccess(workspace.id, "admin")),
+      ...(idempotent ? { meta: { idempotent: true, evidenceRetained: true } } : {}),
+    };
   })
   .post("/api/v2/workspaces/:workspace_id/state-versions", async ({ params, body, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
@@ -1009,6 +1345,16 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-write");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const idempotency = idempotencyContext(
+      request,
+      `state-versions:${workspaceId}`,
+      idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
+      payload,
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotency === "invalid") {
+      return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
+    }
     const data = payload["data"] as Record<string, unknown> | undefined;
     if (data?.["type"] !== "state-versions") {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be state-versions" }] };
@@ -1090,22 +1436,32 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "md5 does not match the state payload" }] };
       }
     }
+    const idempotencyBegin = await beginIdempotency(
+      idempotency,
+      "state-versions",
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotencyBegin.kind === "replay") return replayStateVersion(idempotencyBegin.resourceId, workspaceId, request, idempotencyBegin.body);
+    if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
     const latestState = await db.query.stateVersions.findFirst({
       where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
       orderBy: [desc(stateVersions.serial)],
       columns: { serial: true, statePayload: true },
     });
     if (latestState !== undefined && serial <= latestState.serial) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] };
     }
     if (parsedTerraformState !== null) {
       const lineageError = stateLineageError(latestState, parsedTerraformState);
       if (lineageError !== null) {
+        if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
         (set as { status: number }).status = 409;
         return { errors: [{ status: "409", title: "Conflict", detail: lineageError }] };
       }
     }
     if (jsonState !== null && parseStatePayload(jsonState) === null) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }] };
     }
     const id = crypto.randomUUID();
@@ -1143,9 +1499,25 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
           createdAt: Date.now(),
         });
         await insertStateOutputIndex(t, id, workspaceId, jsonState, statePayload);
+        await t.insert(auditLogs).values(auditLogValues({
+          action: "create",
+          resourceType: "state-version",
+          resourceId: id,
+          orgId: ws.orgId,
+          userId: user?.id ?? null,
+          details: {
+            workspaceId,
+            runId,
+            serial,
+            status: statePayload === null ? "pending" : "finalized",
+            intermediate,
+            stateBytes: statePayload === null ? 0 : Buffer.byteLength(statePayload, "utf8"),
+          },
+        }) as typeof auditLogs.$inferInsert);
       }));
     } catch (error: unknown) {
       if (error instanceof StateSerialConflictError || isUniqueConstraintError(error)) {
+        if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
         (set as { status: number }).status = 409;
         return { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] };
       }
@@ -1153,9 +1525,15 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     scheduleExplorerInventory(workspaceId);
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, id) });
-    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (sv === undefined) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     (set as { status: number }).status = 201;
-    return { data: stateVersionResource(sv, request) };
+     const responseBody = { data: stateVersionResource(sv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
+     if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, id);
+     return responseBody;
   })
   .post("/api/v2/workspaces/:workspace_id/state-versions/upload", async ({ params, body, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
@@ -1188,11 +1566,6 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(rawState) }] };
     }
-    const latestImportedState = await db.query.stateVersions.findFirst({
-      where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
-      orderBy: [desc(stateVersions.serial)],
-      columns: { serial: true, statePayload: true },
-    });
     // Migrating an existing state file into an empty workspace must accept
     // its serial as-is (issue #569): real-world files carry serials like 12
     // or 45, not 1. The record stores the payload serial so later uploads
@@ -1202,23 +1575,48 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "State serial must be a positive integer" }] };
     }
+    const contentMd5 = request.headers.get("content-md5");
+    if (contentMd5 !== null && contentMd5 !== createHash("md5").update(rawState).digest("base64")) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Content-MD5 does not match the state payload" }] };
+    }
+    const idempotency = idempotencyContext(
+      request,
+      `state-versions-upload:${workspaceId}`,
+      idempotencyPrincipal({ userId: user?.id, orgId, teamId, runId: run?.runId }),
+      { rawState, contentMd5 },
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotency === "invalid") {
+      return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
+    }
+    const idempotencyBegin = await beginIdempotency(
+      idempotency,
+      "state-versions-upload",
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotencyBegin.kind === "replay") return replayStateVersion(idempotencyBegin.resourceId, workspaceId, request, idempotencyBegin.body);
+    if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
+
+    const latestImportedState = await db.query.stateVersions.findFirst({
+      where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
+      orderBy: [desc(stateVersions.serial)],
+      columns: { serial: true, statePayload: true },
+    });
     if (latestImportedState !== undefined && incomingSerial !== latestImportedState.serial + 1) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial must be the next workspace state serial" }] };
     }
     const lineageError = stateLineageError(latestImportedState, parsed);
     if (lineageError !== null) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lineageError }] };
     }
     const runCreatedBy = run === null
       ? null
       : (await db.query.runs.findFirst({ where: eq(runs.id, run.runId), columns: { createdBy: true } }))?.createdBy ?? null;
-    const contentMd5 = request.headers.get("content-md5");
-    if (contentMd5 !== null && contentMd5 !== createHash("md5").update(rawState).digest("base64")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Content-MD5 does not match the state payload" }] };
-    }
 
     let stateVersionId: string;
     try {
@@ -1250,18 +1648,40 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
           createdAt: Date.now(),
         });
         await insertStateOutputIndex(t, id, workspaceId, rawState, rawState);
+        await t.insert(auditLogs).values(auditLogValues({
+          action: "promote",
+          resourceType: "state-version",
+          resourceId: id,
+          orgId: ws.orgId,
+          userId: user?.id ?? null,
+          details: {
+            workspaceId,
+            runId: run?.runId ?? null,
+            serial,
+            stateBytes: Buffer.byteLength(rawState, "utf8"),
+            after: { status: "finalized", intermediate: false, serial },
+          },
+          immutable: true,
+        }) as typeof auditLogs.$inferInsert);
         return id;
       }));
     } catch (error: unknown) {
       if (error instanceof StateSerialConflictError || isUniqueConstraintError(error)) {
+        if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
         (set as { status: number }).status = 409;
         return { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] };
       }
       throw error;
     }
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
-    if (sv === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    if (sv === undefined) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+      (set as { status: number }).status = 500;
+      return { errors: [{ status: "500", title: "Internal Server Error" }] };
+    }
     scheduleExplorerInventory(sv.workspaceId);
     (set as { status: number }).status = 201;
-    return { data: stateVersionResource(sv, request) };
+     const responseBody = { data: stateVersionResource(sv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
+     if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, stateVersionId);
+     return responseBody;
   });

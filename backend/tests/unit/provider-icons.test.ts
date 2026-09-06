@@ -10,6 +10,7 @@ import {
   clearProviderIconCache,
   normalizeProvider,
   primeProviderIconCache,
+  providerIconFallbackSvg,
   providerIconPath,
   resolveProviderIconUrl,
 } from "../../src/lib/provider-icons";
@@ -303,4 +304,94 @@ test("serves cached artwork through the provider-icon image route", async () => 
   expect(response.status).toBe(200);
   expect(response.headers.get("content-type")).toBe("image/svg+xml");
   expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+});
+
+test("serves a deterministic fallback while registry discovery runs in the background", async () => {
+  const originalFetch = globalThis.fetch;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let requests = 0;
+  globalThis.fetch = (async (): Promise<Response> => {
+    requests++;
+    await gate;
+    return new Response(null, { status: 404 });
+  }) as unknown as typeof fetch;
+  try {
+    const expected = providerIconFallbackSvg("acme/widgets");
+    if (expected === null) throw new Error("Expected a provider fallback fixture");
+    const response = await app.handle(new Request(
+      "http://terrence.test/api/v2/provider-icons/registry.terraform.io/acme/widgets",
+    ));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("image/svg+xml");
+    expect(response.headers.get("etag")).toBe(expected.etag);
+    expect(await response.text()).toBe(expected.body);
+    await Bun.sleep(0);
+    expect(requests).toBe(1);
+  } finally {
+    release();
+    await Bun.sleep(0);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a distinct-source flood stays bounded, deduplicates canonical names, and preserves cached icons", async () => {
+  const { discoveryStats } = await import("../../src/lib/discovery-queue");
+  const originalFetch = globalThis.fetch;
+  const before = discoveryStats();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let fetches = 0;
+  globalThis.fetch = (async () => {
+    fetches++;
+    await gate;
+    return new Response(null, { status: 404 });
+  }) as unknown as typeof fetch;
+  primeProviderIconCache("cached/icon", "/api/v2/avatars/" + "a".repeat(64));
+  const pending = Array.from({ length: 5000 }, (_, i) => resolveProviderIconUrl(`flood/icon${i}`));
+  const duplicate = resolveProviderIconUrl("registry.terraform.io/flood/icon0");
+  try {
+    await Bun.sleep(0);
+    expect(discoveryStats()).toMatchObject({ active: 2, queued: 30, rejected: before.rejected + 4968 });
+    expect(fetches).toBe(2);
+    if (process.env["DISCOVERY_LOAD"] === "1") console.log("DISCOVERY_LOAD_RESULT " + JSON.stringify({ requests: 5000, ...discoveryStats(), kernelPeakRss: process.resourceUsage().maxRSS * 1024 }));
+    expect(await resolveProviderIconUrl("cached/icon")).toBe("/api/v2/avatars/" + "a".repeat(64));
+  } finally {
+    release();
+    await Promise.all([...pending, duplicate]);
+    globalThis.fetch = originalFetch;
+  }
+  expect(fetches).toBe(32);
+  expect(await resolveProviderIconUrl("cached/icon")).toBe("/api/v2/avatars/" + "a".repeat(64));
+});
+
+test("bounds pending avatar records while preserving existing metadata", async () => {
+  fixtureDirectory = await mkdtemp("/tmp/terrence-avatar-admission-");
+  setFixtureStorage(fixtureDirectory);
+  const cached = AvatarService.resolveUrl("probe", "https://example.com/cached.png");
+  expect(cached).not.toBeNull();
+  await AvatarService.readMeta(cached?.split("/").at(-1) ?? "");
+  const admitted = Array.from({ length: 1000 }, (_, i) => AvatarService.resolveUrl("probe", `https://example.com/icon-${i}.png`)).filter((value): value is string => value !== null);
+  expect(admitted).toHaveLength(128);
+  expect(AvatarService.resolveUrl("probe", "https://example.com/cached.png")).toBe(cached);
+  await Promise.all(admitted.map(async (url) => AvatarService.readMeta(url.split("/").at(-1) ?? "")));
+});
+
+test("rejects oversized registry metadata and negatively caches the failure", async () => {
+  const originalFetch = globalThis.fetch;
+  let canceled = false;
+  let requests = 0;
+  globalThis.fetch = (async () => {
+    requests++;
+    return new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(1024 * 1024 + 1)); },
+      cancel() { canceled = true; },
+    }));
+  }) as unknown as typeof fetch;
+  try {
+    expect(await resolveProviderIconUrl("oversized/icon")).toBeNull();
+    expect(canceled).toBe(true);
+    expect(await resolveProviderIconUrl("oversized/icon")).toBeNull();
+    expect(requests).toBe(1);
+  } finally { globalThis.fetch = originalFetch; }
 });

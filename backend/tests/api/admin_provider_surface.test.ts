@@ -52,11 +52,13 @@ describe("admin provider surface (kanban 11.18)", () => {
   it("serves the provider surface catalog to site admins", async () => {
     const res = await request(adminToken);
     expect(res.status).toBe(200);
-    const body = await res.json() as { data: { provider?: string; resources?: unknown[]; resources_covered?: number; "latest-available"?: string | null } };
+    const body = await res.json() as { data: { provider?: string; resources?: unknown[]; resources_covered?: number; "latest-available"?: string | null; lifecycle_contract?: { version?: number; fixtures?: unknown[] } } };
     expect(typeof body.data.provider).toBe("string");
     expect(Array.isArray(body.data.resources)).toBe(true);
     expect(body.data.resources_covered).toBeGreaterThan(0);
     expect(body.data["latest-available"]).toBe("0.80.0");
+    expect(body.data.lifecycle_contract?.version).toBe(1);
+    expect(body.data.lifecycle_contract?.fixtures?.length).toBeGreaterThanOrEqual(6);
   });
 
   it("rejects non-admin users", async () => {

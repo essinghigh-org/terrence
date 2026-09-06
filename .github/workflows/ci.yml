@@ -41,9 +41,14 @@ jobs:
           # Raises the tofu release-lookup ceiling from 60/hr (per shared
           # runner IP) to 5000/hr when both matrix jobs run e2e downloads.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Keep pull requests fast and deterministic; the scheduled run
+          # expands the independent lifecycle model's seed corpus.
+          TERRENCE_PROPERTY_CASES: ${{ github.event_name == 'schedule' && '2000' || '256' }}
         # The backend package script serializes Bun workers because the test
         # suite shares its Elysia app and SQLite connection across files.
         run: cd backend && bun run test
+      - name: Prove critical guard tests detect mutations
+        run: bun backend/scripts/check-guard-mutations.ts
 
   backend-postgres:
     name: Backend (Postgres)
@@ -86,6 +91,12 @@ jobs:
         # The backend package script serializes Bun workers because the test
         # suite shares its Elysia app and SQLite connection across files.
         run: cd backend && bun run test
+      - name: Run SQLite to PostgreSQL migration and export contracts
+        env:
+          PG_TEST_ADMIN_URL: postgres://terrence:terrence@localhost:5432/terrence_test
+        # Keep DATABASE_URL absent: the application must start on SQLite so
+        # the actual migration path runs, not the already-PostgreSQL guard.
+        run: cd backend && bun test tests/api/db-migration.test.ts tests/api/db-export.test.ts --max-concurrency=1 --no-orphans
 
   frontend:
     name: Frontend
@@ -143,6 +154,32 @@ jobs:
           if (renovate.minimumReleaseAge !== "3 days" || renovate.lockFileMaintenance?.enabled !== false || ageAssignments.length !== 1 || activeAge !== "259200") process.exit(1);
           console.log("Dependency release-age policy is enforced; Renovate lock maintenance is disabled because Bun enforces the same guard.");
           NODE
+      - name: Verify controlled supply-chain policy (issue #787)
+        run: bun run check:supply-chain
+      - name: Generate dependency manifest, SBOM, and change summary
+        env:
+          BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ -n "${BASE_REF:-}" ]] && git cat-file -e "${BASE_REF}^{commit}" 2>/dev/null; then
+            args+=(--base-ref "$BASE_REF")
+          fi
+          bun scripts/supply-chain-manifest.ts \
+            --output dependency-manifest.json \
+            --sbom-output dependency-sbom.spdx.json \
+            --summary-output dependency-change-summary.md \
+            "${args[@]}"
+      - name: Upload dependency supply-chain evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dependency-supply-chain
+          path: |
+            dependency-manifest.json
+            dependency-sbom.spdx.json
+            dependency-change-summary.md
+            supply-chain/dependency-exceptions.json
+          retention-days: 90
       - name: Check canonical brand assets
         run: bun run --cwd frontend scripts/brand-assets.tsx --check
       - name: Typecheck
@@ -158,6 +195,10 @@ jobs:
         run: bun test backend/tests/unit/endpoint-policy-compliance.test.ts
       - name: Secret fingerprint check (todo 116)
         run: bun test backend/tests/worker/env-isolation.test.ts
+      - name: Verify operational runbook in disposable storage (issue #757)
+        run: bun backend/scripts/verify-operations-docs.ts
+      - name: Run documented upgrade fixture (issue #754)
+        run: bun test backend/tests/db/upgrade-invariants.test.ts --max-concurrency=1 --no-orphans
 
   # Coverage gate (issue #380): runs the backend suite under coverage and
   # uploads the report. NOT yet enforcing (--fail) while legacy exposure
@@ -255,7 +296,7 @@ jobs:
       - name: Build static frontend
         run: cd frontend && bun run build
       - name: Run browser E2E & accessibility suite (Bun.WebView)
-        run: cd frontend && bun run test:browser
+        run: bun run test:profile -- browser
 
   provider-compatibility:
     name: Provider and CLI (${{ matrix.engine }}, ${{ matrix.tier }})
@@ -267,6 +308,7 @@ jobs:
     env:
       TERRENCE_E2E_CLI: ${{ matrix.engine }}
       TERRENCE_E2E_TIER: ${{ matrix.tier }}
+      TERRENCE_E2E_SEED: eng21-${{ matrix.engine }}-${{ matrix.tier }}
       TERRENCE_E2E_RESULTS_DIR: ${{ github.workspace }}/provider-lifecycle-results
     runs-on: ubuntu-latest
     permissions:
@@ -317,7 +359,7 @@ jobs:
       - name: Run pinned provider and remote CLI journeys
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bun test --bail=5 --max-concurrency=1 --no-orphans backend/tests/e2e/provider_e2e.test.ts
+        run: bun run test:profile -- sqlite-cli
       - name: Build the production Landlock helper
         if: matrix.engine == 'terraform' && matrix.tier == 'current'
         run: backend/bin/build-landlock-runner.sh
@@ -327,14 +369,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TERRENCE_E2E_CLI: terraform
           TERRENCE_E2E_SECURITY_PROFILE: required
-        run: bun test --bail=5 --max-concurrency=1 --no-orphans backend/tests/e2e/provider_e2e.test.ts
+        run: bun run test:profile -- sandbox
 
       - name: Upload successful provider lifecycle evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: provider-lifecycle-results-${{ matrix.engine }}-${{ matrix.tier }}
-          path: provider-lifecycle-results/*.json
+          path: provider-lifecycle-results/*
           if-no-files-found: ignore
           retention-days: 30
 

@@ -5,7 +5,10 @@ import {
   cancellationEscalationTimerForTests,
   cancellationEscalationTimerReferencedForTests,
   clearCancellationEscalationTimersForTests,
+  clearRunWorkDirCleanupTimersForTests,
   clearTrackedRunProcessesForTests,
+  runWorkDirCleanupTimerCountForTests,
+  scheduleRunWorkDirCleanup,
   terminateActiveRunExecutions,
   trackRunProcessForTests,
 } from "../../src/worker";
@@ -14,6 +17,7 @@ const runId = `cancellation-timer-${crypto.randomUUID()}`;
 
 afterEach((): void => {
   clearCancellationEscalationTimersForTests();
+  clearRunWorkDirCleanupTimersForTests();
   clearTrackedRunProcessesForTests();
 });
 
@@ -62,4 +66,11 @@ test("force cancellation clears the escalation timer", (): void => {
   cancelRunExecution(runId, true);
   expect(cancellationEscalationTimerCountForTests(runId)).toBe(0);
   expect(killCalls).toBe(2);
+});
+
+test("deduplicates delayed workdir cleanup retries", (): void => {
+  const cleanupRunId = `${runId}-workdir`;
+  scheduleRunWorkDirCleanup(cleanupRunId, 60_000);
+  scheduleRunWorkDirCleanup(cleanupRunId, 60_000);
+  expect(runWorkDirCleanupTimerCountForTests(cleanupRunId)).toBe(1);
 });

@@ -80,7 +80,7 @@ export function storageSecretPath(storageDir: string, name: string): string {
 export function validateSecretName(name: string, source: string): void {
   if (name === "" || !SECRET_NAME_PATTERN.test(name) || name.includes("..")) {
     throw new BootConfigError(
-      `Invalid boot configuration in ${source}: "database.urlSecret" must be a plain secret name (letters, digits, ".", "-", "_"; no path separators or ".."), got ${JSON.stringify(name)}`,
+      `Invalid boot configuration in ${source}: "database.urlSecret" must be a plain secret name (letters, digits, ".", "-", "_"; no path separators or "..")`,
     );
   }
 }
@@ -99,7 +99,7 @@ function assertDatabaseObject(db: unknown, source: string): Record<string, unkno
 
 function parseDatabaseDriver(db: Readonly<Record<string, unknown>>, source: string): DatabaseDriver {
   const driver = db["driver"];
-  if (driver !== "sqlite" && driver !== "postgres") throw new BootConfigError(`Invalid boot configuration in ${source}: "database.driver" must be "sqlite" or "postgres", got ${String(driver)}`);
+  if (driver !== "sqlite" && driver !== "postgres") throw new BootConfigError(`Invalid boot configuration in ${source}: "database.driver" must be "sqlite" or "postgres"`);
   return driver;
 }
 
@@ -123,6 +123,14 @@ export function parseBootConfig(raw: unknown, source: string): BootConfig {
   const result: Record<string, unknown> = { ...record };
   if (record["database"] === undefined) return result;
   const db = assertDatabaseObject(record["database"], source);
+  if (Object.keys(db).some((key): boolean => !["driver", "url", "urlSecret"].includes(key))) {
+    throw new BootConfigError(`Invalid boot configuration in ${source}: unsupported database setting`);
+  }
+  for (const key of ["url", "urlSecret"]) {
+    if (db[key] !== undefined && typeof db[key] !== "string") {
+      throw new BootConfigError(`Invalid boot configuration in ${source}: database URL fields must be strings`);
+    }
+  }
   const driver = parseDatabaseDriver(db, source);
   const url = typeof db["url"] === "string" ? db["url"] : undefined;
   const urlSecret = typeof db["urlSecret"] === "string" ? db["urlSecret"] : undefined;
@@ -137,11 +145,11 @@ function validatePostgresUrl(url: string, source: string): void {
   try {
     parsed = new URL(url);
   } catch {
-    throw new BootConfigError(`Invalid boot configuration in ${source}: "${url}" is not a valid URL`);
+    throw new BootConfigError(`Invalid boot configuration in ${source}: database URL is not a valid URL`);
   }
   if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
     throw new BootConfigError(
-      `Invalid boot configuration in ${source}: postgres URL must use postgres:// or postgresql://, got "${parsed.protocol}//"`,
+      `Invalid boot configuration in ${source}: postgres URL must use postgres:// or postgresql://`,
     );
   }
   if (parsed.hostname === "") {
@@ -150,11 +158,12 @@ function validatePostgresUrl(url: string, source: string): void {
 }
 
 function validateSqliteUrl(url: string, source: string): void {
+  if (url.includes("\u0000") || url.trim() === "") throw new BootConfigError(`Invalid boot configuration in ${source}: invalid sqlite URL`);
   if (url === ":memory:") return;
-  if (url.startsWith("file:")) return;
+  if (url.startsWith("file:") && url.length > 5) return;
   // A bare path is accepted and treated as a file URL (bun:sqlite accepts it).
-  if (url.trim() !== "" && !url.includes("\u0000")) return;
-  throw new BootConfigError(`Invalid boot configuration in ${source}: invalid sqlite URL "${url}"`);
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) return;
+  throw new BootConfigError(`Invalid boot configuration in ${source}: invalid sqlite URL`);
 }
 
 /** Read + validate the boot config file. Missing file → defaults. */
@@ -218,23 +227,24 @@ export function resolveStorageSecret(storageDir: string, name: string): string {
  * Exposed separately from the storage-dir wiring so tests can exercise
  * precedence without touching the filesystem.
  */
-export function resolveDatabaseConfig(
+export function resolveDatabaseConfigWithOrigin(
   env: Readonly<Record<string, string | undefined>>,
   storageDir: string,
-): ResolvedDatabaseConfig {
+): Readonly<{ configuration: ResolvedDatabaseConfig; origin: "environment" | "persisted" | "default" }> {
   const envUrl = env["DATABASE_URL"];
-  if (envUrl !== undefined && envUrl !== "") {
+  if (envUrl !== undefined) {
     if (/^postgres(ql)?:\/\//i.test(envUrl)) {
       validatePostgresUrl(envUrl, "DATABASE_URL");
-      return { driver: "postgres", url: envUrl };
+      return { configuration: { driver: "postgres", url: envUrl }, origin: "environment" };
     }
     // file:, :memory:, or a bare path: bun:sqlite handles all of these.
     // Any other URL scheme (mysql://, mongodb://, ...) is a configuration
     // error that must not silently fall through to a sqlite file path.
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(envUrl)) {
-      throw new BootConfigError(`DATABASE_URL uses an unsupported scheme: "${envUrl.slice(0, envUrl.indexOf("://"))}://"`);
+      throw new BootConfigError("DATABASE_URL uses an unsupported scheme");
     }
-    return { driver: "sqlite", url: envUrl };
+    validateSqliteUrl(envUrl, "DATABASE_URL");
+    return { configuration: { driver: "sqlite", url: envUrl }, origin: "environment" };
   }
   const fileConfig = readBootConfigFile(storageDir);
   const db = fileConfig.database;
@@ -243,13 +253,17 @@ export function resolveDatabaseConfig(
       if (db.urlSecret !== undefined) {
         const url = resolveStorageSecret(storageDir, db.urlSecret);
         validatePostgresUrl(url, `storage secret "${db.urlSecret}"`);
-        return { driver: "postgres", url };
+        return { configuration: { driver: "postgres", url }, origin: "persisted" };
       }
-      return { driver: "postgres", url: db.url ?? "" };
+      return { configuration: { driver: "postgres", url: db.url ?? "" }, origin: "persisted" };
     }
-    return { driver: "sqlite", url: db.url ?? defaultSqliteUrl(storageDir) };
+    return { configuration: { driver: "sqlite", url: db.url ?? defaultSqliteUrl(storageDir) }, origin: "persisted" };
   }
-  return { driver: "sqlite", url: defaultSqliteUrl(storageDir) };
+  return { configuration: { driver: "sqlite", url: defaultSqliteUrl(storageDir) }, origin: "default" };
+}
+
+export function resolveDatabaseConfig(env: Readonly<Record<string, string | undefined>>, storageDir: string): ResolvedDatabaseConfig {
+  return resolveDatabaseConfigWithOrigin(env, storageDir).configuration;
 }
 
 export function defaultSqliteUrl(storageDir: string): string {
@@ -290,7 +304,8 @@ export function writeBootDatabaseConfig(storageDir: string, database: BootDataba
   const path = bootConfigPath(storageDir);
   const existing = readBootConfigFile(storageDir);
   // parseBootConfig guarantees a database section when one is supplied.
-  const validated = parseBootConfig({ database }, path).database!;
+  const validated = parseBootConfig({ database }, path).database;
+  if (validated === undefined) throw new BootConfigError("Database configuration is required");
   const next: BootConfig = {
     ...existing,
     database: validated,

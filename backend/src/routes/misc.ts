@@ -1,11 +1,11 @@
 import { newResourceId } from "../lib/resource-id";
 import { Elysia } from "elysia";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { envEnabled } from "../lib/env";
+import { envFlag } from "../lib/env";
 import { db } from "../db";
 import { runTriggers, auditLogs, githubWebhookDeliveries, workspaces, workspaceVariables, users, organizationMemberships, teams } from "../db/schema";
 import { eq, and, asc, count, desc, inArray, or, sql, type SQL } from "drizzle-orm";
-import { checkOrgPermission, findAuthorizedRun, findAuthorizedWorkspace, pageRequest, pagination, workspaceIdsForPermission } from "../lib/utils";
+import { auditLog, checkOrgPermission, findAuthorizedRun, findAuthorizedWorkspace, pageRequest, pagination, workspaceIdsForPermission } from "../lib/utils";
 import { scopeCoversOrg, scopeGrants } from "../lib/token-scopes";
 import { currentTokenScopes } from "../lib/request-scope";
 import { workspaceVariableResource } from "../lib/response";
@@ -24,6 +24,8 @@ import {
 import { authPlugin } from "../auth";
 import { log } from "../lib/log";
 import { cachedOrgByName } from "../lib/cached-lookups";
+import { setAuditPrincipal } from "../lib/audit-trail";
+import { getGitHubWebhookSecret } from "../lib/github-app-config";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -164,7 +166,7 @@ async function durableWebhookEnqueue(input: Readonly<{
       .values({ id: input.deliveryId, status: "queued", receivedAt: Date.now() })
       .onConflictDoNothing();
   }
-  if (envEnabled(process.env["TERRENCE_DISABLE_WORKER"])) {
+  if (envFlag("TERRENCE_DISABLE_WORKER")) {
     const { processVcsWebhookPayload } = await import("../lib/webhook-jobs");
     await processVcsWebhookPayload({
       provider: input.provider,
@@ -329,7 +331,7 @@ export const miscRoutes = new Elysia({ name: "misc" })
   .use(authPlugin)
   // --- Webhook Receivers ---
     .post("/api/webhooks/github", async ({ request, body, set }: Readonly<{ request: Request; body: unknown; set: SetObj }>): Promise<unknown> => {
-    const secret = process.env["GITHUB_WEBHOOK_SECRET"];
+    const secret = await getGitHubWebhookSecret();
     const signature = request.headers.get("x-hub-signature-256");
     const rawBody = typeof body === "string" ? body : await request.text().catch((): string => "");
     if (typeof secret !== "string" || secret.length === 0) {
@@ -466,8 +468,12 @@ export const miscRoutes = new Elysia({ name: "misc" })
     if (action !== "confirm") {
       return webhookUnprocessable(set, "Invalid action; expected \"confirm\"");
     }
+    // The HMAC is the actor for this path; do not leave the event looking like
+    // an anonymous browser request merely because the webhook has no bearer.
+    setAuditPrincipal({ userId: null, credentialClass: "system-token", authenticated: true });
     const outcome = await confirmRunForApply(runId, { isWebhookApproval: true });
     if (!outcome.ok) {
+      await auditLog("apply", "runs", runId, null, null, { source: "approval-webhook", reason: outcome.reason ?? "apply could not be started" }, { result: "denied", immutable: true });
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: outcome.reason ?? "Apply could not be started" }] };
     }

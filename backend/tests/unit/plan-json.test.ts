@@ -5,6 +5,19 @@ import { join } from "node:path";
 
 import { deletePlanJsonArtifact, planJsonDirectory, planJsonResourceCounts, sanitizePlanJson, writePlanJsonArtifactFromFile } from "../../src/lib/plan-json";
 
+for (const engine of ["terraform", "tofu"]) {
+  test(`${engine} serialized engine plan redacts sensitive outputs and retains public output values`, async () => {
+    const raw = JSON.parse(await readFile(join(import.meta.dir, "../fixtures/engine-plan", `${engine}.json`), "utf8"));
+    const projected = sanitizePlanJson(raw);
+    expect(projected["output_changes"]).toMatchObject({
+      credential: { actions: ["create"], after: null, after_sensitive: true },
+      public_label: { actions: ["create"], after: "visible-fixture-value", after_sensitive: false },
+    });
+    expect(JSON.stringify(projected)).not.toContain("engine-fixture-secret");
+    for (const rawOnly of ["variables", "configuration", "prior_state", "planned_values"]) expect(projected).not.toHaveProperty(rawOnly);
+  });
+}
+
 test("counts plan JSON imports orthogonally and replacements as add plus destroy", () => {
   expect(planJsonResourceCounts({
     resource_changes: [{

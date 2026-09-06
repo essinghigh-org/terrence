@@ -9,6 +9,35 @@ import { storageDegradedReason } from "./storage-health";
 import { queueRunNotification } from "./notifications";
 import { log } from "./log";
 
+// Shared cancellation/deadline primitives are exported from the operations
+// surface so routes and workers classify stop causes consistently without
+// coupling to any persistence implementation.
+export {
+  createOperationContext,
+  OperationCanceledError,
+} from "./operation-context";
+export type {
+  OperationCancellationReason,
+  OperationContext,
+  OperationContextOptions,
+} from "./operation-context";
+
+// Workspace run readiness is exported from the operations library as part of
+// the public operations surface; the implementation lives in its own module
+// so route loading does not entangle the existing apply gates.
+export {
+  assessWorkspacePreflight,
+  clearWorkspacePreflightCacheForTests,
+  preflightResource,
+} from "./workspace-preflight";
+export type {
+  PreflightAssessmentStatus,
+  PreflightCheckStatus,
+  WorkspacePreflightAssessment,
+  WorkspacePreflightCheck,
+  WorkspacePreflightOptions,
+} from "./workspace-preflight";
+
 // --- Maintenance windows (kanban 21.6) -------------------------------
 // Global site setting `maintenance-windows`:
 //   { enabled: boolean, windows: [{ days: number[] (0=Sun..6=Sat),
@@ -100,6 +129,48 @@ export function maintenanceWindowsBlockApply(settings: Settings, now: Date): boo
     });
   }
   return !windows.some((window: MaintenanceWindow): boolean => inMaintenanceWindow(window, now));
+}
+
+export type MaintenanceSchedule = Readonly<{
+  active: boolean;
+  nextEligibleAt: string | null;
+  timezone: string | null;
+}>;
+
+/**
+ * Find the next minute at which an apply is eligible. The scan is deliberately
+ * bounded: maintenance configuration is an operator convenience, not a reason
+ * to let a request spend unbounded time doing calendar arithmetic. The
+ * minute-by-minute walk also makes DST gaps/folds deterministic because it
+ * evaluates the same `Intl` conversion used by the gate.
+ */
+export function nextMaintenanceWindowStart(settings: Settings, now = new Date()): Date | null {
+  if (settings["enabled"] !== true || !Array.isArray(settings["windows"])) return null;
+  const windows = settings["windows"] as MaintenanceWindow[];
+  if (windows.length === 0 || windows.every((window): boolean => !isValidMaintenanceWindow(window))) return null;
+  if (windows.some((window): boolean => inMaintenanceWindow(window, now))) return now;
+  const minute = 60_000;
+  const rounded = Math.floor(now.getTime() / minute) * minute + minute;
+  // Eight days covers every weekly schedule, including a Sunday overnight
+  // window and the longest possible DST offset transition.
+  for (let offset = 0; offset <= 8 * 24 * 60; offset += 1) {
+    const candidate = new Date(rounded + offset * minute);
+    if (windows.some((window): boolean => inMaintenanceWindow(window, candidate))) return candidate;
+  }
+  return null;
+}
+
+/** Return a safe operator-facing schedule snapshot for admin previews. */
+export function maintenanceSchedule(settings: Settings, now = new Date()): MaintenanceSchedule {
+  const windows = Array.isArray(settings["windows"]) ? settings["windows"] as MaintenanceWindow[] : [];
+  const active = settings["enabled"] === true && windows.some((window): boolean => inMaintenanceWindow(window, now));
+  const next = active ? now : nextMaintenanceWindowStart(settings, now);
+  const timezone = windows.find((window): boolean => typeof window.timezone === "string" && window.timezone !== "")?.timezone;
+  return {
+    active,
+    nextEligibleAt: next?.toISOString() ?? null,
+    timezone: typeof timezone === "string" ? timezone : null,
+  };
 }
 
 /** True when the site requires external approval before applies (21.8). */

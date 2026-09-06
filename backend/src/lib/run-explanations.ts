@@ -1,9 +1,11 @@
+import { integerSetting } from "./runtime-config";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db";
 import { runExplanations, auditLogs } from "../db/schema";
 import { readPlanJsonArtifact, sanitizePlanJson, PUBLIC_PLAN_VERSION } from "./plan-json";
 import { collectExplainSecrets, redactKnownSecrets } from "./explain-secrets";
 import { auditLog, strictAuditEnabled } from "./utils";
+import { auditLogValues } from "./audit-trail";
 import { readRunLogs } from "./run-logs";
 import { log } from "./log";
 
@@ -32,8 +34,7 @@ export const EXPLAIN_TIMEOUT_MS = 60_000;
 /** Test seam (issue #687): bound the upstream idle deadline without waiting
  * a minute. Values must be a positive safe integer of milliseconds. */
 export function explainTimeoutMs(): number {
-  const override = Number(process.env["TERRENCE_EXPLAIN_TIMEOUT_MS"] ?? "");
-  return Number.isSafeInteger(override) && override > 0 ? override : EXPLAIN_TIMEOUT_MS;
+  return integerSetting("TERRENCE_EXPLAIN_TIMEOUT_MS");
 }
 
 export type ExplainSource = Readonly<{
@@ -155,16 +156,14 @@ export async function persistExplainerOutput(output: PersistExplainerOutput): Pr
         content: output.content,
         cacheKey: explanationCacheKey(output.runId, output.kind),
       });
-      await tx.insert(auditLogs).values({
-        id: crypto.randomUUID(),
+      await tx.insert(auditLogs).values(auditLogValues({
         orgId: output.orgId,
         userId: output.userId,
         action: "request",
         resourceType: "plan-explanation",
         resourceId: output.runId,
         details,
-        createdAt: Date.now(),
-      });
+      }) as typeof auditLogs.$inferInsert);
     });
     return;
   }
@@ -426,7 +425,7 @@ export async function fetchUpstream<T>(
     clearTimeout(deadline);
     deadline = setTimeout(abortWithTimeout, timeoutMs);
   };
-  const onExternalAbort = (): void => { controller.abort(); };
+  const onExternalAbort = (): void => { controller.abort(signal?.reason); };
   signal?.addEventListener("abort", onExternalAbort, { once: true });
   try {
     let upstream: Readonly<Response>;

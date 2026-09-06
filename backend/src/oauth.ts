@@ -1,3 +1,4 @@
+import { integerSetting } from "./lib/runtime-config";
 import { Elysia } from "elysia";
 import { timingSafeEqual } from "node:crypto";
 import { and, eq, isNull, or } from "drizzle-orm";
@@ -339,9 +340,7 @@ export const oauthPlugin = new Elysia({ name: "terraform-login-oauth" })
     }
 
     const accessToken = generateAuthenticationToken("user");
-    const cliTokenTtlMs = Number(process.env["CLI_TOKEN_TTL_MS"]);
-    const defaultTtl = 30 * 24 * 60 * 60 * 1000;
-    const expiresAt = Date.now() + (Number.isFinite(cliTokenTtlMs) && cliTokenTtlMs > 0 ? cliTokenTtlMs : defaultTtl);
+    const expiresAt = Date.now() + integerSetting("CLI_TOKEN_TTL_MS");
 
     const issued = await db.transaction(async (tx): Promise<boolean> => {
       const currentUser = await tx.query.users.findFirst({ where: eq(users.id, entry.userId) });

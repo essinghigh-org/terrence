@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { RunList } from "../src/views/RunList";
 import { WorkspaceDetail } from "../src/views/WorkspaceDetail";
@@ -187,7 +187,7 @@ test("run detail wrap toggle and plan error retry carry visible focus styles", a
   });
 
 // SAFETY: the component renders this element type for the queried role/label.
-  const wrapToggle = view.getByRole("button", { name: /Wrap/ }) as HTMLButtonElement;
+  const wrapToggle = within(view.getByRole("toolbar", { name: "Plan log controls" })).getByRole("button", { name: /Wrap/ }) as HTMLButtonElement;
   expect(wrapToggle.className).toContain("focus-visible:ring-2");
 
 // SAFETY: the component renders this element type for the queried role/label.

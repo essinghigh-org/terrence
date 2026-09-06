@@ -1,3 +1,4 @@
+import { integerSetting } from "./runtime-config";
 import { newResourceId } from "./resource-id";
 import { tokenHashCandidates } from "./token-service";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
@@ -33,6 +34,7 @@ import { encryptStatePayload } from "./validation";
 import { variableValueForRead } from "./variable-crypto";
 import { isAgentPoolTokenActive } from "./agent-token";
 import { canTransitionRunStatus, isTerminalRunStatus } from "./run-status";
+import { agentSupportsPhase, effectiveAgentExecutionPolicy, LEGACY_AGENT_CAPABILITIES } from "./agent-protocol";
 
 export const MAX_AGENT_RESULT_BYTES = 64 * 1024;
 export const MAX_AGENT_RESULT_DEPTH = 8;
@@ -110,7 +112,6 @@ export type AgentJob = DeepReadonly<typeof agentJobs.$inferSelect>;
 type Workspace = DeepReadonly<typeof workspaces.$inferSelect>;
 type Database = Readonly<typeof db>;
 
-const DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS = 60_000;
 // Agent liveness is persisted at most this often per agent. The offline
 // sweep cutoff (AGENT_HEARTBEAT_TIMEOUT_MS) must stay comfortably above
 // this interval so a throttled agent is never swept as unavailable.
@@ -121,12 +122,21 @@ const MIN_PING_WRITE_INTERVAL_MS = 3_000;
 const MAX_INVALID_COMPLETION_REQUEUES = 3;
 
 export function configuredHeartbeatTimeoutMs(): number {
-  const configured = Number(
-    process.env["AGENT_HEARTBEAT_TIMEOUT_MS"] ?? DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS,
-  );
-  return Number.isFinite(configured) && configured > 0
-    ? configured
-    : DEFAULT_AGENT_HEARTBEAT_TIMEOUT_MS;
+  return integerSetting("AGENT_HEARTBEAT_TIMEOUT_MS");
+}
+
+/**
+ * Claim eligibility shared by the agent poller and queue diagnostics. An
+ * authenticated poll refreshes lastPingAt before the claim path reaches this
+ * check, so a live worker remains eligible even when its recorded status is
+ * busy from a previous claim that has already completed.
+ */
+export function isAgentLiveForClaim(
+  agent: Readonly<{ status: string; lastPingAt: number | null }>,
+  now = Date.now(),
+): boolean {
+  if (["unknown", "exited", "errored", "draining"].includes(agent.status)) return false;
+  return agent.lastPingAt !== null && now - agent.lastPingAt <= configuredHeartbeatTimeoutMs();
 }
 
 /** Persist-at-most interval derived from the sweep timeout: always stays
@@ -676,11 +686,13 @@ function resolveAgentBinaries(agent: Agent): readonly string[] {
 }
 
 async function findCandidateJob(agent: Agent, acceptedPhases: readonly string[], agentBinaries: readonly string[], skippedIds: ReadonlySet<string>): Promise<AgentJobRow | undefined> {
+  const compatiblePhases = acceptedPhases.filter((phase): boolean => agentSupportsPhase(agent, phase));
+  if (compatiblePhases.length === 0) return undefined;
   return db.query.agentJobs.findFirst({
     where: and(
       eq(agentJobs.agentPoolId, agent.agentPoolId),
       eq(agentJobs.status, "queued"),
-      inArray(agentJobs.phase, [...acceptedPhases]),
+      inArray(agentJobs.phase, [...compatiblePhases]),
       inArray(agentJobs.iacBinary, agentBinaries),
       ...(skippedIds.size > 0 ? [notInArray(agentJobs.id, [...skippedIds])] : []),
     ),
@@ -723,7 +735,17 @@ async function tryLockWorkspaceForApply(candidate: AgentJobRow, run: AgentRunRow
 }
 
 async function tryAssociateRun(candidate: AgentJobRow, run: AgentRunRow, agent: Agent, expectedRunStatus: string, nextRunStatus: string): Promise<{ id: string } | null> {
-  const associated = await db.update(runs).set({ agentPoolId: agent.agentPoolId, agentId: agent.id, status: nextRunStatus, statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus) }).where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus))).returning({ id: runs.id });
+  const capabilities = agent.capabilities ?? LEGACY_AGENT_CAPABILITIES;
+  const associated = await db.update(runs).set({
+    agentPoolId: agent.agentPoolId,
+    agentId: agent.id,
+    agentVersion: agent.version,
+    agentProtocolVersion: agent.protocolVersion,
+    agentCapabilities: [...capabilities],
+    agentExecutionPolicy: effectiveAgentExecutionPolicy(agent, candidate.phase, candidate.iacBinary),
+    status: nextRunStatus,
+    statusTimestamps: timestampsWithStatus(run.statusTimestamps, nextRunStatus),
+  }).where(and(eq(runs.id, run.id), eq(runs.status, expectedRunStatus))).returning({ id: runs.id });
   if (associated.length > 0) return associated[0] as { id: string };
   if (candidate.phase === "apply") {
     await db.update(workspaces).set({ locked: false, lockedReason: null, lockOwnerType: null, lockOwnerId: null }).where(and(eq(workspaces.id, run.workspaceId), eq(workspaces.locked, true), eq(workspaces.lockOwnerType, "agent-run"), eq(workspaces.lockOwnerId, run.id)));
@@ -736,6 +758,7 @@ export async function claimAgentJob(
   agent: Agent,
   acceptedPhases: readonly string[] = ["plan", "apply"],
 ): Promise<ClaimedAgentJob | undefined> {
+  if (!isAgentLiveForClaim(agent)) return undefined;
   const existingClaim = await findExistingClaim(agent);
   if (existingClaim !== undefined) return existingClaim;
   if (acceptedPhases.length === 0) return undefined;

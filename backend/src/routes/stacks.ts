@@ -158,7 +158,21 @@ async function validStackVcs(vcs: StackVcsAttributes, orgId: string): Promise<st
 }
 
 async function enqueueStackConfiguration(configuration: StackRecordItem): Promise<void> {
-  await enqueueDurableJob("stack-configuration", { configurationId: configuration.id }, { dedupeKey: configuration.id });
+  const stack = await db.query.stacks.findFirst({ where: eq(stacks.id, configuration.stackId), columns: { orgId: true } });
+  const organizationId = stack?.orgId ?? null;
+  await enqueueDurableJob(
+    "stack-configuration",
+    { configurationId: configuration.id, organizationId, jobClass: "plan", estimatedBytes: 16 * 1024 * 1024 },
+    { dedupeKey: configuration.id },
+  );
+}
+
+async function enqueueStackDeployment(runId: string, organizationId: string | null, dedupeKey: string): Promise<void> {
+  await enqueueDurableJob(
+    "stack-deployment",
+    { runId, organizationId, jobClass: "run", estimatedBytes: 32 * 1024 * 1024 },
+    { dedupeKey },
+  );
 }
 
 async function stackDetails(stackId: string): Promise<{ stack: StackItem; orgName: string; projectName: string | null } | undefined> {
@@ -289,7 +303,7 @@ function pagedStackRecords(records: StackRecordItem[], request: ParamCtx["reques
   return { data: records.slice((number - 1) * size, number * size).map(stackRecordResource), pagination: pagination(request, number, size, records.length) };
 }
 
-async function approveStackRecord(record: StackRecordItem, userId: string | null, reason: string | null): Promise<void> {
+async function approveStackRecord(record: StackRecordItem, organizationId: string, userId: string | null, reason: string | null): Promise<void> {
   const approvalId = newResourceId("sa");
   const now = Date.now();
   const runIds: string[] = [];
@@ -322,7 +336,7 @@ async function approveStackRecord(record: StackRecordItem, userId: string | null
       runIds.push(record.id);
     }
   });
-  for (const runId of runIds) await enqueueDurableJob("stack-deployment", { runId }, { dedupeKey: `stack-run:${runId}:approval:${approvalId}` });
+  for (const runId of runIds) await enqueueStackDeployment(runId, organizationId, `stack-run:${runId}:approval:${approvalId}`);
 }
 
 async function createStackConfigurationRecord(stack: StackItem, source: string, attributes: Record<string, unknown>): Promise<StackRecordItem | undefined> {
@@ -651,7 +665,7 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     const authorized = await authorizedStackRecord(params["stack_deployment_group_id"] ?? "", user, tokenOrgId, teamId, "stack-deployment-groups");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    await approveStackRecord(authorized.record, user?.id ?? null, typeof payload["reason"] === "string" ? payload["reason"] : null);
+    await approveStackRecord(authorized.record, authorized.details.stack.orgId, user?.id ?? null, typeof payload["reason"] === "string" ? payload["reason"] : null);
     (set as { status: number }).status = 204;
     return {};
   })
@@ -684,7 +698,7 @@ export const stackRoutes = new Elysia({ name: "stacks" })
       }
     });
     for (const runId of rerunIds) {
-      await enqueueDurableJob("stack-deployment", { runId }, { dedupeKey: `stack-run:${runId}:rerun:${now}` });
+      await enqueueStackDeployment(runId, authorized.details.stack.orgId, `stack-run:${runId}:rerun:${now}`);
     }
     (set as { status: number }).status = 204;
     return {};
@@ -693,7 +707,7 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     const authorized = await authorizedStackRecord(params["stack_deployment_run_id"] ?? "", user, tokenOrgId, teamId, "stack-deployment-runs");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
-    await approveStackRecord(authorized.record, user?.id ?? null, typeof payload["reason"] === "string" ? payload["reason"] : null);
+    await approveStackRecord(authorized.record, authorized.details.stack.orgId, user?.id ?? null, typeof payload["reason"] === "string" ? payload["reason"] : null);
     (set as { status: number }).status = 204;
     return {};
   })
@@ -721,7 +735,7 @@ export const stackRoutes = new Elysia({ name: "stacks" })
     const authorized = await authorizedStackRecord(params["stack_deployment_step_id"] ?? "", user, tokenOrgId, teamId, "stack-deployment-steps");
     if (authorized === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     await db.update(stackRecords).set({ status: "completed", updatedAt: Date.now() }).where(eq(stackRecords.id, authorized.record.id));
-    if (authorized.record.parentId !== null) await enqueueDurableJob("stack-deployment", { runId: authorized.record.parentId }, { dedupeKey: `stack-run:${authorized.record.parentId}:advance:${authorized.record.id}` });
+    if (authorized.record.parentId !== null) await enqueueStackDeployment(authorized.record.parentId, authorized.details.stack.orgId, `stack-run:${authorized.record.parentId}:advance:${authorized.record.id}`);
     (set as { status: number }).status = 204;
     return {};
   })

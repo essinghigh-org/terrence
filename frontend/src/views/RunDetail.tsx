@@ -51,7 +51,7 @@ import {
   TableRow,
 } from "../components/ui/table";
 import { toast } from "../components/ui/toast";
-import { ApiError, fetchApi, fetchApiBlob, streamExplain, type ExplainKind, type ReasoningEffort } from "../lib/api";
+import { ApiError, fetchApi, streamExplain, type ExplainKind, type ReasoningEffort } from "../lib/api";
 import { CAPABILITY_PLAN_EXPLAINER, useCapability } from "../lib/capabilities";
 import { useUnsavedChangesWarning } from "../lib/use-unsaved-changes";
 import { isBigInt, isBoolean, isNumber, isObjectLike, isString } from "../lib/type-guards";
@@ -59,12 +59,12 @@ import { formatRunSource, formatRunStatus, isVcsRunSource } from "../lib/run-lab
 import { StatusBadge } from "../components/ui/status-badge";
 import { RunLogOutput } from "../components/RunLogOutput";
 import { RunDecisionPanel } from "../components/RunDecisionPanel";
+import { RecoveryWorkbench } from "../components/RecoveryWorkbench";
 import { RunStageStrip, resolveStages } from "../components/RunStageStrip";
 import { ACTION_CONFIRMATIONS, resolveRunDecision, type RunActionKind } from "../lib/run-decision";
 import { useRunView } from "../lib/use-run-view";
 import { sectionLabel, TERMINAL_STATUSES, type PolicyCheck, type RunComment, type RunEvent } from "../lib/run-view-state";
-import { formatPhaseState, phaseTone, resolvePhaseStatus, TONE_ACCENT } from "../lib/run-status";
-import { Callout } from "../components/ui/callout";
+import { formatPhaseState, phaseTone, resolvePhaseStatus, resolveRunDisplay, TONE_ACCENT } from "../lib/run-status";
 import { Disclosure } from "../components/ui/disclosure";
 import { MetaList } from "../components/ui/meta-list";
 import type { JsonObject } from "@/lib/json";
@@ -125,6 +125,36 @@ const APPLY_DURATION_END_KEYS = [
   "force-canceled-at",
 ] as const;
 
+type RunProvenanceManifest = Readonly<{
+  schemaVersion: number;
+  runId: string;
+  configuration: Readonly<{ versionId: string | null; digest: string; source: string | null; commitSha: string | null; branch: string | null }>;
+  engine: Readonly<{ binary: string; version: string | null; digest: string | null }>;
+  workspace: Readonly<{ workingDirectory: string | null; executionMode: string }>;
+  inputState: Readonly<{ id: string | null; digest: string | null }>;
+  variables: readonly Readonly<{ key: string; category: string; source: string; sensitive: boolean }>[];
+  sandbox: Readonly<{ required: boolean; networkPolicy: string; executor: string }>;
+  rerun?: Readonly<{ mode: "original" | "current"; sourceRunId: string; changedSinceSource: readonly string[] }>;
+}>;
+
+type RunTaskStage = Readonly<{
+  attributes?: Readonly<{ status?: unknown }>;
+}>;
+
+function taskOutcomeLabel(value: unknown): string {
+  if (!Array.isArray(value)) return "Unavailable";
+  if (value.length === 0) return "No task stages";
+  const statuses = value.map((item: unknown): string => {
+    const status = (item as RunTaskStage | null)?.attributes?.status;
+    return isString(status) ? status : "unknown";
+  });
+  if (statuses.some((status: string): boolean => ["failed", "errored", "unreachable"].includes(status))) return "Failed";
+  if (statuses.some((status: string): boolean => ["running"].includes(status))) return "Running";
+  if (statuses.some((status: string): boolean => ["pending", "queued"].includes(status))) return "Queued";
+  if (statuses.every((status: string): boolean => ["passed", "overridden"].includes(status))) return "Passed";
+  return "Reported";
+}
+
 function firstTimestampMilliseconds(
   timestamps: Readonly<Record<string, string>>,
   keys: readonly string[],
@@ -184,15 +214,17 @@ export function formatExplainElapsed(totalSeconds: number): string {
   return remainder === 0 ? `${minutes}m` : `${minutes}m ${remainder}s`;
 }
 
-function formatMonthlyCost(value: string | undefined): string {
+function formatMonthlyCost(value: string | undefined, currency = "USD", timeBasis = "monthly"): string {
   const amount = Number(value);
   if (!Number.isFinite(amount)) return "—";
+  const normalizedCurrency = /^[A-Z]{3}$/.test(currency) ? currency : "USD";
+  const normalizedBasis = /^[A-Za-z0-9 _-]{1,32}$/.test(timeBasis) ? timeBasis : "period";
   return `${new Intl.NumberFormat("en-US", {
     style: "currency",
-    currency: "USD",
+    currency: normalizedCurrency,
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(amount)} / month`;
+  }).format(amount)} / ${normalizedBasis === "monthly" ? "month" : normalizedBasis}`;
 }
 
 function policyResultText(result: unknown): string {
@@ -299,15 +331,11 @@ function PhaseMeta({
   status,
   timestamps,
   logUrl,
-  logWrap,
-  onToggleLogWrap,
 }: Readonly<{
   phase: "plan" | "apply";
   status: string;
   timestamps: Readonly<Record<string, string>>;
   logUrl: string | null | undefined;
-  logWrap: boolean;
-  onToggleLogWrap: () => void;
 }>): React.JSX.Element {
   const started = timestamps[phase === "plan" ? "planning-at" : "applying-at"];
   const completed = status === "running" ? undefined : (phase === "plan"
@@ -337,30 +365,7 @@ function PhaseMeta({
       {completed !== undefined && (
         <span>{completedLabel} <time dateTime={completed} title={formatDateTime(completed)}>{formatRelativeTime(completed)}</time>{phaseDurationLabel !== null && phaseDurationLabel !== "Unavailable" && (<span title="Phase duration"> · {phaseDurationLabel}</span>)}</span>
       )}
-      {hasLogUrl && (
-        <>
-          <button
-            type="button"
-            onClick={(event: React.MouseEvent<HTMLButtonElement>): void => {
-              event.preventDefault();
-              event.stopPropagation();
-              onToggleLogWrap();
-            }}
-            aria-pressed={logWrap}
-            className="rounded-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Wrap {logWrap ? "on" : "off"}
-          </button>
-          <a
-            href={safeHttpUrl(logUrl) ?? undefined}
-            download
-            onClick={(event: React.MouseEvent<HTMLAnchorElement>): void => { event.stopPropagation(); }}
-            className="font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Download raw log
-          </a>
-        </>
-      )}
+      {hasLogUrl && <span>Raw log available</span>}
     </div>
   );
 }
@@ -439,8 +444,7 @@ export function RunDetail({
   const applyLogs = view.applyLog.text;
   const [rerunPending, setRerunPending] = useState(false);
   const [rerunError, setRerunError] = useState("");
-  const [recoveryPending, setRecoveryPending] = useState(false);
-  const [recoveryError, setRecoveryError] = useState("");
+  const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
   const [fullscreenLog, setFullscreenLog] = useState<"plan" | "apply" | null>(null);
   // Focus management for the fullscreen log dialog: remember
   // whichever control opened it so focus can return there after close.
@@ -484,6 +488,37 @@ export function RunDetail({
   const [explainerReasoningEffort, setExplainerReasoningEffort] = useState<ReasoningEffort | null>(null);
   const [explainerModel, setExplainerModel] = useState("");
   const [explainError, setExplainError] = useState("");
+  const [provenanceManifest, setProvenanceManifest] = useState<RunProvenanceManifest | null>(null);
+  const [provenanceError, setProvenanceError] = useState("");
+  const [taskOutcome, setTaskOutcome] = useState("No task result");
+  useEffect((): (() => void) => {
+    const controller = new AbortController();
+    setTaskOutcome("Loading…");
+    fetchApi(`/api/v2/runs/${encodeURIComponent(runId)}/task-stages`, { signal: controller.signal })
+      .then((payload: unknown): void => {
+        if (controller.signal.aborted) return;
+        setTaskOutcome(taskOutcomeLabel((payload as { data?: unknown }).data));
+      })
+      .catch((): void => {
+        if (!controller.signal.aborted) setTaskOutcome("Unavailable");
+      });
+    return (): void => { controller.abort(); };
+  }, [runId]);
+  useEffect((): (() => void) => {
+    const controller = new AbortController();
+    setProvenanceManifest(null);
+    setProvenanceError("");
+    fetchApi(`/api/v2/runs/${encodeURIComponent(runId)}/provenance`, { signal: controller.signal })
+      .then((payload: unknown): void => {
+        if (controller.signal.aborted) return;
+        const data = (payload as { data?: { attributes?: { manifest?: unknown } } }).data?.attributes?.manifest;
+        if (data !== null && typeof data === "object" && !Array.isArray(data)) setProvenanceManifest(data as RunProvenanceManifest);
+      })
+      .catch((error: unknown): void => {
+        if (!controller.signal.aborted) setProvenanceError(error instanceof Error ? error.message : String(error));
+      });
+    return (): void => { controller.abort(); };
+  }, [runId]);
   const explainerAbortRef = useRef<AbortController | null>(null);
   // Abort any in-flight explanation when the view unmounts (e.g. the user
   // navigates away mid-stream).
@@ -653,47 +688,6 @@ export function RunDetail({
       setPendingAction("");
     }
   }, [runId, markActionSent, markActionSettled, refreshAll]);
-
-  // Issue #580: interrupted-apply recovery copy actions. The copy may be the
-  // only record of the infrastructure state: download it for inspection or
-  // promote it into a new finalized state version (which consumes the copy).
-  async function downloadRecoveryState(): Promise<void> {
-    setRecoveryPending(true);
-    setRecoveryError("");
-    try {
-      const blob = await fetchApiBlob(`/api/v2/runs/${runId}/recovery-state`);
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `recovery-${runId}.tfstate.json`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
-    } catch (error: unknown) {
-      setRecoveryError(error instanceof Error ? error.message : "Could not download the recovery copy.");
-    } finally {
-      setRecoveryPending(false);
-    }
-  }
-
-  async function recoverState(): Promise<void> {
-    setRecoveryPending(true);
-    setRecoveryError("");
-    try {
-      await fetchApi(`/api/v2/runs/${runId}/actions/recover-state`, { method: "POST" });
-      toast.add({ title: "Recovery state promoted to a new state version", type: "success" });
-      refreshAll();
-    } catch (error: unknown) {
-      if (error instanceof ApiError && error.status === 409) {
-        setRecoveryError("The workspace must be locked by you before recovering state. Lock it on the workspace page, then try again.");
-      } else {
-        setRecoveryError(error instanceof Error ? error.message : "Could not recover the state copy.");
-      }
-    } finally {
-      setRecoveryPending(false);
-    }
-  }
 
   const handleDecisionConfirm = useCallback((action: RunActionKind, comment: string): void => {
     void performRunAction(action, ACTION_CONFIRMATIONS[action].successTitle, comment);
@@ -951,19 +945,14 @@ export function RunDetail({
         ? "Rerun is unavailable for destroy runs."
         : "The workspace is locked.";
 
-  const performRerun = async (): Promise<void> => {
+  const performRerun = async (mode: "original" | "current"): Promise<void> => {
     if (workspaceId === "" || rerunPending) return;
     setRerunPending(true);
     setRerunError("");
     try {
-      const body = await fetchApi("/api/v2/runs", {
+      const body = await fetchApi(`/api/v2/runs/${encodeURIComponent(runId)}/actions/rerun`, {
         method: "POST",
-        body: JSON.stringify({
-          data: {
-            attributes: { message: `Re-run of ${runId}` },
-            relationships: { workspace: { data: { type: "workspaces", id: workspaceId } } },
-          },
-        }),
+        body: JSON.stringify({ mode }),
       });
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
       const newRunId = (body as { data?: { id?: string } }).data?.id;
@@ -976,6 +965,7 @@ export function RunDetail({
       setRerunError(err instanceof Error ? err.message : String(err));
     } finally {
       setRerunPending(false);
+      setRerunDialogOpen(false);
     }
   };
 
@@ -1024,20 +1014,6 @@ export function RunDetail({
     ? "No raw apply log was captured for this run."
     : "Apply output is not available yet.";
 
-  /**
-   * A log the server can no longer serve in full — a run that outran the
-   * per-run retention cap. The server has always reported this; nothing in
-   * the UI read it, so the pane silently presented a partial log as if it
-   * were the whole thing.
-   */
-  const truncationNotice = (truncated: boolean): React.JSX.Element | null => truncated
-    ? (
-      <p className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning-text">
-        This log is longer than the retention limit, so the earliest output is no longer stored.
-        What follows is the end of the log.
-      </p>
-    )
-    : null;
   const summaryCounts = applyStatus === "finished" ? applyCounts : planCounts;
   const summaryImportCount = applyStatus === "finished"
     ? applyCounts?.["resource-imports"] ?? planImportCount
@@ -1054,6 +1030,23 @@ export function RunDetail({
     && costAttributes !== undefined
     && costAttributes["terrence:infracost-enabled"] !== false
     && !["skipped", "skipped_due_to_targeting", "disabled"].includes(costStatus);
+  const costProvenance = costAttributes?.provenance;
+  const costComparison = costAttributes?.comparison;
+  const costCurrency = costProvenance?.currency ?? "USD";
+  const costTimeBasis = costProvenance?.["time-basis"] ?? "monthly";
+  const costBaselineComparable = costComparison?.baseline?.comparable !== false;
+  const costWarnings = costComparison?.warnings?.filter((warning): warning is string => isString(warning)) ?? [];
+  const costChanges = costComparison?.["resource-changes"] ?? [];
+  const largestCostIncreases = costChanges
+    .filter((change): boolean => {
+      const delta = change["delta-monthly-cost"];
+      return (change.action === "added" || change.action === "changed")
+        && delta !== null
+        && delta !== undefined
+        && Number.isFinite(Number(delta))
+        && Number(delta) > 0;
+    })
+    .slice(0, 5);
   const hasSoftFailedPolicy = status === "policy_soft_failed"
     || policyChecks.some((check: PolicyCheck): boolean => check.attributes.status === "soft_failed");
   const hasHardFailedPolicy = policyChecks.some((check: PolicyCheck): boolean =>
@@ -1117,7 +1110,43 @@ export function RunDetail({
   const stages = resolveStages(status, timestamps, {
     planOnly: attributes["plan-only"] === true,
     hasPolicyChecks: policyChecks.length > 0,
+    executionMode: attributes["execution-mode"],
+    positionInQueue: attributes["position-in-queue"],
+    scheduledAt: attributes["scheduled-at"],
   });
+  const runDisplay = resolveRunDisplay({
+    ...attributes,
+    status,
+    "status-timestamps": timestamps,
+  });
+  const savedPlanVersion = isString(timestamps["saved-plan-sha256"]) ? timestamps["saved-plan-sha256"] : null;
+  const artifactPlanVersion = isString(plan?.attributes["status-timestamps"]?.["saved-plan-sha256"])
+    ? plan.attributes["status-timestamps"]["saved-plan-sha256"]
+    : null;
+  const stalePlanWarning = savedPlanVersion !== null && artifactPlanVersion !== null && savedPlanVersion !== artifactPlanVersion
+    ? "The run metadata and plan artifact use different versions. Refresh before making a decision."
+    : !fresh
+      ? "Run data may be out of date. Refresh before making a decision."
+      : failedSections.includes("plan")
+        ? "The plan could not be refreshed. Refresh before making a decision."
+        : null;
+  const decisionContext = {
+    planId: `plan-${runId}`,
+    planVersion: savedPlanVersion,
+    additions: planCounts["resource-additions"],
+    changes: planCounts["resource-changes"],
+    destructions: planCounts["resource-destructions"],
+    age: formatRelativeTime(attributes["created-at"]),
+    actor: creatorUsername !== "" ? creatorUsername : attributes["triggered-by"] ?? "System",
+    // The badge and policy section already show the raw summary. Prefixing it
+    // in the rail keeps the compact context useful without creating a second
+    // indistinguishable status announcement for screen readers or tests.
+    policyOutcome: policySummary === "not required" ? "Not required" : `Result: ${policySummary}`,
+    taskOutcome,
+    waitingReason: runDisplay.waitingLabel,
+    responsible: runDisplay.responsible,
+    staleWarning: stalePlanWarning,
+  };
 
   const baseline = attributes["duration-baseline"];
   const medianSeconds = baseline?.["median-duration-seconds"];
@@ -1271,7 +1300,7 @@ export function RunDetail({
               className="gap-1.5"
               disabled={!canRerun || rerunPending || pendingAction !== ""}
               title={rerunBlockedReason ?? undefined}
-              onClick={(): void => { void performRerun(); }}
+              onClick={(): void => { setRerunDialogOpen(true); }}
             >
               <RotateCcw className="size-3.5" aria-hidden="true" />
               {rerunPending ? "Queuing…" : "Re-run"}
@@ -1290,67 +1319,38 @@ export function RunDetail({
           </div>
       </header>
 
+      <Dialog open={rerunDialogOpen} onOpenChange={setRerunDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Choose rerun inputs</DialogTitle>
+            <DialogDescription>
+              A rerun creates a new run. Choose the immutable inputs captured for this run, or the workspace settings currently configured.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+            <Button type="button" variant="outline" disabled={rerunPending} onClick={(): void => { void performRerun("original"); }}>
+              Original inputs
+            </Button>
+            <Button type="button" disabled={rerunPending} onClick={(): void => { void performRerun("current"); }}>
+              Current settings
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <RunStageStrip stages={stages} className="mb-5" />
 
-      <div className="mb-5">
-        <RunDecisionPanel
-          decision={decision}
-          status={status}
-          canComment={canComment}
-          // The comment form shares pendingAction ("comment" while posting):
-          // the panel must not report that as run-action work.
-          pending={pendingAction === "comment" ? "" : pendingAction}
-          onConfirm={handleDecisionConfirm}
-        />
-      </div>
-
       {attributes["has-recovery-state"] === true && (
-        <Callout
-          tone="warning"
-          aria-label="Interrupted-apply recovery"
-          title="Recovery state available"
-          className="mb-5"
-          actions={
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={recoveryPending}
-                onClick={(): void => { void downloadRecoveryState(); }}
-              >
-                {recoveryPending ? "Working…" : "Download recovery state"}
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                disabled={recoveryPending || attributes["recovery-state-format-supported"] === false}
-                onClick={(): void => { void recoverState(); }}
-              >
-                {recoveryPending ? "Working…" : "Recover into new state version"}
-              </Button>
-            </>
-          }
-        >
-          <p>
-            This run was interrupted during apply. The captured state may be the only record of
-            your infrastructure: download it for inspection, or recover it into a new state
-            version. Recovering consumes the copy; unrecovered copies are kept, never pruned.
-          </p>
-          <p className="mt-2 text-xs">
-            Recovering requires state-write permission and the workspace lock held by you.
-          </p>
-          {attributes["recovery-state-format-supported"] === false && (
-            <p className="mt-2 text-xs">{String(attributes["recovery-state-unavailable-reason"] ?? "This recovery format cannot be promoted. Download it for manual recovery.")}</p>
-          )}
-          {recoveryError !== "" && (
-            <p role="alert" className="mt-2 text-xs font-medium text-destructive">{recoveryError}</p>
-          )}
-        </Callout>
+        <RecoveryWorkbench
+          runId={runId}
+          formatSupported={attributes["recovery-state-format-supported"] !== false}
+          onRecoveryComplete={refreshAll}
+          onFreshPlan={(): void => { void performRerun("current"); }}
+        />
       )}
 
-      <div className="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_264px]">
-      <div className="min-w-0 space-y-5">
+      <div className="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]">
+      <div className="order-2 min-w-0 space-y-5 xl:order-1">
           <details
             aria-labelledby="plan-heading"
             className="group overflow-hidden rounded-lg border border-border bg-card"
@@ -1396,8 +1396,6 @@ export function RunDetail({
                     status={planStatus}
                     timestamps={{ ...timestamps, ...plan?.attributes["status-timestamps"] }}
                     logUrl={plan?.attributes["log-read-url"]}
-                    logWrap={logWrap}
-                    onToggleLogWrap={() => { setLogWrap((wrap) => !wrap); }}
                   />
                   {applyStatus === "finished" && (
                     <ResourceCounts
@@ -1414,7 +1412,7 @@ export function RunDetail({
 
             {["errored", "failed", "unreachable"].includes(planStatus) && (
               <div className="flex items-center gap-4 border-b border-destructive/20 bg-destructive/5 px-5 py-3">
-                <Terrence pose="failed" className="w-24 shrink-0" />
+                <Terrence pose="failed" detail="small" className="w-24 shrink-0" />
                 <div><p className="font-medium text-destructive">Plan failed</p><p className="mt-1 text-sm text-muted-foreground">Review the diagnostics and logs below before starting another run.</p></div>
               </div>
             )}
@@ -1433,10 +1431,20 @@ export function RunDetail({
               onSummaryChange={handlePlanSummaryChange}
             />
 
-            <div className="relative border-t border-border">
+            <div id="plan-log-viewer" className="relative border-t border-border">
               <RunLogDisclosure key={`plan-${runId}`} label="Raw plan log" status={planStatus}>
-              {truncationNotice(view.planLog.truncated)}
-              <RunLogOutput active={planStatus === "running"} className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
+              <RunLogOutput
+                active={planStatus === "running"}
+                phase="plan"
+                truncated={view.planLog.truncated}
+                wrap={logWrap}
+                onToggleWrap={() => { setLogWrap((wrap) => !wrap); }}
+                logUrl={plan?.attributes["log-read-url"]}
+                onPhaseChange={(next): void => {
+                  document.getElementById(`${next}-log-viewer`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+                className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}
+              >
                 {planLogs !== "" ? truncateLogForDisplay(planLogs) : planRawLogMessage}
               </RunLogOutput>
               </RunLogDisclosure>
@@ -1475,17 +1483,19 @@ export function RunDetail({
                 {!costUnavailable && (
                   <>
                 <div>
-                  <dt className="text-xs text-muted-foreground">Prior monthly</dt>
-                  <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["prior-monthly-cost"])}</dd>
+                  <dt className="text-xs text-muted-foreground">{costBaselineComparable ? `Prior ${costTimeBasis}` : "Baseline"}</dt>
+                  <dd className="mt-1 font-medium">{costBaselineComparable ? formatMonthlyCost(costAttributes["prior-monthly-cost"], costCurrency, costTimeBasis) : "Not comparable"}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-muted-foreground">Proposed monthly</dt>
-                  <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["proposed-monthly-cost"])}</dd>
+                  <dt className="text-xs text-muted-foreground">Proposed {costTimeBasis}</dt>
+                  <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["proposed-monthly-cost"], costCurrency, costTimeBasis)}</dd>
                 </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">Monthly delta</dt>
-                  <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["delta-monthly-cost"])}</dd>
-                </div>
+                {costBaselineComparable && (
+                  <div>
+                    <dt className="text-xs text-muted-foreground">{costTimeBasis} delta</dt>
+                    <dd className="mt-1 font-medium">{formatMonthlyCost(costAttributes["delta-monthly-cost"], costCurrency, costTimeBasis)}</dd>
+                  </div>
+                )}
                 <div>
                   <dt className="text-xs text-muted-foreground">Priced resources</dt>
                   <dd className="mt-1 font-medium">
@@ -1498,6 +1508,36 @@ export function RunDetail({
                   <div className={costUnavailable ? "col-span-full text-muted-foreground" : "col-span-full text-destructive"}>{costAttributes["error-message"] ?? "Cost estimation is not installed in this image."}</div>
                 )}
               </dl>
+            )}
+            {costProvenance !== undefined && (
+              <p className="border-t border-border px-5 py-3 text-xs text-muted-foreground">
+                Pricing provenance: {costProvenance.tool ?? "estimator"}{costProvenance.version === null || costProvenance.version === undefined ? "" : ` ${costProvenance.version}`}
+                {costProvenance.currency === null || costProvenance.currency === undefined ? "" : ` · ${costProvenance.currency}`}
+                {costProvenance["time-basis"] === null || costProvenance["time-basis"] === undefined ? "" : ` · ${costProvenance["time-basis"]}`}
+                {costProvenance["pricing-date"] === null || costProvenance["pricing-date"] === undefined ? "" : ` · pricing ${costProvenance["pricing-date"]}`}
+              </p>
+            )}
+            {costWarnings.length > 0 && (
+              <div role="note" className="border-t border-warning/30 bg-warning/5 px-5 py-3 text-xs text-warning-text">
+                <p className="font-medium">Estimate caveats</p>
+                <ul className="mt-1 list-disc space-y-1 pl-4">{costWarnings.map((warning): React.JSX.Element => <li key={warning}>{warning}</li>)}</ul>
+              </div>
+            )}
+            {costComparison?.baseline?.comparable === false && costComparison.baseline.reason !== null && costComparison.baseline.reason !== undefined && (
+              <p className="border-t border-border px-5 py-3 text-xs text-muted-foreground">Baseline comparison is unavailable: {costComparison.baseline.reason}</p>
+            )}
+            {largestCostIncreases.length > 0 && (
+              <details className="border-t border-border px-5 py-3 text-xs">
+                <summary className="cursor-pointer font-medium text-foreground">Largest planned cost increases</summary>
+                <ul className="mt-2 space-y-1 text-muted-foreground">
+                  {largestCostIncreases.map((change): React.JSX.Element => (
+                    <li key={`${change.module ?? "default"}:${change.address}`}>
+                      <a href="#plan-heading" className="font-mono text-primary underline-offset-2 hover:underline">{change.module ?? "default"}:{change.address ?? "unknown resource"}</a>
+                      <span className="ml-2">+{formatMonthlyCost(change["delta-monthly-cost"] ?? undefined, costCurrency, costTimeBasis)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
             )}
           </section>
           )}
@@ -1654,8 +1694,6 @@ export function RunDetail({
                     status={applyStatus}
                     timestamps={{ ...timestamps, ...apply?.attributes["status-timestamps"] }}
                     logUrl={apply?.attributes["log-read-url"]}
-                    logWrap={logWrap}
-                    onToggleLogWrap={() => { setLogWrap((wrap) => !wrap); }}
                   />
                   {applyStatus !== "finished" && (
                     <ResourceCounts
@@ -1701,10 +1739,20 @@ export function RunDetail({
               />
             )}
 
-            <div className="relative">
+            <div id="apply-log-viewer" className="relative">
                 <RunLogDisclosure key={`apply-${runId}`} label="Raw apply log" status={applyStatus}>
-                {truncationNotice(view.applyLog.truncated)}
-                <RunLogOutput active={applyStatus === "running"} className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
+                <RunLogOutput
+                  active={applyStatus === "running"}
+                  phase="apply"
+                  truncated={view.applyLog.truncated}
+                  wrap={logWrap}
+                  onToggleWrap={() => { setLogWrap((wrap) => !wrap); }}
+                  logUrl={apply?.attributes["log-read-url"]}
+                  onPhaseChange={(next): void => {
+                    document.getElementById(`${next}-log-viewer`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }}
+                  className={`max-h-[420px] overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} border-t border-code-background bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}
+                >
                   {applyLogs !== "" ? truncateLogForDisplay(applyLogs) : applyRawLogMessage}
                 </RunLogOutput>
                 </RunLogDisclosure>
@@ -1724,7 +1772,55 @@ export function RunDetail({
 
 
       </div>
-      <aside aria-label="Run context" className="min-w-0 space-y-5">
+      <aside aria-label="Run decision and context" className="order-1 min-w-0 space-y-5 xl:order-2">
+      <div className="xl:sticky xl:top-4">
+        <RunDecisionPanel
+          decision={decision}
+          status={status}
+          canComment={canComment}
+          rail
+          context={decisionContext}
+          // The comment form shares pendingAction ("comment" while posting):
+          // the panel must not report that as run-action work.
+          pending={pendingAction === "comment" ? "" : pendingAction}
+          onConfirm={handleDecisionConfirm}
+        />
+      </div>
+      {provenanceManifest !== null && (
+        <section aria-labelledby="run-provenance-heading" className="overflow-hidden rounded-lg border border-border bg-card">
+          <div className="flex items-center justify-between border-b border-border px-5 py-4">
+            <h2 id="run-provenance-heading" className="text-sm font-semibold">Executed with</h2>
+            <a
+              className="text-xs text-primary underline underline-offset-2 hover:no-underline"
+              href={`/api/v2/runs/${encodeURIComponent(runId)}/provenance/download`}
+              download
+            >
+              Download manifest
+            </a>
+          </div>
+          <dl className="grid gap-3 px-5 py-4 text-xs">
+            <div><dt className="text-muted-foreground">Engine</dt><dd className="mt-0.5 font-medium">{provenanceManifest.engine.binary}{provenanceManifest.engine.version === null ? "" : ` ${provenanceManifest.engine.version}`}</dd></div>
+            <div><dt className="text-muted-foreground">Configuration</dt><dd className="mt-0.5 break-all font-mono">{provenanceManifest.configuration.digest.slice(0, 16)}…</dd></div>
+            <div><dt className="text-muted-foreground">Input state</dt><dd className="mt-0.5">{provenanceManifest.inputState.id ?? "None recorded"}</dd></div>
+            <div><dt className="text-muted-foreground">Variables</dt><dd className="mt-0.5">{provenanceManifest.variables.length} sources captured; sensitive values redacted</dd></div>
+            <div><dt className="text-muted-foreground">Sandbox</dt><dd className="mt-0.5">{provenanceManifest.sandbox.required ? "Required" : "Disabled"} · {provenanceManifest.sandbox.networkPolicy} network</dd></div>
+            {provenanceManifest.rerun !== undefined && (
+              <div>
+                <dt className="text-muted-foreground">Rerun inputs</dt>
+                <dd className="mt-0.5">
+                  {provenanceManifest.rerun.mode === "original" ? "Original captured inputs" : "Current workspace settings"}
+                  {provenanceManifest.rerun.changedSinceSource.length === 0
+                    ? " · no recorded differences"
+                    : ` · changed: ${provenanceManifest.rerun.changedSinceSource.join(", ")}`}
+                </dd>
+              </div>
+            )}
+          </dl>
+        </section>
+      )}
+      {provenanceError !== "" && (
+        <p role="status" className="rounded-lg border border-border bg-card px-5 py-3 text-xs text-muted-foreground">Executed-with details unavailable: {provenanceError}</p>
+      )}
       <section aria-labelledby="run-details-heading" className="overflow-hidden rounded-lg border border-border bg-card">
         <h2 id="run-details-heading" className="border-b border-border px-5 py-4 text-sm font-semibold">Run details</h2>
         <MetaList
@@ -2039,8 +2135,16 @@ export function RunDetail({
               Close
             </Button>
           </div>
-          {truncationNotice(fullscreenLog === "plan" ? view.planLog.truncated : view.applyLog.truncated)}
-          <RunLogOutput key={fullscreenLog} active={(fullscreenLog === "plan" ? planStatus : applyStatus) === "running"} className={`flex-1 overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}>
+          <RunLogOutput
+            key={fullscreenLog}
+            active={(fullscreenLog === "plan" ? planStatus : applyStatus) === "running"}
+            phase={fullscreenLog}
+            truncated={fullscreenLog === "plan" ? view.planLog.truncated : view.applyLog.truncated}
+            wrap={logWrap}
+            onToggleWrap={() => { setLogWrap((wrap) => !wrap); }}
+            logUrl={fullscreenLog === "plan" ? plan?.attributes["log-read-url"] : apply?.attributes["log-read-url"]}
+            className={`flex-1 overflow-auto ${logWrap ? "whitespace-pre-wrap" : "whitespace-pre"} bg-code-background p-4 font-mono text-xs leading-5 text-code-foreground`}
+          >
             {fullscreenLog === "plan"
               ? planLogs !== "" ? truncateLogForDisplay(planLogs) : planRawLogMessage
               : applyLogs !== "" ? truncateLogForDisplay(applyLogs) : applyRawLogMessage}

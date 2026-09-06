@@ -7,7 +7,7 @@ description: Every environment variable, its default, and its purpose.
 
 # Configuration
 
-Terrence runs with no environment variables set. Development defaults apply. The variables below enable specific features.
+Terrence runs with no environment variables set. Development defaults apply. The variables below enable specific features. Names, parsed defaults, accepted values, and restart requirements are generated in the [configuration contract](configuration-contract); use that page as the factual reference when changing deployment settings. This page keeps the operator guidance and examples.
 
 Set variables through the container environment or an `.env` file.
 
@@ -36,7 +36,7 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `DATABASE_URL` | `file:<storage>/terrence.db` | Database connection. PostgreSQL strings select the PostgreSQL backend. `<storage>` is `STORAGE_DIR`, default `<repo>/backend/storage`. |
 | `STORAGE_DIR` | `<repo>/backend/storage` | Directory for archives, state, binaries, and the version cache. `/app/backend/storage` in the container. Must persist. |
 | `CORS_ORIGIN` | dev default | Allowed CORS origin for the web interface. |
-| `ENCRYPTION_PASSWORD` | generated | Password for encryption-at-rest features. |
+| `ENCRYPTION_PASSWORD` | unset | Stable password for encryption-at-rest features. When unset, Terrence uses the installation key stored in `STORAGE_DIR`; keep the password or key and `.encryption-salt` with the database. |
 | `SIGNED_URL_SECRET` | generated | Secret for signed URL tokens (state downloads). |
 | `SIGNED_URL_TTL_SECONDS` | `300` | Lifetime of signed download URLs, excluding run-log capabilities. |
 | `LOG_CAPABILITY_TTL_SECONDS` | `172800` | Run-log URL lifetime in seconds (48h); positive integer, maximum 7 days. Shorter lifetimes can interrupt legacy CLI polling; see operations guidance. |
@@ -63,7 +63,7 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | Variable | Default | Purpose |
 |---|---|---|
 | `TERRENCE_DISABLE_WORKER` | off | When `1`, run without the worker. Pending runs stay queued. |
-| `TERRENCE_WORKER_POLL_MS` | `1500` | Run queue poll interval. Values below 100 ms fall back to the default. |
+| `TERRENCE_WORKER_POLL_MS` | `1500` | Run queue poll interval. Values must be at least 100 ms. |
 | `TERRENCE_AUTO_DESTROY_POLL_MS` | `30000` | Auto-destroy scan interval. Minimum 5000 ms. |
 | `TERRENCE_ASSESSMENT_POLL_MS` | `60000` | Assessment discovery interval. Minimum 5000 ms. |
 | `TERRENCE_DRAIN_GRACE_MS` | `6000` | Shutdown drain wait for in-flight executions. Maximum 25000. |
@@ -87,14 +87,14 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `TERRENCE_SANDBOX_EXTRA_RW_PATHS` | none | Extra read-write paths for the sandbox. |
 | `TERRENCE_SANDBOX_EXTRA_RW_ALLOWED` | off | Allow the extra paths to be specified. |
 | `TERRENCE_BINARY_CACHE_DIR` | storage | Directory for downloaded Terraform and OpenTofu binaries. |
-| `TERRENCE_VERSION_CACHE_TTL_MS` | `86400000` | Lifetime of cached version lists. `0` never reuses. |
+| `TERRENCE_VERSION_CACHE_TTL_MS` | `86400000` | Lifetime of cached version lists. It must be at least 1 ms. |
 | `TERRENCE_VERSION_CACHE_FILE` | storage | Path of the version cache file. |
 | `TERRENCE_ALLOW_PRIVATE_URLS` | off | Allow outbound requests to private network addresses. |
 | `ALLOW_UNVERIFIED_CHECKSUMS` | off | Skip binary checksum verification. For restricted networks only. |
 | `ALLOW_TOOL_FALLBACK` | off | Allow fallback binary sources when the primary mirror is unreachable. |
 | `TERRENCE_RUN_NET_POLICY` | `allow` | Run TCP policy. `deny` blocks TCP bind/connect via Landlock ABI >= 4; it does not block UDP, DNS, or other socket families. Use host/container network isolation for complete network denial. Invalid values fail startup. |
-| `TERRENCE_EXECUTOR_BACKEND` | `landlock` | Executor backend: `landlock`, `container`, `kubernetes`, `agent`, or `microvm`. Unknown values fall back to `landlock`. |
-| `TERRENCE_SANDBOX_MIN_ABI` | runner minimum | Minimum Landlock ABI the readiness gate requires. Unset means no floor beyond the sandbox-required check; invalid values are ignored. |
+| `TERRENCE_EXECUTOR_BACKEND` | `landlock` | Executor backend: `landlock`, `container`, `kubernetes`, `agent`, or `microvm`. Unknown values fail startup. |
+| `TERRENCE_SANDBOX_MIN_ABI` | runner minimum | Minimum Landlock ABI the readiness gate requires. Unset means no floor beyond the sandbox-required check; explicit values must be integers from 1 to 255 and invalid values fail startup. |
 | `TERRENCE_AGENT_UPDATE_URL` / `TERRENCE_AGENT_UPDATE_SHA256` / `TERRENCE_AGENT_UPDATE_VERSION` | none | Agent binary self-update source: URL plus expected SHA256 plus version pin. |
 | `TERRAFORM_CONFIG_INSPECT_PATH` | bundled | Path to the config inspector binary. |
 | `TERRAFORM_TEST_BINARY_PATH` | none | Path for the module test binary. |
@@ -130,6 +130,15 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `GITLAB_WEBHOOK_SECRET` | none | Secret for GitLab webhook deliveries. |
 | `BITBUCKET_WEBHOOK_SECRET` | none | Secret for Bitbucket webhook deliveries. |
 
+The four `GITHUB_APP_*`/`GITHUB_WEBHOOK_SECRET` values form a legacy bootstrap
+configuration. When all four are present and no site GitHub App row exists,
+startup validates the private key against GitHub's `GET /app` endpoint, then
+encrypts and stores the credentials with source `legacy_environment_import`.
+The bootstrap-consumed marker survives disconnect, so a restart does not
+re-import a disconnected App. Use the site-admin environment recovery action
+to retry an import after correcting credentials. A stored database
+configuration always wins over environment values.
+
 ## Cost estimation
 
 | Variable | Default | Purpose |
@@ -150,9 +159,19 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `TERRENCE_SYSLOG_FORMAT` | `rfc5424` | Syslog message shape: `rfc5424` structured data or bare `json` object per message (one per UDP datagram, newline-delimited over TCP). |
 | `TERRENCE_QUERY_LOG` | off | Log every database query. |
 | `TERRENCE_QUERY_COUNT` | off | Count database queries for diagnostics. |
+| `TERRENCE_DB_EXPORT_QUERY_CONCURRENCY` | `1` | Maximum concurrent high-cardinality export database operations. |
+| `TERRENCE_DB_EXPORT_QUERY_QUEUE` | `8` | Maximum queued export operations before the API returns temporary unavailability. |
+| `TERRENCE_DB_INDEX_QUERY_CONCURRENCY` | `2` | Maximum concurrent explorer/index database operations. |
+| `TERRENCE_DB_INDEX_QUERY_QUEUE` | `32` | Maximum queued explorer/index operations before the API returns temporary unavailability. |
+| `TERRENCE_DB_QUERY_BUDGET_WAIT_MS` | `30000` | Maximum time queued work waits for a database budget slot. |
 | `MIGRATION_CHECKPOINT_RETRIES` | default | Retry count for migration checkpoints. |
 | `MIGRATION_DRAIN_TIMEOUT_MS` | default | Drain timeout for the migration wizard. |
 | `TERRENCE_DB_SLOW_QUERY_MS` | `1000` | Threshold for slow database query logging. |
+| `TERRENCE_DB_EXPORT_QUERY_CONCURRENCY` | `1` | Maximum concurrent high-cardinality export database operations. |
+| `TERRENCE_DB_EXPORT_QUERY_QUEUE` | `8` | Maximum queued export operations before the API returns temporary unavailability. |
+| `TERRENCE_DB_INDEX_QUERY_CONCURRENCY` | `2` | Maximum concurrent explorer/index database operations. |
+| `TERRENCE_DB_INDEX_QUERY_QUEUE` | `32` | Maximum queued explorer/index operations before the API returns temporary unavailability. |
+| `TERRENCE_DB_QUERY_BUDGET_WAIT_MS` | `30000` | Maximum time queued work waits for a database budget slot. |
 
 ## Operations and clustering
 
@@ -172,6 +191,40 @@ Read [Quick start](quickstart) for first boot, [Operations](operations) for back
 | `TERRENCE_TRUSTED_PROXY_CIDRS` | none | Comma-separated CIDRs trusted as proxies: their `X-Forwarded-For` is used for client-IP resolution and their `X-Forwarded-Host`/`X-Forwarded-Proto` for generated links. Forwarded host headers from other peers are ignored. |
 | `TERRENCE_CSP_STRICT` | off | When `1`, serve the UI with a strict Content-Security-Policy. |
 | `TERRENCE_EXPLAIN_TIMEOUT_MS` | `60000` | Idle deadline in milliseconds for one AI explainer upstream exchange. Lower values abort slow models sooner. |
+| `TERRENCE_RESOURCE_BUDGETS_JSON` | unset | Optional JSON resource budget policy for durable work. Set `global` (`concurrency`, `queue`, `artifactBytes`, `reservedCriticalSlots`), `organization` defaults, `classes`, and exact `organizations` overrides. Unset uses the single-user defaults. |
+
+The resource budget JSON is intentionally one bounded deployment setting so it
+can be reviewed as part of the instance configuration. For example:
+
+```json
+{
+  "global": {
+    "concurrency": 8,
+    "queue": 2000,
+    "artifactBytes": 536870912,
+    "reservedCriticalSlots": 2
+  },
+  "organization": { "concurrency": 4, "queue": 250 },
+  "classes": {
+    "explanation": { "concurrency": 1, "queue": 50 },
+    "export": { "concurrency": 1, "queue": 50 }
+  },
+  "organizations": {
+    "org-production": { "concurrency": 8, "artifactBytes": 1073741824 }
+  }
+}
+```
+
+Jobs carrying budget metadata are admitted with explicit `429` retry guidance
+when a global, organization, or class queue limit is reached; an estimate that
+cannot fit the configured byte cap returns `413`. Claiming applies the same
+policy to every durable job, with fair sharing across organizations and
+classes. `critical`,
+`cancellation`, `health`, and `state-critical` classes retain the configured
+reserved slots, so explanation, export, and background floods cannot consume
+the capacity needed to recover the service. Invalid JSON or out-of-range
+values fail closed when the worker reads the policy; no existing work is
+discarded.
 
 ## Rate limits
 
@@ -224,6 +277,10 @@ Environment for the helper scripts under `backend/scripts` and `frontend/scripts
 | `TERRAFORM_BIN` | `terraform` | Alternate IaC CLI for `refresh-provider-surface`. |
 | `COVERAGE_THRESHOLD` | `60` | Coverage floor for `coverage-report --fail`. |
 | `BACKEND_URL` | `http://127.0.0.1:3000` | Backend proxied by the frontend dev server. |
+| `TERRENCE_E2E_SEED` | `eng21` | Stable fixture seed used by the named operational CLI profiles. |
+| `TERRENCE_E2E_RESULTS_DIR` | temporary | Redacted result directory for operational profile artifacts. |
+| `TERRENCE_E2E_SECURITY_PROFILE` | `default` | Named security profile for operational profile runs. |
+| `TERRENCE_E2E_TIER` | `small` | Fixture size tier for operational profile runs. |
 
 ## Dependency update policy
 
@@ -238,3 +295,7 @@ the three-day guard to clear a Renovate warning.
 ## Invalid values
 
 Poll interval variables validate their values. Invalid, empty, or sub-minimum values fall back to the documented default. This rule prevents a misconfiguration from hot-looping the database.
+
+## Validated configuration contract
+
+See the [generated configuration contract](configuration-contract.md) for validated deployment settings, persisted setting types, value origins, and restart behavior. Regenerate it with `bun backend/scripts/configuration-reference.ts --write` from the repository root.

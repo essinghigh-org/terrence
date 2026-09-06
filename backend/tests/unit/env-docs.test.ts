@@ -20,7 +20,7 @@ const ALLOWLIST = new Set([
   "USER", // OS user (diagnostics only).
   "GH_TOKEN", // CI-provided token for the provider-surface refresh PR.
   "GITHUB_TOKEN", // CI-provided token for tofu release lookups.
-  "TERRENCE_SETUP_RAN", // Test setup sentinel, not server configuration.
+  "TEST_TERRENCE_SETUP_RAN", // Test setup sentinel, not server configuration.
   "TERRENCE_E2E_CLI", // E2E harness CLI selector (terraform|tofu).
   "TERRENCE_LANDLOCK_RECORD_PATH", // Sandbox test hook recording runner args.
   "TERRENCE_QUERY_LOG_SLOW", // Set only by tests alongside TERRENCE_QUERY_LOG.

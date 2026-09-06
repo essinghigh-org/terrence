@@ -116,6 +116,12 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
 
     const out: Record<string, unknown> = {};
 
+    let res = await app.fetch(new Request(base + "/api/agent/protocol"));
+    const protocol = await res.json();
+    out.protocolStatus = res.status;
+    out.protocolVersion = protocol.protocol_version;
+    out.protocolHasFencing = protocol.capabilities.includes("lease.fencing");
+
     const originalPublicUrl = process.env.PUBLIC_URL;
     process.env.PUBLIC_URL = "http://public.example";
     try {
@@ -130,7 +136,7 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     else process.env.PUBLIC_URL = originalPublicUrl;
 
     // register (new agent)
-    let res = await app.fetch(new Request(\`\${base}/api/agent/register\`, {
+    res = await app.fetch(new Request(\`\${base}/api/agent/register\`, {
       method: "POST",
       headers: { authorization: \`Bearer \${agentToken}\`, "tfc-agent-version": "1.30.1", "content-type": "application/json" },
       body: JSON.stringify({ name: "hermes-test", arch: "amd64", os: "linux" }),
@@ -139,6 +145,9 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     const reg = await res.json();
     out.agentId = reg.id;
     out.agentPoolId = reg.agent_pool_id;
+    out.registerProtocolVersion = reg.protocol_version;
+    out.registerLegacy = reg.legacy;
+    out.registerHasFencing = reg.capabilities.includes("lease.fencing");
 
     // register again with same name -> upsert, same id
     res = await app.fetch(new Request(\`\${base}/api/agent/register\`, {
@@ -226,6 +235,10 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     // run is now planning
     const runAfterClaim = await db.query.runs.findFirst({ where: eq(runs.id, "run1") });
     out.runStatusAfterClaim = runAfterClaim.status;
+    out.runAgentVersion = runAfterClaim.agentVersion;
+    out.runAgentProtocolVersion = runAfterClaim.agentProtocolVersion;
+    out.runHasFencing = runAfterClaim.agentCapabilities.includes("lease.fencing");
+    out.runPolicyOperation = runAfterClaim.agentExecutionPolicy.operation;
 
     // Invalid or absent credentials are rejected; a claimed job is not itself
     // a bearer credential.
@@ -349,11 +362,37 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
     const jobAfterComplete = await db.query.agentJobs.findFirst({ where: eq(agentJobs.id, "ajob1") });
     out.jobStatusAfterComplete = jobAfterComplete.status;
 
+    // A late duplicate completion is fenced after the first owner finalizes;
+    // the valid artifact from that owner must remain available.
+    res = await app.fetch(new Request(\`\${base}/api/agent/status\`, {
+      method: "PUT",
+      headers: {
+        authorization: \`Bearer \${agentToken}\`,
+        "tfc-agent-id": reg.id,
+        "tfc-agent-fencing-token": fencingToken,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        status: "idle",
+        job: { type: "plan", status: "finished", data: { operation: "plan", run_id: "run1", run_type: "plan" } },
+      }),
+    }));
+    const duplicateBody = await res.json();
+    out.duplicateCompletionStatus = res.status;
+    out.duplicateCompletionCode = duplicateBody.errors?.[0]?.code;
+    out.planArtifactAfterDuplicate = (await Bun.file(join(process.env.STORAGE_DIR, "plan-json", "run1.json")).json()).format_version;
+
     console.log(JSON.stringify(out));
     process.exit(0);
   `);
 
   expect(result["registerStatus"]).toBe(200);
+  expect(result["protocolStatus"]).toBe(200);
+  expect(result["protocolVersion"]).toBe("1");
+  expect(result["protocolHasFencing"]).toBe(true);
+  expect(result["registerProtocolVersion"]).toBe("1");
+  expect(result["registerLegacy"]).toBe(true);
+  expect(result["registerHasFencing"]).toBe(true);
   expect(result["badIacStatus"]).toBe(422);
   expect(result["agentId"]).toContain("agent-");
   expect(result["agentPoolId"]).toBe("apool");
@@ -388,6 +427,10 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
   expect(result["secondClaimStatus"]).toBe(200);
   expect(result["secondClaimJobId"]).toBe("ajob1");
   expect(result["runStatusAfterClaim"]).toBe("planning");
+  expect(result["runAgentVersion"]).toBe("1.30.1");
+  expect(result["runAgentProtocolVersion"]).toBe("1");
+  expect(result["runHasFencing"]).toBe(true);
+  expect(result["runPolicyOperation"]).toBe("plan");
   expect(result["signedArtifactStatus"]).toBe(200);
   expect(result["artifactUnauthStatus"]).toBe(401);
   expect(result["planJsonPutStatus"]).toBe(200);
@@ -403,6 +446,9 @@ test("modern agent protocol: register, status, claim, artifacts, completion", as
   expect(result["runStatusAfterComplete"]).toBe("planned");
   expect(result["runHasChanges"]).toBe(true);
   expect(result["jobStatusAfterComplete"]).toBe("completed");
+  expect(result["duplicateCompletionStatus"]).toBe(409);
+  expect(result["duplicateCompletionCode"]).toBe("stale-agent-lease");
+  expect(result["planArtifactAfterDuplicate"]).toBe("1.2");
   expect(result["configVersionStatus"]).toBe(404);
   expect(result["configVersionServedStatus"]).toBe(200);
   expect(result["configVersionMembers"]).toContain("./main.tf");

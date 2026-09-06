@@ -1,8 +1,9 @@
+import { executionSetting, listenerSetting } from "./runtime-config";
 import { isAbsolute, join, dirname, resolve } from "path";
 import { mkdir, rm } from "fs/promises";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "os";
-import { envEnabled } from "./env";
+import { envFlag } from "./env";
 import type { Subprocess } from "bun";
 
 /**
@@ -31,14 +32,8 @@ import type { Subprocess } from "bun";
  * means sandboxed); disable it explicitly with TERRENCE_RUN_SANDBOX=false.
  */
 
-const SANDBOX_DISABLED = ["false", "0", "none", "no", "off"].includes(
-  (process.env["TERRENCE_RUN_SANDBOX"] ?? "true").toLowerCase(),
-);
-
 export function runNetPolicy(): "allow" | "deny" {
-  const raw = (process.env["TERRENCE_RUN_NET_POLICY"] ?? "allow").toLowerCase().trim();
-  if (raw !== "allow" && raw !== "deny") throw new Error("TERRENCE_RUN_NET_POLICY must be allow or deny");
-  return raw;
+  return executionSetting("TERRENCE_RUN_NET_POLICY");
 }
 export function runNetDenyEnabled(): boolean {
   return runNetPolicy() === "deny";
@@ -61,7 +56,7 @@ export function validateRunSandboxConfig(): void {
  * explicitly set to false (the insecure opt-out).
  */
 export function runSandboxRequired(): boolean {
-  return !SANDBOX_DISABLED;
+  return executionSetting("TERRENCE_RUN_SANDBOX");
 }
 
 /** Candidate locations for the landlock-runner helper binary. */
@@ -246,7 +241,7 @@ export class RunSandbox {
 
   /** True when the sandbox can be used on this host. */
   public static isUsable(): boolean {
-    if (SANDBOX_DISABLED) return false;
+    if (!runSandboxRequired()) return false;
     return probeLandlockAbi() >= 1;
   }
 
@@ -303,11 +298,26 @@ export class RunSandbox {
 
       const workDir = this.workDirForRunCwd(opts.cwd);
       const binaryDir = dirname(binaryPath);
+      const tmpDir = join(workDir, "tmp");
+      // Terraform's go-plugin binds its provider socket under $TMPDIR, and
+      // AF_UNIX paths cap at 107 usable bytes: a TMPDIR deeper than ~75
+      // chars fails plugin startup with "bind: invalid argument" (flaky,
+      // since the "plugin<...>" socket suffix length varies per run).
+      // Production run workdirs are short, but a deep custom TMPDIR would
+      // otherwise surface as a cryptic provider handshake failure — warn
+      // loudly instead. Warning only (not a throw): tofu dials over TCP
+      // loopback and is unaffected by socket path length.
+      if (tmpDir.length + 32 > 107) {
+        try {
+          const { log } = require("./log") as { log: { warn: (msg: string, data?: unknown) => void } };
+          log.warn("sandbox TMPDIR too deep for terraform provider sockets", { tmpDir, length: tmpDir.length });
+        } catch { /* logging is best-effort */ }
+      }
       const env: Record<string, string> = {
         ...opts.env,
         PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         HOME: workDir,
-        TMPDIR: join(workDir, "tmp"),
+        TMPDIR: tmpDir,
         USER: process.env["USER"] ?? "nobody",
       };
 
@@ -402,13 +412,12 @@ function storageProtectionPrefix(allowStorage: boolean): string | null {
  * only the paths variable.
  */
 function extraRwArgs(): string[] {
-  if (!envEnabled(process.env["TERRENCE_SANDBOX_EXTRA_RW_ALLOWED"])) return [];
-  const raw = process.env["TERRENCE_SANDBOX_EXTRA_RW_PATHS"];
-  if (raw === undefined || raw === "") return [];
-  const allowStorage = envEnabled(process.env["TERRENCE_SANDBOX_EXTRA_RW_ALLOW_STORAGE"]);
+  if (!envFlag("TERRENCE_SANDBOX_EXTRA_RW_ALLOWED")) return [];
+  const paths = listenerSetting("TERRENCE_SANDBOX_EXTRA_RW_PATHS");
+  const allowStorage = envFlag("TERRENCE_SANDBOX_EXTRA_RW_ALLOW_STORAGE");
   const storagePrefix = storageProtectionPrefix(allowStorage);
   const out: string[] = [];
-  for (const p of raw.split(":")) {
+  for (const p of paths) {
     if (p === "") continue;
     if (!isAbsolute(p)) continue;
     let canon = resolve(p);

@@ -1,18 +1,17 @@
 import { stat } from "node:fs/promises";
+import { runBoundedProcess } from "./bounded-process";
 import { mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import {
   MAX_ARCHIVE_MEMBERS,
   MAX_EXPANDED_ARCHIVE_BYTES,
-  assertArchiveExpandedSize,
-  assertArchiveLogicalSize,
-  assertArchiveMemberCount,
+  assertSafeTarArchive,
+  extractSafeTarArchive,
 } from "./archive";
 
 export const MAX_MODULE_ARCHIVE_BYTES = 50 * 1024 * 1024;
 export const MAX_MODULE_FILE_BYTES = 16 * 1024 * 1024;
-const ARCHIVE_TIMEOUT_MS = 30_000;
 
 function safeRelativePath(value: string): boolean {
   if (value === "" || value.includes("\\") || value.includes("\0")) return false;
@@ -25,71 +24,26 @@ function safeRelativePath(value: string): boolean {
 }
 
 async function tarOutput(args: readonly string[]): Promise<string> {
-  const child = Bun.spawn(["tar", ...args], {
-    env: { ...process.env, LANG: "C" },
-    stdout: "pipe",
-    stderr: "pipe",
-    signal: AbortSignal.timeout(ARCHIVE_TIMEOUT_MS),
-  });
-  const [exitCode, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-  if (exitCode !== 0) throw new Error(stderr.trim() || "Archive is not a valid gzip-compressed tar file");
+  // Packaging is a separate archive operation; it gets its own budget rather
+  // than inheriting a generic subprocess timeout.
+  const { stdout } = await runBoundedProcess(["tar", ...args], { timeoutMs: 120_000 });
   return stdout;
 }
 
 export async function validateModuleArchive(path: string): Promise<void> {
-  const compressed = await stat(path);
-  if (!compressed.isFile() || compressed.size === 0) throw new Error("Module archive is empty");
-  if (compressed.size > MAX_MODULE_ARCHIVE_BYTES) {
-    throw new Error(`Module archive exceeds the ${MAX_MODULE_ARCHIVE_BYTES} byte upload limit`);
-  }
-  await Promise.all([
-    assertArchiveExpandedSize(path),
-    assertArchiveLogicalSize(path),
-  ]);
-
-  const names = (await tarOutput(["-tzf", path]))
-    .split("\n")
-    .filter((name): boolean => name !== "");
-  assertArchiveMemberCount(names);
-  if (names.length === 0) throw new Error("Module archive contains no files");
-  if (names.some((name): boolean => !safeRelativePath(name))) {
-    throw new Error("Module archive contains an unsafe path");
-  }
-
-  const details = (await tarOutput(["--numeric-owner", "-tvzf", path]))
-    .split("\n")
-    .filter((line): boolean => line !== "");
-  if (details.length !== names.length) throw new Error("Module archive contains an unsupported file name");
-  for (const line of details) {
-    if (!line.startsWith("-") && !line.startsWith("d")) {
-      throw new Error("Module archive may contain only regular files and directories");
-    }
-    // GNU tar lists the owner as 0/0 (--numeric-owner); BusyBox tar lists
-    // names (root/root). Accept both.
-    const match = /^\S+\s+\S+\/\S+\s+(\d+)\s+\S+\s+\S+\s/.exec(line);
-    if (match === null) throw new Error("Module archive listing could not be validated");
-    if (Number(match[1]) > MAX_MODULE_FILE_BYTES) {
-      throw new Error(`Module archive contains a file larger than ${MAX_MODULE_FILE_BYTES} bytes`);
-    }
-  }
+  await assertSafeTarArchive(path, {
+    maxCompressedBytes: MAX_MODULE_ARCHIVE_BYTES,
+    maxFileBytes: MAX_MODULE_FILE_BYTES,
+  });
 }
 
-export async function extractValidatedModuleArchive(path: string, destination: string): Promise<void> {
-  await validateModuleArchive(path);
+export async function extractValidatedModuleArchive(path: string, destination: string, signal?: Readonly<AbortSignal>): Promise<void> {
   await mkdir(destination, { recursive: true, mode: 0o700 });
-  await tarOutput([
-    "-x",
-    "-o",
-    "-z",
-    "-f",
-    path,
-    "-C",
-    destination,
-  ]);
+  await extractSafeTarArchive(path, destination, {
+    maxCompressedBytes: MAX_MODULE_ARCHIVE_BYTES,
+    maxFileBytes: MAX_MODULE_FILE_BYTES,
+    ...(signal === undefined ? {} : { signal }),
+  });
 }
 
 async function containsTerraform(directory: string): Promise<boolean> {
@@ -138,14 +92,7 @@ export async function ingestModuleArchive<T>(
     const moduleRoot = await moduleRootPath(extracted, sourceDirectory);
     const metadata = await inspect(moduleRoot);
     await mkdir(dirname(destinationPath), { recursive: true, mode: 0o700 });
-    const child = Bun.spawn(["tar", "-czf", temporaryArchive, "-C", moduleRoot, "."], {
-      env: { ...process.env, LANG: "C" },
-      stdout: "pipe",
-      stderr: "pipe",
-      signal: AbortSignal.timeout(ARCHIVE_TIMEOUT_MS),
-    });
-    const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-    if (exitCode !== 0) throw new Error(stderr.trim() || "Module archive could not be prepared");
+    await tarOutput(["-czf", temporaryArchive, "-C", moduleRoot, "."]);
     await validateModuleArchive(temporaryArchive);
     await rename(temporaryArchive, destinationPath);
     return metadata;

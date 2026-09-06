@@ -88,6 +88,7 @@ const AdminDashboard = lazyView(() => import("./views/AdminDashboard"), "AdminDa
 const CompatibilityDashboard = lazyView(() => import("./views/CompatibilityDashboard"), "CompatibilityDashboard");
 const AdminSmtpSettings = lazyView(() => import("./views/AdminSmtpSettings"), "AdminSmtpSettings");
 const AdminScimSettings = lazyView(() => import("./views/AdminScimSettings"), "AdminScimSettings");
+const AdminGitHubApp = lazyView(() => import("./views/AdminGitHubApp"), "AdminGitHubApp");
 const AdminLoggingSettings = lazyView(() => import("./views/AdminLoggingSettings"), "AdminLoggingSettings");
 const AdminMaintenanceWindows = lazyView(() => import("./views/AdminMaintenanceWindows"), "AdminMaintenanceWindows");
 const AdminApprovalWebhook = lazyView(() => import("./views/AdminApprovalWebhook"), "AdminApprovalWebhook");
@@ -221,6 +222,7 @@ function AppRoutes(): JSX.Element {
         <Route path="admin/users" element={<AdminDashboard section="users" />} />
         <Route path="admin/auth" element={<AdminDashboard section="auth" />} />
         <Route path="admin/scim" element={<AdminScimSettings />} />
+        <Route path="admin/github-app" element={<AdminGitHubApp />} />
         <Route path="admin/organizations" element={<AdminDashboard section="orgs" />} />
         <Route path="admin/workspaces" element={<AdminDashboard section="workspaces" />} />
         <Route path="admin/runs" element={<AdminDashboard section="runs" />} />

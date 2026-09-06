@@ -1,12 +1,16 @@
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Terrence, TerrenceLogo, type TerrencePose } from "../src/components/brand/Terrence";
+import { Terrence, TerrenceLogo, type TerrencePose, type TerrenceSurface, type TerrenceDetail } from "../src/components/brand/Terrence";
+import { verifyBrandIcons } from "./brand-icons";
 
 // Export the component's exact geometry so downloadable art never drifts.
 const publicDir = resolve(import.meta.dir, "../public");
 const check = process.argv.includes("--check");
 if (!check) mkdirSync(`${publicDir}/brand`, { recursive: true });
+
 function publish(path: string, contents: string): void {
   if (check) {
     if (readFileSync(path, "utf8") !== contents) throw new Error(`Stale brand asset: ${path}. Run frontend/scripts/brand-assets.tsx.`);
@@ -14,20 +18,159 @@ function publish(path: string, contents: string): void {
     writeFileSync(path, contents);
   }
 }
-const poses: TerrencePose[] = ["welcome", "empty", "healthy", "failed", "lost", "maintenance", "guide"];
-for (const pose of poses) {
-  const svg = renderToStaticMarkup(<Terrence pose={pose} />).replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ');
-  publish(`${publicDir}/brand/terrence-${pose}.svg`, svg);
+
+function assertSafeSvg(svg: string, label: string): void {
+  if (/<script\b|<metadata\b|(?:xlink:)?href\s*=|url\(/i.test(svg)) {
+    throw new Error(`Unsafe external content in generated SVG: ${label}`);
+  }
+  const ids = [...svg.matchAll(/\bid="([^"]+)"/g)].map((match): string => match[1] ?? "");
+  if (new Set(ids).size !== ids.length) throw new Error(`Duplicate SVG IDs in generated asset: ${label}`);
 }
-const logo = /<svg[\s\S]*<\/svg>/.exec(renderToStaticMarkup(<TerrenceLogo />))?.[0];
-if (logo === undefined) throw new Error("Logo SVG is missing");
-publish(`${publicDir}/favicon.svg`, logo.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" '));
-const labels: Record<TerrencePose, string> = { welcome: "Welcome", empty: "No workspaces yet", healthy: "Everything healthy", failed: "Plan failed", lost: "404", maintenance: "Maintenance", guide: "Docs & tutorials" };
-publish(`${publicDir}/brand/index.html`, `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Terrence · Visual language</title><style>
-*{box-sizing:border-box}body{margin:0;background:#edf3ff;color:#233654;font:15px/1.6 system-ui,sans-serif}main{max-width:1160px;margin:auto;padding:48px 24px}header{display:flex;gap:20px;align-items:center;margin-bottom:40px}header svg{width:56px;height:56px}h1{margin:0;font:700 32px/1.2 'Trebuchet MS',sans-serif;letter-spacing:-1px}p{margin:8px 0;color:#536785}.poses{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}figure{margin:0;padding:24px;background:#fff;border:1px solid #c9d9f2;border-radius:16px}figure img{width:100%;height:185px}figcaption{margin-top:16px;font-weight:600}a{color:#234f95;text-underline-offset:4px}a:focus-visible{outline:2px solid #233654;outline-offset:4px}footer{margin-top:32px;max-width:720px}</style><main><header>${logo}<div><h1>terrence.</h1><p>One dependable companion. Seven moments.</p></div></header><div class="poses">${poses.map((pose): string => `<figure><img src="terrence-${pose}.svg" alt="Terrence: ${labels[pose]}"><figcaption>${labels[pose]}</figcaption><a href="terrence-${pose}.svg" download>Download SVG</a></figure>`).join("")}</div><footer><p>Bracket ears. Blue coat. Steady hands. Keep the character consistent and use illustrations sparingly, alongside a clear explanation and a useful next step.</p><p>Ink #233654 · Blue #96B9F6 · Paper #EDF3FF · Line #C9D9F2</p></footer></main></html>`);
+
+function poseSvg(pose: TerrencePose, surface: TerrenceSurface = "transparent", detail: TerrenceDetail = "full", animated = false): string {
+  const svg = renderToStaticMarkup(<Terrence pose={pose} surface={surface} detail={detail} animated={animated} />).replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ');
+  assertSafeSvg(svg, pose);
+  return svg;
+}
+
+function logoSvg(): string {
+  const logo = /<svg[\s\S]*<\/svg>/.exec(renderToStaticMarkup(<TerrenceLogo />))?.[0];
+  if (logo === undefined) throw new Error("Logo SVG is missing");
+  const svg = logo.replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ');
+  assertSafeSvg(svg, "favicon");
+  return svg;
+}
+
+const poses: TerrencePose[] = ["welcome", "empty", "healthy", "failed", "lost", "maintenance", "guide", "blocked", "interrupted", "ecosystem"];
+const labels: Record<TerrencePose, string> = {
+  welcome: "Welcome",
+  empty: "No workspaces yet",
+  healthy: "Everything healthy",
+  failed: "Plan failed",
+  lost: "404",
+  maintenance: "Maintenance",
+  guide: "Docs & tutorials",
+  blocked: "Access blocked",
+  interrupted: "Connection interrupted",
+  ecosystem: "Terraform & OpenTofu",
+};
+const logo = logoSvg();
+
+for (const pose of poses) publish(`${publicDir}/brand/terrence-${pose}.svg`, poseSvg(pose));
+publish(`${publicDir}/favicon.svg`, logo);
+
+// Social cards are opaque, 2:1, and self-contained. The PNG preserves the exact
+// lettering on hosts without the display font; CI verifies it without fonts or
+// a rasterizer, just as it does the application icons.
+const socialSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" fill="none">
+  <title>Terrence — Big plans. Steady hands.</title>
+  <desc>A self-hosted Terraform and OpenTofu run platform. The engine logos orbit Terrence.</desc>
+  <rect width="1280" height="640" fill="#EDF3FF"/>
+  <svg x="72" y="58" width="52" height="52">${logo}</svg>
+  <text x="142" y="99" font-family="Trebuchet MS, sans-serif" font-size="48" font-weight="700" letter-spacing="-2" fill="#233654">terrence<tspan fill="#527CBF">.</tspan></text>
+  <g font-family="Trebuchet MS, sans-serif" font-size="84" font-weight="700" letter-spacing="-3" fill="#233654">
+    <text x="72" y="251">Big plans.</text>
+    <text x="72" y="337">Steady hands.</text>
+  </g>
+  <g font-family="Noto Sans, sans-serif" font-size="25" fill="#536785">
+    <text x="76" y="402">A self-hosted run platform for</text>
+    <text x="76" y="439">Terraform and OpenTofu.</text>
+  </g>
+  <svg x="692" y="70" width="550" height="482">${poseSvg("ecosystem")}</svg>
+  <path d="M76 536h1128" stroke="#C9D9F2" stroke-width="2"/>
+  <g font-family="Noto Sans, sans-serif" font-size="19" fill="#536785">
+    <text x="76" y="583">Plan · Apply · State · Policy</text>
+    <text x="1204" y="583" text-anchor="end">github.com/essinghigh-org/terrence</text>
+  </g>
+</svg>`;
+assertSafeSvg(socialSvg, "GitHub social preview");
+publish(`${publicDir}/brand/github-social.svg`, socialSvg);
+const socialPng = `${publicDir}/brand/github-social.png`;
+const socialManifest = `${publicDir}/brand/github-social.manifest.json`;
+const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
+if (!check) {
+  execFileSync("rsvg-convert", ["-w", "1280", "-h", "640", `${publicDir}/brand/github-social.svg`, "-o", socialPng]);
+  publish(socialManifest, `${JSON.stringify({ sourceSha256: sha256(socialSvg), pngSha256: createHash("sha256").update(readFileSync(socialPng)).digest("hex") }, null, 2)}\n`);
+} else {
+  const manifest = JSON.parse(readFileSync(socialManifest, "utf8")) as { sourceSha256?: string; pngSha256?: string };
+  const bytes = readFileSync(socialPng);
+  if (manifest.sourceSha256 !== sha256(socialSvg) || manifest.pngSha256 !== createHash("sha256").update(bytes).digest("hex")
+    || bytes.length < 24 || bytes.length >= 1_000_000 || bytes.readUInt32BE(0) !== 0x89504e47
+    || bytes.readUInt32BE(16) !== 1280 || bytes.readUInt32BE(20) !== 640) {
+    throw new Error("Stale or invalid GitHub social PNG. Run frontend/scripts/brand-assets.tsx.");
+  }
+}
+
+const gallery = `<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Terrence · Visual language</title>
+<style>
+*{box-sizing:border-box}
+:root{color-scheme:light dark}
+body{margin:0;background:#edf3ff;color:#233654;font:15px/1.6 system-ui,sans-serif}
+main{max-width:1240px;margin:auto;padding:40px 24px 64px}
+header{display:flex;gap:20px;align-items:center;margin-bottom:32px}
+header svg{width:56px;height:56px}
+h1{margin:0;font:700 32px/1.2 'Trebuchet MS',sans-serif;letter-spacing:-1px}
+h2{margin:0;font:700 19px/1.25 'Trebuchet MS',sans-serif}
+p{margin:8px 0;color:#536785}
+.intro{max-width:760px;margin-bottom:28px}
+.poses{display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:18px}
+.pose-card{padding:20px;background:#fff;border:1px solid #c9d9f2;border-radius:16px}
+.fixture-row{display:flex;flex-wrap:wrap;align-items:end;gap:12px;margin-top:16px}
+.fixture{display:grid;justify-items:center;gap:5px;margin:0}
+.fixture figcaption{font:12px/1.2 ui-monospace,monospace;color:#536785}
+.art-frame{display:grid;place-items:center;border-radius:12px;background:#fff;overflow:hidden}
+.art-frame svg{display:block;width:100%;height:100%}
+.size-96{width:96px;height:84px}.size-128{width:128px;height:112px}.size-176{width:176px;height:154px}
+.surface-dark{padding:10px;background:#1b2639;border-radius:12px}
+.surface-dark .art-frame{background:#1b2639}
+.fixture-copy{max-width:36rem;margin:16px 0 0;font-size:13px}
+.logo-fixtures{display:flex;flex-wrap:wrap;align-items:end;gap:16px;margin-top:16px}
+.logo-fixture{display:grid;gap:5px;justify-items:center}.logo-fixture svg{display:block}
+.logo-24 svg{width:24px;height:24px}.logo-32 svg{width:32px;height:32px}.logo-40 svg{width:40px;height:40px}
+.motion-fixture{display:flex;gap:16px;align-items:center;margin-top:16px;padding:16px;background:#fff;border:1px solid #c9d9f2;border-radius:12px}
+.motion-fixture svg{width:96px;height:84px}
+a{color:#234f95;text-underline-offset:4px}a:focus-visible{outline:2px solid #233654;outline-offset:4px}
+footer{margin-top:28px;max-width:760px}
+.terrence-mascot--animated .terrence-wave{animation:wave 6s ease-in-out infinite;transform-origin:226px 165px}
+@keyframes wave{0%,60%,100%{transform:rotate(0)}66%,78%{transform:rotate(-12deg)}72%,84%{transform:rotate(7deg)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+@media (max-width:640px){main{padding:28px 16px 48px}.poses{grid-template-columns:1fr}.pose-card{padding:16px}.intro{font-size:14px}.motion-fixture{align-items:flex-start;flex-direction:column}}
+@media (prefers-color-scheme:dark){body{background:#171f2e;color:#edf3ff}.pose-card,.motion-fixture{background:#202b3e;border-color:#415775}.surface-dark .art-frame{background:#1b2639}p,.fixture figcaption{color:#b8c9e2}a{color:#b5d1ff}}
+@media (forced-colors:active){.terrence-mascot{display:none}.art-frame{border:1px solid CanvasText}}
+</style>
+<main>
+  <header>${logo}<div><h1>terrence.</h1><p>Canonical brand regression sheet</p></div></header>
+  <p class="intro">Every pose is reviewed as the same dependable companion. The fixtures below cover the approved content sizes, a dark surface, long adjacent explanation text, narrow layouts, reduced motion, and the compact mark used by navigation and install icons.</p>
+  <div class="poses">${poses.map((pose): string => `
+    <section class="pose-card" data-pose="${pose}">
+      <h2>${labels[pose]}</h2>
+      <div class="fixture-row">${[96, 128, 176].map((size): string => `<figure class="fixture"><div class="art-frame size-${size}">${poseSvg(pose, "transparent", size <= 128 ? "small" : "full")}</div><figcaption>${size}px</figcaption></figure>`).join("")}</div>
+      <div class="fixture-row surface-dark"><figure class="fixture"><div class="art-frame size-128">${poseSvg(pose, "transparent", "small")}</div><figcaption>128px · transparent</figcaption></figure><figure class="fixture"><div class="art-frame size-128">${poseSvg(pose, "paper", "small")}</div><figcaption>128px · paper</figcaption></figure></div>
+      <p class="fixture-copy">${labels[pose]} art stays decorative. The adjacent copy owns the state, explains what happened, and provides the useful next step without relying on the illustration or its color.</p>
+    </section>`).join("")}</div>
+  <section class="pose-card" aria-labelledby="social-preview-title" style="margin-top:18px">
+    <h2 id="social-preview-title">GitHub social preview</h2>
+    <img src="github-social.png?v=${sha256(socialSvg).slice(0, 12)}" width="1280" height="640" alt="Terrence: Big plans. Steady hands. A self-hosted Terraform and OpenTofu run platform." style="display:block;width:100%;height:auto;margin-top:20px;border-radius:8px">
+    <p><a href="github-social.png" download>Download PNG · 1280 × 640</a> · <a href="github-social.svg">Editable SVG</a></p>
+  </section>
+  <section class="pose-card" aria-labelledby="logo-fixtures-title">
+    <h2 id="logo-fixtures-title">Logo and motion</h2>
+    <div class="logo-fixtures"><figure class="logo-fixture logo-24">${renderToStaticMarkup(<TerrenceLogo />)}<figcaption>24px</figcaption></figure><figure class="logo-fixture logo-32">${renderToStaticMarkup(<TerrenceLogo />)}<figcaption>32px</figcaption></figure><figure class="logo-fixture logo-40">${renderToStaticMarkup(<TerrenceLogo />)}<figcaption>40px</figcaption></figure></div>
+    <div class="motion-fixture">${poseSvg("welcome", "transparent", "full", true)}<div><strong>Opt-in motion</strong><p>The welcome arm may breathe and wave when motion is enabled. The reduced-motion media query disables animation before the primary explanation or action is affected.</p></div></div>
+  </section>
+  <footer><p>Ink #233654 · Blue #96B9F6 · Paper #EDF3FF · Line #C9D9F2 · Caption #536785</p><p>Source: <code>frontend/src/components/brand/Terrence.tsx</code>. Generated output is checked in CI; update the component and regenerate the assets together.</p></footer>
+</main>
+</html>`;
+publish(`${publicDir}/brand/index.html`, gallery);
 
 // Keep the no-JavaScript server fallback self-contained and on-model.
 const fallback = `${publicDir}/404.html`;
 publish(fallback, readFileSync(fallback, "utf8")
-  .replace(/<!-- terrence-lost -->[\s\S]*?<!-- \/terrence-lost -->/, `<!-- terrence-lost -->${readFileSync(`${publicDir}/brand/terrence-lost.svg`, "utf8")}<!-- /terrence-lost -->`)
-  .replace(/<!-- terrence-logo -->[\s\S]*?<!-- \/terrence-logo -->/, `<!-- terrence-logo -->${readFileSync(`${publicDir}/favicon.svg`, "utf8")}<!-- /terrence-logo -->`));
+  .replace(/<!-- terrence-lost -->[\s\S]*?<!-- \/terrence-lost -->/, `<!-- terrence-lost -->${poseSvg("lost")}<!-- /terrence-lost -->`)
+  .replace(/<!-- terrence-logo -->[\s\S]*?<!-- \/terrence-logo -->/, `<!-- terrence-logo -->${logo}<!-- /terrence-logo -->`));
+
+if (check) verifyBrandIcons(publicDir);

@@ -45,7 +45,7 @@ for (const engine of ["terraform", "tofu"] as const) {
       };
       await persistSeed(seed);
       await db.insert(workspaces).values({ id: workspaceId, name: "state-cli", orgId: seed.orgId });
-      await db.insert(runs).values({ id: runId, workspaceId, status: "planned", createdAt: Date.now() });
+      await db.insert(runs).values({ id: runId, workspaceId, status: "errored", createdAt: Date.now() });
       expect((await request(`/api/v2/workspaces/${workspaceId}/actions/lock`, { method: "POST", headers })).status).toBe(200);
       const state = (serial: number, value: string): string => JSON.stringify({
         version: 4, terraform_version: "1.5.0", serial, lineage: seed.suffix,
@@ -86,7 +86,7 @@ for (const engine of ["terraform", "tofu"] as const) {
       await verify(rolledBack, "original");
       const capture = join(storageDir, "recovery", runId);
       await mkdir(capture, { recursive: true });
-      await writeFile(join(capture, "terraform.tfstate"), state(5, "recovered"));
+      await writeFile(join(capture, "terraform.tfstate"), state(10, "recovered"));
       await writeFile(join(capture, ".recovered"), "complete");
       const recovered = await expectSuccessResponse(await request(`/api/v2/runs/${runId}/actions/recover-state`, { method: "POST", headers }), 201, "state-versions");
       expect(recovered.attributes["serial"]).toBe(10);

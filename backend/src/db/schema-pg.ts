@@ -194,6 +194,9 @@ export const agents = pgTable("agents", {
     status: text("status").notNull().default("idle"),
     ipAddress: text("ip_address"),
     version: text("version"),
+    protocolVersion: text("protocol_version").notNull().default("1"),
+    capabilities: jsonb("capabilities").notNull().default(["operation.plan","operation.apply","operation.policy","operation.assessment","operation.stack","operation.source-bundle","operation.test","artifact.configuration","artifact.filesystem","artifact.log","artifact.plan-json","artifact.state-json","artifact.atomic-upload","lease.heartbeat","lease.fencing","cancellation","state.publication"]),
+    artifactFormats: jsonb("artifact_formats").notNull().default(["tar.gz","json","text"]),
     architecture: text("architecture"),
     iacBinaries: jsonb("iac_binaries").notNull().default(["terraform"]),
     accept: text("accept").notNull().default("plan,apply,policy,assessment,stack_prepare,stack_plan,stack_apply,source_bundle,stack_aggregate_outputs,test"),
@@ -203,6 +206,25 @@ export const agents = pgTable("agents", {
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.agents.createdAt.defaultFn!()),
 }, (table) => [
     index("agents_last_ping_at_status_idx").on(table.lastPingAt, table.status),
+  ]);
+
+export const apiIdempotencyKeys = pgTable("api_idempotency_keys", {
+    id: text("id").notNull().primaryKey(),
+    scope: text("scope").notNull(),
+    key: text("key").notNull(),
+    principal: text("principal").notNull(),
+    requestHash: text("request_hash").notNull(),
+    resourceType: text("resource_type").notNull(),
+    resourceId: text("resource_id"),
+    status: text("status").notNull().default("pending"),
+    responseStatus: bigint("response_status", { mode: "number" }),
+    responseBody: jsonb("response_body"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.apiIdempotencyKeys.createdAt.defaultFn!()),
+    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+    completedAt: bigint("completed_at", { mode: "number" }),
+}, (table) => [
+    uniqueIndex("api_idempotency_scope_key_idx").on(table.scope, table.key),
+    index("api_idempotency_expires_idx").on(table.expiresAt),
   ]);
 
 export const apiTokens = pgTable("api_tokens", {
@@ -253,6 +275,7 @@ export const assessmentResults = pgTable("assessment_results", {
     checksUnknown: bigint("checks_unknown", { mode: "number" }).notNull().default(0),
     jsonOutput: jsonb("json_output"),
     jsonSchema: jsonb("json_schema"),
+    artifactSchemaVersion: bigint("artifact_schema_version", { mode: "number" }).notNull().default(0),
     logOutput: text("log_output"),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.assessmentResults.createdAt.defaultFn!()),
     completedAt: bigint("completed_at", { mode: "number" }),
@@ -312,6 +335,7 @@ export const configurationVersions = pgTable("configuration_versions", {
     source: text("source").default("tfe-api"),
     ingressAttributes: jsonb("ingress_attributes"),
     statusTimestamps: jsonb("status_timestamps"),
+    statusMetadataSchemaVersion: bigint("status_metadata_schema_version", { mode: "number" }).notNull().default(0),
     uploadClaimExpiresAt: bigint("upload_claim_expires_at", { mode: "number" }),
     uploadClaimToken: text("upload_claim_token"),
     error: text("error"),
@@ -352,6 +376,7 @@ export const durableJobs = pgTable("durable_jobs", {
     dedupeKey: text("dedupe_key"),
     status: text("status").notNull().default("queued"),
     payload: jsonb("payload").notNull().default({}),
+    payloadSchemaVersion: bigint("payload_schema_version", { mode: "number" }).notNull().default(0),
     attempts: bigint("attempts", { mode: "number" }).notNull().default(0),
     runAfter: bigint("run_after", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.durableJobs.runAfter.defaultFn!()),
     lockedBy: text("locked_by"),
@@ -858,6 +883,21 @@ export const organizations = pgTable("organizations", {
     requireHardIsolation: boolean("require_hard_isolation").notNull().default(false),
 });
 
+export const outboxEvents = pgTable("outbox_events", {
+    id: text("id").notNull().primaryKey(),
+    topic: text("topic").notNull(),
+    payload: jsonb("payload").notNull().default({}),
+    status: text("status").notNull().default("pending"),
+    attempts: bigint("attempts", { mode: "number" }).notNull().default(0),
+    lastError: text("last_error"),
+    deliveredAt: bigint("delivered_at", { mode: "number" }),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.outboxEvents.createdAt.defaultFn!()),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.outboxEvents.updatedAt.defaultFn!()),
+}, (table) => [
+    index("outbox_events_status_updated_idx").on(table.status, table.updatedAt),
+    index("outbox_events_topic_status_idx").on(table.topic, table.status),
+  ]);
+
 export const planExports = pgTable("plan_exports", {
     id: text("id").notNull().primaryKey(),
     planId: text("plan_id").notNull(),
@@ -904,6 +944,7 @@ export const policyEvaluations = pgTable("policy_evaluations", {
     policyToolVersion: text("policy_tool_version").default("0.44.0"),
     resultCount: jsonb("result_count"),
     statusTimestamps: jsonb("status_timestamps"),
+    statusMetadataSchemaVersion: bigint("status_metadata_schema_version", { mode: "number" }).notNull().default(0),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.policyEvaluations.createdAt.defaultFn!()),
 }, (table) => [
     index("policy_evaluations_run_idx").on(table.runId),
@@ -974,6 +1015,7 @@ export const policySetVersions = pgTable("policy_set_versions", {
     source: text("source").notNull().default("tfe-api"),
     status: text("status").notNull().default("pending"),
     statusTimestamps: jsonb("status_timestamps").notNull().default({}),
+    statusMetadataSchemaVersion: bigint("status_metadata_schema_version", { mode: "number" }).notNull().default(0),
     ingressAttributes: jsonb("ingress_attributes"),
     error: text("error"),
     archivePath: text("archive_path"),
@@ -1256,6 +1298,18 @@ export const runExplanations = pgTable("run_explanations", {
     index("run_explanations_run_kind_idx").on(table.runId, table.kind),
   ]);
 
+export const runProvenanceCapsules = pgTable("run_provenance_capsules", {
+    id: text("id").notNull().primaryKey(),
+    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    schemaVersion: bigint("schema_version", { mode: "number" }).notNull().default(1),
+    publicManifest: jsonb("public_manifest").notNull(),
+    manifestSha256: text("manifest_sha256").notNull(),
+    executionMaterial: text("execution_material").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.runProvenanceCapsules.createdAt.defaultFn!()),
+}, (table) => [
+    uniqueIndex("run_provenance_capsules_run_idx").on(table.runId),
+  ]);
+
 export const runTaskResults = pgTable("run_task_results", {
     id: text("id").notNull().primaryKey(),
     runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
@@ -1322,6 +1376,7 @@ export const runs = pgTable("runs", {
     replaceAddrs: jsonb("replace_addrs"),
     invokeActionAddrs: jsonb("invoke_action_addrs"),
     variables: jsonb("variables"),
+    inputSchemaVersion: bigint("input_schema_version", { mode: "number" }).notNull().default(0),
     logToken: text("log_token").$defaultFn(() => sqliteSchema.runs.logToken.defaultFn!()),
     terraformVersion: text("terraform_version"),
     debuggingMode: boolean("debugging_mode").notNull().default(false),
@@ -1330,7 +1385,12 @@ export const runs = pgTable("runs", {
     allowConfigGeneration: boolean("allow_config_generation").notNull().default(false),
     generatedConfiguration: boolean("generated_configuration").notNull().default(false),
     executionMode: text("execution_mode").notNull().default("remote"),
+    agentVersion: text("agent_version"),
+    agentProtocolVersion: text("agent_protocol_version"),
+    agentCapabilities: jsonb("agent_capabilities"),
+    agentExecutionPolicy: jsonb("agent_execution_policy"),
     statusTimestamps: jsonb("status_timestamps"),
+    statusMetadataSchemaVersion: bigint("status_metadata_schema_version", { mode: "number" }).notNull().default(0),
     planResourceAdditions: bigint("plan_resource_additions", { mode: "number" }),
     planResourceChanges: bigint("plan_resource_changes", { mode: "number" }),
     planResourceDestructions: bigint("plan_resource_destructions", { mode: "number" }),
@@ -1456,7 +1516,9 @@ export const stackAgentJobs = pgTable("stack_agent_jobs", {
     phase: text("phase").notNull(),
     iacBinary: text("iac_binary").notNull().default("terraform"),
     status: text("status").notNull().default("queued"),
+    fencingToken: bigint("fencing_token", { mode: "number" }).notNull().default(0),
     result: jsonb("result"),
+    resultSchemaVersion: bigint("result_schema_version", { mode: "number" }).notNull().default(0),
     errorMessage: text("error_message"),
     claimedAt: bigint("claimed_at", { mode: "number" }),
     completedAt: bigint("completed_at", { mode: "number" }),
@@ -1476,6 +1538,7 @@ export const stackRecords = pgTable("stack_records", {
     name: text("name"),
     status: text("status").notNull().default("pending"),
     payload: jsonb("payload").notNull().default({}),
+    payloadSchemaVersion: bigint("payload_schema_version", { mode: "number" }).notNull().default(0),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.stackRecords.createdAt.defaultFn!()),
     updatedAt: bigint("updated_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.stackRecords.updatedAt.defaultFn!()),
 }, (table) => [
@@ -1552,6 +1615,7 @@ export const stateVersions = pgTable("state_versions", {
     uploadExpiresAt: bigint("upload_expires_at", { mode: "number" }),
     uploadLock: text("upload_lock"),
     uploadSha256: text("upload_sha256"),
+    stateSummary: text("state_summary"),
     statePayload: text("state_payload"),
     status: text("status").default("finalized"),
     jsonState: text("json_state"),
@@ -1594,6 +1658,7 @@ export const taskStages = pgTable("task_stages", {
     stage: text("stage").notNull(),
     status: text("status").notNull().default("pending"),
     statusTimestamps: jsonb("status_timestamps"),
+    statusMetadataSchemaVersion: bigint("status_metadata_schema_version", { mode: "number" }).notNull().default(0),
     createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.taskStages.createdAt.defaultFn!()),
 }, (table) => [
     index("task_stages_run_idx").on(table.runId),
@@ -1869,8 +1934,6 @@ export const workspaces = pgTable("workspaces", {
     lockedReason: text("locked_reason"),
     lockOwnerType: text("lock_owner_type"),
     lockOwnerId: text("lock_owner_id"),
-    // Issue #568: when the current lock was taken (ms epoch). Converges via
-    // applyPgMigrations on installs with sparse journals.
     lockedAt: bigint("locked_at", { mode: "number" }),
     trustedExecution: boolean("trusted_execution").notNull().default(true),
     ownedByType: text("owned_by_type"),

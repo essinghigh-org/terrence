@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Bookmark, Columns3, Pencil, Plus, Rows3, Star, Tags, Trash2, X } from "lucide-react";
 
@@ -41,8 +41,6 @@ import { deleteView, getSavedViews, saveView, type SavedView } from "@/lib/saved
 import { cn, formatDateTime, formatRelativeTime } from "@/lib/utils";
 import { PageHeader, PageShell } from "@/components/PageHeader";
 import { WorkspaceRepositoryLink } from "@/components/WorkspaceRepositoryLink";
-import { isNumber } from "../lib/type-guards";
-import type { JsonObject } from "@/lib/json";
 
 type Project = Readonly<{ id: string; attributes: Readonly<{ name: string }> }>;
 
@@ -104,48 +102,15 @@ type RunSummary = Readonly<{
   relationships: Readonly<{ workspace: Readonly<{ data: Readonly<{ id: string }> }> }>;
 }>;
 
-/**
- * Page through a workspace list collecting both `data` and the `included`
- * current-run resources (10.1): the server aggregates the latest run per
- * workspace, so the view no longer bulk-fetches the org run history.
- */
-async function fetchWorkspacePages(
-  endpoint: string,
-  signal?: Readonly<AbortSignal>,
-): Promise<Readonly<{ workspaces: Workspace[]; runs: RunSummary[] }>> {
-  const workspaces: Workspace[] = [];
-  const runs: RunSummary[] = [];
-  const visited = new Set<string>();
-  let pageEndpoint: string | null = endpoint;
-
-  while (pageEndpoint !== null && !visited.has(pageEndpoint)) {
-    visited.add(pageEndpoint);
-// SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
-    const response = await fetchApi(
-      pageEndpoint,
-      signal === undefined ? {} : { signal },
-    ) as {
-      data?: Workspace[];
-      included?: RunSummary[];
-      meta?: { pagination?: JsonObject };
-    };
-    if (Array.isArray(response.data)) workspaces.push(...response.data);
-    if (Array.isArray(response.included)) {
-      runs.push(...response.included);
-    }
-
-    const nextPage = response.meta?.pagination?.["next-page"];
-    if (!isNumber(nextPage) || !Number.isSafeInteger(nextPage) || nextPage < 1) {
-      pageEndpoint = null;
-      continue;
-    }
-    const nextUrl: URL = new globalThis.URL(pageEndpoint, "http://terrence.local");
-    nextUrl.searchParams.set("page[number]", String(nextPage));
-    pageEndpoint = `${nextUrl.pathname}${nextUrl.search}`;
-  }
-
-  return { workspaces, runs };
-}
+const WORKSPACE_PAGE_SIZE = 50;
+type WorkspacePage = Readonly<{
+  data: Workspace[];
+  included?: RunSummary[];
+  meta?: Readonly<{
+    pagination?: Readonly<{ "total-count"?: number; "total-pages"?: number }>;
+    "workspace-summary"?: Readonly<{ total: number; locked: number; "run-statuses": Readonly<Record<string, number>> }>;
+  }>;
+}>;
 
 // The "running" set mirrors the executor's active statuses (worker.ts
 // blockerStatuses minus the completed-plan states, which belong to on-hold):
@@ -199,10 +164,7 @@ export function Workspaces(): React.JSX.Element {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectDataError, setProjectDataError] = useState(false);
   const [latestRuns, setLatestRuns] = useState<ReadonlyMap<string, RunSummary>>(new Map());
-  // Org-wide run map backing the Active/Attention KPI tiles. Under a status
-  // filter this comes from the unfiltered fetch, so the tiles never show
-  // filtered-page counts as org-wide numbers (issue #611).
-  const [totalsRuns, setTotalsRuns] = useState<ReadonlyMap<string, RunSummary>>(new Map());
+  const [runStatusCounts, setRunStatusCounts] = useState<Readonly<Record<string, number>>>({});
   const [canManageWorkspaces, setCanManageWorkspaces] = useState(false);
   const [defaultIacBinary, setDefaultIacBinary] = useState("terraform");
   const [defaultTerraformVersion, setDefaultTerraformVersion] = useState("latest");
@@ -211,6 +173,16 @@ export function Workspaces(): React.JSX.Element {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useSyncedSearchParam("status", "");
   const [projectFilter, setProjectFilter] = useState("");
+  const [sort, setSort] = useState("name");
+  const filterKey = JSON.stringify([orgName, search, statusFilter, projectFilter, sort]);
+  const [pageState, setPageState] = useState({ key: "", number: 1 });
+  if (pageState.key !== filterKey) setPageState({ key: filterKey, number: 1 });
+  const page = pageState.key === filterKey ? pageState.number : 1;
+  const [pageCount, setPageCount] = useState(1);
+  const [matchingCount, setMatchingCount] = useState(0);
+  const loadController = useRef<AbortController | null>(null);
+  const exportController = useRef<AbortController | null>(null);
+  const [exportProgress, setExportProgress] = useState<number | null>(null);
   const [density, setDensity] = useState<TableDensity>((): TableDensity => {
     const prefs = getTablePreferences("workspaces");
     return prefs?.density ?? "comfortable";
@@ -231,95 +203,116 @@ export function Workspaces(): React.JSX.Element {
   // Pending tag removal, confirmed through a dialog (issue #588).
   const [pendingTagDelete, setPendingTagDelete] = useState<TagBinding | null>(null);
 
-  const loadData = useCallback(async (signal?: Readonly<AbortSignal>, quiet = false): Promise<void> => {
-    if (!quiet) setLoading(true);
+  const workspaceQuery = useMemo((): string => {
+    const query = new URLSearchParams({ "page[size]": String(WORKSPACE_PAGE_SIZE), sort });
+    if (search.trim() !== "") query.set("search[query]", search.trim());
+    if (projectFilter !== "") query.set("filter[project][id]", projectFilter);
+    if (statusFilter === "locked") query.set("filter[locked]", "true");
+    const statuses = statusesForFilter(statusFilter);
+    if (statuses !== undefined) query.set("filter[current-run][status]", statuses.join(","));
+    return `/organizations/${encodeURIComponent(orgName)}/workspaces?${query}`;
+  }, [orgName, projectFilter, search, sort, statusFilter]);
+
+  const loadData = useCallback(async (quiet = false): Promise<void> => {
+    loadController.current?.abort();
+    const controller = new AbortController();
+    loadController.current = controller;
+    if (!quiet) { setLoading(true); setWorkspaces([]); }
     setLoadError("");
-    setCanManageWorkspaces(false);
     try {
-      // SAFETY: unknown filter keys yield undefined, treated as "no filter" below.
-      const statuses = statusesForFilter(statusFilter);
-      const query = statuses === undefined
-        ? "?page%5Bsize%5D=100&include=current_run"
-        : `?page%5Bsize%5D=100&include=current_run&filter%5Bcurrent-run%5D%5Bstatus%5D=${encodeURIComponent(statuses.join(","))}`;
-      const [workspaceResult, totalsResult, projectResult, organizationResult] = await Promise.all([
-        fetchWorkspacePages(`/organizations/${encodeURIComponent(orgName)}/workspaces${query}`, signal),
-        // KPIs must reflect the whole org, not the filtered page: fetch the
-        // unfiltered list solely for counting when a status filter is active.
-        statuses === undefined
-          ? Promise.resolve(null)
-          : fetchWorkspacePages(`/organizations/${encodeURIComponent(orgName)}/workspaces?page%5Bsize%5D=100&include=current_run`, signal)
-            .catch((): null => null),
-        fetchAllApiPages<Project>(`/organizations/${encodeURIComponent(orgName)}/projects?page%5Bsize%5D=100`, signal)
-          .then((data): { data: Project[]; failed: false } => ({ data, failed: false }))
-          .catch((): { data: Project[]; failed: true } => ({ data: [], failed: true })),
-        fetchApi(
-          `/organizations/${encodeURIComponent(orgName)}`,
-          signal === undefined ? {} : { signal },
-        )
-          .then((response): Readonly<{
-            canManage: boolean;
-            defaultIacBinary: string;
-            defaultTerraformVersion: string;
-          }> => {
-// SAFETY: the fixture matches the JSON:API envelope the component consumes.
-            const organization = (response as { data?: Organization }).data;
-            const iacBinary = organization?.attributes["default-iac-binary"];
-            const version = organization?.attributes["default-terraform-version"];
-            return {
-              canManage: organization?.attributes.permissions?.["can-manage-workspaces"] === true,
-              defaultIacBinary: iacBinary === "terraform" ? "terraform" : "tofu",
-              defaultTerraformVersion: typeof version === "string" && version !== "" ? version : "latest",
-            };
-          })
-          .catch((): false => false),
-      ]);
-      if (signal?.aborted === true) return;
-      setWorkspaces(workspaceResult.workspaces);
-      if (statuses === undefined || totalsResult !== null) {
-        const totalsSource = totalsResult ?? workspaceResult;
-        setTotalWorkspaceCount(totalsSource.workspaces.length);
-        setLockedWorkspaceCount(totalsSource.workspaces.filter((workspace): boolean => workspace.attributes.locked === true).length);
-        setTotalsRuns(runsByWorkspace(totalsSource));
-        setTotalsUnavailable(false);
-      } else {
-        // Unfiltered counting failed under an active filter: keep the last
-        // verified org-wide totals and surface that they are stale rather
-        // than showing filtered counts as org-wide numbers.
-        setTotalsUnavailable(true);
+      const result = await fetchApi<WorkspacePage>(
+        `${workspaceQuery}&page[number]=${page}&include=current_run,workspace_summary`,
+        { signal: controller.signal },
+      );
+      if (controller.signal.aborted) return;
+      if (!Array.isArray(result.data)) throw new Error("The server returned an invalid workspace page.");
+      const pages = result.meta?.pagination?.["total-pages"] ?? 1;
+      if (page > pages && pages > 0) {
+        setPageState({ key: filterKey, number: pages });
+        return;
       }
-      setProjects(projectResult.data);
-      setProjectDataError(projectResult.failed);
-      if (organizationResult !== false) {
-        setCanManageWorkspaces(organizationResult.canManage);
-        setDefaultIacBinary(organizationResult.defaultIacBinary);
-        setDefaultTerraformVersion(organizationResult.defaultTerraformVersion);
-      } else {
-        setCanManageWorkspaces(false);
+      setWorkspaces(result.data);
+      setLatestRuns(runsByWorkspace({ workspaces: result.data, runs: result.included ?? [] }));
+      setMatchingCount(result.meta?.pagination?.["total-count"] ?? result.data.length);
+      setPageCount(pages);
+      const summary = result.meta?.["workspace-summary"];
+      setTotalsUnavailable(summary === undefined);
+      if (summary !== undefined) {
+        setTotalWorkspaceCount(summary.total);
+        setLockedWorkspaceCount(summary.locked);
+        setRunStatusCounts(summary["run-statuses"]);
       }
-      // The server aggregates the latest run per workspace (include=current_run,
-      // review 10.1); the org-wide runs fetch is gone. The table map below
-      // always reflects the (possibly filtered) page; KPI tiles use totalsRuns.
-      setLatestRuns(runsByWorkspace(workspaceResult));
     } catch (error: unknown) {
-      if (signal?.aborted === true) return;
+      if (controller.signal.aborted) return;
       setLoadError(error instanceof Error ? error.message : "Could not load workspaces");
-      toast.add({
-        title: "Could not load workspaces",
-        description: error instanceof Error ? error.message : "Unknown error",
-        type: "error",
-      });
+      setTotalsUnavailable(true);
     } finally {
-      if (signal?.aborted !== true && !quiet) setLoading(false);
+      if (!controller.signal.aborted && !quiet) setLoading(false);
     }
-  }, [orgName, statusFilter]);
+  }, [filterKey, page, workspaceQuery]);
 
   useEffect((): (() => void) => {
-    const controller = new AbortController();
-    if (orgName !== "") void loadData(controller.signal);
-    return (): void => {
-      controller.abort();
-    };
+    if (orgName !== "") void loadData();
+    return (): void => { loadController.current?.abort(); };
   }, [loadData, orgName]);
+
+  // Auxiliary metadata must not hold up the first useful workspace page.
+  useEffect((): (() => void) => {
+    const controller = new AbortController();
+    setProjects([]);
+    setCanManageWorkspaces(false);
+    setProjectDataError(false);
+    void fetchAllApiPages<Project>(`/organizations/${encodeURIComponent(orgName)}/projects?page%5Bsize%5D=100`, controller.signal)
+      .then((data): void => { if (!controller.signal.aborted) setProjects(data); })
+      .catch((): void => { if (!controller.signal.aborted) setProjectDataError(true); });
+    void fetchApi<{ data?: Organization }>(`/organizations/${encodeURIComponent(orgName)}`, { signal: controller.signal })
+      .then((response): void => {
+        if (controller.signal.aborted) return;
+        const attributes = response.data?.attributes;
+        setCanManageWorkspaces(attributes?.permissions?.["can-manage-workspaces"] === true);
+        setDefaultIacBinary(attributes?.["default-iac-binary"] === "terraform" ? "terraform" : "tofu");
+        const version = attributes?.["default-terraform-version"];
+        setDefaultTerraformVersion(typeof version === "string" && version !== "" ? version : "latest");
+      }).catch((): void => { /* Creation remains unavailable when authorization cannot load. */ });
+    return (): void => { controller.abort(); };
+  }, [orgName]);
+
+  useEffect((): (() => void) => (): void => { exportController.current?.abort(); }, [orgName]);
+
+  const exportWorkspaces = async (): Promise<void> => {
+    exportController.current?.abort();
+    const controller = new AbortController();
+    exportController.current = controller;
+    setExportProgress(0);
+    try {
+      const query = new URL(workspaceQuery, "http://terrence.local");
+      query.searchParams.set("page[size]", "100");
+      const result = await fetchAllApiPages<Workspace>(`${query.pathname}${query.search}`, controller.signal, {
+        onProgress: (records): void => { if (!controller.signal.aborted) setExportProgress(records); },
+      });
+      controller.signal.throwIfAborted();
+      const blob = new Blob([JSON.stringify({
+        organization: orgName,
+        exportedAt: new Date().toISOString(),
+        workspaces: result.map((workspace): Record<string, unknown> => ({
+          id: workspace.id, name: workspace.attributes.name,
+          locked: workspace.attributes.locked === true,
+          projectId: workspace.relationships?.project?.data?.id ?? null,
+          tags: workspace.attributes["tag-names"] ?? [],
+        })),
+      }, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${orgName.replace(/[^a-zA-Z0-9._-]/g, "_")}-workspaces.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error: unknown) {
+      if (!controller.signal.aborted) toast.add({ title: "Workspace export failed", description: error instanceof Error ? error.message : "Could not export workspaces", type: "error" });
+    } finally {
+      if (exportController.current === controller) setExportProgress(null);
+    }
+  };
 
   // Persist table density and column visibility.
   // An empty column list is a valid choice (all optional columns hidden);
@@ -363,53 +356,21 @@ export function Workspaces(): React.JSX.Element {
   };
 
   const visibleWorkspaces = useMemo((): Workspace[] => {
-    const needle = search.trim().toLowerCase();
     const pinnedNames = new Set(
-      getPinnedWorkspaces()
-        .filter((entry): boolean => entry.orgName === orgName)
-        .map((entry): string => entry.workspaceName),
+      getPinnedWorkspaces().filter((entry): boolean => entry.orgName === orgName).map((entry): string => entry.workspaceName),
     );
-    const matches = workspaces.filter((workspace): boolean => {
-      const projectId = workspace.relationships?.project?.data?.id ?? "";
-      const tags = workspace.attributes["tag-names"] ?? [];
-      const matchesSearch = needle === ""
-        || workspace.attributes.name.toLowerCase().includes(needle)
-        || tags.some((tag): boolean => tag.toLowerCase().includes(needle));
-      const matchesProject = projectFilter === "" || projectId === projectFilter;
-      const matchesLocked = statusFilter !== "locked" || workspace.attributes.locked === true;
-      return matchesSearch && matchesProject && matchesLocked;
-    });
-    // Pinned workspaces float to the top; order is otherwise
-    // stable (API order).
+    const matches = [...workspaces];
+    // Pinned shortcuts float to the top of this page; all other rows retain API order.
     return matches.sort((a, b): number => {
       const aPinned = pinnedNames.has(a.attributes.name);
       const bPinned = pinnedNames.has(b.attributes.name);
       if (aPinned === bPinned) return 0;
       return aPinned ? -1 : 1;
     });
-  }, [orgName, pinsRevision, projectFilter, search, statusFilter, workspaces]);
+  }, [orgName, pinsRevision, workspaces]);
 
-  const activeRunsCount = useMemo((): number => {
-    let count = 0;
-    for (const run of totalsRuns.values()) {
-      if (runStatusFilters.running.includes(run.attributes.status)) {
-        count++;
-      }
-    }
-    return count;
-  }, [totalsRuns]);
-
-  const attentionNeededCount = useMemo((): number => {
-    let count = 0;
-    for (const run of totalsRuns.values()) {
-      if (runStatusFilters.attention.includes(run.attributes.status)) {
-        count++;
-      }
-    }
-    return count;
-  }, [totalsRuns]);
-
-
+  const activeRunsCount = runStatusFilters.running.reduce((total, status): number => total + (runStatusCounts[status] ?? 0), 0);
+  const attentionNeededCount = runStatusFilters.attention.reduce((total, status): number => total + (runStatusCounts[status] ?? 0), 0);
 
   const loadTags = async (workspace: Workspace): Promise<void> => {
     try {
@@ -451,7 +412,7 @@ export function Workspaces(): React.JSX.Element {
       setTagKey("");
       setTagValue("");
       setEditingTagKey(null);
-      await Promise.all([loadTags(tagWorkspace), loadData(undefined, true)]);
+      await Promise.all([loadTags(tagWorkspace), loadData(true)]);
       toast.add({ title: editingTagKey === null ? "Tag added" : "Tag updated", type: "success" });
     } catch (error: unknown) {
       toast.add({
@@ -471,7 +432,7 @@ export function Workspaces(): React.JSX.Element {
         method: "DELETE",
         body: JSON.stringify({ data: [{ id: tag.attributes.key, type: "tags" }] }),
       });
-      await Promise.all([loadTags(tagWorkspace), loadData(undefined, true)]);
+      await Promise.all([loadTags(tagWorkspace), loadData(true)]);
       toast.add({ title: "Tag removed", type: "success" });
     } catch (error: unknown) {
       toast.add({
@@ -587,7 +548,7 @@ export function Workspaces(): React.JSX.Element {
 
       {totalsUnavailable && (
         <p role="status" className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
-          Organization-wide workspace totals are stale: the workspace count could not be refreshed while a status filter is active.
+          Organization-wide workspace totals are unavailable. Try refreshing the list.
         </p>
       )}
 
@@ -658,7 +619,16 @@ export function Workspaces(): React.JSX.Element {
             ))}
           </Select>
         </div>
+        <Select aria-label="Workspace sort order" value={sort} onValueChange={setSort} className="w-36">
+          <option value="name">Name A–Z</option>
+          <option value="-name">Name Z–A</option>
+        </Select>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <Button size="sm" variant="outline" disabled={exportProgress !== null} onClick={(): void => { void exportWorkspaces(); }}>Export matching workspaces</Button>
+          {exportProgress !== null && <>
+            <span role="status" className="text-xs">Exported {exportProgress} workspaces…</span>
+            <Button size="sm" variant="ghost" onClick={(): void => { exportController.current?.abort(); setExportProgress(null); }}>Cancel export</Button>
+          </>}
           <Button
             size="sm"
             variant="ghost"
@@ -763,9 +733,10 @@ export function Workspaces(): React.JSX.Element {
                       the user may have scrolled past; offer one here. */}
                   <EmptyState
                     compact
+                    illustration="interrupted"
                     headingLevel="h3"
                     title="Workspace data is unavailable"
-                    description="The list could not be loaded. This is usually a connection problem."
+                    description="The list could not be loaded because the connection was interrupted. Try again when the service is reachable."
                     actionLabel="Try again"
                     onAction={(): void => { void loadData(); }}
                   />
@@ -909,6 +880,14 @@ export function Workspaces(): React.JSX.Element {
             ))}
           </TableBody>
         </Table>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-xs text-muted-foreground">
+          <span>{matchingCount} matching workspaces · {workspaces.length} on this page</span>
+          <nav aria-label="Workspace pagination" className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" disabled={loading || page <= 1} onClick={(): void => { setPageState({ key: filterKey, number: page - 1 }); }}>Previous</Button>
+            <span aria-current="page">Page {page} of {pageCount}</span>
+            <Button variant="ghost" size="sm" disabled={loading || page >= pageCount} onClick={(): void => { setPageState({ key: filterKey, number: page + 1 }); }}>Next</Button>
+          </nav>
+        </div>
       </div>
 
       </>

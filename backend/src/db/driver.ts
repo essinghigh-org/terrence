@@ -7,14 +7,14 @@
 //      selects postgres; anything else is treated as a sqlite URL)
 //   2. boot configuration file (storage/terrence.json)
 //   3. default: sqlite at <storage>/terrence.db
-import { join, resolve } from "node:path";
-import { resolveDatabaseConfig, type DatabaseDriver } from "../lib/boot-config";
+import { listenerSetting } from "../lib/runtime-config";
+import { resolveDatabaseConfigWithOrigin, type DatabaseDriver } from "../lib/boot-config";
 
-export const storageDir = resolve(
-  process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../../storage"),
-);
+export const storageDir = listenerSetting("STORAGE_DIR");
 
-export const resolvedDatabase = resolveDatabaseConfig(process.env, storageDir);
+const resolution = resolveDatabaseConfigWithOrigin(process.env, storageDir);
+export const resolvedDatabase = resolution.configuration;
+export const databaseConfigurationOrigin = resolution.origin;
 
 export const databaseDriver: DatabaseDriver = resolvedDatabase.driver;
 

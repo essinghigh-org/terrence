@@ -1,3 +1,6 @@
+import "./src/lib/validate-runtime-config";
+import { validatePersistedConfiguration } from "./src/lib/settings";
+import { integerSetting, listenerSetting } from "./src/lib/runtime-config";
 import { assertStorageWritable, bootstrapInitialAdmin, resetAdminPassword } from "./src/lib/bootstrap";
 import { refreshTrustedClientIpHeaders } from "./src/lib/client-ip";
 import { applyPgMigrations, isPostgres } from "./src/db";
@@ -7,38 +10,17 @@ import { storageDir } from "./src/db/driver";
 import { shutdownLogging } from "./src/lib/log";
 import { markControlPlaneNodeDraining, startControlPlaneHeartbeat } from "./src/routes/health";
 import { validateRunSandboxConfig } from "./src/lib/sandbox";
+import { importLegacyGitHubAppConfiguration } from "./src/lib/github-app-config";
 
 // SEC-10: a misspelled TERRENCE_RUN_NET_POLICY must fail boot, not surface
 // at the first run execution.
 validateRunSandboxConfig();
 
-const rawPort = process.env.PORT;
-const port = rawPort !== undefined && rawPort !== "" ? Number(rawPort) : 3000;
-if (!Number.isInteger(port) || port < 1 || port > 65535) {
-  throw new Error(`Invalid PORT configuration: "${String(process.env.PORT)}". PORT must be a valid integer between 1 and 65535.`);
-}
-const rawSystemPort = process.env.SYSTEM_API_PORT;
-const systemPort = rawSystemPort !== undefined && rawSystemPort !== "" ? Number(rawSystemPort) : 8443;
-if (!Number.isInteger(systemPort) || systemPort < 1 || systemPort > 65535) {
-  throw new Error(`Invalid SYSTEM_API_PORT configuration: "${String(rawSystemPort)}". SYSTEM_API_PORT must be a valid integer between 1 and 65535.`);
-}
-const readEnv = (name: string): string | undefined => {
-  const value = process.env[name];
-  return value === undefined || value === "" ? undefined : value;
-};
-const systemHost = readEnv("SYSTEM_API_HOST") ?? "127.0.0.1";
-const systemTlsCertPath = readEnv("SYSTEM_API_TLS_CERT");
-const systemTlsKeyPath = readEnv("SYSTEM_API_TLS_KEY");
-// "0.0.0.0"/"::" bind every local interface including loopback; inside a
-// container that is how Docker-forwarded loopback traffic arrives (issue
-// #283), so they are local bindings, not remote exposure.
-const systemIsRemote = !["127.0.0.1", "::1", "localhost", "0.0.0.0", "::"].includes(systemHost);
-if ((systemTlsCertPath === undefined) !== (systemTlsKeyPath === undefined)) {
-  throw new Error("SYSTEM_API_TLS_CERT and SYSTEM_API_TLS_KEY must be configured together.");
-}
-if (systemIsRemote && (systemTlsCertPath === undefined || systemTlsKeyPath === undefined)) {
-  throw new Error("SYSTEM_API_HOST is remote; configure SYSTEM_API_TLS_CERT and SYSTEM_API_TLS_KEY before exposing the System API.");
-}
+const port = integerSetting("PORT");
+const systemPort = integerSetting("SYSTEM_API_PORT");
+const systemHost = listenerSetting("SYSTEM_API_HOST");
+const systemTlsCertPath = listenerSetting("SYSTEM_API_TLS_CERT") ?? undefined;
+const systemTlsKeyPath = listenerSetting("SYSTEM_API_TLS_KEY") ?? undefined;
 const systemTls = systemTlsCertPath !== undefined && systemTlsKeyPath !== undefined
   ? {
       cert: Bun.file(systemTlsCertPath),
@@ -59,6 +41,19 @@ assertStorageWritable();
 // must be migrated before the server accepts traffic.
 if (isPostgres) {
   await applyPgMigrations();
+}
+await validatePersistedConfiguration();
+try {
+  const githubAppBootstrap = await importLegacyGitHubAppConfiguration();
+  if (githubAppBootstrap.imported) {
+    console.log("[terrence] Imported the legacy GitHub App environment configuration into encrypted site settings");
+  } else if (githubAppBootstrap.reason !== "legacy-environment-incomplete" && githubAppBootstrap.reason !== "bootstrap-consumed") {
+    console.warn(`[terrence] Legacy GitHub App environment import skipped: ${githubAppBootstrap.reason ?? "unknown reason"}`);
+  }
+} catch (error: unknown) {
+  // A bad or unreachable legacy App must never prevent the control plane from
+  // starting. Site admins can retry the import explicitly after correcting it.
+  console.warn("[terrence] Legacy GitHub App environment import failed; no credentials were persisted", error);
 }
 await resetAdminPassword();
 await bootstrapInitialAdmin();
@@ -178,12 +173,7 @@ async function shutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
   ]);
   let checkpointFailed = false;
   try {
-    const drainGraceMs = ((): number => {
-      const raw = process.env.TERRENCE_DRAIN_GRACE_MS;
-      if (raw === undefined || raw === "") return 6000;
-      const parsed = Number(raw);
-      return Number.isSafeInteger(parsed) && parsed >= 0 ? Math.min(parsed, 25_000) : 6000;
-    })();
+    const drainGraceMs = integerSetting("TERRENCE_DRAIN_GRACE_MS");
     const drain = waitForWorkerDrain(drainGraceMs);
     const server = app.server;
     const systemServer = systemApiApp.server;

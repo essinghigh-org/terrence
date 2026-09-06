@@ -37,6 +37,7 @@ test("shows the latest run status instead of treating an unlocked workspace as a
 // SAFETY: the mock's handling mirrors the backend contract for this test.
   globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
+    if (url.includes("filter%5Bproject%5D")) return json({ data: [] });
     if (url.includes("/workspaces?")) {
       return json({
         data: [{
@@ -66,7 +67,7 @@ test("shows the latest run status instead of treating an unlocked workspace as a
   expect(view.queryByText("Available")).toBeNull();
   expect(view.queryByRole("button", { name: "New workspace" })).toBeNull();
   fireEvent.change(view.getByLabelText("Project filter"), { target: { value: "project-1" } });
-  expect(view.getByText("No workspaces match the current filters")).toBeTruthy();
+  await waitFor((): void => { expect(view.getByText("No workspaces match the current filters")).toBeTruthy(); });
 });
 
 test("fails closed when workspace management permission cannot be loaded", async () => {
@@ -124,113 +125,46 @@ test("keeps workspaces visible when project metadata cannot be loaded", async ()
   );
 
   await view.findByText("production");
-  expect(view.getByText("Projects could not be refreshed. Workspace results are still available.")).toBeTruthy();
+  await view.findByText("Projects could not be refreshed. Workspace results are still available.");
   expect(view.queryByText(/Workspace data is unavailable/)).toBeNull();
 });
 
-test("KPI totals stay org-wide when a status filter is active", async () => {
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+test("KPI totals stay org-wide on a bounded filtered page", async () => {
+  const seen: string[] = [];
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
-    if (url.includes("current-run")) {
-      // Server-filtered view: only the applying workspace matches, and its
-      // latest run arrives as an included resource.
-      return json({
-        data: [{
-          id: "ws-1",
-          attributes: { name: "filtered-only", locked: true },
-          relationships: { project: { data: null }, ...currentRunRelationship("run-1") },
-        }],
-        included: [includedRun("run-1", "post_plan_running", "ws-1")],
-      });
-    }
-    if (url.includes("/workspaces?")) {
-      // Unfiltered: the org-wide set used purely for the KPI cards.
-      return json({
-        data: [
-          { id: "ws-1", attributes: { name: "filtered-only", locked: true }, relationships: { project: { data: null }, ...currentRunRelationship(null) } },
-          { id: "ws-2", attributes: { name: "idle-ws", locked: false }, relationships: { project: { data: null }, ...currentRunRelationship(null) } },
-        ],
-        included: [],
-      });
-    }
+    seen.push(url);
+    if (url.includes("/workspaces?")) return json({
+      data: [{ id: "ws-1", attributes: { name: "filtered-only", locked: true }, relationships: currentRunRelationship("run-1") }],
+      included: [includedRun("run-1", "post_plan_running", "ws-1")],
+      meta: { pagination: { "total-count": 80, "total-pages": 2 }, "workspace-summary": { total: 10000, locked: 120, "run-statuses": { post_plan_running: 80, errored: 15 } } },
+    });
     if (url.includes("/projects?")) return json({ data: [] });
-    if (url === "/api/v2/organizations/acme") {
-      return json({ data: { attributes: { permissions: { "can-manage-workspaces": false } } } });
-    }
+    if (url === "/api/v2/organizations/acme") return json({ data: { attributes: { permissions: {} } } });
     throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
-
-  const view = render(
-    <MemoryRouter initialEntries={["/app/acme"]}>
-      <Routes><Route path="/app/:orgName" element={<Workspaces />} /></Routes>
-    </MemoryRouter>,
-  );
-  fireEvent.change(view.getByLabelText("Status filter"), { target: { value: "running" } });
-
+  }) as unknown as typeof fetch;
+  const view = render(<MemoryRouter initialEntries={["/app/acme?status=running"]}><Routes><Route path="/app/:orgName" element={<Workspaces />} /></Routes></MemoryRouter>);
   await waitFor((): void => { expect(view.getByText("Running post-plan tasks")).toBeTruthy(); });
-  const totalCard = view.getByText("Total Workspaces").parentElement!;
-  const lockedCard = view.getByText("Locked Workspaces").parentElement!;
-  expect(totalCard.textContent).toContain("2");
-  expect(lockedCard.textContent).toContain("1");
-  // The table still shows only the server-filtered workspace.
-  expect(view.queryByText("idle-ws")).toBeNull();
-  expect(view.getByText("filtered-only")).toBeTruthy();
-  // post_plan_running is only on the filtered page: the org-wide tile stays 0 (issue #611).
-  expect(view.getByText("Active Runs").parentElement!.textContent).not.toContain("1");
-  expect(view.getByText("Active Runs").parentElement!.textContent).toContain("0");
+  expect(view.getByText("Total Workspaces").parentElement!.textContent).toContain("10000");
+  expect(view.getByText("Locked Workspaces").parentElement!.textContent).toContain("120");
+  expect(view.getByText("Active Runs").parentElement!.textContent).toContain("80");
+  expect(view.getByText("Attention Needed").parentElement!.textContent).toContain("15");
+  expect(seen.filter((url): boolean => url.includes("/workspaces?"))).toHaveLength(1);
 });
 
-test("KPI totals degrade visibly when the org-wide count cannot be loaded", async () => {
-  let failUnfiltered = false;
-// SAFETY: the mock's handling mirrors the backend contract for this test.
-  globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
+test("missing summary is unavailable rather than misrepresented by the page count", async () => {
+  globalThis.fetch = mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
-    if (url.includes("current-run")) {
-      return json({
-        data: [{
-          id: "ws-1",
-          attributes: { name: "filtered-only", locked: true },
-          relationships: { project: { data: null }, ...currentRunRelationship(null) },
-        }],
-        included: [],
-      });
-    }
-    if (url.includes("/workspaces?")) {
-      return failUnfiltered
-        ? json({ errors: [{ title: "Count unavailable" }] }, 503)
-        : json({
-            data: [{
-              id: "ws-1",
-              attributes: { name: "filtered-only", locked: true },
-              relationships: { project: { data: null }, ...currentRunRelationship(null) },
-            }],
-            included: [],
-          });
-    }
+    if (url.includes("/workspaces?")) return json({ data: [{ id: "ws-1", attributes: { name: "visible", locked: true } }] });
     if (url.includes("/projects?")) return json({ data: [] });
-    if (url === "/api/v2/organizations/acme") {
-      return json({ data: { attributes: { permissions: { "can-manage-workspaces": false } } } });
-    }
-    throw new Error(`Unexpected request: ${url}`);
-  })) as unknown as typeof fetch;
-
-  const view = render(
-    <MemoryRouter initialEntries={["/app/acme"]}>
-      <Routes><Route path="/app/:orgName" element={<Workspaces />} /></Routes>
-    </MemoryRouter>,
-  );
-  await waitFor((): void => { expect(view.getByText("filtered-only")).toBeTruthy(); });
-  failUnfiltered = true;
-  fireEvent.change(view.getByLabelText("Status filter"), { target: { value: "running" } });
-
-  await waitFor((): void => {
-    expect(view.getByText(/workspace totals are stale/)).toBeTruthy();
-  });
-  expect(view.getByText("Total Workspaces").parentElement!.textContent).toContain("—");
-  expect(view.getByText("Locked Workspaces").parentElement!.textContent).toContain("—");
-  expect(view.getByText("Active Runs").parentElement!.textContent).toContain("—");
-  expect(view.getByText("Attention Needed").parentElement!.textContent).toContain("—");
+    return json({ data: { attributes: { permissions: {} } } });
+  }) as unknown as typeof fetch;
+  const view = render(<MemoryRouter initialEntries={["/app/acme"]}><Routes><Route path="/app/:orgName" element={<Workspaces />} /></Routes></MemoryRouter>);
+  await waitFor((): void => { expect(view.getByText("visible")).toBeTruthy(); });
+  expect(view.getByText(/workspace totals are unavailable/)).toBeTruthy();
+  for (const label of ["Total Workspaces", "Locked Workspaces", "Active Runs", "Attention Needed"]) {
+    expect(view.getByText(label).parentElement!.textContent).toContain("—");
+  }
 });
 
 test("Attention tile counts errored runs and its filter includes them (issue #612)", async () => {
@@ -247,6 +181,7 @@ test("Attention tile counts errored runs and its filter includes them (issue #61
           relationships: { project: { data: null }, ...currentRunRelationship("run-err") },
         }],
         included: [includedRun("run-err", "errored", "ws-1")],
+        meta: { "workspace-summary": { total: 1, locked: 0, "run-statuses": { errored: 1 } } },
       });
     }
     if (url.includes("/projects?")) return json({ data: [] });

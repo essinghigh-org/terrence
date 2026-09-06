@@ -12,7 +12,7 @@ import { deferredChangesFromCapturedOutput, removeStackState, runStackDeployment
 import { captureProcessOutput, PROCESS_OUTPUT_PREVIEW_CHARS } from "../../src/lib/process-output";
 import type { DurableJob } from "../../src/lib/durable-jobs";
 
-const context = { heartbeat: async (): Promise<boolean> => true, canceled: async (): Promise<boolean> => false };
+const context = { signal: new AbortController().signal, heartbeat: async (): Promise<boolean> => true, canceled: async (): Promise<boolean> => false };
 
 async function archive(): Promise<{ directory: string; path: string }> {
   const directory = await mkdtemp(join(tmpdir(), "terrence-stack-test-"));
@@ -27,7 +27,7 @@ async function archive(): Promise<{ directory: string; path: string }> {
 }
 
 function job(runId: string, id = crypto.randomUUID()): DurableJob {
-  return { id, kind: "stack-deployment", dedupeKey: null, status: "running", payload: { runId }, attempts: 1, runAfter: Date.now(), lockedBy: "test", lockToken: "test", leaseExpiresAt: Date.now() + 30_000, heartbeatAt: Date.now(), lastError: null, createdAt: Date.now(), updatedAt: Date.now() };
+  return { id, kind: "stack-deployment", dedupeKey: null, status: "running", payload: { runId }, payloadSchemaVersion: 1, attempts: 1, runAfter: Date.now(), lockedBy: "test", lockToken: "test", leaseExpiresAt: Date.now() + 30_000, heartbeatAt: Date.now(), lastError: null, createdAt: Date.now(), updatedAt: Date.now() };
 }
 
 describe("Stack deployment worker", () => {
@@ -154,7 +154,10 @@ describe("Stack deployment worker", () => {
     await runStackDeploymentJob(job(runId), context);
     const claimed = await claimStackAgentJob((await db.query.agents.findFirst({ where: eq(agents.id, agentId) }))!);
     expect(claimed?.job.phase).toBe("plan");
-    await completeStackAgentJob(agentId, claimed!.job.id, { status: "completed", errorMessage: null, result: { hasChanges: false } });
+    expect(claimed?.job.fencingToken).toBeGreaterThan(0);
+    expect(await completeStackAgentJob(agentId, claimed!.job.id, { status: "completed", errorMessage: null, result: { hasChanges: false } }, claimed!.job.fencingToken - 1)).toBeUndefined();
+    expect((await db.query.stackAgentJobs.findFirst({ where: eq(stackAgentJobs.id, claimed!.job.id) }))?.status).toBe("claimed");
+    await completeStackAgentJob(agentId, claimed!.job.id, { status: "completed", errorMessage: null, result: { hasChanges: false } }, claimed!.job.fencingToken);
     expect((await db.query.stackAgentJobs.findFirst({ where: eq(stackAgentJobs.id, claimed!.job.id) }))?.status).toBe("completed");
     await db.update(stacks).set({ executionMode: "remote", agentPoolId: null }).where(eq(stacks.id, stackId));
   });
@@ -219,6 +222,7 @@ describe("Stack deployment worker", () => {
     const recovered = await claimStackAgentJob(replacement);
     expect(recovered?.job.id).toBe(claimed.job.id);
     expect(recovered?.job.agentId).toBe(replacementAgentId);
+    expect(recovered?.job.fencingToken).toBeGreaterThan(claimed.job.fencingToken);
 
     await db.delete(stackAgentJobs).where(eq(stackAgentJobs.id, claimed.job.id));
     await db.delete(stackRecords).where(inArray(stackRecords.id, recordIds));

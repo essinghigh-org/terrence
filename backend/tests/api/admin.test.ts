@@ -1,3 +1,4 @@
+import { rejects } from "node:assert/strict";
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -14,7 +15,7 @@ import {
   adminSettings,
   user2FA,
 } from "../../src/db/schema";
-import { getSettings, invalidateSettingsCache } from "../../src/lib/settings";
+import { getSettings, invalidateSettingsCache, persistedConfigurationReport } from "../../src/lib/settings";
 import { updateSettings } from "../../src/routes/admin/helpers";
 import { decryptSecret, isEncryptedSecret } from "../../src/lib/secrets";
 
@@ -97,6 +98,13 @@ describe("Admin Operations API contract", () => {
   });
 
   it("lists site admin resources and active runs", async () => {
+    const budgets = await request("/api/v2/admin/resource-budgets");
+    expect(budgets.status).toBe(200);
+    const budgetsBody = await budgets.json() as { data: { type: string; attributes: { snapshot: { queued: number; running: number } } } };
+    expect(budgetsBody.data.type).toBe("resource-budgets");
+    expect(typeof budgetsBody.data.attributes.snapshot.queued).toBe("number");
+    expect(JSON.stringify(budgetsBody)).not.toContain(orgId);
+
     // 1. Admin Users list
     const getUsersRes = await request("/api/v2/admin/users");
     expect(getUsersRes.status).toBe(200);
@@ -286,6 +294,59 @@ describe("Admin Operations API contract", () => {
     await db.delete(users).where(eq(users.id, targetId));
   });
 
+  it("reports effective inherited logging values and explicit sink disablement", async () => {
+    const original = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "logging") });
+    const oldLevel = process.env["LOG_LEVEL"];
+    const oldTargets = process.env["TERRENCE_SYSLOG_TARGETS"];
+    const oldTarget = process.env["TERRENCE_SYSLOG_TARGET"];
+    try {
+      process.env["LOG_LEVEL"] = "warn";
+      process.env["TERRENCE_SYSLOG_TARGETS"] = "udp://collector.example:514";
+      delete process.env["TERRENCE_SYSLOG_TARGET"];
+      await db.insert(adminSettings).values({ id: "logging", values: {}, updatedAt: Date.now() }).onConflictDoUpdate({ target: adminSettings.id, set: { values: {} } });
+      let report = await persistedConfigurationReport();
+      expect(report.find((entry): boolean => entry.name === "logging.log-level")).toMatchObject({ value: "warn", origin: "environment", restartRequired: true });
+      expect(report.find((entry): boolean => entry.name === "logging.enabled")).toMatchObject({ value: true, origin: "environment" });
+      expect(JSON.stringify(report)).not.toContain("collector.example");
+      await db.update(adminSettings).set({ values: { "syslog-targets": [] } }).where(eq(adminSettings.id, "logging"));
+      report = await persistedConfigurationReport();
+      expect(report.find((entry): boolean => entry.name === "logging.enabled")).toMatchObject({ value: false, origin: "persisted", restartRequired: false });
+    } finally {
+      for (const [name, value] of [["LOG_LEVEL", oldLevel], ["TERRENCE_SYSLOG_TARGETS", oldTargets], ["TERRENCE_SYSLOG_TARGET", oldTarget]] as const) {
+        if (value === undefined) Reflect.deleteProperty(process.env, name); else process.env[name] = value;
+      }
+      if (original === undefined) await db.delete(adminSettings).where(eq(adminSettings.id, "logging"));
+      else await db.update(adminSettings).set({ values: original.values }).where(eq(adminSettings.id, "logging"));
+      invalidateSettingsCache();
+    }
+  });
+
+  it("rejects invalid settings without persisting or reflecting supplied values", async () => {
+    const before = await getSettings("general");
+    for (const attributes of [{ "plan-timeout": -1 }, { "api-rate-limit": "private-marker" }, { "private-marker": true }]) {
+      const response = await request("/api/v2/admin/general-settings", "PATCH", { data: { attributes } });
+      expect(response.status).toBe(422);
+      expect(await response.text()).not.toContain("private-marker");
+    }
+    expect(await getSettings("general")).toEqual(before);
+  });
+
+  it("fails closed on invalid persisted settings and permits a corrective update", async () => {
+    const before = await getSettings("general");
+    try {
+      await db.update(adminSettings).set({ values: { ...before, "plan-timeout": -1 } }).where(eq(adminSettings.id, "general"));
+      invalidateSettingsCache();
+      const invalid = await request("/api/v2/admin/general-settings");
+      expect(invalid.status).toBe(503);
+      const repaired = await request("/api/v2/admin/general-settings", "PATCH", { data: { attributes: { "plan-timeout": 3600 } } });
+      expect(repaired.status).toBe(200);
+      expect((await getSettings("general"))["plan-timeout"]).toBe(3600);
+    } finally {
+      await db.update(adminSettings).set({ values: before }).where(eq(adminSettings.id, "general"));
+      invalidateSettingsCache();
+    }
+  });
+
   it("preserves unrelated concurrent site settings patches", async () => {
     const original = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "site") });
     const settingsQuery = db.query.adminSettings as unknown as {
@@ -304,21 +365,21 @@ describe("Admin Operations API contract", () => {
       return row;
     };
     try {
-      const initialValues = { ...(original?.values ?? {}), "concurrency-base": "base" };
+      const initialValues = { ...(original?.values ?? {}), "agent-enabled": true };
       await db.insert(adminSettings).values({ id: "site", values: initialValues, updatedAt: Date.now() })
         .onConflictDoUpdate({ target: adminSettings.id, set: { values: initialValues, updatedAt: Date.now() } });
       invalidateSettingsCache();
       const [left, right] = await Promise.all([
-        request("/api/v2/admin/settings", "PATCH", { data: { attributes: { "concurrency-left": "left" } } }),
-        request("/api/v2/admin/settings", "PATCH", { data: { attributes: { "concurrency-right": "right" } } }),
+        request("/api/v2/admin/settings", "PATCH", { data: { attributes: { "sentinel-enabled": false } } }),
+        request("/api/v2/admin/settings", "PATCH", { data: { attributes: { "opa-enabled": false } } }),
       ]);
       expect(left.status).toBe(200);
       expect(right.status).toBe(200);
       invalidateSettingsCache();
       const stored = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "site") });
-      expect(stored?.values["concurrency-base"]).toBe("base");
-      expect(stored?.values["concurrency-left"]).toBe("left");
-      expect(stored?.values["concurrency-right"]).toBe("right");
+      expect(stored?.values["agent-enabled"]).toBe(true);
+      expect(stored?.values["sentinel-enabled"]).toBe(false);
+      expect(stored?.values["opa-enabled"]).toBe(false);
     } finally {
       settingsQuery.findFirst = originalFindFirst;
       if (original === undefined) {
@@ -334,7 +395,7 @@ describe("Admin Operations API contract", () => {
   it("merges settings from persisted state when the local cache is stale", async () => {
     const original = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "site") });
     try {
-      const initialValues = { ...(original?.values ?? {}), "concurrency-cache-base": "base" };
+      const initialValues = { ...(original?.values ?? {}), "agent-enabled": true };
       await db.insert(adminSettings).values({ id: "site", values: initialValues, updatedAt: Date.now() })
         .onConflictDoUpdate({ target: adminSettings.id, set: { values: initialValues, updatedAt: Date.now() } });
       invalidateSettingsCache();
@@ -342,18 +403,18 @@ describe("Admin Operations API contract", () => {
 
       // Simulate another backend replica committing a change after this
       // process populated its one-second settings cache.
-      const externalValues = { ...initialValues, "concurrency-external": "external" };
+      const externalValues = { ...initialValues, "sentinel-enabled": false };
       await db.update(adminSettings).set({ values: externalValues, updatedAt: Date.now() })
         .where(eq(adminSettings.id, "site"));
 
       const response = await request("/api/v2/admin/settings", "PATCH", {
-        data: { attributes: { "concurrency-local": "local" } },
+        data: { attributes: { "opa-enabled": false } },
       });
       expect(response.status).toBe(200);
       invalidateSettingsCache();
       const stored = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "site") });
-      expect(stored?.values["concurrency-external"]).toBe("external");
-      expect(stored?.values["concurrency-local"]).toBe("local");
+      expect(stored?.values["sentinel-enabled"]).toBe(false);
+      expect(stored?.values["opa-enabled"]).toBe(false);
     } finally {
       if (original === undefined) {
         await db.delete(adminSettings).where(eq(adminSettings.id, "site"));
@@ -369,9 +430,8 @@ describe("Admin Operations API contract", () => {
     const original = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "site") });
     try {
       const attributes = JSON.parse("{\"__proto__\":{\"polluted\":true},\"concurrency-safe\":\"safe\"}") as Record<string, unknown>;
-      const updated = await updateSettings("site", attributes);
-      expect("polluted" in updated).toBeFalse();
-      expect(updated["concurrency-safe"]).toBe("safe");
+      await rejects(updateSettings("site", attributes), /Unsupported setting/);
+      expect("polluted" in await getSettings("site")).toBeFalse();
     } finally {
       if (original === undefined) {
         await db.delete(adminSettings).where(eq(adminSettings.id, "site"));
@@ -443,11 +503,18 @@ describe("Admin Operations API contract", () => {
       const smtpAttributes = (await smtpPatch.json()).data.attributes as Record<string, unknown>;
       expect(smtpAttributes["password"]).toBeUndefined();
       expect(smtpAttributes["password-set"]).toBeTrue();
+      const providerSmtpPatch = await request("/api/v2/admin/smtp-settings", "PATCH", {
+        data: { attributes: { sender: "provider@example.com" } },
+      });
+      expect(providerSmtpPatch.status).toBe(200);
+      const providerSmtpAttributes = (await providerSmtpPatch.json()).data.attributes as Record<string, unknown>;
+      expect(providerSmtpAttributes["sender"]).toBe("provider@example.com");
       const storedSmtp = await db.query.adminSettings.findFirst({ where: eq(adminSettings.id, "smtp") });
       const storedSmtpPassword = storedSmtp?.values["password"];
       expect(typeof storedSmtpPassword).toBe("string");
       expect(isEncryptedSecret(storedSmtpPassword as string)).toBeTrue();
       expect(await decryptSecret(storedSmtpPassword as string)).toBe("secret-smtp");
+      expect(storedSmtp?.values["sender-email"]).toBe("provider@example.com");
     } finally {
       if (originalCost === undefined) await db.delete(adminSettings).where(eq(adminSettings.id, "cost"));
       else await db.update(adminSettings).set({ values: originalCost.values, updatedAt: originalCost.updatedAt }).where(eq(adminSettings.id, "cost"));

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": 1,
+  "_comment": "Every exception is temporary. Keep an owner, disposition, and review date beside the override so dependency maintenance cannot silently become a permanent ignore.",
+  "exceptions": [
+    {
+      "id": "override-brace-expansion",
+      "kind": "dependency-override",
+      "package": "brace-expansion",
+      "constraint": "5.0.9",
+      "owner": "platform-maintainers",
+      "reason": "Keep the transitive brace-expansion resolution on the reviewed patched release while upstream ranges converge.",
+      "disposition": "Accepted override; re-check consumers before renewal.",
+      "expiresOn": "2026-12-31"
+    },
+    {
+      "id": "override-esbuild",
+      "kind": "dependency-override",
+      "package": "esbuild",
+      "constraint": "0.28.2",
+      "owner": "platform-maintainers",
+      "reason": "Keep all frontend toolchain consumers on the reviewed esbuild release until their ranges converge.",
+      "disposition": "Accepted override; run the frontend build and browser smoke suite before renewal.",
+      "expiresOn": "2026-12-31"
+    }
+  ]
+}

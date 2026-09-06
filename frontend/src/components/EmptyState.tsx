@@ -41,7 +41,7 @@ export function EmptyState(props: Readonly<{
   const footerVisible = hasAction || docsHref !== undefined;
   return (
     <Empty className={compact === true ? "p-6" : "px-6 py-12"}>
-      {illustration !== undefined && <Terrence pose={illustration} className={compact === true ? "w-32" : "w-44"} />}
+      {illustration !== undefined && <Terrence pose={illustration} detail={compact === true ? "small" : "full"} className={compact === true ? "w-32" : "w-44"} />}
       <EmptyHeader>
         {/* EmptyTitle is a div; render a real heading inside it so empty
             states still land in the document outline. */}

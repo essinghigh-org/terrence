@@ -25,6 +25,7 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Input } from "../components/ui/input";
 import { Select, SelectItem } from "../components/ui/select";
 import { Spinner } from "../components/ui/spinner";
+import { RelativeTime } from "../components/ui/time";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
 import { fetchApi } from "../lib/api";
 import { registryModuleFromResource, highestUsableRegistryVersion, registryModulePath, type RegistryModule } from "../lib/registry";
@@ -204,7 +205,7 @@ function ModuleCard({ orgName, module }: Readonly<{ orgName: string; module: Reg
                 <span className="truncate">{moduleStatusLabel(module)} · {syncLabel(module)}</span>
               </div>
               <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-                <span title={dateLabel(module.updatedAt)}>Updated {relativeDateLabel(module.updatedAt)}</span>
+                <span>Updated <RelativeTime value={module.updatedAt} /></span>
                 <ArrowUpRight aria-hidden="true" className="size-4 shrink-0" />
               </div>
             </div>
@@ -249,7 +250,7 @@ function ProviderCard({ registryPath, provider }: Readonly<{ registryPath: strin
               <Globe2 aria-hidden="true" className="size-3" />
               Private provider
             </span>
-            <span title={dateLabel(provider.createdAt)}>Added {relativeDateLabel(provider.createdAt)}</span>
+            <span>Added <RelativeTime value={provider.createdAt} /></span>
           </div>
         </CardContent>
       </Card>

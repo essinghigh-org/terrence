@@ -1,5 +1,5 @@
-import { afterEach, expect, test } from "bun:test";
-import { cleanup, render } from "@testing-library/react";
+import { afterEach, expect, mock, test } from "bun:test";
+import { cleanup, render, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { WorkspaceGettingStarted } from "../src/components/WorkspaceGettingStarted";
 
@@ -31,4 +31,55 @@ test("local execution keeps CLI instructions even when a repository is attached"
   expect(view.getByText(/terraform login/)).toBeTruthy();
   expect(view.getByText("Plans execute on your computer. Terrence stores the state.")).toBeTruthy();
   expect(view.queryByRole("link", { name: "Start first plan" })).toBeNull();
+});
+
+test("readiness checklist distinguishes setup work from a workspace ready to plan", () => {
+  const view = render(<MemoryRouter><WorkspaceGettingStarted {...defaults} /></MemoryRouter>);
+  expect(view.getByRole("heading", { name: "Workspace readiness" })).toBeTruthy();
+  expect(view.getByText("Setup required")).toBeTruthy();
+  expect(view.getByText("Configuration connection is still needed")).toBeTruthy();
+
+  view.rerender(
+    <MemoryRouter>
+      <WorkspaceGettingStarted {...defaults} hasRepository />
+    </MemoryRouter>,
+  );
+  expect(view.getByText("Ready for a plan")).toBeTruthy();
+  expect(view.getByText("Repository is connected")).toBeTruthy();
+});
+
+test("readiness checks verify inputs and remote run capability without reading secret values", async () => {
+  const originalFetch = globalThis.fetch;
+  const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.startsWith("/api/v2/workspaces/ws-1/vars")) {
+      return new Response(JSON.stringify({ data: [{ id: "var-1", attributes: { key: "TOKEN" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/vnd.api+json" },
+      });
+    }
+    if (url === "/api/v2/meta") {
+      return new Response(JSON.stringify({ data: { attributes: { "run-sandbox": { enabled: true, available: true } } } }), {
+        status: 200,
+        headers: { "Content-Type": "application/vnd.api+json" },
+      });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  try {
+    const view = render(
+      <MemoryRouter>
+        <WorkspaceGettingStarted {...defaults} workspaceId="ws-1" hasRepository />
+      </MemoryRouter>,
+    );
+    expect(view.getByText(/Secret values are never fetched/)).toBeTruthy();
+    await waitFor((): void => {
+      expect(view.getByText("Variable access is configured; code-specific requirements are verified by a plan.")).toBeTruthy();
+      expect(view.getByText("The remote run sandbox is available.")).toBeTruthy();
+    });
+    expect(view.getByText("The Terrence worker is the execution target.")).toBeTruthy();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

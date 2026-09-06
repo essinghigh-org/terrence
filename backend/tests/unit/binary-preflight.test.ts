@@ -45,7 +45,7 @@ describe("resolveBinaryDownloadTimeoutMs", (): void => {
   test("rejects non-positive and non-numeric values", (): void => {
     for (const value of ["0", "-1", "abc", ""]) {
       setEnv("TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS", value);
-      expect(resolveBinaryDownloadTimeoutMs()).toBe(120_000);
+      expect(resolveBinaryDownloadTimeoutMs).toThrow("TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS must be");
     }
   });
 });
@@ -63,11 +63,11 @@ describe("resolveBinaryDownloadRetries", (): void => {
     expect(resolveBinaryDownloadRetries()).toBe(3);
   });
 
-  test("caps at 5 and rejects negatives", (): void => {
+  test("rejects excessive and negative retry counts", (): void => {
     setEnv("TERRENCE_BINARY_DOWNLOAD_RETRIES", "99");
-    expect(resolveBinaryDownloadRetries()).toBe(5);
+    expect(resolveBinaryDownloadRetries).toThrow("TERRENCE_BINARY_DOWNLOAD_RETRIES must be");
     setEnv("TERRENCE_BINARY_DOWNLOAD_RETRIES", "-1");
-    expect(resolveBinaryDownloadRetries()).toBe(2);
+    expect(resolveBinaryDownloadRetries).toThrow("TERRENCE_BINARY_DOWNLOAD_RETRIES must be");
   });
 });
 

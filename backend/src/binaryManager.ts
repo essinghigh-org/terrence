@@ -1,8 +1,10 @@
+import { integerSetting } from "./lib/runtime-config";
 import { isAbsolute, join, relative, resolve, sep } from "path";
 import { mkdir, exists, chmod, unlink, readdir, rm, readFile, writeFile } from "fs/promises";
 import { spawn } from "bun";
-import { envEnabled } from "./lib/env";
+import { envFlag } from "./lib/env";
 import { log } from "./lib/log";
+import { sha256File } from "./lib/file-hash";
 import { isVersionCacheFresh, loadVersionCacheFile, saveVersionCacheFile } from "./lib/version-cache";
 
 const STORAGE_DIR = resolve(process.env["STORAGE_DIR"] ?? join(import.meta.dir, "../storage"));
@@ -108,8 +110,7 @@ export async function verifyBinaryIntegrity(
   integrity: BinaryIntegrity,
 ): Promise<boolean> {
   try {
-    const buffer = await Bun.file(binaryPath).arrayBuffer();
-    return await calculateSha256(buffer) === integrity.binarySha256.toLowerCase();
+    return await sha256File(binaryPath) === integrity.binarySha256.toLowerCase();
   } catch {
     return false;
   }
@@ -369,8 +370,7 @@ async function lastKnownGoodVersion(tool: "tofu" | "terraform"): Promise<string 
 const versionCache = new Map<string, { versions: string[]; fetchedAt: number }>();
 const VERSION_CACHE_FILE = join(STORAGE_DIR, "version-cache.json");
 function resolveVersionCacheTtl(): number {
-  const configured = Number(process.env["TERRENCE_VERSION_CACHE_TTL_MS"]);
-  return Number.isFinite(configured) && configured > 0 ? configured : 24 * 60 * 60 * 1000;
+  return integerSetting("TERRENCE_VERSION_CACHE_TTL_MS");
 }
 const VERSION_CACHE_TTL_MS = resolveVersionCacheTtl();
 for (const [tool, entry] of Object.entries(loadVersionCacheFile(VERSION_CACHE_FILE))) {
@@ -456,16 +456,13 @@ export async function availableVersions(tool: "tofu" | "terraform"): Promise<str
 
 /** Per-attempt binary download timeout. Overridable for slow links. */
 export function resolveBinaryDownloadTimeoutMs(): number {
-  const configured = Number(process.env["TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS"]);
-  return Number.isSafeInteger(configured) && configured > 0 ? configured : 120_000;
+  return integerSetting("TERRENCE_BINARY_DOWNLOAD_TIMEOUT_MS");
 }
 
 /** Retries for timed-out or transient binary downloads. Capped so a wedged
  * upstream cannot stall run startup for long. */
 export function resolveBinaryDownloadRetries(): number {
-  const configured = Number(process.env["TERRENCE_BINARY_DOWNLOAD_RETRIES"]);
-  if (!Number.isSafeInteger(configured) || configured < 0) return 2;
-  return Math.min(configured, 5);
+  return integerSetting("TERRENCE_BINARY_DOWNLOAD_RETRIES");
 }
 
 /** A failed binary-archive download. `retryable` is false for failures
@@ -680,7 +677,7 @@ async function calculateSha256(buffer: Readonly<ArrayBuffer>): Promise<string> {
 
 async function verifySha256(tool: "tofu" | "terraform", version: string, filename: string, buffer: Readonly<ArrayBuffer>): Promise<boolean> {
 
-  const allowBypass = envEnabled(process.env["ALLOW_UNVERIFIED_CHECKSUMS"]);
+  const allowBypass = envFlag("ALLOW_UNVERIFIED_CHECKSUMS");
   try {
     let checksumUrl = "";
     if (tool === "tofu") {
@@ -731,8 +728,7 @@ async function systemBinaryFallback(
     const binaryPath = (await new Response(which.stdout).text()).trim();
     if (binaryPath === "") return null;
     const versionProcess = spawn([binaryPath, "version"]);
-    const configuredProbeTimeout = Number(process.env["TERRENCE_BINARY_PROBE_TIMEOUT_MS"]);
-    const probeTimeout = Number.isSafeInteger(configuredProbeTimeout) && configuredProbeTimeout > 0 ? configuredProbeTimeout : 10_000;
+    const probeTimeout = integerSetting("TERRENCE_BINARY_PROBE_TIMEOUT_MS");
     const output = await new Promise<string | null>((resolve): void => {
       let settled = false;
       const timer = setTimeout((): void => {
@@ -939,11 +935,10 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
         await chmod(binaryPath, 0o755);
         // Record the on-disk digest so future runs can re-validate the cache
         // without re-downloading (kanban 6.5).
-        const binaryBuffer = await Bun.file(binaryPath).arrayBuffer();
         await writeBinaryIntegrity(targetDir, {
           tool,
           version,
-          binarySha256: await calculateSha256(binaryBuffer),
+          binarySha256: await sha256File(binaryPath),
         });
         log.info(`Successfully installed ${tool} v${version} to ${binaryPath}`);
         return { binaryPath, tool, version };
@@ -982,7 +977,7 @@ export async function ensureBinary(toolInput?: string | null, versionInput?: str
   }
 
   // Alternate-tool fallback ONLY if opt-in via environment flag
-  if (envEnabled(process.env["ALLOW_TOOL_FALLBACK"])) {
+  if (envFlag("ALLOW_TOOL_FALLBACK")) {
     const fallbackTool = tool === "tofu" ? "terraform" : "tofu";
     try {
       const sysAlt = spawn(["which", fallbackTool]);

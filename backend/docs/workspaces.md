@@ -78,3 +78,45 @@ Each workspace runs a specific Terraform or OpenTofu binary. The version is sele
 ## Tags
 
 Workspaces accept tags. Tags filter workspaces in listings and can scope fine-grained token rules.
+
+## Listing and exporting
+
+The workspace list loads 50 rows at a time. Name/tag search, project and run-status filters, locking, and name sorting run on the server before pagination. The matching count follows the query; summary tiles count all workspaces the current credential can access in the organization. Pinned workspaces appear first within the current page.
+
+**Export matching workspaces** explicitly traverses the current query and downloads workspace metadata as JSON. It reports progress and supports cancellation. Each page checks authorization again; a failed or cancelled export never downloads a partial file. Exports stop at 100 pages or 10,000 records; narrow the query for larger organizations. Rate-limit and temporary-unavailable responses are retried up to three times per page, honoring `Retry-After` waits of up to 30 seconds.
+
+### Reproducing the list benchmark
+
+Build the frontend, then run from `backend` on a host with the browser test dependencies:
+
+```sh
+WORKSPACE_SCALE=1 TERRENCE_QUERY_COUNT=1 xvfb-run -a bun test tests/api/workspace_list_scale.test.ts
+```
+
+The opt-in test creates an isolated test database with 10,000 workspaces and 20,000 runs, opens the built UI in a real browser, and reports request duration, query count, response bytes, first useful render and post-GC browser heap. Ordinary tests skip this fixture. `WORKSPACE_SCALE_REPORT` optionally saves the JSON result.
+
+A local SQLite comparison on 2026-09-06 against `e6365cfa` measured:
+
+| Measurement | Before | Bounded list |
+| --- | ---: | ---: |
+| Workspace requests | 100 | 1 |
+| Response bytes | 26,828,639 | 133,733 |
+| First useful render | 6,052 ms | 639 ms |
+| Total workspace request time | 1,187 ms | 24 ms |
+| UI database queries | 10,738 | 88 |
+| JavaScript heap after GC | 151,803,208 bytes | 5,413,272 bytes |
+| Rendered rows | 10,000 | 50 |
+
+These are single-run local measurements, not latency guarantees. Request time includes authorization, database work and serialization, rather than isolated SQL execution. Both builds explicitly selected production React; the baseline build otherwise bundled development React. Both completed measurements used `RATE_LIMIT_MAX=10000`: with the default rate limit the baseline's eager traversal failed before rendering, while the bounded list also passed at the default limit. Functional query tests run against SQLite and PostgreSQL.
+
+### Database query baseline
+
+The backend query benchmark uses a 60,000-row `runs` table spread across 200 workspaces and 30 iterations per query. On 2026-09-06, local SQLite medians and p95 latencies were:
+
+| Query | No index median / p95 | With the three benchmark indexes median / p95 |
+| --- | ---: | ---: |
+| Pending worker queue | 1.44 / 2.88 ms | 0.01 / 0.02 ms |
+| Workspace run list | 1.27 / 1.48 ms | 0.04 / 0.04 ms |
+| Confirmed scheduled runs | 0.05 / 0.06 ms | 0.02 / 0.02 ms |
+
+Run `bun run backend/bench/db-queries.ts` to refresh this fixture. The Explorer export and index budgets default to one and two concurrent operations respectively; saturation, queue depth, cancellation, query latency and SQLite busy/locked writes are exposed through `/metrics`.

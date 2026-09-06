@@ -1,6 +1,7 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db";
 import { auditLogs, stateVersions, workspaces } from "../db/schema";
+import { auditLogValues } from "./audit-trail";
 
 export const STATE_UPLOAD_TTL_MS = 60 * 60 * 1000;
 type Workspace = Readonly<typeof workspaces.$inferSelect>;
@@ -42,9 +43,13 @@ export async function pruneStateReservations(tx: typeof db, workspace: Workspace
 export async function discardStateReservation(tx: typeof db, reservation: Reservation, workspace: Workspace, reason: "upload-expired" | "lock-changed" | "discarded"): Promise<boolean> {
   const removed = await tx.delete(stateVersions).where(and(eq(stateVersions.id, reservation.id), eq(stateVersions.status, "pending"), isNull(stateVersions.statePayload))).returning({ id: stateVersions.id });
   if (removed.length === 0) return false;
-  await tx.insert(auditLogs).values({
-    id: crypto.randomUUID(), orgId: workspace.orgId, action: reason === "discarded" ? "discard" : "expire", resourceType: "state-version", resourceId: reservation.id,
+  await tx.insert(auditLogs).values(auditLogValues({
+    orgId: workspace.orgId,
+    userId: null,
+    action: reason === "discarded" ? "discard" : "expire",
+    resourceType: "state-version",
+    resourceId: reservation.id,
     details: { workspaceId: workspace.id, serial: reservation.serial, reason },
-  });
+  }) as typeof auditLogs.$inferInsert);
   return true;
 }

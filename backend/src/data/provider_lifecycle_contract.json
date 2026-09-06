@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": 1,
+  "name": "hashicorp/tfe provider lifecycle contract",
+  "_comment": "A provider schema entry is inventory only. A priority family is fully exercised only when its named fixture reports every required behavior with a passing status.",
+  "behaviors": [
+    "create",
+    "read",
+    "refresh-twice",
+    "no-op-plan",
+    "second-apply-noop",
+    "destroy",
+    "update",
+    "clear-optional",
+    "restore-optional",
+    "import-minimal",
+    "no-op-plan-after-import",
+    "pagination",
+    "permission-denied",
+    "normalized-state-convergence"
+  ],
+  "fixtures": [
+    {
+      "id": "workspace-lifecycle",
+      "label": "Workspaces",
+      "priority": true,
+      "resources": ["tfe_workspace"],
+      "required_behaviors": ["create", "read", "refresh-twice", "no-op-plan", "second-apply-noop", "destroy", "pagination", "permission-denied", "normalized-state-convergence"]
+    },
+    {
+      "id": "variables-and-sets-lifecycle",
+      "label": "Variables and variable sets",
+      "priority": true,
+      "resources": ["tfe_variable", "tfe_variable_set", "tfe_workspace_variable_set", "tfe_project_variable_set"],
+      "required_behaviors": ["create", "read", "refresh-twice", "no-op-plan", "second-apply-noop", "destroy", "pagination", "permission-denied", "normalized-state-convergence"]
+    },
+    {
+      "id": "variable-set-optional-transitions",
+      "label": "Variable-set optional transitions",
+      "priority": true,
+      "resources": ["tfe_variable_set"],
+      "required_behaviors": ["update", "clear-optional", "restore-optional", "no-op-plan"]
+    },
+    {
+      "id": "teams-and-projects-lifecycle",
+      "label": "Teams and projects",
+      "priority": true,
+      "resources": ["tfe_team", "tfe_project"],
+      "required_behaviors": ["create", "read", "refresh-twice", "no-op-plan", "second-apply-noop", "destroy", "pagination", "permission-denied", "normalized-state-convergence"]
+    },
+    {
+      "id": "team-import-minimal",
+      "label": "Minimal team import",
+      "priority": true,
+      "resources": ["tfe_team"],
+      "required_behaviors": ["import-minimal", "no-op-plan-after-import"]
+    },
+    {
+      "id": "policies-lifecycle",
+      "label": "Policies",
+      "priority": true,
+      "resources": ["tfe_policy", "tfe_sentinel_policy", "tfe_policy_set", "tfe_workspace_policy_set", "tfe_project_policy_set"],
+      "required_behaviors": ["create", "read", "refresh-twice", "no-op-plan", "second-apply-noop", "destroy", "pagination", "permission-denied", "normalized-state-convergence"]
+    },
+    {
+      "id": "notifications-lifecycle",
+      "label": "Notifications",
+      "priority": true,
+      "resources": ["tfe_notification_configuration", "tfe_project_notification_configuration", "tfe_team_notification_configuration"],
+      "required_behaviors": ["create", "read", "refresh-twice", "no-op-plan", "second-apply-noop", "destroy", "pagination", "permission-denied", "normalized-state-convergence"]
+    },
+    {
+      "id": "registry-lifecycle",
+      "label": "Registry objects",
+      "priority": true,
+      "resources": ["tfe_registry_module", "tfe_registry_provider", "tfe_test_variable", "tfe_registry_gpg_key"],
+      "required_behaviors": ["create", "read", "refresh-twice", "no-op-plan", "second-apply-noop", "destroy", "pagination", "permission-denied", "normalized-state-convergence"]
+    }
+  ]
+}

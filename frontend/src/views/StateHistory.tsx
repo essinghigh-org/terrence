@@ -2,15 +2,17 @@ import { EmptyState } from "../components/EmptyState";
 import { useEffect, useRef, useState } from "react";
 import { isNumber, isRecord, isString } from "../lib/type-guards";
 import { Link } from "react-router-dom";
-import { fetchAllApiPages, fetchApi, fetchApiBlob } from "@/lib/api";
+import { ApiError, fetchAllApiPages, fetchApi, fetchApiBlob } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/utils";
 import { formatRunStatusForUi } from "@/lib/run-labels";
 import { safeHttpUrl } from "@/lib/safe-url";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { ErrorPanel } from "@/components/ui/error-panel";
 import { Spinner } from "@/components/ui/spinner";
-import { Upload } from "lucide-react";
+import { Download, Eye, RotateCcw, Upload } from "lucide-react";
+import { TableSkeleton } from "@/components/ui/table-skeleton";
 import { toast } from "@/components/ui/toast";
 import type { JsonObject } from "@/lib/json";
 import {
@@ -48,12 +50,17 @@ type StateHistoryProps = {
   orgName?: string;
   workspaceName?: string;
   canUpload?: boolean;
+  canRollback?: boolean;
 }
 
 type LoadState =
   | Readonly<{ kind: "loading" }>
-  | Readonly<{ kind: "error"; message: string }>
-  | Readonly<{ kind: "ready"; states: StateItem[] }>;
+  | Readonly<{ kind: "error"; message: string; error: unknown }>
+  | Readonly<{
+    kind: "ready";
+    states: StateItem[];
+    refreshError?: Readonly<{ message: string; error: unknown }>;
+  }>;
 
 function formatDate(value: unknown): string {
   if (!isString(value) || value === "") return "—";
@@ -65,12 +72,23 @@ function shortStateId(id: string): string {
   return id.length > 16 ? `${id.slice(0, 10)}…${id.slice(-4)}` : id;
 }
 
-export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = true }: StateHistoryProps): React.JSX.Element {
+function stateSerial(value: unknown): string {
+  return isNumber(value) ? `#${String(value)}` : "Unknown serial";
+}
+
+function stateLineage(value: unknown): string {
+  return isString(value) && value !== "" ? shortStateId(value) : "Unknown lineage";
+}
+
+export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = true, canRollback = false }: StateHistoryProps): React.JSX.Element {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
   const [retry, setRetry] = useState(0);
   const [selectedState, setSelectedState] = useState<string | null>(null);
   const [loadingStateId, setLoadingStateId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [rollingBack, setRollingBack] = useState(false);
+  const [pendingRollback, setPendingRollback] = useState<StateItem | null>(null);
+  const [rollbackError, setRollbackError] = useState<unknown>(null);
   const [pendingUpload, setPendingUpload] = useState<{
     fileName: string;
     rawText: string;
@@ -81,17 +99,27 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
 
   useEffect((): (() => void) => {
     const controller = new AbortController();
-    setLoadState({ kind: "loading" });
-    void fetchAllApiPages<StateItem>(`/workspaces/${workspaceId}/state-versions`, controller.signal)
+    setLoadState((current): LoadState => current.kind === "ready"
+      ? { kind: "ready", states: current.states }
+      : { kind: "loading" });
+    void fetchAllApiPages<StateItem>(`/workspaces/${workspaceId}/state-versions`, controller.signal, { retryAttempts: 0 })
       .then((states: StateItem[]): void => {
-        if (!controller.signal.aborted) setLoadState({ kind: "ready", states });
+        if (!controller.signal.aborted) {
+          setRollbackError(null);
+          setLoadState({ kind: "ready", states });
+        }
       })
       .catch((error: unknown): void => {
         if (!controller.signal.aborted) {
-          setLoadState({
-            kind: "error",
-            message: error instanceof Error ? error.message : "Failed to load state version history",
-          });
+          const message = error instanceof Error ? error.message : "Failed to load state version history";
+          setLoadState((current): LoadState => current.kind === "ready"
+            ? { ...current, refreshError: { message, error } }
+            : {
+              kind: "error",
+              message,
+              error,
+            },
+          );
         }
       });
     return (): void => {
@@ -152,6 +180,44 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
     }
   };
 
+  const performRollback = async (): Promise<void> => {
+    if (pendingRollback === null) return;
+    const selected = pendingRollback;
+    setPendingRollback(null);
+    setRollbackError(null);
+    setRollingBack(true);
+    try {
+      const response = await fetchApi(`/state-versions/${encodeURIComponent(selected.id)}/actions/rollback`, {
+        method: "POST",
+      }) as { data?: StateItem };
+      const promoted = response.data;
+      if (promoted !== undefined) {
+        setLoadState((current): LoadState => current.kind === "ready"
+          ? { kind: "ready", states: [promoted, ...current.states] }
+          : current);
+      } else {
+        setRetry((value): number => value + 1);
+      }
+      toast.add({
+        title: "State version promoted",
+        description: "The older state is now the current state as a new version. Cloud resources change only after the next plan and apply.",
+        type: "success",
+      });
+    } catch (error: unknown) {
+      setRollbackError(error);
+      const rejected = error instanceof ApiError && error.status >= 400 && error.status < 500;
+      toast.add({
+        title: rejected ? "State promotion was rejected" : "State promotion needs reconciliation",
+        description: rejected
+          ? `${error instanceof Error ? error.message : "The state version could not be promoted."} No state change was committed.`
+          : "The server did not confirm whether promotion committed. Refresh state history before trying again.",
+        type: "error",
+      });
+    } finally {
+      setRollingBack(false);
+    }
+  };
+
   const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
@@ -208,7 +274,8 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-xl font-semibold">State version history</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Browse historical state and its source run. Raw downloads may contain secrets. Client-encrypted OpenTofu state cannot be uploaded or inspected as structured state.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Inspect historical state and its source run. Raw downloads may contain secrets. Download raw state only when you need a recoverable copy. Promoting a version creates a new current version; it does not rewind cloud resources.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Client-encrypted OpenTofu state cannot be inspected as structured state; keep its client keys with any recovery copy.</p>
         </div>
         {canUpload && (
           <>
@@ -233,7 +300,33 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
         )}
       </div>
 
+      {rollbackError !== null && (
+        <ErrorPanel
+          title={rollbackError instanceof ApiError && rollbackError.status >= 400 && rollbackError.status < 500
+            ? "State promotion was rejected"
+            : "State promotion needs reconciliation"}
+          message={rollbackError instanceof ApiError && rollbackError.status >= 400 && rollbackError.status < 500
+            ? `${rollbackError.message} No state change was committed.`
+            : "The server did not confirm whether promotion committed. Refresh state history before trying again."}
+          error={rollbackError}
+          retryLabel="Refresh state history"
+          onRetry={(): void => { setRetry((value: number): number => value + 1); }}
+          diagnosticContext={{ screen: "state-history", workspaceId, operation: "rollback" }}
+        />
+      )}
+
       <div className="border rounded-md">
+        {loadState.kind === "ready" && loadState.refreshError !== undefined && (
+          <ErrorPanel
+            title="Could not refresh state version history"
+            message={loadState.refreshError.message}
+            error={loadState.refreshError.error}
+            retryLabel="Try again"
+            onRetry={(): void => { setRetry((value: number): number => value + 1); }}
+            diagnosticContext={{ screen: "state-history", workspaceId, operation: "refresh" }}
+            className="m-3"
+          />
+        )}
         <Table density="dense">
           <TableHeader>
             <TableRow>
@@ -247,28 +340,23 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
           <TableBody>
             {loadState.kind === "loading" && (
               <TableRow>
-                <TableCell colSpan={5} className="py-8">
-                  <div role="status" className="flex items-center justify-center gap-2 text-muted-foreground">
-                    <Spinner />
-                    Loading state versions…
-                  </div>
+                <TableCell colSpan={5} className="p-0">
+                  <TableSkeleton rows={4} cols={5} label="Loading state versions" />
                 </TableCell>
               </TableRow>
             )}
             {loadState.kind === "error" && (
               <TableRow>
                 <TableCell colSpan={5} className="py-8">
-                  <div role="alert" className="mx-auto max-w-md text-center">
-                    <p className="font-medium text-destructive">Could not load state version history</p>
-                    <p className="mt-1 text-sm text-muted-foreground">{loadState.message}</p>
-                    <Button
-                      className="mt-3"
-                      variant="outline"
-                      onClick={(): void => { setRetry((value: number): number => value + 1); }}
-                    >
-                      Try again
-                    </Button>
-                  </div>
+                  <ErrorPanel
+                    title="Could not load state version history"
+                    message={loadState.message}
+                    error={loadState.error}
+                    retryLabel="Try again"
+                    onRetry={(): void => { setRetry((value: number): number => value + 1); }}
+                    diagnosticContext={{ screen: "state-history", workspaceId }}
+                    className="mx-auto max-w-xl"
+                  />
                 </TableCell>
               </TableRow>
             )}
@@ -276,9 +364,14 @@ export function StateHistory({ workspaceId, orgName, workspaceName, canUpload = 
               <TableRow key={s.id}>
                 <TableCell>
                   {/* SAFETY: the fixture field matches the API contract type. */}
-                  <p className="font-bold">#{// SAFETY: the rendered attribute matches the union the UI derives from the API contract.
-s.attributes["serial"] as number}</p>
+                  <p className="font-bold">{stateSerial(s.attributes["serial"])}</p>
                   <p className="font-mono text-xs text-muted-foreground" title={s.id}>{shortStateId(s.id)}</p>
+                  <p className="mt-1 text-2xs text-muted-foreground" title={isString(s.attributes["lineage"]) ? s.attributes["lineage"] : undefined}>
+                    Lineage · {stateLineage(s.attributes["lineage"])}
+                  </p>
+                  <p className="text-2xs text-muted-foreground">
+                    Processing · {stateStatus(s.attributes["summary-status"] ?? s.attributes["status"])}
+                  </p>
                 </TableCell>
                 <TableCell className="text-sm">{formatDate(s.attributes["created-at"])}</TableCell>
                 <TableCell className="font-mono text-xs">
@@ -302,7 +395,12 @@ s.attributes["serial"] as number}</p>
                         <span className="font-medium text-foreground/70">State</span>{" · "}<span>{stateStatus(s.attributes["status"])}</span>
                       </span>
                     </div>
-                  ) : "—"}
+                  ) : (
+                    <div className="space-y-0.5">
+                      <span>—</span>
+                      <span className="block text-2xs text-muted-foreground">Manual or imported state</span>
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell className="font-mono text-xs">
                   {isString(s.attributes["vcs-commit-sha"]) ? (
@@ -318,20 +416,42 @@ s.attributes["serial"] as number}</p>
                     ) : s.attributes["vcs-commit-sha"].slice(0, 8)
                   ) : "—"}
                 </TableCell>
-                <TableCell className="flex items-center gap-2">
+                <TableCell>
+                  <div className="flex flex-wrap items-center gap-2">
                   <Button
                     variant="outline"
                     size="sm"
                     disabled={loadingStateId === s.id || s.attributes["state-representation"] === "opentofu-encrypted"}
                     onClick={(): void => { void handleViewJson(s); }}
                   >
+                    <Eye className="size-3.5" aria-hidden="true" />
                     {loadingStateId === s.id ? "Loading…" : "View JSON"}
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={(): void => { void handleDownload(s); }}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    title="Download raw state — may contain secrets"
+                    aria-describedby={`state-download-warning-${s.id}`}
+                    onClick={(): void => { void handleDownload(s); }}
+                  >
+                    <Download className="size-3.5" aria-hidden="true" />
                     Download raw state
                   </Button>
+                  {canRollback && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={rollingBack || s.attributes["state-representation"] === "opentofu-encrypted"}
+                      onClick={(): void => { setPendingRollback(s); }}
+                    >
+                      <RotateCcw className="size-3.5" aria-hidden="true" />
+                      Rollback as new current
+                    </Button>
+                  )}
+                  </div>
+                  <span id={`state-download-warning-${s.id}`} className="mt-1 block text-2xs text-muted-foreground">Raw download may contain secrets.</span>
                   {s.attributes["state-representation"] === "opentofu-encrypted" && (
-                    <span className="text-xs text-muted-foreground">Client-encrypted state: structured inspection is unavailable. Download it with its client keys for recovery.</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">Client-encrypted state: structured inspection is unavailable. Download it with its client keys for recovery.</span>
                   )}
                 </TableCell>
               </TableRow>
@@ -392,6 +512,29 @@ s.attributes["serial"] as number}</p>
         confirmText="Upload state"
         confirmVariant="destructive"
         onConfirm={(): void => { void performUpload(); }}
+      />
+      <ConfirmDialog
+        open={pendingRollback !== null}
+        onOpenChange={(open): void => { if (!open) setPendingRollback(null); }}
+        title="Rollback this state as a new current version?"
+        description={((): React.ReactNode => {
+          if (pendingRollback === null) return null;
+          const runId = pendingRollback.relationships?.run?.data?.id;
+          return (
+            <span className="block space-y-1">
+              <span className="block">Source version <strong>{stateSerial(pendingRollback.attributes["serial"])}</strong> · {shortStateId(pendingRollback.id)}</span>
+              <span className="block">Lineage: {stateLineage(pendingRollback.attributes["lineage"])} · Processing: {stateStatus(pendingRollback.attributes["summary-status"] ?? pendingRollback.attributes["status"])}</span>
+              <span className="block">Created: {formatDate(pendingRollback.attributes["created-at"])} · Source run: {runId ?? "manual or imported"}</span>
+              <span className="mt-2 block font-medium text-foreground">This creates a new current state version with a new serial. It does not change cloud resources; review the next plan before applying.</span>
+              <span className="block">Promotion requires this workspace to be locked by you. Lock it from Workspace settings before confirming.</span>
+            </span>
+          );
+        })()}
+        requireCheckbox="I understand that promotion changes the current state record and the next plan may propose infrastructure changes."
+        confirmText="Rollback as new current"
+        confirmVariant="destructive"
+        loading={rollingBack}
+        onConfirm={(): void => { void performRollback(); }}
       />
     </div>
   );

@@ -16,10 +16,7 @@ export function AuthLayout({ children, mode = "signin" }: Readonly<{
           <h2>{mode === "signup" ? <>Your next<br />chapter.</> : <>Big plans.<br />Steady hands.</>}</h2>
           <p className="login-story-description">Your workspaces, plans, and people.<br />Together in one place.</p>
           <div className="login-illustration">
-            <div className="login-orbit" aria-hidden="true" />
-            <span className="login-node login-node--plan" aria-hidden="true">plan</span>
-            <span className="login-node login-node--apply" aria-hidden="true">apply</span>
-            <Terrence pose={mode === "signup" ? "guide" : "welcome"} animated className="login-mascot" />
+            <Terrence pose="ecosystem" animated className="login-mascot" />
             <span className="login-illustration-caption">Meet Terrence. Your infrastructure companion.</span>
           </div>
         </div>

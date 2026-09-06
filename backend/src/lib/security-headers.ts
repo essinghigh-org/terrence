@@ -1,3 +1,4 @@
+import { booleanSetting } from "./runtime-config";
 // Browser/shell hardening headers for the Terrence serving layer.
 //
 // CSP is scoped to the actual SPA: everything is same-origin; theme colors are
@@ -19,7 +20,7 @@ let memoizedCsp: string | null = null;
 
 /** Build the CSP (memoized; the policy is static per process). */
 export function buildContentSecurityPolicy(options?: Readonly<{ strict?: boolean }>): string {
-  const strict = options?.strict ?? process.env["TERRENCE_CSP_STRICT"] === "1";
+  const strict = options?.strict ?? booleanSetting("TERRENCE_CSP_STRICT");
   if (memoizedCsp !== null && !strict) return memoizedCsp;
   const imgSrc = DEFAULT_IMG_SRC.join(" ");
   const styleSrc = strict

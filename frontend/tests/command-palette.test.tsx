@@ -21,7 +21,7 @@ function urlOf(input: string | URL | Request): string {
 beforeEach((): void => {
   globalThis.fetch = (mock(async (input: string | URL | Request): Promise<Response> => {
     const url = urlOf(input);
-    if (url === "/api/v2/organizations?page[size]=100") {
+    if (url === "/api/v2/organizations?page[size]=20" || url.startsWith("/api/v2/organizations?page%5Bsize%5D=20&q=")) {
       return json({ data: [{ id: "org-acme", attributes: { name: "acme" } }] });
     }
     if (url === "/api/v2/docs") return json({ data: [] });

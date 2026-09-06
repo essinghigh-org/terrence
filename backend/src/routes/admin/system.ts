@@ -1,4 +1,6 @@
-import { localSignupEnabled } from "../../lib/settings";
+import { databaseConfigurationOrigin, databaseDriver } from "../../db/driver";
+import { localSignupEnabled, persistedConfigurationReport } from "../../lib/settings";
+import { integerSetting, runtimeConfigurationReport } from "../../lib/runtime-config";
 import { Elysia } from "elysia";
 import { authPlugin } from "../../auth";
 import { db } from "../../db";
@@ -14,7 +16,7 @@ import os from "node:os";
 import { join } from "node:path";
 import type { ParamCtx } from "./types";
 import { activeLocalRunExecutionCount, localRunConcurrencyLimit, localRunQueueDepth } from "../../worker";
-import { envEnabled } from "../../lib/env";
+import { envFlag } from "../../lib/env";
 import { currentSamlSettings } from "./helpers";
 import { TOKEN_FORMAT_VERSION } from "../../lib/token-service";
 export const systemRoutes = new Elysia({ name: "admin-system" })
@@ -41,7 +43,6 @@ export const systemRoutes = new Elysia({ name: "admin-system" })
         ? "landlock-runner missing or Landlock not enabled in the kernel"
         : "Landlock is not available on this kernel (needs Linux >= 5.13 with CONFIG_SECURITY_LANDLOCK)";
     }
-    const workerPoll = Number(process.env["TERRENCE_WORKER_POLL_MS"] ?? "1500");
     return {
       data: {
         version: appVersion(),
@@ -51,10 +52,16 @@ export const systemRoutes = new Elysia({ name: "admin-system" })
         platform: { os: os.platform(), arch: os.arch(), release: os.release() },
         storage,
         database: await databaseMetrics(),
+        "deployment-configuration": [
+          ...runtimeConfigurationReport(),
+          { name: "database.driver", value: databaseDriver, origin: databaseConfigurationOrigin, restartRequired: true },
+          { name: "database.url", value: "[redacted]", origin: databaseConfigurationOrigin, restartRequired: true },
+        ],
+        "persisted-configuration": await persistedConfigurationReport(),
         worker: {
-          enabled: !envEnabled(process.env["TERRENCE_DISABLE_WORKER"]),
-          "drain-mode": envEnabled(process.env["TERRENCE_DISABLE_WORKER"]),
-          "poll-interval-ms": Number.isFinite(workerPoll) && workerPoll > 0 ? workerPoll : 1500,
+          enabled: !envFlag("TERRENCE_DISABLE_WORKER"),
+          "drain-mode": envFlag("TERRENCE_DISABLE_WORKER"),
+          "poll-interval-ms": integerSetting("TERRENCE_WORKER_POLL_MS"),
           // Issue #632: live run-concurrency surface for the admin UI.
           "run-concurrency-limit": localRunConcurrencyLimit(),
           "local-runs-executing": activeLocalRunExecutionCount(),

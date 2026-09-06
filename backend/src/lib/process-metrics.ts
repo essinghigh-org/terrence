@@ -11,6 +11,41 @@
  * bytes/hour number instead of a steady-state reading that looks identical
  * at 100 MB and 500 MB.
  */
+import { monitorEventLoopDelay, type IntervalHistogram } from "node:perf_hooks";
+import { discoveryStats } from "./discovery-queue";
+
+/**
+ * Fixed request-journey labels. Keep this list intentionally small: workspace
+ * IDs, run IDs, and Terraform resource addresses must never become metric
+ * labels, otherwise one busy tenant can create an unbounded time series set.
+ */
+export const PERFORMANCE_JOURNEY_LABELS = [
+  "workspace-list",
+  "plan-interaction",
+  "log-retrieval",
+  "state-listing",
+  "queue-start",
+  "other",
+] as const;
+
+export type PerformanceJourneyLabel = (typeof PERFORMANCE_JOURNEY_LABELS)[number];
+
+export type JourneyLatency = Readonly<{
+  requests: number;
+  sampleCount: number;
+  p50Ms: number | null;
+  p95Ms: number | null;
+  maxMs: number | null;
+}>;
+
+export type EventLoopDelayStats = Readonly<{
+  sampleCount: number;
+  minMs: number | null;
+  meanMs: number | null;
+  p95Ms: number | null;
+  maxMs: number | null;
+}>;
+
 export type ProcessSample = Readonly<{
   /** Epoch ms at sampling time. */
   at: number;
@@ -38,6 +73,11 @@ export type ProcessSnapshot = ProcessSample & Readonly<{
   systemCpuSeconds: number;
   requests: Readonly<{ total: number; inFlight: number; errors5xx: number }>;
   failures: Readonly<Record<string, number>>;
+  /** Request latency grouped by a fixed, low-cardinality journey label. */
+  journeys: Readonly<Record<PerformanceJourneyLabel, JourneyLatency>>;
+  /** Event-loop delay from the sampler's bounded histogram. */
+  eventLoopDelay: EventLoopDelayStats;
+  discovery: ReturnType<typeof discoveryStats>;
   worker: Readonly<{
     polls: number;
     lastPollAt: number | null;
@@ -64,6 +104,8 @@ export type SampleWindow = Readonly<{
 
 const DEFAULT_SAMPLE_INTERVAL_MS = 10_000;
 const DEFAULT_MAX_SAMPLES = 720; // 2 hours at 10s
+const EVENT_LOOP_RESOLUTION_MS = 20;
+const MAX_JOURNEY_SAMPLES = 256;
 
 const counters = {
   requestsTotal: 0,
@@ -87,6 +129,23 @@ const failures = {
   webhookDeliveries: 0,
 };
 
+const journeySamples: Record<PerformanceJourneyLabel, number[]> = {
+  "workspace-list": [],
+  "plan-interaction": [],
+  "log-retrieval": [],
+  "state-listing": [],
+  "queue-start": [],
+  other: [],
+};
+const journeyRequests: Record<PerformanceJourneyLabel, number> = {
+  "workspace-list": 0,
+  "plan-interaction": 0,
+  "log-retrieval": 0,
+  "state-listing": 0,
+  "queue-start": 0,
+  other: 0,
+};
+
 export type FailureKind = keyof typeof failures;
 
 /** Record one failed best-effort write; visible via processSnapshot().failures. */
@@ -98,6 +157,76 @@ let samples: ProcessSample[] = [];
 let maxSamples = DEFAULT_MAX_SAMPLES;
 let sampleIntervalMs = DEFAULT_SAMPLE_INTERVAL_MS;
 let samplerTimer: ReturnType<typeof setInterval> | null = null;
+let eventLoopHistogram: IntervalHistogram | null = null;
+
+function percentile(values: readonly number[], requested: number): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b): number => a - b);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((requested / 100) * sorted.length) - 1));
+  return sorted[index] ?? null;
+}
+
+function journeyLabel(path: string): PerformanceJourneyLabel {
+  const pathname = path.split("?", 1)[0] ?? path;
+  if (/^\/api\/v2\/organizations\/[^/]+\/workspaces$/.test(pathname)) return "workspace-list";
+  if (/^\/api\/v2\/(?:runs\/[^/]+\/(?:plan(?:\/json-output|\/sanitized-plan)?|plan\/json-output)|plans\/[^/]+(?:\/json-output|\/json-output-redacted|\/sanitized-plan)?)$/.test(pathname)) return "plan-interaction";
+  if (/^\/api\/v2\/runs\/[^/]+\/(?:logs|plan\/log(?:\/[^/]+)?|apply\/log(?:\/[^/]+)?)$/.test(pathname)) return "log-retrieval";
+  if (/^\/api\/v2\/workspaces\/[^/]+\/state-versions$/.test(pathname)) return "state-listing";
+  if (/^\/api\/v2\/organizations\/[^/]+\/runs\/queue$/.test(pathname)
+    || /^\/api\/v2\/runs\/[^/]+\/actions\/queue$/.test(pathname)) return "queue-start";
+  return "other";
+}
+
+/** Clear process-local latency samples between isolated test scenarios. */
+export function resetJourneyMetricsForTests(): void {
+  for (const label of PERFORMANCE_JOURNEY_LABELS) {
+    journeySamples[label].length = 0;
+    journeyRequests[label] = 0;
+  }
+}
+
+/** Record server-side request latency using only a fixed journey label. */
+export function recordRequestLatency(path: string, durationMs: number): void {
+  if (!Number.isFinite(durationMs) || durationMs < 0) return;
+  const label = journeyLabel(path);
+  journeyRequests[label] += 1;
+  const values = journeySamples[label];
+  values.push(durationMs);
+  if (values.length > MAX_JOURNEY_SAMPLES) values.splice(0, values.length - MAX_JOURNEY_SAMPLES);
+}
+
+function journeyLatencySnapshot(): Readonly<Record<PerformanceJourneyLabel, JourneyLatency>> {
+  return Object.fromEntries(PERFORMANCE_JOURNEY_LABELS.map((label): [PerformanceJourneyLabel, JourneyLatency] => {
+    const samplesForJourney = journeySamples[label];
+    return [label, {
+      requests: journeyRequests[label],
+      sampleCount: samplesForJourney.length,
+      p50Ms: percentile(samplesForJourney, 50),
+      p95Ms: percentile(samplesForJourney, 95),
+      maxMs: samplesForJourney.length === 0 ? null : Math.max(...samplesForJourney),
+    }];
+  })) as Record<PerformanceJourneyLabel, JourneyLatency>;
+}
+
+function eventLoopDelaySnapshot(): EventLoopDelayStats {
+  const histogram = eventLoopHistogram;
+  if (histogram === null || histogram.count === 0) {
+    return { sampleCount: 0, minMs: null, meanMs: null, p95Ms: null, maxMs: null };
+  }
+  const toMs = (nanoseconds: number): number => Number((nanoseconds / 1_000_000).toFixed(3));
+  return {
+    sampleCount: histogram.count,
+    minMs: toMs(histogram.min),
+    meanMs: toMs(histogram.mean),
+    p95Ms: toMs(histogram.percentile(95)),
+    maxMs: toMs(histogram.max),
+  };
+}
+
+/** Expose the current bounded event-loop histogram to benchmark runners. */
+export function eventLoopDelayMetrics(): EventLoopDelayStats {
+  return eventLoopDelaySnapshot();
+}
 
 export function requestStarted(): void {
   counters.requestsTotal += 1;
@@ -154,6 +283,9 @@ export function processSnapshot(): ProcessSnapshot {
       errors5xx: counters.errors5xx,
     },
     failures: { ...failures },
+    journeys: journeyLatencySnapshot(),
+    eventLoopDelay: eventLoopDelaySnapshot(),
+    discovery: discoveryStats(),
     worker: {
       polls: counters.workerPolls,
       lastPollAt: counters.workerLastPollAt,
@@ -184,6 +316,9 @@ export function startProcessSampler(
   maxSamples = ringMax;
   sampleIntervalMs = intervalMs;
   samples = [];
+  eventLoopHistogram?.disable();
+  eventLoopHistogram = monitorEventLoopDelay({ resolution: EVENT_LOOP_RESOLUTION_MS });
+  eventLoopHistogram.enable();
   samplerTimer = setInterval((): void => {
     sampleProcess();
   }, intervalMs);
@@ -194,6 +329,8 @@ export function stopProcessSampler(): void {
     clearInterval(samplerTimer);
     samplerTimer = null;
   }
+  eventLoopHistogram?.disable();
+  eventLoopHistogram = null;
 }
 
 export function processHistory(): SampleWindow {
@@ -208,7 +345,7 @@ export function processHistory(): SampleWindow {
   };
 }
 
-function trendStats(points: readonly { at: number; value: number }[]): TrendStats {
+function trendStats(points: readonly (Readonly<{ at: number; value: number }>)[]): TrendStats {
   const values = points.map((point): number => point.value);
   const min = values.length > 0 ? Math.min(...values) : 0;
   const max = values.length > 0 ? Math.max(...values) : 0;

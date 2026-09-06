@@ -9,6 +9,10 @@ description: The object model: organizations, projects, workspaces, runs, state,
 
 This page explains the objects Terrence manages and how they relate. The model follows familiar Terraform concepts while Terrence remains an independent self-hosted implementation; provider and CLI compatibility are documented separately.
 
+Use the [Product language](product-language) guide when writing UI copy,
+notifications, or operational documentation. It keeps accepted, queued,
+completed, and verified outcomes distinct.
+
 ## Organizations
 
 An organization is the top-level tenant. It owns workspaces, projects, variable sets, teams, and registry entries. Users join organizations through memberships. Membership carries a role: owner, member, or a custom role.

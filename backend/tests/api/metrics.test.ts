@@ -303,6 +303,17 @@ describe("instance metrics", () => {
     expect(typeof requests.in_flight).toBe("number");
     expect(typeof requests.errors5xx).toBe("number");
     expect(requests.total).toBeGreaterThanOrEqual(1);
+    const journeyLatency = metrics["terrence_request_latency"] as Record<string, { requests: number; sample_count: number; p50_ms: number | null; p95_ms: number | null; max_ms: number | null }>;
+    expect(Object.keys(journeyLatency).sort()).toEqual([
+      "log-retrieval",
+      "other",
+      "plan-interaction",
+      "queue-start",
+      "state-listing",
+      "workspace-list",
+    ]);
+    expect(journeyLatency["workspace-list"]?.requests).toBeGreaterThanOrEqual(0);
+    expect(metrics["terrence_event_loop_delay"]).toMatchObject({ sample_count: expect.any(Number) });
     const worker = metrics["terrence_worker"] as { polls: number; last_poll_at: number | null; last_poll_duration_ms: number | null; last_poll_ok: boolean | null };
     expect(typeof worker.polls).toBe("number");
     expect(worker.last_poll_at === null || typeof worker.last_poll_at === "number").toBe(true);
@@ -409,6 +420,9 @@ describe("instance metrics", () => {
     expect(body).toContain("# TYPE terrence_process_rss_bytes gauge");
     expect(body).toMatch(/terrence_process_rss_bytes \d+/);
     expect(body).toMatch(/terrence_requests_total \d+/);
+    expect(body).toMatch(/terrence_request_duration_samples\{journey="workspace-list"\} \d+/);
+    expect(body).toMatch(/terrence_event_loop_delay_samples \d+/);
+    expect(body).not.toMatch(/workspace_id|resource_address/);
     expect(body).toMatch(/terrence_worker_polls_total \d+/);
     // SQLite-only bloat metric: health.ts only emits the value line when
     // freelistBytes !== null (null on postgres). Require the value on

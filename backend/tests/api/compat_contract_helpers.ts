@@ -3,7 +3,7 @@ import { hashAuthenticationToken } from "../../src/lib/token-service";
 import { eq } from "drizzle-orm";
 import { app } from "../../src/app";
 import { db } from "../../src/db";
-import { apiTokens, organizationMemberships, organizations, systemApiTokens, users } from "../../src/db/schema";
+import { apiTokens, organizationMemberships, organizations, runs, stateVersions, systemApiTokens, users, workspaces } from "../../src/db/schema";
 import { hashSystemApiToken } from "../../src/lib/system-api";
 
 export type OrgSeed = {
@@ -59,6 +59,23 @@ export async function cleanupSeed(seed: OrgSeed): Promise<void> {
   await db.delete(organizationMemberships).where(eq(organizationMemberships.id, seed.membershipId));
   await db.delete(organizations).where(eq(organizations.id, seed.orgId));
   await db.delete(users).where(eq(users.id, seed.userId));
+}
+
+/** Build related rows without deriving any expected capability or outcome. */
+export async function persistExecutionSeed(input: Readonly<{
+  orgId: string;
+  workspaceId: string;
+  workspaceName: string;
+  runId: string;
+  status: string;
+  stateId: string;
+  serial: number;
+  statePayload: string;
+  statusTimestamps?: Readonly<Record<string, string>>;
+}>): Promise<void> {
+  await db.insert(workspaces).values({ id: input.workspaceId, orgId: input.orgId, name: input.workspaceName });
+  await db.insert(runs).values({ id: input.runId, workspaceId: input.workspaceId, status: input.status, createdAt: Date.now(), statusTimestamps: input.statusTimestamps ?? {} });
+  await db.insert(stateVersions).values({ id: input.stateId, workspaceId: input.workspaceId, runId: input.runId, serial: input.serial, statePayload: input.statePayload });
 }
 
 export const request = (path: string, init?: RequestInit): Promise<Response> =>
@@ -125,7 +142,7 @@ export function expectErrorDocument(body: unknown, status: string): void {
 }
 
 export async function expectErrorResponse(response: Response, status: number): Promise<void> {
-  expect(response.status).toBe(status);
+  expect(response.status, response.status === status ? undefined : await response.clone().text()).toBe(status);
   expect(response.headers.get("content-type")).toContain("application/vnd.api+json");
   expectErrorDocument(await response.json(), String(status));
 }
@@ -135,7 +152,7 @@ export async function expectSuccessResponse(
   status: number,
   type: string,
 ): Promise<JsonApiResource> {
-  expect(response.status).toBe(status);
+  expect(response.status, response.status === status ? undefined : await response.clone().text()).toBe(status);
   expect(response.headers.get("content-type")).toContain("application/vnd.api+json");
   const body = await response.json();
   expect(body).toBeTypeOf("object");

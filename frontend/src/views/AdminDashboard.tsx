@@ -56,6 +56,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
   const [orgs, setOrgs] = useState<DataItem[]>([]);
   const [workspaces, setWorkspaces] = useState<DataItem[]>([]);
   const [runs, setRuns] = useState<DataItem[]>([]);
+  const [runQueueMeta, setRunQueueMeta] = useState<Record<string, unknown> | null>(null);
   const [tfVersions, setTfVersions] = useState<DataItem[]>([]);
   const [auditLogs, setAuditLogs] = useState<DataItem[]>([]);
   const [securitySummary, setSecuritySummary] = useState<SecuritySummary>({
@@ -266,8 +267,9 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         setWorkspaces(res.data);
       } else if (section === "runs") {
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
-        const res = await fetchApi("/api/v2/admin/runs") as { data: DataItem[] };
+        const res = await fetchApi("/api/v2/admin/runs") as { data: DataItem[]; meta?: { "queue-inspector"?: Record<string, unknown> } };
         setRuns(res.data);
+        setRunQueueMeta(res.meta?.["queue-inspector"] ?? null);
       } else if (section === "versions") {
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const res = await fetchApi("/api/v2/admin/terraform-versions") as { data: DataItem[] };
@@ -723,7 +725,7 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
           )}
           {/* RUNS TAB */}
           {section === "runs" && (
-            <RunsAdmin runs={runs} handleCancelRun={handleCancelRun} />
+            <RunsAdmin runs={runs} queueMeta={runQueueMeta} handleCancelRun={handleCancelRun} />
           )}
           {/* TOOL VERSIONS TAB */}
           {section === "versions" && (

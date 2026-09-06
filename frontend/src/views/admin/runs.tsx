@@ -7,9 +7,18 @@ import { type DataItem, } from "./types";
 // Live run-concurrency surface (issue #632), best-effort: the queue table
 // renders without it when system-info is unreachable.
 type QueueStats = { limit: number; executing: number; queued: number | null };
+type JsonRecord = Record<string, unknown>;
 
-export function RunsAdmin(props: Readonly<{ runs: DataItem[]; handleCancelRun: (runId: string, force?: boolean) => Promise<void>; }>): React.JSX.Element {
-  const { runs, handleCancelRun } = props;
+function record(value: unknown): JsonRecord | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : null;
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+export function RunsAdmin(props: Readonly<{ runs: DataItem[]; queueMeta?: JsonRecord | null; handleCancelRun: (runId: string, force?: boolean) => Promise<void>; }>): React.JSX.Element {
+  const { runs, queueMeta = null, handleCancelRun } = props;
   const [queue, setQueue] = useState<QueueStats | null>(null);
   useEffect((): (() => void) => {
     let cancelled = false;
@@ -40,6 +49,25 @@ export function RunsAdmin(props: Readonly<{ runs: DataItem[]; handleCancelRun: (
         {queue !== null && (
           <p className="mt-2 text-sm text-muted-foreground">Concurrency limit {queue.limit} · {queue.executing} executing · {queue.queued === null ? "queued unknown" : `${String(queue.queued)} queued`} (limit from TERRENCE_RUN_CONCURRENCY)</p>
         )}
+        {queueMeta !== null && ((): React.JSX.Element => {
+          const capacity = record(queueMeta["capacity"]);
+          const pools = capacity !== null && Array.isArray(capacity["pools"])
+            ? capacity["pools"].map(record).filter((pool): pool is JsonRecord => pool !== null)
+            : [];
+          const available = pools.reduce((total, pool): number => total + numberValue(pool["available-agents"]), 0);
+          const queuedJobs = pools.reduce((total, pool): number => total + numberValue(pool["queued-jobs"]), 0);
+          const snapshot = typeof queueMeta["snapshot-at"] === "string" ? queueMeta["snapshot-at"] : null;
+          const controls = record(queueMeta["controls"]);
+          return (
+            <div className="mt-3 rounded-md border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+              <div className="font-medium text-foreground">Capacity snapshot</div>
+              <div>{available} available agent{available === 1 ? "" : "s"} · {queuedJobs} queued agent job{queuedJobs === 1 ? "" : "s"}{snapshot === null ? "" : ` · observed ${new Date(snapshot).toLocaleTimeString()}`}</div>
+              {controls?.["reprioritize-supported"] === false && (
+                <div className="mt-1 text-xs">Queued work keeps scheduler order; reprioritization is unavailable.</div>
+              )}
+            </div>
+          );
+        })()}
       </CardHeader>
       <CardContent>
         <div className="rounded-md border overflow-x-auto">
@@ -49,18 +77,26 @@ export function RunsAdmin(props: Readonly<{ runs: DataItem[]; handleCancelRun: (
                 <TableHead className="px-4 py-3">Run ID</TableHead>
                 <TableHead className="px-4 py-3">Status</TableHead>
                 <TableHead className="px-4 py-3">Message</TableHead>
+                <TableHead className="px-4 py-3">Queue explanation</TableHead>
                 <TableHead className="px-4 py-3">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody className="divide-y">
               {runs.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="px-4 py-6 text-center text-muted-foreground">
+                  <TableCell colSpan={5} className="px-4 py-6 text-center text-muted-foreground">
                     No active runs found.
                   </TableCell>
                 </TableRow>
               ) : (
                 runs.map((r): React.JSX.Element => (
+                  ((): React.JSX.Element => {
+                    const inspection = record(r.attributes["queue-inspection"]);
+                    const reason = inspection !== null && typeof inspection["reason"] === "string" ? inspection["reason"] : null;
+                    const state = inspection !== null && typeof inspection["state"] === "string" ? inspection["state"] : null;
+                    const position = inspection === null ? null : numberValue(inspection["position"]);
+                    const positionQualified = inspection?.["position-qualified"] === true;
+                    return (
                   <TableRow key={r.id} className="hover:bg-muted/50">
                     <TableCell className="px-4 py-3 font-mono text-xs font-semibold text-foreground">{r.id}</TableCell>
                     <TableCell className="px-4 py-3">
@@ -69,6 +105,15 @@ export function RunsAdmin(props: Readonly<{ runs: DataItem[]; handleCancelRun: (
                       </span>
                     </TableCell>
                     <TableCell className="px-4 py-3 text-muted-foreground">{r.attributes.message ?? "—"}</TableCell>
+                    <TableCell className="px-4 py-3 text-xs text-muted-foreground">
+                      {inspection === null ? "No queue explanation available." : (
+                        <div className="space-y-1">
+                          <div className="font-medium text-foreground">{reason ?? "Queue state unavailable"}</div>
+                          <div>{state ?? "unknown"}{positionQualified ? ` · position ${String(position)}` : ""}</div>
+                          {typeof inspection["reason-code"] === "string" && <div className="font-mono text-[11px]">{inspection["reason-code"]}</div>}
+                        </div>
+                      )}
+                    </TableCell>
                     <TableCell className="px-4 py-3">
                       {r.attributes.actions !== undefined && (
                         <div className="flex gap-2">
@@ -86,6 +131,8 @@ export function RunsAdmin(props: Readonly<{ runs: DataItem[]; handleCancelRun: (
                       )}
                     </TableCell>
                   </TableRow>
+                    );
+                  })()
                 ))
               )}
             </TableBody>

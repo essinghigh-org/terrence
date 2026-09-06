@@ -153,6 +153,17 @@ describe("audit coverage", () => {
       userId,
       details: { name: workspaceName, projectId },
     });
+    const organizationDetails = organizationAudit?.details as Record<string, unknown> | null;
+    expect(organizationDetails).toMatchObject({
+      schemaVersion: 1,
+      action: "create",
+      result: "success",
+      credentialClass: "user-token",
+      actor: { userId },
+      target: { orgId, resourceType: "organizations", resourceId: orgId },
+    });
+    expect(typeof organizationDetails?.["requestId"]).toBe("string");
+    expect(organizationDetails?.["requestId"]).toBe(organizationDetails?.["correlationId"]);
     expect(JSON.stringify([organizationAudit?.details, workspaceAudit?.details])).not.toContain(secretMarker);
   });
 

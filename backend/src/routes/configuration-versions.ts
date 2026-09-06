@@ -9,6 +9,8 @@ import { mkdir, rm, rename } from "fs/promises";
 import { authPlugin } from "../auth";
 import { assertArchiveExpandedSize } from "../lib/archive";
 import { persistUploadBody } from "../lib/upload-body";
+import { beginIdempotency, completeIdempotency, idempotencyContext, idempotencyError, idempotencyPrincipal } from "../lib/idempotency";
+import { parsePersistedStatusMetadata } from "../lib/validation";
 
 const rawStorageDir = process.env["STORAGE_DIR"];
 const storageDir = typeof rawStorageDir === "string" && rawStorageDir !== "" ? rawStorageDir : join(import.meta.dir, "../storage");
@@ -43,6 +45,7 @@ export function configurationVersionResource(
   request: Readonly<{ url: string }>,
   includeUploadUrl = true,
 ): Record<string, unknown> {
+  const statusTimestamps = parsePersistedStatusMetadata(cv.statusTimestamps, cv.statusMetadataSchemaVersion, cv.id);
   const downloadUrl = apiURL(request, `/api/v2/configuration-versions/${cv.id}/download`);
   const attributes: Record<string, unknown> = {
     "auto-queue-runs": cv.autoQueueRuns,
@@ -52,8 +55,8 @@ export function configurationVersionResource(
     source: cv.source,
     "ingress-attributes": cv.ingressAttributes,
     "status-timestamps": {
-      "uploaded-at": cv.statusTimestamps?.uploadedAt ?? null,
-      "archived-at": cv.statusTimestamps?.archivedAt ?? null,
+      "uploaded-at": statusTimestamps?.["uploadedAt"] ?? null,
+      "archived-at": statusTimestamps?.["archivedAt"] ?? null,
     },
     error: cv.error,
     "error-message": cv.errorMessage,
@@ -129,7 +132,16 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
 
-    const id = newResourceId("cv");
+    const idempotency = idempotencyContext(
+      request,
+      `configuration-versions:${workspaceId}`,
+      idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
+      payload,
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotency === "invalid") {
+      return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
+    }
     const speculative = typeof attributes["speculative"] === "boolean" ? attributes["speculative"] : false;
     const provisional = typeof attributes["provisional"] === "boolean" ? attributes["provisional"] : false;
     // The Terraform/OpenTofu CLI does not send a source attribute; detect it
@@ -144,6 +156,23 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
       (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: "auto-queue-runs must be boolean" }] };
     }
+    const idempotencyBegin = await beginIdempotency(
+      idempotency,
+      "configuration-versions",
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotencyBegin.kind === "replay") {
+      const replayed = idempotencyBegin.resourceId === null
+        ? undefined
+        : await db.query.configurationVersions.findFirst({
+          where: and(eq(configurationVersions.id, idempotencyBegin.resourceId), eq(configurationVersions.workspaceId, workspaceId)),
+        });
+      if (replayed !== undefined) return { data: configurationVersionResource(replayed, request, true) };
+      return idempotencyBegin.body;
+    }
+    if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
+
+    const id = newResourceId("cv");
     const autoQueueRuns = rawAutoQueueRuns ?? true;
     const createdAt = Date.now();
     const cv: ConfigurationVersion = {
@@ -157,6 +186,7 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
       source,
       ingressAttributes: null,
       statusTimestamps: null,
+      statusMetadataSchemaVersion: 0,
       uploadClaimExpiresAt: null,
       uploadClaimToken: null,
       error: null,
@@ -165,8 +195,10 @@ export const configurationVersionRoutes = new Elysia({ name: "configurationVersi
       createdAt,
     };
     await db.insert(configurationVersions).values(cv);
+    const responseBody = { data: configurationVersionResource(cv, request, true) };
+    if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, id);
     (set as { status: number }).status = 201;
-    return { data: configurationVersionResource(cv, request, true) };
+    return responseBody;
   })
   .get("/api/v2/configuration-versions/:cv_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const cvId = params["cv_id"] ?? "";

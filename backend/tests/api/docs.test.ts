@@ -41,6 +41,9 @@ describe("bundled documentation endpoints", () => {
     expect(attributes["category"]).toBe("Getting started");
     // The index must not carry the full markdown payloads.
     expect(attributes["markdown"]).toBeUndefined();
+    const languageGuide = (body.data ?? []).find((entry): boolean =>
+      (entry as { id?: string }).id === "product-language");
+    expect(languageGuide).toBeDefined();
   });
 
   it("serves a document by slug with markdown content", async () => {
@@ -52,6 +55,16 @@ describe("bundled documentation endpoints", () => {
     expect((markdown as string).length).toBeGreaterThan(500);
     // The doc must be the Terrence documentation, not a redirect to external docs.
     expect((markdown as string)).not.toContain("developer.hashicorp.com");
+  });
+
+  it("serves the product-language guide with precise recovery wording", async () => {
+    const response = await app.handle(new Request("http://localhost/api/v2/docs/product-language", { headers }));
+    expect(response.status).toBe(200);
+    const body = await response.json() as { data?: { attributes?: Record<string, unknown> } };
+    const markdown = body.data?.attributes?.["markdown"];
+    expect(typeof markdown).toBe("string");
+    expect(markdown as string).toContain("Promotion replaces recorded current state");
+    expect(markdown as string).toContain("Queued");
   });
 
   it("returns 404 for an unknown slug", async () => {

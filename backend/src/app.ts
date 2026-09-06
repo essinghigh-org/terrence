@@ -1,9 +1,12 @@
+import { SettingsValidationError } from "./lib/settings-contract";
+import { databaseConstraint } from "./lib/database-errors";
+import { executionSetting, integerSetting } from "./lib/runtime-config";
 import { Elysia } from "elysia";
 import { staticPlugin } from "@elysiajs/static";
 import { rateLimit, type Context as RateLimitContext } from "elysia-rate-limit";
 import { join } from "path";
 import { readFileSync } from "node:fs";
-import { envEnabled } from "./lib/env";
+import { envFlag } from "./lib/env";
 import { authPlugin, authenticatedRateLimitKey } from "./auth";
 import { distributedFixedWindowContext } from "./lib/distributed-rate-limit";
 import { isPostgres } from "./db/driver";
@@ -14,9 +17,10 @@ import { applyLoggingSettings, log } from "./lib/log";
 import { parseTokenScopes, type TokenScopes } from "./lib/token-scopes";
 import { strongDocumentEtag } from "./lib/utils";
 import { setRequestTokenScopes, setRequestSiteAdmin, currentTokenScopes } from "./lib/request-scope";
+import { beginAuditRequest, resetAuditRequest, setAuditPrincipal } from "./lib/audit-trail";
 import { applySecurityHeaders, HSTS_VALUE, shouldSendHsts, staticCacheControl, staticMimeFor } from "./lib/security-headers";
 import openapiJson from "../openapi.json" with { type: "json" };
-import { requestFinished, requestStarted } from "./lib/process-metrics";
+import { recordRequestLatency, requestFinished, requestStarted } from "./lib/process-metrics";
 import { API_BODY_LIMIT_BYTES, BodyTooLargeError, readTextWithLimit } from "./lib/body-limit";
 import { acceptsJsonApi, isJsonApiContentType, isJsonApiResponseContentType, isJsonContentType, JSON_API_MEDIA_TYPE } from "./lib/media-types";
 import { COMPATIBILITY_PROMISE } from "./lib/constants";
@@ -57,6 +61,7 @@ try {
 import { healthRoutes } from "./routes/health";
 import { systemHealthRoutes } from "./routes/health";
 import { operationsRoutes } from "./routes/operations";
+import { operationsIntelligenceRoutes } from "./routes/operations-intelligence";
 import { accountRoutes } from "./routes/accounts";
 import { userRoutes } from "./routes/users";
 import { organizationRoutes } from "./routes/organizations";
@@ -105,10 +110,13 @@ import { emailVerificationRoutes } from "./routes/email-verification";
 import { samlRoutes } from "./routes/saml";
 import { oidcRoutes } from "./routes/oidc";
 import { workloadIdentityRoutes } from "./routes/workload-identity";
+import { credentialDoctorRoutes } from "./routes/credential-doctor";
 import { providerIconRoutes } from "./routes/provider-icons";
 import { actionsRoutes } from "./routes/actions";
 import { registryComponentsRoutes } from "./routes/registry-components";
+import { platformRoutes } from "./routes/platform";
 import { availableVersions } from "./binaryManager";
+import { DurableJobBudgetError } from "./lib/durable-jobs";
 
 // Store request metadata without polluting the set object
 const requestMeta = new WeakMap<Request, { startTime: number; method: string; path: string; correlationId: string }>();
@@ -245,6 +253,15 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
   const { code, error, set, request } = context;
   const mutableSet = set as { status?: number | string; headers: Record<string, string | number> };
   const pathname = new URL(request.url).pathname;
+  const constraint = databaseConstraint(error);
+  if (constraint !== null) mutableSet.status = 409;
+  if (error instanceof SettingsValidationError) mutableSet.status = error.status;
+  if (error instanceof DurableJobBudgetError) {
+    mutableSet.status = error.status;
+    if (error.status === 429 && error.admission.retryAfterMs !== null) {
+      mutableSet.headers["Retry-After"] = Math.ceil(error.admission.retryAfterMs / 1_000);
+    }
+  }
   // Elysia wraps onParse failures in its own ParseError; the original is
   // preserved as `cause` (elysia/dist/error.js ParseError).
   const bodyTooLarge = error instanceof BodyTooLargeError ? error
@@ -259,8 +276,26 @@ export function handleAppError(context: ErrorContext & { request: { url: string 
       : code === "VALIDATION" ? 422
         : code === "PARSE" || code === "INVALID_COOKIE_SIGNATURE" ? (bodyTooLarge !== null ? 413 : 400)
           : typeof mutableSet.status === "number" ? mutableSet.status : 500;
+    recordRequestLatency(errored.path, Date.now() - errored.startTime);
     requestFinished(status);
     requestMeta.delete(request as unknown as Request);
+    resetAuditRequest();
+  }
+  if (error instanceof SettingsValidationError) {
+    return { errors: [{ status: String(error.status), title: error.status === 422 ? "Unprocessable Entity" : "Service Unavailable", detail: error.message }] };
+  }
+  if (error instanceof DurableJobBudgetError) {
+    return {
+      errors: [{
+        status: String(error.status),
+        title: error.status === 413 ? "Payload Too Large" : "Too Many Requests",
+        detail: error.message,
+      }],
+    };
+  }
+  if (constraint !== null) {
+    mutableSet.headers["Content-Type"] = "application/vnd.api+json";
+    return { errors: [{ status: "409", title: "Conflict", detail: constraint === "unique" ? "A resource with these unique attributes already exists" : "The operation conflicts with a related resource" }] };
   }
   if (code === "NOT_FOUND") {
     if (!(pathname === "/api" || pathname.startsWith("/api/"))) {
@@ -323,24 +358,18 @@ type RateLimitServer = Readonly<{
   readonly requestIP?: (request: Request) => Readonly<{ readonly address?: string }> | null;
 }>;
 
-/** Parse a positive-integer env override, falling back to the default. */
-function envPositiveInt(name: string, fallback: number): number {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
-const RATE_LIMIT_MAX = envPositiveInt("RATE_LIMIT_MAX", 60);
-const SENSITIVE_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SENSITIVE_MAX", 5);
+const RATE_LIMIT_MAX = integerSetting("RATE_LIMIT_MAX");
+const SENSITIVE_RATE_LIMIT = integerSetting("RATE_LIMIT_SENSITIVE_MAX");
 const SENSITIVE_RATE_DURATION_MS = 60_000;
 // SSO initiation and IdP-initiated logout arrive from browsers/IdPs (shared
 // NATs, corporate proxies), so the 5/min credential limiter would break
 // legitimate flows; give them their own, higher-bound limiter.
-const SSO_GET_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SSO_GET_MAX", 60);
+const SSO_GET_RATE_LIMIT = integerSetting("RATE_LIMIT_SSO_GET_MAX");
 // SCIM admin settings endpoints: 20 per 1s window per principal (mirrors the
 // former hand-rolled fixed-window limiter in scim-admin.ts exactly).
-const SCIM_SETTINGS_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SCIM_SETTINGS_MAX", 20);
+const SCIM_SETTINGS_RATE_LIMIT = integerSetting("RATE_LIMIT_SCIM_SETTINGS_MAX");
 // SCIM team-group mapping writes: 10 per 60s per principal.
-const SCIM_MAPPING_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SCIM_MAPPING_MAX", 10);
+const SCIM_MAPPING_RATE_LIMIT = integerSetting("RATE_LIMIT_SCIM_MAPPING_MAX");
 // the reference format protects workspace run-history separately from the general API bucket.
 // Keep the compatibility default deliberately conservative while allowing an
 // operator to tune it for a larger deployment.
@@ -356,8 +385,8 @@ const SCIM_MAPPING_RATE_LIMIT = envPositiveInt("RATE_LIMIT_SCIM_MAPPING_MAX", 10
  *  - scim-mapping (RATE_LIMIT_SCIM_MAPPING_MAX / 60s): SCIM team mappings
  * Exposed via GET /api/v2/capabilities rate-limit docs block; see that route.
  */
-const WORKSPACE_RUN_HISTORY_RATE_LIMIT = envPositiveInt("RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX", 120);
-const WORKSPACE_RUN_HISTORY_DURATION_MS = envPositiveInt("RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS", 60_000);
+const WORKSPACE_RUN_HISTORY_RATE_LIMIT = integerSetting("RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX");
+const WORKSPACE_RUN_HISTORY_DURATION_MS = integerSetting("RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS");
 
 function distributedOrLocal(bucketPrefix: string): ReturnType<typeof fixedWindowContext> {
   return isPostgres ? distributedFixedWindowContext(bucketPrefix) : fixedWindowContext();
@@ -477,7 +506,16 @@ const RATE_LIMIT_ERROR_RESPONSE = new Response(
 
 export const app = new Elysia()
   .use(authPlugin)
-  .onBeforeHandle(({ request, token, user, set }: { readonly request: Request; readonly token: { readonly scopes?: string | null } | null; readonly user: { readonly id: string; readonly isSiteAdmin: boolean | null } | null; readonly set: unknown }): Record<string, unknown> | undefined => {
+  .onBeforeHandle(({ request, token, user, orgId, teamId, run, systemToken, set }: {
+    readonly request: Request;
+    readonly token: { readonly id?: string; readonly scopes?: string | null } | null;
+    readonly user: { readonly id: string; readonly isSiteAdmin: boolean | null } | null;
+    readonly orgId?: string | null;
+    readonly teamId?: string | null;
+    readonly run?: { readonly runId: string } | null;
+    readonly systemToken?: { readonly id: string } | null;
+    readonly set: unknown;
+  }): Record<string, unknown> | undefined => {
     // Publish fine-grained token scopes into request-scoped storage BEFORE
     // handlers run, so permission helpers enforce them automatically. Legacy
     // tokens (scopes null/absent) resolve to null = full permissions.
@@ -498,6 +536,18 @@ export const app = new Elysia()
     // The auth derive already read the full user row; hand its site-admin flag
     // to permission helpers so they skip a duplicate users read.
     setRequestSiteAdmin(user?.id ?? null, user?.isSiteAdmin === true);
+    setAuditPrincipal({
+      userId: user?.id ?? null,
+      tokenId: token?.id ?? null,
+      orgId: orgId ?? null,
+      teamId: teamId ?? null,
+      runId: run?.runId ?? null,
+      systemTokenId: systemToken?.id ?? null,
+      scopes: currentTokenScopes(),
+      authenticated: token !== null && token !== undefined || user !== null && user !== undefined
+        || orgId !== null && orgId !== undefined || teamId !== null && teamId !== undefined
+        || run !== null && run !== undefined || systemToken !== null && systemToken !== undefined,
+    });
     const pathname = new URL(request.url).pathname;
     const siteAdminPath = pathname === "/api/v2/admin"
       || pathname.startsWith("/api/v2/admin/")
@@ -621,7 +671,7 @@ export const app = new Elysia()
     // 488: /metrics gets its own small bucket so scrape storms don't starve the global limiter.
     context: distributedOrLocal("metrics"),
     duration: 60_000,
-    max: envPositiveInt("RATE_LIMIT_METRICS_MAX", 30),
+    max: integerSetting("RATE_LIMIT_METRICS_MAX"),
     generator: (request: Request, server: RateLimitServer | null): string => `metrics:${principalRateLimitKey(request, server)}`,
     errorResponse: RATE_LIMIT_ERROR_RESPONSE,
     skip: (request: CustomRequest): boolean => {
@@ -638,6 +688,7 @@ export const app = new Elysia()
     const suppliedId = request.headers.get("x-request-id") ?? request.headers.get("x-correlation-id");
     const correlationId = suppliedId !== null && CORRELATION_ID_PATTERN.test(suppliedId) ? suppliedId : crypto.randomUUID();
     requestMeta.set(request as unknown as Request, { startTime: Date.now(), method, path: pathname, correlationId });
+    beginAuditRequest(correlationId, method, pathname);
     // Issue #648: remember the socket peer so generated links only honor
     // X-Forwarded-Host/Proto from a configured trusted proxy.
     recordRequestPeer(request as unknown as object, socketPeerAddress(request, server));
@@ -655,6 +706,7 @@ export const app = new Elysia()
         // never reach onAfterHandle. Idempotent if it does (meta is gone).
         requestFinished(413);
         requestMeta.delete(request as unknown as Request);
+        resetAuditRequest();
         (set as { status: number }).status = 413;
         return {
           errors: [{
@@ -673,10 +725,7 @@ export const app = new Elysia()
     // Origin that matches it. Otherwise, in non-production builds we reflect a
     // frontend dev Origin explicitly — no origin, no CORS header.
     const origin = request.headers.get("origin");
-    const allowedOrigins = (process.env["CORS_ORIGIN"] ?? "")
-      .split(",")
-      .map((value): string => value.trim())
-      .filter((value): boolean => value !== "");
+    const allowedOrigins = executionSetting("CORS_ORIGIN");
     const isDevBuild = process.env.NODE_ENV !== "production";
     if (origin !== null
       && ((allowedOrigins.length > 0 && allowedOrigins.includes(origin))
@@ -685,7 +734,7 @@ export const app = new Elysia()
     }
     headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
     headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type,Idempotency-Key,If-Match,If-None-Match";
-    headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,Retry-After,X-Request-Id,ETag,Deprecation,Sunset";
+    headers["Access-Control-Expose-Headers"] = "TFP-API-Version,X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,Retry-After,Idempotency-Replayed,X-Request-Id,ETag,Deprecation,Sunset";
   })
   .onAfterHandle(({ request, response, set }: AfterHandleContext): Response | void => {
     const pathname = new URL(request.url).pathname;
@@ -717,10 +766,12 @@ export const app = new Elysia()
       const path = meta.path;
       const status = unacceptable ? 406 : set.status ?? (response instanceof Response ? response.status : 200);
       const numericStatus = typeof status === "number" ? status : Number.parseInt(String(status), 10) || 200;
+      recordRequestLatency(path, duration);
       requestFinished(numericStatus);
       // Idempotent bookkeeping: the WeakMap entry is consumed here so an
       // error path (onError) can never double-count the same request.
       requestMeta.delete(request as unknown as Request);
+      resetAuditRequest();
       if (path.startsWith("/api/")) {
         // Canonical log line (loggingsucks.com wide-event pattern): one
         // context-rich record per request instead of scattered statements.
@@ -771,7 +822,7 @@ export const app = new Elysia()
     // response MUST advertise that with Vary: Origin or shared caches will
     // serve one origin's CORS decision to everyone.
     const originHeader = request.headers.get("origin");
-    const corsConfigured = (process.env["CORS_ORIGIN"] ?? "").split(",").some((value: string): boolean => value.trim() !== "");
+    const corsConfigured = executionSetting("CORS_ORIGIN").length > 0;
     if (originHeader !== null || corsConfigured) {
       const { Vary: existingVary } = headers;
       headers["Vary"] = existingVary === undefined ? "Origin" : `${String(existingVary)}, Origin`;
@@ -980,6 +1031,7 @@ export const app = new Elysia()
   .use(systemHealthRoutes)
   .use(healthRoutes)
   .use(operationsRoutes)
+  .use(operationsIntelligenceRoutes)
   .use(accountRoutes)
   .use(userRoutes)
   .use(organizationRoutes)
@@ -1024,11 +1076,13 @@ export const app = new Elysia()
   .use(samlRoutes)
   .use(oidcRoutes)
   .use(workloadIdentityRoutes)
+  .use(credentialDoctorRoutes)
   .use(providerIconRoutes)
   .use(policyEvaluationRoutes)
   .use(docsRoutes)
   .use(actionsRoutes)
-  .use(registryComponentsRoutes);
+  .use(registryComponentsRoutes)
+  .use(platformRoutes);
 
 // The System API has its own listener in production; privileged diagnostics
 // are deliberately not mounted on the public application listener.
@@ -1082,7 +1136,7 @@ setTimeout((): void => {
   // disable both (TERRENCE_DISABLE_WORKER=1 keeps the process timer-free),
   // production runs both. The ring buffer is what turns the /metrics rss
   // growth figure into a leak trend instead of a steady-state snapshot.
-  if (!envEnabled(process.env["TERRENCE_DISABLE_WORKER"])) {
+  if (!envFlag("TERRENCE_DISABLE_WORKER")) {
     import("./lib/process-metrics").then(({ startProcessSampler }: { startProcessSampler: (intervalMs?: number, ringMax?: number) => void }): void => {
       startProcessSampler();
     }).catch((error: unknown): void => {

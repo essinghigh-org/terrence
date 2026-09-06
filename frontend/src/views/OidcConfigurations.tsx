@@ -11,7 +11,8 @@ import { Spinner } from "../components/ui/spinner";
 import { Select, SelectItem } from "../components/ui/select";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useOrganizationPermissions } from "../hooks/useOrganizationPermissions";
-import { Fingerprint, Plus, Trash2 } from "lucide-react";
+import { useAgentPools } from "../hooks/useAgentPools";
+import { AlertTriangle, CheckCircle2, CircleX, Fingerprint, Plus, Stethoscope, Trash2 } from "lucide-react";
 import { PageHeader, PageShell } from "../components/PageHeader";
 import { isString } from "../lib/type-guards";
 import type { JsonObject } from "@/lib/json";
@@ -21,6 +22,30 @@ type OidcConfig = {
   type: string;
   attributes: JsonObject;
 };
+
+type DoctorCheck = Readonly<{
+  name: string;
+  status: "passed" | "warning" | "failed" | "skipped";
+  code: string;
+  guidance: string;
+  details?: Readonly<Record<string, unknown>>;
+}>;
+
+type DoctorResult = Readonly<{
+  id: string;
+  type: string;
+  attributes: Readonly<{
+    provider: string;
+    status: "passed" | "warning" | "failed";
+    "execution-context": Readonly<{ kind: string; node: string; "agent-pool-id": string | null; "agent-id": string | null }>;
+    claims: Readonly<Record<string, unknown>>;
+    checks: readonly DoctorCheck[];
+    identity: Readonly<Record<string, unknown>> | null;
+    caveat: string;
+    "started-at": string;
+    "completed-at": string;
+  }>;
+}>;
 
 const TYPE_LABELS = {
   "aws-oidc-configurations": "AWS",
@@ -39,6 +64,10 @@ function displayValue(config: OidcConfig): string {
   return config.id;
 }
 
+function safeDisplayValue(value: unknown): string {
+  return typeof value === "string" || typeof value === "number" ? String(value) : "unknown";
+}
+
 export function OidcConfigurations(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
@@ -50,6 +79,7 @@ export function OidcConfigurations(): React.JSX.Element {
   activeOrganizationName.current = orgName;
   const orgPermissions = useOrganizationPermissions(orgName === "" ? undefined : orgName);
   const canManage = orgName !== "" && orgPermissions.loaded && orgPermissions.has("can-manage-providers");
+  const agentPoolsState = useAgentPools(orgName, canManage);
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -61,10 +91,18 @@ export function OidcConfigurations(): React.JSX.Element {
   const [namespace, setNamespace] = useState("");
   const [configToDelete, setConfigToDelete] = useState<OidcConfig | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [doctorConfig, setDoctorConfig] = useState<OidcConfig | null>(null);
+  const [doctorTarget, setDoctorTarget] = useState("worker");
+  const [doctorResult, setDoctorResult] = useState<DoctorResult | null>(null);
+  const [doctorRunning, setDoctorRunning] = useState(false);
+  const [doctorError, setDoctorError] = useState("");
 
   useEffect((): void => {
     setConfigs([]);
     setCreateDialogOpen(false);
+    setDoctorConfig(null);
+    setDoctorResult(null);
+    setDoctorError("");
     permissionGateFired.current = false;
   }, [orgName]);
 
@@ -164,6 +202,39 @@ export function OidcConfigurations(): React.JSX.Element {
     }
   };
 
+  const runDoctor = async (): Promise<void> => {
+    if (doctorConfig === null) return;
+    setDoctorRunning(true);
+    setDoctorError("");
+    setDoctorResult(null);
+    try {
+      const response = await fetchApi(
+        `/organizations/${encodeURIComponent(orgName)}/oidc-configurations/${encodeURIComponent(doctorConfig.id)}/credential-doctor`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            data: {
+              type: "credential-doctor-runs",
+              attributes: { "agent-pool-id": doctorTarget === "worker" ? null : doctorTarget },
+            },
+          }),
+        },
+      ) as { data: DoctorResult };
+      setDoctorResult(response.data);
+    } catch (reason) {
+      setDoctorError(reason instanceof Error ? reason.message : "Credential doctor failed to run.");
+    } finally {
+      setDoctorRunning(false);
+    }
+  };
+
+  const doctorIcon = (status: DoctorCheck["status"]): React.JSX.Element => {
+    if (status === "passed") return <CheckCircle2 className="h-4 w-4 text-emerald-600" aria-hidden="true" />;
+    if (status === "warning") return <AlertTriangle className="h-4 w-4 text-amber-600" aria-hidden="true" />;
+    if (status === "failed") return <CircleX className="h-4 w-4 text-destructive" aria-hidden="true" />;
+    return <AlertTriangle className="h-4 w-4 text-muted-foreground" aria-hidden="true" />;
+  };
+
   return (
     <PageShell>
       <PageHeader
@@ -189,7 +260,7 @@ export function OidcConfigurations(): React.JSX.Element {
               <TableRow>
                 <TableHead>Provider</TableHead>
                 <TableHead>Configuration</TableHead>
-                <TableHead className="w-16" />
+                <TableHead className="w-56" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -227,9 +298,15 @@ export function OidcConfigurations(): React.JSX.Element {
                   <TableCell className="font-mono text-xs text-muted-foreground">{displayValue(config)}</TableCell>
                   <TableCell>
                     {canManage && (
-                      <Button variant="ghost" size="icon" onClick={(): void => { setConfigToDelete(config); }} aria-label="Delete configuration">
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <div className="flex justify-end gap-1">
+                        <Button variant="outline" size="sm" onClick={(): void => { setDoctorConfig(config); setDoctorResult(null); setDoctorError(""); setDoctorTarget("worker"); }}>
+                          <Stethoscope className="mr-2 h-4 w-4" aria-hidden="true" />
+                          Check access
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={(): void => { setConfigToDelete(config); }} aria-label="Delete configuration">
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     )}
                   </TableCell>
                 </TableRow>
@@ -239,6 +316,61 @@ export function OidcConfigurations(): React.JSX.Element {
           </Table>
         </CardContent>
       </Card>
+
+      <Dialog open={doctorConfig !== null} onOpenChange={(open): void => { if (!open && !doctorRunning) { setDoctorConfig(null); setDoctorResult(null); setDoctorError(""); } }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Credential doctor</DialogTitle>
+            <DialogDescription>
+              Issue a short-lived workload token, check its trust claims, test provider reachability, and make one harmless identity/read call from the selected execution context.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="credential-doctor-target">Run from</label>
+              <Select id="credential-doctor-target" name="credential-doctor-target" value={doctorTarget} onValueChange={setDoctorTarget} disabled={doctorRunning}>
+                <SelectItem value="worker">Terrence worker ({typeof window === "undefined" ? "local" : "control plane"})</SelectItem>
+                {agentPoolsState.pools.map((pool): React.JSX.Element => <SelectItem key={pool.id} value={pool.id}>{pool.attributes.name} (agent pool)</SelectItem>)}
+              </Select>
+              {agentPoolsState.error !== "" && <p className="text-xs text-muted-foreground">{agentPoolsState.error}</p>}
+            </div>
+            {doctorError !== "" && <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{doctorError}</div>}
+            {doctorResult !== null && (
+              <div className="space-y-4 rounded-md border p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="font-medium">{doctorResult.attributes.provider.toUpperCase()} credential check</p>
+                    <p className="text-xs text-muted-foreground">{doctorResult.attributes["execution-context"].kind === "agent_pool" ? `Agent ${doctorResult.attributes["execution-context"]["agent-id"] ?? "pool"}` : "Terrence worker"} · {new Date(doctorResult.attributes["completed-at"]).toLocaleString()}</p>
+                  </div>
+                  <span className={doctorResult.attributes.status === "failed" ? "text-sm font-medium text-destructive" : doctorResult.attributes.status === "warning" ? "text-sm font-medium text-amber-700" : "text-sm font-medium text-emerald-700"}>
+                    {doctorResult.attributes.status}
+                  </span>
+                </div>
+                <ul className="space-y-2" aria-label="Credential doctor checks">
+                  {doctorResult.attributes.checks.map((check): React.JSX.Element => (
+                    <li key={check.name} className="flex items-start gap-2 text-sm">
+                      <span className="mt-0.5">{doctorIcon(check.status)}</span>
+                      <span className="min-w-0"><span className="font-medium">{check.name.split("_").join(" ")}</span><span className="ml-2 text-xs text-muted-foreground">{check.code}</span><span className="block text-xs text-muted-foreground">{check.guidance}</span></span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="rounded-md bg-muted/60 p-3 text-xs">
+                  <p className="font-medium">Safe token claims</p>
+                  <p className="mt-1 break-all text-muted-foreground">aud: {safeDisplayValue(doctorResult.attributes.claims["aud"])} · sub: {safeDisplayValue(doctorResult.attributes.claims["sub"])}</p>
+                  <p className="mt-1 text-muted-foreground">A successful identity/read probe does not prove authorization for every later resource operation.</p>
+                </div>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={(): void => { setDoctorConfig(null); setDoctorResult(null); setDoctorError(""); }} disabled={doctorRunning}>Close</Button>
+            <Button type="button" onClick={(): void => { void runDoctor(); }} disabled={doctorRunning || doctorConfig === null}>
+              {doctorRunning && <Spinner data-icon="inline-start" />}
+              {doctorRunning ? "Checking…" : doctorResult === null ? "Run credential doctor" : "Run again"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
         <DialogContent>

@@ -1,3 +1,5 @@
+import { loggingSetting } from "./runtime-config";
+import { validateSettings } from "./settings-contract";
 import { formatSyslogMessage, resolveHostname, resolveSyslogFormat, type SyslogFormat, UDP_JSON_BODY_BUDGET } from "./syslog-format";
 import {
   closeSyslogTransports,
@@ -37,24 +39,16 @@ function resolveLogLevel(rawLevel: unknown, fallback = DEFAULT_LOG_LEVEL): LogLe
   return fallback;
 }
 
-function environmentTargetString(): string | undefined {
-  const multiple = process.env["TERRENCE_SYSLOG_TARGETS"]?.trim();
-  return multiple === undefined || multiple === ""
-    ? process.env["TERRENCE_SYSLOG_TARGET"]
-    : multiple;
-}
-
 function environmentConfiguration(): LoggingConfiguration {
-  const logLevel = resolveLogLevel(process.env["LOG_LEVEL"]);
-  const syslogTargets = parseSyslogTargets(environmentTargetString());
+  const syslogTargets = parseSyslogTargets(loggingSetting("TERRENCE_SYSLOG_TARGETS").join(","));
   return {
     enabled: syslogTargets.length > 0,
-    logLevel,
-    syslogLevel: resolveLogLevel(process.env["TERRENCE_SYSLOG_LEVEL"], logLevel),
+    logLevel: loggingSetting("LOG_LEVEL"),
+    syslogLevel: loggingSetting("TERRENCE_SYSLOG_LEVEL"),
     syslogTargets,
-    syslogHostname: process.env["TERRENCE_SYSLOG_HOSTNAME"]?.trim() || null,
-    syslogApp: process.env["TERRENCE_SYSLOG_APP"]?.trim() || "terrence",
-    syslogFormat: resolveSyslogFormat(process.env["TERRENCE_SYSLOG_FORMAT"]),
+    syslogHostname: loggingSetting("TERRENCE_SYSLOG_HOSTNAME"),
+    syslogApp: loggingSetting("TERRENCE_SYSLOG_APP"),
+    syslogFormat: loggingSetting("TERRENCE_SYSLOG_FORMAT"),
   };
 }
 
@@ -90,6 +84,7 @@ function targetSetChanged(previous: readonly SyslogTarget[], next: readonly Sysl
  * A non-null persisted field overrides its environment fallback; an explicit
  * empty target array disables environment-configured remote sinks. */
 export function applyLoggingSettings(settings: Readonly<Record<string, unknown>>): void {
+  validateSettings("logging", settings);
   const environment = environmentConfiguration();
   const configuredLogLevel = settingString(settings, "log-level");
   const configuredSyslogLevel = settingString(settings, "syslog-level");

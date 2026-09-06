@@ -40,7 +40,7 @@
     }
   },
   "ignoreBinaries": [
-    "tsc",
-    "tsc6"
+    "rsvg-convert",
+    "magick"
   ]
 }

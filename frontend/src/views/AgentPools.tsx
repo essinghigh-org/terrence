@@ -10,10 +10,20 @@ import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from ".
 import { TableSkeleton } from "@/components/ui/table-skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
 
+import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
-import { Server, Plus, Trash2, Key, ShieldCheck, Cpu } from "lucide-react";
+import { Activity, CheckCircle2, Clock3, Cpu, Eye, Key, Plus, RefreshCw, Server, ShieldCheck, Trash2, WifiOff } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PageHeader, PageShell } from "@/components/PageHeader";
+import {
+  agentCapabilities,
+  agentHealthState,
+  agentStatusLabel,
+  formatLastObserved,
+  summarizeAgentHealth,
+  type AgentHealthRecord,
+  type AgentHealthState,
+} from "../lib/agent-health";
 
 type AgentPool = {
   id: string;
@@ -22,6 +32,14 @@ type AgentPool = {
     organization: string;
 
     "agent-count"?: number;
+    "queued-job-count"?: number;
+    "claimed-job-count"?: number;
+    "organization-scoped"?: boolean;
+  };
+  relationships?: {
+    "allowed-workspaces"?: { data?: { id: string }[] };
+    "allowed-projects"?: { data?: { id: string }[] };
+    "excluded-workspaces"?: { data?: { id: string }[] };
   };
 }
 
@@ -36,11 +54,43 @@ type AgentToken = {
   };
 }
 
+function AgentHealthBadge({ state }: Readonly<{ state: AgentHealthState }>): React.JSX.Element {
+  const tone = state === "idle" ? "border-success/30 bg-success/10 text-success"
+    : state === "busy" ? "border-primary/30 bg-primary/10 text-primary"
+      : state === "draining" ? "border-warning/30 bg-warning/10 text-warning"
+        : state === "stale" || state === "offline" ? "border-destructive/30 bg-destructive/10 text-destructive"
+          : "border-border bg-muted text-muted-foreground";
+  const statusIcon = state === "idle" ? <CheckCircle2 className="size-3" aria-hidden="true" />
+    : state === "busy" ? <Activity className="size-3" aria-hidden="true" />
+      : state === "stale" ? <Clock3 className="size-3" aria-hidden="true" />
+        : state === "offline" ? <WifiOff className="size-3" aria-hidden="true" />
+          : <Activity className="size-3" aria-hidden="true" />;
+  return (
+    <Badge variant="outline" className={`inline-flex items-center gap-1 ${tone}`}>
+      {statusIcon}
+      {agentStatusLabel(state)}
+    </Badge>
+  );
+}
+
+function assignmentScopeLabel(pool: AgentPool): string {
+  const allowedWorkspaces = pool.relationships?.["allowed-workspaces"]?.data?.length ?? 0;
+  const allowedProjects = pool.relationships?.["allowed-projects"]?.data?.length ?? 0;
+  const excludedWorkspaces = pool.relationships?.["excluded-workspaces"]?.data?.length ?? 0;
+  if (pool.attributes["organization-scoped"] !== false) {
+    return excludedWorkspaces > 0 ? `Organization-wide · ${excludedWorkspaces} excluded` : "Organization-wide";
+  }
+  if (allowedWorkspaces === 0 && allowedProjects === 0) return "No allowed workspaces or projects";
+  return `${allowedWorkspaces} workspace${allowedWorkspaces === 1 ? "" : "s"}, ${allowedProjects} project${allowedProjects === 1 ? "" : "s"}${excludedWorkspaces > 0 ? ` · ${excludedWorkspaces} excluded` : ""}`;
+}
+
 export function AgentPools(): React.JSX.Element {
   const { orgName: rawOrgName } = useParams<{ orgName: string }>();
   const orgName = rawOrgName ?? "";
   const orgPath = `/app/${encodeURIComponent(orgName)}`;
   const [pools, setPools] = useState<AgentPool[]>([]);
+  const [agentsByPool, setAgentsByPool] = useState<Record<string, AgentHealthRecord[]>>({});
+  const [agentLoadErrors, setAgentLoadErrors] = useState<Record<string, string>>({});
   const [manageableOrganizationName, setManageableOrganizationName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -59,6 +109,7 @@ export function AgentPools(): React.JSX.Element {
   const [loadingTokens, setLoadingTokens] = useState(false);
   const [creatingToken, setCreatingToken] = useState(false);
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
+  const [healthPool, setHealthPool] = useState<AgentPool | null>(null);
   const activeOrganizationName = useRef(orgName);
   const selectedPoolId = useRef<string | null>(null);
   activeOrganizationName.current = orgName;
@@ -66,9 +117,12 @@ export function AgentPools(): React.JSX.Element {
 
   useEffect((): void => {
     setPools([]);
+    setAgentsByPool({});
+    setAgentLoadErrors({});
     setManageableOrganizationName("");
     setPoolDialogOpen(false);
     setTokensDialogOpen(false);
+    setHealthPool(null);
     selectedPoolId.current = null;
     if (orgName !== "") void loadAgentPools();
   }, [orgName]);
@@ -95,7 +149,41 @@ export function AgentPools(): React.JSX.Element {
         `/organizations/${encodeURIComponent(requestedOrganizationName)}/agent-pools`,
       ) as { data?: AgentPool[] };
       if (activeOrganizationName.current !== requestedOrganizationName) return;
-      setPools(Array.isArray(response.data) ? response.data : []);
+      const nextPools = Array.isArray(response.data) ? response.data : [];
+      setPools(nextPools);
+
+      // Pool resources contain only the count. Read the agent collection as a
+      // second, permission-scoped request so the table can explain whether a
+      // worker is usable, busy, draining, or stale without inventing state.
+      const agentResults = await Promise.all(nextPools.map(async (pool): Promise<{
+        id: string;
+        agents: AgentHealthRecord[];
+        error: string;
+      }> => {
+        try {
+          const agentResponse = await fetchApi(
+            `/agent-pools/${encodeURIComponent(pool.id)}/agents`,
+          ) as { data?: AgentHealthRecord[] };
+          return {
+            id: pool.id,
+            agents: Array.isArray(agentResponse.data) ? agentResponse.data : [],
+            error: "",
+          };
+        } catch (agentError: unknown) {
+          return {
+            id: pool.id,
+            agents: [],
+            error: agentError instanceof Error ? agentError.message : "Worker health could not be loaded.",
+          };
+        }
+      }));
+      if (activeOrganizationName.current !== requestedOrganizationName) return;
+      setAgentsByPool(Object.fromEntries(agentResults.map((result): [string, AgentHealthRecord[]] => [result.id, result.agents])));
+      setAgentLoadErrors(Object.fromEntries(
+        agentResults
+          .filter((result): boolean => result.error !== "")
+          .map((result): [string, string] => [result.id, result.error]),
+      ));
     } catch (err: unknown) {
       if (activeOrganizationName.current === requestedOrganizationName) {
         setError(err instanceof Error ? err.message : "Failed to load agent pools");
@@ -125,6 +213,7 @@ export function AgentPools(): React.JSX.Element {
       }) as { data: AgentPool };
       if (activeOrganizationName.current !== orgName) return;
       setPools((prev: AgentPool[]): AgentPool[] => [...prev, res.data]);
+      setAgentsByPool((prev): Record<string, AgentHealthRecord[]> => ({ ...prev, [res.data.id]: [] }));
       setPoolDialogOpen(false);
       setPoolName("");
     } catch (err: unknown) {
@@ -147,6 +236,10 @@ export function AgentPools(): React.JSX.Element {
       await fetchApi(`/agent-pools/${encodeURIComponent(pool.id)}`, { method: "DELETE" });
       if (activeOrganizationName.current !== orgName) return;
       setPools((prev: AgentPool[]): AgentPool[] => prev.filter((p: AgentPool): boolean => p.id !== pool.id));
+      setAgentsByPool((prev): Record<string, AgentHealthRecord[]> => {
+        return Object.fromEntries(Object.entries(prev).filter(([id]): boolean => id !== pool.id));
+      });
+      if (healthPool?.id === pool.id) setHealthPool(null);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to delete agent pool";
       setError(msg);
@@ -268,26 +361,27 @@ export function AgentPools(): React.JSX.Element {
               <TableRow>
                 <TableHead>Pool Name</TableHead>
                 <TableHead>Organization</TableHead>
-                <TableHead>Active Agents</TableHead>
+                <TableHead>Worker health</TableHead>
+                <TableHead>Assignment scope</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="p-0">
-                    <TableSkeleton rows={3} cols={4} />
+                  <TableCell colSpan={5} className="p-0">
+                    <TableSkeleton rows={3} cols={5} />
                   </TableCell>
                 </TableRow>
               ) : !canManage ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
                     Agent pool access is unavailable.
                   </TableCell>
                 </TableRow>
               ) : pools.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
+                  <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
                     <EmptyState compact illustration={error === "" ? "empty" : undefined}
                       title={error === "" ? "No agent pools yet" : "Agent pools unavailable"}
                       description={error === "" ? "Create an agent pool to run infrastructure jobs on your own workers." : "Reload the page to try again."}
@@ -296,7 +390,11 @@ export function AgentPools(): React.JSX.Element {
                   </TableCell>
                 </TableRow>
               ) : (
-                pools.map((pool): React.JSX.Element => (
+                pools.map((pool): React.JSX.Element => {
+                  const agents = agentsByPool[pool.id] ?? [];
+                  const summary = summarizeAgentHealth(agents);
+                  const agentError = agentLoadErrors[pool.id];
+                  return (
                   <TableRow key={pool.id}>
                     <TableCell className="font-semibold">
                       <div className="flex items-center gap-2">
@@ -308,13 +406,35 @@ export function AgentPools(): React.JSX.Element {
                       {pool.attributes.organization}
                     </TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
-                        <Cpu className="size-3.5 text-primary" />
-                        {pool.attributes["agent-count"] ?? 0} Workers
-                      </div>
+                      {agentError !== undefined ? (
+                        <div className="text-xs text-muted-foreground">Worker health unavailable</div>
+                      ) : (
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Cpu className="size-3.5 text-primary" aria-hidden="true" />
+                            <span className="text-xs font-medium">{summary.usable} usable</span>
+                            <span className="text-xs text-muted-foreground">of {summary.total} registered</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            {summary.usable === 0 ? "No eligible workers; runs will wait." : `${summary.idle} idle · ${summary.busy} busy`}
+                            {summary.stale > 0 ? ` · ${summary.stale} heartbeat stale` : ""}
+                          </p>
+                          {(pool.attributes["queued-job-count"] ?? 0) > 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              {pool.attributes["queued-job-count"]} queued job{pool.attributes["queued-job-count"] === 1 ? "" : "s"} · {pool.attributes["claimed-job-count"] ?? 0} claimed
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {assignmentScopeLabel(pool)}
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
+                        <Button size="sm" variant="outline" onClick={(): void => { setHealthPool(pool); }}>
+                          <Eye className="size-3.5 mr-1" aria-hidden="true" /> Worker health
+                        </Button>
                         <Button size="sm" variant="outline" onClick={(): void => { void openTokensModal(pool); }}>
                           <Key className="size-3.5 mr-1" /> Agent Tokens
                         </Button>
@@ -335,12 +455,118 @@ export function AgentPools(): React.JSX.Element {
                       </div>
                     </TableCell>
                   </TableRow>
-                ))
+                  );
+                })
               )}
             </TableBody>
           </Table>
         </CardContent>
       </Card>
+
+      <Dialog open={healthPool !== null} onOpenChange={(open): void => { if (!open) setHealthPool(null); }}>
+        <DialogContent className="sm:max-w-[900px]" align="top">
+          {healthPool !== null && (() => {
+            const healthAgents = agentsByPool[healthPool.id] ?? [];
+            const healthSummary = summarizeAgentHealth(healthAgents);
+            const healthError = agentLoadErrors[healthPool.id];
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle>Worker health — {healthPool.attributes.name}</DialogTitle>
+                  <DialogDescription>
+                    Usable capacity reflects the server&apos;s recorded worker status. Heartbeat times are last observed values, not a live connection claim.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="grid gap-3 sm:grid-cols-4" aria-label="Worker health summary">
+                  <div className="rounded-md border bg-muted/30 p-3">
+                    <div className="text-xs text-muted-foreground">Usable capacity</div>
+                    <div className="mt-1 text-lg font-semibold">{healthSummary.usable} / {healthSummary.total}</div>
+                  </div>
+                  <div className="rounded-md border bg-muted/30 p-3">
+                    <div className="text-xs text-muted-foreground">Idle</div>
+                    <div className="mt-1 text-lg font-semibold">{healthSummary.idle}</div>
+                  </div>
+                  <div className="rounded-md border bg-muted/30 p-3">
+                    <div className="text-xs text-muted-foreground">Busy</div>
+                    <div className="mt-1 text-lg font-semibold">{healthSummary.busy}</div>
+                  </div>
+                  <div className="rounded-md border bg-muted/30 p-3">
+                    <div className="text-xs text-muted-foreground">Needs attention</div>
+                    <div className="mt-1 text-lg font-semibold">{healthSummary.stale + healthSummary.draining + healthSummary.failed}</div>
+                  </div>
+                </div>
+
+                {healthError !== undefined && (
+                  <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-text">
+                    <span>Worker health could not be loaded: {healthError}</span>
+                    <Button type="button" size="sm" variant="outline" onClick={(): void => { void loadAgentPools(); }}>
+                      Try again
+                    </Button>
+                  </div>
+                )}
+
+                {healthError === undefined && healthAgents.length === 0 ? (
+                  <div className="rounded-md border border-dashed p-6 text-center">
+                    <p className="font-medium">No workers have registered with this pool.</p>
+                    <p className="mt-1 text-sm text-muted-foreground">Runs assigned here will wait until a compatible worker checks in.</p>
+                  </div>
+                ) : healthError === undefined ? (
+                  <div className="overflow-x-auto rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Worker</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Capabilities</TableHead>
+                          <TableHead>Version / architecture</TableHead>
+                          <TableHead>Last observed</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {healthAgents.map((agent): React.JSX.Element => {
+                          const state = agentHealthState(agent);
+                          const lastObserved = agent.attributes["last-ping-at"];
+                          return (
+                            <TableRow key={agent.id}>
+                              <TableCell>
+                                <div className="font-medium">{agent.attributes.name ?? agent.id}</div>
+                                <div className="font-mono text-xs text-muted-foreground">{agent.id}</div>
+                              </TableCell>
+                              <TableCell><AgentHealthBadge state={state} /></TableCell>
+                              <TableCell>
+                                <div className="flex flex-wrap gap-1">
+                                  {agentCapabilities(agent).map((capability): React.JSX.Element => (
+                                    <Badge key={capability} variant="secondary" className="font-mono text-[11px]">{capability}</Badge>
+                                  ))}
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-xs text-muted-foreground">
+                                <div>{agent.attributes.version ?? "Version unknown"}</div>
+                                <div>{agent.attributes.architecture ?? "Architecture unknown"}</div>
+                              </TableCell>
+                              <TableCell className="text-xs text-muted-foreground">
+                                <time dateTime={lastObserved ?? undefined}>{formatLastObserved(lastObserved)}</time>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : null}
+
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={(): void => { void loadAgentPools(); }}>
+                    <RefreshCw className="mr-1.5 size-4" aria-hidden="true" /> Refresh health
+                  </Button>
+                  <Button type="button" onClick={(): void => { setHealthPool(null); }}>Close</Button>
+                </DialogFooter>
+              </>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
 
       {/* Create Modal */}
       <Dialog open={poolDialogOpen} onOpenChange={setPoolDialogOpen}>

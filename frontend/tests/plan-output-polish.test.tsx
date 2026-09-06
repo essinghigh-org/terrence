@@ -177,6 +177,7 @@ test("renders replacement and nested safe diffs and filters resources", async ()
     expect(view.getByText(JSON.stringify("https://new.example"))).toBeTruthy();
     expect(view.getByText(JSON.stringify("stable-resource"))).toBeTruthy();
     expect(view.getAllByText("Forces replacement").length).toBeGreaterThan(0);
+    expect(view.getAllByText(/replace because cannot update/).length).toBeGreaterThan(0);
     expect(view.getByText(/1 unchanged attribute hidden/)).toBeTruthy();
   });
   expect((view.container as HTMLElement).querySelector("img[alt=\"\"]")?.getAttribute("src") ?? view.container.textContent).toBeTruthy();
@@ -195,6 +196,49 @@ test("renders replacement and nested safe diffs and filters resources", async ()
     expect(view.getByText("module.app.secret_resource.replaced")).toBeTruthy();
     expect(view.queryByText("aws_instance.changed")).toBeNull();
     expect(view.getByText("Showing 1 of 2")).toBeTruthy();
+  });
+});
+
+test("summary filters retain replacement resources and next change opens the selected row", async () => {
+  globalThis.fetch = mock(async (): Promise<Response> => json({
+    resource_changes: [
+      {
+        address: "aws_instance.replaced",
+        module_address: "module.app",
+        type: "aws_instance",
+        change: {
+          actions: ["delete", "create"],
+          before: { id: "old" },
+          after: { id: "new" },
+        },
+      },
+      {
+        address: "aws_instance.updated",
+        type: "aws_instance",
+        change: {
+          actions: ["update"],
+          before: { size: "small" },
+          after: { size: "large" },
+        },
+      },
+    ],
+  })) as unknown as typeof fetch;
+
+  const view = render(<PlanOutput runId="run-navigation" status="planned" />);
+  await waitFor((): void => {
+    expect(view.getByText("aws_instance.replaced")).toBeTruthy();
+  });
+
+  fireEvent.click(view.getByRole("button", { name: "1 to create" }));
+  await waitFor((): void => {
+    expect(view.getByText("aws_instance.replaced")).toBeTruthy();
+    expect(view.queryByText("aws_instance.updated")).toBeNull();
+    expect(view.getByText("Showing 1 of 2")).toBeTruthy();
+  });
+
+  fireEvent.keyDown(view.container.querySelector("section")!, { key: "n" });
+  await waitFor((): void => {
+    expect(view.getByLabelText("Attribute changes for aws_instance.replaced")).toBeTruthy();
   });
 });
 

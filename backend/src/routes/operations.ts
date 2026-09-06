@@ -4,7 +4,9 @@ import { db } from "../db";
 import { durableJobs } from "../db/schema";
 import {
   findAuthorizedRun,
+  findAuthorizedWorkspace,
 } from "../lib/utils";
+import { assessWorkspacePreflight, preflightResource } from "../lib/workspace-preflight";
 import { getSettings, resolvePlanExplainerSettings } from "../lib/settings";
 import {
   EXPLAIN_KINDS,
@@ -24,7 +26,8 @@ import {
 } from "../lib/run-explanations";
 import { authPlugin } from "../auth";
 import { log } from "../lib/log";
-import { enqueueDurableJob } from "../lib/durable-jobs";
+import { DurableJobBudgetError, enqueueDurableJob } from "../lib/durable-jobs";
+import { requestOperationContext } from "../lib/secure-request";
 
 type ParamCtx = Readonly<{
   params: Readonly<Record<string, string>>;
@@ -47,9 +50,52 @@ function explainAuditContext(user: Readonly<{ readonly id: string }> | null | un
   return { userId: user?.id ?? null, orgId: orgId ?? null };
 }
 
+function preflightBodyProbes(body: unknown): Readonly<{ probes?: readonly string[]; invalid: boolean }> {
+  if (body === undefined || body === null) return { invalid: false };
+  if (typeof body !== "object" || Array.isArray(body)) return { invalid: true };
+  const data = (body as Record<string, unknown>)["data"];
+  if (data === undefined) return { invalid: false };
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return { invalid: true };
+  const attributes = (data as Record<string, unknown>)["attributes"];
+  if (attributes === undefined) return { invalid: false };
+  if (typeof attributes !== "object" || attributes === null || Array.isArray(attributes)) return { invalid: true };
+  const raw = (attributes as Record<string, unknown>)["probes"];
+  if (raw === undefined) return { invalid: false };
+  if (!Array.isArray(raw) || raw.length > 8 || raw.some((probe): boolean => typeof probe !== "string" || !["connectivity", "identity"].includes(probe))) return { invalid: true };
+  return { probes: raw as string[], invalid: false };
+}
+
+function preflightError(set: SetObj, status: number, detail: string): Readonly<{ errors: readonly [{ status: string; title: string; detail: string }] }> {
+  (set as { status: number }).status = status;
+  return { errors: [{ status: String(status), title: status === 422 ? "Unprocessable Entity" : "Not Found", detail }] };
+}
+
 export const operationsRoutes = new Elysia({ name: "operations" })
   .use(authPlugin)
-  // --- AI run explainer ---------------------------------------------------
+    // Workspace-scoped run readiness. These endpoints inspect only bounded,
+    // persisted control-plane state. Optional probes are represented as
+    // deferred checks so the eventual worker/agent/client context remains the
+    // authority and the control plane never follows an arbitrary URL.
+    .get("/api/v2/workspaces/:workspace_id/preflight", async ({ params, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspace = await findAuthorizedWorkspace(params["workspace_id"] ?? "", user?.id, orgId ?? null, teamId ?? null, "read");
+      if (workspace === undefined) return notFound(set);
+      return preflightResource(await assessWorkspacePreflight(workspace));
+    })
+    .post("/api/v2/workspaces/:workspace_id/preflight", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspace = await findAuthorizedWorkspace(params["workspace_id"] ?? "", user?.id, orgId ?? null, teamId ?? null, "read");
+      if (workspace === undefined) return notFound(set);
+      const parsed = preflightBodyProbes(body);
+      if (parsed.invalid) return preflightError(set, 422, "Preflight probes must be connectivity or identity.");
+      return preflightResource(await assessWorkspacePreflight(workspace, parsed.probes === undefined ? {} : { probes: parsed.probes }));
+    })
+    .post("/api/v2/workspaces/:workspace_id/actions/preflight", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+      const workspace = await findAuthorizedWorkspace(params["workspace_id"] ?? "", user?.id, orgId ?? null, teamId ?? null, "read");
+      if (workspace === undefined) return notFound(set);
+      const parsed = preflightBodyProbes(body);
+      if (parsed.invalid) return preflightError(set, 422, "Preflight probes must be connectivity or identity.");
+      return preflightResource(await assessWorkspacePreflight(workspace, parsed.probes === undefined ? {} : { probes: parsed.probes }));
+    })
+    // --- AI run explainer ---------------------------------------------------
     // Read-only convenience: feeds the sanitized stored plan JSON (or a failed
     // apply log) to a user-configured OpenAI-compatible endpoint and returns the
     // plain-language explanation. Explanations are cached per (run, kind) so
@@ -154,7 +200,32 @@ export const operationsRoutes = new Elysia({ name: "operations" })
       // Background the non-streaming generation: enqueue a durable job and
       // return 202 so a tab close does not abort the LLM call. Concurrent
       // requests for the same (run, kind) dedupe to the same job.
-      const job = await enqueueDurableJob("plan-explanation", { runId, kind }, { dedupeKey });
+      let job;
+      try {
+        job = await enqueueDurableJob(
+          "plan-explanation",
+          { runId, kind, organizationId: orgId, jobClass: "explanation", estimatedBytes: 1 * 1024 * 1024 },
+          {
+            dedupeKey,
+            budget: { organizationId: orgId, jobClass: "explanation", estimatedBytes: 1 * 1024 * 1024 },
+          },
+        );
+      } catch (error: unknown) {
+        if (!(error instanceof DurableJobBudgetError)) throw error;
+        (set as { status: number }).status = error.status;
+        if (error.status === 429 && error.admission.retryAfterMs !== null) {
+          (set.headers as Record<string, string | number>)["Retry-After"] = Math.ceil(error.admission.retryAfterMs / 1_000);
+        }
+        return {
+          errors: [{
+            status: String(error.status),
+            title: error.status === 413 ? "Payload Too Large" : "Too Many Requests",
+            detail: error.status === 413
+              ? "The plan explanation estimate exceeds the configured artifact byte budget."
+              : "Plan explanation capacity is temporarily full; retry after the queue drains.",
+          }],
+        };
+      }
       if (job.status === "succeeded") {
         // Rare: a terminal job was recycled in the same call; fall through
         // to serve the cached explanation if present.
@@ -319,7 +390,11 @@ export const operationsRoutes = new Elysia({ name: "operations" })
         // lib types omit it anyway. Fall back to the request signal, which is
         // always a real AbortSignal and covers client disconnects.
         const controllerSignal = (controller as ReadableStreamDefaultController<Uint8Array> & { readonly signal?: AbortSignal }).signal;
-        const clientSignal = controllerSignal ?? request.signal;
+        const requestOperation = requestOperationContext({
+          url: request.url,
+          signal: controllerSignal ?? request.signal,
+        });
+        const clientSignal = requestOperation.signal;
         send(controller, "meta", { kind, model, "reasoning-effort": reasoningEffort });
         try {
           await fetchUpstream(settings, source.prompt, true, clientSignal, async (upstream, tick) => {
@@ -404,6 +479,8 @@ export const operationsRoutes = new Elysia({ name: "operations" })
           if (!clientSignal.aborted) {
             send(controller, "error", { message: error instanceof Error ? error.message : String(error) });
           }
+        } finally {
+          requestOperation.dispose();
         }
         controller.close();
       },

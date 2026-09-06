@@ -304,7 +304,8 @@ for (const route of routes) {
     }
   }
   const isPlanArtifact = m === "get" && /^\/api\/v2\/(plans\/\{[^}]+\}|runs\/\{[^}]+\}\/plan)\/(json-output|json-output-redacted|sanitized-plan)$/.test(openApiPath);
-  if (hasImplicitSuccessReturn(handlerSource) || isPlanArtifact || ![...responseStatuses].some((status) => status >= 200 && status < 300)) {
+  const hasSuccessStatus = [...responseStatuses].some((status) => status >= 200 && status < 300);
+  if ((hasImplicitSuccessReturn(handlerSource) && !hasSuccessStatus) || isPlanArtifact || !hasSuccessStatus) {
     responseStatuses.add(200);
   }
   // The shared artifact responder is called from the handler and therefore

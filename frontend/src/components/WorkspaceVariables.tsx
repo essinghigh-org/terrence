@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LockKeyhole, Plus, Unplug } from "lucide-react";
+import { ChevronDown, LockKeyhole, Plus, Unplug } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -84,6 +84,17 @@ type VariableSetVariable = {
   };
 };
 
+type VariableRowValue = WorkspaceVariable | VariableSetVariable;
+
+type VariableCandidate = Readonly<{
+  id: string;
+  sourceId: string | null;
+  sourceName: string;
+  scope: "Workspace" | "Variable set";
+  priority: boolean;
+  variable: VariableRowValue;
+}>;
+
 // One row of the effective-values endpoint: the winning source per key, with
 // the winning set named on inherited rows (issue #627).
 type EffectiveVariable = {
@@ -146,6 +157,7 @@ export function WorkspaceVariables({
   // Advisory only: a failed load leaves rows unannotated rather than
   // blocking the lists, so tests and offline reads still render.
   const [winners, setWinners] = useState<ReadonlyMap<string, WinnerInfo>>(new Map());
+  const [expandedVariable, setExpandedVariable] = useState<string | null>(null);
 
   // Keys defined by more than one source: only these get won-by titles.
   const duplicatedKeys = useMemo((): ReadonlySet<string> => {
@@ -171,6 +183,66 @@ export function WorkspaceVariables({
     if (winner.id === ownId) return "Effective value for " + key + " (wins for this workspace)";
     const winnerLabel = winner.id === null ? "the workspace value" : "variable set " + JSON.stringify(winner.name);
     return "Overridden by " + winnerLabel + " for this workspace";
+  };
+
+  const candidateSources = (category: VariableCategory, variableKey: string): readonly VariableCandidate[] => {
+    const candidates: VariableCandidate[] = [];
+    for (const variable of variables) {
+      if (variable.attributes.category === category && variable.attributes.key === variableKey) {
+        candidates.push({
+          id: `workspace:${variable.id}`,
+          sourceId: null,
+          sourceName: "Workspace",
+          scope: "Workspace",
+          priority: false,
+          variable,
+        });
+      }
+    }
+    for (const set of sets) {
+      for (const variable of setsVars[set.id] ?? []) {
+        if (variable.attributes.category !== category || variable.attributes.key !== variableKey) continue;
+        candidates.push({
+          id: `set:${set.id}:${variable.id}`,
+          sourceId: set.id,
+          sourceName: set.attributes.name,
+          scope: "Variable set",
+          priority: set.attributes.priority,
+          variable,
+        });
+      }
+    }
+    return candidates.sort((left, right): number => {
+      const rank = (candidate: VariableCandidate): number => candidate.scope === "Workspace" ? 1 : candidate.priority ? 2 : 0;
+      const rankDifference = rank(left) - rank(right);
+      if (rankDifference !== 0) return rankDifference;
+      const nameDifference = left.sourceName.localeCompare(right.sourceName);
+      if (nameDifference !== 0) return nameDifference;
+      return left.id.localeCompare(right.id);
+    });
+  };
+
+  const sourceResolution = (category: VariableCategory, variableKey: string, sourceId: string | null): Readonly<{
+    label: string;
+    detail: string;
+    effective: boolean;
+    unknown: boolean;
+  }> => {
+    const mapKey = category + ':' + variableKey;
+    const winner = winners.get(mapKey);
+    const duplicate = duplicatedKeys.has(mapKey);
+    if (winner === undefined && duplicate) {
+      return { label: "Unable to verify", detail: "The effective source could not be verified for this duplicated key.", effective: false, unknown: true };
+    }
+    const effective = winner === undefined || winner.id === sourceId;
+    return {
+      label: effective ? "Effective" : "Overridden",
+      detail: effective
+        ? "This source supplies the value sent to the next run."
+        : `The effective value comes from ${winner.id === null ? "the workspace" : `variable set ${JSON.stringify(winner.name)}`}.`,
+      effective,
+      unknown: false,
+    };
   };
 
   // Generation guard: invalidated on unmount, workspaceId change, or a newer
@@ -231,6 +303,8 @@ export function WorkspaceVariables({
     const signal = controller.signal;
     setLoading(true);
     setPageError("");
+    setWinners(new Map());
+    setExpandedVariable(null);
 
     fetchAllApiPages<WorkspaceVariable>(`/workspaces/${workspaceId}/vars?page[size]=100`, signal)
       .then((data: WorkspaceVariable[]): void => {
@@ -393,6 +467,142 @@ export function WorkspaceVariables({
     (set: VariableSet): boolean => !sets.some((attached: VariableSet): boolean => attached.id === set.id),
   );
 
+  const renderVariableRow = (
+    variable: VariableRowValue,
+    sourceId: string | null,
+    sourceName: string,
+    scope: "Workspace" | "Variable set",
+    priority: boolean,
+  ): React.JSX.Element[] => {
+    const category = variable.attributes.category;
+    const variableKey = category + ":" + variable.attributes.key;
+    const rowId = `${sourceId ?? "workspace"}:${variable.id}`;
+    const resolution = sourceResolution(category, variable.attributes.key, sourceId);
+    const candidates = candidateSources(category, variable.attributes.key);
+    const expanded = expandedVariable === rowId;
+    const columnCount = canUpdate ? 6 : 5;
+    const sourceHref = scope === "Variable set" && sourceId !== null
+      ? `/app/${encodeURIComponent(orgName)}/variable-sets`
+      : undefined;
+    const candidateValue = (candidate: VariableCandidate): string => candidate.variable.attributes.sensitive
+      ? "Hidden (sensitive)"
+      : candidate.variable.attributes.value ?? "null";
+    return [
+      <TableRow key={rowId} aria-selected={expanded}>
+        <TableCell className="font-mono font-medium">
+          <div className="flex items-center gap-2">
+            {variable.attributes.key}
+            {variable.attributes.sensitive && (
+              <span className="inline-flex items-center text-muted-foreground" title="Sensitive — value hidden after save">
+                <LockKeyhole className="size-3.5" aria-hidden="true" />
+                <span className="sr-only">Sensitive</span>
+              </span>
+            )}
+          </div>
+        </TableCell>
+        <TableCell className="max-w-48 truncate font-mono text-xs">
+          {variable.attributes.sensitive ? <span className="text-muted-foreground">Write only</span> : variable.attributes.value ?? "—"}
+        </TableCell>
+        <TableCell>
+          <span className="text-sm text-muted-foreground">
+            {category === "env" ? "Environment" : "Terraform"}{variable.attributes.hcl ? " · HCL" : ""}
+          </span>
+        </TableCell>
+        <TableCell className="min-w-40" title={winnerTitle(category, variable.attributes.key, sourceId)}>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge variant={resolution.unknown ? "outline" : resolution.effective ? "success" : "warning"}>
+              {resolution.label}
+            </Badge>
+            {sourceHref === undefined ? (
+              <span className="text-xs text-muted-foreground">{sourceName}</span>
+            ) : (
+              <a
+                className="text-xs text-primary hover:underline"
+                href={sourceHref}
+                aria-label={`Open variable set ${sourceName}`}
+                title={sourceName}
+              >
+                {sourceName}
+              </a>
+            )}
+            {priority && <Badge variant="secondary">Priority</Badge>}
+          </div>
+          <p className="mt-1 text-2xs text-muted-foreground">{resolution.detail}</p>
+        </TableCell>
+        <TableCell className="max-w-48 truncate text-muted-foreground">
+          {variable.attributes.description ?? "—"}
+        </TableCell>
+        <TableCell>
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              aria-expanded={expanded}
+              aria-controls={`${rowId}-precedence`}
+              aria-label={`${expanded ? "Hide" : "Show"} precedence for ${variable.attributes.key}`}
+              title="Explain precedence"
+              onClick={(): void => { setExpandedVariable(expanded ? null : rowId); }}
+            >
+              <ChevronDown className={`size-4 transition-transform ${expanded ? "rotate-180" : ""}`} aria-hidden="true" />
+              <span className="sr-only">{expanded ? "Hide" : "Show"} source details</span>
+            </Button>
+            {canUpdate && scope === "Workspace" && (
+              <>
+                <Button size="sm" variant="outline" onClick={(): void => { openEditor(variable as WorkspaceVariable); }}>
+                  Edit
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={(): void => { setPendingDelete(variable as WorkspaceVariable); }}
+                >
+                  Delete
+                </Button>
+              </>
+            )}
+          </div>
+        </TableCell>
+      </TableRow>,
+      ...(expanded ? [
+        <TableRow key={`${rowId}-details`}>
+          <TableCell id={`${rowId}-precedence`} colSpan={columnCount} className="bg-muted/30 px-4 py-3">
+            <div className="space-y-3 text-xs">
+              <div>
+                <p className="font-semibold text-foreground">Why is this value being used?</p>
+                <p className="mt-1 text-muted-foreground">Candidates are ordered from lower to higher precedence: non-priority sets, workspace values, then priority sets. Sensitivity only controls visibility; it never changes the winner.</p>
+              </div>
+              {candidates.length === 0 ? (
+                <p className="text-muted-foreground">No accessible candidates were returned. The effective source is unknown.</p>
+              ) : (
+                <ol className="space-y-1.5">
+                  {candidates.map((candidate, index): React.JSX.Element => {
+                    const candidateWinner = winners.get(variableKey);
+                    const knownWinner = candidateWinner !== undefined;
+                    const candidateEffective = knownWinner
+                      ? candidateWinner.id === candidate.sourceId
+                      : !duplicatedKeys.has(variableKey) && candidate.id === rowId;
+                    return (
+                      <li key={candidate.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded border border-border/70 bg-background px-2.5 py-2">
+                        <span className="w-5 text-muted-foreground">{index + 1}.</span>
+                        <span className="font-medium text-foreground">{candidate.sourceName}</span>
+                        <span className="text-muted-foreground">{candidate.scope}{candidate.priority ? " · priority" : ""}</span>
+                        {candidateEffective && <Badge variant="success">Effective</Badge>}
+                        {!knownWinner && duplicatedKeys.has(variableKey) && <Badge variant="outline">Unable to verify</Badge>}
+                        <span className="ml-auto font-mono text-muted-foreground">{candidateValue(candidate)}</span>
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
+              <p className="text-muted-foreground">The server resolver supplies the effective input used by the next run. Attachment or priority changes recalculate this table after the save completes.</p>
+            </div>
+          </TableCell>
+        </TableRow>,
+      ] : []),
+    ];
+  };
+
   return (
     <>
       <div className="flex flex-col gap-6">
@@ -430,6 +640,7 @@ export function WorkspaceVariables({
                   <TableHead>Key</TableHead>
                   <TableHead>Value</TableHead>
                   <TableHead>Category</TableHead>
+                  <TableHead>Effective source</TableHead>
                   <TableHead>Description</TableHead>
                   {canUpdate && <TableHead className="text-right">Actions</TableHead>}
                 </TableRow>
@@ -437,54 +648,15 @@ export function WorkspaceVariables({
               <TableBody>
                 {loading && (
                   <TableRow>
-                    <TableCell colSpan={canUpdate ? 5 : 4} className="h-20 text-center text-muted-foreground">
+                    <TableCell colSpan={canUpdate ? 6 : 5} className="h-20 text-center text-muted-foreground">
                       Loading variables…
                     </TableCell>
                   </TableRow>
                 )}
-                {!loading && variables.map((variable: WorkspaceVariable): React.JSX.Element => (
-                  <TableRow key={variable.id}>
-                    <TableCell className="font-mono font-medium" title={winnerTitle(variable.attributes.category, variable.attributes.key, null) ?? undefined}>
-                      <div className="flex items-center gap-2">
-                        {variable.attributes.key}
-                        {variable.attributes.sensitive && (
-                          <span className="inline-flex items-center text-muted-foreground" title="Sensitive — value hidden after save">
-                            <LockKeyhole className="size-3.5" aria-hidden="true" />
-                            <span className="sr-only">Sensitive</span>
-                          </span>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="max-w-48 truncate font-mono text-xs">
-                      {variable.attributes.sensitive ? <span className="text-muted-foreground">Write only</span> : variable.attributes.value ?? "—"}
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-muted-foreground">
-                        {variable.attributes.category === "env" ? "Environment" : "Terraform"}{variable.attributes.hcl ? " · HCL" : ""}
-                      </span>
-                    </TableCell>
-                    <TableCell className="max-w-48 truncate text-muted-foreground">
-                      {variable.attributes.description ?? "—"}
-                    </TableCell>
-                    {canUpdate && <TableCell>
-                      <div className="flex justify-end gap-2">
-                        <Button size="sm" variant="outline" onClick={(): void => { openEditor(variable); }}>
-                          Edit
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={(): void => { setPendingDelete(variable); }}
-                        >
-                          Delete
-                        </Button>
-                      </div>
-                    </TableCell>}
-                  </TableRow>
-                ))}
+                {!loading && variables.flatMap((variable): React.JSX.Element[] => renderVariableRow(variable, null, "Workspace", "Workspace", false))}
                 {!loading && variables.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={canUpdate ? 5 : 4} className="h-20 text-center text-muted-foreground">
+                    <TableCell colSpan={canUpdate ? 6 : 5} className="h-20 text-center text-muted-foreground">
                       No workspace variables have been added.
                     </TableCell>
                   </TableRow>
@@ -502,7 +674,7 @@ export function WorkspaceVariables({
             <Badge variant="secondary">{sets.length}</Badge>
           </CardTitle>
           <CardDescription>
-            Variable sets attached to this workspace. Inherited variables are read-only here and managed on the variable set itself; sensitive values remain hidden. Precedence: non-priority sets, then workspace values, then priority sets; same-rank ties go to the alphabetically-first set name. Hover a duplicated key to see which source wins.
+            Variable sets attached to this workspace. Inherited variables are read-only here and managed on the variable set itself; sensitive values remain hidden. Precedence is visible per row: non-priority sets, then workspace values, then priority sets; same-rank ties go to the alphabetically-first set name.
           </CardDescription>
           {canUpdate && <CardAction>
             <Button onClick={openAttach}>
@@ -570,43 +742,20 @@ export function WorkspaceVariables({
                         <TableHead>Key</TableHead>
                         <TableHead>Value</TableHead>
                         <TableHead>Category</TableHead>
+                        <TableHead>Effective source</TableHead>
                         <TableHead>Description</TableHead>
+                        <TableHead>Details</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {inherited.length === 0 && (
                         <TableRow>
-                          <TableCell colSpan={4} className="h-12 text-center text-muted-foreground">
+                          <TableCell colSpan={6} className="h-12 text-center text-muted-foreground">
                             This variable set has no variables.
                           </TableCell>
                         </TableRow>
                       )}
-                      {inherited.map((variable: VariableSetVariable): React.JSX.Element => (
-                        <TableRow key={variable.id}>
-                          <TableCell className="font-mono font-medium" title={winnerTitle(variable.attributes.category, variable.attributes.key, set.id) ?? undefined}>
-                            <div className="flex items-center gap-2">
-                              {variable.attributes.key}
-                              {variable.attributes.sensitive && (
-                                <span className="inline-flex items-center text-muted-foreground" title="Sensitive — value hidden after save">
-                                  <LockKeyhole className="size-3.5" aria-hidden="true" />
-                                  <span className="sr-only">Sensitive</span>
-                                </span>
-                              )}
-                            </div>
-                          </TableCell>
-                          <TableCell className="max-w-48 truncate font-mono text-xs">
-                            {variable.attributes.sensitive ? <span className="text-muted-foreground">Write only</span> : variable.attributes.value ?? "—"}
-                          </TableCell>
-                          <TableCell>
-                            <span className="text-sm text-muted-foreground">
-                              {variable.attributes.category === "env" ? "Environment" : "Terraform"}{variable.attributes.hcl ? " · HCL" : ""}
-                            </span>
-                          </TableCell>
-                          <TableCell className="max-w-48 truncate text-muted-foreground">
-                            {variable.attributes.description ?? "—"}
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                      {inherited.flatMap((variable): React.JSX.Element[] => renderVariableRow(variable, set.id, set.attributes.name, "Variable set", set.attributes.priority))}
                     </TableBody>
                   </Table>
                 </div>
@@ -805,8 +954,8 @@ export function WorkspaceVariables({
         )}
         confirmText="Delete variable"
         confirmVariant="destructive"
-        requireText={pendingDelete !== null && pendingDelete.attributes.sensitive ? pendingDelete.attributes.key : undefined}
-        requireTextLabel={pendingDelete !== null && pendingDelete.attributes.sensitive ? `Type ${pendingDelete.attributes.key} to delete this sensitive variable` : undefined}
+        requireText={pendingDelete?.attributes.sensitive === true ? pendingDelete.attributes.key : undefined}
+        requireTextLabel={pendingDelete?.attributes.sensitive === true ? `Type ${pendingDelete.attributes.key} to delete this sensitive variable` : undefined}
         onConfirm={(): void => { if (pendingDelete !== null) void deleteVariable(pendingDelete); }}
       />
     </>

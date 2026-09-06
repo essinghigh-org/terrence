@@ -48,6 +48,37 @@ export type IssuedIdentityToken = Readonly<{
   expiresAt: number;
 }>;
 
+/**
+ * Inspect declared workload-identity inputs without reading their values.
+ * This is intentionally a pure control-plane check: provider authentication
+ * itself belongs to the worker, agent, or client execution context.
+ */
+export type WorkloadIdentityConfiguration = Readonly<{
+  configured: boolean;
+  providers: readonly string[];
+}>;
+
+export function inspectWorkspaceIdentityConfiguration(keys: readonly string[]): WorkloadIdentityConfiguration {
+  const providers = [...new Set(keys.flatMap((key): string[] => {
+    const match = /^TFC_([A-Z]+)_PROVIDER_AUTH(?:_|$)/.exec(key);
+    return match?.[1] === undefined ? [] : [match[1].toLowerCase()];
+  }))].sort();
+  return { configured: providers.length > 0 || keys.some((key): boolean => key.startsWith("TFC_OIDC_")), providers };
+}
+
+/**
+ * A short-lived identity used by the credential doctor.  Doctor tokens are
+ * deliberately not attached to a run: they are sent only to the selected
+ * worker/agent for one read-only provider probe and expire within minutes.
+ */
+export type CredentialDoctorIdentityInput = Readonly<{
+  organizationId: string;
+  organizationName: string;
+  audience: string;
+  subject: string;
+  ttlSeconds?: number;
+}>;
+
 export function workloadIdentityIssuer(): string {
   const configured = process.env["PUBLIC_URL"];
   try {
@@ -309,6 +340,45 @@ async function issue(claims: TokenClaims, runId: string, audience: string, ttlSe
     await db.update(workloadIdentityTokens).set({ revokedAt: Date.now() }).where(eq(workloadIdentityTokens.jti, jti));
   }
   throw new Error("Workload identity signing key was revoked during token issuance");
+}
+
+/**
+ * Sign an ephemeral identity for a credential doctor probe.
+ *
+ * A doctor run has no Terraform run to own a token row. Keeping this token out
+ * of workload_identity_tokens also means a diagnostic cannot leave a durable
+ * bearer credential behind; the caller must use it immediately and the hard
+ * expiry remains the final boundary.
+ */
+export async function issueCredentialDoctorIdentityToken(input: CredentialDoctorIdentityInput): Promise<IssuedIdentityToken> {
+  const ttlSeconds = Math.min(300, Math.max(30, Math.floor(input.ttlSeconds ?? 300)));
+  const key = await currentWorkloadIdentityKey();
+  const privateKey = await decryptSecret(key.encryptedPrivateKey);
+  const generatedAt = Date.now();
+  const iat = Math.floor(generatedAt / 1000);
+  const exp = iat + ttlSeconds;
+  const jti = crypto.randomUUID();
+  const claims: TokenClaims = {
+    jti,
+    iss: workloadIdentityIssuer(),
+    aud: input.audience,
+    iat,
+    nbf: iat,
+    exp,
+    sub: input.subject,
+    terraform_organization_id: input.organizationId,
+    terraform_organization_name: input.organizationName,
+    terraform_run_phase: "plan",
+    terraform_credential_doctor: "true",
+  };
+  const token = jwt.sign(claims, privateKey, { algorithm: "RS256", keyid: key.keyId });
+  return {
+    token,
+    jti,
+    keyId: key.keyId,
+    generatedAt,
+    expiresAt: exp * 1000,
+  };
 }
 
 export async function issueWorkspaceIdentityToken(input: WorkspaceIdentityInput): Promise<IssuedIdentityToken> {

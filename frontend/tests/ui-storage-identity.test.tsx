@@ -12,8 +12,10 @@ import {
 import {
   getPinnedWorkspaces,
   getRecentWorkspaces,
+  getSingleKeyShortcutsEnabled,
   isWorkspacePinned,
   recordWorkspaceVisit,
+  setSingleKeyShortcutsEnabled,
   setWorkspacePinned,
 } from "../src/lib/workspace-shortcuts";
 import {
@@ -249,4 +251,13 @@ test("legacy unnamespaced localStorage migration", () => {
   expect(JSON.parse(scoped as string)).toEqual([
     { orgName: "legacy-org", workspaceName: "legacy-ws", visitedAt: 12345 },
   ]);
+});
+
+test("single-key navigation can be disabled without affecting identity-scoped recents", () => {
+  expect(getSingleKeyShortcutsEnabled()).toBe(true);
+  setSingleKeyShortcutsEnabled(false);
+  expect(getSingleKeyShortcutsEnabled()).toBe(false);
+  expect(getRecentWorkspaces()).toEqual([]);
+  setSingleKeyShortcutsEnabled(true);
+  expect(getSingleKeyShortcutsEnabled()).toBe(true);
 });

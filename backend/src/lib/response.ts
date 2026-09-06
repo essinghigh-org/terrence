@@ -1,3 +1,4 @@
+import { readStateSummary } from "./state-summary";
 import { createHash } from "node:crypto";
 import { db } from "../db";
 import { AvatarService } from "./avatars";
@@ -9,8 +10,17 @@ import { organizations, workspaceTags, variableSetWorkspaces,
   variableSetProjects, variableSetVariables, stackVariableSets, organizationDataRetentionPolicies, dataRetentionPolicies
 } from "../db/schema";
 import { eq, asc } from "drizzle-orm";
-import { runLogURL, signedApiURL , type DeepReadonly } from "./utils";
-import { CLIENT_ENCRYPTED_STATE_ERROR, decodeStatePayload, isClientEncryptedState, parseStatePayload } from "./validation";
+import { issueRunLogCapability, signedApiURL, type RunLogCapability } from "./capabilities";
+import type { AuthorizedRunCapability, AuthorizedStateAccess } from "./authorized-resources";
+import type { DeepReadonly } from "./types";
+import {
+  CLIENT_ENCRYPTED_STATE_ERROR,
+  decodeStatePayload,
+  isClientEncryptedState,
+  parsePersistedRunInputs,
+  parsePersistedStatusMetadata,
+  parseStatePayload,
+} from "./validation";
 import { cachedOrganizationName, cacheOrganizationName } from "./metadata-cache";
 import { vcsRepoResource } from "./vcs-repo";
 import { moduleTestTokenTtlBounds } from "./workload-identity";
@@ -672,6 +682,7 @@ function buildRunActionAttributes(flags: DeepReadonly<{ isPlanned: boolean; isCo
 }
 
 function buildRunCoreAttributes(run: RunParam, operation: string, normalizedSource: string, hasChanges: boolean): Record<string, unknown> {
+  const statusTimestamps = parsePersistedStatusMetadata(run.statusTimestamps, run.statusMetadataSchemaVersion, run.id);
   return {
     "allow-empty-apply": run.allowEmptyApply,
     "auto-apply": run.autoApply,
@@ -687,9 +698,15 @@ function buildRunCoreAttributes(run: RunParam, operation: string, normalizedSour
     "allow-config-generation": run.allowConfigGeneration,
     "generated-configuration": run.generatedConfiguration === true,
     "execution-mode": run.executionMode,
+    // Agent compatibility is recorded at claim time so a run can be
+    // diagnosed independently of the current pool's agent inventory.
+    "agent-version": run.agentVersion ?? null,
+    "agent-protocol-version": run.agentProtocolVersion ?? null,
+    "agent-capabilities": run.agentCapabilities ?? null,
+    "agent-execution-policy": run.agentExecutionPolicy ?? null,
     source: normalizedSource,
     status: run.status,
-    "status-timestamps": run.statusTimestamps ?? null,
+    "status-timestamps": statusTimestamps,
   };
 }
 
@@ -739,8 +756,14 @@ function buildRunTriggerAttributes(origin?: RunOrigin): Record<string, unknown> 
 }
 
 function getRunVariablesForResponse(run: RunParam): unknown[] {
-  if (!Array.isArray(run.variables)) return [];
-  return (run.variables as Record<string, unknown>[]).map((v) => ({
+  const inputs = parsePersistedRunInputs({
+    targetAddrs: run.targetAddrs,
+    replaceAddrs: run.replaceAddrs,
+    invokeActionAddrs: run.invokeActionAddrs,
+    variables: run.variables,
+  }, run.inputSchemaVersion, run.id);
+  if (!Array.isArray(inputs.variables)) return [];
+  return (inputs.variables as Record<string, unknown>[]).map((v) => ({
     key: v["key"],
     ...(v["category"] === undefined ? {} : { category: v["category"] }),
     ...(v["sensitive"] === undefined ? {} : { sensitive: v["sensitive"] }),
@@ -951,8 +974,13 @@ export function planStatusForRun(run: Readonly<{ status: string; statusTimestamp
   return resolvePlanStatus(run, planStarted, planFinished);
 }
 
-export function planResource(run: RunParam, request: RequestParam): Record<string, unknown> {
-  const status = planStatusForRun(run);
+export function planResource(
+  run: RunParam,
+  request: RequestParam,
+  authorized?: AuthorizedRunCapability<RunLogCapability>,
+): Record<string, unknown> {
+  const statusTimestamps = parsePersistedStatusMetadata(run.statusTimestamps, run.statusMetadataSchemaVersion, run.id);
+  const status = planStatusForRun({ status: run.status, statusTimestamps });
   return {
     id: `plan-${run.id}`,
     type: "plans",
@@ -965,8 +993,8 @@ export function planResource(run: RunParam, request: RequestParam): Record<strin
       "resource-imports": run.planResourceImports ?? null,
       "generated-configuration": run.generatedConfiguration === true,
       "execution-details": { mode: run.executionMode ?? "remote" },
-      "log-read-url": runLogURL(run, "plan", request),
-      "status-timestamps": run.statusTimestamps ?? null,
+      "log-read-url": authorized === undefined ? null : issueRunLogCapability(authorized, "plan", request),
+      "status-timestamps": statusTimestamps,
     },
     relationships: {
       "state-versions": {
@@ -977,8 +1005,12 @@ export function planResource(run: RunParam, request: RequestParam): Record<strin
   };
 }
 
-export function applyResource(run: RunParam, request: RequestParam): Record<string, unknown> {
-  const timestamps = run.statusTimestamps ?? {};
+export function applyResource(
+  run: RunParam,
+  request: RequestParam,
+  authorized?: AuthorizedRunCapability<RunLogCapability>,
+): Record<string, unknown> {
+  const timestamps = parsePersistedStatusMetadata(run.statusTimestamps, run.statusMetadataSchemaVersion, run.id) ?? {};
   const applyStarted = ["confirmed-at", "apply-queued-at", "applying-at", "applied-at"]
     .some((key: string): boolean => typeof timestamps[key] === "string");
   const status = resolveApplyStatus(run, applyStarted);
@@ -991,8 +1023,8 @@ export function applyResource(run: RunParam, request: RequestParam): Record<stri
       "resource-changes": run.applyResourceChanges ?? null,
       "resource-destructions": run.applyResourceDestructions ?? null,
       "resource-imports": run.applyResourceImports ?? null,
-      "log-read-url": runLogURL(run, "apply", request),
-      "status-timestamps": run.statusTimestamps ?? null,
+      "log-read-url": authorized === undefined ? null : issueRunLogCapability(authorized, "apply", request),
+      "status-timestamps": timestamps,
     },
     relationships: {
       "state-versions": {
@@ -1155,12 +1187,38 @@ function buildStateCoreAttributes(
   };
 }
 
-function buildStateUrlAttributes(state: StateParam, flags: { rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean }, request: Readonly<{ url: string }>): Record<string, unknown> {
+function stateAuthorizationWorkspaceId(authorization: AuthorizedStateAccess | undefined): string | undefined {
+  if (authorization === undefined) return undefined;
+  return "workspace" in authorization ? authorization.workspace.id : authorization.workspaceId;
+}
+
+function stateCapabilityAllows(
+  authorization: AuthorizedStateAccess | undefined,
+  workspaceId: string,
+  required: "read" | "write",
+): boolean {
+  if (stateAuthorizationWorkspaceId(authorization) !== workspaceId || authorization === undefined) return false;
+  const granted: readonly string[] = Array.isArray(authorization.capability)
+    ? authorization.capability
+    : [authorization.capability];
+  if (granted.includes("admin")) return true;
+  if (required === "read") return granted.includes("state-read");
+  return granted.includes("state-write");
+}
+
+function buildStateUrlAttributes(
+  state: Readonly<{ id: string; workspaceId: string }>,
+  flags: { rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean },
+  request: Readonly<{ url: string }>,
+  authorization?: AuthorizedStateAccess,
+): Record<string, unknown> {
+  const canRead = stateCapabilityAllows(authorization, state.workspaceId, "read");
+  const canWrite = stateCapabilityAllows(authorization, state.workspaceId, "write");
   return {
-    "hosted-state-download-url": flags.rawStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/download`) : null,
-    "hosted-state-upload-url": flags.pending && !flags.rawStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/upload`, "PUT") : null,
-    "hosted-json-state-download-url": flags.jsonStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-download`) : null,
-    "hosted-json-state-upload-url": flags.pending && !flags.jsonStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-upload`, "PUT") : null,
+    "hosted-state-download-url": canRead && flags.rawStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/download`) : null,
+    "hosted-state-upload-url": canWrite && flags.pending && !flags.rawStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/upload`, "PUT") : null,
+    "hosted-json-state-download-url": canRead && flags.jsonStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-download`) : null,
+    "hosted-json-state-upload-url": canWrite && flags.pending && !flags.jsonStateAvailable ? signedApiURL(request, `/api/v2/state-versions/${state.id}/json-upload`, "PUT") : null,
   };
 }
 
@@ -1171,10 +1229,10 @@ function buildStateRunAttributes(run?: Readonly<{ status: string; message: strin
   };
 }
 
-function buildStateVersionAttributes(state: StateParam, parsed: Readonly<Record<string, unknown> | null>, resources: readonly StateResource[], aggregates: StateAggregates, payload: string, flags: DeepReadonly<{ rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean }>, request: Readonly<{ url: string }>, includeState: boolean, run?: Readonly<{ status: string; message: string | null }> | null): Record<string, unknown> {
+function buildStateVersionAttributes(state: StateParam, parsed: Readonly<Record<string, unknown> | null>, resources: readonly StateResource[], aggregates: StateAggregates, payload: string, flags: DeepReadonly<{ rawStateAvailable: boolean; jsonStateAvailable: boolean; pending: boolean }>, request: Readonly<{ url: string }>, includeState: boolean, run?: Readonly<{ status: string; message: string | null }> | null, authorization?: AuthorizedStateAccess): Record<string, unknown> {
   return {
     ...buildStateCoreAttributes(state, parsed, resources, aggregates, payload, flags.rawStateAvailable, includeState),
-    ...buildStateUrlAttributes(state, flags, request),
+    ...buildStateUrlAttributes(state, flags, request, authorization),
     ...buildStateRunAttributes(run),
   };
 }
@@ -1196,6 +1254,7 @@ export function stateVersionResource(
   request: Readonly<{ url: string }>,
   includeState = false,
   run?: Readonly<{ status: string; message: string | null }> | null,
+  authorization?: AuthorizedStateAccess,
 ): Record<string, unknown> {
   const parsed = parseStatePayload(state.statePayload);
   const resources = extractStateResources(parsed);
@@ -1208,7 +1267,7 @@ export function stateVersionResource(
     id: state.id,
     type: "state-versions",
     attributes: {
-      ...buildStateVersionAttributes(state, parsed, resources, aggregates, payload, flags, request, includeState, run),
+      ...buildStateVersionAttributes(state, parsed, resources, aggregates, payload, flags, request, includeState, run, authorization),
       ...(encrypted ? {
         "state-representation": "opentofu-encrypted",
         "structured-state-unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR,
@@ -1218,6 +1277,57 @@ export function stateVersionResource(
     relationships: {
       ...buildStateVersionRelationships(state),
       ...(encrypted ? { outputs: { data: null, meta: { "unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR } } } : {}),
+    },
+    links: { self: `/api/v2/state-versions/${state.id}` },
+  };
+}
+
+/** History must never load, decrypt or parse state blobs. Details remain lazy. */
+export function stateVersionSummaryResource(
+  state: Readonly<Omit<StateParam, "statePayload" | "jsonState" | "jsonStateOutputs"> & { hasRawState: boolean; hasJsonState: boolean }>,
+  request: Readonly<{ url: string }>,
+  run?: Readonly<{ status: string; message: string | null }> | null,
+  authorization?: AuthorizedStateAccess,
+): Record<string, unknown> {
+  const summary = readStateSummary(state.stateSummary, state.uploadSha256);
+  const available = !["backing_data_soft_deleted", "backing_data_permanently_deleted", "discarded"].includes(state.status ?? "");
+  const rawStateAvailable = available && state.hasRawState;
+  const ready = summary?.status === "ready";
+  return {
+    id: state.id, type: "state-versions",
+    attributes: {
+      serial: state.serial, status: state.status ?? "finalized", intermediate: state.intermediate,
+      "created-at": new Date(state.createdAt).toISOString(),
+      "vcs-commit-sha": state.vcsCommitSha, "vcs-commit-url": state.vcsCommitUrl,
+      md5: rawStateAvailable ? summary?.md5 ?? null : null,
+      size: rawStateAvailable ? summary?.size ?? null : null,
+      lineage: summary?.lineage ?? null, "terraform-version": summary?.terraformVersion ?? null,
+      "state-version": summary?.stateVersion ?? null,
+      "resources-processed": ready,
+      "summary-status": summary?.status ?? (state.stateSummary === null ? "unindexed" : "outdated"),
+      ...(summary?.status === "opaque" ? {
+        "state-representation": "opentofu-encrypted",
+        "structured-state-unavailable-reason": CLIENT_ENCRYPTED_STATE_ERROR,
+      } : {}),
+      "index-generation": summary?.generation ?? null,
+      "resource-count": ready ? summary.resourceCount : null,
+      "managed-resource-count": ready ? summary.managedCount : null,
+      "data-resource-count": ready ? summary.dataCount : null,
+      "module-count": ready ? summary.moduleCount : null,
+      "provider-count": ready ? summary.providerCount : null,
+      "output-count": ready ? summary.outputCount : null,
+      ...buildStateUrlAttributes(state, {
+        rawStateAvailable,
+        jsonStateAvailable: available && state.hasJsonState && summary?.status !== "opaque",
+        pending: state.status === "pending",
+      }, request, authorization),
+      ...buildStateRunAttributes(run),
+    },
+    relationships: {
+      outputs: { links: { related: `/api/v2/state-versions/${state.id}/outputs` }, meta: { count: ready ? summary.outputCount : null } },
+      workspace: { data: { id: state.workspaceId, type: "workspaces" } },
+      run: { data: state.runId === null ? null : { id: state.runId, type: "runs" } },
+      "created-by": { data: state.createdBy === null ? null : { id: state.createdBy, type: "users" } },
     },
     links: { self: `/api/v2/state-versions/${state.id}` },
   };

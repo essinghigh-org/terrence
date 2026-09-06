@@ -1,8 +1,10 @@
+import { buildStateSummary } from "../../src/lib/state-summary";
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import { desc, eq } from "drizzle-orm";
 import { db } from "../../src/db";
-import { auditLogs, runs, stateVersions, workspaces } from "../../src/db/schema";
+import { auditLogs, runs, stateOutputIndex, stateVersions, workspaces } from "../../src/db/schema";
+import { stateOutputIndexRows } from "../../src/lib/state-output-index";
 import {
   cleanupSeed,
   expectSuccessResponse,
@@ -23,6 +25,7 @@ describe("state-version serial safety", () => {
     serial,
     lineage: "serial-safety-lineage",
     resources: [],
+    outputs: { restored: { value: serial, type: "number", sensitive: false } },
     large_number: "9007199254740993",
   }).replace('"9007199254740993"', "9007199254740993");
 
@@ -110,6 +113,11 @@ describe("state-version serial safety", () => {
       const downloaded = await request(`/api/v2/state-versions/${resource.id}/download`, { headers });
       const downloadedText = await downloaded.text();
       expect(downloadedText).toContain('"large_number":9007199254740993');
+      const committed = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, resource.id) });
+      expect(JSON.parse(committed!.stateSummary!)).toEqual(buildStateSummary(downloadedText));
+      expect(committed!.uploadSha256).toBe(buildStateSummary(downloadedText).digest);
+      const index = await db.query.stateOutputIndex.findMany({ where: eq(stateOutputIndex.stateVersionId, resource.id) });
+      expect(index.map(({ createdAt: _, ...row }) => row)).toEqual(stateOutputIndexRows(resource.id, workspaceId, null, downloadedText).map(({ createdAt: _, ...row }) => row));
       const raw = JSON.parse(downloadedText);
       expect(raw.serial).toBe(resource.attributes.serial);
       expect(raw.serial).toBeGreaterThan(3);
@@ -145,7 +153,9 @@ describe("state-version serial safety", () => {
     const { storageDir } = await import("../../src/db/driver");
     const capture = join(storageDir, "recovery", runId);
     await mkdir(capture, { recursive: true });
-    await writeFile(join(capture, "terraform.tfstate"), stateForSerial(1));
+    // Recovery candidates must not be stale relative to the committed state;
+    // the promotion itself assigns the next serial.
+    await writeFile(join(capture, "terraform.tfstate"), stateForSerial(6));
     await writeFile(join(capture, ".recovered"), "complete");
     const response = await request(`/api/v2/runs/${runId}/actions/recover-state`, { method: "POST", headers });
     expect(response.status).toBe(201);
@@ -153,6 +163,11 @@ describe("state-version serial safety", () => {
     expect(resource.attributes.serial).toBe(7);
     const download = await request(`/api/v2/state-versions/${resource.id}/download`, { headers });
     const text = await download.text();
+    const committed = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, resource.id) });
+    expect(JSON.parse(committed!.stateSummary!)).toEqual(buildStateSummary(text));
+    expect(committed!.uploadSha256).toBe(buildStateSummary(text).digest);
+    const index = await db.query.stateOutputIndex.findMany({ where: eq(stateOutputIndex.stateVersionId, resource.id) });
+    expect(index.map(({ createdAt: _, ...row }) => row)).toEqual(stateOutputIndexRows(resource.id, workspaceId, null, text).map(({ createdAt: _, ...row }) => row));
     expect(JSON.parse(text).serial).toBe(7);
     expect(text).toContain('"large_number":9007199254740993');
   });
@@ -183,7 +198,7 @@ describe("state-version serial safety", () => {
   it("discard frees a pending serial and retains an audit tombstone", async () => {
     const pending = await expectSuccessResponse(await createStateVersion(10), 201, "state-versions");
     expect((await request(`/api/v2/state-versions/${pending.id}`, { method: "DELETE", headers })).status).toBe(204);
-    const audit = await db.query.auditLogs.findFirst({ where: eq(auditLogs.resourceId, pending.id) });
+    const audit = await db.query.auditLogs.findFirst({ where: eq(auditLogs.resourceId, pending.id), orderBy: [desc(auditLogs.createdAt), desc(auditLogs.id)] });
     expect(audit?.details).toMatchObject({ workspaceId, serial: 10, reason: "discarded" });
     expect((await createStateVersion(10, { state: stateForSerial(10) })).status).toBe(201);
   });
@@ -195,12 +210,12 @@ describe("state-version serial safety", () => {
     const oldUrl = pending.attributes["hosted-state-upload-url"] as string;
     expect((await request(oldUrl, { method: "PUT", body: stateForSerial(11) })).status).toBe(409);
     expect((await createStateVersion(11, { state: stateForSerial(11) })).status).toBe(201);
-    const audit = await db.query.auditLogs.findFirst({ where: eq(auditLogs.resourceId, pending.id) });
+    const audit = await db.query.auditLogs.findFirst({ where: eq(auditLogs.resourceId, pending.id), orderBy: [desc(auditLogs.createdAt), desc(auditLogs.id)] });
     expect(audit?.details).toMatchObject({ workspaceId, serial: 11, reason: "lock-changed" });
   });
 
   it("prunes expired reservations before each rollback and recovery serial allocation", async () => {
-    const { mkdir, writeFile } = await import("node:fs/promises");
+    const { mkdir, rm, writeFile } = await import("node:fs/promises");
     const { join } = await import("node:path");
     const { storageDir } = await import("../../src/db/driver");
     const source = await db.query.stateVersions.findFirst({ where: eq(stateVersions.workspaceId, workspaceId), orderBy: [stateVersions.serial] });
@@ -211,8 +226,9 @@ describe("state-version serial safety", () => {
       await db.update(stateVersions).set({ uploadExpiresAt: Date.now() - 1 }).where(eq(stateVersions.id, pending.id));
       const capture = join(storageDir, "recovery", runId);
       if (mode === "recovery") {
+        await rm(capture, { recursive: true, force: true });
         await mkdir(capture, { recursive: true });
-        await writeFile(join(capture, "terraform.tfstate"), stateForSerial(1));
+        await writeFile(join(capture, "terraform.tfstate"), stateForSerial(next));
         await writeFile(join(capture, ".recovered"), "complete");
       }
       const response = await request(mode === "workspace" ? `/api/v2/workspaces/${workspaceId}/state-versions` : mode === "version" ? `/api/v2/state-versions/${source!.id}/actions/rollback` : `/api/v2/runs/${runId}/actions/recover-state`, {
@@ -222,12 +238,12 @@ describe("state-version serial safety", () => {
       expect(response.status).toBe(201);
       expect((await response.json()).data.attributes.serial).toBe(next);
       expect(await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, pending.id) })).toBeUndefined();
-      expect((await db.query.auditLogs.findFirst({ where: eq(auditLogs.resourceId, pending.id) }))?.details).toMatchObject({ reason: "upload-expired" });
+      expect((await db.query.auditLogs.findFirst({ where: eq(auditLogs.resourceId, pending.id), orderBy: [desc(auditLogs.createdAt), desc(auditLogs.id)] }))?.details).toMatchObject({ reason: "upload-expired" });
     }
   });
 
   it("rejects every promotion if lock ownership changes after authorization", async () => {
-    const { mkdir, writeFile } = await import("node:fs/promises");
+    const { mkdir, rm, writeFile } = await import("node:fs/promises");
     const { join } = await import("node:path");
     const { storageDir } = await import("../../src/db/driver");
     const source = await db.query.stateVersions.findFirst({ where: eq(stateVersions.workspaceId, workspaceId), orderBy: [stateVersions.serial] });
@@ -236,8 +252,10 @@ describe("state-version serial safety", () => {
       const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId) });
       const capture = join(storageDir, "recovery", runId);
       if (mode === "recovery") {
+        await rm(capture, { recursive: true, force: true });
         await mkdir(capture, { recursive: true });
-        await writeFile(join(capture, "terraform.tfstate"), stateForSerial(1));
+        const latest = await db.query.stateVersions.findFirst({ where: eq(stateVersions.workspaceId, workspaceId), orderBy: [desc(stateVersions.serial)] });
+        await writeFile(join(capture, "terraform.tfstate"), stateForSerial((latest?.serial ?? 0) + 1));
         await writeFile(join(capture, ".recovered"), "complete");
       }
       const transaction = db.transaction.bind(db);

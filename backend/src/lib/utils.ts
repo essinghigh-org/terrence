@@ -1,3 +1,4 @@
+import { deploymentSecret, booleanSetting, executionSetting, integerSetting } from "./runtime-config";
 import { fenceStateWorkspace, pruneStateReservations } from "./state-reservations";
 import { db } from "../db";
 import { isPostgres } from "../db/driver";
@@ -29,6 +30,7 @@ import { outboundAllowlistAllows, privateHostReason } from "./url-safety";
 import { archiveRunLogs, deleteRunLogArchive } from "./run-logs";
 import { deletePlanJsonArtifact } from "./plan-json";
 import { currentSiteAdmin, currentTokenScopes, requestCacheGet, requestCacheSet } from "./request-scope";
+import { currentAuditContext } from "./audit-trail";
 import { withDbLock } from "./db-lock";
 import {
   scopeGrants,
@@ -37,6 +39,7 @@ import {
   type WorkspacePermissionGrant,
   type TokenScopes,
 } from "./token-scopes";
+import { auditLogValues, type AuditResult } from "./audit-trail";
 
 export { validateVersion, decodeStatePayload, parseStatePayload };
 
@@ -60,7 +63,7 @@ export type DeepReadonly<T> =
             ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
             : T;
 
-const PUBLIC_URL = typeof process.env["PUBLIC_URL"] === "string" && process.env["PUBLIC_URL"] !== "" ? new URL(process.env["PUBLIC_URL"]) : null;
+const PUBLIC_URL = executionSetting("PUBLIC_URL");
 
 /** Minimal Elysia `set` shape shared by JSON:API error helpers. */
 export type ErrorSet = { status?: number | string };
@@ -113,18 +116,20 @@ export async function auditLog(
   userId: string | null,
   orgId: string | null,
   details?: Readonly<Record<string, unknown>>,
+  options?: Readonly<{ result?: AuditResult; immutable?: boolean; effectiveUserId?: string | null }>,
 ): Promise<void> {
   try {
-    await db.insert(auditLogs).values({
-      id: crypto.randomUUID(),
-      orgId,
-      userId,
+    await db.insert(auditLogs).values(auditLogValues({
       action,
       resourceType,
       resourceId,
-      details: details !== undefined ? { ...details } : null,
-      createdAt: Date.now(),
-    });
+      userId,
+      orgId,
+      ...(details === undefined ? {} : { details }),
+      ...(options?.result === undefined ? {} : { result: options.result }),
+      ...(options?.immutable === undefined ? {} : { immutable: options.immutable }),
+      ...(options?.effectiveUserId === undefined ? {} : { effectiveUserId: options.effectiveUserId }),
+    }) as typeof auditLogs.$inferInsert);
     } catch (error: unknown) {
       if (isDiskFullError(error)) markStorageDegraded("audit log writes are failing (disk full)");
       recordFailure("auditWrites");
@@ -146,8 +151,7 @@ export async function auditLog(
  * self-hosters on constrained storage are not surprised by extra rows.
  */
 export function strictAuditEnabled(): boolean {
-  const v = process.env["AUDIT_STRICT"];
-  return v === "1" || v === "true";
+  return booleanSetting("AUDIT_STRICT");
 }
 
 function scopeAllowsOrgPermission(
@@ -1307,8 +1311,7 @@ export async function findAuthorizedRun(
 /** The signature lives in the path: go-tfe replaces the query with offset/limit. */
 export function runLogURL(run: Readonly<{ id: string; logToken: string | null; softDeletedAt?: number | null }>, phase: "plan" | "apply", request: RequestWithUrl): string | null {
   if (!run.logToken || run.softDeletedAt != null) return null;
-  const configured = Number(process.env["LOG_CAPABILITY_TTL_SECONDS"] ?? 172800);
-  const ttl = Number.isSafeInteger(configured) && configured > 0 && configured <= 604800 ? configured : 172800;
+  const ttl = integerSetting("LOG_CAPABILITY_TTL_SECONDS");
   const expires = Math.floor(Date.now() / 1000) + ttl;
   const signature = createHmac("sha256", SIGNED_URL_SECRET).update(`${run.id}\n${phase}\n${run.logToken}\n${expires}`).digest("hex");
   return apiURL(request, `/api/v2/runs/${run.id}/${phase}/log/${expires}.${signature}`);
@@ -1424,7 +1427,7 @@ function loadSignedUrlSecret(): string {
   }
 }
 
-const configuredSignedUrlSecret = process.env["SIGNED_URL_SECRET"]?.trim();
+const configuredSignedUrlSecret = deploymentSecret("SIGNED_URL_SECRET")?.trim();
 const SIGNED_URL_SECRET = configuredSignedUrlSecret === undefined || configuredSignedUrlSecret === ""
   ? loadSignedUrlSecret()
   : configuredSignedUrlSecret.length >= 32
@@ -1498,7 +1501,7 @@ function proxyBaseUrl(request: HeaderCarrier): string | null {
 }
 
 export function requestBaseUrl(request: HeaderCarrier): string {
-  if (PUBLIC_URL !== null) return PUBLIC_URL.toString();
+  if (PUBLIC_URL !== null) return PUBLIC_URL;
   // The connection-address fallback is a base URL, so return the origin
   // only: a request-specific pathname must never leak into generated links
   // (CodeRabbit P1-sweep review). Absolute-path callers are unaffected.
@@ -1510,7 +1513,7 @@ export function requestBaseUrl(request: HeaderCarrier): string {
 }
 
 export function signedApiURL(request: RequestWithUrl, path: string, method = "GET", ttlSeconds?: number): string {
-  const configuredTtl = ttlSeconds ?? Number(process.env["SIGNED_URL_TTL_SECONDS"] ?? 300);
+  const configuredTtl = ttlSeconds ?? integerSetting("SIGNED_URL_TTL_SECONDS");
   const ttl = Number.isSafeInteger(configuredTtl) && configuredTtl > 0 ? configuredTtl : 300;
   const expires = Math.floor(Date.now() / 1000) + ttl;
   const signature = createHmac("sha256", SIGNED_URL_SECRET)
@@ -2069,6 +2072,12 @@ export async function promoteIntermediateStateVersion(workspaceId: string): Prom
   });
   if (snapshot === undefined) return null;
   await db.update(stateVersions).set({ intermediate: false }).where(eq(stateVersions.id, snapshot.id));
+  const workspace = await db.query.workspaces.findFirst({ where: eq(workspaces.id, workspaceId), columns: { orgId: true } });
+  await auditLog("promote", "state-version", snapshot.id, currentAuditContext()?.userId ?? null, workspace?.orgId ?? null, {
+    workspaceId,
+    before: { intermediate: true },
+    after: { intermediate: false },
+  }, { immutable: true });
   return snapshot.id;
 }
 
@@ -2090,10 +2099,7 @@ async function removeConfigurationArchive(archivePath: string | null): Promise<b
  *   2. Backing data whose grace period elapsed → permanently deleted
  */
 function getGraceCutoff(now: number, gracePeriodMs: number | undefined): number {
-  const configuredGraceDays = Number(process.env["GC_GRACE_PERIOD_DAYS"] ?? 7);
-  const defaultGracePeriodMs = Number.isFinite(configuredGraceDays) && configuredGraceDays >= 0
-    ? configuredGraceDays * 86_400_000
-    : 7 * 86_400_000;
+  const defaultGracePeriodMs = integerSetting("GC_GRACE_PERIOD_DAYS") * 86_400_000;
   return now - (gracePeriodMs ?? defaultGracePeriodMs);
 }
 
@@ -2252,7 +2258,10 @@ function collectExpiredRunIds(retainedRuns: GcCollections["workspaceRuns"], rete
 async function archiveAndDeleteExpiredRuns(expiredRunIds: readonly string[], now: number): Promise<{ logsDeletedCount: number; logsArchived: number }> {
   if (expiredRunIds.length === 0) return { logsDeletedCount: 0, logsArchived: 0 };
   const expiredLogs = await db.query.logs.findMany({ where: inArray(logs.runId, expiredRunIds), columns: { id: true } });
-  const logsArchived = (await Promise.all(expiredRunIds.map(archiveRunLogs))).filter(Boolean).length;
+  let logsArchived = 0;
+  for (const runId of expiredRunIds) {
+    if (await archiveRunLogs(runId)) logsArchived++;
+  }
   await db.delete(logs).where(inArray(logs.runId, expiredRunIds));
   await db.update(runs).set({ softDeletedAt: now, logToken: null }).where(inArray(runs.id, expiredRunIds));
   return { logsDeletedCount: expiredLogs.length, logsArchived };

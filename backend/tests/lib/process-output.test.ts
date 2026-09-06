@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { readFile, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -45,5 +45,21 @@ describe("process output capture", () => {
     const artifact = await readFile(artifactPath, "utf8");
     expect(artifact.startsWith("stdout:\n" + "o".repeat(200000) + "\nstderr:\n")).toBe(true);
     expect(artifact.endsWith("e".repeat(300000))).toBe(true);
+  });
+
+  test("cancellation stops a stalled capture and leaves no output files", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "terrence-process-output-cancel-"));
+    temporaryDirectories.push(directory);
+    const child = Bun.spawn([process.execPath, "-e", "setInterval(() => process.stdout.write('x'), 10)"], { stdout: "pipe", stderr: "pipe" });
+    const controller = new AbortController();
+    const capture = captureProcessOutput(child.stdout, child.stderr, directory, "cancel", { signal: controller.signal });
+    await Bun.sleep(30);
+    controller.abort(new Error("capture canceled"));
+    const failure = await capture.catch((error: unknown): unknown => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain("capture canceled");
+    child.kill("SIGKILL");
+    await child.exited;
+    expect(await readdir(directory)).toEqual([]);
   });
 });

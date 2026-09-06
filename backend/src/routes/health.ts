@@ -1,9 +1,10 @@
+import { executionSetting, integrationSetting, integerSetting } from "../lib/runtime-config";
 import { localSignupEnabled } from "../lib/settings";
 import { Elysia } from "elysia";
 import { db } from "../db";
 import { authPlugin } from "../auth";
 import { probeLandlockAbi, runNetPolicy, runSandboxRequired } from "../lib/sandbox";
-import { envEnabled } from "../lib/env";
+import { envFlag } from "../lib/env";
 import { log } from "../lib/log";
 import { ssoSettingsSnapshot } from "../lib/sso";
 import { isStorageDegraded } from "../lib/storage-health";
@@ -140,6 +141,29 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
       failed: collection.instance.webhookQueue.failed,
       oldest_pending_seconds: collection.instance.webhookQueue.oldestPendingSeconds,
     };
+    metrics["terrence_outbox_queue"] = {
+      pending: collection.instance.outboxQueue.pending,
+      processing: collection.instance.outboxQueue.processing,
+      delivered: collection.instance.outboxQueue.delivered,
+      dead_letter: collection.instance.outboxQueue.deadLetter,
+      oldest_pending_seconds: collection.instance.outboxQueue.oldestPendingSeconds,
+    };
+    metrics["terrence_resource_budgets"] = {
+      limits: {
+        global_concurrency: collection.instance.resourceBudgets.limits.globalConcurrency,
+        global_queue: collection.instance.resourceBudgets.limits.globalQueue,
+        organization_concurrency: collection.instance.resourceBudgets.limits.organizationConcurrency,
+        organization_queue: collection.instance.resourceBudgets.limits.organizationQueue,
+        artifact_bytes: collection.instance.resourceBudgets.limits.artifactBytes,
+        reserved_critical_slots: collection.instance.resourceBudgets.limits.reservedCriticalSlots,
+      },
+      queued: collection.instance.resourceBudgets.queued,
+      running: collection.instance.resourceBudgets.running,
+      queued_bytes: collection.instance.resourceBudgets.queuedBytes,
+      running_bytes: collection.instance.resourceBudgets.runningBytes,
+      queued_by_class: collection.instance.resourceBudgets.queuedByClass,
+      running_by_class: collection.instance.resourceBudgets.runningByClass,
+    };
   }
   if (collection.process !== null) {
     const { snapshot, history } = collection.process;
@@ -155,6 +179,24 @@ function collectionToJson(collection: MetricsCollection): Record<string, unknown
       total: snapshot.requests.total,
       in_flight: snapshot.requests.inFlight,
       errors5xx: snapshot.requests.errors5xx,
+    };
+    // Journey labels are a fixed allow-list from process-metrics.ts. Do not
+    // add workspace IDs, run IDs, or resource addresses to this map.
+    metrics["terrence_request_latency"] = Object.fromEntries(
+      Object.entries(snapshot.journeys).map(([journey, stats]): [string, Record<string, number | null>] => [journey, {
+        requests: stats.requests,
+        sample_count: stats.sampleCount,
+        p50_ms: stats.p50Ms,
+        p95_ms: stats.p95Ms,
+        max_ms: stats.maxMs,
+      }]),
+    );
+    metrics["terrence_event_loop_delay"] = {
+      sample_count: snapshot.eventLoopDelay.sampleCount,
+      min_ms: snapshot.eventLoopDelay.minMs,
+      mean_ms: snapshot.eventLoopDelay.meanMs,
+      p95_ms: snapshot.eventLoopDelay.p95Ms,
+      max_ms: snapshot.eventLoopDelay.maxMs,
     };
     metrics["terrence_failures"] = { ...snapshot.failures };
     metrics["terrence_storage_degraded"] = isStorageDegraded() ? 1 : 0;
@@ -265,6 +307,37 @@ function prometheusLines(collection: MetricsCollection): string[] {
       "# HELP terrence_webhook_oldest_pending_seconds Age of the oldest delivery not yet processed.",
       "# TYPE terrence_webhook_oldest_pending_seconds gauge",
       `terrence_webhook_oldest_pending_seconds ${instance.webhookQueue.oldestPendingSeconds}`,
+      "# HELP terrence_outbox_queue_depth Transactional outbox events by state.",
+      "# TYPE terrence_outbox_queue_depth gauge",
+      `terrence_outbox_queue_depth{state="pending"} ${instance.outboxQueue.pending}`,
+      `terrence_outbox_queue_depth{state="processing"} ${instance.outboxQueue.processing}`,
+      `terrence_outbox_queue_depth{state="delivered"} ${instance.outboxQueue.delivered}`,
+      `terrence_outbox_queue_depth{state="dead_letter"} ${instance.outboxQueue.deadLetter}`,
+      "# HELP terrence_outbox_oldest_pending_seconds Age of the oldest pending outbox event.",
+      "# TYPE terrence_outbox_oldest_pending_seconds gauge",
+      `terrence_outbox_oldest_pending_seconds ${instance.outboxQueue.oldestPendingSeconds}`,
+      "# HELP terrence_resource_budget_queued Durable jobs waiting for capacity, by class.",
+      "# TYPE terrence_resource_budget_queued gauge",
+      ...Object.entries(instance.resourceBudgets.queuedByClass).map(([jobClass, value]): string =>
+        `terrence_resource_budget_queued{class="${prometheusLabel(jobClass)}"} ${value}`,
+      ),
+      "# HELP terrence_resource_budget_running Durable jobs consuming capacity, by class.",
+      "# TYPE terrence_resource_budget_running gauge",
+      ...Object.entries(instance.resourceBudgets.runningByClass).map(([jobClass, value]): string =>
+        `terrence_resource_budget_running{class="${prometheusLabel(jobClass)}"} ${value}`,
+      ),
+      "# HELP terrence_resource_budget_queue_limit Configured aggregate durable queue limit.",
+      "# TYPE terrence_resource_budget_queue_limit gauge",
+      `terrence_resource_budget_queue_limit ${instance.resourceBudgets.limits.globalQueue}`,
+      "# HELP terrence_resource_budget_concurrency_limit Configured aggregate durable concurrency limit.",
+      "# TYPE terrence_resource_budget_concurrency_limit gauge",
+      `terrence_resource_budget_concurrency_limit ${instance.resourceBudgets.limits.globalConcurrency}`,
+      "# HELP terrence_resource_budget_artifact_bytes_limit Configured aggregate in-flight artifact byte limit.",
+      "# TYPE terrence_resource_budget_artifact_bytes_limit gauge",
+      `terrence_resource_budget_artifact_bytes_limit ${instance.resourceBudgets.limits.artifactBytes}`,
+      "# HELP terrence_resource_budget_running_bytes In-flight estimated artifact bytes.",
+      "# TYPE terrence_resource_budget_running_bytes gauge",
+      `terrence_resource_budget_running_bytes ${instance.resourceBudgets.runningBytes}`,
     );
     // Backend-specific samples are omitted when the value is unavailable
     // (postgres has no sqlite page cache/freelist) rather than emitting 0.
@@ -284,12 +357,26 @@ function prometheusLines(collection: MetricsCollection): string[] {
         "# HELP terrence_database_pool_exhausted_total Queries that arrived while another was pending (contention signal).",
         "# TYPE terrence_database_pool_exhausted_total counter",
         `terrence_database_pool_exhausted_total ${p.queriesExhausted}`,
+        "# HELP terrence_database_sqlite_write_contention_total SQLite write transactions rejected or delayed by a busy/locked database.",
+        "# TYPE terrence_database_sqlite_write_contention_total counter",
+        `terrence_database_sqlite_write_contention_total ${p.sqliteWriteContention}`,
         "# HELP terrence_database_query_duration_ms Observed query/transaction latency (recent window).",
         "# TYPE terrence_database_query_duration_ms gauge",
         `terrence_database_query_duration_ms{quantile="0.5"} ${p.p50Ms ?? 0}`,
         `terrence_database_query_duration_ms{quantile="0.95"} ${p.p95Ms ?? 0}`,
         `terrence_database_query_duration_ms{quantile="max"} ${p.maxMs ?? 0}`,
       );
+      for (const budget of Object.values(p.queryBudgets)) {
+        lines.push(
+          `terrence_database_query_budget_active{kind="${budget.kind}"} ${budget.active}`,
+          `terrence_database_query_budget_queued{kind="${budget.kind}"} ${budget.queued}`,
+          `terrence_database_query_budget_concurrency{kind="${budget.kind}"} ${budget.concurrency}`,
+          `terrence_database_query_budget_queue_limit{kind="${budget.kind}"} ${budget.queueLimit}`,
+          `terrence_database_query_budget_rejected_total{kind="${budget.kind}"} ${budget.rejected}`,
+          `terrence_database_query_budget_cancelled_total{kind="${budget.kind}"} ${budget.cancelled}`,
+          `terrence_database_query_budget_completed_total{kind="${budget.kind}"} ${budget.completed}`,
+        );
+      }
       const fps = (instance.database as unknown as { slowFingerprints?: Readonly<Record<string, number>> }).slowFingerprints ?? {};
       const fpLines = Object.entries(fps).slice(0, 10).map(([fp, count]): string =>
         `terrence_database_slow_fingerprint_total{fingerprint="${prometheusLabel(fp)}"} ${count}`,
@@ -342,6 +429,21 @@ function prometheusLines(collection: MetricsCollection): string[] {
       "# HELP terrence_requests_errors5xx_total Responses with status >= 500.",
       "# TYPE terrence_requests_errors5xx_total counter",
       `terrence_requests_errors5xx_total ${snapshot.requests.errors5xx}`,
+      "# HELP terrence_request_duration_ms Server request latency by bounded user journey.",
+      "# TYPE terrence_request_duration_ms gauge",
+      "# HELP terrence_request_duration_samples Requests observed by bounded user journey.",
+      "# TYPE terrence_request_duration_samples counter",
+      ...Object.entries(snapshot.journeys).flatMap(([journey, stats]): string[] => [
+        `terrence_request_duration_samples{journey="${prometheusLabel(journey)}"} ${stats.sampleCount}`,
+        ...(stats.p50Ms === null ? [] : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="0.5"} ${stats.p50Ms}`]),
+        ...(stats.p95Ms === null ? [] : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="0.95"} ${stats.p95Ms}`]),
+        ...(stats.maxMs === null ? [] : [`terrence_request_duration_ms{journey="${prometheusLabel(journey)}",quantile="max"} ${stats.maxMs}`]),
+      ]),
+      "# HELP terrence_event_loop_delay_ms Event-loop delay from the bounded runtime histogram.",
+      "# TYPE terrence_event_loop_delay_ms gauge",
+      "# HELP terrence_event_loop_delay_samples Event-loop histogram samples.",
+      "# TYPE terrence_event_loop_delay_samples gauge",
+      `terrence_event_loop_delay_samples ${snapshot.eventLoopDelay.sampleCount}`,
       "# HELP terrence_failures_total Best-effort subsystem write failures (audit log, run logs).",
       "# TYPE terrence_failures_total counter",
       ...Object.entries(snapshot.failures).map(([kind, value]): string =>
@@ -374,6 +476,13 @@ function prometheusLines(collection: MetricsCollection): string[] {
     }
     if (history.stats.rss.growthPerHour !== null) {
       lines.push(`terrence_process_history_rss_growth_per_hour ${history.stats.rss.growthPerHour}`);
+    }
+    if (snapshot.eventLoopDelay.p95Ms !== null) {
+      lines.push(
+        `terrence_event_loop_delay_ms{quantile="0.5"} ${snapshot.eventLoopDelay.meanMs ?? snapshot.eventLoopDelay.p95Ms}`,
+        `terrence_event_loop_delay_ms{quantile="0.95"} ${snapshot.eventLoopDelay.p95Ms}`,
+        ...(snapshot.eventLoopDelay.maxMs === null ? [] : [`terrence_event_loop_delay_ms{quantile="max"} ${snapshot.eventLoopDelay.maxMs}`]),
+      );
     }
     for (const [poller, stats] of Object.entries(snapshot.worker.pollers)) {
       const label = `poller="${prometheusLabel(poller)}"`;
@@ -459,16 +568,11 @@ async function readinessResponse(
     if (timer !== undefined) clearTimeout(timer);
   });
   const disk = isStorageDegraded() ? "ERROR" : "OK";
-  const worker = envEnabled(process.env["TERRENCE_DISABLE_WORKER"]) ? "ERROR" : "OK";
+  const worker = envFlag("TERRENCE_DISABLE_WORKER") ? "ERROR" : "OK";
   // Fail readiness when the sandbox is required but the host cannot
   // provide Landlock at all (issue #566); the operator policy floor
   // still applies on top for newer-ABI requirements.
-  const sandboxMinAbi = (() => {
-    const raw = process.env["TERRENCE_SANDBOX_MIN_ABI"];
-    if (raw === undefined || raw.trim() === "") return null;
-    const n = Number.parseInt(raw.trim(), 10);
-    return Number.isSafeInteger(n) && n >= 1 ? n : null;
-  })();
+  const sandboxMinAbi = executionSetting("TERRENCE_SANDBOX_MIN_ABI");
   const hostAbi = probeLandlockAbi();
   const sandboxAbiStatus: "OK" | "ERROR" =
     sandboxMinAbi !== null
@@ -484,7 +588,7 @@ async function readinessResponse(
     netPolicyStatus = "ERROR";
   }
   const maintenance = maintenanceSnapshot();
-  const draining = maintenance.active || ["draining", "maintenance"].includes((process.env["TERRENCE_NODE_STATUS"] ?? "").toLowerCase());
+  const draining = maintenance.active || ["draining", "maintenance"].includes(integrationSetting("TERRENCE_NODE_STATUS"));
   const status =
     database === "ERROR" || disk === "ERROR" || sandboxAbiStatus === "ERROR" || netPolicyStatus === "ERROR"
       ? "ERROR"
@@ -682,12 +786,12 @@ export const healthRoutes = new Elysia({ name: "health" })
     h["TFE-Version"] = COMPATIBILITY_VERSION;
     h["X-TFE-Version"] = COMPATIBILITY_VERSION;
     const rateLimits = {
-      general: { max: Number(process.env["RATE_LIMIT_MAX"] ?? 30), "window-ms": 1_000 },
-      "workspace-run-history": { max: Number(process.env["RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX"] ?? 30), "window-ms": Number(process.env["RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS"] ?? 60_000) },
-      sensitive: { max: Number(process.env["RATE_LIMIT_SENSITIVE_MAX"] ?? 5), "window-ms": 60_000 },
-      "sso-get": { max: Number(process.env["RATE_LIMIT_SSO_GET_MAX"] ?? 60), "window-ms": 60_000 },
-      "scim-settings": { max: Number(process.env["RATE_LIMIT_SCIM_SETTINGS_MAX"] ?? 20), "window-ms": 1_000 },
-      "scim-mapping": { max: Number(process.env["RATE_LIMIT_SCIM_MAPPING_MAX"] ?? 10), "window-ms": 60_000 },
+      general: { max: integerSetting("RATE_LIMIT_MAX"), "window-ms": 1_000 },
+      "workspace-run-history": { max: integerSetting("RATE_LIMIT_WORKSPACE_RUN_HISTORY_MAX"), "window-ms": integerSetting("RATE_LIMIT_WORKSPACE_RUN_HISTORY_DURATION_MS") },
+      sensitive: { max: integerSetting("RATE_LIMIT_SENSITIVE_MAX"), "window-ms": 60_000 },
+      "sso-get": { max: integerSetting("RATE_LIMIT_SSO_GET_MAX"), "window-ms": 60_000 },
+      "scim-settings": { max: integerSetting("RATE_LIMIT_SCIM_SETTINGS_MAX"), "window-ms": 1_000 },
+      "scim-mapping": { max: integerSetting("RATE_LIMIT_SCIM_MAPPING_MAX"), "window-ms": 60_000 },
     };
     return {
       data: {
@@ -787,7 +891,7 @@ export const healthRoutes = new Elysia({ name: "health" })
         ? "landlock-runner missing or Landlock not enabled in the kernel"
         : "Landlock is not available on this kernel (needs Linux >= 5.13 with CONFIG_SECURITY_LANDLOCK)";
     }
-    const extraRwAllowed = envEnabled(process.env["TERRENCE_SANDBOX_EXTRA_RW_ALLOWED"]);
+    const extraRwAllowed = envFlag("TERRENCE_SANDBOX_EXTRA_RW_ALLOWED");
     // SEC-10: expose the effective run network policy and its enforcement
     // scope. `deny` restricts TCP bind/connect only (Landlock ABI >= 4);
     // UDP, DNS and other families are unaffected. Never throw here: an

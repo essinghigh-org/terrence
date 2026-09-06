@@ -407,6 +407,48 @@
       "when": 1788669486649,
       "tag": "0057_melodic_jubilee",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "6",
+      "when": 1788694902761,
+      "tag": "0058_state_summary",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "6",
+      "when": 1788705033113,
+      "tag": "0059_shiny_vulcan",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "6",
+      "when": 1788706434340,
+      "tag": "0060_aspiring_mindworm",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "6",
+      "when": 1788708994220,
+      "tag": "0061_real_junta",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "6",
+      "when": 1788709606926,
+      "tag": "0062_red_reaper",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "6",
+      "when": 1788710967270,
+      "tag": "0063_long_baron_strucker",
+      "breakpoints": true
     }
   ]
 }

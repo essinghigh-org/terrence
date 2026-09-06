@@ -25,6 +25,14 @@ import { notificationDeliveryState } from "../db/schema";
 const BREAKER_FAILURE_LIMIT = 3;
 const BREAKER_OPEN_MS = 60_000;
 const DEDUP_WINDOW_MS = 5_000;
+const SNOOZE_MAX_MS = 7 * 24 * 60 * 60 * 1_000;
+
+/** Events that must remain visible while a destination is snoozed. */
+const CRITICAL_NOTIFICATION_TRIGGERS = new Set([
+  "run:errored",
+  "run:needs_attention",
+  "assessment:failed",
+]);
 
 /** Rows older than this are swept regardless of kind (dedup rows are already
  * short-lived; a breaker row older than an hour is stale by definition). */
@@ -131,6 +139,75 @@ export async function sharedDedupRecord(scope: "run" | "assessment", key: string
       set: { windowStart: now, updatedAt: now },
     });
 }
+
+export type NotificationSnooze = Readonly<{
+  until: number;
+  reason: string | null;
+}>;
+
+function snoozeStateKey(configurationId: string): string {
+  return `notification:${configurationId}`;
+}
+
+/** Read the expiry for a destination snooze. Expired rows are removed on read. */
+export async function notificationSnooze(configurationId: string, now = Date.now()): Promise<NotificationSnooze | null> {
+  const row = await db.query.notificationDeliveryState.findFirst({
+    where: and(
+      eq(notificationDeliveryState.kind, "snooze"),
+      eq(notificationDeliveryState.stateKey, snoozeStateKey(configurationId)),
+    ),
+  });
+  if (row === undefined) return null;
+  if (row.value <= now) {
+    await db.delete(notificationDeliveryState).where(eq(notificationDeliveryState.id, row.id));
+    return null;
+  }
+  return { until: row.value, reason: null };
+}
+
+/** Persist a bounded destination snooze. A zero/negative duration clears it. */
+export async function setNotificationSnooze(
+  configurationId: string,
+  durationMs: number,
+  now = Date.now(),
+): Promise<NotificationSnooze | null> {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    await clearNotificationSnooze(configurationId);
+    return null;
+  }
+  const until = now + Math.min(SNOOZE_MAX_MS, Math.floor(durationMs));
+  await db.insert(notificationDeliveryState).values({
+    id: crypto.randomUUID(),
+    kind: "snooze",
+    stateKey: snoozeStateKey(configurationId),
+    value: until,
+    windowStart: now,
+    updatedAt: now,
+  }).onConflictDoUpdate({
+    target: [notificationDeliveryState.kind, notificationDeliveryState.stateKey],
+    set: { value: until, windowStart: now, updatedAt: now },
+  });
+  return { until, reason: null };
+}
+
+export async function clearNotificationSnooze(configurationId: string): Promise<void> {
+  await db.delete(notificationDeliveryState).where(and(
+    eq(notificationDeliveryState.kind, "snooze"),
+    eq(notificationDeliveryState.stateKey, snoozeStateKey(configurationId)),
+  ));
+}
+
+/** Critical failures bypass snoozes; ordinary repeated updates do not. */
+export async function notificationSnoozedForTrigger(
+  configurationId: string,
+  trigger: string,
+  now = Date.now(),
+): Promise<boolean> {
+  if (CRITICAL_NOTIFICATION_TRIGGERS.has(trigger)) return false;
+  return (await notificationSnooze(configurationId, now)) !== null;
+}
+
+export const MAX_NOTIFICATION_SNOOZE_MS = SNOOZE_MAX_MS;
 
 /** Delete expired dedup rows and stale breaker rows. Called opportunistically
  * from the delivery path (cheap indexed delete, no scan). */

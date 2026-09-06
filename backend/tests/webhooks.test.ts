@@ -50,6 +50,11 @@ const tarballRequests: { url: string; authorization: string | null }[] = [];
 const redirectedTarballRequests: { url: string; authorization: string | null }[] = [];
 const commitStatuses: Record<string, unknown>[] = [];
 
+function restoreEnvironment(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
 const pushPayload = {
   ref: "refs/heads/main",
   after: "1234567890abcdef1234567890abcdef12345678",
@@ -271,10 +276,10 @@ describe("GitHub Webhooks", () => {
   afterAll(async () => {
     setExternalUrlTransportForTests(undefined);
     globalThis.fetch = originalFetch;
-    process.env["GITHUB_WEBHOOK_SECRET"] = originalSecret;
-    process.env["GITHUB_APP_ID"] = originalAppId;
-    process.env["GITHUB_APP_PRIVATE_KEY"] = originalPrivateKey;
-    process.env["GITHUB_APP_API_URL"] = originalAppApiUrl;
+    restoreEnvironment("GITHUB_WEBHOOK_SECRET", originalSecret);
+    restoreEnvironment("GITHUB_APP_ID", originalAppId);
+    restoreEnvironment("GITHUB_APP_PRIVATE_KEY", originalPrivateKey);
+    restoreEnvironment("GITHUB_APP_API_URL", originalAppApiUrl);
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
     await db.delete(workspaces).where(eq(workspaces.id, secondWorkspaceId));
     await db.delete(workspaces).where(eq(workspaces.id, crossProviderWorkspaceId));

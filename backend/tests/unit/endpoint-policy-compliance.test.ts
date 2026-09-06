@@ -73,6 +73,7 @@ describe("endpoint-policy (465-469)", () => {
     expect(declared("GET", "http://x/api/v2/state-versions/sv-1/json-download")).toBe("state-secret-read");
     expect(declared("GET", "http://x/api/v2/state-version-outputs/svo-1")).toBe("state-secret-read");
     expect(declared("GET", "http://x/api/v2/plans/plan-1/json-output")).toBe("state-secret-read");
+    expect(declared("GET", "http://x/api/v2/runs/run-1/recovery-state")).toBe("state-secret-read");
     const entry = ENDPOINT_POLICIES.find((candidate) => candidate.id === "state-secret-read");
     expect(entry?.auth).toBe("authenticated");
     expect(entry?.audit).toBe("run");

@@ -1,9 +1,10 @@
+import { integerSetting } from "./lib/runtime-config";
 import { normalizeRunVariables } from "./lib/run-variables";
 export { normalizeRunVariables } from "./lib/run-variables";
 import { terraformVariableLine } from "./lib/tfvars";
 import { compareCodePoints, compareVariableSets } from "./lib/variable-set-precedence";
 import { newResourceId } from "./lib/resource-id";
-import { envEnabled } from "./lib/env";
+import { envFlag } from "./lib/env";
 import { db } from "./db";
 import {
   runs,
@@ -55,9 +56,11 @@ import { isStorageDegraded, isDiskFullError, markStorageDegraded } from "./lib/s
 import { workspaceExecutionDirectory } from "./workspace";
 import {
   captureInterruptedApplyState,
+  RECOVERY_PROMOTION_LOCK_FILENAME,
+  RECOVERY_PROMOTED_FILENAME,
   sweepIncompleteRecoveryCopies,
 } from "./lib/recovery-files";
-import { queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
+import { enqueueRunNotificationOutboxTx, queueAssessmentNotification, queueRunNotification } from "./lib/notifications";
 import { canTransitionRunStatus, isTerminalRunStatus } from "./lib/run-status";
 import { FINAL_RUN_STATUSES, WORKSPACE_BLOCKING_RUN_STATUSES, apiURL, signedApiURL, decodeStatePayload } from "./lib/utils";
 import { fetchResolvedExternalUrl, resolveExternalUrl } from "./lib/url-safety";
@@ -85,19 +88,21 @@ import { probeLandlockAbi, RunSandbox, removeSandboxWorkDir, runNetDenyEnabled, 
 import { createRunCgroup, destroyRunCgroup, killRunCgroup } from "./lib/run-cgroup";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "./lib/secrets";
 import { variableValueForRead } from "./lib/variable-crypto";
-import { encryptStatePayload } from "./lib/validation";
+import {
+  encryptStatePayload,
+  parsePersistedArtifact,
+  parsePersistedRunInputs,
+  parsePersistedStatusMetadata,
+} from "./lib/validation";
 import { log, safeJsonStringify } from "./lib/log";
 export type { ExecutionPhase } from "./worker/phases";
 export { executorBackendFromEnv, type ExecutorBackend, EXECUTOR_BACKENDS } from "./worker/executor-policy";
 import {
-  assertArchiveExpandedSize,
-  assertArchiveLogicalSize,
-  assertArchiveMemberCount,
-  tarMemberIsForbiddenSpecial,
-  tarMemberPathUnsafe,
+  extractSafeTarArchive,
 } from "./lib/archive";
 export { tarMemberIsForbiddenSpecial, tarMemberPathUnsafe } from "./lib/archive";
 import { startDurableJobWorker } from "./lib/durable-jobs";
+import { handleOutboxDeliveryJob, repairOutboxJobs } from "./lib/outbox";
 import { handleVcsWebhookJob } from "./lib/webhook-jobs";
 import { runModuleTestJob } from "./lib/module-test-worker";
 import { runStackConfigurationJob, runStackDeploymentJob } from "./lib/stack-worker";
@@ -110,6 +115,7 @@ import { costEstimationEnabledForOrganization, getSettings } from "./lib/setting
 import { storageDir } from "./db/driver";
 import { insertStateVersionWithSerialRetry } from "./lib/state-serial";
 import { jitteredPollDelay } from "./lib/poll-jitter";
+import { LocalExecutionLifecycle } from "./worker/local-execution";
 
 
 // --- Run sandbox (Landlock isolation for tofu/terraform) ---
@@ -122,6 +128,9 @@ import { jitteredPollDelay } from "./lib/poll-jitter";
 // TERRENCE_RUN_SANDBOX=false.
 const RUN_SANDBOX_REQUIRED = runSandboxRequired();
 const runSandbox = RUN_SANDBOX_REQUIRED && RunSandbox.isUsable() ? new RunSandbox() : null;
+const localExecutionLifecycle = new LocalExecutionLifecycle({
+  concurrencyLimit: (): number => integerSetting("TERRENCE_RUN_CONCURRENCY"),
+});
 const POLICY_EVALUATION_TIMEOUT_MS = 30_000;
 if (RUN_SANDBOX_REQUIRED && runSandbox === null) {
   log.error(
@@ -172,7 +181,7 @@ function assertRunSandboxAvailable(): void {
  * opt-out may run without Landlock; production's default is fail-closed.
  */
 function policyEvaluationSandbox(): RunSandbox | null {
-  if (envEnabled(process.env["SIMULATED_RUNS"]) || !runSandboxRequired()) return null;
+  if (envFlag("SIMULATED_RUNS") || !runSandboxRequired()) return null;
   if (!RunSandbox.isUsable() || !RunSandbox.hasRunner()) {
     throw new Error("Landlock sandbox is required but unavailable for policy evaluation");
   }
@@ -277,13 +286,34 @@ export async function cleanupRunWorkDir(runId: string): Promise<void> {
   else await rm(runWorkDir(runId), { recursive: true, force: true });
 }
 
+const scheduledRunWorkDirCleanups = new Map<string, ReturnType<typeof setTimeout>>();
+
 export function scheduleRunWorkDirCleanup(runId: string, delayMs = 6_000): void {
+  // Apply/run finalizers can discover the same failed cleanup independently.
+  // Keep one retry per run so repeated stop signals cannot create a timer
+  // pile-up or race two removals against recovery preservation.
+  if (scheduledRunWorkDirCleanups.has(runId)) return;
   const timer = setTimeout((): void => {
+    scheduledRunWorkDirCleanups.delete(runId);
     void cleanupRunWorkDir(runId).catch((error: unknown): void => {
       logBestEffortFailure("Scheduled run workdir cleanup failed", { runId }, error);
     });
   }, delayMs);
   timer.unref?.();
+  scheduledRunWorkDirCleanups.set(runId, timer);
+}
+
+/** Test-only visibility for idempotent cleanup scheduling. */
+export function runWorkDirCleanupTimerCountForTests(runId: string): number {
+  return scheduledRunWorkDirCleanups.has(runId) ? 1 : 0;
+}
+
+/** Test-only cleanup for scheduled workdir retries. */
+export function clearRunWorkDirCleanupTimersForTests(): void {
+  for (const [runId, timer] of scheduledRunWorkDirCleanups.entries()) {
+    clearTimeout(timer);
+    scheduledRunWorkDirCleanups.delete(runId);
+  }
 }
 
 // Issue #579: run IDs whose recovery capture failed after finding state.
@@ -401,15 +431,16 @@ async function recordPlanInput(
   state: Readonly<{ id: string | null; serial: number }>,
   savedPlan: SavedPlanMetadata | undefined,
 ): Promise<void> {
-  const current = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { status: true, statusTimestamps: true } });
+  const current = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { status: true, statusTimestamps: true, statusMetadataSchemaVersion: true } });
   if (current === undefined) throw new Error(`Run ${runId} disappeared while recording its plan input.`);
+  const currentTimestamps = parsePersistedStatusMetadata(current.statusTimestamps, current.statusMetadataSchemaVersion, runId) ?? {};
   const timestamps = {
-    ...(current.statusTimestamps ?? {}),
+    ...currentTimestamps,
     ...(state.id === null ? {} : { "input-state-version-id": state.id }),
     "input-state-serial": String(state.serial),
     ...(savedPlan === undefined ? {} : { "saved-plan-sha256": savedPlan.sha256 }),
   };
-  const updated = await db.update(runs).set({ statusTimestamps: timestamps }).where(and(eq(runs.id, runId), eq(runs.status, current.status))).returning({ id: runs.id });
+  const updated = await db.update(runs).set({ statusTimestamps: timestamps, statusMetadataSchemaVersion: 1 }).where(and(eq(runs.id, runId), eq(runs.status, current.status))).returning({ id: runs.id });
   if (updated.length === 0) throw new Error(`Run ${runId} changed while recording its plan input.`);
 }
 
@@ -634,7 +665,7 @@ function terminateProcessGroup(pid: number | null, signal: "SIGINT" | "SIGKILL")
 
 /** Deletion must wait for local process exit, including cancellation escalation. */
 export function hasActiveRunExecution(runId: string): boolean {
-  return localRunReservations.has(runId) || activeLocalRunExecutions.has(runId)
+  return localExecutionLifecycle.hasRunExecution(runId)
     || activeRunProcesses.has(runId) || activeRunCgroups.has(runId) || cancellationEscalationTimers.has(runId);
 }
 
@@ -771,45 +802,6 @@ type RunStatusExtra = Readonly<Partial<Pick<
 async function updateRunStatus(runId: string, status: string, extra?: RunStatusExtra): Promise<void> {
   const now = new Date().toISOString();
   const statusKey = status.replace(/_/g, "-") + "-at";
-  let workspaceId: string | null = null;
-  try {
-    const existing = await db.query.runs.findFirst({
-      where: eq(runs.id, runId),
-      columns: { statusTimestamps: true, status: true, workspaceId: true },
-    });
-    if (existing === undefined) {
-      // The run record was deleted mid-execution (issue #693): there is no
-      // state left to publish to. Stand down quietly instead of throwing a
-      // compare-and-set error that escapes as an unhandled rejection and
-      // crashes the worker.
-      log.warn(`Run ${runId} no longer exists; skipping status update to ${status}`, { runId, status });
-      return;
-    }
-    workspaceId = existing?.workspaceId ?? null;
-    const existingTimestamps = typeof existing?.statusTimestamps === "object" && existing.statusTimestamps !== null
-      ? existing.statusTimestamps
-      : {};
-    // State machine guard: illegal writes are rejected, not merely logged.
-    // Otherwise a canceled worker can overwrite the terminal cancellation with
-    // "applied" after the operator action has already returned.
-    const currentStatus = existing?.status;
-    if (currentStatus !== undefined && currentStatus !== status && !canTransitionRunStatus(currentStatus, status)) {
-      throw new Error(`Illegal run status transition for ${runId}: ${currentStatus} -> ${status}`);
-    }
-    const timestamps = { ...existingTimestamps, [statusKey]: now };
-    const updated = await db.update(runs)
-      .set({ status, statusTimestamps: timestamps, ...(extra ?? {}) })
-      .where(and(eq(runs.id, runId), eq(runs.status, currentStatus ?? status)))
-      .returning({ id: runs.id });
-    if (updated.length === 0) {
-      // A concurrent cancel/force-cancel won the race after the read above.
-      // Do not publish or notify a transition that was not persisted.
-      throw new Error(`Run ${runId} status transition to ${status} lost its compare-and-set race`);
-    }
-  } catch (err: unknown) {
-    log.error(`Failed to update run ${runId} status to ${status}`, { error: err instanceof Error ? err.message : String(err) });
-    throw err;
-  }
   const trigger = status === "planning"
     ? "run:planning"
     : status === "applying"
@@ -821,7 +813,53 @@ async function updateRunStatus(runId: string, status: string, extra?: RunStatusE
           : status === "policy_soft_failed" || status === "planned_and_saved"
             ? "run:needs_attention"
             : undefined;
-  if (trigger !== undefined) queueRunNotification(runId, trigger, status);
+  let workspaceId: string | null = null;
+  try {
+    const committed = await db.transaction(async (transaction): Promise<boolean> => {
+      const tx = transaction as unknown as typeof db;
+      const existing = await tx.query.runs.findFirst({
+        where: eq(runs.id, runId),
+        columns: { statusTimestamps: true, statusMetadataSchemaVersion: true, status: true, workspaceId: true },
+      });
+      if (existing === undefined) return false;
+      workspaceId = existing.workspaceId;
+      const existingTimestamps = parsePersistedStatusMetadata(
+        existing.statusTimestamps,
+        existing.statusMetadataSchemaVersion,
+        runId,
+      ) ?? {};
+      // State machine guard: illegal writes are rejected, not merely logged.
+      // Otherwise a canceled worker can overwrite the terminal cancellation with
+      // "applied" after the operator action has already returned.
+      const currentStatus = existing.status;
+      if (currentStatus !== status && !canTransitionRunStatus(currentStatus, status)) {
+        throw new Error(`Illegal run status transition for ${runId}: ${currentStatus} -> ${status}`);
+      }
+      const timestamps = { ...existingTimestamps, [statusKey]: now };
+      const updated = await tx.update(runs)
+        .set({ status, statusTimestamps: timestamps, statusMetadataSchemaVersion: 1, ...(extra ?? {}) })
+        .where(and(eq(runs.id, runId), eq(runs.status, currentStatus)))
+        .returning({ id: runs.id });
+      if (updated.length === 0) {
+        // A concurrent cancel/force-cancel won the race after the read above.
+        // Do not publish or notify a transition that was not persisted.
+        throw new Error(`Run ${runId} status transition to ${status} lost its compare-and-set race`);
+      }
+      if (trigger !== undefined) await enqueueRunNotificationOutboxTx(tx, runId, trigger, status);
+      return true;
+    });
+    if (!committed) {
+      // The run record was deleted mid-execution (issue #693): there is no
+      // state left to publish to. Stand down quietly instead of throwing a
+      // compare-and-set error that escapes as an unhandled rejection and
+      // crashes the worker.
+      log.warn(`Run ${runId} no longer exists; skipping status update to ${status}`, { runId, status });
+      return;
+    }
+  } catch (err: unknown) {
+    log.error(`Failed to update run ${runId} status to ${status}`, { error: err instanceof Error ? err.message : String(err) });
+    throw err;
+  }
   void reportRunVcsStatus(runId, status);
   // Publish the transition on the in-process bus so authenticated SSE
   // clients (10.20) can refresh without polling. The org lookup is one
@@ -1557,62 +1595,6 @@ async function extractTarArchive(
     workingDirectory: workingDirectory ?? null,
   };
   try {
-    await assertArchiveExpandedSize(archivePath);
-    const verboseProc = spawn(["tar", "-tvzf", archivePath]);
-    const verboseText = await new Response(verboseProc.stdout).text();
-    const verboseExitCode = await verboseProc.exited;
-    if (verboseExitCode !== 0) {
-      log.error("Configuration archive member inspection failed", {
-        ...diagnosticContext,
-        exitCode: verboseExitCode,
-      });
-      return false;
-    }
-
-    const verboseLines = verboseText.split("\n").map((s: string): string => s.trim()).filter((s: string): boolean => s !== "");
-    assertArchiveMemberCount(verboseLines);
-    for (const line of verboseLines) {
-      if (tarMemberIsForbiddenSpecial(line.charAt(0))) {
-        log.error("Security error: archive contains forbidden link/special member", {
-          ...diagnosticContext,
-          member: line,
-        });
-        return false;
-      }
-      if (line.includes(" -> ") || line.includes(" link to ")) {
-        log.error("Security error: archive contains link member", {
-          ...diagnosticContext,
-          member: line,
-        });
-        return false;
-      }
-    }
-
-    const listProc = spawn(["tar", "-tzf", archivePath]);
-    const membersText = await new Response(listProc.stdout).text();
-    const exitCode = await listProc.exited;
-    if (exitCode !== 0) {
-      log.error("Configuration archive path inspection failed", {
-        ...diagnosticContext,
-        exitCode,
-      });
-      return false;
-    }
-
-    const members = membersText.split("\n").map((s: string): string => s.trim()).filter((s: string): boolean => s !== "");
-    assertArchiveMemberCount(members);
-    for (const m of members) {
-      if (tarMemberPathUnsafe(m)) {
-        log.error("Security error: archive contains dangerous path", {
-          ...diagnosticContext,
-          member: m,
-          path: m,
-        });
-        return false;
-      }
-    }
-    await assertArchiveLogicalSize(archivePath);
-
     // Uploaded archives can contain client-side execution artifacts (a stale
     // `tfplan` bookmark from `terraform plan -out=tfplan`, local state, or a
     // provider cache). Those must never shadow the server-managed files that
@@ -1629,16 +1611,8 @@ async function extractTarArchive(
       "*/.terraform",
       ".terraform/*",
       "*/.terraform/*",
-    ].flatMap((pattern): string[] => ["--exclude", pattern]);
-    const extractProc = spawn(["tar", "-x", "-o", "-z", "-f", archivePath, "-C", destDir, ...executionArtifactExcludes]);
-    const extractExitCode = await extractProc.exited;
-    if (extractExitCode !== 0) {
-      log.error("Configuration archive extraction process failed", {
-        ...diagnosticContext,
-        exitCode: extractExitCode,
-      });
-      return false;
-    }
+    ];
+    await extractSafeTarArchive(archivePath, destDir, {}, executionArtifactExcludes);
     await unnestArchiveDirectory(destDir, workingDirectory);
     return true;
   } catch (error: unknown) {
@@ -1694,7 +1668,7 @@ type RunTaskExecution = Readonly<{
 }>;
 
 function runTaskTransportError(taskUrl: string, stage: RunTaskStage, isGlobal: boolean): string | undefined {
-  if ((stage !== "pre_apply" && !isGlobal) || envEnabled(process.env["TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS"])) return undefined;
+  if ((stage !== "pre_apply" && !isGlobal) || envFlag("TERRENCE_ALLOW_INSECURE_RUN_TASK_URLS")) return undefined;
   try {
     return new URL(taskUrl).protocol === "https:"
       ? undefined
@@ -1740,8 +1714,7 @@ async function executeRunTasks(
   const run = await db.query.runs.findFirst({ where: eq(runs.id, runId) });
   const taskAccessToken = (await runTokenStateFor(runId, workspace)).token;
   let proceed = true;
-  const configuredTimeout = Number(process.env["RUN_TASK_TIMEOUT_MS"] ?? 3_600_000);
-  const timeoutMs = Number.isSafeInteger(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 3_600_000;
+  const timeoutMs = integerSetting("RUN_TASK_TIMEOUT_MS");
 
   // Batch-insert all pending run-task results in one statement instead of
   // issuing one INSERT per binding inside the loop below.
@@ -1821,7 +1794,7 @@ async function executeRunTasks(
     let resultUrl: string | null = null;
     const transportError = runTaskTransportError(task.url, stage, isGlobal);
     const destination = transportError === undefined
-      ? await resolveExternalUrl(task.url, envEnabled(process.env["TERRENCE_ALLOW_PRIVATE_URLS"]))
+      ? await resolveExternalUrl(task.url, envFlag("TERRENCE_ALLOW_PRIVATE_URLS"))
       : { error: transportError };
     if ("error" in destination) {
       status = "failed";
@@ -2014,10 +1987,12 @@ export async function executeRun(runId: string): Promise<void> {
       .catch(async (error: unknown): Promise<void> => {
         if (!(await runWasCanceled(runId))) {
           try {
-            const current = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { statusTimestamps: true } });
+            const current = await db.query.runs.findFirst({ where: eq(runs.id, runId), columns: { statusTimestamps: true, statusMetadataSchemaVersion: true } });
+            const timestamps = parsePersistedStatusMetadata(current?.statusTimestamps, current?.statusMetadataSchemaVersion, runId) ?? {};
             await db.update(runs).set({
               status: "errored",
-              statusTimestamps: { ...(current?.statusTimestamps ?? {}), "errored-at": new Date().toISOString() },
+              statusTimestamps: { ...timestamps, "errored-at": new Date().toISOString() },
+              statusMetadataSchemaVersion: 1,
             }).where(and(
               eq(runs.id, runId),
               notInArray(runs.status, [
@@ -2040,12 +2015,30 @@ export async function executeRun(runId: string): Promise<void> {
 
 async function executeRunImpl(runId: string): Promise<void> {
   assertRunSandboxAvailable();
-  const run = await db.query.runs.findFirst({
+  const rawRun = await db.query.runs.findFirst({
     where: eq(runs.id, runId),
   });
 
-  if (run === undefined) return;
-  if (FINAL_RUN_STATUSES.includes(run.status)) return;
+  if (rawRun === undefined) return;
+  if (FINAL_RUN_STATUSES.includes(rawRun.status)) return;
+  const runInputs = parsePersistedRunInputs({
+    targetAddrs: rawRun.targetAddrs,
+    replaceAddrs: rawRun.replaceAddrs,
+    invokeActionAddrs: rawRun.invokeActionAddrs,
+    variables: rawRun.variables,
+  }, rawRun.inputSchemaVersion, rawRun.id);
+  const runStatusTimestamps = parsePersistedStatusMetadata(rawRun.statusTimestamps, rawRun.statusMetadataSchemaVersion, rawRun.id);
+  // From this point onward the worker operates on the trusted adapter output.
+  // Unknown persisted extension fields are retained by the adapter but are not
+  // copied into the CLI arguments or environment.
+  const run = {
+    ...rawRun,
+    targetAddrs: runInputs.targetAddrs === null ? null : [...runInputs.targetAddrs],
+    replaceAddrs: runInputs.replaceAddrs === null ? null : [...runInputs.replaceAddrs],
+    invokeActionAddrs: runInputs.invokeActionAddrs === null ? null : [...runInputs.invokeActionAddrs],
+    variables: runInputs.variables === null ? null : [...runInputs.variables],
+    statusTimestamps: runStatusTimestamps,
+  };
 
   const workspace = await db.query.workspaces.findFirst({
     where: eq(workspaces.id, run.workspaceId),
@@ -2232,7 +2225,7 @@ async function executeRunImpl(runId: string): Promise<void> {
     const currentDirFiles = await readdir(executionDir);
     const hasTfFiles = currentDirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
 
-    const isSimulatedAllowed = envEnabled(process.env["SIMULATED_RUNS"]) || Reflect.get(process.env, "NODE_ENV") === "test";
+    const isSimulatedAllowed = envFlag("SIMULATED_RUNS") || Reflect.get(process.env, "NODE_ENV") === "test";
     if (!isSimulatedAllowed) {
       await writeLog(runId, "plan", `[terrence] Resolving binary for ${requestedTool} (version: ${requestedVersion})...`);
     }
@@ -2870,7 +2863,7 @@ async function executeApplyImpl(runId: string): Promise<void> {
     // directory `terraform apply` is about to see.
     dirFiles = (await exists(executionDir)) ? await readdir(executionDir) : [];
     hasTfFiles = dirFiles.some((f: string): boolean => f.endsWith(".tf") || f.endsWith(".tf.json"));
-    const isSimulatedAllowed = envEnabled(process.env["SIMULATED_RUNS"]) || Reflect.get(process.env, "NODE_ENV") === "test";
+    const isSimulatedAllowed = envFlag("SIMULATED_RUNS") || Reflect.get(process.env, "NODE_ENV") === "test";
     let resolved: Awaited<ReturnType<typeof ensureBinary>> | null = null;
     if (!isSimulatedAllowed) {
       try {
@@ -3735,8 +3728,7 @@ async function captureProcess(
 }
 
 function assessmentIntervalMs(): number {
-  const configured = Number(process.env["HEALTH_ASSESSMENT_INTERVAL_MS"] ?? 86_400_000);
-  return Number.isSafeInteger(configured) && configured > 0 ? configured : 86_400_000;
+  return integerSetting("HEALTH_ASSESSMENT_INTERVAL_MS");
 }
 
 function autoDestroyDurationMs(value: string | null): number | undefined {
@@ -3930,6 +3922,8 @@ export async function enqueueDueAutoDestroyRuns(now = Date.now()): Promise<strin
           isDestroy: true,
           autoApply: true,
           statusTimestamps: { "pending-at": new Date(now).toISOString() },
+          inputSchemaVersion: 1,
+          statusMetadataSchemaVersion: 1,
           createdAt: now,
         });
         if (scheduled) {
@@ -4033,6 +4027,7 @@ export async function enqueueDueAssessments(now = Date.now()): Promise<string[]>
       id,
       workspaceId: workspace.id,
       status: "pending" as const,
+      artifactSchemaVersion: 1,
       createdAt: now,
     });
     enqueued.push(id);
@@ -4080,6 +4075,10 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
   };
 
   try {
+    // Existing assessment rows may have null legacy artifacts; malformed
+    // imported artifacts fail this worker with a typed row-aware diagnostic.
+    parsePersistedArtifact(assessment.jsonOutput, assessment.artifactSchemaVersion, assessment.id);
+    parsePersistedArtifact(assessment.jsonSchema, assessment.artifactSchemaVersion, assessment.id);
     const appliedRun = await db.query.runs.findFirst({
       where: and(
         eq(runs.workspaceId, workspace.id),
@@ -4092,7 +4091,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
       throw new Error("No successfully applied configuration is available for assessment.");
     }
 
-    const simulated = envEnabled(process.env["SIMULATED_RUNS"]) || Reflect.get(process.env, "NODE_ENV") === "test";
+    const simulated = envFlag("SIMULATED_RUNS") || Reflect.get(process.env, "NODE_ENV") === "test";
     let planJson: JsonObject;
     let providerSchema: JsonObject = {};
 
@@ -4278,6 +4277,7 @@ async function executeAssessmentImpl(assessmentResultId: string): Promise<void> 
       checksUnknown: checks.unknown,
       jsonOutput: planJson,
       jsonSchema: providerSchema,
+      artifactSchemaVersion: 1,
       logOutput: output.join("\n"),
       completedAt: Date.now(),
     }).where(eq(assessmentResults.id, assessmentResultId));
@@ -4345,8 +4345,7 @@ export async function pollAssessmentQueue(): Promise<string[]> {
   return withQueueGate("assessment", async (): Promise<string[]> => {
   if (isMaintenanceActive()) return [];
   if (workerQueueDraining()) return [];
-  const configured = Number(process.env["HEALTH_ASSESSMENT_CONCURRENCY"] ?? 2);
-  const maximum = Number.isSafeInteger(configured) && configured > 0 ? configured : 2;
+  const maximum = integerSetting("HEALTH_ASSESSMENT_CONCURRENCY");
   const running = await db.query.assessmentResults.findMany({
     where: eq(assessmentResults.status, "running"),
     columns: { id: true },
@@ -4834,7 +4833,7 @@ export async function applyDueScheduledRuns(): Promise<string[]> {
       });
       applied.push(run.id);
     } catch (error: unknown) {
-      if (localRunReservations.has(run.id)) releaseLocalRunReservation(run.id);
+      if (localExecutionLifecycle.hasReservation(run.id)) releaseLocalRunReservation(run.id);
       log.error("Scheduled apply failed", { runId: run.id, error });
       // Keep the run confirmed so a transient failure retries next poll.
       try {
@@ -4872,18 +4871,13 @@ export function pruneScheduledBlockReasonsForTests(dueIds: ReadonlySet<string>):
  * fall back to the default so a misconfiguration cannot hot-loop the DB
  * (kanban 3.7 pattern).
  */
-function pollIntervalMs(raw: string | undefined, fallback: number, minimum: number): number {
-  if (raw === undefined || raw === "") return fallback;
-  const parsed = Number(raw);
-  return Number.isInteger(parsed) && parsed >= minimum ? parsed : fallback;
-}
 
 /**
  * Run queue poll interval (startWorkerQueue claims pending runs and drains
  * the apply schedule on this cadence). Configurable for low-power homelab
  * installs that want a gentler query load.
  */
-const WORKER_POLL_INTERVAL_MS = pollIntervalMs(process.env["TERRENCE_WORKER_POLL_MS"], 1500, 100);
+const WORKER_POLL_INTERVAL_MS = integerSetting("TERRENCE_WORKER_POLL_MS");
 
 /**
  * Auto-destroy scan cadence, independent of the run-queue poll. The sweep
@@ -4892,14 +4886,14 @@ const WORKER_POLL_INTERVAL_MS = pollIntervalMs(process.env["TERRENCE_WORKER_POLL
  * review: full-table sweep per 1.5s tick is O(all history) even with zero
  * workspaces using auto-destroy).
  */
-const AUTO_DESTROY_POLL_INTERVAL_MS = pollIntervalMs(process.env["TERRENCE_AUTO_DESTROY_POLL_MS"], 30_000, 5_000);
+const AUTO_DESTROY_POLL_INTERVAL_MS = integerSetting("TERRENCE_AUTO_DESTROY_POLL_MS");
 
 /**
  * Health-assessment discovery cadence. Assessments become due in minutes to
  * days; discovering them every 1.5s reloads every workspace and organization
  * for nothing. Default 60s (scratch review).
  */
-const ASSESSMENT_POLL_INTERVAL_MS = pollIntervalMs(process.env["TERRENCE_ASSESSMENT_POLL_MS"], 60_000, 5_000);
+const ASSESSMENT_POLL_INTERVAL_MS = integerSetting("TERRENCE_ASSESSMENT_POLL_MS");
 
 // --- Graceful-drain state (shutdown) ---
 // SIGTERM sets the draining flag: the pollers stop claiming new work while
@@ -4907,23 +4901,16 @@ const ASSESSMENT_POLL_INTERVAL_MS = pollIntervalMs(process.env["TERRENCE_ASSESSM
 // naturally, then the shutdown path checkpoints the DB once idle (or after a
 // bounded grace). Startup reconciliation (reconcileInterruptedLocalRuns) is
 // the safety net for executions that could NOT finish (SIGKILL, power loss).
-let draining = false;
-let activeLocalExecutions = 0;
-const activeLocalRunExecutions = new Map<string, number>();
-const localRunReservations = new Set<string>();
-const localRunWaiters: (() => void)[] = [];
-let executionIdleCallback: (() => void) | null = null;
-
 /** Stop the background scheduler from claiming new work (graceful shutdown).
  * Terminal for the process: poll cycles stop re-arming and startWorkerQueue
  * cannot be restarted (isWorkerLoopRunning stays set), which is the intended
  * contract for the shutdown path in index.ts. */
 export function stopWorkerQueue(): void {
-  draining = true;
+  localExecutionLifecycle.stop();
 }
 
 export function workerQueueDraining(): boolean {
-  return draining;
+  return localExecutionLifecycle.isDraining();
 }
 
 /**
@@ -4932,45 +4919,16 @@ export function workerQueueDraining(): boolean {
  * the DB so no execution can write after the checkpoint.
  */
 export async function waitForWorkerDrain(graceMs: number): Promise<boolean> {
-  if (activeLocalExecutions === 0) return Promise.resolve(true);
-  return new Promise((resolve): void => {
-    const timer = setTimeout((): void => {
-      executionIdleCallback = null;
-      resolve(false);
-    }, graceMs);
-    executionIdleCallback = (): void => {
-      clearTimeout(timer);
-      resolve(true);
-    };
-  });
+  return localExecutionLifecycle.waitForDrain(graceMs);
 }
 
 /** Count a local execution so shutdown can wait for it (drain mode). */
 async function trackLocalExecution<T>(promise: Promise<T>): Promise<T> {
-  activeLocalExecutions += 1;
-  const settle = (): void => {
-    activeLocalExecutions -= 1;
-    if (activeLocalExecutions === 0 && executionIdleCallback !== null) {
-      const callback = executionIdleCallback;
-      executionIdleCallback = null;
-      callback();
-    }
-  };
-  return promise.then(
-    (value: T): T => {
-      settle();
-      return value;
-    },
-    (error: unknown): never => {
-      settle();
-      throw error;
-    },
-  );
+  return localExecutionLifecycle.trackExecution(promise);
 }
 
 export function localRunConcurrencyLimit(): number {
-  const configured = Number(process.env["TERRENCE_RUN_CONCURRENCY"] ?? 5);
-  return Number.isSafeInteger(configured) && configured > 0 ? configured : 5;
+  return localExecutionLifecycle.concurrencyLimit();
 }
 
 /** Last lock-blocked log per pending run (issue #575): re-log at most every
@@ -5013,65 +4971,20 @@ export async function localRunQueueDepth(): Promise<number | null> {
     return null;
   }
 }
-function localRunCapacityUsed(): number {
-  return activeLocalRunExecutions.size + localRunReservations.size;
-}
-
 function reserveLocalRunExecution(runId: string): boolean {
-  if (activeLocalRunExecutions.has(runId) || localRunReservations.has(runId)) return true;
-  if (localRunCapacityUsed() >= localRunConcurrencyLimit()) return false;
-  localRunReservations.add(runId);
-  return true;
+  return localExecutionLifecycle.reserveRun(runId);
 }
 
 function releaseLocalRunReservation(runId: string): void {
-  if (!localRunReservations.delete(runId)) return;
-  localRunWaiters.shift()?.();
-}
-
-function acquireLocalRunExecutionSlot(runId: string): Promise<void> {
-  const activeCount = activeLocalRunExecutions.get(runId);
-  if (activeCount !== undefined) {
-    activeLocalRunExecutions.set(runId, activeCount + 1);
-    return Promise.resolve();
-  }
-  if (!localRunReservations.has(runId)) {
-    return (async (): Promise<void> => {
-      while (localRunCapacityUsed() >= localRunConcurrencyLimit()) {
-        await new Promise<void>((resolve): void => { localRunWaiters.push(resolve); });
-      }
-      // Capacity was awaited above; the reservation was never taken on this
-      // path, so there is nothing to convert: mark the slot active directly.
-      activeLocalRunExecutions.set(runId, 1);
-    })();
-  }
-  localRunReservations.delete(runId);
-  activeLocalRunExecutions.set(runId, 1);
-  return Promise.resolve();
-}
-
-function releaseLocalRunExecutionSlot(runId: string): void {
-  const activeCount = activeLocalRunExecutions.get(runId);
-  if (activeCount === undefined) return;
-  if (activeCount > 1) {
-    activeLocalRunExecutions.set(runId, activeCount - 1);
-    return;
-  }
-  activeLocalRunExecutions.delete(runId);
-  localRunWaiters.shift()?.();
+  localExecutionLifecycle.releaseReservation(runId);
 }
 
 async function trackLocalRunExecution<T>(runId: string, work: () => Promise<T>): Promise<T> {
-  await acquireLocalRunExecutionSlot(runId);
-  try {
-    return await work();
-  } finally {
-    releaseLocalRunExecutionSlot(runId);
-  }
+  return localExecutionLifecycle.trackRun(runId, work);
 }
 
 export function activeLocalRunExecutionCount(): number {
-  return activeLocalRunExecutions.size;
+  return localExecutionLifecycle.activeRunExecutionCount();
 }
 
 /**
@@ -5224,9 +5137,7 @@ const ERROR_AFTER_RESTART = new Set([
 ]);
 
 async function pruneInterruptedApplyRecovery(): Promise<void> {
-  const rawRetention = process.env["TERRENCE_RECOVERY_RETENTION_MS"];
-  const parsedRetention = rawRetention === undefined || rawRetention === "" ? 7 * 24 * 60 * 60 * 1000 : Number(rawRetention);
-  const retentionMs = Number.isSafeInteger(parsedRetention) && parsedRetention >= 0 ? parsedRetention : 7 * 24 * 60 * 60 * 1000;
+  const retentionMs = integerSetting("TERRENCE_RECOVERY_RETENTION_MS");
   const cutoff = Date.now() - retentionMs;
   type CleanupEntry = Readonly<{ name: string; isDirectory(): boolean }>;
   const readCleanupEntries = async (root: string, message: string): Promise<readonly CleanupEntry[] | null> => {
@@ -5255,10 +5166,32 @@ async function pruneInterruptedApplyRecovery(): Promise<void> {
         }
       }));
   };
-  // Issue #580: recovery copies are consumed by a successful recover-state
-  // action (which deletes them) and are otherwise never time-pruned: a
-  // remaining copy may be the only record of the infrastructure state, and
-  // must not age out while the operator is away. Only saved plans expire.
+  // Issue #761: keep every unpromoted capture until an operator can inspect
+  // it. A successful promotion retains the bytes and manifest as audit
+  // evidence for the configured recovery retention window, then removes the
+  // whole capture during a later startup sweep. An in-progress
+  // promotion is never pruned.
+  const recoveryRoot = join(storageDir, "recovery");
+  const recoveryEntries = await readCleanupEntries(recoveryRoot, "Could not scan recovery cleanup directory");
+  if (recoveryEntries !== null) {
+    await Promise.all(recoveryEntries
+      .filter((entry): boolean => entry.isDirectory())
+      .map(async (entry): Promise<void> => {
+        const path = join(recoveryRoot, entry.name);
+        const promoted = join(path, RECOVERY_PROMOTED_FILENAME);
+        const promoting = join(path, RECOVERY_PROMOTION_LOCK_FILENAME);
+        try {
+          const [promotedStat, promotingStat] = await Promise.all([
+            stat(promoted).catch((): null => null),
+            stat(promoting).catch((): null => null),
+          ]);
+          if (promotedStat === null || promotingStat !== null || promotedStat.mtimeMs >= cutoff) return;
+          await rm(path, { recursive: true, force: true });
+        } catch (error: unknown) {
+          if (!isMissingFileError(error)) logBestEffortFailure("Could not prune promoted recovery evidence", { path }, error);
+        }
+      }));
+  }
   await pruneSavedPlans();
 }
 
@@ -5449,9 +5382,15 @@ export function startWorkerQueue(): void {
   // Off switch for benchmarks/tests that must run in a process with no
   // background DB activity (the polling loop otherwise injects queries
   // and CPU into measurements).
-  if (envEnabled(process.env["TERRENCE_DISABLE_WORKER"])) return;
+  if (envFlag("TERRENCE_DISABLE_WORKER")) return;
   if (isWorkerLoopRunning) return;
   isWorkerLoopRunning = true;
+  // A previous release or an operator action can leave a committed outbox
+  // row without its companion durable job. Repair those boundedly before the
+  // normal lease poll starts; a current transaction always writes both rows.
+  void repairOutboxJobs().catch((error: unknown): void => {
+    log.error("Outbox repair failed", { error: String(error) });
+  });
   startDurableJobWorker({
     "module-test": runModuleTestJob,
     "stack-configuration": runStackConfigurationJob,
@@ -5460,6 +5399,7 @@ export function startWorkerQueue(): void {
     "explorer-catalog": runExplorerCatalogJob,
     "plan-explanation": runPlanExplanationJob,
     "vcs-webhook": handleVcsWebhookJob,
+    "outbox-delivery": handleOutboxDeliveryJob,
   });
 
   const arm = (cycle: () => Promise<void>, interval: number): void => {

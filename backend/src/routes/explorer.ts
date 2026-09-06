@@ -13,10 +13,12 @@ import {
 } from "../db/schema";
 import { and, asc, count, countDistinct, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { authPlugin } from "../auth";
+import { auditLogValues } from "../lib/audit-trail";
 import { checkOrganizationPermission, pageRequest, pagination } from "../lib/utils";
 import { queueExplorerBulkActionNotification } from "../lib/notifications";
 import { ensureExplorerInventory } from "../lib/explorer-inventory";
 import { isPostgres } from "../db/driver";
+import { isDbQueryBudgetError, withDbQueryBudget, type DbQueryBudgetKind } from "../lib/db-pool-metrics";
 
 type SetObj = Readonly<{ status?: number | string; headers: Record<string, string | number> }>;
 
@@ -26,7 +28,7 @@ type ParamCtx = Readonly<{
   user?: Readonly<typeof users.$inferSelect> | null;
   orgId: string | null;
   teamId: string | null;
-  request: Readonly<{ url: string }>;
+  request: Readonly<{ url: string; signal?: AbortSignal }>;
   set: SetObj;
 }>;
 
@@ -51,6 +53,13 @@ function safeIsoDate(val: unknown): string | null {
 
 function error(status: string, title: string, detail?: string): { errors: { status: string; title: string; detail?: string }[] } {
   return { errors: [{ status, title, ...(detail === undefined ? {} : { detail }) }] };
+}
+
+function queryBudgetError(set: SetObj, cause: unknown): Record<string, unknown> | undefined {
+  if (!isDbQueryBudgetError(cause)) return undefined;
+  (set as { status: number }).status = 503;
+  set.headers["Retry-After"] = "1";
+  return error("503", "Service Unavailable", "Explorer query capacity is busy; retry shortly");
 }
 
 async function canExplore(orgId: string, userId: string | undefined, tokenOrgId: string | null, tokenTeamId: string | null): Promise<boolean> {
@@ -457,8 +466,21 @@ async function indexedExplorerRows(
   query: ExplorerQuery,
   page?: Readonly<{ offset: number; limit: number }>,
   ensureInventory = true,
+  budget: DbQueryBudgetKind = "index",
+  signal?: AbortSignal,
 ): Promise<Readonly<{ rows: ExplorerRow[]; total: number }>> {
-  if (ensureInventory) await ensureExplorerInventory(orgId);
+  return withDbQueryBudget(budget, async (): Promise<Readonly<{ rows: ExplorerRow[]; total: number }>> => {
+    if (ensureInventory) await ensureExplorerInventory(orgId);
+    return indexedExplorerRowsUnbudgeted(orgId, orgName, query, page);
+  }, { signal });
+}
+
+async function indexedExplorerRowsUnbudgeted(
+  orgId: string,
+  orgName: string,
+  query: ExplorerQuery,
+  page?: Readonly<{ offset: number; limit: number }>,
+): Promise<Readonly<{ rows: ExplorerRow[]; total: number }>> {
   if (query.type === "workspaces") {
     const where = indexedWhere(query, orgId, orgName, workspaceInventoryColumns);
     const [rows, total] = await Promise.all([
@@ -518,9 +540,9 @@ async function indexedExplorerRows(
   return { rows: rows.map(membershipCatalogResource), total: total[0]?.total ?? 0 };
 }
 
-async function executeQuery(orgId: string, orgName: string, query: ExplorerQuery, request: Readonly<{ url: string }>): Promise<{ rows: ExplorerRow[]; number: number; size: number; total: number }> {
+async function executeQuery(orgId: string, orgName: string, query: ExplorerQuery, request: Readonly<{ url: string; signal?: AbortSignal }>): Promise<{ rows: ExplorerRow[]; number: number; size: number; total: number }> {
   const { number, size } = pageRequest(request);
-  const indexed = await indexedExplorerRows(orgId, orgName, query, { offset: (number - 1) * size, limit: size });
+  const indexed = await indexedExplorerRows(orgId, orgName, query, { offset: (number - 1) * size, limit: size }, true, "index", request.signal);
   return { rows: applyQuery(indexed.rows, { ...query, filter: [], sort: [] }), number, size, total: indexed.total };
 }
 
@@ -568,6 +590,7 @@ function streamingExplorerCsv(
   orgId: string,
   orgName: string,
   query: ExplorerQuery,
+  signal?: AbortSignal,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const fields = csvFields(query);
@@ -576,17 +599,12 @@ function streamingExplorerCsv(
   let first = true;
   let done = false;
   let reading = false;
-  let initialized = false;
   return new ReadableStream<Uint8Array>({
     async pull(controller): Promise<void> {
       if (done || reading) return;
       reading = true;
       try {
-        if (!initialized) {
-          await ensureExplorerInventory(orgId);
-          initialized = true;
-        }
-        const page = await indexedExplorerRows(orgId, orgName, query, { offset, limit: pageSize }, false);
+        const page = await indexedExplorerRows(orgId, orgName, query, { offset, limit: pageSize }, false, "export", signal);
         const rows = applyQuery(page.rows, { ...query, filter: [], sort: [] });
         if (first || rows.length > 0) controller.enqueue(encoder.encode(csvChunk(fields, rows, first)));
         first = false;
@@ -602,6 +620,22 @@ function streamingExplorerCsv(
         reading = false;
       }
     },
+  });
+}
+
+async function explorerCsvResponse(
+  orgId: string,
+  orgName: string,
+  query: ExplorerQuery,
+  filename: string,
+  signal?: AbortSignal,
+): Promise<Response> {
+  // Admit the inventory refresh before sending headers. Subsequent pages use
+  // the independent export budget so a large download cannot starve normal
+  // explorer/index reads.
+  await withDbQueryBudget("export", async (): Promise<void> => { await ensureExplorerInventory(orgId); }, { signal });
+  return new Response(streamingExplorerCsv(orgId, orgName, query, signal), {
+    headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename=${filename}.csv` },
   });
 }
 
@@ -694,6 +728,7 @@ async function queryWorkspaceIds(
   orgId: string,
   orgName: string,
   query: unknown,
+  signal?: AbortSignal,
 ): Promise<ExplorerWorkspaceSelection | undefined> {
   const parsed = bulkActionQuery(query);
   if (parsed === undefined) return undefined;
@@ -702,13 +737,16 @@ async function queryWorkspaceIds(
     orgName,
     parsed,
     { offset: 0, limit: MAX_EXPLORER_BULK_ACTION_TARGETS + 1 },
+    true,
+    "index",
+    signal,
   );
   return { ids: result.rows.map((row): string => row.id), total: result.total };
 }
 
 export const explorerRoutes = new Elysia({ name: "explorer" })
   .use(authPlugin)
-  .post("/api/v2/organizations/:org_name/explorer/bulk-actions", async ({ params, body, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/organizations/:org_name/explorer/bulk-actions", async ({ params, body, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const organization = await organizationFor(params);
     if (
       organization === undefined
@@ -757,7 +795,14 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
       selectedIds = requestedIds;
       if (selectedIds.some((id): boolean => !candidateIds.has(id))) selectedIds = undefined;
     } else {
-      const selection = await queryWorkspaceIds(organization.id, organization.name, query);
+      let selection: ExplorerWorkspaceSelection | undefined;
+      try {
+        selection = await queryWorkspaceIds(organization.id, organization.name, query, request.signal);
+      } catch (cause: unknown) {
+        const response = queryBudgetError(set, cause);
+        if (response !== undefined) return response;
+        throw cause;
+      }
       selectedIds = selection?.ids;
       selectedTotal = selection?.total;
     }
@@ -776,8 +821,7 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
       explorerBulkActionRecordValues(workspaceId, subject, message, user?.id ?? null, now));
     await db.transaction(async (tx): Promise<void> => {
       await tx.insert(explorerBulkActionRecords).values(records);
-      await tx.insert(auditLogs).values(records.map((record) => ({
-        id: crypto.randomUUID(),
+      await tx.insert(auditLogs).values(records.map((record) => auditLogValues({
         orgId: organization.id,
         userId: user?.id ?? null,
         action: "create",
@@ -788,7 +832,7 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
           toStatus: "pending",
         },
         createdAt: now,
-      })));
+      }) as typeof auditLogs.$inferInsert));
     });
     // Notifications reread the committed Explorer bulk-action rows. Dispatching only
     // after commit prevents a failed transaction from producing a notification
@@ -815,8 +859,14 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
     }
     const query = urlQuery(new URL(request.url));
     if (query === undefined) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "type must be one of workspaces, tf_versions, providers, or modules"); }
-    const result = await executeQuery(org.id, org.name, query, request);
-    return { data: result.rows, ...pagination(request, result.number, result.size, result.total) };
+    try {
+      const result = await executeQuery(org.id, org.name, query, request);
+      return { data: result.rows, ...pagination(request, result.number, result.size, result.total) };
+    } catch (cause: unknown) {
+      const response = queryBudgetError(set, cause);
+      if (response !== undefined) return response;
+      throw cause;
+    }
   })
   .get("/api/v2/organizations/:org_name/explorer/export/csv", async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
@@ -825,7 +875,13 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
     }
     const query = urlQuery(new URL(request.url));
     if (query === undefined) { (set as { status: number }).status = 422; return error("422", "Unprocessable Entity", "type is required"); }
-    return new Response(streamingExplorerCsv(org.id, org.name, query), { headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename=explorer-${query.type}.csv` } });
+    try {
+      return await explorerCsvResponse(org.id, org.name, query, `explorer-${query.type}`, request.signal);
+    } catch (cause: unknown) {
+      const response = queryBudgetError(set, cause);
+      if (response !== undefined) return response;
+      throw cause;
+    }
   })
   .get("/api/v2/organizations/:org_name/explorer/views", async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
@@ -910,10 +966,16 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
     }
     const query = queryObject(view.query, view.queryType);
     if (query === undefined) { (set as { status: number }).status = 500; return error("500", "Internal Server Error"); }
-    const result = await executeQuery(org.id, org.name, query, request);
-    return { data: result.rows, ...pagination(request, result.number, result.size, result.total) };
+    try {
+      const result = await executeQuery(org.id, org.name, query, request);
+      return { data: result.rows, ...pagination(request, result.number, result.size, result.total) };
+    } catch (cause: unknown) {
+      const response = queryBudgetError(set, cause);
+      if (response !== undefined) return response;
+      throw cause;
+    }
   })
-  .get("/api/v2/organizations/:org_name/explorer/views/:view_id/csv", async ({ params, user, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
+  .get("/api/v2/organizations/:org_name/explorer/views/:view_id/csv", async ({ params, user, request, orgId: tokenOrgId, teamId: tokenTeamId, set }: ParamCtx): Promise<unknown> => {
     const org = await organizationFor(params);
     const view = org === undefined ? undefined : await db.query.explorerSavedQueries.findFirst({ where: eq(explorerSavedQueries.id, params["view_id"] ?? "") });
     if (org === undefined || view === undefined || view.orgId !== org.id || !(await canExplore(org.id, user?.id, tokenOrgId, tokenTeamId))) {
@@ -921,6 +983,12 @@ export const explorerRoutes = new Elysia({ name: "explorer" })
     }
     const query = queryObject(view.query, view.queryType);
     if (query === undefined) { (set as { status: number }).status = 500; return error("500", "Internal Server Error"); }
-    return new Response(streamingExplorerCsv(org.id, org.name, query), { headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename=${view.id}.csv` } });
+    try {
+      return await explorerCsvResponse(org.id, org.name, query, view.id, request.signal);
+    } catch (cause: unknown) {
+      const response = queryBudgetError(set, cause);
+      if (response !== undefined) return response;
+      throw cause;
+    }
   })
   ;

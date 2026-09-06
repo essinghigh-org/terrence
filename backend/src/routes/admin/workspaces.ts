@@ -5,7 +5,7 @@ import { workspaces } from "../../db/schema";
 import { eq } from "drizzle-orm";
 import type { ParamCtx } from "./types";
 import type { WsItem } from "./helpers";
-import { deleteWorkspace } from "../../lib/utils";
+import { deleteWorkspace } from "../../lib/lifecycle";
 export const workspacesRoutes = new Elysia({ name: "admin-workspaces" })
   .use(authPlugin)
   .get("/api/v2/admin/workspaces", async ({ user, set }: ParamCtx): Promise<unknown> => {

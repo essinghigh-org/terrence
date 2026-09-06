@@ -12,8 +12,10 @@
  *   3. Otherwise run `terraform init` + `terraform providers schema -json`
  *      against a temp config pinning the target version, and diff the schema
  *      resource/data-source names against the catalog.
- *   4. Existing names keep their status (covered / planned / backend-gap /
- *      admin); NEW names are marked backend-gap; REMOVED names are dropped.
+ *   4. Existing names keep their schema-inventory status (covered / planned /
+ *      backend-gap / admin); NEW names are marked backend-gap; REMOVED names
+ *      are dropped. Behavioral compatibility is defined separately by
+ *      backend/src/data/provider_lifecycle_contract.json.
  *   5. Rewrite both catalog copies and print a summary.
  *
  * Usage:
@@ -146,7 +148,7 @@ function schemaHashesMatch(surface: Surface, resources: Record<string, unknown>,
 }
 
 function commentFor(version: string): string {
-  return `Authoritative hashicorp/tfe v${version} provider surface, generated from \`terraform providers schema -json\` by backend/scripts/refresh-provider-surface.ts. Each entry includes a SHA-256 schema_hash over its full resource/data-source schema. Status values: covered (exercised by provider_e2e E2E), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).`;
+  return `Authoritative hashicorp/tfe v${version} provider surface, generated from \`terraform providers schema -json\` by backend/scripts/refresh-provider-surface.ts. Each entry includes a SHA-256 schema_hash over its full resource/data-source schema. Status values describe schema fixture inclusion only; named behavioral evidence is defined by backend/src/data/provider_lifecycle_contract.json. covered (included in provider_e2e), planned (backend routes exist, not yet in E2E), backend-gap (backend lacks routes), admin (requires site-admin auth, not reachable with org token).`;
 }
 
 async function main(): Promise<void> {

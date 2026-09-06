@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { db } from "../db";
-import { stateOutputIndex } from "../db/schema";
+import { stateOutputIndex, stateVersions } from "../db/schema";
+import { buildStateSummary } from "./state-summary";
 import { parseStatePayload } from "./validation";
+
+export const STATE_OUTPUT_INDEX_BATCH_SIZE = 200;
 
 export function stateOutputIndexRows(
   stateVersionId: string,
@@ -31,9 +34,18 @@ export async function insertStateOutputIndex(
   jsonState: string | null,
   statePayload: string | null,
 ): Promise<void> {
+  const summary = statePayload === null ? null : buildStateSummary(statePayload);
+  await (tx as typeof db).update(stateVersions).set({
+    stateSummary: summary === null ? null : JSON.stringify(summary),
+    ...(summary === null ? {} : { uploadSha256: summary.digest }),
+  }).where(eq(stateVersions.id, stateVersionId));
   const rows = stateOutputIndexRows(stateVersionId, workspaceId, jsonState, statePayload);
   if (rows.length === 0) return;
-  await (tx as typeof db).insert(stateOutputIndex).values(rows).onConflictDoNothing();
+  for (let offset = 0; offset < rows.length; offset += STATE_OUTPUT_INDEX_BATCH_SIZE) {
+    await (tx as typeof db).insert(stateOutputIndex)
+      .values(rows.slice(offset, offset + STATE_OUTPUT_INDEX_BATCH_SIZE))
+      .onConflictDoNothing();
+  }
 }
 
 /** Rebuild the output index for an existing version (issue #578). Upload
@@ -51,7 +63,5 @@ export async function replaceStateOutputIndex(
 ): Promise<void> {
   const store = tx as typeof db;
   await store.delete(stateOutputIndex).where(eq(stateOutputIndex.stateVersionId, stateVersionId));
-  const rows = stateOutputIndexRows(stateVersionId, workspaceId, jsonState, statePayload);
-  if (rows.length === 0) return;
-  await store.insert(stateOutputIndex).values(rows);
+  await insertStateOutputIndex(tx, stateVersionId, workspaceId, jsonState, statePayload);
 }

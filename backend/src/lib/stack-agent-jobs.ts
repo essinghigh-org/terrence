@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, lt } from "drizzle-orm";
+import { and, asc, eq, inArray, lt, sql } from "drizzle-orm";
 import { db } from "../db";
 import {
   agents,
@@ -10,6 +10,7 @@ import {
 import { enqueueDurableJob } from "./durable-jobs";
 import { refreshStackStateLock, removeStackState, saveStackState } from "./stack-worker";
 import type { DeepReadonly } from "./utils";
+import { agentSupportsPhase } from "./agent-protocol";
 
 export type StackAgent = DeepReadonly<typeof agents.$inferSelect>;
 export type StackAgentJob = DeepReadonly<typeof stackAgentJobs.$inferSelect>;
@@ -122,18 +123,26 @@ async function claimStackAgentAttempt(
   acceptedPhases: readonly string[],
   binaries: readonly string[],
 ): Promise<StackAgentClaimAttempt> {
+  const compatiblePhases = acceptedPhases.filter((phase): boolean => agentSupportsPhase(agent, `stack_${phase}`));
+  if (compatiblePhases.length === 0) return { kind: "empty" };
   const candidate = await db.query.stackAgentJobs.findFirst({
     where: and(
       eq(stackAgentJobs.agentPoolId, agent.agentPoolId),
       eq(stackAgentJobs.status, "queued"),
-      inArray(stackAgentJobs.phase, [...acceptedPhases]),
+      inArray(stackAgentJobs.phase, [...compatiblePhases]),
       inArray(stackAgentJobs.iacBinary, binaries),
     ),
     orderBy: [asc(stackAgentJobs.createdAt)],
   });
   if (candidate === undefined) return { kind: "empty" };
   const now = Date.now();
-  const claimed = await db.update(stackAgentJobs).set({ agentId: agent.id, status: "claimed", claimedAt: now, updatedAt: now }).where(and(
+  const claimed = await db.update(stackAgentJobs).set({
+    agentId: agent.id,
+    status: "claimed",
+    claimedAt: now,
+    fencingToken: sql`${stackAgentJobs.fencingToken} + 1`,
+    updatedAt: now,
+  }).where(and(
     eq(stackAgentJobs.id, candidate.id),
     eq(stackAgentJobs.status, "queued"),
   )).returning();
@@ -192,13 +201,18 @@ export async function claimStackAgentJob(
   return undefined;
 }
 
-export async function findClaimedStackAgentJob(agentId: string, jobId: string): Promise<ClaimedStackAgentJob | undefined> {
-  const job = await db.query.stackAgentJobs.findFirst({ where: and(eq(stackAgentJobs.id, jobId), eq(stackAgentJobs.agentId, agentId), eq(stackAgentJobs.status, "claimed")) });
+export async function findClaimedStackAgentJob(agentId: string, jobId: string, fencingToken?: number): Promise<ClaimedStackAgentJob | undefined> {
+  const job = await db.query.stackAgentJobs.findFirst({ where: and(
+    eq(stackAgentJobs.id, jobId),
+    eq(stackAgentJobs.agentId, agentId),
+    eq(stackAgentJobs.status, "claimed"),
+    ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
+  ) });
   return job === undefined ? undefined : jobDetails(job);
 }
 
-export async function heartbeatStackAgentJob(agentId: string, jobId: string): Promise<boolean> {
-  const claimed = await findClaimedStackAgentJob(agentId, jobId);
+export async function heartbeatStackAgentJob(agentId: string, jobId: string, fencingToken?: number): Promise<boolean> {
+  const claimed = await findClaimedStackAgentJob(agentId, jobId, fencingToken);
   if (claimed === undefined) return false;
   const requiresStateLock = (claimed.step.payload ?? {})["requires-state-lock"] === true;
   if (requiresStateLock) {
@@ -211,6 +225,7 @@ export async function heartbeatStackAgentJob(agentId: string, jobId: string): Pr
     eq(stackAgentJobs.id, jobId),
     eq(stackAgentJobs.agentId, agentId),
     eq(stackAgentJobs.status, "claimed"),
+    ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
   )).returning({ id: stackAgentJobs.id });
   return renewed.length > 0;
 }
@@ -269,8 +284,14 @@ async function stackAgentCompletionContext(
   tx: StackAgentTransaction,
   agentId: string,
   jobId: string,
+  fencingToken?: number,
 ): Promise<StackAgentCompletionContext | undefined> {
-  const job = await tx.query.stackAgentJobs.findFirst({ where: and(eq(stackAgentJobs.id, jobId), eq(stackAgentJobs.agentId, agentId), eq(stackAgentJobs.status, "claimed")) });
+  const job = await tx.query.stackAgentJobs.findFirst({ where: and(
+    eq(stackAgentJobs.id, jobId),
+    eq(stackAgentJobs.agentId, agentId),
+    eq(stackAgentJobs.status, "claimed"),
+    ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
+  ) });
   if (job === undefined) return undefined;
   const step = await tx.query.stackRecords.findFirst({ where: and(eq(stackRecords.id, job.stepId), eq(stackRecords.recordType, "stack-deployment-steps")) });
   if (step === undefined) return undefined;
@@ -283,10 +304,14 @@ async function persistStackAgentCompletion(
   job: StackAgentJob,
   completion: StackAgentJobCompletion,
   now: number,
+  fencingToken?: number,
 ): Promise<StackAgentJob | undefined> {
   const jobStatus = completion.status === "completed" ? "completed" : "errored";
   const updated = await tx.update(stackAgentJobs).set({ status: jobStatus, result: { ...completion.result }, errorMessage: completion.errorMessage, completedAt: now, updatedAt: now }).where(and(
-    eq(stackAgentJobs.id, job.id), eq(stackAgentJobs.agentId, agentId), eq(stackAgentJobs.status, "claimed"),
+    eq(stackAgentJobs.id, job.id),
+    eq(stackAgentJobs.agentId, agentId),
+    eq(stackAgentJobs.status, "claimed"),
+    ...(fencingToken === undefined ? [] : [eq(stackAgentJobs.fencingToken, fencingToken)]),
   )).returning();
   return updated[0];
 }
@@ -365,14 +390,15 @@ export async function completeStackAgentJob(
   agentId: string,
   jobId: string,
   completion: StackAgentJobCompletion,
+  fencingToken?: number,
 ): Promise<StackAgentCompletionOutcome | undefined> {
   const outcome = await db.transaction(async (transaction): Promise<StackAgentCompletionOutcome | undefined> => {
     validateStackAgentCompletion(completion);
     const tx = transaction as unknown as StackAgentTransaction;
-    const context = await stackAgentCompletionContext(tx, agentId, jobId);
+    const context = await stackAgentCompletionContext(tx, agentId, jobId, fencingToken);
     if (context === undefined) return undefined;
     const now = Date.now();
-    const completed = await persistStackAgentCompletion(tx, agentId, context.job, completion, now);
+    const completed = await persistStackAgentCompletion(tx, agentId, context.job, completion, now, fencingToken);
     if (completed === undefined) return undefined;
     const run = await stackAgentCompletionRun(tx, context.step);
     if (run === undefined) return undefined;

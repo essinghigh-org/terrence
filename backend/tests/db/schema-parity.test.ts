@@ -4,6 +4,8 @@
 // paths; this test pins them to structural equality so a change to either
 // derivation is caught immediately.
 import { describe, expect, test } from "bun:test";
+import { getTableConfig as sqliteTableConfig, type SQLiteTable } from "drizzle-orm/sqlite-core";
+import { getTableConfig as pgTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as sqliteSchema from "../../src/db/schema-sqlite";
 import { buildPgSchema } from "../../src/db/pg-convert";
 import * as staticPg from "../../src/db/schema-pg";
@@ -132,22 +134,27 @@ describe("pg schema parity", () => {
 
   test("foreign key counts agree between both mirrors and the sqlite schema", () => {
     const runtime = buildPgSchema(sqliteSchema);
-    const sqliteFKSymbol = Symbol.for("drizzle:SQLiteInlineForeignKeys");
-    const pgFKSymbol = Symbol.for("drizzle:PgInlineForeignKeys");
     for (const [exportName, sqliteTable] of Object.entries(sqliteSchema)) {
       if (sqliteTable === null || typeof sqliteTable !== "object" || (sqliteTable as unknown as Record<PropertyKey, unknown>)[COLUMNS] === undefined) continue;
       const name = dbName(sqliteTable as object);
-      const sqliteFks = ((sqliteTable as unknown as Record<PropertyKey, unknown>)[sqliteFKSymbol] as unknown[] | undefined) ?? [];
-      const runtimeFks = ((runtime[name] as unknown as Record<PropertyKey, unknown>)[pgFKSymbol] as unknown[] | undefined) ?? [];
-      const staticFks = ((staticPg[exportName as keyof typeof staticPg] as unknown as Record<PropertyKey, unknown>)[pgFKSymbol] as unknown[] | undefined) ?? [];
+      const sqliteFks = sqliteTableConfig(sqliteTable as SQLiteTable).foreignKeys;
+      const runtimeFks = pgTableConfig(runtime[name] as PgTable).foreignKeys;
+      const staticFks = pgTableConfig(staticPg[exportName as keyof typeof staticPg] as PgTable).foreignKeys;
       expect(runtimeFks.length, `runtime FK count mismatch on ${name}`).toBe(sqliteFks.length);
       expect(staticFks.length, `static FK count mismatch on ${name}`).toBe(sqliteFks.length);
-      const fkDetails = (fks: unknown[]): readonly { onDelete: string; onUpdate: string; columnCount: number }[] =>
-        (fks as readonly Record<string, unknown>[]).map((fk) => ({
-          onDelete: typeof fk["onDelete"] === "string" ? fk["onDelete"] : "no action",
-          onUpdate: typeof fk["onUpdate"] === "string" ? fk["onUpdate"] : "no action",
-          columnCount: Array.isArray((fk as Record<string, unknown>)["columns"]) ? ((fk as Record<string, unknown>)["columns"] as unknown[]).length : Array.isArray((fk as Record<string, unknown>)["foreignColumns"]) ? ((fk as Record<string, unknown>)["foreignColumns"] as unknown[]).length : 0,
-        })).sort((a, b) => a.onDelete.localeCompare(b.onDelete));
+      const fkDetails = (fks: unknown[]): readonly object[] =>
+        fks.map((value) => {
+          const fk = value as { onDelete?: string; onUpdate?: string; reference(): { columns: Col[]; foreignColumns: Col[]; foreignTable: object } };
+          const reference = fk.reference();
+          expect(reference.foreignTable, `${name}: missing target for ${reference.columns.map((column) => column.name).join(",")}`).toBeDefined();
+          return {
+            onDelete: fk.onDelete ?? "no action",
+            onUpdate: fk.onUpdate ?? "no action",
+            columns: reference.columns.map((column) => column.name),
+            foreignColumns: reference.foreignColumns.map((column) => column.name),
+            foreignTable: dbName(reference.foreignTable),
+          };
+        }).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
       expect(fkDetails(runtimeFks), `runtime FK details mismatch on ${name}`).toEqual(fkDetails(sqliteFks));
       expect(fkDetails(staticFks), `static FK details mismatch on ${name}`).toEqual(fkDetails(sqliteFks));
     }
