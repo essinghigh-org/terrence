@@ -71,7 +71,8 @@ Use conventional commits:
 3. Run `bun run typecheck` from the repo root — must produce **0 errors**
 4. Run `bun run test:backend` — the full backend suite must pass
 5. Run `bun run test:frontend` — the full frontend suite must pass
-6. If you touched dependencies: `bun run deps:dedupe:check`, `bun run deps:audit`, and `bun run knip` must pass; CI also enforces `check:bun-version`, `check:bundle-size`, `lint:budget`, and the dependency release-age policy (see `.github/workflows/ci.yml`)
+6. If you touched dependencies: `bun run deps:dedupe:check`, `bun run deps:audit`, `bun run knip`, and `bun run check:supply-chain` must pass; CI also enforces `check:bun-version`, `check:bundle-size`, `lint:budget`, and the dependency release-age policy (see `.github/workflows/ci.yml`).
+   Release builds publish a deterministic `dependency-manifest.json`, SPDX SBOM, and dependency-change summary derived from `bun.lock`. Package overrides are recorded in [`supply-chain/dependency-exceptions.json`](supply-chain/dependency-exceptions.json) with an owner, disposition, and expiry; do not add a blanket audit or license ignore.
 7. Open a PR against `master` using `.github/pull_request_template.md` — including the AI-assistance disclosure when applicable (required by `AGENTS.md`)
 
 ## Architecture Notes

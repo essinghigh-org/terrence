@@ -37,6 +37,8 @@
     "tfectl": "bun run --cwd backend scripts/tfectl.ts",
     "check:bun-version": "bun scripts/check-bun-version.ts",
     "check:bundle-size": "bun scripts/check-bundle-size.ts",
+    "check:supply-chain": "bun scripts/check-supply-chain.ts",
+    "deps:manifest": "bun scripts/supply-chain-manifest.ts",
     "deps:dedupe": "bun dedupe",
     "deps:dedupe:check": "bun dedupe --check",
     "deps:licenses": "bun pm licenses --prod",

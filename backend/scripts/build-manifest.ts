@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 
 export type BuildManifest = Readonly<{
-  schema: 1;
+  schema: 2;
   version: string;
   commit: string;
   image: Readonly<{ reference: string; digest: string }>;
@@ -11,6 +11,12 @@ export type BuildManifest = Readonly<{
   compatibility: Readonly<{
     matrixSha256: string;
     evidence: readonly Readonly<{ file: string; sha256: string }>[];
+  }>;
+  supplyChain: Readonly<{
+    dependencyManifestSha256: string;
+    sbomSha256: string;
+    changeSummarySha256: string;
+    exceptionsSha256: string;
   }>;
 }>;
 
@@ -47,6 +53,10 @@ export async function buildManifest(input: Readonly<{
   sqliteMigrations: string;
   postgresMigrations: string;
   compatibilityMatrix: string;
+  dependencyManifest: string;
+  dependencySbom: string;
+  dependencyChangeSummary: string;
+  dependencyExceptions: string;
   evidenceDirectory?: string;
 }>): Promise<BuildManifest> {
   if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(input.version)) throw new Error("Invalid release version");
@@ -60,7 +70,7 @@ export async function buildManifest(input: Readonly<{
       sha256: await digestFile(file),
     })));
   return {
-    schema: 1,
+    schema: 2,
     version: input.version,
     commit: input.commit,
     image: { reference: input.imageReference, digest: input.imageDigest },
@@ -71,6 +81,12 @@ export async function buildManifest(input: Readonly<{
     compatibility: {
       matrixSha256: await digestFile(input.compatibilityMatrix),
       evidence: evidence.sort((left, right) => left.file.localeCompare(right.file)),
+    },
+    supplyChain: {
+      dependencyManifestSha256: await digestFile(input.dependencyManifest),
+      sbomSha256: await digestFile(input.dependencySbom),
+      changeSummarySha256: await digestFile(input.dependencyChangeSummary),
+      exceptionsSha256: await digestFile(input.dependencyExceptions),
     },
   };
 }
@@ -86,9 +102,14 @@ if (import.meta.main) {
   const commit = argument("commit");
   const imageReference = argument("image");
   const imageDigest = argument("digest");
+  const dependencyManifest = argument("dependency-manifest");
+  const dependencySbom = argument("dependency-sbom");
+  const dependencyChangeSummary = argument("dependency-summary");
+  const dependencyExceptions = argument("dependency-exceptions");
   const evidencePath = argument("evidence-dir");
-  if (output === undefined || version === undefined || commit === undefined || imageReference === undefined || imageDigest === undefined) {
-    throw new Error("Usage: build-manifest.ts --output FILE --version VERSION --commit SHA --image REF --digest sha256:DIGEST [--evidence-dir DIR]");
+  if (output === undefined || version === undefined || commit === undefined || imageReference === undefined || imageDigest === undefined
+    || dependencyManifest === undefined || dependencySbom === undefined || dependencyChangeSummary === undefined || dependencyExceptions === undefined) {
+    throw new Error("Usage: build-manifest.ts --output FILE --version VERSION --commit SHA --image REF --digest sha256:DIGEST --dependency-manifest FILE --dependency-sbom FILE --dependency-summary FILE --dependency-exceptions FILE [--evidence-dir DIR]");
   }
   const root = resolve(import.meta.dir, "../..");
   const manifest = await buildManifest({
@@ -96,6 +117,10 @@ if (import.meta.main) {
     sqliteMigrations: join(root, "backend/drizzle"),
     postgresMigrations: join(root, "backend/drizzle/pg"),
     compatibilityMatrix: join(root, "backend/tests/e2e/cli_matrix.json"),
+    dependencyManifest,
+    dependencySbom,
+    dependencyChangeSummary,
+    dependencyExceptions: resolve(dependencyExceptions),
     ...(evidencePath === undefined ? {} : { evidenceDirectory: resolve(evidencePath) }),
   });
   await Bun.write(output, `${JSON.stringify(manifest, null, 2)}\n`);

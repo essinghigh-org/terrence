@@ -154,6 +154,32 @@ jobs:
           if (renovate.minimumReleaseAge !== "3 days" || renovate.lockFileMaintenance?.enabled !== false || ageAssignments.length !== 1 || activeAge !== "259200") process.exit(1);
           console.log("Dependency release-age policy is enforced; Renovate lock maintenance is disabled because Bun enforces the same guard.");
           NODE
+      - name: Verify controlled supply-chain policy (issue #787)
+        run: bun run check:supply-chain
+      - name: Generate dependency manifest, SBOM, and change summary
+        env:
+          BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ -n "${BASE_REF:-}" ]] && git cat-file -e "${BASE_REF}^{commit}" 2>/dev/null; then
+            args+=(--base-ref "$BASE_REF")
+          fi
+          bun scripts/supply-chain-manifest.ts \
+            --output dependency-manifest.json \
+            --sbom-output dependency-sbom.spdx.json \
+            --summary-output dependency-change-summary.md \
+            "${args[@]}"
+      - name: Upload dependency supply-chain evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dependency-supply-chain
+          path: |
+            dependency-manifest.json
+            dependency-sbom.spdx.json
+            dependency-change-summary.md
+            supply-chain/dependency-exceptions.json
+          retention-days: 90
       - name: Check canonical brand assets
         run: bun run --cwd frontend scripts/brand-assets.tsx --check
       - name: Typecheck
