@@ -27,7 +27,8 @@ jobs:
     # the upstream CI run succeeded. Tag and dispatch events are unaffected.
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     permissions:
-      contents: read
+      contents: write
+      actions: read
       packages: write
 
     steps:
@@ -75,6 +76,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Refuse to overwrite an immutable release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME}"
+          if docker manifest inspect "$image" > /dev/null 2>&1; then
+            echo "Refusing to overwrite existing immutable image tag $image" >&2
+            exit 1
+          fi
+
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
@@ -87,6 +98,7 @@ jobs:
             type=sha,format=short
 
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -101,3 +113,45 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: mode=max
           sbom: true
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push=true
+
+      - name: Download tested CLI/provider evidence from the validated CI run
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh run download "${{ github.event.workflow_run.id }}" --name cli-compatibility-report --dir release-evidence || true
+
+      - name: Write redacted build manifest
+        run: |
+          set -euo pipefail
+          evidence_args=()
+          if [[ -d release-evidence ]]; then evidence_args=(--evidence-dir release-evidence); fi
+          bun backend/scripts/build-manifest.ts \
+            --output build-manifest.json \
+            --version "${{ steps.version.outputs.version }}" \
+            --commit "$(git rev-parse HEAD)" \
+            --image "ghcr.io/${{ github.repository }}:${{ steps.version.outputs.tag }}" \
+            --digest "${{ steps.build.outputs.digest }}" \
+            "${evidence_args[@]}"
+
+      - name: Upload redacted build manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-manifest-${{ steps.version.outputs.tag }}
+          path: build-manifest.json
+          retention-days: 365
+
+      - name: Publish immutable release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Stable image: `ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME}@${{ steps.build.outputs.digest }}`"
+            echo
+            echo "The attached build manifest records the validated commit, image digest, migration digests, and redacted CLI/provider evidence."
+            echo
+            cat build-manifest.json
+          } > release-notes.md
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "Terrence $GITHUB_REF_NAME" --generate-notes --notes-file release-notes.md build-manifest.json
