@@ -64,6 +64,8 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
     sandboxAvailable: false,
     sandboxReason: null,
     sandboxExtraRwAllowed: false,
+    sandboxNetPolicy: "allow",
+    sandboxNetScope: null,
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -224,14 +226,19 @@ export function AdminDashboard({ section }: Readonly<{ section: AdminSection }>)
         const ping = pingResponse as { "signup-enabled"?: boolean };
 // SAFETY: the endpoint contract returns the JSON:API envelope with this data shape.
         const sandbox = (metaResponse as {
-          data?: { attributes?: { "run-sandbox"?: { enabled?: boolean; available?: boolean; reason?: string | null; "extra-rw-allowed"?: boolean } } };
+          data?: { attributes?: { "run-sandbox"?: { enabled?: boolean; available?: boolean; reason?: string | null; "extra-rw-allowed"?: boolean; "net-policy"?: string; "net-scope"?: string | null } } };
         }).data?.attributes?.["run-sandbox"];
+        const rawNetPolicy = sandbox?.["net-policy"];
+        const netPolicy = rawNetPolicy === "deny" || rawNetPolicy === "invalid" ? rawNetPolicy : "allow";
+        const rawNetScope = sandbox?.["net-scope"];
         setSecuritySummary({
           signupEnabled: ping["signup-enabled"] === true,
           sandboxEnabled: sandbox?.enabled === true,
           sandboxAvailable: sandbox?.available === true,
           sandboxReason: isString(sandbox?.reason) ? sandbox.reason : null,
           sandboxExtraRwAllowed: sandbox?.["extra-rw-allowed"] === true,
+          sandboxNetPolicy: netPolicy,
+          sandboxNetScope: isString(rawNetScope) ? rawNetScope : null,
         });
 // SAFETY: the fixture matches the JSON:API envelope the component consumes.
         const samlIsEnabled = (samlResponse as { data?: { attributes?: { enabled?: boolean } } }).data?.attributes?.enabled === true;

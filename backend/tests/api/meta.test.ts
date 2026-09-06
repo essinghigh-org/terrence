@@ -16,6 +16,8 @@ type SandboxMeta = {
         abi: number;
         reason: string | null;
         docs: string;
+        "net-policy"?: string;
+        "net-scope"?: string | null;
       };
     };
   };
@@ -49,6 +51,10 @@ test("GET /api/v2/meta reports the run sandbox status for an authenticated calle
   expect(typeof sandbox?.available).toBe("boolean");
   expect(typeof sandbox?.abi).toBe("number");
   expect(typeof sandbox?.docs).toBe("string");
+  // SEC-10: the effective network policy and its TCP-only scope are exposed.
+  const netPolicy = sandbox?.["net-policy"];
+  expect(netPolicy === "allow" || netPolicy === "deny" || netPolicy === "invalid").toBe(true);
+  expect((netPolicy === "deny") === (sandbox?.["net-scope"] === "tcp-bind-connect")).toBe(true);
 });
 
 test("GET /api/v2/capabilities returns a typed JSON:API resource", async () => {

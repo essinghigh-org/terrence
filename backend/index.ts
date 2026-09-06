@@ -6,6 +6,11 @@ import { sweepUploadTemps } from "./src/lib/upload-sweep";
 import { storageDir } from "./src/db/driver";
 import { shutdownLogging } from "./src/lib/log";
 import { markControlPlaneNodeDraining, startControlPlaneHeartbeat } from "./src/routes/health";
+import { validateRunSandboxConfig } from "./src/lib/sandbox";
+
+// SEC-10: a misspelled TERRENCE_RUN_NET_POLICY must fail boot, not surface
+// at the first run execution.
+validateRunSandboxConfig();
 
 const rawPort = process.env.PORT;
 const port = rawPort !== undefined && rawPort !== "" ? Number(rawPort) : 3000;

@@ -45,6 +45,16 @@ export function runNetDenyEnabled(): boolean {
 }
 
 /**
+ * Fail-fast configuration validation for the run network policy (SEC-10).
+ * `runNetPolicy()` throws on any value other than allow|deny; call this at
+ * process startup so a typo fails boot instead of surfacing at the first
+ * run execution (or, worse, silently meaning something else).
+ */
+export function validateRunSandboxConfig(): void {
+  runNetPolicy();
+}
+
+/**
  * Whether the run sandbox is required on this deployment. Single source of
  * truth shared by worker.ts (fail-closed guard) and health.ts (meta endpoint).
  * Fail-closed: the sandbox is required unless TERRENCE_RUN_SANDBOX is
