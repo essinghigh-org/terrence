@@ -25,7 +25,6 @@ export type AgentHealthSummary = Readonly<{
   failed: number;
 }>;
 
-const FRESH_STATUSES = new Set(["idle", "busy"]);
 
 /**
  * Turn the server's recorded status into a display state without claiming a
@@ -42,13 +41,6 @@ export function agentHealthState(agent: AgentHealthRecord): AgentHealthState {
   if (status === "busy") return "busy";
   if (status === "unknown") return "stale";
   return "unknown";
-}
-
-/** A worker is usable when the server reports a fresh idle or busy agent. */
-export function isUsableAgent(agent: AgentHealthRecord): boolean {
-  return FRESH_STATUSES.has(agent.attributes.status?.toLowerCase() ?? "")
-    && agent.attributes["last-ping-at"] !== null
-    && agent.attributes["last-ping-at"] !== undefined;
 }
 
 export function summarizeAgentHealth(agents: readonly AgentHealthRecord[]): AgentHealthSummary {

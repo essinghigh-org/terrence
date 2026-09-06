@@ -3,6 +3,7 @@ import {
   processHistory,
   processSnapshot,
   recordRequestLatency,
+  resetJourneyMetricsForTests,
   requestFinished,
   requestStarted,
   sampleProcess,
@@ -89,6 +90,7 @@ describe("snapshot", () => {
 
 describe("bounded journey latency", () => {
   test("uses fixed journey labels instead of resource identifiers", () => {
+    resetJourneyMetricsForTests();
     recordRequestLatency("/api/v2/organizations/acme/workspaces", 12);
     recordRequestLatency("/api/v2/runs/run-secret/plan", 20);
     recordRequestLatency("/api/v2/runs/run-secret/plan/log/log-secret", 21);

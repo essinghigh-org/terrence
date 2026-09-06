@@ -42,5 +42,3 @@ export function variableRelationshipResources(body: unknown): VarRelationshipRes
   ) return undefined;
   return { many, resources };
 }
-
-export type { DeepReadonly } from "./types";

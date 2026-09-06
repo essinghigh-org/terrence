@@ -17,7 +17,6 @@ import { join } from "node:path";
  * retaining them in `extensions` for round trips.
  */
 export const PERSISTED_RUN_INPUT_SCHEMA_VERSION = PERSISTED_JSON_SCHEMA_VERSION;
-export const PERSISTED_STATUS_METADATA_SCHEMA_VERSION = PERSISTED_JSON_SCHEMA_VERSION;
 export const PERSISTED_ARTIFACT_SCHEMA_VERSION = PERSISTED_JSON_SCHEMA_VERSION;
 export const PERSISTED_JOB_PAYLOAD_SCHEMA_VERSION = PERSISTED_JSON_SCHEMA_VERSION;
 
@@ -167,19 +166,6 @@ export function parsePersistedStatusMetadata(
     if (typeof value !== "string") persistedFailure(persistedContext(`statusTimestamps.${key}`, rowId, version), "field", "status metadata values must be strings");
   }
   return Object.fromEntries(Object.entries(record).filter(([key]) => key !== "extensions")) as PersistedStatusMetadata;
-}
-
-export function encodePersistedStatusMetadata(value: PersistedStatusMetadata, extensions?: Readonly<Record<string, unknown>>): ReturnType<typeof versionedJson<PersistedStatusMetadata>> {
-  return versionedJson(value, extensions);
-}
-
-export function decodePersistedStatusMetadata(raw: unknown, rowId?: string): Readonly<{ value: PersistedStatusMetadata | null; schemaVersion: number; extensions: Readonly<Record<string, unknown>> }> {
-  const decoded = readVersionedJson<PersistedStatusMetadata>(raw, "statusTimestamps", (value, context) => {
-    const parsed = parsePersistedStatusMetadata(value, PERSISTED_STATUS_METADATA_SCHEMA_VERSION, context.rowId);
-    if (parsed === null) persistedFailure(persistedContext("statusTimestamps", context.rowId), "null", "status metadata envelope cannot contain null data");
-    return parsed;
-  }, { rowId, nullable: true });
-  return { value: decoded.value, schemaVersion: decoded.schemaVersion, extensions: decoded.extensions };
 }
 
 /** Artifact JSON is intentionally opaque to execution, but must be an object. */

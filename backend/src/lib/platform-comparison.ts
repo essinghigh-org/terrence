@@ -14,7 +14,7 @@ function stringValue(value: unknown): string | null {
 }
 
 function pathString(parts: readonly (string | number)[]): string {
-  return parts.map((part): string => typeof part === "number" ? `[${part}]` : part).join(".");
+  return parts.reduce<string>((path, part): string => typeof part === "number" ? `${path}[${part}]` : path === "" ? part : `${path}.${part}`, "");
 }
 
 const SENSITIVE_KEY = /(secret|password|token|credential|private[_-]?key|access[_-]?key|client[_-]?secret|api[_-]?key)/i;
@@ -22,16 +22,28 @@ const UNKNOWN_VALUE = { unknown: true } as const;
 const SENSITIVE_VALUE = { sensitive: true } as const;
 
 function sensitivePathSet(value: unknown): ReadonlySet<string> {
-  if (!Array.isArray(value)) return new Set();
-  const paths = value.flatMap((entry): string[] => {
-    if (!Array.isArray(entry) || !entry.every((part): part is string | number => typeof part === "string" || typeof part === "number")) return [];
-    return [pathString(entry)];
-  });
+  if (value === undefined || value === null) return new Set();
+  // Unknown metadata must not silently turn a sensitive attribute public.
+  if (!Array.isArray(value)) return new Set([""]);
+  const paths: string[] = [];
+  for (const entry of value) {
+    if (!Array.isArray(entry)) return new Set([""]);
+    const parts: (string | number)[] = [];
+    for (const part of entry) {
+      if (typeof part === "string" || typeof part === "number") parts.push(part);
+      else if (record(part) && (part["type"] === "get_attr" || part["type"] === "index")
+        && (typeof part["value"] === "string" || typeof part["value"] === "number")) parts.push(part["value"]);
+      else if (record(part) && part["type"] === "index" && record(part["value"])
+        && (typeof part["value"]["value"] === "string" || typeof part["value"]["value"] === "number")) parts.push(part["value"]["value"]);
+      else return new Set([""]);
+    }
+    paths.push(pathString(parts));
+  }
   return new Set(paths);
 }
 
 function isSensitivePath(path: string, paths: ReadonlySet<string>): boolean {
-  if (paths.has(path)) return true;
+  if (paths.has("") || paths.has(path)) return true;
   for (const prefix of paths) {
     if (path.startsWith(`${prefix}.`) || path.startsWith(`${prefix}[`)) return true;
   }
@@ -53,12 +65,8 @@ function safeValue(value: unknown, path: string, sensitive: ReadonlySet<string>,
   ]));
 }
 
-function containsMarker(value: unknown, marker: "sensitive" | "unknown"): boolean {
-  if (record(value)) {
-    if (value[marker] === true && Object.keys(value).length === 1) return true;
-    return Object.values(value).some((entry): boolean => containsMarker(entry, marker));
-  }
-  return Array.isArray(value) && value.some((entry): boolean => containsMarker(entry, marker));
+function isSensitiveMarker(value: unknown): boolean {
+  return record(value) && value["sensitive"] === true && Object.keys(value).length === 1;
 }
 
 function equalSafe(left: unknown, right: unknown): boolean {
@@ -73,12 +81,12 @@ type AttributeChange = Readonly<{
 }>;
 
 function attributeChanges(before: unknown, after: unknown, path = ""): AttributeChange[] {
-  const beforeSensitive = containsMarker(before, "sensitive");
-  const afterSensitive = containsMarker(after, "sensitive");
+  const beforeSensitive = isSensitiveMarker(before);
+  const afterSensitive = isSensitiveMarker(after);
   if (beforeSensitive || afterSensitive) {
     return equalSafe(before, after)
       ? []
-      : [{ path: path || "<root>", before: beforeSensitive ? SENSITIVE_VALUE : before, after: afterSensitive ? SENSITIVE_VALUE : after, changed: null }];
+      : [{ path: path || "<root>", before: SENSITIVE_VALUE, after: SENSITIVE_VALUE, changed: null }];
   }
   if (equalSafe(before, after)) return [];
   if (record(before) || record(after)) {
@@ -103,6 +111,7 @@ type ParsedStateResource = Readonly<{
   provider: string;
   identity: string;
   attributes: unknown;
+  sensitivePaths: ReadonlySet<string>;
   identitySource: "provider-id" | "address";
 }>;
 
@@ -126,7 +135,8 @@ function parsedStateResources(state: JsonRecord): ParsedStateResource[] {
     return raw["instances"].flatMap((rawInstance, index): ParsedStateResource[] => {
       if (!record(rawInstance)) return [];
       const attributes = record(rawInstance["attributes"]) ? rawInstance["attributes"] : {};
-      const id = stringValue(attributes["id"]);
+      const sensitivePaths = sensitivePathSet(rawInstance["sensitive_attributes"]);
+      const id = isSensitivePath("id", sensitivePaths) ? null : stringValue(attributes["id"]);
       return [{
         address: resourceAddress(raw, rawInstance, index),
         mode,
@@ -134,6 +144,7 @@ function parsedStateResources(state: JsonRecord): ParsedStateResource[] {
         provider,
         identity: id === null ? `${provider}|${type}|${resourceAddress(raw, rawInstance, index)}` : `${provider}|${type}|${id}`,
         attributes,
+        sensitivePaths,
         identitySource: id === null ? "address" : "provider-id",
       }];
     });
@@ -220,9 +231,10 @@ export function compareStateVersions(before: StateVersionComparisonInput, after:
       continue;
     }
     matchedBefore.add(previous.address);
+    const sensitivePaths = new Set([...previous.sensitivePaths, ...resource.sensitivePaths]);
     const differences = attributeChanges(
-      safeValue(previous.attributes, "", sensitivePathSet(null), 0),
-      safeValue(resource.attributes, "", sensitivePathSet(null), 0),
+      safeValue(previous.attributes, "", sensitivePaths, 0),
+      safeValue(resource.attributes, "", sensitivePaths, 0),
     );
     if (previous.address !== resource.address) {
       moved.push({ from: previous.address, to: resource.address, identity: resource.identity, identitySource: resource.identitySource });

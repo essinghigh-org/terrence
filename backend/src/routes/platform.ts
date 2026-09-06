@@ -338,17 +338,23 @@ export const platformRoutes = new Elysia({ name: "platform" })
     return resourceList(rows, "import-workbenches");
   })
   .get("/api/v2/import-workbenches/:workbench_id", async (context: ParamContext): Promise<unknown> => {
-    const row = await getPlatformArtifact(context.params["workbench_id"] ?? "", "import-workbench", context.orgId ?? "");
+    const candidate = await db.query.durableJobs.findFirst({ where: and(eq(durableJobs.id, context.params["workbench_id"] ?? ""), eq(durableJobs.kind, "import-workbench")) });
+    if (candidate === undefined) return notFound(context.set);
+    const workspaceId = typeof candidate.payload["workspaceId"] === "string" ? candidate.payload["workspaceId"] : "";
+    const workspace = await workspaceByPermission(workspaceId, context, "plan");
+    if (workspace === undefined) return notFound(context.set);
+    const row = await getPlatformArtifact(candidate.id, "import-workbench", workspace.orgId);
     if (row === undefined) return notFound(context.set);
-    const workspaceId = typeof row.payload["workspaceId"] === "string" ? row.payload["workspaceId"] : "";
-    if (await workspaceByPermission(workspaceId, context, "plan") === undefined) return notFound(context.set);
     return { data: artifactResource(row, "import-workbenches") };
   })
   .post("/api/v2/import-workbenches/:workbench_id/export", async (context: ParamContext): Promise<unknown> => {
-    const row = await getPlatformArtifact(context.params["workbench_id"] ?? "", "import-workbench", context.orgId ?? "");
+    const candidate = await db.query.durableJobs.findFirst({ where: and(eq(durableJobs.id, context.params["workbench_id"] ?? ""), eq(durableJobs.kind, "import-workbench")) });
+    if (candidate === undefined) return notFound(context.set);
+    const workspaceId = typeof candidate.payload["workspaceId"] === "string" ? candidate.payload["workspaceId"] : "";
+    const workspace = await workspaceByPermission(workspaceId, context, "plan");
+    if (workspace === undefined) return notFound(context.set);
+    const row = await getPlatformArtifact(candidate.id, "import-workbench", workspace.orgId);
     if (row === undefined) return notFound(context.set);
-    const workspaceId = typeof row.payload["workspaceId"] === "string" ? row.payload["workspaceId"] : "";
-    if (await workspaceByPermission(workspaceId, context, "plan") === undefined) return notFound(context.set);
     const generated = Array.isArray(row.payload["generated-configuration"]) ? row.payload["generated-configuration"] : [];
     const text = generated.filter((line): line is string => typeof line === "string").join("\n\n");
     context.set.headers["Content-Type"] = "text/plain; charset=utf-8";
@@ -579,37 +585,7 @@ export const platformRoutes = new Elysia({ name: "platform" })
     const expectedDigest = typeof manifestRecord["selection-digest"] === "string" ? manifestRecord["selection-digest"] as string : "";
     const suppliedDigest = stringAttribute(attrs, "selection-digest", "selectionDigest");
     if (suppliedDigest !== null && suppliedDigest !== expectedDigest) return errorDocument(context.set, 409, "The selection manifest digest does not match the preview", "Selection Changed");
-    const targetIdsRaw = manifestRecord["target-ids"];
-    const targetIds = Array.isArray(targetIdsRaw) ? targetIdsRaw.filter((id: unknown): id is string => typeof id === "string") : [];
-    const action = typeof manifestRecord["action"] === "string" ? manifestRecord["action"] as string : "assess";
-    const perTarget: Record<string, unknown>[] = [];
-    for (const targetId of targetIds) {
-      const target = await workspaceByPermission(targetId, context, action === "export-metadata" || action === "assess" ? "read" : "admin");
-      perTarget.push(target === undefined
-        ? { workspaceId: targetId, status: "failed", reason: "permission-revoked-before-execution" }
-        : { workspaceId: targetId, status: action === "export-metadata" || action === "assess" ? "succeeded" : "queued", action });
-    }
-    const idempotency = context.request.headers.get("Idempotency-Key");
-    const artifact = await createPlatformArtifact({
-      kind: "fleet-operation",
-      organizationId: organization.id,
-      actorId: context.user?.id ?? null,
-      dedupeKey: `fleet:${previewId}:${idempotency ?? expectedDigest}`,
-      payload: {
-        phase: "execution",
-        action,
-        "preview-id": previewId,
-        manifest,
-        "per-target": perTarget,
-        "permission-failures": payload["permission-failures"] ?? [],
-        "canceled-remaining": false,
-        "executed-at": new Date().toISOString(),
-      },
-      status: perTarget.some((target): boolean => target["status"] === "failed") ? "partial-failure" : "completed",
-    });
-    await updatePlatformArtifact(preview.id, "fleet-operation", organization.id, { status: "committed", payload: { ...payload, "committed-operation-id": artifact.id } });
-    context.set.status = 201;
-    return { data: fleetResource(artifact) };
+    return errorDocument(context.set, 501, "Fleet execution is not implemented. This manifest remains a preview; no target actions have been queued or completed.", "Fleet Execution Unavailable");
   })
   .get("/api/v2/organizations/:org_name/fleet-operations/:operation_id", async (context: ParamContext): Promise<unknown> => {
     const organization = await organizationForName(context.params["org_name"] ?? "");
@@ -673,33 +649,7 @@ export const platformRoutes = new Elysia({ name: "platform" })
     if (row === undefined) return notFound(context.set);
     const payload = artifactPayload(row);
     if (payload["stopped"] === true) return errorDocument(context.set, 409, "Promotion was explicitly stopped; create a deliberate retry from the recorded stage", "Promotion Stopped");
-    const stages = Array.isArray(payload["target-graph"]) ? payload["target-graph"].map((stage): Record<string, unknown> => stage as Record<string, unknown>) : [];
-    const retryFailed = attributesFrom(context.body)["retry-failed"] === true;
-    const stage = stages.find((candidate): boolean => candidate["status"] === "pending" || (retryFailed && candidate["status"] === "failed"));
-    if (stage === undefined) return { data: promotionResource(row), meta: { "promotion-complete": true } };
-    const workspaceId = typeof stage["workspace-id"] === "string" ? stage["workspace-id"] : "";
-    const workspace = await workspaceByPermission(workspaceId, context, "plan");
-    if (workspace === undefined || workspace.orgId !== organization.id) {
-      stage["status"] = "failed";
-      stage["reason"] = "permission-revoked-at-execution";
-      await updatePlatformArtifact(row.id, "promotion", organization.id, { status: "partial-failure", payload: { ...payload, "failed-stage": stage["stage-number"], "target-graph": stages } });
-      return errorDocument(context.set, 403, "Promotion stage is no longer authorized", "Promotion Stage Failed");
-    }
-    const configuredVersion = payload["configuration-version-ids"] !== null && typeof payload["configuration-version-ids"] === "object" && !Array.isArray(payload["configuration-version-ids"]) ? (payload["configuration-version-ids"] as Record<string, unknown>)[workspaceId] : undefined;
-    const configuration = typeof configuredVersion === "string" ? await db.query.configurationVersions.findFirst({ where: and(eq(configurationVersions.id, configuredVersion), eq(configurationVersions.workspaceId, workspaceId)) }) : await latestConfigurationVersion(workspaceId);
-    if (configuration === undefined) {
-      stage["status"] = "failed";
-      stage["reason"] = "target-configuration-version-unavailable";
-      await updatePlatformArtifact(row.id, "promotion", organization.id, { status: "partial-failure", payload: { ...payload, "failed-stage": stage["stage-number"], "target-graph": stages } });
-      return errorDocument(context.set, 409, "Target has no configuration version for a fresh plan", "Promotion Stage Failed");
-    }
-    const runId = newResourceId("run");
-    await db.insert(runs).values({ id: runId, workspaceId, configurationVersionId: configuration.id, status: "pending", operation: "plan_only", planOnly: true, autoApply: false, message: `Promotion ${row.id} digest ${payload["configuration-digest"] as string}`, createdBy: context.user?.id ?? null, createdAt: Date.now() });
-    stage["status"] = "queued";
-    stage["run-id"] = runId;
-    const updated = await updatePlatformArtifact(row.id, "promotion", organization.id, { status: "in-progress", payload: { ...payload, "target-graph": stages, "last-advanced-at": new Date().toISOString() } });
-    if (updated === undefined) return notFound(context.set);
-    return { data: promotionResource(updated), meta: { "created-run-id": runId, "target-configuration-version-id": configuration.id, "fresh-plan-required": true } };
+    return errorDocument(context.set, 501, "Promotion execution is unavailable until configuration digests and stage completion can be verified. Use the normal run endpoints for reviewed configurations.", "Promotion Execution Unavailable");
   })
   .post("/api/v2/organizations/:org_name/promotions/:promotion_id/stop", async (context: ParamContext): Promise<unknown> => {
     const organization = await organizationForName(context.params["org_name"] ?? "");

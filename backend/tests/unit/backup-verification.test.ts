@@ -2,8 +2,12 @@ import { afterAll, describe, expect, it } from "bun:test";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { checkpointWal } from "../../src/db";
-import { databaseUrl, storageDir } from "../../src/db/driver";
+import { Database } from "bun:sqlite";
+import { drizzle } from "drizzle-orm/bun-sqlite";
+import { migrate } from "drizzle-orm/bun-sqlite/migrator";
+import { createCipheriv, randomBytes } from "node:crypto";
+import * as schema from "../../src/db/schema-sqlite";
+import { storageDir } from "../../src/db/driver";
 import {
   BACKUP_STATUS_FILE,
   createBackupManifestForSource,
@@ -21,12 +25,31 @@ describe("backup verification and restore rehearsal", () => {
   });
 
   it("creates a checksummed manifest and verifies a copied SQLite backup", async () => {
-    checkpointWal();
     work = await mkdtemp(join(tmpdir(), "terrence-backup-test-"));
     const backupStorage = join(work, "storage");
-    await cp(storageDir, backupStorage, { recursive: true, force: true, preserveTimestamps: true });
+    await mkdir(backupStorage, { recursive: true });
     const backupDatabase = join(backupStorage, "terrence.db");
-    await cp(databaseUrl.replace(/^file:/, ""), backupDatabase, { force: true, preserveTimestamps: true });
+    // Build a complete SQLite fixture independently of the shared application
+    // DB, which can be PostgreSQL and contains intentionally broken test data.
+    const key = randomBytes(32);
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
+    const ciphertext = Buffer.concat([cipher.update("backup-secret", "utf8"), cipher.final()]);
+    const encrypted = ["enc", "v1", iv.toString("base64"), cipher.getAuthTag().toString("base64"), ciphertext.toString("base64")].join(":");
+    await writeFile(join(backupStorage, ".encryption-key"), key.toString("base64"), { mode: 0o600 });
+    const archivePath = join(backupStorage, "configuration.tar.gz");
+    await writeFile(archivePath, "backup archive fixture", { mode: 0o600 });
+    const sqlite = new Database(backupDatabase, { create: true });
+    try {
+      const fixture = drizzle(sqlite, { schema });
+      migrate(fixture, { migrationsFolder: join(import.meta.dir, "../../drizzle") });
+      await fixture.insert(schema.organizations).values({ id: "org-backup", name: "backup" });
+      await fixture.insert(schema.workspaces).values({ id: "ws-backup", orgId: "org-backup", name: "backup" });
+      await fixture.insert(schema.configurationVersions).values({ id: "cv-backup", workspaceId: "ws-backup", status: "uploaded", archivePath });
+      await fixture.insert(schema.workspaceVariables).values({ id: "var-backup", workspaceId: "ws-backup", key: "secret", value: "", valueEncrypted: encrypted, sensitive: true });
+    } finally {
+      sqlite.close();
+    }
     const created = await createBackupManifestForSource(
       { sourcePath: backupStorage, storagePath: backupStorage, databasePath: backupDatabase },
       { outputDirectory: work },
@@ -39,9 +62,12 @@ describe("backup verification and restore rehearsal", () => {
     expect(JSON.stringify(created.manifest)).not.toContain("ENCRYPTION_PASSWORD");
 
     const report = await verifyBackupIntegrity({ sourcePath: work });
+    expect(report.checks.filter((check) => check.status === "fail")).toEqual([]);
     expect(report.passed).toBe(true);
     expect(report.checks.find((check) => check.name === "database-integrity")?.status).toBe("pass");
     expect(report.checks.find((check) => check.name === "key-identifiers")?.status).toBe("pass");
+    expect(report.checks.find((check) => check.name === "encrypted-records")?.detail).toBe("1 selected encrypted record(s) decrypted");
+    expect(report.checks.find((check) => check.name === "artifact-references")?.detail).toBe("1 referenced artifact(s) are readable");
 
     // A colocated SQLite file is a supported source form as long as its
     // manifest is beside it.
@@ -56,6 +82,7 @@ describe("backup verification and restore rehearsal", () => {
       source: { sourcePath: work },
       requireCli: false,
     });
+    expect(rehearsal.checks.filter((check) => check.status === "fail")).toEqual([]);
     expect(rehearsal.passed).toBe(true);
     expect(rehearsal.checks.find((check) => check.name === "schema-migration")?.status).toBe("pass");
     expect(rehearsal.lastVerifiedRestoreAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);

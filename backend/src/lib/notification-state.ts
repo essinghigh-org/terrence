@@ -207,10 +207,6 @@ export async function notificationSnoozedForTrigger(
   return (await notificationSnooze(configurationId, now)) !== null;
 }
 
-export function isCriticalNotificationTrigger(trigger: string): boolean {
-  return CRITICAL_NOTIFICATION_TRIGGERS.has(trigger);
-}
-
 export const MAX_NOTIFICATION_SNOOZE_MS = SNOOZE_MAX_MS;
 
 /** Delete expired dedup rows and stale breaker rows. Called opportunistically

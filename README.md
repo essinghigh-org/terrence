@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="frontend/public/brand/terrence-welcome.svg" width="240" height="210" alt="Terrence, a blue infrastructure companion with bracket-shaped ears, waving hello.">
+  <img src="frontend/public/brand/terrence-ecosystem.svg" width="320" height="280" alt="Terrence with Terraform and OpenTofu orbiting nearby.">
 </p>
 
 <h1 align="center">
@@ -113,7 +113,7 @@ Our infrastructure companion has bracket-shaped ears, a blue coat, and a few too
   <img src="frontend/public/brand/terrence-guide.svg" width="144" height="126" alt="Terrence reading a guide.">
 </p>
 
-The [seven SVG poses](frontend/public/brand/) share one character and palette. The [brand guide](frontend/src/components/brand/README.md) covers illustration placement, typography, spacing, and regenerating the assets. If you're contributing to the UI, reuse the shared character and controls to keep Terrence consistent.
+The [SVG poses](frontend/public/brand/) share one character and palette. The [brand guide](frontend/src/components/brand/README.md) covers illustration placement, typography, spacing, and regenerating the assets. If you're contributing to the UI, reuse the shared character and controls to keep Terrence consistent.
 
 ## License
 

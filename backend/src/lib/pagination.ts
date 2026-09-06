@@ -12,7 +12,6 @@ export function pageRequest(request: RequestWithUrl): { number: number; size: nu
 }
 
 /** Cursor pagination (303-305): keyset helper for enormous tables. */
-/** @lintignore Intentional surface: large-table consumers opt into cursor pagination. */
 export function cursorPagination(
   request: RequestWithUrl,
   cursor: string | null,

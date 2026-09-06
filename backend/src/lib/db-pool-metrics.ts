@@ -217,14 +217,12 @@ export function poolQueryEnd(startMs: number): number {
   return durationMs;
 }
 
-/** @lintignore - wired in follow-up transaction instrumentation */
 export function poolTransactionStart(): number {
   pendingTransactions += 1;
   totalTransactions += 1;
   return performance.now();
 }
 
-/** @lintignore - wired in follow-up transaction instrumentation */
 export function poolTransactionEnd(startMs: number): void {
   pendingTransactions = Math.max(0, pendingTransactions - 1);
   const durationMs = performance.now() - startMs;
@@ -282,7 +280,6 @@ export function poolMetrics(driver: "sqlite" | "postgres", maxConnections: numbe
 }
 
 /** Test seam: clear all samples and counters. */
-/** @lintignore */
 export function _resetPoolMetrics(): void {
   pendingQueries = 0;
   pendingTransactions = 0;

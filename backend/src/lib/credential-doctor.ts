@@ -277,7 +277,8 @@ function awsAuthorization(
 
 function xmlValue(body: string, name: string): string | undefined {
   const value = new RegExp(`<${name}>([^<]{1,4096})</${name}>`).exec(body)?.[1];
-  return value?.replaceAll("&amp;", "&").replaceAll("&lt;", "<").replaceAll("&gt;", ">");
+  const entities: Readonly<Record<string, string>> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+  return value?.replace(/&(amp|lt|gt|quot|apos);/g, (match: string, entity: string): string => entities[entity] ?? match);
 }
 
 async function awsAccess(

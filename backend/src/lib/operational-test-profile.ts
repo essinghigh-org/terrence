@@ -116,9 +116,10 @@ export function normalizeOperationalTestSeed(value: string | undefined): string 
 export function operationalFixtureSuffix(seed: string, component?: string): string {
   const normalized = normalizeOperationalTestSeed(seed);
   const suffix = component === undefined ? normalized : `${normalized}-${component}`;
-  if (suffix.length <= 48) return suffix;
+  // tfe_project names allow 40 characters including the pe2e-proj- prefix.
+  if (suffix.length <= 30) return suffix;
   const digest = createHash("sha256").update(suffix).digest("hex").slice(0, 10);
-  return `${suffix.slice(0, 37)}-${digest}`;
+  return `${suffix.slice(0, 19)}-${digest}`;
 }
 
 /** Create a unique directory below the supplied parent without touching normal instance storage. */

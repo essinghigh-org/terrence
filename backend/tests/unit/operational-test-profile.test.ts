@@ -39,7 +39,9 @@ describe("operational test profiles", () => {
 
   test("derives repeatable bounded fixture names", () => {
     expect(operationalFixtureSuffix("eng21", "terraform")).toBe("eng21-terraform");
-    expect(operationalFixtureSuffix("a".repeat(32), "terraform").length).toBeLessThanOrEqual(48);
+    expect(operationalFixtureSuffix("a".repeat(32), "terraform").length).toBeLessThanOrEqual(30);
+    expect(`pe2e-proj-${operationalFixtureSuffix("eng21-terraform-current", "terraform")}`.length).toBeLessThanOrEqual(40);
+    expect(operationalFixtureSuffix("a".repeat(32), "terraform")).not.toBe(operationalFixtureSuffix("a".repeat(31) + "b", "terraform"));
     expect(operationalFixtureSuffix("a".repeat(32), "terraform")).toBe(operationalFixtureSuffix("a".repeat(32), "terraform"));
   });
 

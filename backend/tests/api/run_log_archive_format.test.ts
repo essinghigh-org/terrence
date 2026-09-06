@@ -29,7 +29,7 @@ test("indexed archives select chunks, preserve byte windows and legacy data, and
 
     // Fail after one chunk has reached the temporary file. The old archive
     // must remain intact and the live rows must remain available to retention.
-    const handle = await open(path, "r");
+    const handle = await open(import.meta.filename, "r");
     const prototype = Object.getPrototypeOf(handle) as typeof handle;
     await handle.close();
     // Invoked with the current file handle via apply below.

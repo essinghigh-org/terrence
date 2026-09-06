@@ -1,7 +1,7 @@
 /** Capability issuance and validation helpers. */
 import type { RequestWithUrl } from "./types";
 import type { AuthorizedRunCapability } from "./authorized-resources";
-import { runLogURL, findLogCapability, signedApiURL, validSignedApiURL, apiURL } from "./utils";
+import { runLogURL, findLogCapability, signedApiURL, validSignedApiURL } from "./utils";
 
 export type RunLogPhase = "plan" | "apply";
 export type RunLogCapability = "run-read" | "admin";
@@ -19,5 +19,5 @@ export function issueRunLogCapability(
   return runLogURL(authorized.run, phase, request);
 }
 
-export { apiURL, findLogCapability, signedApiURL, validSignedApiURL };
+export { findLogCapability, signedApiURL, validSignedApiURL };
 export type { RequestWithUrl } from "./types";

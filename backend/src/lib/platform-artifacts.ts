@@ -1,6 +1,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db";
 import { durableJobs } from "../db/schema";
+import { jsonExtract } from "./db-json";
 import { newResourceId } from "./resource-id";
 import { canonicalJson, sha256Hex } from "./run-provenance";
 
@@ -41,10 +42,6 @@ function organizationIdOf(payload: ArtifactPayload): string | null {
   return typeof payload["organizationId"] === "string" ? payload["organizationId"] : null;
 }
 
-function workspaceIdOf(payload: ArtifactPayload): string | null {
-  return typeof payload["workspaceId"] === "string" ? payload["workspaceId"] : null;
-}
-
 function boundedPayload(payload: ArtifactPayload): Record<string, unknown> {
   const value = JSON.parse(canonicalJson(payload)) as unknown;
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -78,9 +75,12 @@ export async function createPlatformArtifact(input: Readonly<{
     ...(input.actorId === undefined ? {} : { actorId: input.actorId }),
     schemaVersion: PLATFORM_ARTIFACT_SCHEMA_VERSION,
   });
-  if (input.dedupeKey !== undefined) {
+  const dedupeKey = input.dedupeKey === undefined ? undefined : platformArtifactDigest({
+    organizationId: input.organizationId, workspaceId: input.workspaceId ?? null, key: input.dedupeKey,
+  });
+  if (dedupeKey !== undefined) {
     const existing = await db.query.durableJobs.findFirst({
-      where: and(eq(durableJobs.kind, input.kind), eq(durableJobs.dedupeKey, input.dedupeKey)),
+      where: and(eq(durableJobs.kind, input.kind), eq(durableJobs.dedupeKey, dedupeKey)),
     });
     if (existing !== undefined && isArtifactKind(existing.kind)) return existing as PlatformArtifact;
   }
@@ -88,7 +88,7 @@ export async function createPlatformArtifact(input: Readonly<{
   const row: typeof durableJobs.$inferInsert = {
     id: newResourceId("platform"),
     kind: input.kind,
-    dedupeKey: input.dedupeKey ?? null,
+    dedupeKey: dedupeKey ?? null,
     status: input.status ?? "completed",
     payload,
     payloadSchemaVersion: PLATFORM_ARTIFACT_SCHEMA_VERSION,
@@ -105,9 +105,9 @@ export async function createPlatformArtifact(input: Readonly<{
   try {
     await db.insert(durableJobs).values(row);
   } catch (error: unknown) {
-    if (input.dedupeKey === undefined) throw error;
+    if (dedupeKey === undefined) throw error;
     const existing = await db.query.durableJobs.findFirst({
-      where: and(eq(durableJobs.kind, input.kind), eq(durableJobs.dedupeKey, input.dedupeKey)),
+      where: and(eq(durableJobs.kind, input.kind), eq(durableJobs.dedupeKey, dedupeKey)),
     });
     if (existing === undefined || !isArtifactKind(existing.kind)) throw error;
     return existing as PlatformArtifact;
@@ -132,15 +132,15 @@ export async function listPlatformArtifacts(input: Readonly<{
   limit?: number;
 }>): Promise<readonly PlatformArtifact[]> {
   const rows = await db.query.durableJobs.findMany({
-    where: eq(durableJobs.kind, input.kind),
+    where: and(
+      eq(durableJobs.kind, input.kind),
+      eq(jsonExtract(durableJobs.payload, "$.organizationId"), input.organizationId),
+      input.workspaceId == null ? undefined : eq(jsonExtract(durableJobs.payload, "$.workspaceId"), input.workspaceId),
+    ),
     orderBy: [desc(durableJobs.createdAt), desc(durableJobs.id)],
     limit: Math.min(Math.max(input.limit ?? 200, 1), 500),
   });
-  return rows.filter((row): row is PlatformArtifact =>
-    isArtifactKind(row.kind)
-    && organizationIdOf(row.payload) === input.organizationId
-    && (input.workspaceId === undefined || input.workspaceId === null || workspaceIdOf(row.payload) === input.workspaceId),
-  );
+  return rows as PlatformArtifact[];
 }
 
 export async function updatePlatformArtifact(

@@ -46,7 +46,7 @@ describe("credential doctor API", () => {
     });
     setExternalUrlTransportForTests(async (target, init): Promise<Response> => {
       if (init.method === "HEAD") return new Response(null, { status: 200 });
-      if (target.url.includes("login.microsoftonline.com")) return Response.json({ access_token: "provider-access-token" });
+      if (new URL(target.url).hostname === "login.microsoftonline.com") return Response.json({ access_token: "provider-access-token" });
       return Response.json({ subscriptionId: "subscription", tenantId: "tenant", displayName: "Doctor subscription", state: "Enabled" });
     });
   });

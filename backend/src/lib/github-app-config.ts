@@ -281,13 +281,6 @@ export async function getGitHubAppApiUrl(): Promise<string | null> {
   return safeHttpUrl(integrationSetting("GITHUB_APP_API_URL"), "https://api.github.com");
 }
 
-/** Same as getGitHubAppConfiguration, but does not fall back to environment.
- * Runtime token and webhook paths use this to honour a deliberate disconnect. */
-export async function getPersistedGitHubAppConfiguration(): Promise<GitHubAppConfiguration | null> {
-  const record = await loadRecord();
-  return record?.status === "active" ? record.configuration : null;
-}
-
 export async function getGitHubWebhookSecret(): Promise<string | null> {
   const record = await loadRecord();
   if (record !== null) return record.status === "active" ? record.configuration?.webhookSecret ?? null : null;

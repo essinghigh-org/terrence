@@ -92,12 +92,6 @@ export const OPINIONATED_POLICY_PACKS: readonly PolicyPackDefinition[] = [
   },
 ];
 
-export type RunbookMatch = Readonly<{
-  tags: readonly string[];
-  status: string;
-  error: string;
-}>;
-
 export function normalizedSearchText(value: unknown): string {
   return typeof value === "string" ? value.trim().toLocaleLowerCase() : "";
 }

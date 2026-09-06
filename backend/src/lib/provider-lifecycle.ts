@@ -117,23 +117,3 @@ export function assertLifecycleEvidence(contract: LifecycleContract, evidence: L
   const gaps = lifecycleEvidenceGaps(contract, evidence);
   if (gaps.length > 0) throw new Error(`Incomplete provider lifecycle evidence:\n${gaps.map((gap): string => `- ${gap}`).join("\n")}`);
 }
-
-export function isLifecycleContract(value: unknown): value is LifecycleContract {
-  if (value === null || typeof value !== "object") return false;
-  const candidate = value as Record<string, unknown>;
-  return typeof candidate["version"] === "number"
-    && typeof candidate["name"] === "string"
-    && Array.isArray(candidate["behaviors"])
-    && candidate["behaviors"].every((item: unknown): boolean => typeof item === "string")
-    && Array.isArray(candidate["fixtures"])
-    && candidate["fixtures"].every((item: unknown): boolean => {
-      if (item === null || typeof item !== "object") return false;
-      const fixture = item as Record<string, unknown>;
-      return typeof fixture["id"] === "string"
-        && typeof fixture["label"] === "string"
-        && Array.isArray(fixture["resources"])
-        && fixture["resources"].every((entry: unknown): boolean => typeof entry === "string")
-        && Array.isArray(fixture["required_behaviors"])
-        && fixture["required_behaviors"].every((entry: unknown): boolean => typeof entry === "string");
-    });
-}

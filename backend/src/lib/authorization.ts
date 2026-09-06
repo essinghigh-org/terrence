@@ -9,21 +9,11 @@
 export {
   checkOrgPermission,
   checkOrganizationPermission,
-  checkOrganizationPermissionsMany,
-  checkOrganizationVcsReadPermission,
-  scopeWorkspaceIdsForOrg,
   workspaceIdsForPermission,
-  workspacePermissionSets,
-  workspaceAllows,
   checkWorkspacePermission,
-  checkRunRegistryRead,
   checkRunStateAccess,
-  checkRegistryReadPermission,
 } from "./utils";
 
 export type {
-  OrganizationPermission,
   WorkspacePermission,
-  WorkspacePermissionSets,
-  RunPrincipal,
 } from "./utils";

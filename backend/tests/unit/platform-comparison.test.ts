@@ -50,6 +50,38 @@ describe("platform comparison projections", () => {
     expect(comparison.provenance.liveCloudChangeProven).toBe(false);
   });
 
+  it("masks Terraform path metadata on both sides while retaining public changes", () => {
+    const instance = (name: string, hidden: string, metadata: unknown) => ({
+      mode: "managed", type: "example_resource", name: "web", provider: "example",
+      instances: [{ attributes: { id: "i-1", name, values: [{ value: hidden }] }, sensitive_attributes: metadata }],
+    });
+    const before = version("state-1", 1, state(1, [instance("old", "hidden-before", [])]));
+    for (const metadata of [
+      [["values", 0, "value"]],
+      [[{ type: "get_attr", value: "values" }, { type: "index", value: 0 }, { type: "get_attr", value: "value" }]],
+      [[{ type: "get_attr", value: "values" }, { type: "index", value: { type: "number", value: 0 } }, { type: "get_attr", value: "value" }]],
+    ]) {
+      const comparison = compareStateVersions(before, version("state-2", 2, state(2, [instance("new", "hidden-after", metadata)])));
+      expect(JSON.stringify(comparison)).not.toContain("hidden-");
+      expect(comparison.resources.changed).toEqual([{
+        address: "example_resource.web", actions: ["update"],
+        "changed-attributes": [{ path: "name", before: "old", after: "new", changed: true }],
+      }]);
+    }
+  });
+
+  it("does not expose sensitive IDs through inventory identities or moves", () => {
+    const sensitive = (name: string) => ({
+      mode: "managed", type: "example_resource", name, provider: "example",
+      instances: [{ attributes: { id: "hidden-identity" }, sensitive_attributes: [[{ type: "get_attr", value: "id" }]] }],
+    });
+    const before = version("state-1", 1, state(1, [sensitive("old")]));
+    const after = version("state-2", 2, state(2, [sensitive("new")]));
+    expect(JSON.stringify(compareStateVersions(before, after))).not.toContain("hidden-identity");
+    expect(stateInventoryObservations(after)[0]?.identitySource).toBe("address");
+    expect(JSON.stringify(stateInventoryObservations(after))).not.toContain("hidden-identity");
+  });
+
   it("falls back to a bounded limited comparison for opaque state", () => {
     const opaque = "{\"encryption_version\":\"v1\",\"encrypted_data\":\"opaque\"}";
     const comparison = compareStateVersions(version("state-1", 1, opaque), version("state-2", 2, opaque));

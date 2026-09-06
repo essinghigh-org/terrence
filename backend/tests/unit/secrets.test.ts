@@ -39,7 +39,8 @@ describe("loadEncryptionKey ENOENT handling", () => {
     } finally {
       if (previousDir === undefined) delete process.env["STORAGE_DIR"];
       else process.env["STORAGE_DIR"] = previousDir;
-      if (previousPass !== undefined) process.env["ENCRYPTION_PASSWORD"] = previousPass;
+      if (previousPass === undefined) delete process.env["ENCRYPTION_PASSWORD"];
+      else process.env["ENCRYPTION_PASSWORD"] = previousPass;
     }
   });
 });
@@ -110,7 +111,8 @@ describe("per-installation KDF salt (4.10)", () => {
     } finally {
       if (previousDir === undefined) delete process.env["STORAGE_DIR"];
       else process.env["STORAGE_DIR"] = previousDir;
-      if (previousPass !== undefined) process.env["ENCRYPTION_PASSWORD"] = previousPass;
+      if (previousPass === undefined) delete process.env["ENCRYPTION_PASSWORD"];
+      else process.env["ENCRYPTION_PASSWORD"] = previousPass;
     }
   });
 
@@ -133,7 +135,8 @@ describe("per-installation KDF salt (4.10)", () => {
     } finally {
       if (previousDir === undefined) delete process.env["STORAGE_DIR"];
       else process.env["STORAGE_DIR"] = previousDir;
-      if (previousPass !== undefined) process.env["ENCRYPTION_PASSWORD"] = previousPass;
+      if (previousPass === undefined) delete process.env["ENCRYPTION_PASSWORD"];
+      else process.env["ENCRYPTION_PASSWORD"] = previousPass;
     }
   });
 });

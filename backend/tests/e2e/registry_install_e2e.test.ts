@@ -83,12 +83,11 @@ async function startBackend(workDir: string): Promise<Backend> {
     proc = Bun.spawn(managedCommand(["bun", "run", "index.ts"]), {
       cwd: BACKEND_DIR,
       env: {
-        ...process.env,
+        ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("TERRENCE_E2E_"))),
         NODE_ENV: "production",
         PORT: String(port),
         DATABASE_URL: databaseUrl,
         STORAGE_DIR: dbDir,
-        TERRENCE_JWT_SECRET: "registry-e2e-secret",
         ADMIN_PASSWORD: "re2e-admin-password-123",
         TERRENCE_RUN_SANDBOX: "false",
         TERRENCE_ENABLE_LOCAL_SIGNUP: "true",

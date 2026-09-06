@@ -177,6 +177,14 @@ function journeyLabel(path: string): PerformanceJourneyLabel {
   return "other";
 }
 
+/** Clear process-local latency samples between isolated test scenarios. */
+export function resetJourneyMetricsForTests(): void {
+  for (const label of PERFORMANCE_JOURNEY_LABELS) {
+    journeySamples[label].length = 0;
+    journeyRequests[label] = 0;
+  }
+}
+
 /** Record server-side request latency using only a fixed journey label. */
 export function recordRequestLatency(path: string, durationMs: number): void {
   if (!Number.isFinite(durationMs) || durationMs < 0) return;

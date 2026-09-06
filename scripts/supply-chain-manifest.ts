@@ -259,7 +259,7 @@ function spdxPackageId(entry: LockedPackage): string {
 }
 
 function npmPurl(name: string, version: string): string {
-  return `pkg:npm/${name.replace(/^@/, "%40").replace("/", "%2f")}@${version}`;
+  return `pkg:npm/${name.split("/").map(encodeURIComponent).join("/")}@${encodeURIComponent(version)}`;
 }
 
 function spdxId(entry: Readonly<JsonRecord>): string {

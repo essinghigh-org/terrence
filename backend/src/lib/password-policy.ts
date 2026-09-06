@@ -29,12 +29,6 @@ export type PasswordPolicyRules = {
   disallowUsername: boolean;
 }
 
-export function boolEnv(name: string, fallback: boolean): boolean {
-  const raw = process.env[name];
-  if (raw === undefined) return fallback;
-  return raw === "1" || raw.toLowerCase() === "true";
-}
-
 export function loadPasswordPolicy(): PasswordPolicyRules {
   return {
     minLength: integerSetting("TERRENCE_PASSWORD_MIN_LENGTH"),

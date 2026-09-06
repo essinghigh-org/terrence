@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Terrence } from "../src/components/brand/Terrence";
 
-const poses = ["welcome", "empty", "healthy", "failed", "lost", "maintenance", "guide", "blocked", "interrupted"] as const;
+const poses = ["welcome", "empty", "healthy", "failed", "lost", "maintenance", "guide", "blocked", "interrupted", "ecosystem"] as const;
 
 test("Terrence exposes one explicit small detail tier for every canonical pose", (): void => {
   for (const pose of poses) {
@@ -26,49 +26,64 @@ test("Terrence exposes one explicit small detail tier for every canonical pose",
 test("the small tier keeps essential prop geometry", (): void => {
   const requiredProps = new Map([
     ["empty", "box"],
-    ["healthy", undefined],
-    ["failed", undefined],
+    ["healthy", "check"],
+    ["failed", "diagnostic"],
     ["lost", "map"],
     ["maintenance", "wrench"],
     ["guide", "book"],
-    ["blocked", "gate"],
+    ["blocked", "lock"],
     ["interrupted", "cable"],
   ] as const);
 
   for (const [pose, prop] of requiredProps) {
     const view = render(<Terrence pose={pose} detail="small" />);
     const svg = view.container.querySelector("svg");
-    if (prop !== undefined) expect(svg?.querySelector(`[data-prop="${prop}"]`)).not.toBeNull();
-    if (pose === "healthy") expect(svg?.querySelector("path[d^=\"m209 213\"]")).not.toBeNull();
-    if (pose === "failed") expect(svg?.querySelector("path[d^=\"m151 211\"]")).not.toBeNull();
+    expect(svg?.querySelector(`[data-prop="${prop}"]`)).not.toBeNull();
+    expect(svg?.querySelector(".terrence-paw")).not.toBeNull();
   }
 });
 
-test("held props get a foreground hand layer and healthy settles its posture", (): void => {
-  for (const [pose, prop] of [["empty", "box"], ["lost", "map"], ["maintenance", "wrench"], ["guide", "book"]] as const) {
-    const svg = render(<Terrence pose={pose} />).container.querySelector("svg");
-    expect(svg?.querySelector(`[data-prop=\"${prop}\"]`)).not.toBeNull();
-    expect(svg?.querySelector(`[data-held-prop=\"${prop}\"]`)).not.toBeNull();
-    expect(svg?.querySelector(".terrence-foreground-hand")).not.toBeNull();
-    expect(svg?.getAttribute("data-surface")).toBe("paper");
-  }
+test("engine marks float independently of the character without tiles or grips", (): void => {
+  const svg = render(<Terrence pose="ecosystem" />).container.querySelector("svg");
+  const marks = svg?.querySelector('[data-prop="engine-marks"]');
+  expect(marks).not.toBeNull();
+  expect(marks?.querySelectorAll("g > svg > svg").length).toBe(2);
+  expect(marks?.closest(".terrence-body")).toBeNull();
+  expect(marks?.querySelector("rect, .terrence-paw")).toBeNull();
+  expect(svg?.querySelector(".terrence-orbit--back")).not.toBeNull();
+  expect(marks?.querySelector(".terrence-orbit--front")).not.toBeNull();
+  const layers = [...(svg?.children ?? [])];
+  expect(layers.findIndex((layer): boolean => layer === marks))
+    .toBeGreaterThan(layers.findIndex((layer): boolean => layer.classList.contains("terrence-body")));
+});
 
-  const welcome = render(<Terrence pose="welcome" surface="transparent" />).container.querySelector("svg");
-  const healthy = render(<Terrence pose="healthy" surface="transparent" />).container.querySelector("svg");
-  expect(welcome?.querySelector(".terrence-wave")).not.toBeNull();
-  expect(healthy?.querySelector(".terrence-wave")).toBeNull();
-  expect(healthy?.querySelector('[data-arm-role="settled"]')).not.toBeNull();
-  expect(healthy?.querySelector('[data-prop="check"]')).not.toBeNull();
+test("illustrations blend into their surrounding surface by default", (): void => {
+  for (const pose of poses) {
+    const svg = render(<Terrence pose={pose} />).container.querySelector("svg");
+    expect(svg?.getAttribute("aria-hidden")).toBe("true");
+    expect(svg?.getAttribute("focusable")).toBe("false");
+    expect(svg?.querySelector(".terrence-backplate")).toBeNull();
+  }
 });
 
 test("blocked and interrupted stay neutral, distinct, and opt into a dark-surface backplate", (): void => {
   const blocked = render(<Terrence pose="blocked" surface="transparent" />).container.querySelector("svg");
   const interrupted = render(<Terrence pose="interrupted" surface="paper" />).container.querySelector("svg");
-  expect(blocked?.querySelector('[data-prop="gate"]')).not.toBeNull();
-  expect(blocked?.querySelector('path[d="M151 171h20"]')).not.toBeNull();
+  expect(blocked?.querySelector('[data-prop="lock"]')).not.toBeNull();
   expect(blocked?.querySelector(".terrence-backplate")).toBeNull();
   expect(interrupted?.querySelector('[data-prop="cable"]')).not.toBeNull();
   expect(interrupted?.querySelector(".terrence-backplate")).not.toBeNull();
+});
+
+test("every illustration stays self-contained vector art with flat fills", (): void => {
+  for (const pose of poses) {
+    const svg = render(<Terrence pose={pose} />).container.querySelector("svg");
+    expect(svg?.querySelector("image, foreignObject, script, filter, linearGradient, radialGradient, use")).toBeNull();
+    expect(svg?.querySelector(".terrence-ear-left")).not.toBeNull();
+    expect(svg?.querySelector(".terrence-ear-right")).not.toBeNull();
+    expect(svg?.querySelector(".terrence-face")).not.toBeNull();
+    expect(svg?.querySelectorAll("[id]").length).toBe(0);
+  }
 });
 
 test("the generated gallery is a deterministic real-size regression sheet", (): void => {

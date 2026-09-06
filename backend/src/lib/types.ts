@@ -13,8 +13,3 @@ export type DeepReadonly<T> =
             : T;
 
 export type RequestWithUrl = Readonly<{ readonly url: string }>;
-
-/** Minimal Elysia `set` shape shared by JSON:API response helpers. */
-export type ErrorSet = { status?: number | string };
-
-export type JsonApiErrorBody = { errors: { status: string; title: string; detail?: string }[] };

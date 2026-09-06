@@ -242,7 +242,7 @@ export function WorkspaceGettingStarted({
             : "Connect your existing configuration to this workspace. Your CLI uploads the code; Terrence keeps the state and run history together."}
         </p>
         {isLocked && (
-          <p className="mt-2 text-sm font-medium text-warning">This workspace is locked. Unlock it before starting a run.</p>
+          <p className="mt-2 text-sm font-medium text-warning-text">This workspace is locked. Unlock it before starting a run.</p>
         )}
       </div>
       <section aria-labelledby="workspace-readiness-heading" className="rounded-md border border-border bg-muted/20 p-3">
@@ -270,7 +270,7 @@ export function WorkspaceGettingStarted({
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                 <span className="text-sm font-medium text-foreground">{check.label}</span>
-                <span className={`text-xs font-medium ${check.state === "ready" ? "text-success" : check.state === "missing" ? "text-warning" : "text-muted-foreground"}`}>
+                <span className={`text-xs font-medium ${check.state === "ready" ? "text-success-text" : check.state === "missing" ? "text-warning-text" : "text-muted-foreground"}`}>
                   {readinessStateLabel(check.state)}
                 </span>
               </div>

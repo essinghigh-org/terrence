@@ -142,7 +142,7 @@ export function expectErrorDocument(body: unknown, status: string): void {
 }
 
 export async function expectErrorResponse(response: Response, status: number): Promise<void> {
-  expect(response.status).toBe(status);
+  expect(response.status, response.status === status ? undefined : await response.clone().text()).toBe(status);
   expect(response.headers.get("content-type")).toContain("application/vnd.api+json");
   expectErrorDocument(await response.json(), String(status));
 }
@@ -152,7 +152,7 @@ export async function expectSuccessResponse(
   status: number,
   type: string,
 ): Promise<JsonApiResource> {
-  expect(response.status).toBe(status);
+  expect(response.status, response.status === status ? undefined : await response.clone().text()).toBe(status);
   expect(response.headers.get("content-type")).toContain("application/vnd.api+json");
   const body = await response.json();
   expect(body).toBeTypeOf("object");

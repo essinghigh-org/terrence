@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { beforeEach, afterEach, describe, expect, test } from "bun:test";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../../src/db";
 import {
@@ -24,6 +24,13 @@ import {
 const createdEventIds: string[] = [];
 const createdOrganizationIds: string[] = [];
 
+beforeEach(async (): Promise<void> => {
+  // Other suites enqueue notifications while exercising run transitions.
+  // These queue-claim tests require an empty delivery queue in the test DB.
+  await db.delete(durableJobs).where(eq(durableJobs.kind, "outbox-delivery"));
+  await db.delete(outboxEvents);
+});
+
 afterEach(async (): Promise<void> => {
   if (createdEventIds.length > 0) {
     await db.delete(durableJobs).where(and(
@@ -48,6 +55,12 @@ function event(id: string, topic = "test.outbox", payload: Record<string, unknow
 }
 
 describe("transactional outbox", () => {
+  test("idempotency compares payload contents regardless of JSON object key order", async () => {
+    const input = event(`outbox-key-order-${crypto.randomUUID()}`, "test.outbox", { runId: "run-1", details: { status: "planned", count: 1 } });
+    await enqueueOutboxEvent(input);
+    await expect(enqueueOutboxEvent({ ...input, payload: { details: { count: 1, status: "planned" }, runId: "run-1" } })).resolves.toMatchObject({ id: input.id });
+    await expect(enqueueOutboxEvent({ ...input, payload: { runId: "run-2", details: { status: "planned", count: 1 } } })).rejects.toThrow("different payload");
+  });
   test("commits the event and durable job with the domain transaction", async () => {
     const id = `outbox-atomic-${crypto.randomUUID()}`;
     const orgId = `outbox-org-${crypto.randomUUID()}`;

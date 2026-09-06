@@ -7,4 +7,3 @@ export {
   WORKSPACE_BLOCKING_RUN_STATUSES,
   DISCARDABLE_RUN_STATUSES,
 } from "./utils";
-export type { RequestWithUrl } from "./types";

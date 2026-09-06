@@ -12,10 +12,10 @@ Every projection is scoped through the existing workspace or organization permis
 
 ## Review workflows
 
-- `POST /api/v2/organizations/:org_name/fleet-previews` materializes an immutable target manifest. `POST /api/v2/organizations/:org_name/fleet-operations` commits that manifest and records each target's result. `.../:operation_id/cancel` marks queued remaining targets canceled.
-- `POST /api/v2/organizations/:org_name/dependency-impact-previews` records bounded dependency edges and detected cycles. Queueing the preview preserves the input graph and does not apply a workspace.
+- `POST /api/v2/organizations/:org_name/fleet-operations/previews` materializes an immutable target manifest. Fleet execution returns HTTP 501 until an executor is implemented; it does not consume the preview or report target success.
+- `POST /api/v2/workspaces/:workspace_id/dependency-impact-previews` records bounded dependency edges and detected cycles. Queueing the preview preserves the input graph and does not apply a workspace.
 - `POST /api/v2/workspaces/:workspace_id/import-workbench` validates provider IDs and addresses, emits import blocks, reports existing-ID conflicts, and preserves unresolved arguments for review. It has no apply authority.
-- `POST /api/v2/organizations/:org_name/promotions` creates an ordered promotion graph. `.../:promotion_id/advance` checks permissions and the current target configuration again, then queues a fresh plan-only run for one stage. `.../stop` records an explicit stop; it does not mutate the workspace.
+- `POST /api/v2/organizations/:org_name/promotions` creates an ordered promotion graph. `.../:promotion_id/advance` returns HTTP 501 until configuration digest binding and stage completion checks are implemented. `.../stop` records an explicit stop; it does not mutate the workspace.
 - `POST /api/v2/workspaces/:workspace_id/upgrade-rehearsals` validates a candidate engine/version against a retained baseline and records a speculative-plan review. Rehearsal promotion is rejected until an explicit workspace configuration change is made.
 - `POST /api/v2/organizations/:org_name/policy-playground` validates an OPA or Sentinel source against a supplied plan projection. Results are review-only and never authorize apply.
 

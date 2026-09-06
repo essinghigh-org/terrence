@@ -8,6 +8,7 @@
  * but every run carries the same event id to the destination.
  */
 import { and, asc, count, eq, inArray, min } from "drizzle-orm";
+import { isDeepStrictEqual } from "node:util";
 import { db } from "../db";
 import { durableJobs, outboxEvents } from "../db/schema";
 import { newResourceId } from "./resource-id";
@@ -22,7 +23,6 @@ import type { DeepReadonly } from "./utils";
 export const OUTBOX_DELIVERY_KIND = "outbox-delivery" as const;
 export const RUN_NOTIFICATION_OUTBOX_TOPIC = "notification.run" as const;
 
-export type OutboxStatus = "pending" | "processing" | "delivered" | "dead_letter";
 export type OutboxEvent = DeepReadonly<typeof outboxEvents.$inferSelect>;
 export type OutboxEventInput = DeepReadonly<{
   id: string;
@@ -75,7 +75,8 @@ async function ensureDeliveryJob(database: Database, event: OutboxEvent, now = D
 }
 
 function samePayload(left: Readonly<Record<string, unknown>>, right: Readonly<Record<string, unknown>>): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  // PostgreSQL jsonb does not preserve object key order.
+  return isDeepStrictEqual(left, right);
 }
 
 /**
