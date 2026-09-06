@@ -15,6 +15,9 @@ Terrence is a self-hosted Terraform and OpenTofu run platform. Its compatibility
 - **Terraform/OpenTofu remote workflows**, including discovery, authentication, workspace selection, configuration upload, runs, plans, applies, state, and locking.
 - **The official `hashicorp/tfe` Terraform provider**, tracked against the explicit version recorded in `backend/src/data/provider_surface.json`.
 
+Remote client retry and idempotency behavior is documented in [Remote client
+retry contract](retry-contract).
+
 The provider surface is refreshed from the provider schema and verified by provider end-to-end tests. A schema entry is not considered compatible merely because the server accepts a request: supported resources and data sources must perform their provider operations successfully.
 
 ## Not a goal

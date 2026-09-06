@@ -205,6 +205,25 @@ export const agents = pgTable("agents", {
     index("agents_last_ping_at_status_idx").on(table.lastPingAt, table.status),
   ]);
 
+export const apiIdempotencyKeys = pgTable("api_idempotency_keys", {
+    id: text("id").notNull().primaryKey(),
+    scope: text("scope").notNull(),
+    key: text("key").notNull(),
+    principal: text("principal").notNull(),
+    requestHash: text("request_hash").notNull(),
+    resourceType: text("resource_type").notNull(),
+    resourceId: text("resource_id"),
+    status: text("status").notNull().default("pending"),
+    responseStatus: bigint("response_status", { mode: "number" }),
+    responseBody: jsonb("response_body"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull().$defaultFn(() => sqliteSchema.apiIdempotencyKeys.createdAt.defaultFn!()),
+    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+    completedAt: bigint("completed_at", { mode: "number" }),
+}, (table) => [
+    uniqueIndex("api_idempotency_scope_key_idx").on(table.scope, table.key),
+    index("api_idempotency_expires_idx").on(table.expiresAt),
+  ]);
+
 export const apiTokens = pgTable("api_tokens", {
     id: text("id").notNull().primaryKey(),
     token: text("token").notNull().unique(),

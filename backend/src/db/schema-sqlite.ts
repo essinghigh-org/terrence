@@ -1753,6 +1753,30 @@ export const auditLogs = sqliteTable("audit_logs", {
   index("audit_logs_resource_idx").on(table.resourceType, table.resourceId, table.createdAt, table.id),
 ]);
 
+// Remote clients can lose a response after a write commits. Keep the
+// idempotency contract in the database so a replay is safe across process
+// restarts and control-plane handoffs. The scope includes the logical
+// resource being created; the caller and canonical request hash are checked
+// before returning a stored response.
+export const apiIdempotencyKeys = sqliteTable("api_idempotency_keys", {
+  id: text("id").primaryKey(),
+  scope: text("scope").notNull(),
+  key: text("key").notNull(),
+  principal: text("principal").notNull(),
+  requestHash: text("request_hash").notNull(),
+  resourceType: text("resource_type").notNull(),
+  resourceId: text("resource_id"),
+  status: text("status").notNull().default("pending"),
+  responseStatus: integer("response_status"),
+  responseBody: text("response_body", { mode: "json" }).$type<Record<string, unknown>>(),
+  createdAt: integer("created_at").notNull().$defaultFn(() => Date.now()),
+  expiresAt: integer("expires_at").notNull(),
+  completedAt: integer("completed_at"),
+}, (table) => [
+  uniqueIndex("api_idempotency_scope_key_idx").on(table.scope, table.key),
+  index("api_idempotency_expires_idx").on(table.expiresAt),
+]);
+
 export const runTriggers = sqliteTable("run_triggers", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),

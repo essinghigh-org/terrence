@@ -85,6 +85,10 @@ export const agents: typeof sqliteSchema.agents = pgTables === null
   ? sqliteSchema.agents
   : (pgTables[dbNameOf(sqliteSchema.agents)] as unknown as typeof sqliteSchema.agents);
 
+export const apiIdempotencyKeys: typeof sqliteSchema.apiIdempotencyKeys = pgTables === null
+  ? sqliteSchema.apiIdempotencyKeys
+  : (pgTables[dbNameOf(sqliteSchema.apiIdempotencyKeys)] as unknown as typeof sqliteSchema.apiIdempotencyKeys);
+
 export const apiTokens: typeof sqliteSchema.apiTokens = pgTables === null
   ? sqliteSchema.apiTokens
   : (pgTables[dbNameOf(sqliteSchema.apiTokens)] as unknown as typeof sqliteSchema.apiTokens);

@@ -421,6 +421,13 @@
       "when": 1788705033113,
       "tag": "0059_shiny_vulcan",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "6",
+      "when": 1788706434340,
+      "tag": "0060_aspiring_mindworm",
+      "breakpoints": true
     }
   ]
 }

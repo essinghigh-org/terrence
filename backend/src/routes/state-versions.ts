@@ -30,6 +30,7 @@ import {
   type RecoveryCopyInspection,
 } from "../lib/recovery-files";
 import { commitStateVersionAtSerialTx, nextStateSerialTx } from "../lib/state-commit";
+import { abandonIdempotency, beginIdempotency, completeIdempotency, idempotencyContext, idempotencyError, idempotencyPrincipal } from "../lib/idempotency";
 
 type SetObj = Readonly<{ status?: number | string; headers: Readonly<Record<string, string | number>> }>;
 
@@ -121,6 +122,19 @@ async function requestBodyText(
   } finally {
     await rm(path, { force: true });
   }
+}
+
+async function replayStateVersion(
+  resourceId: string | null,
+  workspaceId: string,
+  request: Readonly<{ url: string }>,
+  fallback: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (resourceId === null) return fallback;
+  const state = await db.query.stateVersions.findFirst({
+    where: and(eq(stateVersions.id, resourceId), eq(stateVersions.workspaceId, workspaceId)),
+  });
+  return state === undefined ? fallback : { data: stateVersionResource(state, request) };
 }
 
 function stateLineageError(
@@ -495,6 +509,16 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot roll back state" }] }; }
     if (!ownsWorkspaceLock(workspace, lockPrincipal(user?.id, orgId, teamId))) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before rollback" }] }; }
     const payload = body !== null && typeof body === "object" ? body as Record<string, unknown> : {};
+    const idempotency = idempotencyContext(
+      request,
+      `state-rollback:${workspaceId}`,
+      idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
+      payload,
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotency === "invalid") {
+      return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
+    }
     const data = payload["data"] !== null && typeof payload["data"] === "object" ? payload["data"] as Record<string, unknown> : {};
     const relationships = data["relationships"] !== null && typeof data["relationships"] === "object" ? data["relationships"] as Record<string, unknown> : {};
     const rollback = relationships["rollback-state-version"];
@@ -509,6 +533,13 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(sourcePayload) }] };
     }
+    const idempotencyBegin = await beginIdempotency(
+      idempotency,
+      "state-rollback",
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotencyBegin.kind === "replay") return replayStateVersion(idempotencyBegin.resourceId, workspaceId, request, idempotencyBegin.body);
+    if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
     const id = crypto.randomUUID();
     try {
       await withStateSerialRetry(async () => db.transaction(async (tx): Promise<void> => {
@@ -540,14 +571,21 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       }));
     } catch (error) {
       if (!(error instanceof StateSerialConflictError) && !isUniqueConstraintError(error)) throw error;
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock or state changed before promotion" }] };
     }
     scheduleExplorerInventory(workspaceId);
     const created = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, id) });
-    if (created === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    if (created === undefined) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+      (set as { status: number }).status = 500;
+      return { errors: [{ status: "500", title: "Internal Server Error" }] };
+    }
     (set as { status: number }).status = 201;
-    return { data: stateVersionResource(created, request, false, undefined, await stateResponseAccess(workspace, user?.id, orgId, teamId)) };
+     const responseBody = { data: stateVersionResource(created, request, false, undefined, await stateResponseAccess(workspace, user?.id, orgId, teamId)) };
+     if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, id);
+     return responseBody;
   })
   .get("/api/v2/state-versions/:state_version_id", async ({ params, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
@@ -901,6 +939,16 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot roll back state" }] }; }
     if (!ownsWorkspaceLock(ws, lockPrincipal(user?.id, orgId, teamId))) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Workspace must be locked by the caller before rollback" }] }; }
+    const idempotency = idempotencyContext(
+      request,
+      `state-action-rollback:${stateVersionId}`,
+      idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
+      {},
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotency === "invalid") {
+      return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
+    }
     if (sv.statePayload === null || sv.status !== "finalized") {
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "State version cannot be rolled back" }] };
     }
@@ -910,6 +958,13 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: statePayloadError(sourcePayload) }] };
     }
+    const idempotencyBegin = await beginIdempotency(
+      idempotency,
+      "state-action-rollback",
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotencyBegin.kind === "replay") return replayStateVersion(idempotencyBegin.resourceId, sv.workspaceId, request, idempotencyBegin.body);
+    if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
     const newId = crypto.randomUUID();
     try {
       await withStateSerialRetry(async () => db.transaction(async (tx): Promise<void> => {
@@ -944,14 +999,21 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       }));
     } catch (error) {
       if (!(error instanceof StateSerialConflictError) && !isUniqueConstraintError(error)) throw error;
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
       (set as { status: number }).status = 409;
       return { errors: [{ status: "409", title: "Conflict", detail: "Workspace lock or state changed before promotion" }] };
     }
     scheduleExplorerInventory(sv.workspaceId);
     const newSv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, newId) });
-    if (newSv === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    if (newSv === undefined) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+      (set as { status: number }).status = 500;
+      return { errors: [{ status: "500", title: "Internal Server Error" }] };
+    }
     (set as { status: number }).status = 201;
-    return { data: stateVersionResource(newSv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
+     const responseBody = { data: stateVersionResource(newSv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
+     if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, newId);
+     return responseBody;
   })
   .post("/api/v2/state-versions/:state_version_id/actions/soft_delete_backing_data", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const stateVersionId = params["state_version_id"] ?? "";
@@ -1283,6 +1345,16 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       : await findAuthorizedWorkspace(workspaceId, user?.id, orgId, teamId, "state-write");
     if (ws === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const idempotency = idempotencyContext(
+      request,
+      `state-versions:${workspaceId}`,
+      idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
+      payload,
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotency === "invalid") {
+      return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
+    }
     const data = payload["data"] as Record<string, unknown> | undefined;
     if (data?.["type"] !== "state-versions") {
       (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "data.type must be state-versions" }] };
@@ -1364,22 +1436,32 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
         (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "md5 does not match the state payload" }] };
       }
     }
+    const idempotencyBegin = await beginIdempotency(
+      idempotency,
+      "state-versions",
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotencyBegin.kind === "replay") return replayStateVersion(idempotencyBegin.resourceId, workspaceId, request, idempotencyBegin.body);
+    if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
     const latestState = await db.query.stateVersions.findFirst({
       where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
       orderBy: [desc(stateVersions.serial)],
       columns: { serial: true, statePayload: true },
     });
     if (latestState !== undefined && serial <= latestState.serial) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
       (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] };
     }
     if (parsedTerraformState !== null) {
       const lineageError = stateLineageError(latestState, parsedTerraformState);
       if (lineageError !== null) {
+        if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
         (set as { status: number }).status = 409;
         return { errors: [{ status: "409", title: "Conflict", detail: lineageError }] };
       }
     }
     if (jsonState !== null && parseStatePayload(jsonState) === null) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
       (set as { status: number }).status = 400; return { errors: [{ status: "400", title: "Bad Request", detail: "JSON state content must be valid JSON" }] };
     }
     const id = crypto.randomUUID();
@@ -1435,6 +1517,7 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       }));
     } catch (error: unknown) {
       if (error instanceof StateSerialConflictError || isUniqueConstraintError(error)) {
+        if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
         (set as { status: number }).status = 409;
         return { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] };
       }
@@ -1442,9 +1525,15 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
     }
     scheduleExplorerInventory(workspaceId);
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, id) });
-    if (sv === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
+    if (sv === undefined) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+      (set as { status: number }).status = 404;
+      return { errors: [{ status: "404", title: "Not Found" }] };
+    }
     (set as { status: number }).status = 201;
-    return { data: stateVersionResource(sv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
+     const responseBody = { data: stateVersionResource(sv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
+     if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, id);
+     return responseBody;
   })
   .post("/api/v2/workspaces/:workspace_id/state-versions/upload", async ({ params, body, user, orgId, teamId, run, request, set }: ParamCtx): Promise<unknown> => {
     const workspaceId = params["workspace_id"] ?? "";
@@ -1477,11 +1566,6 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 400;
       return { errors: [{ status: "400", title: "Bad Request", detail: statePayloadError(rawState) }] };
     }
-    const latestImportedState = await db.query.stateVersions.findFirst({
-      where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
-      orderBy: [desc(stateVersions.serial)],
-      columns: { serial: true, statePayload: true },
-    });
     // Migrating an existing state file into an empty workspace must accept
     // its serial as-is (issue #569): real-world files carry serials like 12
     // or 45, not 1. The record stores the payload serial so later uploads
@@ -1491,23 +1575,48 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "State serial must be a positive integer" }] };
     }
+    const contentMd5 = request.headers.get("content-md5");
+    if (contentMd5 !== null && contentMd5 !== createHash("md5").update(rawState).digest("base64")) {
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Content-MD5 does not match the state payload" }] };
+    }
+    const idempotency = idempotencyContext(
+      request,
+      `state-versions-upload:${workspaceId}`,
+      idempotencyPrincipal({ userId: user?.id, orgId, teamId, runId: run?.runId }),
+      { rawState, contentMd5 },
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotency === "invalid") {
+      return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
+    }
+    const idempotencyBegin = await beginIdempotency(
+      idempotency,
+      "state-versions-upload",
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotencyBegin.kind === "replay") return replayStateVersion(idempotencyBegin.resourceId, workspaceId, request, idempotencyBegin.body);
+    if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
+
+    const latestImportedState = await db.query.stateVersions.findFirst({
+      where: and(eq(stateVersions.workspaceId, workspaceId), eq(stateVersions.status, "finalized")),
+      orderBy: [desc(stateVersions.serial)],
+      columns: { serial: true, statePayload: true },
+    });
     if (latestImportedState !== undefined && incomingSerial !== latestImportedState.serial + 1) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "serial must be the next workspace state serial" }] };
     }
     const lineageError = stateLineageError(latestImportedState, parsed);
     if (lineageError !== null) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lineageError }] };
     }
     const runCreatedBy = run === null
       ? null
       : (await db.query.runs.findFirst({ where: eq(runs.id, run.runId), columns: { createdBy: true } }))?.createdBy ?? null;
-    const contentMd5 = request.headers.get("content-md5");
-    if (contentMd5 !== null && contentMd5 !== createHash("md5").update(rawState).digest("base64")) {
-      (set as { status: number }).status = 422;
-      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Content-MD5 does not match the state payload" }] };
-    }
 
     let stateVersionId: string;
     try {
@@ -1558,14 +1667,21 @@ export const stateVersionRoutes = new Elysia({ name: "stateVersions" })
       }));
     } catch (error: unknown) {
       if (error instanceof StateSerialConflictError || isUniqueConstraintError(error)) {
+        if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
         (set as { status: number }).status = 409;
         return { errors: [{ status: "409", title: "Conflict", detail: "State serial must advance the current workspace state" }] };
       }
       throw error;
     }
     const sv = await db.query.stateVersions.findFirst({ where: eq(stateVersions.id, stateVersionId) });
-    if (sv === undefined) { (set as { status: number }).status = 500; return { errors: [{ status: "500", title: "Internal Server Error" }] }; }
+    if (sv === undefined) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+      (set as { status: number }).status = 500;
+      return { errors: [{ status: "500", title: "Internal Server Error" }] };
+    }
     scheduleExplorerInventory(sv.workspaceId);
     (set as { status: number }).status = 201;
-    return { data: stateVersionResource(sv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
+     const responseBody = { data: stateVersionResource(sv, request, false, undefined, await stateResponseAccess(ws, user?.id, orgId, teamId)) };
+     if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, stateVersionId);
+     return responseBody;
   });

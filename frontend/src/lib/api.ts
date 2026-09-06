@@ -89,6 +89,7 @@ export class ApiError extends Error {
     public readonly retryAfter: string | null = null,
     code = `HTTP_${status}`,
     requestId: string | null = null,
+    public readonly idempotencyReplayed = false,
   ) {
     super(message);
     this.name = "ApiError";
@@ -97,6 +98,20 @@ export class ApiError extends Error {
     this.code = code.trim() === "" ? `HTTP_${status}` : code;
     this.requestId = requestId === null || requestId.trim() === "" ? null : requestId;
   }
+}
+
+/** The server asks clients to retry these responses only for read traversals or
+ * when the caller supplied an Idempotency-Key for a write. */
+export function isRetryableApiError(error: unknown): error is ApiError {
+  return error instanceof ApiError && (error.status === 429 || error.status === 503);
+}
+
+/** Convert a Retry-After header to a bounded delay, preserving HTTP-date support. */
+export function retryAfterDelayMilliseconds(value: string | null, now = Date.now()): number | null {
+  if (value === null) return 1_000;
+  if (/^\d+$/.test(value)) return Number(value) * 1_000;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? Math.max(0, parsed - now) : null;
 }
 
 /**
@@ -333,6 +348,7 @@ async function requestApi(endpoint: string, options: ReadonlyRequestInit = {}): 
       response.headers.get("Retry-After"),
       code,
       requestId,
+      response.headers.get("Idempotency-Replayed") === "true",
     );
   }
 
@@ -387,15 +403,13 @@ export async function fetchAllApiPages<T>(
     };
     for (;;) {
       try {
-        response = await fetchApi(pageEndpoint, signal === undefined ? {} : { signal });
+        response = await fetchApi(pageEndpoint, { method: "GET", ...(signal === undefined ? {} : { signal }) });
         break;
       } catch (error: unknown) {
-        if (!(error instanceof ApiError) || ![429, 503].includes(error.status) || retries++ >= retryAttempts) throw error;
-        const value = error.retryAfter;
-        const delay = value === null ? 1000 : /^\d+$/.test(value)
-          ? Number(value) * 1000 : Math.max(0, Date.parse(value) - Date.now());
+        if (!isRetryableApiError(error) || retries++ >= retryAttempts) throw error;
+        const delay = retryAfterDelayMilliseconds(error.retryAfter);
         // Long maintenance windows need a later user retry, not an export held in memory.
-        if (!Number.isFinite(delay) || delay > 30_000) throw error;
+        if (delay === null || !Number.isFinite(delay) || delay > 30_000) throw error;
         signal?.throwIfAborted();
         await new Promise<void>((resolve, reject): void => {
           const abort = (): void => { clearTimeout(timer); reject(new DOMException("Export cancelled", "AbortError")); };
@@ -572,6 +586,10 @@ export async function streamExplain(
       response.status,
       detail ?? title ?? `API request failed (${response.status})`,
       extractFieldErrors(errors),
+      response.headers.get("Retry-After"),
+      undefined,
+      response.headers.get("X-Request-Id") ?? response.headers.get("X-Correlation-Id"),
+      response.headers.get("Idempotency-Replayed") === "true",
     );
   }
 

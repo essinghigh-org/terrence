@@ -49,6 +49,7 @@ import { workspaceRunHistoryWhere, organizationRunHistoryWhere, FINAL_RUN_STATUS
 import type { WorkspacePermission } from "../lib/authorization";
 import type { DeepReadonly } from "../lib/types";
 import { inspectRecoveryCopy } from "../lib/recovery-files";
+import { abandonIdempotency, beginIdempotency, completeIdempotency, idempotencyContext, idempotencyError, idempotencyPrincipal, type IdempotencyContext } from "../lib/idempotency";
 
 type SetObj = { status?: number | string; headers: Record<string, string | number> };
 
@@ -737,6 +738,7 @@ export async function createRun(
   orgId: string | null | undefined,
   teamId: string | null | undefined,
   set: SetObj,
+  idempotency: IdempotencyContext | null = null,
 ): Promise<Record<string, unknown> | { errors: { status: string; title: string; detail?: string }[] }> {
   const message = typeof attributes["message"] === "string" ? attributes["message"] : "";
   const requestedOperation = typeof attributes["operation"] === "string" ? attributes["operation"] : undefined;
@@ -802,7 +804,15 @@ export async function createRun(
   if (workspace === undefined) { (set as { status: number }).status = 404; return { errors: [{ status: "404", title: "Not Found" }] }; }
   if (orgId !== null && orgId !== undefined) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden", detail: "Organization tokens cannot create runs. Use a team token or user token." }] }; }
   if (!(await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "plan"))) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+  const idempotencyBegin = await beginIdempotency(
+    idempotency,
+    "runs",
+    set as unknown as { status?: number | string; headers: Record<string, string | number> },
+  );
+  if (idempotencyBegin.kind === "replay") return idempotencyBegin.body;
+  if (idempotencyBegin.kind === "error") return idempotencyError(idempotencyBegin);
   if (workspace.locked === true) {
+    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(workspace.lockedReason) }] };
   }
@@ -810,15 +820,21 @@ export async function createRun(
   // plans and applies on the operator machine and the server only stores
   // state. This matches the reference behavior for local workspaces.
   if (workspace.executionMode === "local") {
+    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Remote runs cannot be created for workspaces with local execution mode" }] };
   }
   if (isDestroy && workspace.allowDestroyPlan === false) {
+    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Destroy plans are disabled for this workspace" }] };
   }
   const canApply = await checkWorkspacePermission(workspace, user?.id, null, teamId ?? null, "apply");
-  if (!canApply && (requestedAutoApply === true || allowEmptyApply || operation === "action_only")) { (set as { status: number }).status = 403; return { errors: [{ status: "403", title: "Forbidden" }] }; }
+  if (!canApply && (requestedAutoApply === true || allowEmptyApply || operation === "action_only")) {
+    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+    (set as { status: number }).status = 403;
+    return { errors: [{ status: "403", title: "Forbidden" }] };
+  }
   const autoApply = operation === "action_only" ? canApply : canApply && (requestedAutoApply ?? workspace.autoApply === true);
   // Issue #601: inheriting the workspace default while lacking apply rights
   // silently drops auto-apply (explicit requests already 403 above). Flag it
@@ -827,14 +843,27 @@ export async function createRun(
   let configurationVersion: typeof configurationVersions.$inferSelect | undefined;
   if (cvId !== undefined) {
     configurationVersion = await db.query.configurationVersions.findFirst({ where: eq(configurationVersions.id, cvId) });
-    if (configurationVersion === undefined) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version was not found" }] }; }
-    if (configurationVersion?.workspaceId !== workspaceId) { (set as { status: number }).status = 422; return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version does not belong to workspace" }] }; }
+    if (configurationVersion === undefined) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version was not found" }] };
+    }
+    if (configurationVersion?.workspaceId !== workspaceId) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+      (set as { status: number }).status = 422;
+      return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "Configuration version does not belong to workspace" }] };
+    }
     const pendingVcs = configurationVersion.status === "pending" && ["github", "gitlab", "bitbucket"].includes(configurationVersion.source ?? "");
-    if (configurationVersion.status !== "uploaded" && !pendingVcs) { (set as { status: number }).status = 409; return { errors: [{ status: "409", title: "Conflict", detail: "Configuration version is not ready for a run" }] }; }
+    if (configurationVersion.status !== "uploaded" && !pendingVcs) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
+      (set as { status: number }).status = 409;
+      return { errors: [{ status: "409", title: "Conflict", detail: "Configuration version is not ready for a run" }] };
+    }
   } else if (workspace.vcsRepo?.identifier !== undefined) {
     // Auto-create a configuration version from VCS for manual runs
     const result = await createConfigurationVersionFromVcs(workspace);
     if (typeof result === "object" && "error" in result) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: result.error }] };
     }
@@ -859,6 +888,7 @@ export async function createRun(
   // except for VCS-backed workspaces (handled above) and local-path
   // workspaces whose source lives on disk.
   if (cvId === undefined && workspace.vcsRepo?.identifier === undefined && workspace.source !== "local") {
+    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: "No configuration version is available for this workspace. Upload a configuration version or connect a VCS repository first." }] };
   }
@@ -889,6 +919,7 @@ export async function createRun(
   if (typeof effectiveVersion === "string") {
     const preflight = await preflightBinaryAvailability(effectiveTool, effectiveVersion);
     if (!preflight.ok) {
+      if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
       (set as { status: number }).status = 422;
       return { errors: [{ status: "422", title: "Unprocessable Entity", detail: preflight.detail }] };
     }
@@ -969,6 +1000,7 @@ export async function createRun(
     return null;
   });
   if (lockConflict !== null) {
+    if (idempotencyBegin.kind === "reserved") await abandonIdempotency(idempotencyBegin.id);
     (set as { status: number }).status = 422;
     return { errors: [{ status: "422", title: "Unprocessable Entity", detail: lockedWorkspaceDetail(lockConflict.lockedReason) }] };
   }
@@ -1000,7 +1032,9 @@ export async function createRun(
     (createdResource["attributes"] as Record<string, unknown>)["auto-apply-warning"] =
       "Auto-apply is enabled on this workspace, but you do not have apply permission, so this run was created with auto-apply off and will wait for confirmation.";
   }
-  return { data: createdResource };
+  const responseBody = { data: createdResource };
+  if (idempotencyBegin.kind === "reserved") await completeIdempotency(idempotencyBegin.id, 201, responseBody, id);
+  return responseBody;
 }
 
 /**
@@ -1250,7 +1284,7 @@ export const runRoutes = new Elysia({ name: "runs" })
       .reduce((sum, row): number => sum + row.total, 0);
     return { data: { id: organization.name, type: "organization-capacity", attributes: { pending: totalFor(CAPACITY_PENDING_STATUSES), running: totalFor(CAPACITY_RUNNING_STATUSES) } } };
   })
-  .post("/api/v2/workspaces/:workspace_id/runs", async ({ params, body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/workspaces/:workspace_id/runs", async ({ params, body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const wsId = params["workspace_id"] ?? "";
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload["data"] as Record<string, unknown> | undefined;
@@ -1259,9 +1293,17 @@ export const runRoutes = new Elysia({ name: "runs" })
     const cvRel = typeof rels["configuration-version"] === "object" && rels["configuration-version"] !== null ? (rels["configuration-version"] as Record<string, unknown>) : {};
     const cvData = typeof cvRel["data"] === "object" && cvRel["data"] !== null ? (cvRel["data"] as Record<string, unknown>) : {};
     const cvId = typeof cvData["id"] === "string" ? cvData["id"] : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
-    return createRun(wsId, attributes, cvId, user, orgId, teamId, set);
+    const idempotency = idempotencyContext(
+      request,
+      `runs:workspace:${wsId}`,
+      idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
+      payload,
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotency === "invalid") return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
+    return createRun(wsId, attributes, cvId, user, orgId, teamId, set, idempotency);
   })
-  .post("/api/v2/runs", async ({ body, user, orgId, teamId, set }: ParamCtx): Promise<unknown> => {
+  .post("/api/v2/runs", async ({ body, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const payload = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const data = payload["data"] as Record<string, unknown> | undefined;
     const attributes = typeof data?.["attributes"] === "object" && data["attributes"] !== null ? (data["attributes"] as Record<string, unknown>) : {};
@@ -1272,7 +1314,15 @@ export const runRoutes = new Elysia({ name: "runs" })
     const cvData = typeof cvRel["data"] === "object" && cvRel["data"] !== null ? (cvRel["data"] as Record<string, unknown>) : {};
     const workspaceId = typeof wsData["id"] === "string" ? wsData["id"] : "";
     const cvId = typeof cvData["id"] === "string" ? cvData["id"] : (typeof attributes["configuration-version-id"] === "string" ? attributes["configuration-version-id"] : undefined);
-    return createRun(workspaceId, attributes, cvId, user, orgId, teamId, set);
+    const idempotency = idempotencyContext(
+      request,
+      `runs:generic:${workspaceId}`,
+      idempotencyPrincipal({ userId: user?.id, orgId, teamId }),
+      payload,
+      set as unknown as { status?: number | string; headers: Record<string, string | number> },
+    );
+    if (idempotency === "invalid") return { errors: [{ status: "400", title: "Bad Request", detail: "Idempotency-Key must be between 1 and 255 characters" }] };
+    return createRun(workspaceId, attributes, cvId, user, orgId, teamId, set, idempotency);
   })
   .get("/api/v2/runs/:run_id", async ({ params, user, orgId, teamId, request, set }: ParamCtx): Promise<unknown> => {
     const runId = params["run_id"] ?? "";
