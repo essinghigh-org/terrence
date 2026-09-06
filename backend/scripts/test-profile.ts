@@ -247,7 +247,11 @@ async function main(argv: readonly string[]): Promise<number> {
   assertRealProfileEnvironment(profile);
   const seed = normalizeOperationalTestSeed(args.seed ?? process.env["TERRENCE_E2E_SEED"]);
   const versions = profile.mode === "real-cli" ? await pinnedVersions() : {};
-  const root = await mkdtemp(join(tmpdir(), `terrence-profile-${profile.name}-`));
+  // Short prefix on purpose: sandboxed CLI runs inherit a TMPDIR nested
+  // below this root, and terraform's go-plugin binds its provider socket
+  // under $TMPDIR where AF_UNIX paths cap at 107 usable bytes. Every
+  // character saved here is socket headroom (see assertCliDirFitsSocket).
+  const root = await mkdtemp(join(tmpdir(), `te2e-${profile.name}-`));
   const artifactDirectory = join(root, "artifacts");
   await mkdir(artifactDirectory, { recursive: true });
   const externalArtifactDirectory = args.artifactDirectory ?? process.env["TERRENCE_E2E_RESULTS_DIR"];

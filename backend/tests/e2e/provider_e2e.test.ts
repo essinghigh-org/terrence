@@ -329,6 +329,19 @@ async function cli(bin: string, args: string[], cwd: string, env: Record<string,
   return { code, out, err };
 }
 
+// Terraform's go-plugin dials providers over a unix socket under $TMPDIR
+// (sandboxed runs: <cliDir>/tmp, set by RunSandbox.spawnGeneric). AF_UNIX
+// paths cap at 107 usable bytes, so a CLI dir deeper than ~75 chars fails
+// plugin startup with "bind: invalid argument" — flaky, because the
+// "plugin<...>" socket suffix length varies per run. Fail fast with the
+// real cause instead of a cryptic provider handshake error.
+const PLUGIN_SOCKET_SPARE = 32; // "/tmp/plugin" plus up to a 20-char suffix.
+function assertCliDirFitsSocket(dir: string): void {
+  if (dir.length + PLUGIN_SOCKET_SPARE > 107) {
+    throw new Error(`CLI dir too deep for terraform provider sockets (${dir.length} chars + ${PLUGIN_SOCKET_SPARE} spare > 107): ${dir}`);
+  }
+}
+
 function cliOk(result: CliResult, what: string): void {
   if (result.code !== 0) {
     const safe = JSON.parse(safeJsonStringify(result)) as CliResult;
@@ -1274,7 +1287,10 @@ describe("tfe provider e2e", () => {
       return false;
     };
     for (const name of readdirSync(tmpdir())) {
-      if (!(name.startsWith("terrence-test-") || name.startsWith("terrence-provider-e2e-") || name.startsWith("terrence-profile-"))) continue;
+      // Sweep stale roots from prior runs (old and current prefixes: the
+      // prefixes were shortened to leave AF_UNIX socket headroom, but dirs
+      // from earlier runs still need cleanup).
+      if (!(name.startsWith("terrence-test-") || name.startsWith("terrence-provider-e2e-") || name.startsWith("terrence-profile-") || name.startsWith("tpe2e-") || name.startsWith("te2e-"))) continue;
       try {
         const st = statSync(join(tmpdir(), name));
         if (st.mtimeMs < now - 10 * 60 * 1000 && !dirIsOpen(name)) {
@@ -1337,7 +1353,12 @@ describe("tfe provider e2e", () => {
     test(`tracked hashicorp/tfe provider: full lifecycle against Terrence via ${cliName} CLI`, async () => {
       const bin = cliName === "terraform" ? terraformBin : tofuBin;
       const suffix = operationalFixtureSuffix(fixtureSeed, cliName);
-      const workDir = createOperationalTestDirectory(`terrence-provider-e2e-${cliName}-`, process.env["TERRENCE_E2E_ROOT"]);
+      // Short prefix on purpose: the sandboxed cli() harness sets TMPDIR to
+      // <workDir>/config-*/tmp and terraform's go-plugin binds its provider
+      // socket there, where AF_UNIX paths cap at 107 usable bytes. A deeper
+      // tree fails plugin startup with "bind: invalid argument" as a
+      // socket-suffix-length-dependent flake (see assertCliDirFitsSocket).
+      const workDir = createOperationalTestDirectory(`tpe2e-${cliName}-`, process.env["TERRENCE_E2E_ROOT"]);
       await mkdir(workDir, { recursive: true });
       const cliEnv: Record<string, string> = {
         ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
@@ -1363,6 +1384,7 @@ describe("tfe provider e2e", () => {
 
           // mkdtemp: unique per run, no check-then-create race (CodeQL).
           const cfgDir = mkdtempSync(join(workDir, "config-"));
+          assertCliDirFitsSocket(cfgDir);
           await writeFile(join(cfgDir, "providers.tf"), providerTf(proxy.port!, auth.token));
           await writeFile(join(cfgDir, "main.tf"), mainTf(suffix, auth.username));
           await writeFile(join(cfgDir, "outputs.tf"), outputsTf());
@@ -1402,6 +1424,7 @@ describe("tfe provider e2e", () => {
           // in configuration, and never destroy the imported shared object here.
           lifecycleStage = "minimal team import";
           const importDir = mkdtempSync(join(workDir, "import-"));
+          assertCliDirFitsSocket(importDir);
           await writeFile(join(importDir, "providers.tf"), providerTf(proxy.port!, auth.token));
           await writeFile(join(importDir, "main.tf"), `resource "tfe_team" "imported" {
   organization = "pe2e-org-${suffix}"

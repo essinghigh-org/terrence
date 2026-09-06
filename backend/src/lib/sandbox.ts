@@ -298,11 +298,26 @@ export class RunSandbox {
 
       const workDir = this.workDirForRunCwd(opts.cwd);
       const binaryDir = dirname(binaryPath);
+      const tmpDir = join(workDir, "tmp");
+      // Terraform's go-plugin binds its provider socket under $TMPDIR, and
+      // AF_UNIX paths cap at 107 usable bytes: a TMPDIR deeper than ~75
+      // chars fails plugin startup with "bind: invalid argument" (flaky,
+      // since the "plugin<...>" socket suffix length varies per run).
+      // Production run workdirs are short, but a deep custom TMPDIR would
+      // otherwise surface as a cryptic provider handshake failure — warn
+      // loudly instead. Warning only (not a throw): tofu dials over TCP
+      // loopback and is unaffected by socket path length.
+      if (tmpDir.length + 32 > 107) {
+        try {
+          const { log } = require("./log") as { log: { warn: (msg: string, data?: unknown) => void } };
+          log.warn("sandbox TMPDIR too deep for terraform provider sockets", { tmpDir, length: tmpDir.length });
+        } catch { /* logging is best-effort */ }
+      }
       const env: Record<string, string> = {
         ...opts.env,
         PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         HOME: workDir,
-        TMPDIR: join(workDir, "tmp"),
+        TMPDIR: tmpDir,
         USER: process.env["USER"] ?? "nobody",
       };
 
